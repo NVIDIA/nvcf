@@ -20,6 +20,11 @@ openbao:
   # secrets, volumes, and bootstrap scripts.
   fullnameOverride: openbao-server
 
+  # Optional NVCF control-plane identity. When set, the migration hook receives
+  # plane-scoped service-account namespaces and the reachable OpenBao address.
+  controlPlane:
+    id: ""
+
   hooks:
     initializeCluster:
       podAnnotations: {}
@@ -43,6 +48,10 @@ openbao:
           memory: 256Mi
 
   migrations:
+    # Opaque trust-domain used by projected service-account tokens and OpenBao
+    # JWT roles. This is intentionally independent of the plane-specific
+    # OpenBao network address.
+    jwtAudience: http://openbao-server.vault-system.svc.cluster.local:8200
     image:
       registry: ""
       repository: ""

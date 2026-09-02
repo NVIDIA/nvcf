@@ -143,13 +143,15 @@ type agentDTO struct {
 
 // clusterDTO represents an NVCA clusterDTO definition stored in the NGC API
 type clusterDTO struct {
-	ID            string              `json:"clusterId"`
-	Name          string              `json:"clusterName"`
-	Description   string              `json:"clusterDescription"`
-	GroupName     string              `json:"clusterGroupName"`
-	GroupID       string              `json:"clusterGroupId"`
-	Status        types.ClusterStatus `json:"status"`
-	LastConnected metav1.Time         `json:"nvcaLastConnected"`
+	ControlPlaneID     string              `json:"controlPlaneId,omitempty"`
+	ControlPlaneIDYAML string              `json:"controlPlaneID,omitempty"`
+	ID                 string              `json:"clusterId"`
+	Name               string              `json:"clusterName"`
+	Description        string              `json:"clusterDescription"`
+	GroupName          string              `json:"clusterGroupName"`
+	GroupID            string              `json:"clusterGroupId"`
+	Status             types.ClusterStatus `json:"status"`
+	LastConnected      metav1.Time         `json:"nvcaLastConnected"`
 
 	NCAID string `json:"ncaID"`
 
@@ -214,6 +216,13 @@ type clusterDTO struct {
 	} `json:"miniService,omitempty"`
 	// Agent configures NVCA agent-specific settings sourced from cluster DTO.
 	Agent *agentDTO `json:"agent,omitempty"`
+}
+
+func (c *clusterDTO) controlPlaneID() string {
+	if c.ControlPlaneID != "" {
+		return c.ControlPlaneID
+	}
+	return c.ControlPlaneIDYAML
 }
 
 // getClientID returns the OAuth client ID.

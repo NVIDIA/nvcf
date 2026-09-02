@@ -98,8 +98,35 @@ jobs:
       - name: Lint and render every chart with a CI values file
         run: ./tools/ci/check-helm-charts
 
+      - name: Run control-plane isolation render regressions
+        run: |
+          sh migrations/cassandra/tests/test-execute-sqls.sh
+          bash deploy/helm/cassandra/helm/scripts/test-bitnami-upgrade-identity.sh
+          bash migrations/openbao/tests/namespace-isolation-test.sh
+          bash deploy/helm/gateway-routes/scripts/test-render-routes.sh
+          bash deploy/helm/admin-token-issuer-proxy/scripts/test-gateway-namespace-isolation.sh
+          bash deploy/helm/cloud-functions/nvcf-api/scripts/test-account-bootstrap-render.sh
+          bash deploy/helm/openbao/helm/scripts/test-control-plane-isolation.sh
+          bash deploy/helm/icms/scripts/test-control-plane-isolation.sh
+          make -C deploy/helm/nvca-operator test-control-plane-isolation
+          make -C deploy/helm/llm-request-router check-pki-render
+
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
+
+      - name: Run compute-plane Helmfile render and lifecycle tests
+        run: make -C deploy/stacks/nvcf-compute-plane test-local
+
+      - name: Run compute-plane Make safety regression on Alpine 3.20
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace:ro" \
+            --workdir /workspace \
+            alpine:3.20 sh -ec '
+              apk add --no-cache bash make yq >/dev/null
+              make --version | sed -n "1p"
+              make -C deploy/stacks/nvcf-compute-plane test-control-plane-id-safety
+            '
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
@@ -134,6 +161,7 @@ jobs:
         run: |
           make -C tools/ncp-local-cluster test-cluster-lifecycle-make
           make -C tools/ncp-local-cluster test-multicluster-make
+          make -C tools/ncp-local-cluster test-isolated-control-plane-gateways
 
       # The repo tooling modules carry tests that no workflow ran, so a pull
       # request could break them and still go green. tools/docs-version-sync

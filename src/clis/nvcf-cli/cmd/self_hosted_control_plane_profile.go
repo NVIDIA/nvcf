@@ -51,17 +51,23 @@ type controlPlaneProfileWriteRequest struct {
 	ICMSURL             string
 	NATSURL             string
 	StackDomain         string
+	ControlPlaneID      string
 	SourceRootCA        bool
 	RootCAPEM           string
 }
 
 func writeControlPlaneProfile(req controlPlaneProfileWriteRequest) (string, error) {
-	if req.StackDomain == "" {
-		domain, err := loadControlPlaneStackDomain(req.StackPath, req.Env)
+	if req.StackDomain == "" || req.ControlPlaneID == "" {
+		settings, err := loadControlPlaneStackProfileSettings(req.StackPath, req.Env)
 		if err != nil {
 			return "", err
 		}
-		req.StackDomain = domain
+		if req.StackDomain == "" {
+			req.StackDomain = settings.Domain
+		}
+		if req.ControlPlaneID == "" {
+			req.ControlPlaneID = settings.ControlPlaneID
+		}
 	}
 	doc := buildControlPlaneProfile(req)
 	rootCAPEM := strings.TrimSpace(req.RootCAPEM)
@@ -71,7 +77,7 @@ func writeControlPlaneProfile(req controlPlaneProfileWriteRequest) (string, erro
 			ctx = context.Background()
 		}
 		var err error
-		rootCAPEM, err = fetchControlPlaneRootCAPEM(ctx, req.ControlPlaneContext)
+		rootCAPEM, err = fetchControlPlaneRootCAPEM(ctx, req.ControlPlaneContext, req.ControlPlaneID)
 		if err != nil {
 			return "", err
 		}
@@ -92,8 +98,8 @@ func controlPlaneProfilePath(stackPath string) string {
 	return filepath.Join(stackPath, "out", controlPlaneProfileFileName)
 }
 
-var fetchControlPlaneRootCAPEM = func(ctx context.Context, kctx string) (string, error) {
-	cfg := controlPlaneRootCAOpenBaoConfig(kctx)
+var fetchControlPlaneRootCAPEM = func(ctx context.Context, kctx, controlPlaneID string) (string, error) {
+	cfg := controlPlaneRootCAOpenBaoConfig(kctx, controlPlaneID)
 	pem, err := openbao.NewClient(cfg, nil).ReadPKICertificatePEM(ctx, controlPlaneRootPKIPath())
 	if errors.Is(err, openbao.ErrPKICertificateNotFound) {
 		return "", nil
@@ -104,13 +110,19 @@ var fetchControlPlaneRootCAPEM = func(ctx context.Context, kctx string) (string,
 	return strings.TrimSpace(pem), nil
 }
 
-func controlPlaneRootCAOpenBaoConfig(kctx string) *openbao.Config {
+func controlPlaneRootCAOpenBaoConfig(kctx, controlPlaneID string) *openbao.Config {
+	prefix := ""
+	if id := strings.TrimSpace(controlPlaneID); id != "" {
+		prefix = id + "-"
+	}
+	vaultNamespace := prefix + "vault-system"
 	return &openbao.Config{
-		OpenBaoURL:        defaultString(firstNonEmptyEnv("NVCF_OPENBAO_URL", "OPENBAO_URL", "VAULT_ADDR", "BAO_ADDR"), "http://openbao-server.vault-system.svc.cluster.local:8200"),
-		OpenBaoNamespace:  defaultString(os.Getenv("NVCF_OPENBAO_NAMESPACE"), "vault-system"),
-		OpenBaoSecretName: defaultString(os.Getenv("NVCF_OPENBAO_SECRET_NAME"), "openbao-server-root-token"),
+		OpenBaoURL: defaultString(firstNonEmptyEnv("NVCF_OPENBAO_URL", "OPENBAO_URL", "VAULT_ADDR", "BAO_ADDR"),
+			fmt.Sprintf("http://%sopenbao-server.%s.svc.cluster.local:8200", prefix, vaultNamespace)),
+		OpenBaoNamespace:  defaultString(os.Getenv("NVCF_OPENBAO_NAMESPACE"), vaultNamespace),
+		OpenBaoSecretName: defaultString(os.Getenv("NVCF_OPENBAO_SECRET_NAME"), prefix+"openbao-server-root-token"),
 		KubeContext:       kctx,
-		ClusterNamespace:  defaultString(os.Getenv("NVCF_CLUSTER_NAMESPACE"), "nvcf"),
+		ClusterNamespace:  defaultString(os.Getenv("NVCF_CLUSTER_NAMESPACE"), prefix+"nvcf"),
 		UtilityImage:      defaultString(os.Getenv("NVCF_CLUSTER_UTILITY_IMAGE"), "curlimages/curl:latest"),
 	}
 }
@@ -148,6 +160,7 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 	sisHost := firstNonEmpty(os.Getenv("NVCF_ICMS_HOST"), viper.GetString("icms_host"), "sis."+domain)
 	revalHost := firstNonEmpty(os.Getenv("NVCF_REVAL_HOST"), viper.GetString("reval_host"), "reval."+domain)
 	natsHost := firstNonEmpty(os.Getenv("NVCF_NATS_HOST"), viper.GetString("nats_host"), "nats."+domain)
+	inClusterEndpoints := profileInClusterEndpointScope(req.ControlPlaneID)
 	if strings.EqualFold(req.Env, "local") {
 		computeEndpoints.ICMSServiceURL = rewriteURLHost(computeEndpoints.ICMSServiceURL, sisHost)
 		computeEndpoints.ReValServiceURL = rewriteURLHost(computeEndpoints.ReValServiceURL, revalHost)
@@ -162,11 +175,7 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 			NCAID:       defaultString(req.NCAID, "nvcf-default"),
 			Region:      defaultString(req.Region, "us-west-1"),
 			Endpoints: controlplaneprofile.Endpoints{
-				InCluster: controlplaneprofile.EndpointScope{
-					ICMSURL:  "http://api.sis.svc.cluster.local:8080",
-					ReValURL: "http://reval.nvcf.svc.cluster.local:8080",
-					NATSURL:  "nats://nats.nats-system.svc.cluster.local:4222",
-				},
+				InCluster: inClusterEndpoints,
 				ComputeReachable: controlplaneprofile.EndpointScope{
 					ICMSURL:  computeEndpoints.ICMSServiceURL,
 					ReValURL: computeEndpoints.ReValServiceURL,
@@ -189,11 +198,28 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 	}
 }
 
-func loadControlPlaneStackDomain(stackPath, env string) (string, error) {
-	if stackPath == "" {
-		return "", nil
+func profileInClusterEndpointScope(controlPlaneID string) controlplaneprofile.EndpointScope {
+	prefix := ""
+	if id := strings.TrimSpace(controlPlaneID); id != "" {
+		prefix = id + "-"
 	}
-	domain := ""
+	return controlplaneprofile.EndpointScope{
+		ICMSURL:  fmt.Sprintf("http://api.%ssis.svc.cluster.local:8080", prefix),
+		ReValURL: fmt.Sprintf("http://reval.%snvcf.svc.cluster.local:8080", prefix),
+		NATSURL:  fmt.Sprintf("nats://nats.%snats-system.svc.cluster.local:4222", prefix),
+	}
+}
+
+type controlPlaneStackProfileSettings struct {
+	Domain         string
+	ControlPlaneID string
+}
+
+func loadControlPlaneStackProfileSettings(stackPath, env string) (controlPlaneStackProfileSettings, error) {
+	if stackPath == "" {
+		return controlPlaneStackProfileSettings{}, nil
+	}
+	settings := controlPlaneStackProfileSettings{}
 	for _, name := range []string{"base.yaml", env + ".yaml"} {
 		path := filepath.Join(stackPath, "environments", name)
 		body, err := os.ReadFile(path)
@@ -201,21 +227,32 @@ func loadControlPlaneStackDomain(stackPath, env string) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", fmt.Errorf("reading control-plane stack values %q: %w", path, err)
+			return controlPlaneStackProfileSettings{}, fmt.Errorf("reading control-plane stack values %q: %w", path, err)
 		}
 		var values struct {
 			Global struct {
-				Domain string `yaml:"domain"`
+				Domain       string `yaml:"domain"`
+				ControlPlane struct {
+					ID string `yaml:"id"`
+				} `yaml:"controlPlane"`
 			} `yaml:"global"`
 		}
 		if err := yaml.Unmarshal(body, &values); err != nil {
-			return "", fmt.Errorf("parsing control-plane stack values %q: %w", path, err)
+			return controlPlaneStackProfileSettings{}, fmt.Errorf("parsing control-plane stack values %q: %w", path, err)
 		}
 		if value := strings.TrimSpace(values.Global.Domain); value != "" {
-			domain = value
+			settings.Domain = value
+		}
+		if value := strings.TrimSpace(values.Global.ControlPlane.ID); value != "" {
+			settings.ControlPlaneID = value
 		}
 	}
-	return domain, nil
+	return settings, nil
+}
+
+func loadControlPlaneStackDomain(stackPath, env string) (string, error) {
+	settings, err := loadControlPlaneStackProfileSettings(stackPath, env)
+	return settings.Domain, err
 }
 
 func resolveProfileICMSURL(flagValue, env, stackDomain string) string {

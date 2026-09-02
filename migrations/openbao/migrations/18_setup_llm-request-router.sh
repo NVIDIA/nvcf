@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="nvcf"
+SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 SERVICE_ACCOUNT_NAME="llm-request-router"
 
 #-------------------------------------------
@@ -40,7 +40,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="services-all-kv-ro"
 # Add Access to NVCF API via JWT Secret Role
 #-------------------------------------------
 
-NVCF_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+NVCF_API_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 NVCF_API_SERVICE_ACCOUNT_NAME="nvcf-api"
 NVCF_API_SERVICE_NAME="api"
 NVCF_API_SECRET_BASE_PATH="services/${NVCF_API_SERVICE_ACCOUNT_NAME}"

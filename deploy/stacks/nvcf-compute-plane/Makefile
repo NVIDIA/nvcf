@@ -22,7 +22,18 @@ HELMFILE_BIN := $(MAKEFILE_DIR)/bin/helmfile
 HELM_BIN := $(MAKEFILE_DIR)/bin/helm
 HELM_PLUGINS_DIR := $(MAKEFILE_DIR)/bin/helm-plugins
 
-# Detect OS and architecture
+# Development mode flag - skip version checks since we use pinned binaries
+DEV_MODE := 1
+
+# Use ensure-binaries hook
+INSTALL_PRE_HOOKS := ensure-binaries
+APPLY_PRE_HOOKS := ensure-binaries
+
+# --- Include Core Targets ---
+include Makefile.dist
+
+# Run platform-detection subprocesses only after Makefile.dist has captured,
+# removed, and safely resolved the command-line control-plane identity.
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
@@ -46,21 +57,11 @@ endif
 HELMFILE_DOWNLOAD_URL := https://github.com/helmfile/helmfile/releases/download/v$(HELMFILE_VERSION)/helmfile_$(HELMFILE_VERSION)_$(HELMFILE_OS)_$(HELMFILE_ARCH).tar.gz
 HELM_DOWNLOAD_URL := https://get.helm.sh/helm-v$(HELM_VERSION)-$(HELMFILE_OS)-$(HELMFILE_ARCH).tar.gz
 
-# Development mode flag - skip version checks since we use pinned binaries
-DEV_MODE := 1
-
-# Use ensure-binaries hook
-INSTALL_PRE_HOOKS := ensure-binaries
-APPLY_PRE_HOOKS := ensure-binaries
-
-# --- Include Core Targets ---
-include Makefile.dist
-
 # --- Include Docker Targets (optional) ---
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-nvca-entrypoints test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-nvca-entrypoints test-control-plane-id-safety test-control-plane-isolation test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -117,6 +118,7 @@ clean-dist:
 dist: clean-dist
 	@echo ">>> Building distribution package..."
 	@mkdir -p "$(DIST_DIR)/environments"
+	@mkdir -p "$(DIST_DIR)/scripts"
 
 	# Copy Makefile.dist as the distribution Makefile
 	@cp "$(MAKEFILE_DIR)/Makefile.dist" "$(DIST_DIR)/Makefile"
@@ -126,6 +128,9 @@ dist: clean-dist
 
 	# Copy environments/base.yaml
 	@cp "$(MAKEFILE_DIR)/environments/base.yaml" "$(DIST_DIR)/environments/"
+
+	# Copy identity resolver used by the distributable Makefile
+	@cp "$(MAKEFILE_DIR)/scripts/resolve-control-plane-id.sh" "$(DIST_DIR)/scripts/"
 
 	# Copy helmfile.d files
 	@cp -r "$(MAKEFILE_DIR)/helmfile.d" "$(DIST_DIR)/"
@@ -162,12 +167,13 @@ GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local
 # this repo's tests; `make template` on its own keeps helmfile's default layout.
 GOLDEN_OUTPUT_DIR_TEMPLATE ?= {{ .OutputDir }}/{{ .State.BaseName }}-{{ .Release.Name }}
 
-render-local: dist
+render-local: ensure-binaries dist
 	@echo ">>> Rendering local environment into $(DIST_DIR)/out..."
 	@cp -r testdata/environments/* $(DIST_DIR)/environments/
 	@cp -r testdata/registration $(DIST_DIR)/
 	@cd $(DIST_DIR) && CLUSTER_NAME=ncp-local NCA_ID=ncp-local HELMFILE_ENV=local \
-		make template OUTPUT_DIR_TEMPLATE='$(GOLDEN_OUTPUT_DIR_TEMPLATE)'
+		make template DEV_MODE=1 DEV_BIN_DIR="$(MAKEFILE_DIR)/bin" \
+		OUTPUT_DIR_TEMPLATE='$(GOLDEN_OUTPUT_DIR_TEMPLATE)'
 
 test-observability-profile:
 	@tests/observability-profile.sh
@@ -181,7 +187,13 @@ test-kube-context:
 test-nvca-entrypoints: render-local
 	@tests/nvca-entrypoints.sh "$(DIST_DIR)/out"
 
-test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-entrypoints
+test-control-plane-id-safety:
+	@tests/control-plane-id-safety.sh
+
+test-control-plane-isolation: ensure-binaries
+	@tests/control-plane-isolation.sh
+
+test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-entrypoints test-control-plane-id-safety test-control-plane-isolation
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local
@@ -215,6 +227,8 @@ help:
 	@echo "  install            Initial deployment to cluster (helmfile sync)"
 	@echo "  apply              Update existing deployment (helmfile apply)"
 	@echo "  destroy            Remove all releases and clean up namespaces"
+	@echo "  install-shared-prerequisites  Install cluster-wide prerequisite releases"
+	@echo "  destroy-shared-prerequisites  Remove cluster-wide prerequisite releases"
 	@echo "  clean              Remove generated output directory"
 	@echo ""
 	@echo "Distribution Targets:"
@@ -226,12 +240,15 @@ help:
 	@echo "  test-register-cluster       Verify generated profile registration handoff"
 	@echo "  test-kube-context           Verify lifecycle and cleanup context propagation"
 	@echo "  test-nvca-entrypoints       Verify rendered NVCA images use available entrypoints"
+	@echo "  test-control-plane-id-safety Verify literal identity handling under GNU Make"
+	@echo "  test-control-plane-isolation Verify dual control-plane compute isolation and teardown"
 	@echo "  test-local         Render the local env and diff against golden testdata"
 	@echo "  generate-golden    Render the local env and update golden testdata"
 	@echo ""
 	@echo "Configuration:"
 	@echo "  HELMFILE_ENV       Environment name (default: $(HELMFILE_ENV))"
 	@echo "                     Maps to: environments/<env>.yaml"
+	@echo "  CONTROL_PLANE_ID   Optional identity override; defaults to global.controlPlane.id"
 	@echo "  HELMFILE_SELECTOR  Optional release selector (e.g., name=nvca-operator)"
 	@echo "  KUBECONFIG_FILE    Path to kubeconfig file (pass to all targets in"
 	@echo "                     multi-cluster setups so registration reads JWKS"

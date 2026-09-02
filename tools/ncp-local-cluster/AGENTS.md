@@ -19,6 +19,7 @@ make print-compute-clusters
 make test-cluster-lifecycle-make
 make test-multicluster-make
 make test-validate-gateway-route
+make test-isolated-control-plane-gateways
 ```
 
 Cluster lifecycle targets require local tools such as `k3d`, `kubectl`, `helm`, and Docker.

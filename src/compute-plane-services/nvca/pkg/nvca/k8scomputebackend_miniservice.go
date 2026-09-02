@@ -60,8 +60,19 @@ const (
 	helmChartInstanceRoleName          = "mini-service-restrictions"
 )
 
-func getMiniServiceInstanceID(srName string) string {
-	return trimDNS1123Label(srName, len(miniserviceNameSuffix)) + miniserviceNameSuffix
+func getMiniServiceInstanceID(srName string, controlPlaneIDs ...string) string {
+	legacyName := trimDNS1123Label(srName, len(miniserviceNameSuffix)) + miniserviceNameSuffix
+	if len(controlPlaneIDs) == 0 {
+		return legacyName
+	}
+	return nvcatypes.ControlPlaneResourceName(controlPlaneIDs[0], legacyName)
+}
+
+func getMiniServiceNamespace(srName string, controlPlaneIDs ...string) string {
+	if len(controlPlaneIDs) == 0 {
+		return srName
+	}
+	return nvcatypes.ControlPlaneResourceName(controlPlaneIDs[0], srName)
 }
 
 func isMiniServiceInstance(name string) bool {
@@ -129,9 +140,10 @@ func (c K8sComputeBackend) applyMiniServiceCreationMessage(ctx context.Context,
 		"Creating %v requested instances", nil, instCount)
 
 	labelsForReq := nvcatypes.GetLabelsForRequest(req, c.bk8s.featureFlagFetcher)
+	labelsForReq = nvcatypes.AddControlPlaneLabel(labelsForReq, c.bk8s.controlPlaneID)
 	annosForReq := nvcatypes.GetAnnotationsForRequest(req)
 
-	instanceID := getMiniServiceInstanceID(req.Name)
+	instanceID := getMiniServiceInstanceID(req.Name, c.bk8s.controlPlaneID)
 
 	hcCfg, err := common.ExtractHelmConfiguration(envB64, hcLaunchSpec)
 	if err != nil {
@@ -143,7 +155,7 @@ func (c K8sComputeBackend) applyMiniServiceCreationMessage(ctx context.Context,
 	ms.Labels = labelsForReq
 	ms.Annotations = annosForReq
 	ms.Spec = v1alpha1.MiniServiceSpec{
-		Namespace:       req.Name,
+		Namespace:       getMiniServiceNamespace(req.Name, c.bk8s.controlPlaneID),
 		ICMSRequestName: req.Name,
 		HelmChartConfig: hcCfg,
 	}

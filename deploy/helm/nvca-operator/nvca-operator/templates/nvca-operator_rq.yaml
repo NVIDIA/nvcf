@@ -16,8 +16,8 @@
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: nvca-operator
-  namespace: nvca-operator
+  name: {{ include "nvcaop.fullname" . }}
+  namespace: {{ .Release.Namespace }}
 spec:
   scopeSelector:
     matchExpressions:

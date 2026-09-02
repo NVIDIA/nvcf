@@ -295,6 +295,30 @@ The cluster uses Envoy Gateway with hostname-based routing. Routes use the `.loc
 
 Use the [self-hosted gateway route manifests](../../deploy/helm/gateway-routes) as the source of truth for route names and subdomains.
 
+For multiple isolated control planes in one local cluster, create a distinct
+Gateway set and non-overlapping listener ports for each plane after
+`setup-gateway-api`:
+
+```bash
+make deploy-isolated-control-plane-gateways \
+  CONTROL_PLANE_ID=plane-a \
+  ISOLATED_SHARED_HTTP_PORT=18080 \
+  ISOLATED_GRPC_API_PORT=19081 \
+  ISOLATED_GRPC_WORKER_PORT=19086 \
+  ISOLATED_NATS_PORT=14222
+```
+
+This creates `<id>-shared-gw`, `<id>-grpc-gw`, and `<id>-nats-gw` plus owned
+EnvoyProxy policies in `envoy-gateway-system`. Each policy gives the generated
+Deployment and Service a bounded name so k3s ServiceLB labels remain within the
+63-character Kubernetes limit. The lifecycle rejects foreign ownership and listener-port collisions,
+allows routes only from namespaces labeled
+`nvcf.nvidia.com/control-plane-id=<id>`, and waits for all three Gateways to
+become `Programmed`. The self-managed stack's named-plane install prepares
+those labels. Remove only that plane's owned Gateways with the same variables and
+`make destroy-isolated-control-plane-gateways`; the command refuses to delete
+an unowned or differently owned Gateway.
+
 ### Troubleshooting Hostname Resolution
 
 If `.localhost` domains don't resolve automatically, add entries to `/etc/hosts`:

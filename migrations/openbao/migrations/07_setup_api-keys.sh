@@ -27,7 +27,7 @@ else
   source "${curr_dir}/utils/encryption_setup.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="api-keys"
+SERVICE_ACCOUNT_NAMESPACE="${API_KEYS_NAMESPACE:-api-keys}"
 SERVICE_ACCOUNT_NAME="api-keys-api"
 
 # 43-char service id for NVCT registration. Must match the value stored

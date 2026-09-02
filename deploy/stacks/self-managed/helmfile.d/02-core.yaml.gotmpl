@@ -6,6 +6,56 @@ environments:
 
 ---
 
+{{- $controlPlaneID := dig "global" "controlPlane" "id" "" .Values | toString -}}
+{{- $sharedInfrastructure := dig "global" "controlPlane" "sharedInfrastructure" "bundled" .Values | toString -}}
+{{- if and $controlPlaneID (or (gt (len $controlPlaneID) 20) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $controlPlaneID)) (eq $controlPlaneID "default")) -}}
+{{- fail "global.controlPlane.id must be a DNS-1123 label of at most 20 characters and must not be 'default'" -}}
+{{- end -}}
+{{- if and $controlPlaneID (ne $sharedInfrastructure "external") -}}
+{{- fail "global.controlPlane.sharedInfrastructure must be external for a named control plane" -}}
+{{- end -}}
+{{- if and (eq $sharedInfrastructure "external") (dig "certManager" "enabled" false .Values) -}}
+{{- fail "certManager.enabled must be false when global.controlPlane.sharedInfrastructure is external" -}}
+{{- end -}}
+{{- $gatewayEnabled := dig "ingress" "gatewayApi" "enabled" false .Values -}}
+{{- if and $controlPlaneID $gatewayEnabled (eq (dig "global" "domain" "localhost" .Values | toString) "localhost") -}}
+{{- fail "global.domain must be unique and non-localhost for a named control plane with Gateway API enabled" -}}
+{{- end -}}
+{{- if and $controlPlaneID (dig "addons" "nvcfUi" "enabled" false .Values) -}}
+{{- fail "addons.nvcfUi.enabled must be false for a named control plane because the pinned chart is not namespace-isolated" -}}
+{{- end -}}
+{{- $controlPlanePrefix := "" -}}
+{{- if $controlPlaneID -}}
+{{- $controlPlanePrefix = printf "%s-" $controlPlaneID -}}
+{{- end -}}
+{{- $apiKeysNamespace := printf "%sapi-keys" $controlPlanePrefix -}}
+{{- $sisNamespace := printf "%ssis" $controlPlanePrefix -}}
+{{- $nvcfNamespace := printf "%snvcf" $controlPlanePrefix -}}
+{{- $nvcfUiNamespace := printf "%snvcf-ui" $controlPlanePrefix -}}
+{{- $essNamespace := printf "%sess" $controlPlanePrefix -}}
+{{- $natsNamespace := printf "%snats-system" $controlPlanePrefix -}}
+{{- $ingressNamespace := .Values.ingress.gatewayApi.controllerNamespace -}}
+{{- if $controlPlaneID -}}
+{{- $ingressNamespace = printf "%singress" $controlPlanePrefix -}}
+{{- end -}}
+{{- $ingressRelease := printf "%singress" $controlPlanePrefix -}}
+{{- if and $controlPlaneID $gatewayEnabled -}}
+{{- range $gatewayName := list (dig "ingress" "gatewayApi" "gateways" "shared" "name" "" $.Values | toString) (dig "ingress" "gatewayApi" "gateways" "grpc" "name" "" $.Values | toString) (dig "ingress" "gatewayApi" "gateways" "nats" "name" "" $.Values | toString) -}}
+{{- if not (hasPrefix $controlPlanePrefix $gatewayName) -}}
+{{- fail (printf "named control-plane Gateway %q must start with %q" $gatewayName $controlPlanePrefix) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $controlPlaneID (dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values) -}}
+{{- $llmGrpcGatewayName := dig "ingress" "gatewayApi" "gateways" "llmGrpc" "name" "" .Values | default (printf "%sllm-grpc-gw" $controlPlanePrefix) | toString -}}
+{{- $llmQuicGatewayName := dig "ingress" "gatewayApi" "gateways" "llmQuic" "name" "" .Values | default (printf "%sllm-quic-gw" $controlPlanePrefix) | toString -}}
+{{- range $gatewayName := list $llmGrpcGatewayName $llmQuicGatewayName -}}
+{{- if not (hasPrefix $controlPlanePrefix $gatewayName) -}}
+{{- fail (printf "named control-plane Gateway %q must start with %q" $gatewayName $controlPlanePrefix) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 repositories:
   - name: nvcf
 {{- if dig "global" "helm" "sources" "url" "" .Values }}
@@ -45,75 +95,75 @@ releases:
   # --- NVCF Services ---
   - name: api-keys
     version: 1.6.0
-    namespace: api-keys
+    namespace: {{ $apiKeysNamespace }}
     inherit:
       - template: service
 
   - name: sis
     version: 2.0.0
-    namespace: sis
+    namespace: {{ $sisNamespace }}
     inherit:
       - template: service
 
   - name: api
     version: 1.25.1
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
     needs:
       # not needed to start, but needed for bootstrapping account which is done with a script in the api helm chart
-      - ess/ess-api
+      - {{ $essNamespace }}/ess-api
 
   - name: nvct-api
     version: 1.5.2
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
 
   - name: invocation-service
     version: 1.6.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
 
   - name: grpc-proxy
     version: 1.7.1
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
 
   - name: ratelimiter
     chart: nvcf/helm-nvcf-rate-limiter
     version: 1.1.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: rateLimiter.enabled
     values:
       - ../global.yaml.gotmpl
     labels:
       release-group: services
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
 
   - name: ess-api
     version: 1.7.2
-    namespace: ess
+    namespace: {{ $essNamespace }}
     inherit:
       - template: service
 
   - name: notary-service
     version: 1.4.2
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
 
   - name: admin-issuer-proxy
     chart: nvcf/helm-admin-token-issuer-proxy
     version: 1.4.3
-    namespace: api-keys
+    namespace: {{ $apiKeysNamespace }}
     values:
       - ../global.yaml.gotmpl
     # Finding #22 (E2E 2026-04-20): admin-issuer-proxy was not installed by
@@ -145,7 +195,7 @@ releases:
   - name: reval
     chart: nvcf/helm-reval
     version: 1.3.8
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     values:
       - ../global.yaml.gotmpl
     labels:
@@ -154,7 +204,7 @@ releases:
   - name: nats-auth-callout-service
     chart: nvcf/helm-nvcf-nats-auth-callout-service
     version: 1.1.3
-    namespace: nats-system
+    namespace: {{ $natsNamespace }}
     values:
       - ../global.yaml.gotmpl
       {{- if .Values.global.imagePullSecrets }}
@@ -170,42 +220,42 @@ releases:
     {{- if not $llmRequestRouterChartPath }}
     version: 1.12.2
     {{- end }}
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: addons.llm.enabled
     values:
       - ../global.yaml.gotmpl
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
     labels:
       release-group: services
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
     version: 1.4.2
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: addons.llm.enabled
     values:
       - ../global.yaml.gotmpl
     needs:
-      - nvcf/llm-request-router
+      - {{ $nvcfNamespace }}/llm-request-router
     labels:
       release-group: services
 
   - name: vanity-gateway
     version: 0.4.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: addons.vanityGateway.enabled
     inherit:
       - template: service
     needs:
-      - nvcf/invocation-service
+      - {{ $nvcfNamespace }}/invocation-service
     labels:
       release-group: services
 
   - name: nvcf-ui
     chart: nvcf/helm-nvcf-ui
     version: 1.1.2
-    namespace: nvcf-ui
+    namespace: {{ $nvcfUiNamespace }}
     condition: addons.nvcfUi.enabled
     values:
       - ../global.yaml.gotmpl
@@ -213,19 +263,19 @@ releases:
       release-group: services
 
   # --- Gateway API Ingress ---
-  - name: ingress
+  - name: {{ $ingressRelease }}
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
     version: 1.17.0
     {{- end }}
     needs:
-      - nvcf/notary-service
-      - api-keys/api-keys
+      - {{ $nvcfNamespace }}/notary-service
+      - {{ $apiKeysNamespace }}/api-keys
       {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
-      - nvcf-ui/nvcf-ui
+      - {{ $nvcfUiNamespace }}/nvcf-ui
       {{- end }}
-    namespace: {{ .Values.ingress.gatewayApi.controllerNamespace }}
+    namespace: {{ $ingressNamespace }}
     condition: ingress.gatewayApi.enabled
     values:
       - ../global.yaml.gotmpl

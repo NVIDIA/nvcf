@@ -38,6 +38,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 // Re-export constants from types package for backward compatibility
@@ -64,12 +65,13 @@ type cleanupOptions struct {
 
 // BackendNamespaces returns the system and requests namespace names for an NVCFBackend
 func BackendNamespaces(nb *nvidiaiov1.NVCFBackend) (systemNS, requestsNS string) {
-	systemNS = DefaultNVCASystemNamespace
+	controlPlaneID := nb.Spec.ClusterConfig.ControlPlaneID
+	systemNS = nvcatypes.ControlPlaneResourceName(controlPlaneID, DefaultNVCASystemNamespace)
 	if nb.Spec.ClusterConfig.SystemNamespace != "" {
 		systemNS = nb.Spec.ClusterConfig.SystemNamespace
 	}
 
-	requestsNS = DefaultNVCARequestsNamespace
+	requestsNS = nvcatypes.ControlPlaneResourceName(controlPlaneID, DefaultNVCARequestsNamespace)
 	if nb.Spec.ClusterConfig.RequestsNamespace != "" {
 		requestsNS = nb.Spec.ClusterConfig.RequestsNamespace
 	}
@@ -77,9 +79,9 @@ func BackendNamespaces(nb *nvidiaiov1.NVCFBackend) (systemNS, requestsNS string)
 	return systemNS, requestsNS
 }
 
-// CleanupBackendResources deletes all resources created by an NVCFBackend
-// including namespaces, webhooks, and cluster roles.
-// Note: Operator-managed CRDs are cleaned up via owner references.
+// CleanupBackendResources deletes all per-backend resources created by an
+// NVCFBackend, including namespaces, webhooks, and cluster roles. Shared CRD
+// definitions are intentionally preserved for other control planes.
 func CleanupBackendResources( //nolint:revive // exported name is intentional
 	ctx context.Context,
 	k8sClient kubernetes.Interface,
@@ -96,6 +98,19 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	log.Infof("cleaning-up resources for nvcfbackend %v/%v", nb.Namespace, nb.Name)
 
 	systemNS, requestsNS := BackendNamespaces(nb)
+	controlPlaneID := nb.Spec.ClusterConfig.ControlPlaneID
+	clusterResourceName := nvcatypes.ControlPlaneResourceName(controlPlaneID, NVCAModuleName)
+	modelCacheNamespace := nvcatypes.ControlPlaneResourceName(controlPlaneID, DefaultModelCacheInitNamespace)
+	if controlPlaneID != "" {
+		for _, namespace := range []string{systemNS, requestsNS, modelCacheNamespace} {
+			if err := validateNamespaceOwnership(ctx, k8sClient, namespace, controlPlaneID); err != nil {
+				return err
+			}
+		}
+		if err := validateClusterResourceOwnership(ctx, k8sClient, clusterResourceName, controlPlaneID); err != nil {
+			return err
+		}
+	}
 
 	// Delete all ICMSRequest CRs (remove finalizers first, then delete)
 	if err := deleteICMSRequests(ctx, dynamicClient, requestsNS); err != nil {
@@ -106,57 +121,92 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	// These are standalone top-level namespaces with no owner references, so they
 	// won't be cleaned up by garbage collection. Normally NVCA's MiniService controller
 	// handles this, but during forced cleanup NVCA is being torn down.
-	if err := deleteWorkloadNamespaces(ctx, k8sClient); err != nil {
+	if err := deleteWorkloadNamespaces(ctx, k8sClient, controlPlaneID); err != nil {
 		log.WithError(err).Warn("failed to delete some workload namespaces")
 	}
 
 	// Cleanup the system namespace
-	err := k8sClient.CoreV1().Namespaces().Delete(ctx, systemNS, metav1.DeleteOptions{})
+	err := deleteNamespaceForControlPlane(ctx, k8sClient, systemNS, controlPlaneID)
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", systemNS, err)
 	}
 
 	// Cleanup the requests namespace
-	err = k8sClient.CoreV1().Namespaces().Delete(ctx, requestsNS, metav1.DeleteOptions{})
+	err = deleteNamespaceForControlPlane(ctx, k8sClient, requestsNS, controlPlaneID)
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", requestsNS, err)
 	}
 
 	// Cleanup the shared model-cache initialization namespace created by NVCA.
-	err = k8sClient.CoreV1().Namespaces().Delete(ctx, DefaultModelCacheInitNamespace, metav1.DeleteOptions{})
+	err = deleteNamespaceForControlPlane(ctx, k8sClient, modelCacheNamespace, controlPlaneID)
 	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to cleanup namespace %v, err: %v", DefaultModelCacheInitNamespace, err)
+		return fmt.Errorf("failed to cleanup namespace %v, err: %v", modelCacheNamespace, err)
 	}
 
 	// Delete ValidatingWebhookConfiguration
-	err = k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
+	err = k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(ctx, clusterResourceName, metav1.DeleteOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete validatingwebhookconfiguration %v, err: %v", NVCAModuleName, err)
+		return fmt.Errorf("failed to delete validatingwebhookconfiguration %v, err: %v", clusterResourceName, err)
 	}
 
 	// Delete MutatingWebhookConfiguration
-	err = k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
+	err = k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Delete(ctx, clusterResourceName, metav1.DeleteOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete mutatingwebhookconfiguration %v, err: %v", NVCAModuleName, err)
+		return fmt.Errorf("failed to delete mutatingwebhookconfiguration %v, err: %v", clusterResourceName, err)
 	}
 
 	// Delete ClusterRole
-	err = k8sClient.RbacV1().ClusterRoles().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
+	err = k8sClient.RbacV1().ClusterRoles().Delete(ctx, clusterResourceName, metav1.DeleteOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete cluster-role %v, err: %v", NVCAModuleName, err)
+		return fmt.Errorf("failed to delete cluster-role %v, err: %v", clusterResourceName, err)
 	}
 
 	// Delete ClusterRoleBinding
-	err = k8sClient.RbacV1().ClusterRoleBindings().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
+	err = k8sClient.RbacV1().ClusterRoleBindings().Delete(ctx, clusterResourceName, metav1.DeleteOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete cluster-role-bindings %v, err: %v", NVCAModuleName, err)
+		return fmt.Errorf("failed to delete cluster-role-bindings %v, err: %v", clusterResourceName, err)
 	}
 
-	// Note: Operator-managed CRDs (ICMSRequest, StorageRequest, MiniServices) have owner references
-	// to the NVCFBackend CRD and will be garbage collected when Helm deletes that CRD.
+	// Namespaced CR instances are removed with their owning namespaces. Their
+	// shared CRD definitions remain installed for other control planes.
 
 	log.Infof("Successfully cleaned up resources for nvcfbackend %v/%v", nb.Namespace, nb.Name)
 	return nil
+}
+
+func validateClusterResourceOwnership(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	name string,
+	controlPlaneID string,
+) error {
+	check := func(kind string, object metav1.Object, err error) error {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to get %s %s before cleanup: %w", kind, name, err)
+		}
+		if !nvcatypes.IsOwnedByControlPlane(object, controlPlaneID) {
+			return fmt.Errorf("refusing to delete %s %s owned by another control plane", kind, name)
+		}
+		return nil
+	}
+
+	validatingWebhook, err := k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+	if err := check("validating webhook configuration", validatingWebhook, err); err != nil {
+		return err
+	}
+	mutatingWebhook, err := k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+	if err := check("mutating webhook configuration", mutatingWebhook, err); err != nil {
+		return err
+	}
+	clusterRole, err := k8sClient.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{})
+	if err := check("cluster role", clusterRole, err); err != nil {
+		return err
+	}
+	clusterRoleBinding, err := k8sClient.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+	return check("cluster role binding", clusterRoleBinding, err)
 }
 
 // DeleteNVCFBackend deletes an NVCFBackend resource
@@ -639,11 +689,19 @@ func deleteICMSRequests(ctx context.Context, dynamicClient dynamic.Interface, na
 const workloadNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-type"
 
 // deleteWorkloadNamespaces lists and deletes all NVCA workload namespaces (sr-*).
-func deleteWorkloadNamespaces(ctx context.Context, k8sClient kubernetes.Interface) error {
+func deleteWorkloadNamespaces(ctx context.Context, k8sClient kubernetes.Interface, controlPlaneIDs ...string) error {
 	log := core.GetLogger(ctx)
+	controlPlaneID := ""
+	if len(controlPlaneIDs) != 0 {
+		controlPlaneID = controlPlaneIDs[0]
+	}
+	selector := workloadNamespaceLabelSelector
+	if controlPlaneID != "" {
+		selector += "," + nvcatypes.ControlPlaneIDLabel + "=" + controlPlaneID
+	}
 
 	nsList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-		LabelSelector: workloadNamespaceLabelSelector,
+		LabelSelector: selector,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to list workload namespaces: %w", err)
@@ -670,6 +728,34 @@ func deleteWorkloadNamespaces(ctx context.Context, k8sClient kubernetes.Interfac
 
 	if len(errs) > 0 {
 		return fmt.Errorf("failed to delete %d workload namespace(s)", len(errs))
+	}
+	return nil
+}
+
+func deleteNamespaceForControlPlane(ctx context.Context, k8sClient kubernetes.Interface, namespace, controlPlaneID string) error {
+	if controlPlaneID == "" {
+		return k8sClient.CoreV1().Namespaces().Delete(ctx, namespace, metav1.DeleteOptions{})
+	}
+	ns, err := k8sClient.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	if !nvcatypes.IsOwnedByControlPlane(ns, controlPlaneID) {
+		return fmt.Errorf("refusing to delete namespace %s owned by another control plane", namespace)
+	}
+	return k8sClient.CoreV1().Namespaces().Delete(ctx, namespace, metav1.DeleteOptions{})
+}
+
+func validateNamespaceOwnership(ctx context.Context, k8sClient kubernetes.Interface, namespace, controlPlaneID string) error {
+	ns, err := k8sClient.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !nvcatypes.IsOwnedByControlPlane(ns, controlPlaneID) {
+		return fmt.Errorf("refusing cleanup: namespace %s is not owned by control plane %q", namespace, controlPlaneID)
 	}
 	return nil
 }

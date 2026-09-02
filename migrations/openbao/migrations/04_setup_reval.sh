@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="nvcf"
+SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 SERVICE_ACCOUNT_NAME="reval"
 
 #-------------------------------------------

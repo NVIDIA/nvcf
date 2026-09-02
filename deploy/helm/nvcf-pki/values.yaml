@@ -16,6 +16,7 @@
 clusterIssuer:
   enabled: false
   name: nvcf-openbao-pki
+  controlPlaneID: ""
   server: ""
   path: ""
   auth:

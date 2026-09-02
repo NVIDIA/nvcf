@@ -49,6 +49,7 @@ Chart defaults are defined in [values.yaml](./values.yaml).
 | --- | --- | --- |
 | `clusterIssuer.enabled` | `false` | Creates the `ClusterIssuer` when set to `true`. |
 | `clusterIssuer.name` | `nvcf-openbao-pki` | Name of the cluster-scoped issuer. |
+| `clusterIssuer.controlPlaneID` | empty | Optional control-plane owner label used by named self-managed deployments. |
 | `clusterIssuer.server` | empty | OpenBao server URL reachable from cert-manager. |
 | `clusterIssuer.path` | empty | OpenBao PKI signing path, excluding the `/v1/` prefix. |
 | `clusterIssuer.auth.mountPath` | `/v1/auth/jwt` | OpenBao authentication mount used for login. |
@@ -57,6 +58,10 @@ Chart defaults are defined in [values.yaml](./values.yaml).
 | `clusterIssuer.auth.serviceAccount.audience` | empty | Token audience accepted by the OpenBao JWT role. |
 
 The chart fails to render when it is enabled and any required value is empty.
+When `clusterIssuer.controlPlaneID` is non-empty, the chart adds the
+`nvcf.nvidia.com/control-plane-id` label. This label lets the self-managed
+lifecycle remove retained issuers belonging to one named control plane without
+removing another plane's or an external issuer.
 
 Example values:
 

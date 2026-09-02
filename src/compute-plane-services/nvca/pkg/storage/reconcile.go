@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -96,6 +97,12 @@ func WithICMSRequestNamespace(icmsRequestNamespace string) ReconcilerOption {
 		if icmsRequestNamespace != "" {
 			r.ICMSRequestNamespace = icmsRequestNamespace
 		}
+	}
+}
+
+func WithControlPlaneID(controlPlaneID string) ReconcilerOption {
+	return func(r *Reconciler) {
+		r.controlPlaneID = controlPlaneID
 	}
 }
 
@@ -210,6 +217,7 @@ type Reconciler struct {
 	cfg nvcaconfig.Config
 
 	Client               client.Client
+	controlPlaneID       string
 	ICMSRequestNamespace string
 	Decoder              runtime.Decoder
 	clusterName          string
@@ -251,6 +259,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	st, ref, err := r.getStorageRequest(ctx, req)
 	if err != nil || st == nil {
 		return reconcile.Result{}, err
+	}
+	if r.controlPlaneID != "" && (!strings.HasPrefix(req.Namespace, r.controlPlaneID+"-") || !nvcatypes.IsOwnedByControlPlane(st, r.controlPlaneID)) {
+		log.V(1).Info("StorageRequest belongs to another control plane; ignoring", "controlPlaneID", r.controlPlaneID)
+		return reconcile.Result{}, nil
 	}
 	if err := r.validateStorageRequest(st, ref); err != nil {
 		return reconcile.Result{}, reconcile.TerminalError(err)
@@ -936,8 +948,12 @@ func getWorkloadLabels(obj client.Object) map[string]string {
 }
 
 func getClusterWideResourceLabels(st *nvcav1new.StorageRequest) map[string]string {
-	return map[string]string{
+	result := map[string]string{
 		StorageRequestOwnerKey:     st.Name,
 		StorageRequestNamespaceKey: st.Namespace,
 	}
+	if id := st.Labels[nvcatypes.ControlPlaneIDLabel]; id != "" {
+		result[nvcatypes.ControlPlaneIDLabel] = id
+	}
+	return result
 }

@@ -30,7 +30,7 @@ fi
 # the NATS data plane), not in the standard `nvcf` ns the other per-service
 # scripts use. The `services-all-kv-ro` policy is enough — auth-callout only
 # reads its own KV path written by 03_setup_shared_secrets.sh.
-SERVICE_ACCOUNT_NAMESPACE="nats-system"
+SERVICE_ACCOUNT_NAMESPACE="${NATS_NAMESPACE:-nats-system}"
 SERVICE_ACCOUNT_NAME="nats-auth-callout"
 
 VAULT_JWT_AUTH_ROLE_POLICIES="services-all-kv-ro"

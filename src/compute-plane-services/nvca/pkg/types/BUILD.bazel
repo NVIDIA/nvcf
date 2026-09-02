@@ -7,6 +7,7 @@ go_library(
     name = "types",
     srcs = [
         "common_labels.go",
+        "control_plane.go",
         "event_annotations.go",
         "gpu.go",
         "miniservice_types.go",
@@ -28,7 +29,9 @@ go_library(
         "//src/compute-plane-services/nvca/vendor/gopkg.in/inf.v0:inf_v0",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/labels",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/validation",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/core/v1:core",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
     ],
@@ -44,6 +47,7 @@ go_test(
     name = "types_test",
     srcs = [
         "common_labels_test.go",
+        "control_plane_test.go",
         "event_annotations_test.go",
         "gpu_test.go",
         "miniservice_types_test.go",

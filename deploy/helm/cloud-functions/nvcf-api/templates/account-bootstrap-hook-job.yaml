@@ -51,6 +51,8 @@ spec:
           - serviceAccountToken:
               path: token
               expirationSeconds: 3600
+              # Audience is an opaque shared trust-domain value. OpenBao roles
+              # enforce control-plane isolation with the bound SA namespace.
               audience: http://openbao-server.vault-system.svc.cluster.local:8200
       - name: account-bootstrap-script
         configMap:

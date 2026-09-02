@@ -168,6 +168,7 @@ type AgentOptions struct {
 	NCAId string
 
 	ClusterName        string
+	ControlPlaneID     string
 	ClusterID          string
 	ClusterDescription string
 	ClusterGroupName   string
@@ -503,6 +504,22 @@ func (o *AgentOptions) GetOTelAttributes() []otelattr.KeyValue {
 }
 
 func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
+	if err := types.ValidateControlPlaneID(opts.ControlPlaneID); err != nil {
+		return nil, fmt.Errorf("invalid control plane ID: %w", err)
+	}
+	if opts.ControlPlaneID != "" {
+		if opts.SystemNamespace == "" {
+			opts.SystemNamespace = types.ControlPlaneResourceName(opts.ControlPlaneID, SystemNamespace)
+		}
+		if opts.RequestsNamespace == "" {
+			opts.RequestsNamespace = types.ControlPlaneResourceName(opts.ControlPlaneID, RequestsNamespace)
+		}
+		labelsCopy := labels.Set{}
+		for key, value := range opts.NamespaceLabels {
+			labelsCopy[key] = value
+		}
+		opts.NamespaceLabels = types.AddControlPlaneLabel(labelsCopy, opts.ControlPlaneID)
+	}
 	log := core.GetLogger(ctx)
 	if opts.EffectiveICMSURL() == "" {
 		return nil, errors.New("ICMSURL required for Agent")
@@ -1142,6 +1159,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	log.Info("Configuring backendk8scache")
 	backendk8scache, _, err := a.newBackendK8sCacheBuilder().
 		WithConfig(a.Config).
+		WithControlPlaneID(a.ControlPlaneID).
 		WithClusterProvider(a.CloudProvider).
 		WithClusterRegion(a.ClusterRegion).
 		WithClusterName(a.ClusterName).

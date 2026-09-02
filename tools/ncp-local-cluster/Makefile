@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-cluster-lifecycle-make test-destroy-all-ncp-local test-multicluster-make test-validate-gateway-route setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
+.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-cluster-lifecycle-make test-destroy-all-ncp-local test-multicluster-make test-validate-gateway-route test-isolated-control-plane-gateways setup-gateway-api setup-metallb check-gateway-api deploy-isolated-control-plane-gateways destroy-isolated-control-plane-gateways deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
 
 # === Cluster Configuration ===
 CLUSTER_NAME := ncp-local
@@ -48,6 +48,13 @@ COMPUTE_CLUSTERS ?=
 GATEWAY_HTTP_PORT ?= $(CONTROL_PLANE_HTTP_PORT)
 GATEWAY_ROUTE_TIMEOUT_SECONDS ?= 60
 GATEWAY_ROUTE_RETRY_INTERVAL_SECONDS ?= 2
+CONTROL_PLANE_ID ?=
+ISOLATED_SHARED_HTTP_PORT ?=
+ISOLATED_GRPC_API_PORT ?=
+ISOLATED_GRPC_WORKER_PORT ?=
+ISOLATED_NATS_PORT ?=
+KUBECTL_CONTEXT ?=
+KUBECTL_CONTEXT_FLAG = $(if $(KUBECTL_CONTEXT),--context $(KUBECTL_CONTEXT))
 
 # === Go Credential Provider Configuration ===
 GO_PROVIDER_PATH         := ./credential-provider-go
@@ -315,6 +322,9 @@ test-destroy-all-ncp-local: ## Run dry Makefile tests for host-wide local-cluste
 test-validate-gateway-route: ## Run Gateway route retry tests
 	@tests/test-validate-gateway-route.sh
 
+test-isolated-control-plane-gateways: ## Run isolated control-plane Gateway render tests
+	@tests/test-isolated-control-plane-gateways.sh
+
 # --- Load Balancer & Gateway API Setup ---
 setup-gateway-api:
 	$(call require,kubectl,See https://kubernetes.io/docs/tasks/tools/)
@@ -330,20 +340,38 @@ setup-metallb:
 check-gateway-api:
 	@echo ">>> Checking Gateway API infrastructure..."
 	@echo -n "  Gateway API CRDs: "
-	@if kubectl get crd gateways.gateway.networking.k8s.io >/dev/null 2>&1; then \
+	@if kubectl $(KUBECTL_CONTEXT_FLAG) get crd gateways.gateway.networking.k8s.io >/dev/null 2>&1; then \
 		echo "OK Installed"; \
 	else \
 		echo "ERROR Not found. Run 'make setup-gateway-api'"; \
 		exit 1; \
 	fi
 	@echo -n "  GatewayClass: "
-	@if kubectl get gatewayclass eg >/dev/null 2>&1; then \
+	@if kubectl $(KUBECTL_CONTEXT_FLAG) get gatewayclass eg >/dev/null 2>&1; then \
 		echo "OK Available"; \
 	else \
 		echo "ERROR Not found. Run 'make setup-gateway-api'"; \
 		exit 1; \
 	fi
 	@echo ">>> Gateway API infrastructure is ready!"
+
+deploy-isolated-control-plane-gateways: check-gateway-api ## Create three plane-scoped Gateways; requires CONTROL_PLANE_ID and four ISOLATED_*_PORT values
+	@CONTROL_PLANE_ID="$(CONTROL_PLANE_ID)" \
+	SHARED_HTTP_PORT="$(ISOLATED_SHARED_HTTP_PORT)" \
+	GRPC_API_PORT="$(ISOLATED_GRPC_API_PORT)" \
+	GRPC_WORKER_PORT="$(ISOLATED_GRPC_WORKER_PORT)" \
+	NATS_PORT="$(ISOLATED_NATS_PORT)" \
+	KUBECTL_CONTEXT="$(KUBECTL_CONTEXT)" \
+	  bash ./scripts/configure-isolated-control-plane-gateways.sh apply
+
+destroy-isolated-control-plane-gateways: ## Remove only the Gateways and EnvoyProxy policies owned by CONTROL_PLANE_ID
+	@CONTROL_PLANE_ID="$(CONTROL_PLANE_ID)" \
+	SHARED_HTTP_PORT="$(ISOLATED_SHARED_HTTP_PORT)" \
+	GRPC_API_PORT="$(ISOLATED_GRPC_API_PORT)" \
+	GRPC_WORKER_PORT="$(ISOLATED_GRPC_WORKER_PORT)" \
+	NATS_PORT="$(ISOLATED_NATS_PORT)" \
+	KUBECTL_CONTEXT="$(KUBECTL_CONTEXT)" \
+	  bash ./scripts/configure-isolated-control-plane-gateways.sh delete
 
 # --- Application & Provider Deployment ---
 deploy-sample: # Depends on the cluster being up

@@ -19,7 +19,7 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   name: {{ .Values.nvcfGatewayRoutes.routes.nats.name }}
-  namespace: {{ .Values.nvcfGatewayRoutes.gateways.nats.namespace }}
+  namespace: {{ include "nvcf-gateway.routeNamespace" . }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: nats-route

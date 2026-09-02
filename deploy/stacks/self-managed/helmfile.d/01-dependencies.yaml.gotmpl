@@ -6,11 +6,31 @@ environments:
 
 ---
 
+{{- $controlPlaneID := dig "global" "controlPlane" "id" "" .Values | toString -}}
+{{- $sharedInfrastructure := dig "global" "controlPlane" "sharedInfrastructure" "bundled" .Values | toString -}}
+{{- if and $controlPlaneID (or (gt (len $controlPlaneID) 20) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $controlPlaneID)) (eq $controlPlaneID "default")) -}}
+{{- fail "global.controlPlane.id must be a DNS-1123 label of at most 20 characters and must not be 'default'" -}}
+{{- end -}}
+{{- if and $controlPlaneID (ne $sharedInfrastructure "external") -}}
+{{- fail "global.controlPlane.sharedInfrastructure must be external for a named control plane" -}}
+{{- end -}}
+{{- if and (eq $sharedInfrastructure "external") (dig "certManager" "enabled" false .Values) -}}
+{{- fail "certManager.enabled must be false when global.controlPlane.sharedInfrastructure is external" -}}
+{{- end -}}
+{{- $controlPlanePrefix := "" -}}
+{{- if $controlPlaneID -}}
+{{- $controlPlanePrefix = printf "%s-" $controlPlaneID -}}
+{{- end -}}
+{{- $natsNamespace := printf "%snats-system" $controlPlanePrefix -}}
+{{- $vaultNamespace := printf "%svault-system" $controlPlanePrefix -}}
+{{- $cassandraNamespace := printf "%scassandra-system" $controlPlanePrefix -}}
+{{- $openbaoFullname := printf "%sopenbao-server" $controlPlanePrefix -}}
+
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- $pkiEnabled := dig "addons" "llm" "pki" "enabled" false .Values }}
 {{- $llmPkiActive := and $llmEnabled $pkiEnabled }}
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
-{{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+{{- $issuerName := dig "addons" "llm" "pki" "issuerName" (printf "%snvcf-openbao-pki" $controlPlanePrefix) .Values }}
 {{- $manageIssuer := false }}
 {{- /* existingSecret hands issuance to the operator, so the stack must not
      create an issuer or require OpenBao for one. Validate the mode here as
@@ -46,7 +66,7 @@ environments:
 {{- if gt (len $issuerName) 253 }}
 {{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
 {{- end }}
-{{- $manageIssuer = and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+{{- $manageIssuer = and (eq $issuerKind "ClusterIssuer") (eq $issuerName (printf "%snvcf-openbao-pki" $controlPlanePrefix)) }}
 {{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
 {{- if kindIs "map" $pkiValues }}
 {{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
@@ -64,6 +84,9 @@ environments:
 {{- $managedIssuer := and $llmPkiActive $manageIssuer }}
 {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
 {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+{{- end }}
+{{- if and $controlPlaneID $managedIssuer (ne $issuerName (printf "%snvcf-openbao-pki" $controlPlanePrefix)) }}
+{{- fail (printf "managed ClusterIssuer name %q must equal canonical name %q" $issuerName (printf "%snvcf-openbao-pki" $controlPlanePrefix)) }}
 {{- end }}
 {{- if and $managedIssuer (not (dig "openbao" "enabled" true .Values)) }}
 {{- fail "openbao.enabled must be true when addons.llm.pki.clusterIssuer management is enabled" }}
@@ -110,7 +133,7 @@ releases:
   - name: nats
     version: 0.8.1
     condition: nats.enabled # From defaults.yaml or env overrides
-    namespace: nats-system
+    namespace: {{ $natsNamespace }}
     <<: *dependency # Inherits base values from the dependency template
 
   - name: cert-manager
@@ -122,7 +145,7 @@ releases:
   - name: openbao-server # this name MUST not change
     version: 0.32.1
     condition: openbao.enabled # From defaults.yaml or env overrides
-    namespace: vault-system
+    namespace: {{ $vaultNamespace }}
     <<: *dependency # Inherits base values from the dependency template
     # Secret values own migrations.env. Apply the generated LLM addition last
     # so it preserves that list while adding the addon migration switch.
@@ -131,10 +154,14 @@ releases:
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
       - ../openbao-migrations-llm-env.yaml.gotmpl
     needs:
-      - nats-system/nats
+      - {{ $natsNamespace }}/nats
 
 {{- if $managedIssuer }}
+{{- if $controlPlaneID }}
+  - name: {{ printf "%snvcf-pki" $controlPlanePrefix }}
+{{- else }}
   - name: nvcf-pki
+{{- end }}
     chart: nvcf/helm-nvcf-pki
     version: 0.1.0
     namespace: cert-manager
@@ -142,20 +169,23 @@ releases:
       - clusterIssuer:
           enabled: true
           name: {{ $issuerName | quote }}
-          server: "http://openbao-server.vault-system.svc.cluster.local:8200"
+{{- if $controlPlaneID }}
+          controlPlaneID: {{ $controlPlaneID | quote }}
+{{- end }}
+          server: {{ printf "http://%s.%s.svc.cluster.local:8200" $openbaoFullname $vaultNamespace | quote }}
           path: "services/all/pki/nvcf-service-issuing/sign/nvcf-service-server"
           auth:
             mountPath: "/v1/auth/jwt"
             role: "cert-manager"
             serviceAccount:
               name: "cert-manager"
-              audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+              audience: {{ printf "http://%s.%s.svc.cluster.local:8200" $openbaoFullname $vaultNamespace | quote }}
     wait: true
     waitForJobs: true
     labels:
       release-group: dependencies
     needs:
-      - vault-system/openbao-server
+      - {{ $vaultNamespace }}/openbao-server
 {{- if dig "certManager" "enabled" true .Values }}
       - cert-manager/cert-manager
 {{- end }}
@@ -164,5 +194,5 @@ releases:
   - name: cassandra
     version: 0.20.2
     condition: cassandra.enabled # From defaults.yaml or env overrides
-    namespace: cassandra-system
+    namespace: {{ $cassandraNamespace }}
     <<: *dependency # Inherits base values from the dependency template

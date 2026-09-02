@@ -55,6 +55,10 @@ imagePullSecretName: "nvca-operator-image-pull"
 ## @param imagePullSecrets List of pre-existing imagePullSecret objects in the nvca-operator namespace to use for nvca and nvca-operator Pods. Each object must have a 'name' field. Example: [{name: "foo-bar"}, {name: "baz"}]
 imagePullSecrets: []
 
+## @param controlPlane.id Optional control-plane identity for running multiple isolated NVCA operators in one Kubernetes cluster. Empty preserves the legacy resource names and namespaces.
+controlPlane:
+  id: ""
+
 ## Service Account configuration
 serviceAccount:
   ## @param serviceAccount.create Specifies whether a ServiceAccount should be created
@@ -186,7 +190,7 @@ resources:
 ## @param agent.cacheMountOptionsEnabled Enable or disable CSI volume mount options for NVCA caches
 ## @param agent.cacheMountOptions Comma-separated string of CSI volume mount options (e.g., "ro,noatime,nouuid") used when cacheMountOptionsEnabled is true
 ## @param agent.workerDegradationPeriod Duration for determining if a worker is degraded (e.g., "90m", "1h30m")
-## @param agent.secretMirrorNamespace Default namespace to mirror custom secrets for nvcf workloads
+## @param agent.secretMirrorNamespace Namespace to source mirrored workload secrets from. Empty derives this control plane's operator namespace.
 ## @param agent.secretMirrorLabelSelector Label selector on the secrets in the sourceNamespace
 ## @param agent.customAnnotations Map of custom annotations to add to the agent pod
 ## @param agent.gpuProfiling.functionIds Comma/space/newline-separated NVCF function IDs (or "*" for all) whose pods NVCA labels for NVIDIA Nsight GPU profiling. Empty disables profiling. The operator creates and mirrors the nvca-gpu-profiling-config ConfigMap from this value at deploy/upgrade time.
@@ -203,7 +207,7 @@ agent:
   cacheMountOptionsEnabled: true
   cacheMountOptions: "ro,norecovery,nouuid"
   workerDegradationPeriod: ""
-  secretMirrorNamespace: nvca-operator
+  secretMirrorNamespace: ""
   secretMirrorLabelSelector: ""
   customAnnotations: {}
   ## GPU (Nsight) profiling opt-in: NVCF function IDs to profile ("*" = all) and an optional

@@ -19,16 +19,13 @@ Phase 4 tested an in-place over-the-top upgrade on k3d (old Bitnami stack with a
 known dataset, then upgrade to the new chart/image). Three concrete obstacles
 surfaced, each with evidence:
 
-1. StatefulSet immutability. A direct `helm upgrade` from the Bitnami-subchart
-   release to the in-house chart fails:
-   `StatefulSet.apps "cassandra" is invalid: spec: Forbidden: updates to
-   statefulset spec for fields other than 'replicas', 'ordinals', 'template',
-   'updateStrategy', 'persistentVolumeClaimRetentionPolicy' and
-   'minReadySeconds' are forbidden`. The new chart intentionally removes the
-   existing `app.kubernetes.io/name` and `app.kubernetes.io/instance` labels
-   from `volumeClaimTemplates.metadata.labels`. Kubernetes treats the entire
-   volume claim template as immutable, so the StatefulSet must be recreated
-   instead of updated in place.
+1. StatefulSet immutability. Early versions of the in-house chart removed the
+   `apiVersion`, `kind`, and the existing `app.kubernetes.io/name` and
+   `app.kubernetes.io/instance` labels from
+   `volumeClaimTemplates.metadata`. Kubernetes treats the entire volume claim
+   template as immutable, so the API server rejected a normal Helm upgrade.
+   The chart now preserves the exact identity emitted by published chart
+   0.15.5, and CI guards that contract. Do not remove or rename those fields.
 
 2. Data-layout nesting. Bitnami stored data nested under the mount:
    `<pvc>/data/{data,commitlog,hints,saved_caches}` with
@@ -49,7 +46,7 @@ the old and new charts, so PVC adoption is mechanically possible. The UID
 difference (old 1001, new 999) is handled by the pod `fsGroup: 999`; in testing
 the new image read the old files without a permission error.
 
-## StatefulSet immutability and the recreate step
+## StatefulSet immutability and the data-safe upgrade
 
 This is the mechanical heart of an in-place migration, so it is worth spelling
 out.
@@ -61,59 +58,38 @@ fields you may change on an existing StatefulSet are `replicas`, `ordinals`,
 `serviceName`, `podManagementPolicy`, and `volumeClaimTemplates`.
 
 The old and new StatefulSets share the name, selector, service name,
-`podManagementPolicy`, and the `volumeClaimTemplates.spec` fields. The only
-immutable-field difference is in `volumeClaimTemplates.metadata.labels`. The
-new chart intentionally removes the existing `app.kubernetes.io/name` and
-`app.kubernetes.io/instance` labels.
+`podManagementPolicy`, and the `volumeClaimTemplates` identity and spec fields.
+The in-house chart must keep that immutable subset byte-for-byte equivalent to
+the Kubernetes-normalized 0.15.5 object. The regression test at
+`helm/scripts/test-bitnami-upgrade-identity.sh` enforces the fields that caused
+the original rejection; live upgrade validation must additionally confirm that
+the StatefulSet UID and PVC UID remain unchanged.
 
-So `helm upgrade` applies the new chart onto the existing `cassandra`
-StatefulSet, and the API server rejects it with the Forbidden error above. You
-cannot reshape one StatefulSet into a structurally different one in place. This
-is a Kubernetes constraint, not a chart defect.
+With that immutable identity preserved, a normal `helm upgrade` updates the
+existing StatefulSet in place. Set `cassandra.persistence.subPath: data` for
+this one-time transition so the new UID-999 container sees the Bitnami layout,
+and retain the compatibility keys in `cassandra.config`. Do not delete or
+recreate the StatefulSet or PVC as part of the normal path.
 
-The recreate step works because the data lives in a PersistentVolumeClaim
-(`data-cassandra-0`) whose lifecycle is independent of the StatefulSet
-controller object. Deleting the StatefulSet does not delete its PVCs;
-StatefulSet-managed PVCs are retained by default (this is what
-`persistentVolumeClaimRetentionPolicy` governs, and its default is Retain). The
-runbook:
-
-1. `kubectl delete statefulset cassandra --cascade=orphan` removes only the
-   StatefulSet controller object. `--cascade=orphan` also leaves the running
-   pods; the PVC is kept regardless of cascade mode.
-2. Delete the old pod so the new controller starts a fresh one on the official
-   image. The PVC stays.
-3. `helm upgrade` creates a brand-new StatefulSet named `cassandra`. A create is
-   not an update, so there is no immutability check.
-4. Because the new StatefulSet has the same name and the same
-   volumeClaimTemplate name (`data`), it re-adopts the existing
-   `data-cassandra-0` PVC by name instead of provisioning a new empty one.
-   StatefulSets bind to a matching existing PVC and never recreate one that is
-   already present.
-
-Net effect: the controller object is swapped, the data volume is untouched and
-re-adopted, and the new pod comes up on the old data. In the Phase 4 test the
-PVC stayed `Bound` throughout and the new UID-999 pod mounted and read it.
+The published-0.15.5-to-source validation kept the StatefulSet, PVC, and PV
+UIDs unchanged, retained a pre-upgrade sentinel row, and reached Ready on the
+official image. The pod was replaced, as expected for an image and pod-template
+change; the controller and storage objects were not.
 
 Two caveats:
-- This is a one-time migration hop (Bitnami-shaped StatefulSet to
-  in-house-shaped StatefulSet). Ordinary upgrades within the in-house chart
-  later do not hit this, because the StatefulSet spec shape stays stable, unless
-  a future change edits a `volumeClaimTemplate` field (which would trip the same
-  rule).
-- The orphan-delete is a manual, operator-error-prone step (a wrong flag or
-  target can delete more than intended). That risk is one of the reasons Option
-  C (backup and restore) is the safer path for production.
+- This is a one-time data-layout compatibility setting. Keep `subPath: data`
+  for that release after the transition; changing it later changes where the
+  node looks for its files.
+- Any future edit to a `volumeClaimTemplate` field will trip the same immutable
+  StatefulSet rule and must be rejected by upgrade testing.
 
 ## Options
 
 ### Option A: in-place adopt (legacy layout + config compat)
 
 Reuse the existing PVC in place. Mechanics:
-- Recreate the StatefulSet: `kubectl delete statefulset cassandra
-  --cascade=orphan` (keeps the pod and PVC), delete the old pod (the PVC
-  persists), then `helm upgrade` so the new StatefulSet adopts
-  `data-cassandra-0`.
+- Use a normal `helm upgrade`; the chart preserves the published 0.15.5
+  StatefulSet and volume-claim-template identities.
 - Align the layout: set `persistence.subPath: data` so the old nested
   `data/{data,commitlog,...}` surfaces at the official defaults
   `/var/lib/cassandra/*` with no cassandra.yaml directory edits. This is
@@ -124,15 +100,10 @@ Reuse the existing PVC in place. Mechanics:
   is not yet enumerated.
 
 
-The orphan-delete-and-recreate runbook is scripted with safety checks at
-`upgrade/migrate-from-bitnami.sh` (dry-run by default). It is provisional until
-the config-compat set and strategy below are settled.
-
 Pros: no downtime beyond the pod restart, no data copy, keeps the existing PVC.
-Cons: relies on the orphan-delete runbook (operator error prone), and on
-enumerating every cassandra.yaml setting the old fleet used. Config drift risk:
-if an old setting is missed, the node fails to start on real data. Leaves the
-data physically in the Bitnami nesting.
+Cons: relies on enumerating every cassandra.yaml setting the old fleet used.
+Config drift risk: if an old setting is missed, the node fails to start on real
+data. Leaves the data physically in the Bitnami nesting.
 
 ### Option B: data relocation on first upgrade
 
@@ -162,8 +133,8 @@ cutover; more operator steps; larger data means longer restore.
 Given we are pre-1.0.0 and want a clean result:
 - Ship Option A as the convenience path for environments that want in-place
   adoption, but only after the full cassandra.yaml config-compat set is
-  enumerated and encoded, and with the orphan-delete-and-recreate documented as
-  a supported runbook.
+  enumerated and encoded, with the published-to-source UID and data-retention
+  regression kept as a release gate.
 - Document Option C (backup/restore) as the recommended, safest path,
   especially for production, and as the fallback when in-place adoption is not
   acceptable.
@@ -190,7 +161,7 @@ Open questions for Brad:
 ## Phase 4 evidence
 
 - Fresh install (single and multi node) on the new stack: validated.
-- In-place upgrade: PVC adoption mechanically works; `subPath: data` surfaces
-  the old data and the UID-999 image reads the UID-1001 files; blocked by the
-  `uuid_sstable_identifiers_enabled` config mismatch and gated behind the
-  StatefulSet recreate runbook.
+- In-place upgrade from published 0.15.5: validated with unchanged StatefulSet,
+  PVC, and PV UIDs and a retained sentinel row. `subPath: data` surfaces the old
+  data and the chart's compatibility config lets the UID-999 image read the
+  UID-1001 files.

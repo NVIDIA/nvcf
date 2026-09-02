@@ -14,6 +14,10 @@
 # limitations under the License.
 
 {{- $serverFullname := include "nvcf-openbao.serverFullname" . }}
+{{- $controlPlaneID := dig "controlPlane" "id" "" .Values.openbao | toString }}
+{{- if and $controlPlaneID (or (gt (len $controlPlaneID) 20) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $controlPlaneID))) }}
+{{- fail "openbao.controlPlane.id must be a DNS-1123 label of at most 20 characters" }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -65,12 +69,36 @@ spec:
               value: "{{- .Values.openbao.migrations.issuerDiscovery.urlOverride | default "https://kubernetes.default.svc/.well-known/openid-configuration" -}}"
             - name: OIDC_DISCOVERY_INSECURE
               value: "{{ .Values.openbao.migrations.issuerDiscovery.insecure }}"
+            - name: OPENBAO_JWT_AUDIENCE
+              value: {{ required "openbao.migrations.jwtAudience is required" .Values.openbao.migrations.jwtAudience | quote }}
             {{- if .Values.openbao.migrations.issuerDiscovery.caBundleSecretName }}
             - name: OIDC_CA_BUNDLE
               value: "/etc/ssl/certs/oidc/ca.crt"
             {{- end }}
             {{- with .Values.openbao.migrations.env }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $controlPlaneID }}
+            - name: BAO_SERVICE
+              value: {{ printf "%s.%s.svc.cluster.local" $serverFullname (include "nvcf-openbao.namespace" .) | quote }}
+            - name: OPENBAO_SERVER_INTERNAL_URL
+              value: {{ printf "http://%s.%s.svc.cluster.local:8200" $serverFullname (include "nvcf-openbao.namespace" .) | quote }}
+            - name: NVCF_NAMESPACE
+              value: {{ printf "%s-nvcf" $controlPlaneID | quote }}
+            - name: SIS_NAMESPACE
+              value: {{ printf "%s-sis" $controlPlaneID | quote }}
+            - name: API_KEYS_NAMESPACE
+              value: {{ printf "%s-api-keys" $controlPlaneID | quote }}
+            - name: ESS_NAMESPACE
+              value: {{ printf "%s-ess" $controlPlaneID | quote }}
+            - name: NATS_NAMESPACE
+              value: {{ printf "%s-nats-system" $controlPlaneID | quote }}
+            - name: NVCF_UI_NAMESPACE
+              value: {{ printf "%s-nvcf-ui" $controlPlaneID | quote }}
+            - name: NVCA_NAMESPACE
+              value: {{ printf "%s-nvca-system" $controlPlaneID | quote }}
+            - name: NVCA_OPERATOR_NAMESPACE
+              value: {{ printf "%s-nvca-operator" $controlPlaneID | quote }}
             {{- end }}
           resources:
             {{- toYaml .Values.openbao.hooks.migrations.resources | nindent 12 }}

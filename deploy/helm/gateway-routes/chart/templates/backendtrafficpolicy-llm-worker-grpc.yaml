@@ -7,7 +7,7 @@ apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:
   name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.name }}-grpc-streams
-  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
+  namespace: {{ include "nvcf-gateway.routeNamespace" . }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: llm-worker-grpc-stream-policy

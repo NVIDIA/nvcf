@@ -19,6 +19,53 @@ HELMFILE_ENV  ?= default
 # Determine the absolute path of the directory containing this Makefile.
 MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
+# Optional stable identity for one of multiple control planes sharing a
+# Kubernetes cluster. Explicit Make input wins; otherwise resolve the selected
+# environment so Helmfile and lifecycle cleanup target the same plane.
+REQUESTED_CONTROL_PLANE_ID := $(value CONTROL_PLANE_ID)
+REQUESTED_CONTROL_PLANE_DOMAIN := $(value CONTROL_PLANE_DOMAIN)
+REQUESTED_CONTROL_PLANE_SHARED_GATEWAY := $(value CONTROL_PLANE_SHARED_GATEWAY)
+REQUESTED_CONTROL_PLANE_GRPC_GATEWAY := $(value CONTROL_PLANE_GRPC_GATEWAY)
+REQUESTED_CONTROL_PLANE_NATS_GATEWAY := $(value CONTROL_PLANE_NATS_GATEWAY)
+unexport CONTROL_PLANE_ID CONTROL_PLANE_DOMAIN
+unexport CONTROL_PLANE_SHARED_GATEWAY CONTROL_PLANE_GRPC_GATEWAY CONTROL_PLANE_NATS_GATEWAY
+ENVIRONMENT_VALUES_FILE := $(MAKEFILE_DIR)/environments/$(HELMFILE_ENV).yaml
+CONFIGURED_CONTROL_PLANE_ID := $(shell if command -v yq >/dev/null 2>&1; then \
+	if [ -f "$(ENVIRONMENT_VALUES_FILE)" ]; then \
+		yq eval-all -r '. as $$item ireduce ({}; . * $$item) | .global.controlPlane.id // ""' \
+			"$(MAKEFILE_DIR)/environments/base.yaml" "$(ENVIRONMENT_VALUES_FILE)"; \
+	else \
+		yq -r '.global.controlPlane.id // ""' "$(MAKEFILE_DIR)/environments/base.yaml"; \
+	fi; \
+fi)
+CONFIGURED_CONTROL_PLANE_DOMAIN := $(shell if command -v yq >/dev/null 2>&1; then \
+	if [ -f "$(ENVIRONMENT_VALUES_FILE)" ]; then \
+		yq eval-all -r '. as $$item ireduce ({}; . * $$item) | .global.domain // ""' \
+			"$(MAKEFILE_DIR)/environments/base.yaml" "$(ENVIRONMENT_VALUES_FILE)"; \
+	else \
+		yq -r '.global.domain // ""' "$(MAKEFILE_DIR)/environments/base.yaml"; \
+	fi; \
+fi)
+override CONTROL_PLANE_ID := $(if $(REQUESTED_CONTROL_PLANE_ID),$(REQUESTED_CONTROL_PLANE_ID),$(CONFIGURED_CONTROL_PLANE_ID))
+MATCHING_CONFIGURED_CONTROL_PLANE_DOMAIN := $(if $(strip $(CONFIGURED_CONTROL_PLANE_ID)),$(if $(filter $(CONTROL_PLANE_ID),$(CONFIGURED_CONTROL_PLANE_ID)),$(CONFIGURED_CONTROL_PLANE_DOMAIN),),)
+override CONTROL_PLANE_DOMAIN := $(if $(REQUESTED_CONTROL_PLANE_DOMAIN),$(REQUESTED_CONTROL_PLANE_DOMAIN),$(MATCHING_CONFIGURED_CONTROL_PLANE_DOMAIN))
+export CONTROL_PLANE_ID CONTROL_PLANE_DOMAIN
+
+CONTROL_PLANE_PREFIX := $(if $(strip $(CONTROL_PLANE_ID)),$(strip $(CONTROL_PLANE_ID))-,)
+override CONTROL_PLANE_SHARED_GATEWAY := $(if $(REQUESTED_CONTROL_PLANE_SHARED_GATEWAY),$(REQUESTED_CONTROL_PLANE_SHARED_GATEWAY),$(CONTROL_PLANE_PREFIX)shared-gw)
+override CONTROL_PLANE_GRPC_GATEWAY := $(if $(REQUESTED_CONTROL_PLANE_GRPC_GATEWAY),$(REQUESTED_CONTROL_PLANE_GRPC_GATEWAY),$(CONTROL_PLANE_PREFIX)grpc-gw)
+override CONTROL_PLANE_NATS_GATEWAY := $(if $(REQUESTED_CONTROL_PLANE_NATS_GATEWAY),$(REQUESTED_CONTROL_PLANE_NATS_GATEWAY),$(CONTROL_PLANE_PREFIX)nats-gw)
+ifneq ($(REQUESTED_CONTROL_PLANE_SHARED_GATEWAY),)
+export CONTROL_PLANE_SHARED_GATEWAY
+endif
+ifneq ($(REQUESTED_CONTROL_PLANE_GRPC_GATEWAY),)
+export CONTROL_PLANE_GRPC_GATEWAY
+endif
+ifneq ($(REQUESTED_CONTROL_PLANE_NATS_GATEWAY),)
+export CONTROL_PLANE_NATS_GATEWAY
+endif
+CONTROL_PLANE_STATE_ARGS := $(if $(strip $(CONTROL_PLANE_ID)),--state-values-set-string global.controlPlane.id=$(strip $(CONTROL_PLANE_ID)) --state-values-set-string global.controlPlane.sharedInfrastructure=external --state-values-set certManager.enabled=false --state-values-set-string global.domain=$(strip $(CONTROL_PLANE_DOMAIN)) --state-values-set-string ingress.gatewayApi.gateways.shared.name=$(strip $(CONTROL_PLANE_SHARED_GATEWAY)) --state-values-set-string ingress.gatewayApi.gateways.grpc.name=$(strip $(CONTROL_PLANE_GRPC_GATEWAY)) --state-values-set-string ingress.gatewayApi.gateways.nats.name=$(strip $(CONTROL_PLANE_NATS_GATEWAY)),)
+
 # Directory where templated manifests will be stored
 OUTPUT_DIR    ?= $(MAKEFILE_DIR)/out
 
@@ -31,8 +78,15 @@ REQUIRED_HELMFILE_MAJOR := 1
 REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
-# Namespaces created by the NVCF stack (used by destroy target)
-NAMESPACES := cassandra-system nats-system vault-system ncp nvcf api-keys ess sis
+# Namespaces created by the NVCF stack (used by install/destroy targets).
+LEGACY_NAMESPACES := cassandra-system nats-system vault-system ncp nvcf api-keys ess sis
+NAMED_NAMESPACE_SUFFIXES := cassandra-system nats-system vault-system nvcf api-keys ess sis ingress
+NAMED_NAMESPACES := $(addprefix $(CONTROL_PLANE_PREFIX),$(NAMED_NAMESPACE_SUFFIXES))
+NAMESPACES := $(if $(strip $(CONTROL_PLANE_ID)),$(NAMED_NAMESPACES),$(LEGACY_NAMESPACES))
+CONTROL_PLANE_NAMESPACE_TOOL := $(MAKEFILE_DIR)/scripts/control-plane-namespaces.sh
+CONTROL_PLANE_CLUSTERISSUER_TOOL := $(MAKEFILE_DIR)/scripts/control-plane-clusterissuers.sh
+CONTROL_PLANE_VALIDATOR := $(MAKEFILE_DIR)/scripts/validate-control-plane-config.sh
+KUBECTL_ENV := $(if $(KUBECONFIG_FILE),KUBECONFIG="$(KUBECONFIG_FILE)",)
 
 # Optional kubeconfig file - only used if defined
 KUBECONFIG_FILE ?=
@@ -53,10 +107,20 @@ INSTALL_PRE_HOOKS ?=
 APPLY_PRE_HOOKS ?=
 
 # --- Targets ---
-.PHONY: check-versions template install sync apply destroy clean help
+.PHONY: check-versions check-yq validate-control-plane-id prepare-control-plane-namespaces template install sync apply destroy clean help
 .DEFAULT_GOAL := help
 
+# Namespace ownership checks, lifecycle hooks, and Helmfile operations mutate
+# shared cluster state and must retain their declared ordering under `make -j`.
+.NOTPARALLEL:
+
 # --- Prerequisite Checks ---
+check-yq:
+	@command -v yq >/dev/null 2>&1 && yq --version 2>/dev/null | grep -Eq 'version v?4\.' || { \
+		echo "Error: 'yq' v4 is required to resolve the selected control-plane environment" >&2; \
+		exit 1; \
+	}
+
 check-versions:
 ifdef DEV_MODE
 	@echo ">>> Development mode: Using pinned binaries (skipping system version checks)"
@@ -138,7 +202,15 @@ endif
 
 # --- Core Targets ---
 
-template: clean check-versions
+validate-control-plane-id: check-yq
+	@"$(CONTROL_PLANE_VALIDATOR)"
+
+prepare-control-plane-namespaces: validate-control-plane-id
+ifneq ($(strip $(CONTROL_PLANE_ID)),)
+	@$(KUBECTL_ENV) "$(CONTROL_PLANE_NAMESPACE_TOOL)" prepare "$(CONTROL_PLANE_ID)" $(NAMED_NAMESPACES)
+endif
+
+template: clean check-versions validate-control-plane-id
 	@echo ">>> Templating Helmfile..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
@@ -149,11 +221,11 @@ template: clean check-versions
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	OUTPUT_DIR="$(OUTPUT_DIR)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template --output-dir "$(OUTPUT_DIR)"
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(CONTROL_PLANE_STATE_ARGS) template --output-dir "$(OUTPUT_DIR)"
 
 	@echo ">>> Templating complete. Manifests generated in $(OUTPUT_DIR)"
 
-install: check-versions $(INSTALL_PRE_HOOKS)
+install: check-versions prepare-control-plane-namespaces $(INSTALL_PRE_HOOKS)
 	@echo ">>> Installing Helmfile configuration..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
@@ -161,13 +233,13 @@ install: check-versions $(INSTALL_PRE_HOOKS)
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(CONTROL_PLANE_STATE_ARGS) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
 
 	@echo ">>> Helmfile sync complete."
 
 sync: install
 
-apply: check-versions $(APPLY_PRE_HOOKS)
+apply: check-versions prepare-control-plane-namespaces $(APPLY_PRE_HOOKS)
 	@echo ">>> Applying Helmfile configuration..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
@@ -175,11 +247,14 @@ apply: check-versions $(APPLY_PRE_HOOKS)
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(CONTROL_PLANE_STATE_ARGS) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
 
 	@echo ">>> Helmfile apply complete."
 
-destroy: check-versions
+destroy: check-versions validate-control-plane-id
+ifneq ($(strip $(CONTROL_PLANE_ID)),)
+	@$(KUBECTL_ENV) "$(CONTROL_PLANE_NAMESPACE_TOOL)" verify "$(CONTROL_PLANE_ID)" $(NAMED_NAMESPACES)
+endif
 	@echo ">>> Destroying Helmfile releases..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
@@ -187,17 +262,24 @@ destroy: check-versions
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) destroy
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(CONTROL_PLANE_STATE_ARGS) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) destroy
 
 	@echo ">>> Helmfile destroy complete."
 
 ifndef HELMFILE_SELECTOR
+ifneq ($(strip $(CONTROL_PLANE_ID)),)
+	@$(KUBECTL_ENV) "$(CONTROL_PLANE_CLUSTERISSUER_TOOL)" cleanup "$(CONTROL_PLANE_ID)"
+endif
 	@echo ">>> Deleting namespaces... $(NAMESPACES)"
-	@for ns in $(NAMESPACES); do \
-		if kubectl get namespace "$$ns" >/dev/null 2>&1; then \
-			kubectl delete namespace "$$ns" --wait=true; \
+ifneq ($(strip $(CONTROL_PLANE_ID)),)
+	@$(KUBECTL_ENV) "$(CONTROL_PLANE_NAMESPACE_TOOL)" cleanup "$(CONTROL_PLANE_ID)" $(NAMED_NAMESPACES)
+else
+	@for ns in $(LEGACY_NAMESPACES); do \
+		if kubectl $(KUBECONFIG_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
+			kubectl $(KUBECONFIG_FLAG) delete namespace "$$ns" --wait=true; \
 		fi; \
 	done
+endif
 	@echo ">>> Namespace cleanup complete."
 else
 	@echo ">>> Skipping namespace cleanup (selector was used)"
@@ -226,6 +308,9 @@ help:
 	@echo "Configuration:"
 	@echo "  HELMFILE_ENV       Environment name (default: $(HELMFILE_ENV))"
 	@echo "                     Must match a file: environments/<env>.yaml"
+	@echo "  CONTROL_PLANE_ID   Optional namespace prefix for an isolated control plane"
+	@echo "  CONTROL_PLANE_DOMAIN  Required unique DNS domain for a named control plane"
+	@echo "  CONTROL_PLANE_{SHARED,GRPC,NATS}_GATEWAY  Optional prefixed external Gateway names"
 	@echo "  HELMFILE_SELECTOR  Optional release selector (e.g., name=api-keys)"
 	@echo "  KUBECONFIG_FILE    Optional path to kubeconfig file"
 	@echo "  OUTPUT_DIR         Output directory for template (default: ./out)"

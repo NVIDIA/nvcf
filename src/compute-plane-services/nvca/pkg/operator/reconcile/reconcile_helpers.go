@@ -35,6 +35,7 @@ import (
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
@@ -94,12 +95,100 @@ func decodeEnvOverrides(b64 string) (map[string]string, error) {
 	return envOverrides, nil
 }
 
-func getAppLabels() map[string]string {
-	return map[string]string{
+func getAppLabels(controlPlaneIDs ...string) map[string]string {
+	labels := map[string]string{
 		InstanceLabelKey:  nvcaoptypes.NVCAModuleName,
 		ManagedbyLabelKey: NVCAOperatorName,
 		NameLabelKey:      nvcaoptypes.NVCAModuleName,
 	}
+	if len(controlPlaneIDs) != 0 {
+		labels = nvcatypes.AddControlPlaneLabel(labels, controlPlaneIDs[0])
+	}
+	return labels
+}
+
+func controlPlaneClusterResourceName(nb *nvidiaiov1.NVCFBackend, legacyName string) string {
+	return nvcatypes.ControlPlaneResourceName(nb.Spec.ClusterConfig.ControlPlaneID, legacyName)
+}
+
+func applyControlPlaneIdentity(nb *nvidiaiov1.NVCFBackend, operatorControlPlaneID string) error {
+	configured := nb.Spec.ClusterConfig.ControlPlaneID
+	if err := nvcatypes.ValidateControlPlaneID(configured); err != nil {
+		return fmt.Errorf("invalid NVCFBackend controlPlaneId: %w", err)
+	}
+	if err := nvcatypes.ValidateControlPlaneID(operatorControlPlaneID); err != nil {
+		return fmt.Errorf("invalid operator control plane ID: %w", err)
+	}
+	if operatorControlPlaneID == "" {
+		if configured != "" {
+			return fmt.Errorf("NVCFBackend controlPlaneId %q cannot be reconciled by a legacy operator", configured)
+		}
+		return nil
+	}
+	if configured != "" && configured != operatorControlPlaneID {
+		return fmt.Errorf("NVCFBackend controlPlaneId %q does not match operator control plane ID %q", configured, operatorControlPlaneID)
+	}
+	nb.Spec.ClusterConfig.ControlPlaneID = operatorControlPlaneID
+	return nil
+}
+
+// validateAndApplyControlPlaneScope prevents one named operator from using an
+// NVCFBackend to address another control plane's namespaces. It intentionally
+// preserves the legacy operator's support for explicitly configured namespaces.
+func (bc *BackendK8sCache) validateAndApplyControlPlaneScope(nb *nvidiaiov1.NVCFBackend) error {
+	if nb.Namespace != bc.operatorNamespace {
+		return fmt.Errorf("NVCFBackend namespace %q does not match operator namespace %q",
+			nb.Namespace, bc.operatorNamespace)
+	}
+	if err := applyControlPlaneIdentity(nb, bc.controlPlaneID); err != nil {
+		return err
+	}
+	if bc.controlPlaneID == "" {
+		return nil
+	}
+
+	expectedSystemNamespace := nvcatypes.ControlPlaneResourceName(
+		bc.controlPlaneID, DefaultNVCASystemNamespace)
+	if configured := nb.Spec.ClusterConfig.SystemNamespace; configured != "" && configured != expectedSystemNamespace {
+		return fmt.Errorf("NVCFBackend system namespace %q does not match control plane %q namespace %q",
+			configured, bc.controlPlaneID, expectedSystemNamespace)
+	}
+	expectedRequestsNamespace := nvcatypes.ControlPlaneResourceName(
+		bc.controlPlaneID, DefaultNVCARequestsNamespace)
+	if configured := nb.Spec.ClusterConfig.RequestsNamespace; configured != "" && configured != expectedRequestsNamespace {
+		return fmt.Errorf("NVCFBackend requests namespace %q does not match control plane %q namespace %q",
+			configured, bc.controlPlaneID, expectedRequestsNamespace)
+	}
+	return nil
+}
+
+func scopeNamespaceSelector(selector **metav1.LabelSelector, controlPlaneID string) {
+	if controlPlaneID == "" {
+		return
+	}
+	if *selector == nil {
+		*selector = &metav1.LabelSelector{}
+	}
+	if (*selector).MatchLabels == nil {
+		(*selector).MatchLabels = map[string]string{}
+	}
+	(*selector).MatchLabels[nvcatypes.ControlPlaneIDLabel] = controlPlaneID
+}
+
+func scopeMutatingWebhook(webhook *admissionregistrationv1.MutatingWebhook, controlPlaneID string) {
+	if controlPlaneID == "" {
+		return
+	}
+	webhook.Name = controlPlaneID + "." + webhook.Name
+	scopeNamespaceSelector(&webhook.NamespaceSelector, controlPlaneID)
+}
+
+func scopeValidatingWebhook(webhook *admissionregistrationv1.ValidatingWebhook, controlPlaneID string) {
+	if controlPlaneID == "" {
+		return
+	}
+	webhook.Name = controlPlaneID + "." + webhook.Name
+	scopeNamespaceSelector(&webhook.NamespaceSelector, controlPlaneID)
 }
 
 func getNBAnnotations(nb *nvidiaiov1.NVCFBackend) map[string]string {
@@ -112,7 +201,7 @@ func getNBAnnotations(nb *nvidiaiov1.NVCFBackend) map[string]string {
 //nolint:dupl
 func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.Namespace) error {
 	// get and create if not exists
-	_, err := bc.clients.K8s.CoreV1().Namespaces().Get(ctx, ns.Name, metav1.GetOptions{})
+	existing, err := bc.clients.K8s.CoreV1().Namespaces().Get(ctx, ns.Name, metav1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			_, err := bc.clients.K8s.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
@@ -123,7 +212,11 @@ func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.N
 			return fmt.Errorf("failed to get %v namespace, err: %v", ns.Name, err)
 		}
 	} else {
+		if id := ns.Labels[nvcatypes.ControlPlaneIDLabel]; id != "" && !nvcatypes.IsOwnedByControlPlane(existing, id) {
+			return fmt.Errorf("refusing to update namespace %s owned by another control plane", ns.Name)
+		}
 		// update namespace with new labels
+		ns.ResourceVersion = existing.ResourceVersion
 		_, err = bc.clients.K8s.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to update %v namespace, err: %v", ns.Name, err)

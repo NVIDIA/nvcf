@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="nvca-system"
+SERVICE_ACCOUNT_NAMESPACE="${NVCA_NAMESPACE:-nvca-system}"
 SERVICE_ACCOUNT_NAME="nvca"
 
 #-------------------------------------------
@@ -40,7 +40,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="services-all-kv-ro"
 # Add Access to SIS via JWT Secret Role
 #-------------------------------------------
 
-SIS_API_SERVICE_ACCOUNT_NAMESPACE="sis"
+SIS_API_SERVICE_ACCOUNT_NAMESPACE="${SIS_NAMESPACE:-sis}"
 SIS_API_SERVICE_ACCOUNT_NAME="sis-api"
 SIS_API_SERVICE_NAME="api"
 SIS_API_SECRET_BASE_PATH="services/${SIS_API_SERVICE_ACCOUNT_NAME}"
@@ -70,7 +70,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 # Add Access to ReVal via JWT Secret Role
 #-------------------------------------------
 
-REVAL_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+REVAL_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 REVAL_SERVICE_ACCOUNT_NAME="reval"
 REVAL_SERVICE_NAME="reval"
 REVAL_SECRET_BASE_PATH="services/${REVAL_SERVICE_ACCOUNT_NAME}"

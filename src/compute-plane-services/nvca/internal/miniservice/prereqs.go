@@ -352,6 +352,7 @@ func (r *Reconciler) ensureImageCredentialUpdaterObjects(
 	jobLabels := map[string]string{
 		miniserviceNameLabel: ms.Name,
 	}
+	jobLabels = nvcatypes.AddControlPlaneLabel(jobLabels, r.ControlPlaneID)
 	tprUpdaterInitJob.Labels = jobLabels
 	tprUpdaterInitJob.Spec.Template.Labels = jobLabels
 	// Use NVCA's service account to run the job for API access and image pull secrets.

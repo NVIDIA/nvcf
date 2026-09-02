@@ -63,7 +63,7 @@ func (bc *BackendK8sCache) setupMiniServiceRBACConfigmap(ctx context.Context, nb
 			Name:        MiniServiceRBACConfigmapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: rbacData,
 	}
@@ -85,8 +85,8 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 
 	vw := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   nvcaoptypes.NVCAModuleName,
-			Labels: getAppLabels(),
+			Name:   controlPlaneClusterResourceName(nb, nvcaoptypes.NVCAModuleName),
+			Labels: getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Webhooks: []admissionregistrationv1.ValidatingWebhook{
 			{
@@ -157,6 +157,9 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 				},
 			},
 		},
+	}
+	for i := range vw.Webhooks {
+		scopeValidatingWebhook(&vw.Webhooks[i], nb.Spec.ClusterConfig.ControlPlaneID)
 	}
 
 	return bc.createOrUpdateValidatingWebhookConfiguration(ctx, vw)

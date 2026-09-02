@@ -83,6 +83,30 @@ helmDefaults:
 {{- $registrationValues := readFile $registrationValuesPath | fromYaml | default dict }}
 {{- $registrationAgentMergeConfig := dig "agentConfig" "mergeConfig" "" $registrationValues }}
 {{- $environmentAgentMergeConfig := dig "agentConfig" "mergeConfig" "" .Values }}
+{{- $configuredControlPlaneID := dig "global" "controlPlane" "id" "" .Values }}
+{{- $environmentControlPlaneID := env "CONTROL_PLANE_ID" }}
+{{- if and $configuredControlPlaneID $environmentControlPlaneID (ne $configuredControlPlaneID $environmentControlPlaneID) }}
+{{- fail (printf "CONTROL_PLANE_ID %q does not match global.controlPlane.id %q" $environmentControlPlaneID $configuredControlPlaneID) }}
+{{- end }}
+{{- $controlPlaneID := $environmentControlPlaneID | default $configuredControlPlaneID }}
+{{- if not (kindIs "string" $controlPlaneID) }}
+{{- fail "global.controlPlane.id must be a string" }}
+{{- end }}
+{{- if eq $controlPlaneID "default" }}
+{{- fail "global.controlPlane.id \"default\" is reserved" }}
+{{- end }}
+{{- if and $controlPlaneID (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $controlPlaneID)) }}
+{{- fail (printf "global.controlPlane.id must be a lowercase RFC 1123 DNS label, got %q" $controlPlaneID) }}
+{{- end }}
+{{- if gt (len $controlPlaneID) 20 }}
+{{- fail "global.controlPlane.id must be at most 20 characters" }}
+{{- end }}
+{{- $operatorReleaseName := "nvca-operator" }}
+{{- $operatorNamespace := "nvca-operator" }}
+{{- if $controlPlaneID }}
+{{- $operatorReleaseName = printf "%s-nvca-operator" $controlPlaneID }}
+{{- $operatorNamespace = $operatorReleaseName }}
+{{- end }}
 {{- $observabilityProfile := dig "observability" "profile" "compute" .Values }}
 {{- if not (has $observabilityProfile (list "disabled" "control" "compute" "all")) }}
 {{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
@@ -162,12 +186,15 @@ helmDefaults:
 
 releases:
 
-  - name: nvca-operator
+  - name: {{ $operatorReleaseName }}
     # Released chart from nvca-operator-deploy. Compute-plane base values own
     # the operator and NVCA versions used by this stack.
-    chart: nvcf/helm-nvca-operator
+    {{- $nvcaOperatorChartPath := dig "chartPath" "" $nvcaOp }}
+    chart: {{ $nvcaOperatorChartPath | default "nvcf/helm-nvca-operator" | quote }}
+    {{- if not $nvcaOperatorChartPath }}
     version: 1.21.3
-    namespace: nvca-operator
+    {{- end }}
+    namespace: {{ $operatorNamespace }}
     values:
       - ../global.yaml.gotmpl
       # Cluster-scoped registration values produced by
@@ -199,6 +226,8 @@ releases:
                chart default stays enabled for ngc-managed installs, which rely
                on it being generated from ngcConfig.serviceKey. */}}
         generateImagePullSecret: false
+        controlPlane:
+          id: {{ $controlPlaneID | quote }}
         ngcConfig:
           clusterSource: self-managed
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}
@@ -273,8 +302,8 @@ releases:
         {{- $agent := dig "agent" dict $nvcaOp }}
         {{- $agentTolerations := dig "tolerations" list $agent }}
         {{- $workloadTolerations := dig "workload" "tolerations" list $agent }}
-        {{- if or $agentTolerations $workloadTolerations }}
         agent:
+          secretMirrorNamespace: {{ $operatorNamespace | quote }}
           {{- with $agentTolerations }}
           tolerations:
 {{ toYaml . | nindent 12 }}
@@ -284,7 +313,6 @@ releases:
             tolerations:
 {{ toYaml . | nindent 14 }}
           {{- end }}
-        {{- end }}
     labels:
       release-group: workers
     wait: true

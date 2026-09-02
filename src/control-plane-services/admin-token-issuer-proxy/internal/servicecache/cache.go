@@ -34,6 +34,7 @@ import (
 )
 
 const metadataErrorBodyLimit = 64 << 10
+const adminIssuerServiceName = "nvcf-api"
 
 // RetryPolicy controls the exponential backoff used while api-keys is starting.
 type RetryPolicy struct {
@@ -110,13 +111,25 @@ func (c *Cache) FetchContext(ctx context.Context) error {
 	if len(servicesResp.Services) == 0 {
 		return fmt.Errorf("no services found in response")
 	}
-	if servicesResp.Services[0].ServiceID == "" {
+	var serviceInfo *models.ServiceInfo
+	for i := range servicesResp.Services {
+		if servicesResp.Services[i].ServiceName == adminIssuerServiceName {
+			serviceInfo = &servicesResp.Services[i]
+			break
+		}
+	}
+	if serviceInfo == nil {
+		return fmt.Errorf("service metadata response does not contain %s", adminIssuerServiceName)
+	}
+	if serviceInfo.ServiceID == "" {
 		return fmt.Errorf("service metadata is missing service_id")
 	}
 
-	// Cache the first service (typically nvcf-api)
+	// Admin tokens are issued for the NVCF API. API Keys does not guarantee
+	// response order, so selecting the first service can mint a token for an
+	// unrelated service such as NVCT.
 	c.mu.Lock()
-	c.serviceInfo = &servicesResp.Services[0]
+	c.serviceInfo = serviceInfo
 	c.mu.Unlock()
 
 	return nil

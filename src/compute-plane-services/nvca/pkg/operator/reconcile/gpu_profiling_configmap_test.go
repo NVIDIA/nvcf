@@ -70,3 +70,77 @@ func TestSetupGPUProfilingConfigMap(t *testing.T) {
 		assert.Equal(t, "fn-1,fn-2", mirrored.Data["functionIds"])
 	})
 }
+
+func TestNamedControlPlaneConfigMapMirrorsUseOperatorNamespace(t *testing.T) {
+	const (
+		operatorNS = "plane-a-nvca-operator"
+		systemNS   = "plane-a-nvca-system"
+	)
+	nb := &nvidiaiov1.NVCFBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "plane-a", Namespace: operatorNS},
+	}
+	nb.Spec.ClusterConfig.ControlPlaneID = "plane-a"
+	require.Equal(t, systemNS, getSystemNamespace(nb))
+
+	t.Run("required annotations ConfigMap", func(t *testing.T) {
+		ctx := newTestContext()
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{clients: clients, operatorNamespace: operatorNS}
+		src := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: nvcfCustomAnnotationsConfigMapName, Namespace: operatorNS},
+			Data:       map[string]string{"annotations": `{"owner":"plane-a"}`},
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(operatorNS).Create(ctx, src, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		require.NoError(t, bc.mirrorConfigMap(ctx, nb, nvcfCustomAnnotationsConfigMapName))
+		mirrored, err := clients.K8s.CoreV1().ConfigMaps(systemNS).Get(
+			ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, src.Data, mirrored.Data)
+	})
+
+	t.Run("optional GPU profiling ConfigMap", func(t *testing.T) {
+		ctx := newTestContext()
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{clients: clients, operatorNamespace: operatorNS}
+		src := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: nvcfGPUProfilingConfigMapName, Namespace: operatorNS},
+			Data:       map[string]string{"functionIds": "fn-plane-a"},
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(operatorNS).Create(ctx, src, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		require.NoError(t, bc.setupGPUProfilingConfigMap(ctx, nb))
+		mirrored, err := clients.K8s.CoreV1().ConfigMaps(systemNS).Get(
+			ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, src.Data, mirrored.Data)
+	})
+
+	t.Run("does not consume same-named ConfigMaps from foreign or legacy namespaces", func(t *testing.T) {
+		ctx := newTestContext()
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{clients: clients, operatorNamespace: operatorNS}
+		for _, namespace := range []string{"plane-b-nvca-operator", NVCAOperatorNamespace} {
+			for _, name := range []string{nvcfCustomAnnotationsConfigMapName, nvcfGPUProfilingConfigMapName} {
+				_, err := clients.K8s.CoreV1().ConfigMaps(namespace).Create(ctx, &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+					Data:       map[string]string{"source": namespace},
+				}, metav1.CreateOptions{})
+				require.NoError(t, err)
+			}
+		}
+
+		err := bc.mirrorConfigMap(ctx, nb, nvcfCustomAnnotationsConfigMapName)
+		assert.True(t, k8serr.IsNotFound(err), "required mirror must not fall back to another plane")
+		_, err = clients.K8s.CoreV1().ConfigMaps(systemNS).Get(
+			ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
+		assert.True(t, k8serr.IsNotFound(err), "foreign annotations must not be mirrored")
+
+		require.NoError(t, bc.setupGPUProfilingConfigMap(ctx, nb))
+		_, err = clients.K8s.CoreV1().ConfigMaps(systemNS).Get(
+			ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
+		assert.True(t, k8serr.IsNotFound(err), "foreign profiling config must not be mirrored")
+	})
+}

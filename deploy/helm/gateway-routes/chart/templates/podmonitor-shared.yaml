@@ -18,7 +18,7 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: envoy-gateway-proxy-shared
+  name: {{ .Values.nvcfGatewayRoutes.podMonitors.sharedName }}
   namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}

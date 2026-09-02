@@ -233,8 +233,9 @@ func RunShutdownCleanup(ctx context.Context, opts ShutdownHandlerOptions) Shutdo
 		log.Infof("Cleaned up NVCFBackend %s/%s", nb.Namespace, nb.Name)
 	}
 
-	// Note: Operator-managed CRDs (ICMSRequest, StorageRequest, MiniServices) have owner references
-	// to the NVCFBackend CRD, so they will be garbage collected when Helm deletes that CRD.
+	// Namespaced custom resources are removed with their per-control-plane namespaces.
+	// Their shared CRD definitions are cluster prerequisites and must remain installed so
+	// another control plane in this cluster can continue serving those resource kinds.
 
 	// Remove finalizers from RBAC resources (ClusterRole, ClusterRoleBinding, ServiceAccount)
 	// This must be done before removing the sentinel finalizer to ensure the operator retains permissions

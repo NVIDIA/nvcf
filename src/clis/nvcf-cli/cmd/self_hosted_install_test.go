@@ -50,7 +50,7 @@ func resetInstallFlags(t *testing.T) {
 		return selfhosted.HelmRuntimeHelm3Legacy, nil
 	}
 	prevFetchRootCA := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 		return "", nil
 	}
 	t.Cleanup(func() {

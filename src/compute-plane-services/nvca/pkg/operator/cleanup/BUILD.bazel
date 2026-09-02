@@ -17,6 +17,7 @@ go_library(
         "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
         "//src/compute-plane-services/nvca/pkg/operator/types",
         "//src/compute-plane-services/nvca/pkg/storage",
+        "//src/compute-plane-services/nvca/pkg/types",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
@@ -48,8 +49,10 @@ go_test(
     deps = [
         "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
         "//src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake",
+        "//src/compute-plane-services/nvca/pkg/types",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
         "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/admissionregistration/v1:admissionregistration",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/apps/v1:apps",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/rbac/v1:rbac",

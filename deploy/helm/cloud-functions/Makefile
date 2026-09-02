@@ -84,6 +84,7 @@ validate: template
 test:
 	@echo "Running chart tests..."
 	@./tests/sidecar_release_artifacts_test.sh
+	@sh ./nvcf-api/scripts/test-account-bootstrap-render.sh
 
 # Publish Chart
 # NOTE: this is manual until the CI pipeline is updated to push the chart to the NVCR OCI registry

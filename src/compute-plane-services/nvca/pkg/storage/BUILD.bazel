@@ -100,6 +100,7 @@ go_test(
         "cachebackend_samba_test.go",
         "cachebackend_test.go",
         "controller_test.go",
+        "control_plane_isolation_test.go",
         "modelcache_cleanup_test.go",
         "modelcache_nvmesh_encrypt_test.go",
         "modelcache_test.go",

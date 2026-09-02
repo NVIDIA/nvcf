@@ -68,6 +68,7 @@ Important settings to review before deployment:
 
 - `cassandra.image.*` for the main Cassandra image
 - `cassandra.migrations.image.*` for the migrations job image
+- `cassandra.migrations.controlPlaneID` for a named, namespace-isolated control plane; empty preserves legacy single-plane authorization URLs
 - `cassandra.global.imagePullSecrets` for private registry access
 - `cassandra.replicaCount`, `cassandra.cluster.*`, and storage settings for your environment
 - `cassandra.dbUser.*` and `cassandra.serviceRolePassword` for database credentials

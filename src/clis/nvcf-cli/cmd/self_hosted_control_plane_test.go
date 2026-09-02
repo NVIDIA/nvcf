@@ -131,7 +131,7 @@ func TestControlPlaneProfileExportCommandRecreatesProfileFromOpenBao(t *testing.
 	require.NoError(t, err)
 
 	prevFetch := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx, _ string) (string, error) {
 		assert.Equal(t, "cp-context", kctx)
 		return rootCA, nil
 	}
@@ -179,15 +179,16 @@ func TestControlPlaneProfileExportCommandUsesSelectedEnvironmentDomain(t *testin
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "environments"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "base.yaml"), []byte("global:\n  domain: base.example.test\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "alpha.yaml"), []byte("global:\n  domain: alpha.example.test\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "beta.yaml"), []byte("global:\n  domain: beta.example.test\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "alpha.yaml"), []byte("global:\n  domain: alpha.example.test\n  controlPlane:\n    id: plane-a\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "beta.yaml"), []byte("global:\n  domain: beta.example.test\n  controlPlane:\n    id: plane-b\n"), 0o600))
 
 	for _, tc := range []struct {
-		env    string
-		domain string
+		env            string
+		domain         string
+		controlPlaneID string
 	}{
-		{env: "alpha", domain: "alpha.example.test"},
-		{env: "beta", domain: "beta.example.test"},
+		{env: "alpha", domain: "alpha.example.test", controlPlaneID: "plane-a"},
+		{env: "beta", domain: "beta.example.test", controlPlaneID: "plane-b"},
 	} {
 		t.Run(tc.env, func(t *testing.T) {
 			resetControlPlaneProfileValidateCommand(t)
@@ -208,7 +209,7 @@ func TestControlPlaneProfileExportCommandUsesSelectedEnvironmentDomain(t *testin
 			}
 
 			prevFetch := fetchControlPlaneRootCAPEM
-			fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+			fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 				return "", nil
 			}
 			t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
@@ -241,6 +242,9 @@ func TestControlPlaneProfileExportCommandUsesSelectedEnvironmentDomain(t *testin
 			assert.Equal(t, "https://sis."+tc.domain, profile.Endpoints.ComputeReachable.ICMSURL)
 			assert.Equal(t, "https://reval."+tc.domain, profile.Endpoints.ComputeReachable.ReValURL)
 			assert.Equal(t, "nats://nats."+tc.domain+":4222", profile.Endpoints.ComputeReachable.NATSURL)
+			assert.Equal(t, "http://api."+tc.controlPlaneID+"-sis.svc.cluster.local:8080", profile.Endpoints.InCluster.ICMSURL)
+			assert.Equal(t, "http://reval."+tc.controlPlaneID+"-nvcf.svc.cluster.local:8080", profile.Endpoints.InCluster.ReValURL)
+			assert.Equal(t, "nats://nats."+tc.controlPlaneID+"-nats-system.svc.cluster.local:4222", profile.Endpoints.InCluster.NATSURL)
 		})
 	}
 }
@@ -278,7 +282,7 @@ icms_host: sis.config.example.test
 	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "qa.yaml"), []byte("global:\n  domain: stack.example.test\n"), 0o600))
 
 	prevFetch := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 		return "", nil
 	}
 	t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
@@ -445,7 +449,7 @@ func TestWriteControlPlaneProfileSourcesOpenBaoRootCA(t *testing.T) {
 	require.NoError(t, err)
 
 	prevFetch := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx, _ string) (string, error) {
 		assert.Equal(t, "cp-context", kctx)
 		return rootCA, nil
 	}
@@ -473,6 +477,33 @@ func TestWriteControlPlaneProfileSourcesOpenBaoRootCA(t *testing.T) {
 	assert.Equal(t, controlplaneprofile.TrustModeBundle, result.Profile.TransportTLS.TrustMode)
 	assert.Equal(t, strings.TrimSpace(rootCA), strings.TrimSpace(result.Profile.TransportTLS.TrustBundlePEM))
 	assert.Equal(t, wantFingerprint, result.Profile.TransportTLS.TrustBundleFingerprint)
+}
+
+func TestControlPlaneRootCAOpenBaoConfigUsesNamedScope(t *testing.T) {
+	for _, name := range []string{
+		"NVCF_OPENBAO_URL",
+		"OPENBAO_URL",
+		"VAULT_ADDR",
+		"BAO_ADDR",
+		"NVCF_OPENBAO_NAMESPACE",
+		"NVCF_OPENBAO_SECRET_NAME",
+		"NVCF_CLUSTER_NAMESPACE",
+	} {
+		t.Setenv(name, "")
+	}
+
+	legacy := controlPlaneRootCAOpenBaoConfig("legacy-context", "")
+	assert.Equal(t, "http://openbao-server.vault-system.svc.cluster.local:8200", legacy.OpenBaoURL)
+	assert.Equal(t, "vault-system", legacy.OpenBaoNamespace)
+	assert.Equal(t, "openbao-server-root-token", legacy.OpenBaoSecretName)
+	assert.Equal(t, "nvcf", legacy.ClusterNamespace)
+
+	named := controlPlaneRootCAOpenBaoConfig("plane-a-context", "plane-a")
+	assert.Equal(t, "http://plane-a-openbao-server.plane-a-vault-system.svc.cluster.local:8200", named.OpenBaoURL)
+	assert.Equal(t, "plane-a-vault-system", named.OpenBaoNamespace)
+	assert.Equal(t, "plane-a-openbao-server-root-token", named.OpenBaoSecretName)
+	assert.Equal(t, "plane-a-nvcf", named.ClusterNamespace)
+	assert.Equal(t, "plane-a-context", named.KubeContext)
 }
 
 func TestRewriteURLHost(t *testing.T) {

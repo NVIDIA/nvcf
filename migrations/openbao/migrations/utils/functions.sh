@@ -36,7 +36,12 @@ function initialize_mount_lists() {
     log_success "Mount lists initialized."
 }
 
-OPENBAO_SERVER_INTERNAL_URL="http://openbao-server.vault-system.svc.cluster.local:8200"
+OPENBAO_SERVER_INTERNAL_URL="${OPENBAO_SERVER_INTERNAL_URL:-http://openbao-server.vault-system.svc.cluster.local:8200}"
+# JWT audiences are an opaque trust-domain identifier, not the network address
+# used to reach a particular OpenBao instance. Keep the legacy audience by
+# default so every projected service-account token continues to match its role
+# when OPENBAO_SERVER_INTERNAL_URL is plane-scoped.
+OPENBAO_JWT_AUDIENCE="${OPENBAO_JWT_AUDIENCE:-http://openbao-server.vault-system.svc.cluster.local:8200}"
 
 ##
 # Enable a auth engine
@@ -474,8 +479,8 @@ function generate_jwt_auth_role() {
   local service_name=$1
   local service_account_namespace=$2
   local policies=$3
-  # Allow audience to be overridden, but default to the server's internal URL
-  local audience=${4:-"${OPENBAO_SERVER_INTERNAL_URL}"}
+  # Allow audience to be overridden, but default to the shared trust-domain.
+  local audience=${4:-"${OPENBAO_JWT_AUDIENCE}"}
 
   local quoted_policies=$(sed 's/\([^,]*\)/"\1"/g' <<< "$policies")
   local quoted_audiences=$(sed 's/\([^,]*\)/"\1"/g' <<< "$audience")

@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="nvcf"
+SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 SERVICE_ACCOUNT_NAME="nvct-api"
 
 #-------------------------------------------
@@ -43,6 +43,14 @@ VAULT_JWT_AUTH_ROLE_POLICIES="services-all-kv-ro"
 # Create KV2 secrets engine
 #-------------------------------------------
 enable_secrets_mount "${VAULT_SECRET_BASE_PATH}/kv" "kv-v2"
+
+# NVCT is deployed by the core stack and its resource server always resolves
+# keys from this mount. The optional UI addon adds a signing role, but must not
+# own the mount itself or core/no-UI installs expose a permanently failing JWKS
+# endpoint.
+enable_secrets_mount "${VAULT_SECRET_BASE_PATH}/jwt" "vault-plugin-secrets-jwt"
+jwt_secret_mount_config=$(generate_jwt_secret_mount_config)
+config_jwt_secret_mount_config "${VAULT_SECRET_BASE_PATH}/jwt" "${jwt_secret_mount_config}"
 
 #-------------------------------------------
 # Create default service paths and secrets
@@ -63,7 +71,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${VAULT_POLICY_BAS
 # Add JWT sign access to NVCF API for nvct-api (notary + account_setup)
 #-------------------------------------------
 
-NVCF_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+NVCF_API_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 NVCF_API_SERVICE_ACCOUNT_NAME="nvcf-api"
 NVCF_API_SERVICE_NAME="api"
 NVCF_API_SECRET_BASE_PATH="services/${NVCF_API_SERVICE_ACCOUNT_NAME}"
@@ -115,7 +123,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 # Add Access to SIS API via JWT Secret Role
 #-------------------------------------------
 
-SIS_API_SERVICE_ACCOUNT_NAMESPACE="sis"
+SIS_API_SERVICE_ACCOUNT_NAMESPACE="${SIS_NAMESPACE:-sis}"
 SIS_API_SERVICE_ACCOUNT_NAME="sis-api"
 SIS_API_SERVICE_NAME="api"
 SIS_API_SECRET_BASE_PATH="services/${SIS_API_SERVICE_ACCOUNT_NAME}"
@@ -146,7 +154,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 # Add Access to API-KEYS API via JWT Secret Role
 #--------------------------------------------
 
-API_KEYS_API_SERVICE_ACCOUNT_NAMESPACE="api-keys"
+API_KEYS_API_SERVICE_ACCOUNT_NAMESPACE="${API_KEYS_NAMESPACE:-api-keys}"
 API_KEYS_API_SERVICE_ACCOUNT_NAME="api-keys-api"
 API_KEYS_API_SECRET_BASE_PATH="services/${API_KEYS_API_SERVICE_ACCOUNT_NAME}"
 API_KEYS_API_SECRET_POLICY_PATH="services-${API_KEYS_API_SERVICE_ACCOUNT_NAME}"
@@ -176,7 +184,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 # Add Access to ESS API via JWT Secret Role
 #-------------------------------------------
 
-ESS_API_SERVICE_ACCOUNT_NAMESPACE="ess"
+ESS_API_SERVICE_ACCOUNT_NAMESPACE="${ESS_NAMESPACE:-ess}"
 ESS_API_SERVICE_ACCOUNT_NAME="ess-api"
 ESS_API_SECRET_BASE_PATH="services/${ESS_API_SERVICE_ACCOUNT_NAME}"
 ESS_API_SECRET_POLICY_PATH="services-${ESS_API_SERVICE_ACCOUNT_NAME}"
@@ -205,7 +213,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 # Add Access to Reval API via JWT Secret Role
 #-------------------------------------------
 
-REVAL_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+REVAL_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 REVAL_SERVICE_ACCOUNT_NAME="reval"
 REVAL_SERVICE_NAME="reval"
 REVAL_SECRET_BASE_PATH="services/${REVAL_SERVICE_ACCOUNT_NAME}"

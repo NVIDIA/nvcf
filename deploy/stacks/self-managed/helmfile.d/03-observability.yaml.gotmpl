@@ -6,6 +6,23 @@ environments:
 
 ---
 
+{{- $controlPlaneID := dig "global" "controlPlane" "id" "" .Values | toString -}}
+{{- $sharedInfrastructure := dig "global" "controlPlane" "sharedInfrastructure" "bundled" .Values | toString -}}
+{{- if and $controlPlaneID (or (gt (len $controlPlaneID) 20) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $controlPlaneID)) (eq $controlPlaneID "default")) -}}
+{{- fail "global.controlPlane.id must be a DNS-1123 label of at most 20 characters and must not be 'default'" -}}
+{{- end -}}
+{{- if and $controlPlaneID (ne $sharedInfrastructure "external") -}}
+{{- fail "global.controlPlane.sharedInfrastructure must be external for a named control plane" -}}
+{{- end -}}
+{{- if and (eq $sharedInfrastructure "external") (dig "certManager" "enabled" false .Values) -}}
+{{- fail "certManager.enabled must be false when global.controlPlane.sharedInfrastructure is external" -}}
+{{- end -}}
+{{- $controlPlanePrefix := "" -}}
+{{- if $controlPlaneID -}}
+{{- $controlPlanePrefix = printf "%s-" $controlPlaneID -}}
+{{- end -}}
+{{- $nvcfNamespace := printf "%snvcf" $controlPlanePrefix -}}
+
 {{- $observabilityProfile := dig "observability" "profile" "disabled" .Values }}
 {{- if not (has $observabilityProfile (list "disabled" "control" "compute" "all")) }}
 {{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
@@ -59,7 +76,7 @@ releases:
   # --- Observability Services ---
   - name: state-metrics
     version: 1.0.2
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: stateMetrics.enabled # From global.yaml.gotmpl or env overrides
     inherit:
       - template: service
@@ -69,9 +86,9 @@ releases:
   {{- if $functionAutoscalerEnabled }}
   - name: function-autoscaler
     version: 0.2.1
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: functionAutoscaler
     needs:
-      - nvcf/state-metrics
+      - {{ $nvcfNamespace }}/state-metrics
   {{- end }}

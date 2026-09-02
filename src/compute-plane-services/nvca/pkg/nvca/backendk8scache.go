@@ -138,6 +138,8 @@ type CacheAccessObj struct {
 // thread-safe.
 type BackendK8sCache struct {
 	cfg nvcaconfig.Config
+	// controlPlaneID is empty for the legacy single-control-plane deployment.
+	controlPlaneID string
 
 	// Namespace for all BART app resources.
 	// No ICMS request or request-derived resources will be created here.
@@ -299,6 +301,14 @@ func (b *BackendK8sCacheBuilder) WithSystemNamespace(systemNamespace string) *Ba
 func (b *BackendK8sCacheBuilder) WithRequestsNamespace(requestsNamespace string) *BackendK8sCacheBuilder {
 	next := *b
 	next.requestsNamespace = requestsNamespace
+	return &next
+}
+
+// WithControlPlaneID scopes all namespaced and cluster-scoped runtime objects
+// to one stable control-plane identity. Empty preserves legacy behavior.
+func (b *BackendK8sCacheBuilder) WithControlPlaneID(controlPlaneID string) *BackendK8sCacheBuilder {
+	next := *b
+	next.controlPlaneID = controlPlaneID
 	return &next
 }
 
@@ -508,6 +518,7 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 
 	c := &BackendK8sCache{
 		cfg:                                  b.cfg,
+		controlPlaneID:                       b.controlPlaneID,
 		systemNamespace:                      b.systemNamespace,
 		requestsNamespace:                    b.requestsNamespace,
 		namespaceLabels:                      b.namespaceLabels,
@@ -587,9 +598,14 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 
 	// Initialize ICMSRequest and StorageRequest informers but do not start.
 	// Must be started after dependencies are initialized and started.
+	informerOptions := []nvcainformers.SharedInformerOption{}
+	if c.controlPlaneID != "" {
+		informerOptions = append(informerOptions, nvcainformers.WithNamespace(c.requestsNamespace))
+	}
 	nvcaInformerFactory := nvcainformers.NewSharedInformerFactoryWithOptions(
 		b.clients.BART,
 		ResyncInterval,
+		informerOptions...,
 	)
 	icmsReqGenInf, err := nvcaInformerFactory.ForResource(nvcav2beta1new.SchemeGroupVersion.WithResource("icmsrequests"))
 	if err != nil {
@@ -642,10 +658,16 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 					}
 				}
 			}
-			podInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
-				k8sClient,
-				resyncPeriod,
-			)
+			podInformerOptions := []k8sinformers.SharedInformerOption{}
+			if c.controlPlaneID != "" {
+				controlPlaneSelector := labels.SelectorFromSet(labels.Set{
+					nvcatypes.ControlPlaneIDLabel: c.controlPlaneID,
+				})
+				podInformerOptions = append(podInformerOptions, k8sinformers.WithTweakListOptions(func(lo *metav1.ListOptions) {
+					lo.LabelSelector = controlPlaneSelector.String()
+				}))
+			}
+			podInfFactory := k8sinformers.NewSharedInformerFactoryWithOptions(k8sClient, resyncPeriod, podInformerOptions...)
 			podInf := podInfFactory.Core().V1().Pods()
 			_, err := podInf.Informer().AddEventHandler(&cache.ResourceEventHandlerFuncs{
 				UpdateFunc: func(oldObj, newObj any) {
@@ -727,24 +749,26 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			}
 		}
 
-		// Helm model cache initialization namespace may not exist on startup.
-		mcInitNamespace := storage.NewModelCacheInitNamespace()
-		_, err := c.clients.K8s.CoreV1().Namespaces().Create(ctx, mcInitNamespace, metav1.CreateOptions{})
-
-		if err != nil && !k8serrors.IsAlreadyExists(err) {
-			return nil, nil, fmt.Errorf("failed to create model cache init namespace: %w", err)
+		// Network policies must exist in all workload namespaces; the Helm
+		// handler methods do this for each new namespace. The historical model
+		// cache namespace is a shared singleton and is therefore created only in
+		// legacy mode; named mode disables durable model-cache resources.
+		workloadNamespaces := []string{c.podInstanceNamespace}
+		if legacyModelCacheResourcesEnabled(c.controlPlaneID) {
+			mcInitNamespace := storage.NewModelCacheInitNamespace()
+			_, err := c.clients.K8s.CoreV1().Namespaces().Create(ctx, mcInitNamespace, metav1.CreateOptions{})
+			if err != nil && !k8serrors.IsAlreadyExists(err) {
+				return nil, nil, fmt.Errorf("failed to create model cache init namespace: %w", err)
+			}
+			// Patch WorkloadInstanceTypeLabel onto the namespace so the Kyverno
+			// add-unbound-dns policy injects nvcf-unbound nameservers into writer
+			// job pods. Done here so upgraded legacy clusters are patched too.
+			if err := ensureModelCacheNamespaceLabel(ctx, c.clients.K8s.CoreV1().Namespaces(), mcInitNamespace.Name); err != nil {
+				return nil, nil, fmt.Errorf("failed to patch model cache init namespace labels: %w", err)
+			}
+			workloadNamespaces = append(workloadNamespaces, mcInitNamespace.Name)
 		}
-		// Patch WorkloadInstanceTypeLabel onto the namespace so the Kyverno
-		// add-unbound-dns policy injects nvcf-unbound nameservers into writer
-		// job pods. Done here (not only in Create) so pre-existing namespaces
-		// on upgraded clusters receive the label immediately at startup.
-		if err := ensureModelCacheNamespaceLabel(ctx, c.clients.K8s.CoreV1().Namespaces(), mcInitNamespace.Name); err != nil {
-			return nil, nil, fmt.Errorf("failed to patch model cache init namespace labels: %w", err)
-		}
-
-		// Network policies must exist in all workload namespaces;
-		// the Helm handler methods will do this for each new namespace.
-		for _, namespace := range []string{c.podInstanceNamespace, mcInitNamespace.Name} {
+		for _, namespace := range workloadNamespaces {
 			err := k8sArtHelper.(K8sComputeBackend).ensureNetworkPolicies(ctx, namespace)
 			if err != nil {
 				return nil, nil, fmt.Errorf("create NetworkPolicies in namespace %s: %v",
@@ -895,7 +919,12 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	// Start NVCA object informers after all setup is complete so dependencies
 	// can start first.
 	nvcaInformerFactory.Start(ctx.Done())
-	cache.WaitForCacheSync(ctx.Done(), c.syncedFuncs...)
+	if ok := cache.WaitForCacheSync(ctx.Done(), c.syncedFuncs...); !ok {
+		return nil, nil, fmt.Errorf("failed to sync Kubernetes informer caches")
+	}
+	if err := c.reconcileExistingMirroredSecrets(ctx); err != nil {
+		return nil, nil, fmt.Errorf("reconcile existing mirrored secrets: %w", err)
+	}
 
 	log.Infof("Starting %d ICMS request sync workers", b.icmsRequestSyncConcurrency)
 	for i := 0; i < b.icmsRequestSyncConcurrency; i++ {
@@ -955,6 +984,36 @@ func (c *BackendK8sCache) startSecretMirroringInformer(ctx context.Context) erro
 	return nil
 }
 
+// reconcileExistingMirroredSecrets closes the startup race between the Secret
+// and instance-namespace informers. Add events can run before the namespace
+// lister is initialized or synced, so replay the cached source Secrets after
+// all informer caches have synced.
+func (c *BackendK8sCache) reconcileExistingMirroredSecrets(ctx context.Context) error {
+	if c.secretMirrorLabelSelector == "" {
+		return nil
+	}
+	if c.secretNamespaceLister == nil {
+		return fmt.Errorf("secret mirror lister is not initialized")
+	}
+	if c.instanceNamespaceLister == nil {
+		return fmt.Errorf("instance namespace lister is not initialized")
+	}
+
+	secrets, err := c.secretNamespaceLister.List(labels.Everything())
+	if err != nil {
+		return fmt.Errorf("list existing source secrets: %w", err)
+	}
+
+	var reconcileErrors []error
+	for _, secret := range secrets {
+		if err := c.mirrorSecret(ctx, secret); err != nil {
+			reconcileErrors = append(reconcileErrors,
+				fmt.Errorf("mirror existing secret %s/%s: %w", secret.Namespace, secret.Name, err))
+		}
+	}
+	return errors.Join(reconcileErrors...)
+}
+
 // initCustomAnnotationsCache initializes the custom annotations cache
 // The cache is populated by the ConfigMap informer in addConfigMapInformers
 func (c *BackendK8sCache) initCustomAnnotationsCache() {
@@ -979,8 +1038,7 @@ func (c *BackendK8sCache) mirrorSecret(ctx context.Context, sourceSecret *corev1
 	}
 
 	if c.instanceNamespaceLister == nil {
-		log.Debug("instanceNamespaceLister not initialized to mirror secrets")
-		return nil
+		return fmt.Errorf("instance namespace lister is not initialized")
 	}
 
 	// Get all function namespaces
@@ -989,8 +1047,14 @@ func (c *BackendK8sCache) mirrorSecret(ctx context.Context, sourceSecret *corev1
 		return fmt.Errorf("failed to list function namespaces: %w", err)
 	}
 
-	// Create a new secret object for each namespace
+	// Create a new secret object for each namespace. Continue processing other
+	// namespaces after a target failure, but report every failure to the caller
+	// so startup reconciliation cannot silently succeed with missing mirrors.
+	var mirrorErrors []error
 	for _, ns := range namespaces {
+		if !nvcatypes.IsOwnedByControlPlane(ns, c.controlPlaneID) {
+			continue
+		}
 		// Skip if source namespace is the same as target
 		if ns.Name == sourceSecret.Namespace {
 			continue
@@ -1013,6 +1077,7 @@ func (c *BackendK8sCache) mirrorSecret(ctx context.Context, sourceSecret *corev1
 		}
 		// add mirrored from label
 		newSecret.Labels[SecretMirroredFromLabelKey] = sourceSecret.Namespace
+		newSecret.Labels = nvcatypes.AddControlPlaneLabel(newSecret.Labels, c.controlPlaneID)
 
 		// Copy the secret data
 		maps.Copy(newSecret.Data, sourceSecret.Data)
@@ -1021,15 +1086,32 @@ func (c *BackendK8sCache) mirrorSecret(ctx context.Context, sourceSecret *corev1
 		_, err = c.clients.K8s.CoreV1().Secrets(ns.Name).Create(ctx, newSecret, metav1.CreateOptions{})
 		if err != nil {
 			if k8serrors.IsAlreadyExists(err) {
-				// Update existing secret
-				_, err = c.clients.K8s.CoreV1().Secrets(ns.Name).Update(ctx, newSecret, metav1.UpdateOptions{})
-				if err != nil {
-					log.WithError(err).Errorf("failed to update mirrored secret %s in namespace %s", newSecret.Name, ns.Name)
+				// The informer handler and startup replay can update the same
+				// mirror concurrently. Re-read ownership and resourceVersion on
+				// every retry so normal conflicts cannot fail agent startup.
+				updateErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+					existing, getErr := c.clients.K8s.CoreV1().Secrets(ns.Name).Get(ctx, newSecret.Name, metav1.GetOptions{})
+					if getErr != nil {
+						return fmt.Errorf("get mirrored secret %s/%s: %w", ns.Name, newSecret.Name, getErr)
+					}
+					if !nvcatypes.IsOwnedByControlPlane(existing, c.controlPlaneID) {
+						return fmt.Errorf(
+							"refusing to update mirrored secret %s/%s owned by another control plane", ns.Name, newSecret.Name,
+						)
+					}
+					newSecret.ResourceVersion = existing.ResourceVersion
+					_, updateErr := c.clients.K8s.CoreV1().Secrets(ns.Name).Update(ctx, newSecret, metav1.UpdateOptions{})
+					return updateErr
+				})
+				if updateErr != nil {
+					mirrorErrors = append(mirrorErrors,
+						fmt.Errorf("update mirrored secret %s/%s: %w", ns.Name, newSecret.Name, updateErr))
 					continue
 				}
 				log.Debugf("Updated mirrored secret %s in namespace %s", newSecret.Name, ns.Name)
 			} else {
-				log.WithError(err).Errorf("failed to create mirrored secret %s in namespace %s", newSecret.Name, ns.Name)
+				mirrorErrors = append(mirrorErrors,
+					fmt.Errorf("create mirrored secret %s/%s: %w", ns.Name, newSecret.Name, err))
 				continue
 			}
 		} else {
@@ -1037,7 +1119,7 @@ func (c *BackendK8sCache) mirrorSecret(ctx context.Context, sourceSecret *corev1
 		}
 	}
 
-	return nil
+	return errors.Join(mirrorErrors...)
 }
 
 func (c *BackendK8sCache) processICMSRequestWork(ctx context.Context) bool {
@@ -1079,9 +1161,14 @@ func (c *BackendK8sCache) processICMSRequestWork(ctx context.Context) bool {
 					// additionally delete it's associated MiniService if it exists.
 					if k8serrors.IsNotFound(err) {
 						c.icmsRequestWQ.Forget(obj)
-						miniserviceName := getMiniServiceInstanceID(nn.Name)
-						if err := c.clients.HelmV2.Get(ctx, client.ObjectKey{Name: miniserviceName}, &v1alpha1.MiniService{}); err == nil {
-							err = c.clients.HelmV2.Delete(ctx, &v1alpha1.MiniService{ObjectMeta: metav1.ObjectMeta{Name: miniserviceName}})
+						miniserviceName := getMiniServiceInstanceID(nn.Name, c.controlPlaneID)
+						miniService := &v1alpha1.MiniService{}
+						if err := c.clients.HelmV2.Get(ctx, client.ObjectKey{Name: miniserviceName}, miniService); err == nil {
+							if !nvcatypes.IsOwnedByControlPlane(miniService, c.controlPlaneID) {
+								log.Errorf("Refusing to delete MiniService %s owned by another control plane", miniserviceName)
+								return
+							}
+							err = c.clients.HelmV2.Delete(ctx, miniService)
 							if !k8serrors.IsNotFound(err) {
 								log.WithError(err).Error("Failed to delete MiniService workload, requeuing to try again")
 								c.icmsRequestWQ.AddRateLimited(obj)
@@ -1107,7 +1194,7 @@ func (c *BackendK8sCache) processICMSRequestWork(ctx context.Context) bool {
 					if len(sr.Status.Instances) == 0 {
 						if helmutil.IsMiniServiceCreateRequest(sr) {
 							// Helm chart request - create single placeholder instance
-							instanceID := getMiniServiceInstanceID(sr.Name)
+							instanceID := getMiniServiceInstanceID(sr.Name, c.controlPlaneID)
 							sr.Status.Instances = map[string]nvcav2beta1new.InstanceStatus{
 								instanceID: {
 									ID:                    instanceID,
@@ -1337,8 +1424,10 @@ func configMapInformerHandler(ctx context.Context, c *BackendK8sCache) func(obj 
 			// return true if the namespace is not active which will remove it from the list
 			return ns.Status.Phase != corev1.NamespaceActive
 		})
-		// Include the model cache init namespace since it has workload pods running (cache init jobs).
-		instanceNamespaces = append(instanceNamespaces, storage.NewModelCacheInitNamespace())
+		// Legacy model-cache init jobs run in a shared singleton namespace.
+		if legacyModelCacheResourcesEnabled(c.controlPlaneID) {
+			instanceNamespaces = append(instanceNamespaces, storage.NewModelCacheInitNamespace())
+		}
 
 		switch cm.Name {
 		case k8sutil.NetworkPoliciesConfigMapName:
@@ -1494,18 +1583,38 @@ func (c *BackendK8sCache) processNodeWork(ctx context.Context,
 	return true
 }
 
-func (c *BackendK8sCache) initInstanceNamespaceInformer(ctx context.Context) error {
+func legacyModelCacheResourcesEnabled(controlPlaneID string) bool {
+	return controlPlaneID == ""
+}
+
+func instanceNamespaceSelector(controlPlaneID string) (labels.Selector, error) {
 	// Ensure only instance namespaces are selected
 	namespaceLabelSel, err := labels.NewRequirement(nvcatypes.WorkloadInstanceTypeLabel,
 		selection.Exists, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create namespace label requirement: %w", err)
+		return nil, fmt.Errorf("failed to create namespace label requirement: %w", err)
+	}
+	selector := labels.NewSelector().Add(*namespaceLabelSel)
+	if controlPlaneID == "" {
+		return selector, nil
+	}
+	controlPlaneSel, err := labels.NewRequirement(nvcatypes.ControlPlaneIDLabel, selection.Equals, []string{controlPlaneID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create control plane label requirement: %w", err)
+	}
+	return selector.Add(*controlPlaneSel), nil
+}
+
+func (c *BackendK8sCache) initInstanceNamespaceInformer(ctx context.Context) error {
+	selector, err := instanceNamespaceSelector(c.controlPlaneID)
+	if err != nil {
+		return err
 	}
 	infFactory := k8sinformers.NewSharedInformerFactoryWithOptions(
 		c.clients.K8s,
 		c.resyncPeriod,
 		k8sinformers.WithTweakListOptions(func(lo *metav1.ListOptions) {
-			lo.LabelSelector = namespaceLabelSel.String()
+			lo.LabelSelector = selector.String()
 		}),
 	)
 	namespaceInf := infFactory.Core().V1().Namespaces()
@@ -2024,6 +2133,13 @@ func getICMSRequestObjectMeta(depInfo types.DeploymentInfo) metav1.ObjectMeta {
 	return om
 }
 
+func ownsICMSRequest(req *nvcav2beta1new.ICMSRequest, requestsNamespace, controlPlaneID string) bool {
+	if controlPlaneID == "" {
+		return true
+	}
+	return req != nil && req.Namespace == requestsNamespace && nvcatypes.IsOwnedByControlPlane(req, controlPlaneID)
+}
+
 func (c *BackendK8sCache) applyICMSRequestStatusChange(ctx context.Context,
 	sr *nvcav2beta1new.ICMSRequest, modify func(context.Context, *nvcav2beta1new.ICMSRequest),
 ) bool {
@@ -2268,6 +2384,7 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			TaskID:         mt.Details.TaskID,
 		})
 	}
+	o.Labels = nvcatypes.AddControlPlaneLabel(o.Labels, c.controlPlaneID)
 	obj, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).Create(ctx, &o, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to persist the ICMS request on the backend, err: %v", err)
@@ -2315,6 +2432,7 @@ func (c *BackendK8sCache) CreateICMSTerminationMessageRequest(ctx context.Contex
 			Instances:         map[string]nvcav2beta1new.InstanceStatus{},
 		},
 	}
+	o.Labels = nvcatypes.AddControlPlaneLabel(o.Labels, c.controlPlaneID)
 
 	obj, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).Create(ctx, &o, metav1.CreateOptions{})
 	if err != nil {
@@ -2473,6 +2591,9 @@ func (c *BackendK8sCache) CleanupCreationRequestResources(ctx context.Context, r
 						-> "RequestCompletionACK / "RequestFailureACK"
 */
 func (c *BackendK8sCache) SyncICMSRequest(ctx context.Context, nn apitypes.NamespacedName) error {
+	if c.controlPlaneID != "" && nn.Namespace != c.requestsNamespace {
+		return nvcaerrors.TerminalError(fmt.Errorf("ICMS request %s/%s is outside control plane %q", nn.Namespace, nn.Name, c.controlPlaneID))
+	}
 	req, err := c.icmsRequestLister.ICMSRequests(nn.Namespace).Get(nn.Name)
 	if err != nil {
 		// If the ICMS request no longer exists we need to consider it terminal
@@ -2484,6 +2605,9 @@ func (c *BackendK8sCache) SyncICMSRequest(ctx context.Context, nn apitypes.Names
 	// Deep copy the ICMS request to avoid data race condition
 	// since the lister is pulling it from a cache
 	req = req.DeepCopy()
+	if !ownsICMSRequest(req, c.requestsNamespace, c.controlPlaneID) {
+		return nvcaerrors.TerminalError(fmt.Errorf("ICMS request %s/%s is not owned by control plane %q", req.Namespace, req.Name, c.controlPlaneID))
+	}
 	ctx = logging.WithICMSRequestFieldLogger(ctx, req)
 	return nvcaotel.InvokeWithSpan(ctx, c.tracer, "nvca.BackendK8sCache.SyncICMSRequest",
 		func(ctx context.Context) error {
@@ -2968,7 +3092,17 @@ func (c *BackendK8sCache) ensureImageCredentialUpdaterCronJob(ctx context.Contex
 		return err
 	}
 	namespaceSelector := labels.NewSelector().Add(*namespaceSelectorReq)
+	if c.controlPlaneID != "" {
+		controlPlaneReq, reqErr := labels.NewRequirement(nvcatypes.ControlPlaneIDLabel, selection.Equals, []string{c.controlPlaneID})
+		if reqErr != nil {
+			return reqErr
+		}
+		namespaceSelector = namespaceSelector.Add(*controlPlaneReq)
+	}
 	cj := imagecredential.NewUpdaterCronJob(cjName, c.imageCredentialHelperImage, namespaceSelector.String())
+	cj.Labels = nvcatypes.AddControlPlaneLabel(cj.Labels, c.controlPlaneID)
+	cj.Spec.JobTemplate.Labels = nvcatypes.AddControlPlaneLabel(cj.Spec.JobTemplate.Labels, c.controlPlaneID)
+	cj.Spec.JobTemplate.Spec.Template.Labels = nvcatypes.AddControlPlaneLabel(cj.Spec.JobTemplate.Spec.Template.Labels, c.controlPlaneID)
 	// Use NVCA's service account to run the job for API access and image pull secrets.
 	cj.Namespace = c.systemNamespace
 	cj.Spec.JobTemplate.Spec.Template.Spec.ServiceAccountName = "nvca"

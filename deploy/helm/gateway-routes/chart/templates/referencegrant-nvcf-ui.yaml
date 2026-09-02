@@ -30,7 +30,7 @@ spec:
   from:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
+      namespace: {{ include "nvcf-gateway.routeNamespace" . }}
   # TO Services in the nvcf-ui namespace
   to:
     - group: ""

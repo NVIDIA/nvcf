@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="nvca-operator"
+SERVICE_ACCOUNT_NAMESPACE="${NVCA_OPERATOR_NAMESPACE:-nvca-operator}"
 SERVICE_ACCOUNT_NAME="nvca-operator"
 
 #-------------------------------------------
@@ -40,7 +40,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="services-all-kv-ro"
 # Add Access to SIS via JWT Secret Role
 #-------------------------------------------
 
-SIS_API_SERVICE_ACCOUNT_NAMESPACE="sis"
+SIS_API_SERVICE_ACCOUNT_NAMESPACE="${SIS_NAMESPACE:-sis}"
 SIS_API_SERVICE_ACCOUNT_NAME="sis-api"
 SIS_API_SERVICE_NAME="api"
 SIS_API_SECRET_BASE_PATH="services/${SIS_API_SERVICE_ACCOUNT_NAME}"

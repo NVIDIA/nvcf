@@ -150,6 +150,10 @@ adminIssuerProxy:
     # Namespace where the Gateway resource is located
     namespace: envoy-gateway-system
 
+    # Namespace where the HTTPRoute is created. Empty preserves the legacy
+    # behavior by using the Gateway namespace.
+    routeNamespace: ""
+
     # Reference to the Gateway resource to attach this HTTPRoute to
     gatewayRef:
       name: shared-gw

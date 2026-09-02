@@ -15,13 +15,13 @@
 
 {{- if .Values.nvcfGatewayRoutes.enabled }}
 ---
-# ReferenceGrant allows HTTPRoutes and GRPCRoutes in traefik-gateway namespace
-# to reference Services in nvcf namespace (for api, invocation-service, grpc)
+# ReferenceGrant allows HTTPRoutes and GRPCRoutes in the shared Gateway
+# namespaces to reference Services in the configured NVCF backend namespace.
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
   name: allow-routes-to-nvcf
-  namespace: nvcf  # Grant is created in the target namespace
+  namespace: {{ .Values.nvcfGatewayRoutes.routes.nvcfApi.backend.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
 spec:
@@ -29,16 +29,15 @@ spec:
   from:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
+      namespace: {{ include "nvcf-gateway.routeNamespace" . }}
     - group: gateway.networking.k8s.io
       kind: TCPRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.grpc.namespace }}
+      namespace: {{ include "nvcf-gateway.routeNamespace" . }}
     - group: gateway.networking.k8s.io
       kind: GRPCRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
-  # TO Services in nvcf namespace
+      namespace: {{ include "nvcf-gateway.routeNamespace" . }}
+  # TO Services in the configured NVCF backend namespace
   to:
     - group: ""
       kind: Service
 {{- end }}
-

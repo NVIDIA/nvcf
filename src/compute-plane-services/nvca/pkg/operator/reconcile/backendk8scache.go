@@ -99,6 +99,7 @@ type BackendK8sCache struct {
 	httpClient           *http.Client
 	operatorNamespace    string
 	systemNamespace      string
+	controlPlaneID       string
 	k8sVersionOverride   string
 	ngcServiceKeyFetcher cmnsecret.TokenFetcher
 	nvcaRunAsUserID      int64
@@ -233,6 +234,14 @@ func (b *BackendK8sCacheBuilder) WithClients(clients *kubeclients.KubeClients) *
 func (b *BackendK8sCacheBuilder) WithSystemNamespace(systemNamespace string) *BackendK8sCacheBuilder {
 	next := *b
 	next.operatorNamespace = systemNamespace
+	next.systemNamespace = systemNamespace
+	return &next
+}
+
+// WithControlPlaneID sets the stable identity used for resource isolation.
+func (b *BackendK8sCacheBuilder) WithControlPlaneID(controlPlaneID string) *BackendK8sCacheBuilder {
+	next := *b
+	next.controlPlaneID = controlPlaneID
 	return &next
 }
 
@@ -397,7 +406,9 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		clients:              b.clients,
 		eventBroadcaster:     eventBroadcaster,
 		eventRecorder:        eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "nvca-operator"}),
+		operatorNamespace:    b.operatorNamespace,
 		systemNamespace:      b.systemNamespace,
+		controlPlaneID:       b.controlPlaneID,
 		ngcServiceKeyFetcher: b.ngcServiceKeyFetcher,
 		k8sVersionOverride:   b.k8sVersionOverride,
 		tracer:               b.tracer,
@@ -773,6 +784,9 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 func (bc *BackendK8sCache) CreateOrUpdateNVCFBackend(ctx context.Context, deltaNB *nvidiaiov1.NVCFBackend) error {
 	log := core.GetLogger(ctx)
 	deltaNB = deltaNB.DeepCopy()
+	if err := applyControlPlaneIdentity(deltaNB, bc.controlPlaneID); err != nil {
+		return err
+	}
 	log.Debugf("create or update NVCFBackend %s/%s", bc.operatorNamespace, deltaNB.Name)
 	deltaNB.Namespace = bc.operatorNamespace
 	if bc.nvcaOTELConfig != nil {
@@ -1060,10 +1074,14 @@ func (bc *BackendK8sCache) SyncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 }
 
 func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend, forceRollout bool) error {
+	nb = nb.DeepCopy()
 	log := core.GetLogger(ctx).WithFields(logrus.Fields{
 		"backend":   nb.Name,
 		"namespace": nb.Namespace,
 	})
+	if err := bc.validateAndApplyControlPlaneScope(nb); err != nil {
+		return fmt.Errorf("refusing to reconcile NVCFBackend %s/%s: %w", nb.Namespace, nb.Name, err)
+	}
 
 	// If the backend is being deleted, we need to cleanup the resources
 	if !nb.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -1137,6 +1155,10 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 	nbMerged := nb.DeepCopy()
 	if err := mergeOverrides(nbMerged); err != nil {
 		return err
+	}
+	if err := bc.validateAndApplyControlPlaneScope(nbMerged); err != nil {
+		return fmt.Errorf("refusing to reconcile NVCFBackend %s/%s after applying overrides: %w",
+			nbMerged.Namespace, nbMerged.Name, err)
 	}
 
 	// version cannot be empty

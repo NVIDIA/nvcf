@@ -14,6 +14,7 @@
 # limitations under the License.
 
 {{- if .Values.adminIssuerProxy.gateway.enabled }}
+{{- $routeNamespace := .Values.adminIssuerProxy.gateway.routeNamespace | default .Values.adminIssuerProxy.gateway.namespace }}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -33,7 +34,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: {{ include "admin-issuer-proxy.fullname" . }}
-  namespace: {{ .Values.adminIssuerProxy.gateway.namespace }}
+  namespace: {{ $routeNamespace }}
 spec:
   parentRefs:
   - name: {{ .Values.adminIssuerProxy.gateway.gatewayRef.name }}

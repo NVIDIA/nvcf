@@ -37,7 +37,7 @@ readonly API_READINESS_PERIOD_SECONDS="${API_READINESS_PERIOD_SECONDS:-10}"     
 readonly API_READINESS_FAILURE_THRESHOLD="${API_READINESS_FAILURE_THRESHOLD:-60}"  # failureThreshold (period * threshold = total timeout)
 
 # Service endpoints
-readonly OPENBAO_SERVICE_ADDR="openbao-server.vault-system.svc.cluster.local:8200"
+readonly OPENBAO_SERVICE_ADDR="{{ required "api.accountBootstrap.openbaoServiceAddress is required" .Values.api.accountBootstrap.openbaoServiceAddress }}"
 # Vault JWT Auth configuration
 # Role used for the /v1/auth/jwt/login endpoint (overridable via env var)
 readonly OPENBAO_JWT_AUTH_ROLE="${OPENBAO_JWT_AUTH_ROLE:-nvcf-api-account-bootstrap}"

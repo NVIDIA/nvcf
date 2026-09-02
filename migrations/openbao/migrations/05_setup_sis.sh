@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="sis"
+SERVICE_ACCOUNT_NAMESPACE="${SIS_NAMESPACE:-sis}"
 SERVICE_ACCOUNT_NAME="sis-api"
 
 #-------------------------------------------

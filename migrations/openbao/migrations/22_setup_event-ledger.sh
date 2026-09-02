@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="nvcf"
+SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 SERVICE_ACCOUNT_NAME="event-ledger"
 
 #-------------------------------------------
@@ -65,7 +65,7 @@ config_jwt_secret_mount_config "${VAULT_SECRET_BASE_PATH}/jwt" "${jwt_secret_mou
 # Issuer: http://event-ledger.nvcf.svc.cluster.local
 #-------------------------------------------
 
-SIS_SERVICE_ACCOUNT_NAMESPACE="sis"
+SIS_SERVICE_ACCOUNT_NAMESPACE="${SIS_NAMESPACE:-sis}"
 SIS_SERVICE_ACCOUNT_NAME="sis-api"
 SCOPES="fnds:createEvent,fnds:archiveEvents"
 
@@ -85,7 +85,7 @@ create_auth_jwt_role "${SIS_SERVICE_ACCOUNT_NAME}" "${sis_jwt_auth_role}"
 # Issuer: http://event-ledger.nvcf.svc.cluster.local
 #-------------------------------------------
 
-NVCA_SERVICE_ACCOUNT_NAMESPACE="nvca-system"
+NVCA_SERVICE_ACCOUNT_NAMESPACE="${NVCA_NAMESPACE:-nvca-system}"
 NVCA_SERVICE_ACCOUNT_NAME="nvca"
 
 jwt_secret_role=$(generate_jwt_secret_role "${SERVICE_ACCOUNT_NAMESPACE}" "${SERVICE_ACCOUNT_NAME}" "${NVCA_SERVICE_ACCOUNT_NAME}" "${SCOPES}")

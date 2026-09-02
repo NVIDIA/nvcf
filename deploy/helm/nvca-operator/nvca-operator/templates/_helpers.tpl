@@ -23,12 +23,63 @@ Expand the name of the chart.
 {{- end -}}
 
 {{/*
+Validated control-plane identity. Empty is the legacy compatibility mode.
+*/}}
+{{- define "nvcaop.controlPlaneID" -}}
+{{- $controlPlane := .Values.controlPlane | default dict -}}
+{{- $id := $controlPlane.id | default "" -}}
+{{- if eq $id "default" -}}
+{{- fail "controlPlane.id \"default\" is reserved" -}}
+{{- end -}}
+{{- if and $id (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $id)) -}}
+{{- fail (printf "controlPlane.id must be a lowercase RFC 1123 DNS label, got %q" $id) -}}
+{{- end -}}
+{{- if gt (len $id) 20 -}}
+{{- fail "controlPlane.id must be at most 20 characters" -}}
+{{- end -}}
+{{- if $id -}}
+{{- $expectedOperatorName := printf "%s-nvca-operator" $id -}}
+{{- if ne .Release.Name $expectedOperatorName -}}
+{{- fail (printf "controlPlane.id=%q requires Helm release name %q" $id $expectedOperatorName) -}}
+{{- end -}}
+{{- if ne .Release.Namespace $expectedOperatorName -}}
+{{- fail (printf "controlPlane.id=%q requires Helm release namespace %q" $id $expectedOperatorName) -}}
+{{- end -}}
+{{- end -}}
+{{- $id -}}
+{{- end -}}
+
+{{/* Namespaces derived from the control-plane identity. */}}
+{{- define "nvcaop.operatorNamespace" -}}
+{{- $id := include "nvcaop.controlPlaneID" . -}}
+{{- if $id -}}{{ printf "%s-nvca-operator" $id }}{{- else -}}nvca-operator{{- end -}}
+{{- end -}}
+
+{{- define "nvcaop.systemNamespace" -}}
+{{- $id := include "nvcaop.controlPlaneID" . -}}
+{{- if $id -}}{{ printf "%s-nvca-system" $id }}{{- else -}}nvca-system{{- end -}}
+{{- end -}}
+
+{{- define "nvcaop.requestsNamespace" -}}
+{{- $id := include "nvcaop.controlPlaneID" . -}}
+{{- if $id -}}{{ printf "%s-nvcf-backend" $id }}{{- else -}}nvcf-backend{{- end -}}
+{{- end -}}
+
+{{/* Secret mirror source defaults to this control plane's operator namespace. */}}
+{{- define "nvcaop.secretMirrorNamespace" -}}
+{{- .Values.agent.secretMirrorNamespace | default (include "nvcaop.operatorNamespace" .) -}}
+{{- end -}}
+
+{{/*
 Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
 {{- define "nvcaop.fullname" -}}
-{{- if .Values.fullnameOverride -}}
+{{- $id := include "nvcaop.controlPlaneID" . -}}
+{{- if $id -}}
+{{- printf "%s-nvca-operator" $id -}}
+{{- else if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- $name := default .Chart.Name .Values.nameOverride -}}
@@ -54,6 +105,10 @@ Common labels
 helm.sh/chart: {{ include "nvcaop.chart" . }}
 app.kubernetes.io/name: {{ include "nvcaop.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- $controlPlaneID := include "nvcaop.controlPlaneID" . }}
+{{- if $controlPlaneID }}
+nvcf.nvidia.com/control-plane-id: {{ $controlPlaneID | quote }}
+{{- end }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}

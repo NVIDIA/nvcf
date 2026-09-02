@@ -15,13 +15,13 @@
 
 {{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.apiKeys.enabled }}
 ---
-# ReferenceGrant allows HTTPRoute in traefik-gateway namespace to reference
-# Service in api-keys namespace (cross-namespace reference)
+# ReferenceGrant allows HTTPRoute in the shared Gateway namespace to reference
+# the Service in the configured API Keys backend namespace.
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
   name: allow-httproute-to-api-keys
-  namespace: api-keys  # Grant is created in the target namespace
+  namespace: {{ .Values.nvcfGatewayRoutes.routes.apiKeys.backend.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
 spec:
@@ -29,11 +29,9 @@ spec:
   from:
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
-  # TO Services in api-keys namespace
+      namespace: {{ include "nvcf-gateway.routeNamespace" . }}
+  # TO Services in the configured API Keys backend namespace
   to:
     - group: ""
       kind: Service
 {{- end }}
-
-

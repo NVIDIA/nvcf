@@ -108,6 +108,22 @@
             "default": [],
             "items": {}
         },
+        "controlPlane": {
+            "type": "object",
+            "description": "Optional identity used to isolate multiple control-plane compute agents in one Kubernetes cluster.",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Lowercase DNS label prefix. Empty preserves legacy resource names and namespaces.",
+                    "default": "",
+                    "maxLength": 20,
+                    "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                    "not": {
+                        "const": "default"
+                    }
+                }
+            }
+        },
         "serviceAccount": {
             "type": "object",
             "properties": {
@@ -392,8 +408,8 @@
                 },
                 "secretMirrorNamespace": {
                     "type": "string",
-                    "description": "Default namespace to mirror custom secrets for nvcf workloads",
-                    "default": "nvca-operator"
+                    "description": "Namespace to source mirrored workload secrets from. Empty derives this control plane's operator namespace.",
+                    "default": ""
                 },
                 "secretMirrorLabelSelector": {
                     "type": "string",

@@ -9,6 +9,7 @@ ML-framework operators (Grove, Dynamo) onto GPU clusters registered with an NVCF
 - `helmfile` v1.1.x (v1.2.0+ breaks ordering; see version note below)
 - `helm` v3.x
 - `helm-diff` plugin
+- `yq` v4
 - `nvcf-cli` (for cluster registration)
 - A kubeconfig pointing at the target GPU cluster
 
@@ -108,6 +109,55 @@ compute-plane stack does not override.
 
 Only set `global.nvcaOperator.selfManaged.imageCredHelper.imageTag` when
 pinning a tested replacement helper image.
+
+For pre-release validation, `global.nvcaOperator.chartPath` can point to a
+local NVCA operator chart. Leave it empty for the pinned released chart.
+
+## Multiple Isolated Control Planes
+
+Set the same control-plane identity used by the selected self-managed control
+plane. The identity must be a lowercase DNS label no longer than 20 characters:
+
+```yaml
+global:
+  controlPlane:
+    id: plane-a
+```
+
+A named compute-plane install creates the Helm release and operator namespace
+`plane-a-nvca-operator`. The operator then owns only the derived namespaces
+`plane-a-nvca-system`, `plane-a-nvcf-backend`, and
+`plane-a-nvca-modelcache-init`. Empty identity keeps the legacy names.
+
+Install cluster-wide prerequisites once, independently from either control
+plane. This includes the shared `NVCFBackend` CRD; named worker releases never
+own or remove that definition. Named `install`, `apply`, and `destroy` commands
+automatically read the identity from the selected environment and select only
+the per-instance NVCA release. `CONTROL_PLANE_ID` remains available as an
+explicit override:
+
+```sh
+make install-shared-prerequisites HELMFILE_ENV=<env>
+
+make install \
+  CLUSTER_NAME=gpu-plane-a \
+  HELMFILE_ENV=plane-a
+
+make install \
+  CLUSTER_NAME=gpu-plane-b \
+  HELMFILE_ENV=plane-b
+```
+
+The command-line identity must match `global.controlPlane.id` when both are
+set. Named `install` and `apply` create the operator namespace with its
+`nvcf.nvidia.com/control-plane-id` ownership label, or verify that an existing
+namespace has the expected label before Helm writes resources. Named `destroy`
+checks that label before uninstall and again before deleting the namespace.
+
+Re-run `install-shared-prerequisites` before a worker upgrade that changes the
+CRD. Removing one instance leaves shared prerequisites and the other instance
+untouched. `make destroy-shared-prerequisites` refuses to run while any labeled
+named compute-plane namespaces remain; remove every named compute plane first.
 
 ## Helmfile Version Note
 

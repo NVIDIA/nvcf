@@ -850,6 +850,45 @@ Deploy the self-managed stack:
 HELMFILE_ENV=<environment-name> helmfile sync
 ```
 
+#### Multiple isolated control planes in one cluster
+
+Use the Make targets when two or more control planes share a Kubernetes
+cluster. Give each plane a stable DNS-1123 ID of at most 20 characters and a
+unique external domain in its environment file:
+
+```yaml
+global:
+  controlPlane:
+    id: plane-a
+  domain: plane-a.example.test
+```
+
+Install cert-manager, the Gateway API controller, and the shared observability
+backend once, outside either plane's lifecycle. Named-plane installs treat
+those components as external prerequisites and derive isolated service, data,
+route, and ingress namespaces from the ID:
+
+```bash
+make install HELMFILE_ENV=plane-a
+make install HELMFILE_ENV=plane-b
+```
+
+The same selected environment must be used for updates and removal. Before
+installing, updating, or deleting a named plane, the Make targets verify the
+`nvcf.nvidia.com/control-plane-id=<id>` namespace ownership label. Removing
+one plane therefore leaves the other plane and shared prerequisites intact:
+
+```bash
+make apply HELMFILE_ENV=plane-a
+make destroy HELMFILE_ENV=plane-a
+```
+
+The optional NVCF UI is not yet supported in named-plane mode because its
+published chart requires cluster-wide read access. Keep `addons.nvcfUi.enabled`
+set to `false`; configuration validation rejects it rather than silently
+weakening isolation. An empty control-plane ID preserves the existing
+single-control-plane names and lifecycle behavior.
+
 <Note>
 The initial deployment takes approximately 5-10 minutes for local development
 and 10-20 minutes for cloud deployments.

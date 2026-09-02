@@ -13,10 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- $controlPlaneID := include "nvcaop.controlPlaneID" . -}}
+{{- if not $controlPlaneID -}}
+{{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "nvcfbackends.nvcf.nvidia.io" -}}
+{{- $ownedByThisRelease := false -}}
+{{- with $existing -}}
+{{- $annotations := .metadata.annotations | default dict -}}
+{{- $ownedByThisRelease = and
+      (eq (get $annotations "meta.helm.sh/release-name") $.Release.Name)
+      (eq (get $annotations "meta.helm.sh/release-namespace") $.Release.Namespace) -}}
+{{- end -}}
+{{- if or (not $existing) $ownedByThisRelease }}
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: nvcfbackends.nvcf.nvidia.io
+  annotations:
+    helm.sh/resource-policy: keep
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
 spec:
@@ -58,3 +71,5 @@ spec:
     storage: true
     subresources:
       status: {}
+{{- end }}
+{{- end }}

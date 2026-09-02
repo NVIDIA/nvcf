@@ -131,6 +131,13 @@ func schema_pkg_apis_nvcf_v1_ClusterConfig(ref common.ReferenceCallback) common.
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"controlPlaneId": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ControlPlaneID is the stable identity used to isolate multiple NVCF control planes sharing one Kubernetes cluster. Empty preserves legacy names.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 					"clusterID": {
 						SchemaProps: spec.SchemaProps{
 							Description: "required",

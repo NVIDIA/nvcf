@@ -373,6 +373,7 @@ func TestOperatorCommand_NVCAFlags(t *testing.T) {
 	assert.True(t, flagNames["enable-gxcache"], "enable-gxcache flag should still exist")
 	assert.True(t, flagNames["nca-id"], "nca-id flag should still exist")
 	assert.True(t, flagNames["cluster-name"], "cluster-name flag should still exist")
+	assert.True(t, flagNames["control-plane-id"], "control-plane-id flag should exist")
 }
 
 func TestOperatorCommand_NVCAFlagDefaults(t *testing.T) {

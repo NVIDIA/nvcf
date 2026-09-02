@@ -37,6 +37,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 
 	"github.com/bombsimon/logrusr/v4"
 	corev1 "k8s.io/api/core/v1"
@@ -62,6 +63,11 @@ func NewOperatorCommand() *cli.Command {
 				Name:  "system-namespace",
 				Value: NVCAOperatorNamespace,
 				Usage: "Namespace where NVCA Operator will watch for NVCFBackend types",
+			},
+			&cli.StringFlag{
+				Name:    "control-plane-id",
+				Usage:   "Stable identity used to isolate this control plane in a shared cluster",
+				EnvVars: []string{"NVCF_CONTROL_PLANE_ID"},
 			},
 			&cli.StringFlag{
 				Name:     "nca-id",
@@ -367,6 +373,20 @@ func NewOperatorCommand() *cli.Command {
 	}
 }
 
+func resolveOperatorSystemNamespace(controlPlaneID, configuredNamespace string, explicitlySet bool) string {
+	if controlPlaneID != "" && !explicitlySet {
+		return nvcatypes.ControlPlaneResourceName(controlPlaneID, NVCAOperatorNamespace)
+	}
+	return configuredNamespace
+}
+
+func resolveOperatorSecretMirrorSourceNamespace(controlPlaneID, configuredNamespace string, explicitlySet bool) string {
+	if controlPlaneID != "" && !explicitlySet {
+		return nvcatypes.ControlPlaneResourceName(controlPlaneID, NVCAOperatorNamespace)
+	}
+	return configuredNamespace
+}
+
 func doAction(c *cli.Context) error {
 	ctx := c.Context
 	log := core.GetLogger(ctx)
@@ -460,41 +480,46 @@ func doAction(c *cli.Context) error {
 		return fmt.Errorf("identity-source is not supported for cluster source %s", clusterSource)
 	}
 
+	controlPlaneID := c.String("control-plane-id")
 	opts := &AgentOptions{
-		NCAID:                             c.String("nca-id"),
-		KubeConfigPath:                    c.String("kubeconfig"),
-		K8sVersionOverride:                c.String("k8s-version-override"),
-		SvcAddress:                        c.String("listen"),
-		AdminAddr:                         c.String("listen-admin"),
-		ShutdownAddr:                      c.String("listen-shutdown"),
-		PodName:                           c.String("pod-name"),
-		PodNamespace:                      c.String("pod-namespace"),
-		DeploymentName:                    c.String("deployment-name"),
-		SystemNamespace:                   c.String("system-namespace"),
-		PriorityClassName:                 c.String("priority-class-name"),
-		ClusterName:                       c.String("cluster-name"),
-		ClusterSource:                     clusterSource,
-		NodeSelectorKey:                   c.String("node-selector-key"),
-		NodeSelectorValue:                 c.String("node-selector-value"),
-		NVCAClusterManagementAPIURL:       c.String("ngc-api-url"),
-		NVCFClusterID:                     c.String("cluster-id"),
-		NVCAClusterAPIRefreshInterval:     c.Duration("nvca-cluster-api-refresh-interval"),
-		NVCAImageRepo:                     c.String("nvca-image-repo"),
-		NVCARunAsUserID:                   c.Int64("nvca-run-as-userid"),
-		NVCARunAsGroupID:                  c.Int64("nvca-run-as-groupid"),
-		GXCacheNamespace:                  c.String("nvca-gxcache-namespace"),
-		HelmRepositoryPrefix:              c.String("nvca-helm-repository-prefix"),
-		EnableGXCache:                     c.Bool("enable-gxcache"),
-		DDCSIPAllowList:                   c.StringSlice("ddcs-ip-allowlist"),
-		K8sClusterNetworkCIDRs:            c.StringSlice("k8s-cluster-network-cidrs"),
-		AgentResources:                    agentRR,
-		WebhookResources:                  webhookRR,
-		NVCACacheMountOptionsEnabled:      c.Bool("nvca-cache-mount-options-enabled"),
-		NVCACacheMountOptions:             c.String("nvca-cache-mount-options"),
-		NVCAWorkerDegradationPeriod:       c.Duration("nvca-worker-degradation-period"),
-		NVCAWorkloadTolerations:           workloadTolerations,
-		NVCAAgentTolerations:              agentTolerations,
-		NVCASecretMirrorSourceNamespace:   c.String("nvca-secret-mirror-source-namespace"),
+		NCAID:              c.String("nca-id"),
+		KubeConfigPath:     c.String("kubeconfig"),
+		K8sVersionOverride: c.String("k8s-version-override"),
+		SvcAddress:         c.String("listen"),
+		AdminAddr:          c.String("listen-admin"),
+		ShutdownAddr:       c.String("listen-shutdown"),
+		PodName:            c.String("pod-name"),
+		PodNamespace:       c.String("pod-namespace"),
+		DeploymentName:     c.String("deployment-name"),
+		SystemNamespace: resolveOperatorSystemNamespace(
+			controlPlaneID, c.String("system-namespace"), c.IsSet("system-namespace")),
+		ControlPlaneID:                controlPlaneID,
+		PriorityClassName:             c.String("priority-class-name"),
+		ClusterName:                   c.String("cluster-name"),
+		ClusterSource:                 clusterSource,
+		NodeSelectorKey:               c.String("node-selector-key"),
+		NodeSelectorValue:             c.String("node-selector-value"),
+		NVCAClusterManagementAPIURL:   c.String("ngc-api-url"),
+		NVCFClusterID:                 c.String("cluster-id"),
+		NVCAClusterAPIRefreshInterval: c.Duration("nvca-cluster-api-refresh-interval"),
+		NVCAImageRepo:                 c.String("nvca-image-repo"),
+		NVCARunAsUserID:               c.Int64("nvca-run-as-userid"),
+		NVCARunAsGroupID:              c.Int64("nvca-run-as-groupid"),
+		GXCacheNamespace:              c.String("nvca-gxcache-namespace"),
+		HelmRepositoryPrefix:          c.String("nvca-helm-repository-prefix"),
+		EnableGXCache:                 c.Bool("enable-gxcache"),
+		DDCSIPAllowList:               c.StringSlice("ddcs-ip-allowlist"),
+		K8sClusterNetworkCIDRs:        c.StringSlice("k8s-cluster-network-cidrs"),
+		AgentResources:                agentRR,
+		WebhookResources:              webhookRR,
+		NVCACacheMountOptionsEnabled:  c.Bool("nvca-cache-mount-options-enabled"),
+		NVCACacheMountOptions:         c.String("nvca-cache-mount-options"),
+		NVCAWorkerDegradationPeriod:   c.Duration("nvca-worker-degradation-period"),
+		NVCAWorkloadTolerations:       workloadTolerations,
+		NVCAAgentTolerations:          agentTolerations,
+		NVCASecretMirrorSourceNamespace: resolveOperatorSecretMirrorSourceNamespace(
+			controlPlaneID, c.String("nvca-secret-mirror-source-namespace"),
+			c.IsSet("nvca-secret-mirror-source-namespace")),
 		NVCASecretMirrorLabelSelector:     c.String("nvca-secret-mirror-label-selector"),
 		GenerateImagePullSecret:           c.Bool("generate-image-pull-secret"),
 		AdditionalImagePullSecrets:        additionalSecrets,

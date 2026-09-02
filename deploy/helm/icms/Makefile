@@ -34,7 +34,10 @@ OCI_REGISTRY_NAMESPACE ?= 0651155215864979/ncp-dev
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: deploy delete status lint template
+.PHONY: deploy delete status lint template test
+
+test:
+	@sh ./scripts/test-control-plane-isolation.sh
 
 install:
 ifndef values

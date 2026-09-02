@@ -8,8 +8,8 @@ SET
     'nvcf-api': {
       id: 'nvcf-api',
       name: 'nvcf notary client',
-      jwks_url: 'http://notary.nvcf.svc.cluster.local:8080/.well-known/jwks.json',
-      issuer: 'http://notary.nvcf.svc.cluster.local:8080',
+      jwks_url: '${NOTARY_BASE_URL}/.well-known/jwks.json',
+      issuer: '${NOTARY_BASE_URL}',
       type: 'NOTARY'
     }
   }
