@@ -565,3 +565,5 @@ replace github.com/DataDog/datadog-agent/comp/core/delegatedauth => github.com/D
 replace github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws => github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws v0.79.0-devel.0.20260402163801-bfa4eff6c991
 
 replace golang.org/x/crypto => golang.org/x/crypto v0.55.0
+
+replace google.golang.org/grpc => google.golang.org/grpc v1.83.1
