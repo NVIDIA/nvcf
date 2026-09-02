@@ -54,6 +54,7 @@ releases:
     namespace: sis
     inherit:
       - template: service
+    condition: sis.enabled
 
   - name: api
     version: 1.25.1
