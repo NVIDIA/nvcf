@@ -282,6 +282,7 @@ fn finish_observation(
             Instant::now(),
             completion.usage.completion_tokens > 0,
             0,
+            false,
         );
         generation.observe_output_tokens_total(u64::from(completion.usage.completion_tokens));
         observer.complete();

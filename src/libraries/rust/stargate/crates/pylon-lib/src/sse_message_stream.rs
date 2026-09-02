@@ -30,12 +30,26 @@ const SSE_DELIVERY_BUFFER_EVENTS: usize = 1;
 pub(crate) struct GeneratedOutput {
     pub(crate) characters: OutputCharacters,
     pub(crate) token_bearing: bool,
+    pub(crate) reasoning_text: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExactUsage {
     pub(crate) input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
+    pub(crate) reasoning_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChatChoiceCalibration {
+    pub(crate) index: u64,
+    pub(crate) safely_finished: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SseEventProtocol {
+    ChatCompletions,
+    Responses,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,8 +60,10 @@ pub(crate) enum RelayOutcome {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct SseEventFacts {
+    pub(crate) protocol: Option<SseEventProtocol>,
     pub(crate) generated_output: Option<GeneratedOutput>,
     pub(crate) exact_usage: Option<ExactUsage>,
+    pub(crate) calibration_ineligible: bool,
     pub(crate) terminal: Option<RelayOutcome>,
 }
 
@@ -57,6 +73,28 @@ pub(crate) struct ParsedSseMessage {
     pub(crate) parsed: Option<Value>,
     pub(crate) facts: SseEventFacts,
     pub(crate) received_at: Instant,
+}
+
+impl ParsedSseMessage {
+    pub(crate) fn chat_choice_calibration(
+        &self,
+    ) -> impl Iterator<Item = ChatChoiceCalibration> + '_ {
+        self.parsed
+            .as_ref()
+            .filter(|value| value["object"].as_str() == Some("chat.completion.chunk"))
+            .and_then(|value| value["choices"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|choice| {
+                choice["index"].as_u64().map(|index| ChatChoiceCalibration {
+                    index,
+                    safely_finished: matches!(
+                        choice["finish_reason"].as_str(),
+                        Some("stop" | "length")
+                    ),
+                })
+            })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -95,7 +133,8 @@ impl SseMessageBuffer {
     fn pop_event(&mut self, event_end: usize) -> ParsedSseMessage {
         let raw_event = self.buffer.split_to(event_end).freeze();
         let fields = extract_sse_fields(raw_event.as_ref());
-        let (parsed, facts) = classify_sse_event(fields.event_name.as_deref(), &fields.data);
+        let (parsed, mut facts) = classify_sse_event(fields.event_name.as_deref(), &fields.data);
+        facts.calibration_ineligible |= fields.conflicting_event_names;
         ParsedSseMessage {
             raw_event,
             parsed,
@@ -306,6 +345,9 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
         return (
             None,
             SseEventFacts {
+                protocol: Some(SseEventProtocol::ChatCompletions),
+                calibration_ineligible: event_name
+                    .is_some_and(|event_name| event_name.starts_with("response.")),
                 terminal: Some(terminal),
                 ..SseEventFacts::default()
             },
@@ -324,6 +366,7 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
         return (
             parsed,
             SseEventFacts {
+                calibration_ineligible: !trimmed.is_empty(),
                 terminal,
                 ..SseEventFacts::default()
             },
@@ -331,9 +374,16 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
     };
     let json_event_type = value["type"].as_str();
     let event_type = json_event_type.or(event_name);
+    let protocol = sse_event_protocol(value, event_type);
+    let (generated_output, generated_output_ineligible) = generated_output(value, event_type);
+    let (exact_usage, usage_ineligible) = exact_usage(value, protocol);
     let facts = SseEventFacts {
-        generated_output: generated_output(value, event_type),
-        exact_usage: exact_usage(value),
+        protocol,
+        generated_output,
+        exact_usage,
+        calibration_ineligible: generated_output_ineligible
+            || usage_ineligible
+            || calibration_ineligible_event(value, json_event_type, event_name),
         terminal: merge_terminal_outcomes(
             terminal_outcome(json_event_type),
             terminal_outcome(event_name),
@@ -342,21 +392,153 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
     (parsed, facts)
 }
 
+fn sse_event_protocol(value: &Value, event_type: Option<&str>) -> Option<SseEventProtocol> {
+    if value["object"].as_str() == Some("chat.completion.chunk") {
+        Some(SseEventProtocol::ChatCompletions)
+    } else if event_type.is_some_and(|event_type| event_type.starts_with("response.")) {
+        Some(SseEventProtocol::Responses)
+    } else {
+        None
+    }
+}
+
+fn calibration_ineligible_event(
+    value: &Value,
+    json_event_type: Option<&str>,
+    event_name: Option<&str>,
+) -> bool {
+    let is_chat_completion_chunk = value["object"].as_str() == Some("chat.completion.chunk");
+    let identifiers_match = match (json_event_type, event_name) {
+        (Some(json_event_type), Some(event_name)) => json_event_type == event_name,
+        _ => true,
+    };
+    if !identifiers_match {
+        return true;
+    }
+
+    if is_chat_completion_chunk {
+        return json_event_type.is_some()
+            || event_name.is_some_and(|event_name| !matches!(event_name, "chunk" | "message"))
+            || value["choices"].as_array().is_none_or(|choices| {
+                choices.iter().any(|choice| {
+                    let finish_reason = &choice["finish_reason"];
+                    let delta = &choice["delta"];
+                    choice["index"].as_u64().is_none()
+                        || (!finish_reason.is_null()
+                            && !matches!(finish_reason.as_str(), Some("stop" | "length")))
+                        || delta["function_call"].is_object()
+                        || delta["tool_calls"]
+                            .as_array()
+                            .is_some_and(|calls| !calls.is_empty())
+                        || chat_audio_is_calibration_ineligible(delta)
+                })
+            });
+    }
+
+    match json_event_type.or(event_name) {
+        Some("response.created" | "response.queued" | "response.in_progress") => {
+            !response_output_is_calibration_safe(value, true)
+        }
+        Some("response.output_item.added" | "response.output_item.done") => !matches!(
+            value["item"]["type"].as_str(),
+            Some("message" | "reasoning")
+        ),
+        Some("response.content_part.added" | "response.content_part.done") => !matches!(
+            value["part"]["type"].as_str(),
+            Some("output_text" | "refusal" | "reasoning_text")
+        ),
+        Some("response.output_text.delta") => value["delta"].as_str().is_none(),
+        Some("response.output_text.done") => value["text"].as_str().is_none(),
+        Some("response.refusal.delta") => value["delta"].as_str().is_none(),
+        Some("response.refusal.done") => value["refusal"].as_str().is_none(),
+        Some("response.reasoning_text.delta" | "response.audio.transcript.delta") => {
+            value["delta"].as_str().is_none()
+        }
+        Some("response.reasoning_text.done") => value["text"].as_str().is_none(),
+        Some("response.completed") => !response_output_is_calibration_safe(value, false),
+        Some(_) | None => true,
+    }
+}
+
+fn chat_audio_is_calibration_ineligible(delta: &Value) -> bool {
+    let audio = &delta["audio"];
+    if audio.is_null() {
+        return false;
+    }
+    if audio.as_object().is_none() {
+        return true;
+    }
+
+    let transcript_is_text = audio["transcript"].as_str().is_some();
+    let data = &audio["data"];
+    let contains_binary_data = match data.as_str() {
+        Some(data) => !data.is_empty(),
+        None => !data.is_null(),
+    };
+    !transcript_is_text || contains_binary_data
+}
+
+fn response_output_is_calibration_safe(value: &Value, allow_empty: bool) -> bool {
+    value["response"]["output"].as_array().is_some_and(|items| {
+        (allow_empty || !items.is_empty())
+            && items
+                .iter()
+                .all(|item| matches!(item["type"].as_str(), Some("message" | "reasoning")))
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneratedValueKind {
+    Text,
+    ReasoningText,
+    CalibrationIneligibleText,
+    Modal,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChatOutputSpec {
+    _json_path: &'static str,
+    relative_path: &'static [&'static str],
+    kind: GeneratedValueKind,
+}
+
 // Chat Completions | chat.completion.chunk | JSON path below | string
-const CHAT_DELTA_TEXT_FIELDS: &[(&str, &[&str])] = &[
-    ("choices[].delta.content", &["content"]),
-    ("choices[].delta.refusal", &["refusal"]),
-    ("choices[].delta.reasoning", &["reasoning"]),
-    ("choices[].delta.reasoning_content", &["reasoning_content"]),
-    (
-        "choices[].delta.function_call.name",
-        &["function_call", "name"],
-    ),
-    (
-        "choices[].delta.function_call.arguments",
-        &["function_call", "arguments"],
-    ),
-    ("choices[].delta.audio.transcript", &["audio", "transcript"]),
+const CHAT_DELTA_TEXT_FIELDS: &[ChatOutputSpec] = &[
+    ChatOutputSpec {
+        _json_path: "choices[].delta.content",
+        relative_path: &["content"],
+        kind: GeneratedValueKind::Text,
+    },
+    ChatOutputSpec {
+        _json_path: "choices[].delta.refusal",
+        relative_path: &["refusal"],
+        kind: GeneratedValueKind::Text,
+    },
+    ChatOutputSpec {
+        _json_path: "choices[].delta.reasoning",
+        relative_path: &["reasoning"],
+        kind: GeneratedValueKind::ReasoningText,
+    },
+    ChatOutputSpec {
+        _json_path: "choices[].delta.reasoning_content",
+        relative_path: &["reasoning_content"],
+        kind: GeneratedValueKind::ReasoningText,
+    },
+    ChatOutputSpec {
+        _json_path: "choices[].delta.function_call.name",
+        relative_path: &["function_call", "name"],
+        kind: GeneratedValueKind::CalibrationIneligibleText,
+    },
+    ChatOutputSpec {
+        _json_path: "choices[].delta.function_call.arguments",
+        relative_path: &["function_call", "arguments"],
+        kind: GeneratedValueKind::CalibrationIneligibleText,
+    },
+    ChatOutputSpec {
+        _json_path: "choices[].delta.audio.transcript",
+        relative_path: &["audio", "transcript"],
+        kind: GeneratedValueKind::Text,
+    },
 ];
 
 // Chat Completions | chat.completion.chunk | JSON path below | string
@@ -367,12 +549,6 @@ const CHAT_TOOL_TEXT_FIELDS: &[(&str, &str)] = &[
         "arguments",
     ),
 ];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GeneratedValueKind {
-    Text,
-    Modal,
-}
 
 #[derive(Debug, Clone, Copy)]
 struct ResponsesOutputSpec {
@@ -396,42 +572,42 @@ const RESPONSES_OUTPUT_ALLOWLIST: &[ResponsesOutputSpec] = &[
     ResponsesOutputSpec {
         event_type: "response.reasoning_text.delta",
         field: "delta",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::ReasoningText,
     },
     ResponsesOutputSpec {
         event_type: "response.reasoning_summary_text.delta",
         field: "delta",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ResponsesOutputSpec {
         event_type: "response.function_call_arguments.delta",
         field: "delta",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ResponsesOutputSpec {
         event_type: "response.mcp_call_arguments.delta",
         field: "delta",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ResponsesOutputSpec {
         event_type: "response.custom_tool_call_input.delta",
         field: "delta",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ResponsesOutputSpec {
         event_type: "response.code_interpreter_call_code.delta",
         field: "delta",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ResponsesOutputSpec {
         event_type: "response.shell_call_command.added",
         field: "command",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ResponsesOutputSpec {
         event_type: "response.shell_call_command.delta",
         field: "delta",
-        kind: GeneratedValueKind::Text,
+        kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ResponsesOutputSpec {
         event_type: "response.audio.transcript.delta",
@@ -450,20 +626,23 @@ const RESPONSES_OUTPUT_ALLOWLIST: &[ResponsesOutputSpec] = &[
     },
 ];
 
-fn generated_output(value: &Value, event_type: Option<&str>) -> Option<GeneratedOutput> {
+fn generated_output(value: &Value, event_type: Option<&str>) -> (Option<GeneratedOutput>, bool) {
     let mut output = GeneratedOutput::default();
     let mut saw_generated_output = false;
+    let mut calibration_ineligible = false;
 
     if value["object"].as_str() == Some("chat.completion.chunk")
         && let Some(choices) = value["choices"].as_array()
     {
         for choice in choices {
             let delta = &choice["delta"];
-            for (_, path) in CHAT_DELTA_TEXT_FIELDS {
+            for spec in CHAT_DELTA_TEXT_FIELDS {
                 add_generated_text(
                     &mut output,
                     &mut saw_generated_output,
-                    string_at_path(delta, path),
+                    &mut calibration_ineligible,
+                    string_at_path(delta, spec.relative_path),
+                    spec.kind,
                 );
             }
             if delta["audio"]["data"]
@@ -471,6 +650,7 @@ fn generated_output(value: &Value, event_type: Option<&str>) -> Option<Generated
                 .is_some_and(|value| !value.is_empty())
             {
                 saw_generated_output = true;
+                calibration_ineligible = true;
             }
             if let Some(tool_calls) = delta["tool_calls"].as_array() {
                 for tool_call in tool_calls {
@@ -478,7 +658,9 @@ fn generated_output(value: &Value, event_type: Option<&str>) -> Option<Generated
                         add_generated_text(
                             &mut output,
                             &mut saw_generated_output,
+                            &mut calibration_ineligible,
                             tool_call["function"][field].as_str(),
+                            GeneratedValueKind::CalibrationIneligibleText,
                         );
                     }
                 }
@@ -493,17 +675,25 @@ fn generated_output(value: &Value, event_type: Option<&str>) -> Option<Generated
     {
         saw_generated_output = true;
         match spec.kind {
-            GeneratedValueKind::Text => {
+            GeneratedValueKind::Text
+            | GeneratedValueKind::ReasoningText
+            | GeneratedValueKind::CalibrationIneligibleText => {
                 output.token_bearing = true;
+                output.reasoning_text |= spec.kind == GeneratedValueKind::ReasoningText;
+                calibration_ineligible |=
+                    spec.kind == GeneratedValueKind::CalibrationIneligibleText;
                 output.characters = output
                     .characters
                     .saturating_add(OutputCharacters::from_text(fragment));
             }
-            GeneratedValueKind::Modal => {}
+            GeneratedValueKind::Modal => calibration_ineligible = true,
         }
     }
 
-    saw_generated_output.then_some(output)
+    (
+        saw_generated_output.then_some(output),
+        calibration_ineligible,
+    )
 }
 
 fn string_at_path<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a str> {
@@ -516,29 +706,90 @@ fn string_at_path<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a str> {
 fn add_generated_text(
     output: &mut GeneratedOutput,
     saw_generated_output: &mut bool,
+    calibration_ineligible: &mut bool,
     value: Option<&str>,
+    kind: GeneratedValueKind,
 ) {
     if let Some(value) = value.filter(|value| !value.is_empty()) {
         *saw_generated_output = true;
         output.token_bearing = true;
+        output.reasoning_text |= kind == GeneratedValueKind::ReasoningText;
+        *calibration_ineligible |= kind == GeneratedValueKind::CalibrationIneligibleText;
         output.characters = output
             .characters
             .saturating_add(OutputCharacters::from_text(value));
     }
 }
 
-fn exact_usage(value: &Value) -> Option<ExactUsage> {
-    let input_tokens = value["usage"]["prompt_tokens"]
-        .as_u64()
-        .or_else(|| value["response"]["usage"]["input_tokens"].as_u64());
-    let output_tokens = value["usage"]["completion_tokens"]
-        .as_u64()
-        .or_else(|| value["response"]["usage"]["output_tokens"].as_u64())
-        .or_else(|| value["output_tokens_so_far"].as_u64());
-    (input_tokens.is_some() || output_tokens.is_some()).then_some(ExactUsage {
-        input_tokens,
-        output_tokens,
-    })
+fn exact_usage(value: &Value, protocol: Option<SseEventProtocol>) -> (Option<ExactUsage>, bool) {
+    let usage = &value["usage"];
+    let response_usage = &value["response"]["usage"];
+    let completion_details = &usage["completion_tokens_details"];
+    let output_details = &response_usage["output_tokens_details"];
+    let (input_tokens, invalid_input_tokens) =
+        merge_u64_fields([&usage["prompt_tokens"], &response_usage["input_tokens"]]);
+    let (output_tokens, invalid_output_tokens) = merge_u64_fields([
+        &usage["completion_tokens"],
+        &response_usage["output_tokens"],
+        &value["output_tokens_so_far"],
+    ]);
+    let (reasoning_tokens, invalid_reasoning_tokens) = merge_u64_fields([
+        &completion_details["reasoning_tokens"],
+        &output_details["reasoning_tokens"],
+    ]);
+    let (audio_tokens, invalid_audio_tokens) = merge_u64_fields([
+        &completion_details["audio_tokens"],
+        &output_details["audio_tokens"],
+    ]);
+    let (rejected_prediction_tokens, invalid_rejected_prediction_tokens) = merge_u64_fields([
+        &completion_details["rejected_prediction_tokens"],
+        &output_details["rejected_prediction_tokens"],
+    ]);
+    let invalid_container = [usage, response_usage, completion_details, output_details]
+        .into_iter()
+        .any(|value| !value.is_null() && value.as_object().is_none());
+    let chat_usage_observed = !usage.is_null() || !value["output_tokens_so_far"].is_null();
+    let responses_usage_observed = !response_usage.is_null();
+    let usage_protocol_mismatch = match protocol {
+        Some(SseEventProtocol::ChatCompletions) => responses_usage_observed,
+        Some(SseEventProtocol::Responses) => chat_usage_observed,
+        None => chat_usage_observed || responses_usage_observed,
+    };
+    let calibration_ineligible = usage_protocol_mismatch
+        || invalid_container
+        || invalid_input_tokens
+        || invalid_output_tokens
+        || invalid_reasoning_tokens
+        || invalid_audio_tokens
+        || invalid_rejected_prediction_tokens
+        || audio_tokens.is_some_and(|tokens| tokens > 0)
+        || rejected_prediction_tokens.is_some_and(|tokens| tokens > 0);
+    (
+        (input_tokens.is_some() || output_tokens.is_some() || reasoning_tokens.is_some())
+            .then_some(ExactUsage {
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+            }),
+        calibration_ineligible,
+    )
+}
+
+fn merge_u64_fields<const N: usize>(values: [&Value; N]) -> (Option<u64>, bool) {
+    let mut merged = None;
+    let mut invalid = false;
+    for value in values {
+        if value.is_null() {
+            continue;
+        }
+        let Some(value) = value.as_u64() else {
+            invalid = true;
+            continue;
+        };
+        invalid |= merged.is_some_and(|merged| merged != value);
+        merged.get_or_insert(value);
+    }
+    (merged, invalid)
 }
 
 fn terminal_outcome(event_type: Option<&str>) -> Option<RelayOutcome> {
@@ -580,6 +831,7 @@ fn find_sse_event_end(buffer: &[u8]) -> Option<usize> {
 #[derive(Debug, Default)]
 struct ExtractedSseFields {
     event_name: Option<String>,
+    conflicting_event_names: bool,
     data: String,
 }
 
@@ -598,8 +850,13 @@ fn extract_sse_fields(event_bytes: &[u8]) -> ExtractedSseFields {
                 fields.data.push_str(rest.trim_start());
                 saw_data = true;
             }
-            Some(("event", rest)) if fields.event_name.is_none() => {
-                fields.event_name = Some(rest.trim_start().to_string());
+            Some(("event", rest)) => {
+                let event_name = rest.trim_start();
+                fields.conflicting_event_names |= fields
+                    .event_name
+                    .as_deref()
+                    .is_some_and(|previous| previous != event_name);
+                fields.event_name = Some(event_name.to_string());
             }
             _ => {}
         }
@@ -632,7 +889,7 @@ mod tests {
         let first = messages.next().expect("first event should be complete");
         assert_eq!(first.raw_event, Bytes::from_static(b"data: first\n\n"));
         assert_eq!(first.parsed, None);
-        assert_eq!(first.facts, SseEventFacts::default());
+        assert!(first.facts.calibration_ineligible);
         assert_eq!(messages.next(), None);
 
         messages.push_bytes(b"ond\n\n");
@@ -640,41 +897,54 @@ mod tests {
             .next()
             .expect("second event should now be complete");
         assert_eq!(second.raw_event, Bytes::from_static(b"data: second\n\n"));
-        assert_eq!(second.facts, SseEventFacts::default());
+        assert!(second.facts.calibration_ineligible);
         assert_eq!(messages.next(), None);
     }
 
     #[test]
     fn classifies_every_chat_generated_string_path() {
-        for (json_path, relative_path) in CHAT_DELTA_TEXT_FIELDS {
-            let delta = match *relative_path {
+        for spec in CHAT_DELTA_TEXT_FIELDS {
+            let delta = match spec.relative_path {
                 [field] => serde_json::json!({(*field): "x"}),
                 [container, field] => {
                     serde_json::json!({(*container): {(*field): "x"}})
                 }
-                _ => panic!("unsupported test path {json_path}"),
+                _ => panic!("unsupported test path {}", spec._json_path),
             };
             let data = serde_json::json!({
                 "object": "chat.completion.chunk",
-                "choices": [{"delta": delta}],
+                "choices": [{"index": 0, "delta": delta}],
             });
             let parsed = parse_data(&data.to_string());
             let output = parsed
                 .facts
                 .generated_output
-                .unwrap_or_else(|| panic!("{json_path} should count as generated output"));
-            assert!(output.token_bearing, "{json_path} should be token-bearing");
+                .unwrap_or_else(|| panic!("{} should count as generated output", spec._json_path));
+            assert!(
+                output.token_bearing,
+                "{} should be token-bearing",
+                spec._json_path
+            );
             assert_eq!(
                 output.characters,
                 OutputCharacters::from_text("x"),
-                "unexpected character count for {json_path}"
+                "unexpected character count for {}",
+                spec._json_path
+            );
+            assert_eq!(
+                output.reasoning_text,
+                spec.kind == GeneratedValueKind::ReasoningText
+            );
+            assert_eq!(
+                parsed.facts.calibration_ineligible,
+                spec.kind == GeneratedValueKind::CalibrationIneligibleText
             );
         }
 
         for (json_path, field) in CHAT_TOOL_TEXT_FIELDS {
             let data = serde_json::json!({
                 "object": "chat.completion.chunk",
-                "choices": [{"delta": {"tool_calls": [{"function": {(*field): "x"}}]}}],
+                "choices": [{"index": 0, "delta": {"tool_calls": [{"function": {(*field): "x"}}]}}],
             });
             let parsed = parse_data(&data.to_string());
             let output = parsed
@@ -687,6 +957,8 @@ mod tests {
                 OutputCharacters::from_text("x"),
                 "unexpected character count for {json_path}"
             );
+            assert!(parsed.facts.calibration_ineligible);
+            assert!(!output.reasoning_text);
         }
     }
 
@@ -695,17 +967,19 @@ mod tests {
         let parsed = parse_data(
             r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"answer","refusal":"refuse","reasoning":"think","reasoning_content":"think-more","function_call":{"name":"legacy","arguments":"{}"},"tool_calls":[{"function":{"name":"tool","arguments":"[]"}}],"audio":{"transcript":"spoken"}}}]}"#,
         );
+        let output = parsed
+            .facts
+            .generated_output
+            .expect("mixed Chat event should count");
         assert_eq!(
-            parsed
-                .facts
-                .generated_output
-                .expect("mixed Chat event should count")
-                .characters,
+            output.characters,
             OutputCharacters {
                 ascii: 47,
                 non_ascii: 0,
             }
         );
+        assert!(parsed.facts.calibration_ineligible);
+        assert!(output.reasoning_text);
     }
 
     #[test]
@@ -720,6 +994,7 @@ mod tests {
 
         assert!(!output.token_bearing);
         assert_eq!(output.characters, OutputCharacters::default());
+        assert!(parsed.facts.calibration_ineligible);
     }
 
     #[test]
@@ -734,6 +1009,7 @@ mod tests {
 
         assert!(output.token_bearing);
         assert_eq!(output.characters, OutputCharacters::from_text("spoken"));
+        assert!(parsed.facts.calibration_ineligible);
     }
 
     #[test]
@@ -749,22 +1025,195 @@ mod tests {
                 )
             });
             match spec.kind {
-                GeneratedValueKind::Text => {
+                GeneratedValueKind::Text
+                | GeneratedValueKind::ReasoningText
+                | GeneratedValueKind::CalibrationIneligibleText => {
                     assert!(output.token_bearing);
                     assert_eq!(output.characters, OutputCharacters::from_text("x"));
+                    assert_eq!(
+                        output.reasoning_text,
+                        spec.kind == GeneratedValueKind::ReasoningText
+                    );
+                    assert_eq!(
+                        parsed.facts.calibration_ineligible,
+                        !matches!(
+                            spec.event_type,
+                            "response.output_text.delta"
+                                | "response.refusal.delta"
+                                | "response.reasoning_text.delta"
+                                | "response.audio.transcript.delta"
+                        )
+                    );
                 }
                 GeneratedValueKind::Modal => {
                     assert!(!output.token_bearing);
                     assert_eq!(output.characters, OutputCharacters::default());
+                    assert!(parsed.facts.calibration_ineligible);
                 }
             }
         }
     }
 
     #[test]
+    fn tool_lifecycle_events_are_calibration_ineligible_without_generated_output() {
+        for data in [
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function"}]}}]}"#,
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"audio":{"id":"audio-1"}}}]}"#,
+            r#"{"type":"response.web_search_call.searching"}"#,
+            r#"{"type":"response.function_call_arguments.done","arguments":""}"#,
+            r#"{"type":"response.output_item.added","item":{"type":"function_call"}}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"program"}}"#,
+            r#"{"type":"response.output_item.added","item":{}}"#,
+            r#"{"type":"response.output_item.done","item":{"type":7}}"#,
+            r#"{"type":"response.reasoning_summary_part.added"}"#,
+        ] {
+            let facts = parse_data(data).facts;
+            assert_eq!(
+                facts.generated_output, None,
+                "metadata must not count as generated output: {data}"
+            );
+            assert!(
+                facts.calibration_ineligible,
+                "tool or non-visible output must reject calibration: {data}"
+            );
+        }
+
+        let message = r#"{"type":"response.output_item.added","item":{"type":"message"}}"#;
+        assert!(!parse_data(message).facts.calibration_ineligible);
+        let reasoning = r#"{"type":"response.output_item.added","item":{"type":"reasoning"}}"#;
+        assert!(!parse_data(reasoning).facts.calibration_ineligible);
+        let reasoning_part =
+            r#"{"type":"response.content_part.added","part":{"type":"reasoning_text"}}"#;
+        assert!(!parse_data(reasoning_part).facts.calibration_ineligible);
+
+        let matching_message = parse_event(
+            "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"}}\n\n",
+        );
+        assert!(!matching_message.facts.calibration_ineligible);
+
+        for mismatched_event in [
+            "event: response.output_text.delta\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"message\"}}\n\n",
+            "event: response.output_item.added\ndata: {\"type\":\"response.output_text.delta\",\"item\":{\"type\":\"message\"}}\n\n",
+        ] {
+            assert!(parse_event(mismatched_event).facts.calibration_ineligible);
+        }
+    }
+
+    #[test]
+    fn unsafe_or_unknown_chat_finish_reasons_are_calibration_ineligible() {
+        for finish_reason in [
+            serde_json::json!("content_filter"),
+            serde_json::json!("tool_calls"),
+            serde_json::json!("function_call"),
+            serde_json::json!("future_reason"),
+            serde_json::json!(7),
+        ] {
+            let event = serde_json::json!({
+                "object": "chat.completion.chunk",
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": "visible"},
+                    "finish_reason": finish_reason,
+                }],
+            });
+            assert!(
+                parse_data(&event.to_string()).facts.calibration_ineligible,
+                "unsafe finish reason must fail closed: {event}"
+            );
+        }
+
+        for finish_reason in [serde_json::json!("stop"), serde_json::json!("length")] {
+            let event = serde_json::json!({
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+            });
+            assert!(!parse_data(&event.to_string()).facts.calibration_ineligible);
+        }
+    }
+
+    #[test]
+    fn terminal_response_output_items_gate_calibration() {
+        for item_type in ["message", "reasoning"] {
+            let event = serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "output": [{"type": item_type}],
+                    "usage": {"output_tokens": 2},
+                },
+            });
+            assert!(!parse_data(&event.to_string()).facts.calibration_ineligible);
+        }
+
+        for data in [
+            r#"{"type":"response.completed","response":{"output":[{"type":"function_call"}],"usage":{"output_tokens":2}}}"#,
+            r#"{"type":"response.completed","response":{"output":[{}],"usage":{"output_tokens":2}}}"#,
+            r#"{"type":"response.completed","response":{"output":[],"usage":{"output_tokens":2}}}"#,
+            r#"{"type":"response.completed","response":{"output":"invalid","usage":{"output_tokens":2}}}"#,
+            r#"{"type":"response.completed","response":{"usage":{"output_tokens":2}}}"#,
+        ] {
+            assert!(
+                parse_data(data).facts.calibration_ineligible,
+                "terminal output must fail closed: {data}"
+            );
+        }
+    }
+
+    #[test]
+    fn conflicting_event_identifiers_are_calibration_ineligible() {
+        for event in [
+            "event: response.content_part.done\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"text\"}\n\n",
+            "event: response.output_text.delta\ndata: {\"type\":\"response.content_part.done\",\"delta\":\"text\"}\n\n",
+        ] {
+            assert!(parse_event(event).facts.calibration_ineligible);
+        }
+    }
+
+    #[test]
+    fn duplicate_event_fields_use_the_last_identity_and_fail_closed_on_conflict() {
+        let raw_event = "event: response.reasoning_text.delta\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible\"}\n\n";
+        let fields = extract_sse_fields(raw_event.as_bytes());
+        assert_eq!(
+            fields.event_name.as_deref(),
+            Some("response.output_text.delta")
+        );
+        assert!(fields.conflicting_event_names);
+
+        let parsed = parse_event(raw_event);
+        assert!(parsed.facts.generated_output.is_some());
+        assert!(parsed.facts.calibration_ineligible);
+
+        let repeated = parse_event(
+            "event: response.output_text.delta\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"visible\"}\n\n",
+        );
+        assert!(!repeated.facts.calibration_ineligible);
+    }
+
+    #[test]
+    fn untyped_non_chat_and_malformed_events_are_calibration_ineligible() {
+        for data in [
+            r#"{"item":{"type":"reasoning"}}"#,
+            r#"{"item":{"type":"function_call"}}"#,
+            r#"{"audio":{"data":"YWJj"}}"#,
+            r#"{"type":"response.future.delta","delta":"unknown"}"#,
+            "not-json",
+            "{",
+        ] {
+            assert!(
+                parse_data(data).facts.calibration_ineligible,
+                "ambiguous event must fail closed: {data}"
+            );
+        }
+
+        let chat = parse_data(
+            r#"{"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"text"}}]}"#,
+        );
+        assert!(!chat.facts.calibration_ineligible);
+    }
+
+    #[test]
     fn non_empty_whitespace_text_is_token_bearing_and_counted() {
         let parsed = parse_data(
-            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":" "}}]}"#,
+            r#"{"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" "}}]}"#,
         );
         let output = parsed
             .facts
@@ -773,6 +1222,8 @@ mod tests {
 
         assert!(output.token_bearing);
         assert_eq!(output.characters, OutputCharacters::from_text(" "));
+        assert!(!parsed.facts.calibration_ineligible);
+        assert!(!output.reasoning_text);
     }
 
     #[test]
@@ -849,44 +1300,75 @@ mod tests {
 
     #[test]
     fn parses_exact_usage_independently_from_generated_output() {
-        for (data, expected) in [
+        for (data, expected, calibration_ineligible) in [
             (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3}}"#,
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":2}}}"#,
                 ExactUsage {
                     input_tokens: Some(8),
                     output_tokens: Some(3),
+                    reasoning_tokens: Some(2),
                 },
+                false,
             ),
             (
-                r#"{"type":"response.completed","response":{"usage":{"input_tokens":5,"output_tokens":2}}}"#,
+                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":5,"output_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}}}"#,
                 ExactUsage {
                     input_tokens: Some(5),
                     output_tokens: Some(2),
+                    reasoning_tokens: Some(1),
                 },
+                false,
             ),
             (
                 r#"{"object":"chat.completion.chunk","output_tokens_so_far":7,"choices":[]}"#,
                 ExactUsage {
                     input_tokens: None,
                     output_tokens: Some(7),
+                    reasoning_tokens: None,
                 },
+                false,
+            ),
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":8,"completion_tokens_details":{"reasoning_tokens":2,"rejected_prediction_tokens":1}}}"#,
+                ExactUsage {
+                    input_tokens: Some(8),
+                    output_tokens: None,
+                    reasoning_tokens: Some(2),
+                },
+                true,
             ),
         ] {
             let parsed = parse_data(data);
             assert_eq!(parsed.facts.exact_usage, Some(expected));
             assert_eq!(parsed.facts.generated_output, None);
+            assert_eq!(parsed.facts.calibration_ineligible, calibration_ineligible);
         }
     }
 
     #[test]
-    fn ignores_missing_null_and_non_integer_usage() {
+    fn non_visible_completion_details_are_calibration_ineligible() {
+        for field in ["audio_tokens", "rejected_prediction_tokens"] {
+            let data = serde_json::json!({
+                "object": "chat.completion.chunk",
+                "choices": [],
+                "usage": {
+                    "completion_tokens": 5,
+                    "completion_tokens_details": {(field): 1},
+                },
+            });
+            assert!(
+                parse_data(&data.to_string()).facts.calibration_ineligible,
+                "{field} should make calibration ineligible"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_missing_and_null_usage() {
         for data in [
             r#"{"object":"chat.completion.chunk"}"#,
             r#"{"object":"chat.completion.chunk","usage":null}"#,
             r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":null}}"#,
-            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":"4"}}"#,
-            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":4.5}}"#,
-            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":-1}}"#,
             "not-json",
         ] {
             assert_eq!(parse_data(data).facts.exact_usage, None);
@@ -894,13 +1376,58 @@ mod tests {
     }
 
     #[test]
+    fn malformed_or_conflicting_usage_is_calibration_ineligible() {
+        for data in [
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":"4"}}"#,
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":4.5}}"#,
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":-1}}"#,
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":"2"}}}"#,
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5,"completion_tokens_details":{"audio_tokens":"1"}}}"#,
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5,"completion_tokens_details":"invalid"}}"#,
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5},"response":{"usage":{"output_tokens":6}}}"#,
+            r#"{"object":"chat.completion.chunk","choices":[],"response":{"usage":{"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0}}}}"#,
+            r#"{"type":"response.completed","usage":{"completion_tokens":5},"response":{"output":[{"type":"message"}]}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5,"output_tokens_details":"invalid"}}}"#,
+        ] {
+            assert!(
+                parse_data(data).facts.calibration_ineligible,
+                "malformed or conflicting usage must fail closed: {data}"
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_reasoning_detail_remains_calibration_eligible() {
+        for usage in [
+            r#"{"output_tokens":5}"#,
+            r#"{"output_tokens":5,"output_tokens_details":null}"#,
+            r#"{"output_tokens":5,"output_tokens_details":{}}"#,
+            r#"{"output_tokens":5,"output_tokens_details":{"reasoning_tokens":null}}"#,
+        ] {
+            let data = format!(
+                r#"{{"type":"response.completed","response":{{"output":[{{"type":"message"}}],"usage":{usage}}}}}"#
+            );
+            let parsed = parse_data(&data);
+            assert_eq!(
+                parsed.facts.exact_usage,
+                Some(ExactUsage {
+                    input_tokens: None,
+                    output_tokens: Some(5),
+                    reasoning_tokens: None,
+                })
+            );
+            assert!(!parsed.facts.calibration_ineligible);
+        }
+    }
+
+    #[test]
     fn classifies_explicit_terminal_outcomes_without_output() {
-        assert_eq!(
-            parse_data("[DONE]").facts.terminal,
-            Some(RelayOutcome::Complete)
-        );
+        let done = parse_data("[DONE]");
+        assert_eq!(done.facts.terminal, Some(RelayOutcome::Complete));
+        assert_eq!(done.facts.protocol, Some(SseEventProtocol::ChatCompletions));
         let completed = parse_data(r#"{"type":"response.completed"}"#);
         assert_eq!(completed.facts.terminal, Some(RelayOutcome::Complete));
+        assert_eq!(completed.facts.protocol, Some(SseEventProtocol::Responses));
         assert_eq!(completed.facts.generated_output, None);
         for event_type in ["response.failed", "response.incomplete", "error"] {
             let parsed = parse_data(&format!(r#"{{"type":"{event_type}"}}"#));
@@ -916,6 +1443,13 @@ mod tests {
 
         let typed_named_error = parse_event("event: error\ndata: {\"type\":\"server_error\"}\n\n");
         assert_eq!(typed_named_error.facts.terminal, Some(RelayOutcome::Failed));
+
+        let responses_done = parse_event("event: response.completed\ndata: [DONE]\n\n");
+        assert_eq!(
+            responses_done.facts.terminal,
+            Some(RelayOutcome::Complete)
+        );
+        assert!(responses_done.facts.calibration_ineligible);
     }
 
     #[test]
@@ -991,7 +1525,7 @@ mod tests {
         while let Some(message) = messages.next().await {
             let message = message.expect("complete small SSE events should not fail");
             assert!(message.raw_event.len() <= 11);
-            assert_eq!(message.facts, SseEventFacts::default());
+            assert!(message.facts.calibration_ineligible);
             received += 1;
         }
         assert_eq!(received, event_count);
@@ -1201,7 +1735,7 @@ mod tests {
         tokio::task::yield_now().await;
 
         let second = messages.next().await.unwrap().unwrap();
-        assert_eq!(second.facts, SseEventFacts::default());
+        assert!(second.facts.calibration_ineligible);
         assert_eq!(second.received_at, received_at);
         assert!(matches!(
             messages.next().await,

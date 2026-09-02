@@ -43,7 +43,8 @@ pub(super) struct ModelMetricsState {
     pub(super) kv_cache: KvCacheStatsSnapshot,
     pub(super) input_tps_distribution: TpsDistribution,
     pub(super) request_input_intervals: RequestInputIntervalWindow,
-    pub(super) completed_fallback_output_keys: VecDeque<RequestIntervalKey>,
+    pub(super) completed_request_keys: VecDeque<RequestIntervalKey>,
+    pub(super) output_token_calibration: OutputTokenCalibration,
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
@@ -71,6 +72,71 @@ impl RequestIntervalKey {
             request_id: request_id.to_string(),
             submitted_at,
         }
+    }
+}
+
+const MIN_OUTPUT_TOKEN_CALIBRATION_SAMPLES: usize = 3;
+
+#[derive(Debug, Default)]
+pub(super) struct OutputTokenCalibration {
+    ratios: VecDeque<f64>,
+    factor: Option<f64>,
+}
+
+impl OutputTokenCalibration {
+    pub(super) fn observe(
+        &mut self,
+        exact_output_tokens: u64,
+        raw_output_units: u64,
+        window_size: usize,
+    ) -> bool {
+        if window_size == 0 || raw_output_units == 0 {
+            return false;
+        }
+        let ratio = exact_output_tokens as f64 / raw_output_units as f64;
+        if ratio <= 0.0 || !ratio.is_finite() {
+            return false;
+        }
+        self.ratios.push_back(ratio);
+        while self.ratios.len() > window_size {
+            self.ratios.pop_front();
+        }
+        self.factor = calibration_factor(&self.ratios);
+        true
+    }
+
+    pub(super) fn scale(&self, raw_output_units: u64) -> u64 {
+        if raw_output_units == 0 {
+            return 0;
+        }
+        let Some(factor) = self.factor else {
+            return raw_output_units;
+        };
+        let scaled = raw_output_units as f64 * factor;
+        if !scaled.is_finite() || scaled >= u64::MAX as f64 {
+            u64::MAX
+        } else {
+            (scaled.round() as u64).max(1)
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.ratios.len()
+    }
+}
+
+fn calibration_factor(ratios: &VecDeque<f64>) -> Option<f64> {
+    if ratios.len() < MIN_OUTPUT_TOKEN_CALIBRATION_SAMPLES {
+        return None;
+    }
+    let mut ratios = ratios.iter().copied().collect::<Vec<_>>();
+    ratios.sort_unstable_by(f64::total_cmp);
+    let middle = ratios.len() / 2;
+    if ratios.len().is_multiple_of(2) {
+        Some((ratios[middle - 1] + ratios[middle]) / 2.0)
+    } else {
+        Some(ratios[middle])
     }
 }
 
@@ -1132,5 +1198,66 @@ pub(super) fn average_with_sum(samples: &VecDeque<f64>, sum: f64) -> f64 {
     match samples.len() {
         0 => 0.0,
         count => sum / count as f64,
+    }
+}
+
+#[cfg(test)]
+mod output_token_calibration_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_median_activates_after_three_samples() {
+        let mut calibration = OutputTokenCalibration::default();
+
+        assert!(calibration.observe(2, 1, 3));
+        assert!(calibration.observe(8, 2, 3));
+        assert_eq!(calibration.scale(5), 5);
+        assert!(calibration.observe(30, 3, 3));
+        assert_eq!(calibration.factor, Some(4.0));
+        assert_eq!(calibration.scale(5), 20);
+
+        assert!(calibration.observe(40, 2, 3));
+        assert_eq!(calibration.len(), 3);
+        assert_eq!(calibration.factor, Some(10.0));
+        assert_eq!(calibration.scale(5), 50);
+    }
+
+    #[test]
+    fn invalid_samples_are_rejected_and_scaling_saturates() {
+        let mut calibration = OutputTokenCalibration::default();
+
+        assert!(!calibration.observe(5, 0, 3));
+        assert!(!calibration.observe(0, 5, 3));
+        assert!(!calibration.observe(5, 1, 0));
+        assert_eq!(calibration.len(), 0);
+
+        for _ in 0..3 {
+            assert!(calibration.observe(u64::MAX, 1, 3));
+        }
+        assert_eq!(calibration.scale(u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn even_sample_count_uses_mean_of_middle_ratios() {
+        let mut calibration = OutputTokenCalibration::default();
+
+        assert!(calibration.observe(2, 1, 4));
+        assert!(calibration.observe(4, 1, 4));
+        assert!(calibration.observe(10, 1, 4));
+        assert!(calibration.observe(20, 1, 4));
+
+        assert_eq!(calibration.scale(2), 14);
+    }
+
+    #[test]
+    fn positive_raw_units_never_scale_to_zero() {
+        let mut calibration = OutputTokenCalibration::default();
+
+        for _ in 0..3 {
+            assert!(calibration.observe(1, 4, 3));
+        }
+
+        assert_eq!(calibration.scale(0), 0);
+        assert_eq!(calibration.scale(1), 1);
     }
 }

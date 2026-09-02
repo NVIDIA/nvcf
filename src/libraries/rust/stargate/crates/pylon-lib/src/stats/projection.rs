@@ -15,7 +15,8 @@
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
 use crate::request_observer::{RequestObservationEndpoint, RequestObservationState};
-use crate::{CurrentModelStats, RequestObservationEvent};
+use crate::runtime_state::OutputCalibrationFacts;
+use crate::{CurrentModelStats, RequestObservation, RequestObservationEvent};
 
 use super::aggregator::{
     EmbeddingThroughputSample, InputThroughputSample, KvCacheStatsSnapshot, ModelMetricsState,
@@ -125,6 +126,8 @@ impl StatsAggregator {
             return changed_models;
         };
         let model_state = &mut generation_state.metrics;
+        let output_token_calibration_enabled =
+            self.runtime_state.output_token_calibration_enabled();
         model_state.chunk_usage_stats_observed |= observation.output_tokens_from_chunk_usage;
         let record_sample = |samples, sum: &mut f64, max: &mut f64, sample| {
             *max = max.max(sample);
@@ -154,25 +157,49 @@ impl StatsAggregator {
                 RequestObservationEndpoint::ChatCompletions
                 | RequestObservationEndpoint::Responses => {
                     if let Some(interval) = event.input_interval() {
+                        let facts = event.output_calibration();
                         let key =
                             RequestIntervalKey::new(&observation.request_id, interval.submitted_at);
-                        if !model_state.completed_fallback_output_keys.contains(&key)
-                            && (observation.output_tokens_explicit || event.raw_output_units() > 0)
-                            && let Some(output_tps) = observed_output_tps(config, event)
+                        if (observation.output_tokens_explicit || facts.raw_output_units > 0)
+                            && !model_state.completed_request_keys.contains(&key)
                         {
-                            record_sample(
-                                &mut model_state.chat_output_tps_samples,
-                                &mut model_state.chat_output_tps_sum,
-                                &mut model_state.max_chat_output_tps,
-                                output_tps,
-                            );
-                            model_state.completed_fallback_output_keys.push_back(key);
-                            while model_state.completed_fallback_output_keys.len()
+                            model_state.completed_request_keys.push_back(key);
+                            while model_state.completed_request_keys.len()
                                 > config.smoothing_window_size
                             {
-                                model_state.completed_fallback_output_keys.pop_front();
+                                model_state.completed_request_keys.pop_front();
                             }
-                            completed_sample_recorded = true;
+
+                            let output_tokens = output_tokens_for_rate(
+                                output_token_calibration_enabled,
+                                model_state,
+                                observation,
+                                facts,
+                            );
+                            if let Some(output_tps) =
+                                observed_output_tps(config, event, output_tokens)
+                            {
+                                record_sample(
+                                    &mut model_state.chat_output_tps_samples,
+                                    &mut model_state.chat_output_tps_sum,
+                                    &mut model_state.max_chat_output_tps,
+                                    output_tps,
+                                );
+                                completed_sample_recorded = true;
+                            }
+                            if output_token_calibration_enabled
+                                && calibration_sample_is_valid(
+                                    observation,
+                                    facts,
+                                    config.min_output_tokens,
+                                )
+                            {
+                                model_state.output_token_calibration.observe(
+                                    observation.output_tokens,
+                                    facts.raw_output_units,
+                                    config.smoothing_window_size,
+                                );
+                            }
                         }
                     }
                 }
@@ -222,10 +249,22 @@ impl StatsAggregator {
 
     fn record_lifecycle_event(&mut self, event: &RequestObservationEvent) -> Vec<String> {
         let observation = &event.observation;
+        let facts = event.output_calibration();
+        let output_tokens = self.per_model.get(&observation.model_id).map_or(
+            observation.output_tokens,
+            |generation_state| {
+                output_tokens_for_rate(
+                    self.runtime_state.output_token_calibration_enabled(),
+                    &generation_state.metrics,
+                    observation,
+                    facts,
+                )
+            },
+        );
         let active_chat_output_tps = self
             .config
             .openai_fallback_stats_enabled
-            .then(|| observed_output_tps(&self.config, event))
+            .then(|| observed_output_tps(&self.config, event, output_tokens))
             .flatten();
         let mut changed_models = event
             .changed_generations
@@ -274,9 +313,9 @@ fn push_changed_model(models: &mut Vec<String>, model_id: String) {
 pub(super) fn observed_output_tps(
     config: &StatsCollectorConfig,
     event: &RequestObservationEvent,
+    output_tokens: u64,
 ) -> Option<f64> {
     let observation = &event.observation;
-    let output_tokens = observation.output_tokens;
     if observation.endpoint == RequestObservationEndpoint::Embeddings
         || output_tokens < config.min_output_tokens
     {
@@ -292,4 +331,37 @@ pub(super) fn observed_output_tps(
         )?,
         config.duration_floor,
     )
+}
+
+fn output_tokens_for_rate(
+    calibration_enabled: bool,
+    model_state: &ModelMetricsState,
+    observation: &RequestObservation,
+    facts: OutputCalibrationFacts,
+) -> u64 {
+    if !calibration_enabled || observation.output_tokens_explicit {
+        return observation.output_tokens;
+    }
+    let exact_baseline = facts
+        .exact_output_tokens_baseline
+        .unwrap_or_default()
+        .min(observation.output_tokens);
+    exact_baseline.saturating_add(
+        model_state
+            .output_token_calibration
+            .scale(observation.output_tokens.saturating_sub(exact_baseline)),
+    )
+}
+
+fn calibration_sample_is_valid(
+    observation: &RequestObservation,
+    facts: OutputCalibrationFacts,
+    min_output_tokens: u64,
+) -> bool {
+    observation.output_tokens_explicit
+        && observation.output_tokens >= min_output_tokens
+        && facts.raw_output_units > 0
+        && !facts.calibration_ineligible
+        && !(facts.reasoning_tokens.is_some_and(|tokens| tokens > 0)
+            && !facts.reasoning_text_observed)
 }

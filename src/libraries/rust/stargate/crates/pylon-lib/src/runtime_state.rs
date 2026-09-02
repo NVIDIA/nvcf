@@ -86,6 +86,7 @@ impl ModelGeneration {
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
     live_requests: LiveRequestState,
+    output_token_calibration_enabled: bool,
     metrics: Option<Arc<PylonMetrics>>,
     observation_tx: Option<flume::Sender<RequestObservationEvent>>,
 }
@@ -97,8 +98,17 @@ pub struct RequestObservationEvent {
     pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) input_interval: Option<RequestInputInterval>,
     pub(crate) input_tokens_explicit: bool,
-    pub(crate) raw_output_units: u64,
+    pub(crate) output_calibration: OutputCalibrationFacts,
     pub(crate) upstream_duration: Option<Duration>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct OutputCalibrationFacts {
+    pub(crate) raw_output_units: u64,
+    pub(crate) exact_output_tokens_baseline: Option<u64>,
+    pub(crate) calibration_ineligible: bool,
+    pub(crate) reasoning_text_observed: bool,
+    pub(crate) reasoning_tokens: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,7 +122,7 @@ pub(crate) struct RequestObservationMetadata {
     pub(crate) input_interval: Option<RequestInputInterval>,
     pub(crate) request_input_tokens: u64,
     pub(crate) input_tokens_explicit: bool,
-    pub(crate) raw_output_units: u64,
+    pub(crate) output_calibration: OutputCalibrationFacts,
     pub(crate) upstream_duration: Option<Duration>,
 }
 
@@ -196,9 +206,19 @@ impl PylonRuntimeState {
                 models,
             })),
             live_requests: LiveRequestState::default(),
+            output_token_calibration_enabled: false,
             metrics: None,
             observation_tx: None,
         }
+    }
+
+    pub fn with_single_pylon_output_token_calibration(mut self) -> Self {
+        self.output_token_calibration_enabled = true;
+        self
+    }
+
+    pub(crate) fn output_token_calibration_enabled(&self) -> bool {
+        self.output_token_calibration_enabled
     }
 
     pub fn observed(
@@ -514,7 +534,7 @@ impl PylonRuntimeState {
             input_interval,
             request_input_tokens,
             input_tokens_explicit,
-            raw_output_units,
+            output_calibration,
             upstream_duration,
         } = metadata;
         // Held across the queue transition below: retire_generation() purges
@@ -540,7 +560,7 @@ impl PylonRuntimeState {
                     changed_generations: Vec::new(),
                     input_interval,
                     input_tokens_explicit,
-                    raw_output_units,
+                    output_calibration,
                     upstream_duration,
                 };
             }
@@ -562,7 +582,7 @@ impl PylonRuntimeState {
             changed_generations: transition.changed_generations,
             input_interval,
             input_tokens_explicit,
-            raw_output_units,
+            output_calibration,
             upstream_duration,
         }
     }
@@ -656,8 +676,8 @@ impl RequestObservationEvent {
         self.input_tokens_explicit
     }
 
-    pub(crate) fn raw_output_units(&self) -> u64 {
-        self.raw_output_units
+    pub(crate) fn output_calibration(&self) -> OutputCalibrationFacts {
+        self.output_calibration
     }
 
     pub(crate) fn output_duration(&self) -> Duration {

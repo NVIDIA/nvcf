@@ -757,7 +757,8 @@ mod tests {
                 submitted_at,
                 first_generated_output_at: submitted_at + duration,
             });
-            event.raw_output_units = if event.observation.output_tokens_explicit {
+            event.output_calibration.raw_output_units = if event.observation.output_tokens_explicit
+            {
                 0
             } else {
                 event.observation.output_tokens
@@ -778,10 +779,13 @@ mod tests {
                 first_generated_output_at: submitted_at + duration,
             }
         });
-        let raw_output_units = if observation.output_tokens_explicit {
-            0
-        } else {
-            observation.output_tokens
+        let output_calibration = crate::runtime_state::OutputCalibrationFacts {
+            raw_output_units: if observation.output_tokens_explicit {
+                0
+            } else {
+                observation.output_tokens
+            },
+            ..crate::runtime_state::OutputCalibrationFacts::default()
         };
         let request_input_tokens = observation.input_tokens;
         runtime_state.observe_request_for_generation(
@@ -790,7 +794,7 @@ mod tests {
             crate::runtime_state::RequestObservationMetadata {
                 input_interval,
                 request_input_tokens,
-                raw_output_units,
+                output_calibration,
                 ..Default::default()
             },
         );
@@ -824,11 +828,25 @@ mod tests {
             .transition_request_observation(observation.clone());
         event.input_interval = Some(input_interval);
         event.input_tokens_explicit = input_tokens_explicit;
-        event.raw_output_units = if observation.output_tokens_explicit {
+        event.output_calibration.raw_output_units = if observation.output_tokens_explicit {
             0
         } else {
             observation.output_tokens
         };
+        aggregator.apply_fallback_observation(&event)
+    }
+
+    fn apply_fallback_observation_with_output_facts(
+        aggregator: &mut StatsAggregator,
+        observation: &RequestObservation,
+        input_interval: crate::runtime_state::RequestInputInterval,
+        output_calibration: crate::runtime_state::OutputCalibrationFacts,
+    ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation.clone());
+        event.input_interval = Some(input_interval);
+        event.output_calibration = output_calibration;
         aggregator.apply_fallback_observation(&event)
     }
 
@@ -1114,6 +1132,18 @@ mod tests {
 
     fn test_aggregator(config: StatsCollectorConfig) -> TestAggregator {
         test_aggregator_with_initialization(config, ModelStatsInitialization::Empty)
+    }
+
+    fn test_aggregator_with_output_token_calibration(
+        config: StatsCollectorConfig,
+    ) -> TestAggregator {
+        let mut aggregator = test_aggregator(config);
+        aggregator.inner.runtime_state = aggregator
+            .inner
+            .runtime_state
+            .clone()
+            .with_single_pylon_output_token_calibration();
+        aggregator
     }
 
     fn kv_cache_stats(model: &str) -> KvCacheStatsSnapshot {
@@ -2178,7 +2208,7 @@ mod tests {
         assert!(
             aggregator.per_model["model-a"]
                 .metrics
-                .completed_fallback_output_keys
+                .completed_request_keys
                 .is_empty(),
             "failed requests must not add completed output history"
         );
@@ -2714,8 +2744,378 @@ mod tests {
         apply_fallback_observation_with_interval(&mut aggregator, &complete, interval, false);
         let model = &aggregator.per_model["model-a"].metrics;
         assert_eq!(model.chat_output_tps_samples.len(), 1);
-        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(model.completed_request_keys.len(), 1);
         assert_eq!(aggregator.snapshot("model-a").output_tps, 5.0);
+    }
+
+    fn record_output_calibration_sample(
+        aggregator: &mut StatsAggregator,
+        request_id: &str,
+        exact_output_tokens: u64,
+        raw_output_units: u64,
+        calibration_ineligible: bool,
+        reasoning_text_observed: bool,
+        reasoning_tokens: Option<u64>,
+    ) {
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        };
+        let observation = identified(
+            RequestObservation {
+                output_tokens_explicit: true,
+                output_tokens_from_chunk_usage: true,
+                ..completed_observation(20, 1, exact_output_tokens, seconds(1), seconds(2))
+            },
+            request_id,
+        );
+        apply_fallback_observation_with_output_facts(
+            aggregator,
+            &observation,
+            interval,
+            crate::runtime_state::OutputCalibrationFacts {
+                raw_output_units,
+                exact_output_tokens_baseline: Some(exact_output_tokens),
+                calibration_ineligible,
+                reasoning_text_observed,
+                reasoning_tokens,
+            },
+        );
+    }
+
+    #[test]
+    fn output_token_calibration_defaults_off() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 3));
+        for (index, (exact, raw)) in [(2, 1), (8, 2), (30, 3)].into_iter().enumerate() {
+            record_output_calibration_sample(
+                &mut aggregator,
+                &format!("req-calibration-off-{index}"),
+                exact,
+                raw,
+                false,
+                false,
+                None,
+            );
+        }
+
+        let calibration = &aggregator.per_model["model-a"]
+            .metrics
+            .output_token_calibration;
+        assert_eq!(calibration.len(), 0);
+        assert_eq!(calibration.scale(5), 5);
+    }
+
+    #[test]
+    fn duplicate_completion_records_output_rate_and_calibration_once() {
+        let mut aggregator =
+            test_aggregator_with_output_token_calibration(config!(smoothing_window_size: 3));
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        };
+        let observation = RequestObservation {
+            output_tokens: 10,
+            output_tokens_explicit: true,
+            output_tokens_from_chunk_usage: true,
+            time_to_first_output: Some(seconds(1)),
+            time_to_first_token: Some(seconds(1)),
+            total_duration: seconds(3),
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-duplicate-calibration",
+                RequestObservationState::Complete,
+            )
+        };
+        let facts = crate::runtime_state::OutputCalibrationFacts {
+            raw_output_units: 2,
+            exact_output_tokens_baseline: Some(10),
+            ..crate::runtime_state::OutputCalibrationFacts::default()
+        };
+
+        apply_fallback_observation_with_output_facts(
+            &mut aggregator,
+            &observation,
+            interval,
+            facts,
+        );
+        apply_fallback_observation_with_output_facts(
+            &mut aggregator,
+            &observation,
+            interval,
+            facts,
+        );
+
+        let model = &aggregator.per_model["model-a"].metrics;
+        assert_eq!(model.chat_output_tps_samples.len(), 1);
+        assert_eq!(model.output_token_calibration.len(), 1);
+        assert_eq!(model.completed_request_keys.len(), 1);
+    }
+
+    #[test]
+    fn output_token_calibration_warms_up_then_scales_only_estimates() {
+        let mut aggregator =
+            test_aggregator_with_output_token_calibration(config!(smoothing_window_size: 3));
+        for (index, (exact, raw)) in [(2, 1), (8, 2)].into_iter().enumerate() {
+            record_output_calibration_sample(
+                &mut aggregator,
+                &format!("req-calibration-warmup-{index}"),
+                exact,
+                raw,
+                false,
+                false,
+                None,
+            );
+        }
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .output_token_calibration
+                .scale(5),
+            5
+        );
+
+        record_output_calibration_sample(
+            &mut aggregator,
+            "req-calibration-warmup-2",
+            30,
+            3,
+            false,
+            false,
+            None,
+        );
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .output_token_calibration
+                .scale(5),
+            20
+        );
+        let model_state = &mut aggregator
+            .per_model
+            .get_mut("model-a")
+            .expect("test model should exist")
+            .metrics;
+        model_state.chat_output_tps_samples.clear();
+        model_state.chat_output_tps_sum = 0.0;
+
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at: std::time::Instant::now(),
+            first_generated_output_at: std::time::Instant::now() + seconds(1),
+        };
+        let estimated = RequestObservation {
+            input_tokens: 20,
+            output_messages: 1,
+            output_tokens: 5,
+            time_to_first_output: Some(seconds(1)),
+            time_to_first_token: Some(seconds(1)),
+            total_duration: seconds(2),
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-calibrated-live",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+        let calibrated = published_stats(apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &estimated,
+            interval,
+            false,
+        ));
+        assert_eq!(calibrated.output_tps, 20.0);
+
+        let exact_baseline = RequestObservation {
+            output_tokens: 3,
+            output_tokens_explicit: true,
+            output_tokens_from_chunk_usage: true,
+            ..estimated.clone()
+        };
+        let exact_baseline_stats = published_stats(apply_fallback_observation_with_output_facts(
+            &mut aggregator,
+            &exact_baseline,
+            interval,
+            crate::runtime_state::OutputCalibrationFacts {
+                raw_output_units: 5,
+                exact_output_tokens_baseline: Some(3),
+                ..crate::runtime_state::OutputCalibrationFacts::default()
+            },
+        ));
+        assert_eq!(exact_baseline_stats.output_tps, 3.0);
+
+        let estimated_tail = RequestObservation {
+            output_tokens: 7,
+            output_tokens_explicit: false,
+            ..exact_baseline
+        };
+        let estimated_tail_stats = published_stats(apply_fallback_observation_with_output_facts(
+            &mut aggregator,
+            &estimated_tail,
+            interval,
+            crate::runtime_state::OutputCalibrationFacts {
+                raw_output_units: 9,
+                exact_output_tokens_baseline: Some(3),
+                ..crate::runtime_state::OutputCalibrationFacts::default()
+            },
+        ));
+        assert_eq!(estimated_tail_stats.output_tps, 19.0);
+
+        let final_exact = RequestObservation {
+            output_tokens_explicit: true,
+            ..estimated_tail
+        };
+        let final_exact_stats = published_stats(apply_fallback_observation_with_output_facts(
+            &mut aggregator,
+            &final_exact,
+            interval,
+            crate::runtime_state::OutputCalibrationFacts {
+                raw_output_units: 9,
+                exact_output_tokens_baseline: Some(7),
+                ..crate::runtime_state::OutputCalibrationFacts::default()
+            },
+        ));
+        assert_eq!(final_exact_stats.output_tps, 7.0);
+    }
+
+    #[test]
+    fn output_token_calibration_keeps_positive_estimates_publishable() {
+        let mut aggregator =
+            test_aggregator_with_output_token_calibration(config!(smoothing_window_size: 3));
+        for index in 0..3 {
+            record_output_calibration_sample(
+                &mut aggregator,
+                &format!("req-low-factor-{index}"),
+                1,
+                4,
+                false,
+                false,
+                None,
+            );
+        }
+        let model_state = &mut aggregator
+            .per_model
+            .get_mut("model-a")
+            .expect("test model should exist")
+            .metrics;
+        model_state.chat_output_tps_samples.clear();
+        model_state.chat_output_tps_sum = 0.0;
+
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        };
+        let estimated = RequestObservation {
+            input_tokens: 20,
+            output_messages: 1,
+            output_tokens: 1,
+            time_to_first_output: Some(seconds(1)),
+            time_to_first_token: Some(seconds(1)),
+            total_duration: seconds(2),
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-low-factor-estimate",
+                RequestObservationState::Complete,
+            )
+        };
+
+        let calibrated = published_stats(apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &estimated,
+            interval,
+            false,
+        ));
+        assert_eq!(calibrated.output_tps, 1.0);
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .chat_output_tps_samples
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn output_token_calibration_rejects_unsafe_samples() {
+        let mut aggregator = test_aggregator_with_output_token_calibration(config!(
+            smoothing_window_size: 3,
+            min_output_tokens: 5,
+        ));
+        for (request_id, exact, raw, ineligible, reasoning_text, reasoning_tokens) in [
+            ("undersized", 4, 1, false, false, None),
+            ("empty", 10, 0, false, false, None),
+            ("modal", 10, 2, true, false, None),
+            ("hidden-reasoning", 10, 2, false, false, Some(1)),
+        ] {
+            record_output_calibration_sample(
+                &mut aggregator,
+                request_id,
+                exact,
+                raw,
+                ineligible,
+                reasoning_text,
+                reasoning_tokens,
+            );
+        }
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .output_token_calibration
+                .len(),
+            0
+        );
+
+        for (request_id, reasoning_text, reasoning_tokens) in [
+            ("visible-reasoning", true, Some(1)),
+            ("reasoning-unavailable", false, None),
+            ("zero-hidden-reasoning", false, Some(0)),
+        ] {
+            record_output_calibration_sample(
+                &mut aggregator,
+                request_id,
+                10,
+                2,
+                false,
+                reasoning_text,
+                reasoning_tokens,
+            );
+        }
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .output_token_calibration
+                .scale(2),
+            10
+        );
+    }
+
+    #[test]
+    fn output_token_calibration_resets_with_model_generation() {
+        let mut aggregator =
+            test_aggregator_with_output_token_calibration(config!(smoothing_window_size: 3));
+        for index in 0..3 {
+            record_output_calibration_sample(
+                &mut aggregator,
+                &format!("req-calibration-reset-{index}"),
+                10,
+                2,
+                false,
+                false,
+                None,
+            );
+        }
+        let retired = aggregator.current_generation("model-a").unwrap().clone();
+        assert!(aggregator.retire_generation(&retired));
+        let replacement = ModelGeneration::new("model-a", retired.sequence() + 1);
+        aggregator
+            .begin_generation(replacement, ModelStatsInitialization::Empty)
+            .expect("replacement generation should initialize");
+
+        let calibration = &aggregator.per_model["model-a"]
+            .metrics
+            .output_token_calibration;
+        assert_eq!(calibration.len(), 0);
+        assert_eq!(calibration.scale(5), 5);
     }
 
     #[test]
@@ -2750,7 +3150,7 @@ mod tests {
 
         let model = &aggregator.per_model["model-a"].metrics;
         assert_eq!(model.chat_output_tps_samples.len(), 1);
-        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(model.completed_request_keys.len(), 1);
         assert_eq!(aggregator.snapshot("model-a").output_tps, 4.0);
     }
 
@@ -2763,7 +3163,7 @@ mod tests {
 
         let model = &aggregator.per_model["model-a"].metrics;
         assert_eq!(model.chat_output_tps_samples.len(), 1);
-        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(model.completed_request_keys.len(), 1);
         assert_eq!(aggregator.snapshot("model-a").output_tps, 3.0);
     }
 
@@ -2776,7 +3176,7 @@ mod tests {
         );
 
         let model = &aggregator.per_model["model-a"].metrics;
-        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(model.completed_request_keys.len(), 1);
         assert_eq!(
             model
                 .chat_output_tps_samples
