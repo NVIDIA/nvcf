@@ -177,8 +177,20 @@ functionAutoscaler:
 # global.sidecars (or global.image) at version 0.14.1.
 api:
   env: {}
+  # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
+  # global.workerEndpoints.essServiceURL. In split-plane deployments that value
+  # is the public ESS URL for remote workers, so set this to the in-cluster
+  # ess-api Service to keep control-plane ESS calls off the public edge, e.g.
+  # http://ess-api.ess.svc.cluster.local:8080. The worker alias
+  # (NVCF_ESS_WORKER_BASE_URL) stays on essServiceURL.
+  essBaseURL: ""
   remoteConfig:
     configData: {}
+
+# NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
+# global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
+nvctApi:
+  essBaseURL: ""
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
