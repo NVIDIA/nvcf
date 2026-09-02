@@ -93,12 +93,8 @@ the init lease or any in-memory fan-out, both of which are lost on restart.
   namespace) plus a read-only PVC.
 - samba: a static SMB CSI PV pointing at the per-handle Samba share, read-only,
   plus a read-only PVC.
-- sharedfs: a read-only PV derived from the writer's bound volume, plus a
-  read-only PVC bound to it by name. The derived PV carries no StorageClass, a
-  read-only CSI source, and the provisioner's reader mount options. Each
-  namespace gets its own PVC; it binds to the writer's volume, never to a newly
-  provisioned one. Only the volume handle differs by driver: NVMesh rewrites
-  the namespace segment, other drivers reuse the writer's handle unchanged.
+- sharedfs: a read-only PVC on the shared class; the class itself shares data
+  across namespaces, so no per-namespace PV plumbing is needed.
 
 ## Samba backend (Samba over NVMesh)
 
@@ -198,11 +194,15 @@ child span around per-handle Samba provisioning.
 
 ## Known gaps and fast-follows
 
-- sharedfs readers no longer provision from the class. A dynamic provisioner
-  answers each claim with a new volume, so a reader provisioned that way
-  mounted an empty directory while binding cleanly. Readers are now derived
-  from the writer's bound volume, and the access-mode probe that chose the
-  reader's mode was removed with it.
+- sharedfs reader binding assumes the class exposes one shared filesystem:
+  separately provisioned PVCs on the same StorageClass do not share data on
+  provisioners that create per-claim access points, subvolumes, or
+  directories (EFS access points, CephFS subvolumes, some NFS provisioners).
+  Classes backed by a single share (for example an SMB class pointing at one
+  server share) work. The capability probe validates bindability, not
+  data-sharing; the fast-follow is a write-through-one-claim /
+  read-through-another probe, and deriving reader PVs from the writer's bound
+  volume where the driver supports it.
 - The per-handle Samba infrastructure is create-once: image, resource, and
   cache-size changes do not reconcile onto an existing server or expand its
   backing PVC.
