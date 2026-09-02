@@ -34,7 +34,17 @@ case "${1:-}:${2:-}" in
     ;;
   get:crd)
     [[ "${3:-}" == "backendtrafficpolicies.gateway.envoyproxy.io" ]]
-    printf '%s\n' "${MOCK_REQUEST_TIMEOUT_TYPE-}"
+    if [[ "$*" == *'.name=="v1alpha1"'* ]]; then
+      printf 'v1alpha1\t%s\t%s\n' \
+        "${MOCK_V1ALPHA1_SERVED-}" "${MOCK_V1ALPHA1_REQUEST_TIMEOUT_TYPE-}"
+    else
+      if [[ "${MOCK_V1ALPHA1_SERVED-}" == true ]]; then
+        printf '%s\n' "${MOCK_V1ALPHA1_REQUEST_TIMEOUT_TYPE-}"
+      fi
+      if [[ "${MOCK_V1BETA1_SERVED-}" == true ]]; then
+        printf '%s\n' "${MOCK_V1BETA1_REQUEST_TIMEOUT_TYPE-}"
+      fi
+    fi
     ;;
   apply:-k)
     ;;
@@ -73,7 +83,10 @@ lowest_version="$(printf '%s\n%s\n' "$minimum_version" "$setup_version" | sort -
 [[ "$lowest_version" == "$minimum_version" ]] ||
   fail "Envoy Gateway $setup_version predates requestTimeout support"
 
-export MOCK_REQUEST_TIMEOUT_TYPE=string
+export MOCK_V1ALPHA1_SERVED=true
+export MOCK_V1ALPHA1_REQUEST_TIMEOUT_TYPE=string
+export MOCK_V1BETA1_SERVED=true
+export MOCK_V1BETA1_REQUEST_TIMEOUT_TYPE=
 "$setup_script" >"$test_dir/success.out"
 grep -Fq "helm upgrade --install eg" "$call_log" ||
   fail "setup did not install Envoy Gateway"
@@ -81,18 +94,21 @@ grep -Fq -- "--version $setup_version" "$call_log" ||
   fail "setup did not use the pinned Envoy Gateway version"
 grep -Fq "kubectl get crd backendtrafficpolicies.gateway.envoyproxy.io" "$call_log" ||
   fail "setup did not inspect the BackendTrafficPolicy CRD"
+grep -Fq '.spec.versions[?(@.name=="v1alpha1")]' "$call_log" ||
+  fail "setup did not inspect the v1alpha1 BackendTrafficPolicy schema"
 grep -Fq "kubectl apply -k" "$call_log" ||
   fail "timeout-capable CRD did not proceed to Gateway creation"
 grep -Fq "supports disabling the LLM worker request timeout" "$test_dir/success.out" ||
   fail "successful capability check was not reported"
 
 : >"$call_log"
-export MOCK_REQUEST_TIMEOUT_TYPE=
+export MOCK_V1ALPHA1_REQUEST_TIMEOUT_TYPE=
+export MOCK_V1BETA1_REQUEST_TIMEOUT_TYPE=string
 if "$setup_script" >"$test_dir/failure.out" 2>&1; then
-  fail "setup accepted a CRD without requestTimeout"
+  fail "setup accepted v1alpha1 without requestTimeout because another served version provided it"
 fi
 grep -Fq "installed Envoy Gateway CRD does not support BackendTrafficPolicy spec.timeout.http.requestTimeout" "$test_dir/failure.out" ||
-  fail "missing requestTimeout did not return the expected error"
+  fail "missing v1alpha1 requestTimeout did not return the expected error"
 if grep -Fq "kubectl apply -k" "$call_log"; then
   fail "setup created Gateway resources after the capability check failed"
 fi
