@@ -96,6 +96,7 @@ pub struct RequestObservationEvent {
     pub(crate) generation: Option<ModelGeneration>,
     pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) input_interval: Option<RequestInputInterval>,
+    pub(crate) upstream_duration: Option<Duration>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -422,7 +423,7 @@ impl PylonRuntimeState {
 
     pub fn observe_request(&self, observation: RequestObservation) {
         let generation = self.current_generation(&observation.model_id);
-        self.observe_request_for_generation(observation, generation, None);
+        self.observe_request_for_generation(observation, generation, None, None);
     }
 
     pub(crate) fn observe_request_for_generation(
@@ -430,11 +431,13 @@ impl PylonRuntimeState {
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
         input_interval: Option<RequestInputInterval>,
+        upstream_duration: Option<Duration>,
     ) {
         let event = self.transition_request_observation_for_generation(
             observation,
             generation,
             input_interval,
+            upstream_duration,
         );
         if let Some(tx) = &self.observation_tx
             && let Err(error) = tx.try_send(event)
@@ -474,7 +477,12 @@ impl PylonRuntimeState {
         let generation = self
             .current_generation(&observation.model_id)
             .expect("test model generation should already exist");
-        self.transition_request_observation_for_generation(observation, Some(generation), None)
+        self.transition_request_observation_for_generation(
+            observation,
+            Some(generation),
+            None,
+            None,
+        )
     }
 
     fn transition_request_observation_for_generation(
@@ -482,6 +490,7 @@ impl PylonRuntimeState {
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
         input_interval: Option<RequestInputInterval>,
+        upstream_duration: Option<Duration>,
     ) -> RequestObservationEvent {
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
@@ -505,6 +514,7 @@ impl PylonRuntimeState {
                     generation,
                     changed_generations: Vec::new(),
                     input_interval,
+                    upstream_duration,
                 };
             }
         }
@@ -522,6 +532,7 @@ impl PylonRuntimeState {
             generation,
             changed_generations: transition.changed_generations,
             input_interval,
+            upstream_duration,
         }
     }
 
@@ -607,6 +618,11 @@ impl RequestObservationEvent {
 
     pub(crate) fn input_interval(&self) -> Option<RequestInputInterval> {
         self.input_interval
+    }
+
+    pub(crate) fn output_duration(&self) -> Duration {
+        self.upstream_duration
+            .unwrap_or(self.observation.total_duration)
     }
 }
 
@@ -924,6 +940,7 @@ mod tests {
             first_observation.clone(),
             Some(first.clone()),
             None,
+            None,
         );
         assert_eq!(runtime_state.snapshot_live_model("model-a").queue_size, 1);
 
@@ -934,6 +951,7 @@ mod tests {
         runtime_state.transition_request_observation_for_generation(
             first_observation,
             Some(first),
+            None,
             None,
         );
 
@@ -960,7 +978,7 @@ mod tests {
 
         let mut stale = observation("req-first", "model-a", Some("rk-a"));
         stale.state = RequestObservationState::Failed;
-        runtime_state.transition_request_observation_for_generation(stale, Some(first), None);
+        runtime_state.transition_request_observation_for_generation(stale, Some(first), None, None);
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(

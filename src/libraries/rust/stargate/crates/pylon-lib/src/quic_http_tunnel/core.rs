@@ -442,6 +442,7 @@ impl TunnelRequestLifecycle {
                     "observer missing for observed streaming request"
                 ))
             })?;
+        obs.observe_upstream_event(message.received_at);
         let mut quality_progress = None;
         if let Some(generated_output) = message.facts.generated_output.as_ref() {
             if let (false, Some(queue)) = (*saw_output, self.queue_request.as_mut()) {

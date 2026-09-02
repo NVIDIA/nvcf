@@ -133,6 +133,7 @@ struct BackendPhaseData {
     submitted_at: Instant,
     upstream_status: Option<u16>,
     response_headers_at: Option<Instant>,
+    last_upstream_event_at: Option<Instant>,
     first_generated_output_at: Option<Instant>,
     first_token_at: Option<Instant>,
     output_messages: u64,
@@ -206,6 +207,7 @@ impl RequestObserver {
             submitted_at,
             upstream_status: None,
             response_headers_at: None,
+            last_upstream_event_at: None,
             first_generated_output_at: None,
             first_token_at: None,
             output_messages: 0,
@@ -238,6 +240,19 @@ impl RequestObserver {
             backend.first_token_at.get_or_insert(observed_at);
         }
         self.emit();
+    }
+
+    pub(crate) fn observe_upstream_event(&mut self, observed_at: Instant) {
+        let backend = Self::backend_mut(
+            &mut self.state,
+            &self.request_id,
+            "upstream event observation",
+        );
+        backend.last_upstream_event_at = Some(
+            backend
+                .last_upstream_event_at
+                .map_or(observed_at, |previous| previous.max(observed_at)),
+        );
     }
 
     pub(crate) fn observe_input_tokens_total(&mut self, input_tokens: u64) {
@@ -394,6 +409,9 @@ impl RequestObserver {
             observation,
             self.generation.clone(),
             input_interval,
+            backend
+                .and_then(|backend| backend.last_upstream_event_at)
+                .map(|instant| instant.saturating_duration_since(self.started_at)),
         );
     }
 }
@@ -903,6 +921,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn terminal_observation_preserves_upstream_completion_time() {
+        let accepted_at = Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .expect("test acceptance time should be representable");
+        let required = RequiredTunnelHeaders {
+            request_id: "req-upstream-completion".to_string(),
+            routing_key: Some("rk-1".to_string()),
+            model_id: "model-a".to_string(),
+            priority: None,
+            input_tokens: 42,
+            accepted_at,
+        };
+        let (runtime_state, rx) = observed_runtime(8);
+        let mut observer = RequestObserver::from_required(
+            RequestObservationEndpoint::ChatCompletions,
+            required,
+            None,
+            runtime_state,
+        );
+        rx.try_recv().unwrap();
+        observer.on_backend_submission(accepted_at + Duration::from_millis(500));
+        rx.try_recv().unwrap();
+
+        let first_output_at = accepted_at + Duration::from_secs(1);
+        observer.observe_upstream_event(first_output_at);
+        observer.observe_generated_output(first_output_at, true);
+        let output = rx.try_recv().unwrap();
+        assert_eq!(output.output_duration(), Duration::from_secs(1));
+
+        observer.observe_output_tokens(100);
+        rx.try_recv().unwrap();
+        observer.observe_upstream_event(accepted_at + Duration::from_secs(2));
+        observer.complete();
+        let terminal = rx.try_recv().unwrap();
+
+        assert_eq!(terminal.output_duration(), Duration::from_secs(2));
+        assert!(terminal.observation().total_duration >= Duration::from_secs(9));
+    }
+
     #[tokio::test]
     async fn upstream_connecting_observation_is_emitted_when_request_starts() {
         let (runtime_state, rx) = observed_runtime(8);
@@ -1131,6 +1189,7 @@ mod tests {
             submitted_at: started_at,
             upstream_status: Some(200),
             response_headers_at: Some(started_at + Duration::from_millis(10)),
+            last_upstream_event_at: None,
             first_generated_output_at: None,
             first_token_at: None,
             output_messages: 0,
@@ -1162,6 +1221,7 @@ mod tests {
             submitted_at: started_at + Duration::from_millis(25),
             upstream_status: Some(200),
             response_headers_at: Some(started_at + Duration::from_millis(50)),
+            last_upstream_event_at: Some(first_output_at),
             first_generated_output_at: Some(first_output_at),
             first_token_at: Some(first_output_at),
             output_messages: 2,
