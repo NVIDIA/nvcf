@@ -259,6 +259,7 @@ fn relay_sse_error(error: UpstreamSseReadError) -> anyhow::Error {
             "upstream SSE buffer exceeded {max_buffer_bytes} bytes while waiting for an event boundary (buffered {buffered_bytes} bytes)"
         ),
         Upstream(error) => error.context("failed to read upstream response message"),
+        Producer(error) => anyhow::Error::new(error).context("upstream SSE producer task failed"),
     }
 }
 

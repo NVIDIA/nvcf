@@ -639,8 +639,6 @@ pub(crate) fn gated_model_status(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use stargate_proto::pb::InferenceServerStatus;
@@ -650,78 +648,22 @@ mod tests {
     use crate::request_observer::{
         RequestObservation, RequestObservationEndpoint, RequestObservationState,
     };
-
-    #[derive(Clone, Default)]
-    struct RecordingWarnSubscriber {
-        events: Arc<Mutex<Vec<BTreeMap<String, String>>>>,
-    }
-
-    impl tracing::Subscriber for RecordingWarnSubscriber {
-        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-            metadata.level() <= &tracing::Level::WARN
-        }
-
-        fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            let mut visitor = RecordingFieldVisitor::default();
-            event.record(&mut visitor);
-            self.events.lock().unwrap().push(visitor.fields);
-        }
-
-        fn enter(&self, _span: &tracing::span::Id) {}
-
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
-    #[derive(Default)]
-    struct RecordingFieldVisitor {
-        fields: BTreeMap<String, String>,
-    }
-
-    impl tracing::field::Visit for RecordingFieldVisitor {
-        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-            self.fields
-                .insert(field.name().to_string(), value.to_string());
-        }
-
-        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            self.fields
-                .insert(field.name().to_string(), format!("{value:?}"));
-        }
-    }
+    use crate::test_support::{
+        RecordingTracingSubscriber, assert_tracing_event_field, tracing_event_by_message,
+    };
 
     fn assert_drop_warning(
-        subscriber: &RecordingWarnSubscriber,
+        subscriber: &RecordingTracingSubscriber,
         request_id: &str,
         drop_cause: &str,
     ) {
-        let events = subscriber.events.lock().unwrap();
-        let event = events
-            .iter()
-            .find(|event| {
-                event.get("message").map(String::as_str) == Some("dropping request observation")
-            })
-            .expect("drop warning should be recorded");
-        assert_eq!(
-            event.get("request_id").map(String::as_str),
-            Some(request_id)
-        );
-        assert_eq!(event.get("model_id").map(String::as_str), Some("model-a"));
-        assert_eq!(
-            event.get("state").map(String::as_str),
-            Some("UpstreamConnecting")
-        );
-        assert_eq!(
-            event.get("drop_cause").map(String::as_str),
-            Some(drop_cause)
-        );
+        let events = subscriber.events();
+        let event = tracing_event_by_message(&events, "dropping request observation");
+        assert_eq!(event.level, tracing::Level::WARN);
+        assert_tracing_event_field(event, "request_id", request_id);
+        assert_tracing_event_field(event, "model_id", "model-a");
+        assert_tracing_event_field(event, "state", "UpstreamConnecting");
+        assert_tracing_event_field(event, "drop_cause", drop_cause);
     }
 
     fn observation(
@@ -847,7 +789,7 @@ mod tests {
             None,
         );
         runtime_state.observe_request(observation("req-retained", "model-a", None));
-        let subscriber = RecordingWarnSubscriber::default();
+        let subscriber = RecordingTracingSubscriber::default();
         tracing::subscriber::with_default(subscriber.clone(), || {
             runtime_state.observe_request(observation("req-dropped-full", "model-a", None));
         });
@@ -864,7 +806,7 @@ mod tests {
             None,
         );
         drop(observation_rx);
-        let subscriber = RecordingWarnSubscriber::default();
+        let subscriber = RecordingTracingSubscriber::default();
         tracing::subscriber::with_default(subscriber.clone(), || {
             runtime_state.observe_request(observation("req-dropped-disconnected", "model-a", None));
         });

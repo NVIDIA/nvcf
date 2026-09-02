@@ -120,6 +120,8 @@ pub(crate) enum UpstreamSseReadError {
     },
     #[error("failed to read upstream SSE bytes: {0}")]
     Upstream(#[source] anyhow::Error),
+    #[error("upstream SSE producer task failed: {0}")]
+    Producer(#[source] tokio::task::JoinError),
 }
 
 pub(crate) type UpstreamSseMessageStream =
@@ -147,7 +149,9 @@ where
         while let Some(message) = delivery_rx.recv().await {
             yield message;
         }
-        drop(producer);
+        if let Err(error) = producer.await {
+            yield Err(UpstreamSseReadError::Producer(error));
+        }
     })
 }
 
@@ -908,6 +912,24 @@ mod tests {
             messages.next().await.is_none(),
             "the byte stream should be exhausted after both events"
         );
+    }
+
+    #[tokio::test]
+    async fn producer_panics_are_reported_to_the_consumer() {
+        let mut messages = upstream_sse_message_stream(
+            futures::stream::poll_fn(|_| -> std::task::Poll<Option<reqwest::Result<Bytes>>> {
+                panic!("producer panic fixture");
+            }),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            1024,
+        );
+
+        match messages.next().await {
+            Some(Err(UpstreamSseReadError::Producer(error))) => assert!(error.is_panic()),
+            unexpected => panic!("producer panic should surface as a stream error: {unexpected:?}"),
+        }
+        assert!(messages.next().await.is_none());
     }
 
     #[tokio::test(start_paused = true)]
