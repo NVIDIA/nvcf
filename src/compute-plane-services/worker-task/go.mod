@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3
+	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260902221359-b62eeeca37a7
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
