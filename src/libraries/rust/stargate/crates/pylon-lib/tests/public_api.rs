@@ -19,9 +19,12 @@ use std::time::Duration;
 use pylon_lib::{
     ClientError, CurrentModelStats, DEFAULT_MAX_SSE_BUFFER_BYTES,
     InferenceServerRegistrationClient, InferenceServerRegistrationConfig, ModelInitialization,
-    QuicHttpTunnelConfig, RequestCounterUpdate, RequestCounterUpdateInput, ReverseQuicTunnelConfig,
-    StatsUpdateSource, TunnelTransportProtocol,
+    PylonRuntimeState, QuicHttpTunnelConfig, RequestCounterUpdate, RequestCounterUpdateInput,
+    RequestObservation, RequestObservationEndpoint, RequestObservationState,
+    ReverseQuicTunnelConfig, StatsCollectorConfig, StatsUpdateSource, TunnelTransportProtocol,
+    start_stats_collector,
 };
+use stargate_proto::pb::InferenceServerStatus;
 
 #[test]
 fn crate_root_exports_registration_public_api() {
@@ -77,6 +80,64 @@ fn configured_input_tps_retains_legacy_pin_field() {
         }
         _ => panic!("configured input TPS variant should round-trip"),
     }
+}
+
+#[tokio::test]
+async fn public_observation_api_preserves_duration_based_throughput() {
+    let model_id = "model-a".to_string();
+    let (runtime_state, observation_rx) = PylonRuntimeState::observed(
+        InferenceServerStatus::Active,
+        std::slice::from_ref(&model_id),
+        16,
+        None,
+    );
+    let collector = start_stats_collector(
+        StatsCollectorConfig {
+            openai_fallback_stats_enabled: true,
+            ..Default::default()
+        },
+        observation_rx,
+        runtime_state.clone(),
+    );
+
+    for request_index in 0..5 {
+        runtime_state.observe_request(RequestObservation {
+            endpoint: RequestObservationEndpoint::ChatCompletions,
+            request_id: format!("request-{request_index}"),
+            routing_key: None,
+            model_id: model_id.clone(),
+            priority: 0,
+            input_tokens: 100,
+            embedding_items: 0,
+            embedding_items_observed: false,
+            upstream_status: Some(200),
+            output_messages: 1,
+            output_tokens: 20,
+            output_tokens_explicit: true,
+            output_tokens_from_chunk_usage: false,
+            state: RequestObservationState::Complete,
+            time_to_response_headers: Some(Duration::from_millis(100)),
+            time_to_first_output: Some(Duration::from_secs(1)),
+            time_to_first_token: Some(Duration::from_secs(2)),
+            total_duration: Duration::from_secs(4),
+        });
+    }
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let stats = runtime_state
+                .model_stats(&model_id)
+                .expect("configured model should retain public stats");
+            if stats.last_mean_input_tps == 100.0 && stats.output_tps == 10.0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("public observations should publish input and output throughput");
+
+    collector.shutdown().await;
 }
 
 #[test]

@@ -148,6 +148,24 @@ impl StatsAggregator {
             model_state.last_mean_input_tps = input_tps;
             input_tps_changed = true;
         }
+        if event.uses_duration_only_throughput()
+            && observation.state == RequestObservationState::Complete
+            && matches!(
+                observation.endpoint,
+                RequestObservationEndpoint::ChatCompletions | RequestObservationEndpoint::Responses
+            )
+            && let Some(duration) = observation.time_to_first_output
+        {
+            input_tps_changed |= apply_input_throughput_sample(
+                config,
+                model_state,
+                InputThroughputSample {
+                    units: observation.input_tokens,
+                    duration,
+                    clamp_duration_to_floor: false,
+                },
+            );
+        }
 
         let mut completed_sample_recorded = false;
         if observation.state == RequestObservationState::Complete {
@@ -175,6 +193,16 @@ impl StatsAggregator {
                             }
                             completed_sample_recorded = true;
                         }
+                    } else if event.uses_duration_only_throughput()
+                        && let Some(output_tps) = observed_output_tps(config, event)
+                    {
+                        record_sample(
+                            &mut model_state.chat_output_tps_samples,
+                            &mut model_state.chat_output_tps_sum,
+                            &mut model_state.max_chat_output_tps,
+                            output_tps,
+                        );
+                        completed_sample_recorded = true;
                     }
                 }
                 RequestObservationEndpoint::Embeddings => {

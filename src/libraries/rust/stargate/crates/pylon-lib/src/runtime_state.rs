@@ -99,6 +99,7 @@ pub struct RequestObservationEvent {
     pub(crate) input_tokens_explicit: bool,
     pub(crate) raw_output_units: u64,
     pub(crate) upstream_duration: Option<Duration>,
+    pub(crate) duration_only_throughput: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,6 +115,7 @@ pub(crate) struct RequestObservationMetadata {
     pub(crate) input_tokens_explicit: bool,
     pub(crate) raw_output_units: u64,
     pub(crate) upstream_duration: Option<Duration>,
+    pub(crate) duration_only_throughput: bool,
 }
 
 impl RequestInputInterval {
@@ -441,6 +443,7 @@ impl PylonRuntimeState {
             generation,
             RequestObservationMetadata {
                 request_input_tokens,
+                duration_only_throughput: true,
                 ..Default::default()
             },
         );
@@ -515,6 +518,7 @@ impl PylonRuntimeState {
             input_tokens_explicit,
             raw_output_units,
             upstream_duration,
+            duration_only_throughput,
         } = metadata;
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
@@ -541,6 +545,7 @@ impl PylonRuntimeState {
                     input_tokens_explicit,
                     raw_output_units,
                     upstream_duration,
+                    duration_only_throughput,
                 };
             }
         }
@@ -563,6 +568,7 @@ impl PylonRuntimeState {
             input_tokens_explicit,
             raw_output_units,
             upstream_duration,
+            duration_only_throughput,
         }
     }
 
@@ -657,6 +663,10 @@ impl RequestObservationEvent {
 
     pub(crate) fn raw_output_units(&self) -> u64 {
         self.raw_output_units
+    }
+
+    pub(crate) fn uses_duration_only_throughput(&self) -> bool {
+        self.duration_only_throughput
     }
 
     pub(crate) fn output_duration(&self) -> Duration {

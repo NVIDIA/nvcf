@@ -439,6 +439,7 @@ impl RequestObserver {
                 upstream_duration: backend
                     .and_then(|backend| backend.last_upstream_event_at)
                     .map(|instant| instant.saturating_duration_since(self.started_at)),
+                duration_only_throughput: false,
             },
         );
     }
