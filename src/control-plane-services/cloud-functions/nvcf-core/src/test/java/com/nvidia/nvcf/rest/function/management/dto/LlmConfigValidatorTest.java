@@ -84,7 +84,10 @@ class LlmConfigValidatorTest {
         "pulsar;s=\"unterminated",      // unterminated quoted string
         "pul,sar",                      // comma in token
         "pulsar;s=\"a,b\"",             // comma inside a quoted string
+        "pulsar;s=\"a;b\"",             // semicolon inside a quoted string
         "pulsar;s=a b",                 // whitespace inside a bare value
+        "pulsar/v2",                    // algorithm charset is [a-z0-9-] after normalization
+        "*pulsar",                      // algorithm must start with a letter
     })
     void malformedRoutingMethodsRejected(String routingMethod) {
         assertThatThrownBy(
@@ -104,10 +107,18 @@ class LlmConfigValidatorTest {
     }
 
     @Test
-    void quotedStringMayContainSemicolon() {
-        assertThat(LlmConfigValidator.validateAndNormalizeRoutingMethod(
-                MODEL, "pulsar;seed=\"a;b\""))
-                .isEqualTo("pulsar;seed=\"a;b\"");
+    void parameterCountCappedAt32() {
+        var atCap = new StringBuilder("pulsar");
+        for (var i = 0; i < 32; i++) {
+            atCap.append(";p").append(i).append("=1");
+        }
+        assertThat(LlmConfigValidator.validateAndNormalizeRoutingMethod(MODEL, atCap.toString()))
+                .isEqualTo(atCap.toString());
+        var overCap = atCap + ";p32=1";
+        assertThatThrownBy(
+                () -> LlmConfigValidator.validateAndNormalizeRoutingMethod(MODEL, overCap))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("32 parameters");
     }
 
     @ParameterizedTest

@@ -32,6 +32,9 @@ public final class LlmConfigValidator {
     private LlmConfigValidator() {}
 
     private static final int MAX_ROUTING_METHOD_LENGTH = 1024;
+    // The richest real algorithm config is under 20 tunable fields; 32 leaves headroom while
+    // keeping audit lines and canonicalization work bounded.
+    private static final int MAX_PARAMETER_COUNT = 32;
 
     // Router LoadBalancerAlgorithm canonical spellings; keep this alias map in sync with the
     // router's serde aliases. Aliases are normalized away at write time so newly persisted
@@ -43,9 +46,13 @@ public final class LlmConfigValidator {
             "groq-multiregion", "wait-and-widen",
             "pulsar-multiregion", "pulsar-wait-and-widen");
 
-    // RFC 8941 token: (ALPHA / "*") *(tchar / ":" / "/").
+    // RFC 8941 token: (ALPHA / "*") *(tchar / ":" / "/"). Used for parameter values only.
     private static final Pattern ALGORITHM_TOKEN_PATTERN =
             Pattern.compile("[A-Za-z*][!#$%&'*+.^_`|~0-9A-Za-z:/-]*");
+    // Algorithm names are checked after normalization, so this accepts any historical spelling
+    // (uppercase, underscores) while keeping persisted names to the shape Stargate has ever used.
+    private static final Pattern NORMALIZED_ALGORITHM_PATTERN =
+            Pattern.compile("[a-z][a-z0-9-]*");
     private static final Pattern PARAMETER_PATTERN =
             Pattern.compile("([a-z][a-z0-9_]*)=(.+)", Pattern.DOTALL);
     private static final Pattern INTEGER_VALUE_PATTERN = Pattern.compile("-?\\d{1,15}");
@@ -65,7 +72,12 @@ public final class LlmConfigValidator {
     private static final String REASON_COMMA = "commas are not allowed in a routing expression";
     private static final String REASON_UNTERMINATED_STRING = "unterminated quoted string";
     private static final String REASON_INVALID_ALGORITHM =
-            "the algorithm name before the first ';' must be a bare token";
+            "the algorithm name before the first ';' must start with a letter and contain only "
+                    + "letters, digits, hyphens, or underscores";
+    private static final String REASON_TOO_MANY_PARAMETERS =
+            "expression exceeds " + MAX_PARAMETER_COUNT + " parameters";
+    private static final String REASON_SEMICOLON_IN_STRING =
+            "parameter '%s' quoted string must not contain ';'";
     private static final String REASON_MALFORMED_PARAMETER =
             "malformed parameter '%s'; expected key=value with a lowercase snake_case key";
     private static final String REASON_INVALID_VALUE =
@@ -97,11 +109,14 @@ public final class LlmConfigValidator {
             throw invalidRoutingMethod(modelName, REASON_COMMA);
         }
         var segments = splitOutsideStrings(modelName, raw);
-        var algorithm = segments.get(0);
-        if (!ALGORITHM_TOKEN_PATTERN.matcher(algorithm).matches()) {
+        if (segments.size() - 1 > MAX_PARAMETER_COUNT) {
+            throw invalidRoutingMethod(modelName, REASON_TOO_MANY_PARAMETERS);
+        }
+        var algorithm = normalizeAlgorithm(segments.get(0));
+        if (!NORMALIZED_ALGORITHM_PATTERN.matcher(algorithm).matches()) {
             throw invalidRoutingMethod(modelName, REASON_INVALID_ALGORITHM);
         }
-        var normalized = new StringBuilder(normalizeAlgorithm(algorithm));
+        var normalized = new StringBuilder(algorithm);
         var seenKeys = new HashSet<String>();
         for (var segment : segments.subList(1, segments.size())) {
             // RFC 8941 allows spaces after ';' only; anything else is part of the parameter.
@@ -168,6 +183,11 @@ public final class LlmConfigValidator {
     private static void validateParameterValue(String modelName, String key, String value) {
         if (value.charAt(0) == '?') {
             throw invalidRoutingMethod(modelName, REASON_BOOLEAN_SYNTAX.formatted(key));
+        }
+        // Quoted strings must not carry ';' so a naive top-level split on ';' stays correct for
+        // every downstream consumer (router, CLI, log tooling).
+        if (STRING_VALUE_PATTERN.matcher(value).matches() && value.indexOf(';') >= 0) {
+            throw invalidRoutingMethod(modelName, REASON_SEMICOLON_IN_STRING.formatted(key));
         }
         var isValidValue = STRING_VALUE_PATTERN.matcher(value).matches()
                 || INTEGER_VALUE_PATTERN.matcher(value).matches()
