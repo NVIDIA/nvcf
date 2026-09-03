@@ -65,12 +65,11 @@ func withRequiredHelmManagedVaultAddress() clusterMapper {
 		parsed, err := url.Parse(address)
 		if err != nil ||
 			address != strings.TrimSpace(address) ||
-			(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Scheme != "https" ||
 			parsed.Hostname() == "" ||
 			parsed.User != nil ||
-			parsed.RawQuery != "" ||
-			parsed.Fragment != "" {
-			return errors.New("vaultConfig.address must be an absolute HTTP(S) URL with no credentials, query, or fragment when OAuth is enabled")
+			strings.ContainsAny(address, "?#") {
+			return errors.New("vaultConfig.address must be an absolute HTTPS URL with no credentials, query, or fragment when OAuth is enabled")
 		}
 
 		return nil
