@@ -708,7 +708,15 @@ func (n InstanceName) GetGPUMultiplier() int {
 	if len(matches) < 2 {
 		return 0
 	}
-	gpus, _ := strconv.Atoi(matches[1])
+	// The pattern only matches digits, so the sole failure left is a value too
+	// large for an int, for which Atoi still returns MaxInt. Report that as "no
+	// multiplier" rather than an impossibly large node, so that a malformed name
+	// falls back to the caller's unrecognised-name behaviour instead of becoming
+	// a threshold no container can ever meet.
+	gpus, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
 	return gpus
 }
 

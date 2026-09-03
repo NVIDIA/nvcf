@@ -1549,6 +1549,15 @@ func TestMultiplierMultiNode(t *testing.T) {
 			expNodeCount:     2,
 			expGPUMultiplier: 4,
 		},
+		{
+			// A multiplier too large for an int must read as "no multiplier", not
+			// as a threshold no container could ever meet.
+			name:             "multiplier overflowing an int",
+			input:            "ON-PREM.GPU.A100_99999999999999999999x.x2",
+			want:             "ON-PREM.GPU.A100",
+			expNodeCount:     2,
+			expGPUMultiplier: 0,
+		},
 	}
 
 	for _, tt := range tests {

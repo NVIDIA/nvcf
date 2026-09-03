@@ -747,3 +747,13 @@ func Test_containerWholeGPUCount(t *testing.T) {
 		})
 	}
 }
+
+// TestComputeDomainChannelPolicy_MalformedMultiplierFailsOpen guards the
+// fail-open contract: a multiplier that cannot be parsed must fall back to
+// claiming a channel for every GPU container, never to a threshold that no
+// container can satisfy, which would strip channels from multi-node workers.
+func TestComputeDomainChannelPolicy_MalformedMultiplierFailsOpen(t *testing.T) {
+	minGPUs, needed := ComputeDomainChannelPolicy("AWS.GPU.GB300_99999999999999999999x.x2")
+	assert.True(t, needed)
+	assert.Equal(t, int64(0), minGPUs)
+}
