@@ -158,6 +158,6 @@ require (
 // `cas`). The fork keeps upstream's module path so this is a drop-in
 // replace with no import-site changes. Once CAS is upstreamed into
 // olric-data/olric, drop the replace and bump the require. See AGENTS.md.
-replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260506001115-492943853c7b
+replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260903172631-1d7a94c91260
 
 replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2

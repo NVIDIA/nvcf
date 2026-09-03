@@ -229,8 +229,8 @@ github.com/mattn/go-isatty v0.0.19/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
-github.com/max007-008/olric v0.0.0-20260506001115-492943853c7b h1:u1ecx6l5gNH5xF7tk1TyWY9iRBACS9yGsqZ0iW4QyKE=
-github.com/max007-008/olric v0.0.0-20260506001115-492943853c7b/go.mod h1:+ZnPpgc8JkNkza8rETCKGn0P/QPF6HhZY0EbCKAOslo=
+github.com/max007-008/olric v0.0.0-20260903172631-1d7a94c91260 h1:6ug2ACJNMB1QxrBowyXGk82prHFeDSLi3/4gvmQJtb0=
+github.com/max007-008/olric v0.0.0-20260903172631-1d7a94c91260/go.mod h1:+ZnPpgc8JkNkza8rETCKGn0P/QPF6HhZY0EbCKAOslo=
 github.com/maypok86/otter/v2 v2.3.0 h1:8H8AVVFUSzJwIegKwv1uF5aGitTY+AIrtktg7OcLs8w=
 github.com/maypok86/otter/v2 v2.3.0/go.mod h1:XgIdlpmL6jYz882/CAx1E4C1ukfgDKSaw4mWq59+7l8=
 github.com/miekg/dns v1.1.65 h1:0+tIPHzUW0GCge7IiK3guGP57VAw7hoPDfApjkMD1Fc=
