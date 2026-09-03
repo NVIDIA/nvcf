@@ -14,6 +14,13 @@
       "name": "LZ4 Java Compression",
       "url": "https://github.com/yawkat/lz4-java"
     },
+    "at.yawk.lz4:lz4-java:1.11.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "LZ4 Java Compression",
+      "url": "https://github.com/yawkat/lz4-java"
+    },
     "ch.qos.logback:logback-classic:1.5.34": {
       "licenses": [
         "EPL-2.0",
@@ -1252,6 +1259,13 @@
       "name": "Bouncy Castle Provider",
       "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
     },
+    "org.bouncycastle:bcprov-jdk18on:1.85.2": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle Provider",
+      "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
+    },
     "org.bouncycastle:bcprov-lts8on:2.73.8": {
       "licenses": [
         "Bouncy Castle Licence"
@@ -1337,11 +1351,25 @@
       "name": "LatencyUtils",
       "url": "http://latencyutils.github.io/LatencyUtils/"
     },
+    "org.ow2.asm:asm-analysis:9.10.1": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-analysis",
+      "url": "http://asm.ow2.io/"
+    },
     "org.ow2.asm:asm-analysis:9.9": {
       "licenses": [
         "BSD-3-Clause"
       ],
       "name": "asm-analysis",
+      "url": "http://asm.ow2.io/"
+    },
+    "org.ow2.asm:asm-commons:9.10.1": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-commons",
       "url": "http://asm.ow2.io/"
     },
     "org.ow2.asm:asm-commons:9.9": {
@@ -1351,6 +1379,13 @@
       "name": "asm-commons",
       "url": "http://asm.ow2.io/"
     },
+    "org.ow2.asm:asm-tree:9.10.1": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-tree",
+      "url": "http://asm.ow2.io/"
+    },
     "org.ow2.asm:asm-tree:9.9": {
       "licenses": [
         "BSD-3-Clause"
@@ -1358,11 +1393,25 @@
       "name": "asm-tree",
       "url": "http://asm.ow2.io/"
     },
+    "org.ow2.asm:asm-util:9.10.1": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm-util",
+      "url": "http://asm.ow2.io/"
+    },
     "org.ow2.asm:asm-util:9.9": {
       "licenses": [
         "BSD-3-Clause"
       ],
       "name": "asm-util",
+      "url": "http://asm.ow2.io/"
+    },
+    "org.ow2.asm:asm:9.10.1": {
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "name": "asm",
       "url": "http://asm.ow2.io/"
     },
     "org.ow2.asm:asm:9.9": {
@@ -2016,7 +2065,21 @@
       "name": "Spring Cloud Commons",
       "url": "https://projects.spring.io/spring-cloud/spring-cloud-commons/"
     },
+    "org.springframework.cloud:spring-cloud-commons:5.0.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Cloud Commons",
+      "url": "https://projects.spring.io/spring-cloud/spring-cloud-commons/"
+    },
     "org.springframework.cloud:spring-cloud-context:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Cloud Context",
+      "url": "https://projects.spring.io/spring-cloud/spring-cloud-context/"
+    },
+    "org.springframework.cloud:spring-cloud-context:5.0.3": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2030,7 +2093,21 @@
       "name": "spring-cloud-starter-bootstrap",
       "url": "https://projects.spring.io/spring-cloud"
     },
+    "org.springframework.cloud:spring-cloud-starter-bootstrap:5.0.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-starter-bootstrap",
+      "url": "https://projects.spring.io/spring-cloud"
+    },
     "org.springframework.cloud:spring-cloud-starter:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-starter",
+      "url": "https://projects.spring.io/spring-cloud"
+    },
+    "org.springframework.cloud:spring-cloud-starter:5.0.3": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2331,7 +2408,21 @@
       "name": "AWS Java SDK :: Annotations",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:annotations:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Annotations",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:checksums-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Checksums SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:checksums-spi:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2345,7 +2436,21 @@
       "name": "AWS Java SDK :: Checksums",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:checksums:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Checksums",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:endpoints-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Endpoints SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:endpoints-spi:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2359,7 +2464,21 @@
       "name": "AWS Java SDK :: HTTP Auth AWS",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:http-auth-aws:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Auth AWS",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:http-auth-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Auth SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:http-auth-spi:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2373,7 +2492,21 @@
       "name": "AWS Java SDK :: HTTP Client Interface",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:http-client-spi:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Client Interface",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:identity-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Identity SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:identity-spi:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2387,7 +2520,21 @@
       "name": "AWS Java SDK :: Core :: Protocols :: Json Utils",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:json-utils:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Core :: Protocols :: Json Utils",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:metrics-spi:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Metrics SPI",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:metrics-spi:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2401,7 +2548,21 @@
       "name": "AWS Java SDK :: Profiles",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:profiles:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Profiles",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:regions:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Regions",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:regions:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2415,7 +2576,21 @@
       "name": "AWS Java SDK :: Retries API",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:retries-spi:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Retries API",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:retries:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Retries",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:retries:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -2429,6 +2604,13 @@
       "name": "AWS Java SDK :: SDK Core",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:sdk-core:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: SDK Core",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:third-party-jackson-core:2.40.1": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -2436,7 +2618,21 @@
       "name": "AWS Java SDK :: Third Party :: Jackson-core",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:third-party-jackson-core:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Third Party :: Jackson-core",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:utils:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Utilities",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:utils:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],

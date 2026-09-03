@@ -268,6 +268,13 @@
       "name": "Apache Commons Collections",
       "url": "https://commons.apache.org/proper/commons-collections/"
     },
+    "org.apache.commons:commons-collections4:4.6.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Collections",
+      "url": "https://commons.apache.org/proper/commons-collections/"
+    },
     "org.aspectj:aspectjweaver:1.9.25.1": {
       "licenses": [
         "Eclipse Public License - v 2.0"

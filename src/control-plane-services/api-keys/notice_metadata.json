@@ -112,6 +112,13 @@
       "name": "Apache Commons Collections",
       "url": "https://commons.apache.org/proper/commons-collections/"
     },
+    "org.apache.commons:commons-collections4:4.6.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Collections",
+      "url": "https://commons.apache.org/proper/commons-collections/"
+    },
     "org.apache.commons:commons-pool2:2.12.1": {
       "licenses": [
         "Apache-2.0"

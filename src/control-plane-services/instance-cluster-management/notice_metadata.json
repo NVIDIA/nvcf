@@ -471,6 +471,13 @@
       "name": "net.javacrumbs.shedlock:shedlock-core",
       "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
     },
+    "net.javacrumbs.shedlock:shedlock-core:7.9.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "net.javacrumbs.shedlock:shedlock-core",
+      "url": "https://github.com/lukas-krecan/ShedLock"
+    },
     "net.javacrumbs.shedlock:shedlock-provider-cassandra:7.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -478,12 +485,26 @@
       "name": "net.javacrumbs.shedlock:shedlock-provider-cassandra",
       "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
     },
+    "net.javacrumbs.shedlock:shedlock-provider-cassandra:7.9.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "net.javacrumbs.shedlock:shedlock-provider-cassandra",
+      "url": "https://github.com/lukas-krecan/ShedLock"
+    },
     "net.javacrumbs.shedlock:shedlock-spring:7.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
       "name": "net.javacrumbs.shedlock:shedlock-spring",
       "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
+    },
+    "net.javacrumbs.shedlock:shedlock-spring:7.9.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "net.javacrumbs.shedlock:shedlock-spring",
+      "url": "https://github.com/lukas-krecan/ShedLock"
     },
     "net.logstash.logback:logstash-logback-encoder:8.1": {
       "designated_license": "Apache-2.0",
@@ -502,6 +523,13 @@
       "url": "https://github.com/datastax/java-driver"
     },
     "org.apache.commons:commons-collections4:4.5.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Collections",
+      "url": "https://commons.apache.org/proper/commons-collections/"
+    },
+    "org.apache.commons:commons-collections4:4.6.0": {
       "licenses": [
         "Apache-2.0"
       ],
@@ -613,7 +641,21 @@
       "name": "Bouncy Castle PKIX, CMS, EAC, TSP, PKCS, OCSP, CMP, and CRMF APIs",
       "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
     },
+    "org.bouncycastle:bcpkix-jdk18on:1.85": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle PKIX, CMS, EAC, TSP, PKCS, OCSP, CMP, and CRMF APIs",
+      "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
+    },
     "org.bouncycastle:bcutil-jdk18on:1.80.2": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle ASN.1 Extension and Utility APIs",
+      "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
+    },
+    "org.bouncycastle:bcutil-jdk18on:1.85": {
       "licenses": [
         "Bouncy Castle Licence"
       ],
@@ -765,7 +807,21 @@
       "name": "spring-cloud-kubernetes-client-autoconfig",
       "url": "https://cloud.spring.io/spring-cloud-kubernetes-client-autoconfig"
     },
+    "org.springframework.cloud:spring-cloud-kubernetes-client-autoconfig:5.0.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-kubernetes-client-autoconfig",
+      "url": "https://cloud.spring.io/spring-cloud-kubernetes-client-autoconfig"
+    },
     "org.springframework.cloud:spring-cloud-kubernetes-client-config:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-kubernetes-client-config",
+      "url": "https://cloud.spring.io/spring-cloud-kubernetes-client-config"
+    },
+    "org.springframework.cloud:spring-cloud-kubernetes-client-config:5.0.3": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -779,7 +835,21 @@
       "name": "spring-cloud-kubernetes-commons",
       "url": "https://cloud.spring.io/spring-cloud-kubernetes-commons"
     },
+    "org.springframework.cloud:spring-cloud-kubernetes-commons:5.0.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-kubernetes-commons",
+      "url": "https://cloud.spring.io/spring-cloud-kubernetes-commons"
+    },
     "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Cloud Kubernetes :: Kubernetes Native Starter :: Config",
+      "url": "https://cloud.spring.io/spring-cloud-starter-kubernetes-client-config"
+    },
+    "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config:5.0.3": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -800,7 +870,21 @@
       "name": "AWS Java SDK :: HTTP Clients :: Apache",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:apache5-client:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Clients :: Apache5",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:arns:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Arns",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:arns:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -814,7 +898,21 @@
       "name": "AWS Java SDK :: Auth",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:auth:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Auth",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:aws-core:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: AWS Core",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:aws-core:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -828,7 +926,21 @@
       "name": "AWS Java SDK :: Core :: Protocols :: AWS Query Protocol",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:aws-query-protocol:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Core :: Protocols :: AWS Query Protocol",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:http-auth-aws-eventstream:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Auth Event Stream",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:http-auth-aws-eventstream:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -842,7 +954,21 @@
       "name": "AWS Java SDK :: HTTP Auth",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:http-auth:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Auth",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:netty-nio-client:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: HTTP Clients :: Netty Non-Blocking I/O",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:netty-nio-client:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -856,6 +982,13 @@
       "name": "AWS Java SDK :: Core :: Protocols :: Protocol Core",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:protocol-core:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Core :: Protocols :: Protocol Core",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:sts:2.40.1": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -863,7 +996,21 @@
       "name": "AWS Java SDK :: Services :: AWS STS",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "software.amazon.awssdk:sts:2.54.10": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Services :: AWS STS",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "software.amazon.awssdk:utils-lite:2.40.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK :: Utils Lite",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "software.amazon.awssdk:utils-lite:2.54.10": {
       "licenses": [
         "Apache License, Version 2.0"
       ],

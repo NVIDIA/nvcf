@@ -105,6 +105,13 @@
       "name": "Apache Commons Collections",
       "url": "https://commons.apache.org/proper/commons-collections/"
     },
+    "org.apache.commons:commons-collections4:4.6.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Collections",
+      "url": "https://commons.apache.org/proper/commons-collections/"
+    },
     "org.apache.tomcat.embed:tomcat-embed-core:11.0.24": {
       "licenses": [
         "Apache License, Version 2.0"
