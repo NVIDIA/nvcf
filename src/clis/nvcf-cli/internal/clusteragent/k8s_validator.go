@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -408,7 +409,7 @@ func (v *k8sValidator) ValidateDeployment(ctx context.Context, functionID, versi
 	}
 	instances := extractInstances(match)
 	out.Checks = append(out.Checks,
-		checkPodReadiness(ctx, v.cs, matchNamespace, instances),
+		checkPodReadiness(ctx, v.cs, v.dc, matchNamespace, instances),
 		checkQueueHealth(match, instances),
 		checkGPUUtilization(cc.backend),
 	)
@@ -420,13 +421,20 @@ func (v *k8sValidator) ValidateDeployment(ctx context.Context, functionID, versi
 // last crash, not just its current state, is the relevant signal.
 const podReadinessRestartThreshold = int32(3)
 
+// utilsPodName is the fixed name NVCA gives the sidecar Pod it uses as the
+// health signal for an entire MiniService (Helm) release: NVCA's own status
+// reconciler reduces "is this MiniService healthy" to this Pod's readiness
+// the same way checkPodReadiness does for a plain container function's Pod.
+const utilsPodName = "utils"
+
 // checkPodReadiness fails when no instances are running or any instance's
-// backing Pod isn't ready. For Pod-backed instances this reads the actual
-// Pod (PodReady condition, container termination/restart state) instead of
-// the ICMSRequest CR's mirrored status string, which can lag or omit a crash
-// NVCA hasn't reconciled forward yet. MiniService (Helm)-backed instances
-// aren't a single Pod, so they still fall back to the CR-reported status.
-func checkPodReadiness(ctx context.Context, cs kubernetes.Interface, namespace string, instances []Instance) CheckResult {
+// backing Pod isn't ready. It reads the actual Pod (PodReady condition,
+// container termination/restart state) instead of the ICMSRequest CR's
+// mirrored status string, which can lag or omit a crash NVCA hasn't
+// reconciled forward yet: for a plain container function that's the Pod
+// named after the instance ID directly; for a MiniService (Helm) instance
+// it's the "utils" Pod in the dedicated namespace the MiniService CR names.
+func checkPodReadiness(ctx context.Context, cs kubernetes.Interface, dc dynamic.Interface, namespace string, instances []Instance) CheckResult {
 	res := CheckResult{Name: "pod-readiness"}
 	if len(instances) == 0 {
 		res.Status = CheckFailed
@@ -434,7 +442,17 @@ func checkPodReadiness(ctx context.Context, cs kubernetes.Interface, namespace s
 		return res
 	}
 	for _, in := range instances {
-		if !isPodBackedInstance(in) {
+		var pod *corev1.Pod
+		var err error
+		switch {
+		case isPodBackedInstance(in):
+			pod, err = cs.CoreV1().Pods(namespace).Get(ctx, in.ID, metav1.GetOptions{})
+		case in.Type == "MiniService":
+			pod, err = getMiniServiceUtilsPod(ctx, dc, cs, in.ID)
+		default:
+			// Unrecognized instance type: don't guess which resource kind
+			// backs it. Fall back to the CR-reported status rather than
+			// silently skipping.
 			if instanceUnhealthy(in) {
 				res.Status = CheckFailed
 				res.Message = fmt.Sprintf("instance %s is unhealthy (status=%s lastReported=%s)", in.ID, orUnknown(in.Status), orUnknown(in.LastReportedStatus))
@@ -442,7 +460,6 @@ func checkPodReadiness(ctx context.Context, cs kubernetes.Interface, namespace s
 			}
 			continue
 		}
-		pod, err := cs.CoreV1().Pods(namespace).Get(ctx, in.ID, metav1.GetOptions{})
 		if err != nil {
 			res.Status = CheckFailed
 			if apierrors.IsNotFound(err) {
@@ -473,6 +490,23 @@ func isPodBackedInstance(in Instance) bool {
 	default:
 		return false
 	}
+}
+
+// getMiniServiceUtilsPod resolves a MiniService instance to its utils Pod.
+// The MiniService CR (cluster-scoped, keyed by instance ID -- the same
+// lookup killMatching's evictInstances already uses to delete it) carries
+// the dedicated namespace NVCA created for that release; the utils Pod lives
+// there under the fixed name NVCA itself relies on.
+func getMiniServiceUtilsPod(ctx context.Context, dc dynamic.Interface, cs kubernetes.Interface, instanceID string) (*corev1.Pod, error) {
+	ms, err := dc.Resource(miniServiceGVR).Get(ctx, instanceID, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("reading MiniService %s: %w", instanceID, err)
+	}
+	msNamespace, found, err := unstructured.NestedString(ms.Object, "spec", "namespace")
+	if err != nil || !found || msNamespace == "" {
+		return nil, fmt.Errorf("MiniService %s has no spec.namespace", instanceID)
+	}
+	return cs.CoreV1().Pods(msNamespace).Get(ctx, utilsPodName, metav1.GetOptions{})
 }
 
 // podUnhealthyReason reports why a Pod isn't ready, checked in order of how

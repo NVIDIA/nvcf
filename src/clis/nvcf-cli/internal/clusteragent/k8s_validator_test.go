@@ -48,6 +48,7 @@ func newFakeValidator(httpCli *http.Client, dynObjs, k8sObjs []runtime.Object) *
 	gvrToListKind := map[schema.GroupVersionResource]string{
 		nvcfBackendGVR: "NVCFBackendList",
 		icmsRequestGVR: "ICMSRequestList",
+		miniServiceGVR: "MiniServiceList",
 	}
 	dc := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind, dynObjs...)
 	cs := k8sfake.NewSimpleClientset(k8sObjs...)
@@ -490,13 +491,72 @@ func TestValidateDeploymentPodReadinessFailsWhenPodMissing(t *testing.T) {
 	}
 }
 
-// TestValidateDeploymentPodReadinessFallsBackForMiniServiceInstances confirms
-// MiniService (Helm)-backed instances -- which aren't a single Pod -- still
-// use the CR-reported status instead of attempting (and failing) a Pod fetch.
-func TestValidateDeploymentPodReadinessFallsBackForMiniServiceInstances(t *testing.T) {
+// icmsWithMiniServiceInstance builds an ICMSRequest with one MiniService-typed
+// instance, plus the MiniService CR it resolves to.
+func icmsWithMiniServiceInstance(ns, name, fid, vid, requestStatus, instanceID, crStatus, msNamespace string) (*unstructured.Unstructured, *unstructured.Unstructured) {
+	req := icmsWithInstances(ns, name, fid, vid, requestStatus, nil)
+	unstructured.SetNestedMap(req.Object, map[string]interface{}{
+		instanceID: map[string]interface{}{"id": instanceID, "type": "MiniService", "status": crStatus},
+	}, "status", "instances")
+
+	ms := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "nvca.nvcf.nvidia.io/v1alpha1",
+		"kind":       "MiniService",
+		"metadata":   map[string]interface{}{"name": instanceID},
+		"spec":       map[string]interface{}{"namespace": msNamespace},
+	}}
+	return req, ms
+}
+
+// TestValidateDeploymentPodReadinessPassesForHealthyMiniServiceInstance
+// confirms a MiniService (Helm)-backed instance is checked the same way as a
+// plain container function's Pod: resolved to its "utils" Pod via the
+// MiniService CR's spec.namespace, not just trusted from the CR status string.
+func TestValidateDeploymentPodReadinessPassesForHealthyMiniServiceInstance(t *testing.T) {
+	req, ms := icmsWithMiniServiceInstance(testRequestsNS, "r1", "fn-1", "v1", statusCompleted, "inst-a", "Active", "ms-inst-a-ns")
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{validatorBackend(testSystemNS, agentStatusHealthy, 8, 5), req, ms},
+		[]runtime.Object{fakePod("ms-inst-a-ns", utilsPodName, corev1.ConditionTrue)},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	if got := checkByName(t, out.Checks, "pod-readiness"); got.Status != CheckPassed {
+		t.Errorf("pod-readiness = %s, want PASS (%s)", got.Status, got.Message)
+	}
+}
+
+// TestValidateDeploymentPodReadinessFailsForCrashedMiniServiceUtilsPod is the
+// MiniService analogue of the crashed-container regression test: the CR
+// status looks clean, but the release's utils Pod has actually crashed.
+func TestValidateDeploymentPodReadinessFailsForCrashedMiniServiceUtilsPod(t *testing.T) {
+	req, ms := icmsWithMiniServiceInstance(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, "inst-a", "Active", "ms-inst-a-ns")
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{validatorBackend(testSystemNS, agentStatusHealthy, 8, 5), req, ms},
+		[]runtime.Object{fakeTerminatedPod("ms-inst-a-ns", utilsPodName, "utils", 1, "Error")},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	if got := checkByName(t, out.Checks, "pod-readiness"); got.Status != CheckFailed {
+		t.Errorf("pod-readiness = %s, want FAIL (%s)", got.Status, got.Message)
+	}
+}
+
+// TestValidateDeploymentPodReadinessFallsBackForUnrecognizedInstanceType
+// covers a genuinely unrecognized instance type, where the check can't know
+// which resource kind backs it and falls back to the CR-reported status
+// rather than guessing or silently skipping.
+func TestValidateDeploymentPodReadinessFallsBackForUnrecognizedInstanceType(t *testing.T) {
 	req := icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusCompleted, nil)
 	unstructured.SetNestedMap(req.Object, map[string]interface{}{
-		"inst-a": map[string]interface{}{"id": "inst-a", "type": "MiniService", "status": "Active"},
+		"inst-a": map[string]interface{}{"id": "inst-a", "type": "SomeFutureInstanceType", "status": "Active"},
 	}, "status", "instances")
 
 	v := newFakeValidator(nil,
