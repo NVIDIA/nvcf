@@ -23,7 +23,7 @@ RUN apk add --no-cache curl tar && \
         -ldflags="-s -w -buildid= -X main.version=${JWKER_BUILD_VERSION} -X main.commit=${JWKER_COMMIT} -X main.date=${JWKER_BUILD_DATE}" \
         -o /out/jwker ./cmd/jwker
 
-FROM alpine:${ALPINE_VERSION} AS kubectl-downloader
+FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS kubectl-downloader
 
 ARG TARGETARCH
 ARG KUBECTL_VERSION=v1.36.4
