@@ -34,6 +34,7 @@ USER root
 # Upgrade packages inherited from the upstream image before installing the
 # runtime tools. This ensures security fixes from the pinned Alpine branch are
 # applied even when the upstream image predates them.
+USER root
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache && \
     apk add --no-cache curl jq bash && \
