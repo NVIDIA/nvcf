@@ -959,19 +959,31 @@ type notFoundInstanceKey struct {
 func (c *BackendK8sCache) enqueueNotFoundInstancesOnDelete(ctx context.Context, obj interface{}) {
 	log := core.GetLogger(ctx)
 
+	// No worker drains notFoundInstanceWQ without a reporter (see the guard
+	// on the worker startup in Start()), so enqueueing here would just leak
+	// entries for the process lifetime. The periodic instance status sync
+	// remains the fallback in builds that don't wire a reporter.
+	if c.notFoundInstanceReporter == nil {
+		return
+	}
+
 	req, ok := obj.(*nvcav2beta1new.ICMSRequest)
 	if !ok {
-		if _, isTombstone := obj.(cache.DeletedFinalStateUnknown); isTombstone {
+		tombstone, isTombstone := obj.(cache.DeletedFinalStateUnknown)
+		if !isTombstone {
+			log.Errorf("Wrong object type in ICMS request delete event handler: %T", obj)
+			return
+		}
+		req, ok = tombstone.Obj.(*nvcav2beta1new.ICMSRequest)
+		if !ok {
 			// The informer lost the object before delivering its delete
-			// event, so its last known status.instances isn't available
-			// here. The periodic instance status sync remains the fallback
-			// for this case.
+			// event, and the tombstone's last-known object isn't an
+			// ICMSRequest either, so status.instances isn't available here.
+			// The periodic instance status sync remains the fallback.
 			log.Warn("ICMS request delete tombstone: last known instance status unavailable, " +
 				"deferring to periodic instance status sync")
 			return
 		}
-		log.Errorf("Wrong object type in ICMS request delete event handler: %T", obj)
-		return
 	}
 
 	for instanceID := range req.Status.Instances {
@@ -1271,7 +1283,15 @@ func (c *BackendK8sCache) processNotFoundInstanceWork(ctx context.Context) bool 
 		"requestID":  key.RequestID,
 		"instanceID": key.InstanceID,
 	})
-	if err := c.notFoundInstanceReporter(ctx, key.RequestID, key.InstanceID); err != nil {
+	err := nvcaotel.InvokeWithSpan(ctx, c.tracer, "nvca.BackendK8sCache.ReportNotFoundInstance",
+		func(ctx context.Context) error {
+			return c.notFoundInstanceReporter(ctx, key.RequestID, key.InstanceID)
+		},
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+		oteltrace.WithAttributes(
+			otelattr.String(nvcaotel.ICMSRequestIDAttributeKey, key.RequestID),
+			otelattr.String("nvcf.instance.id", key.InstanceID)))
+	if err != nil {
 		log.WithError(err).Error("Failed to report not-found instance as terminated, requeuing")
 		c.notFoundInstanceWQ.AddRateLimited(obj)
 		return true
