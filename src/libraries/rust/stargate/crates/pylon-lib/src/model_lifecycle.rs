@@ -848,73 +848,6 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct BlockingKvCacheState {
-        blocked: Arc<AtomicBool>,
-        blocked_polls: Arc<AtomicUsize>,
-        released: Arc<Notify>,
-    }
-
-    struct BlockingKvCacheServer {
-        server: TestHttpServer,
-        blocked: Arc<AtomicBool>,
-        blocked_polls: Arc<AtomicUsize>,
-        released: Arc<Notify>,
-    }
-
-    impl BlockingKvCacheServer {
-        async fn spawn() -> Self {
-            let blocked = Arc::new(AtomicBool::new(false));
-            let blocked_polls = Arc::new(AtomicUsize::new(0));
-            let released = Arc::new(Notify::new());
-            let state = BlockingKvCacheState {
-                blocked: blocked.clone(),
-                blocked_polls: blocked_polls.clone(),
-                released: released.clone(),
-            };
-            let server = TestHttpServer::spawn(
-                Router::new()
-                    .route("/kv-cache", get(test_kv_cache))
-                    .with_state(state),
-            )
-            .await;
-            Self {
-                server,
-                blocked,
-                blocked_polls,
-                released,
-            }
-        }
-
-        fn url(&self) -> String {
-            format!("{}/kv-cache", self.server.as_str())
-        }
-
-        fn block(&self) {
-            self.blocked.store(true, Ordering::SeqCst);
-        }
-
-        fn unblock(&self) {
-            self.blocked.store(false, Ordering::SeqCst);
-            self.released.notify_waiters();
-        }
-
-        fn blocked_poll_count(&self) -> usize {
-            self.blocked_polls.load(Ordering::SeqCst)
-        }
-
-        async fn wait_for_blocked_poll_after(&self, count: usize) {
-            wait_for("KV-cache stats poll should block", || {
-                self.blocked_polls.load(Ordering::SeqCst) > count
-            })
-            .await;
-        }
-
-        async fn shutdown(self) {
-            self.server.shutdown().await;
-        }
-    }
-
     async fn test_models(State(state): State<TestUpstreamState>) -> Response {
         state.discovery_polls.fetch_add(1, Ordering::SeqCst);
         state.discovery_polled.notify_one();
@@ -986,26 +919,6 @@ mod tests {
         }
     }
 
-    async fn test_kv_cache(State(state): State<BlockingKvCacheState>) -> Response {
-        if state.blocked.load(Ordering::SeqCst) {
-            state.blocked_polls.fetch_add(1, Ordering::SeqCst);
-            loop {
-                let released = state.released.notified();
-                if !state.blocked.load(Ordering::SeqCst) {
-                    break;
-                }
-                released.await;
-            }
-        }
-        Json(json!({
-            "model": "model-a",
-            "kv_cache_capacity_tokens": 1000,
-            "kv_cache_used_tokens": 400,
-            "kv_cache_free_tokens": 600
-        }))
-        .into_response()
-    }
-
     fn discovery_config(base_url: &str) -> ModelLifecycleConfig {
         ModelLifecycleConfig {
             upstream_http_base_url: base_url.to_string(),
@@ -1062,8 +975,17 @@ mod tests {
             .iter()
             .map(|model_id| (*model_id).to_string())
             .collect::<Vec<_>>();
-        wait_for("advertised model set should converge", || {
-            runtime_state.advertised_model_ids() == expected
+        wait_for("active model set should converge", || {
+            let mut active = runtime_state
+                .advertised_models()
+                .into_iter()
+                .filter_map(|(model_id, registration)| {
+                    (registration.status == InferenceServerStatus::Active as i32)
+                        .then_some(model_id)
+                })
+                .collect::<Vec<_>>();
+            active.sort_unstable();
+            active == expected
         })
         .await;
     }
@@ -1272,15 +1194,7 @@ mod tests {
 
     #[tokio::test]
     async fn retire_cancels_canary_before_removing_runtime_generation() {
-        let kv_cache = BlockingKvCacheServer::spawn().await;
-        let stats_config = StatsCollectorConfig {
-            kv_cache_stats_url: Some(kv_cache.url()),
-            // Poll quickly and keep the request open so retirement parks on
-            // stats cleanup after the canary ordering point under test.
-            kv_cache_poll_interval: Duration::from_millis(1),
-            kv_cache_request_timeout: Duration::from_secs(60),
-            ..StatsCollectorConfig::default()
-        };
+        let stats_config = StatsCollectorConfig::default();
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &[],
@@ -1344,9 +1258,6 @@ mod tests {
             next_poll_at: None,
         };
 
-        let blocked_polls = kv_cache.blocked_poll_count();
-        kv_cache.block();
-        kv_cache.wait_for_blocked_poll_after(blocked_polls).await;
         let retire_generation = generation.clone();
         let retire = tokio::spawn(async move {
             supervisor.retire(&retire_generation).await;
@@ -1367,12 +1278,8 @@ mod tests {
             "normal retirement must not look like an unexpected canary exit"
         );
 
-        kv_cache.unblock();
-        let _supervisor = retire
-            .await
-            .expect("retirement task should not panic after stats resumes");
+        let _supervisor = retire.await.expect("retirement task should not panic");
         stats.shutdown().await;
-        kv_cache.shutdown().await;
     }
 
     #[tokio::test]
@@ -1796,7 +1703,11 @@ mod tests {
 
         upstream.set_models(&["model-a"]).await;
         let retired = upstream.next_calibration().await;
-        assert!(runtime_state.advertised_model_ids().is_empty());
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-a"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         upstream.set_models(&[]).await;
         wait_for_generation_retirement(&runtime_state, "model-a").await;
         let polls = upstream.discovery_polls.load(Ordering::SeqCst);
@@ -1891,11 +1802,19 @@ mod tests {
             error_observed,
             "the first failed attempt should be recorded"
         );
-        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a", "model-b"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-b"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         let second_attempt = upstream.next_calibration().await;
         assert_eq!(second_attempt.model_id(), "model-b");
         assert_eq!(first_attempt, second_attempt);
-        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a", "model-b"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-b"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         wait_for_calibration_count(&metrics, "model-b", "error", 2).await;
 
         failing.store(false, Ordering::SeqCst);
@@ -2222,7 +2141,11 @@ mod tests {
             runtime_state.current_generation("model-a"),
             Some(generation.clone())
         );
-        assert!(runtime_state.advertised_model_ids().is_empty());
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-a"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         wait_for_model_ids(&runtime_state, &["model-a"]).await;
         assert_eq!(
             runtime_state.current_generation("model-a"),

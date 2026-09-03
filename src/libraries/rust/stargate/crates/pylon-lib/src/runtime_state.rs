@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -47,6 +47,7 @@ pub struct CurrentModelStats {
     pub kv_cache_capacity_tokens: u64,
     pub kv_cache_used_tokens: u64,
     pub kv_cache_free_tokens: u64,
+    pub kv_cache: Option<CurrentKvCacheStats>,
     pub num_running_queries: u64,
     pub max_engine_concurrency: Option<u64>,
     pub total_query_input_size: u64,
@@ -56,6 +57,14 @@ pub struct CurrentModelStats {
     pub stats_observed_at_unix_ms: u64,
     pub stats_capabilities: Vec<String>,
     pub stats_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentKvCacheStats {
+    pub capacity_tokens: u64,
+    pub used_tokens: u64,
+    pub free_tokens: u64,
+    pub source_observed_at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -107,7 +116,9 @@ pub(crate) enum RequestGenerationAdmission {
 struct AdvertisedRuntimeState {
     base_status: InferenceServerStatus,
     require_admitted_generation: bool,
+    require_relay_load: bool,
     models: HashMap<String, RuntimeModelState>,
+    relay_models: BTreeMap<String, bool>,
 }
 
 impl AdvertisedRuntimeState {
@@ -129,6 +140,7 @@ struct RuntimeModelState {
     generation: u64,
     stats: CurrentModelStats,
     publication: ModelPublication,
+    relay_ready: bool,
 }
 
 #[derive(Debug, Default)]
@@ -165,7 +177,9 @@ impl PylonRuntimeState {
             advertised: Arc::new(Mutex::new(AdvertisedRuntimeState {
                 base_status: initial_status,
                 require_admitted_generation: true,
+                require_relay_load: false,
                 models,
+                relay_models: BTreeMap::new(),
             })),
             live_requests: LiveRequestState::default(),
             metrics: None,
@@ -190,6 +204,28 @@ impl PylonRuntimeState {
         self.advertised.lock().base_status = status;
     }
 
+    pub(crate) fn require_relay_load(&self, required: bool) {
+        self.advertised.lock().require_relay_load = required;
+    }
+
+    pub(crate) fn replace_relay_models(&self, models: BTreeMap<String, bool>) {
+        let mut advertised = self.advertised.lock();
+        for (model_id, model) in &mut advertised.models {
+            model.relay_ready = models.get(model_id).copied().unwrap_or(false);
+        }
+        advertised.relay_models = models;
+    }
+
+    pub(crate) fn mark_relay_load_unavailable(&self) {
+        let mut advertised = self.advertised.lock();
+        for model in advertised.models.values_mut() {
+            model.relay_ready = false;
+        }
+        for ready in advertised.relay_models.values_mut() {
+            *ready = false;
+        }
+    }
+
     pub(crate) fn model_ids(&self) -> Vec<String> {
         let mut model_ids = self
             .advertised
@@ -208,10 +244,16 @@ impl PylonRuntimeState {
         if advertised.models.contains_key(generation.model_id()) {
             return false;
         }
+        let relay_ready = advertised
+            .relay_models
+            .get(generation.model_id())
+            .copied()
+            .unwrap_or(false);
         advertised.models.insert(
             generation.model_id.clone(),
             RuntimeModelState {
                 generation: generation.sequence,
+                relay_ready,
                 ..RuntimeModelState::default()
             },
         );
@@ -232,7 +274,10 @@ impl PylonRuntimeState {
     ) -> RequestGenerationAdmission {
         let advertised = self.advertised.lock();
         match advertised.models.get(model_id) {
-            Some(model) if matches!(model.publication, ModelPublication::Admitted { .. }) => {
+            Some(model)
+                if matches!(model.publication, ModelPublication::Admitted { .. })
+                    && (!advertised.require_relay_load || model.relay_ready) =>
+            {
                 RequestGenerationAdmission::Admitted(ModelGeneration::new(
                     model_id,
                     model.generation,
@@ -355,12 +400,13 @@ impl PylonRuntimeState {
 
     pub(crate) fn advertised_models(&self) -> HashMap<String, InferenceServerModelRegistration> {
         let advertised = self.advertised.lock();
-        advertised
+        let mut registrations = advertised
             .models
             .iter()
-            .filter_map(|(model_id, model)| {
-                let ModelPublication::Admitted { bringup_ready } = model.publication else {
-                    return None;
+            .map(|(model_id, model)| {
+                let bringup_ready = match model.publication {
+                    ModelPublication::Pending => false,
+                    ModelPublication::Admitted { bringup_ready } => bringup_ready,
                 };
                 let stats = &model.stats;
                 let registration = InferenceServerModelRegistration {
@@ -373,6 +419,15 @@ impl PylonRuntimeState {
                         kv_cache_capacity_tokens: stats.kv_cache_capacity_tokens,
                         kv_cache_used_tokens: stats.kv_cache_used_tokens,
                         kv_cache_free_tokens: stats.kv_cache_free_tokens,
+                        kv_cache: stats.kv_cache.as_ref().map(|kv_cache| {
+                            stargate_proto::pb::KvCacheStats {
+                                capacity_tokens: kv_cache.capacity_tokens,
+                                used_tokens: kv_cache.used_tokens,
+                                free_tokens: kv_cache.free_tokens,
+                                source_observed_at_unix_ms: kv_cache.source_observed_at_unix_ms,
+                                complete: true,
+                            }
+                        }),
                         num_running_queries: stats.num_running_queries,
                         max_engine_concurrency: stats.max_engine_concurrency.unwrap_or_default(),
                         total_query_input_size: stats.total_query_input_size,
@@ -386,23 +441,35 @@ impl PylonRuntimeState {
                         stats_capabilities: stats.stats_capabilities.clone(),
                         stats_sources: stats.stats_sources.clone(),
                     }),
-                    status: gated_model_status(advertised.base_status, bringup_ready).into(),
+                    status: gated_model_status(
+                        advertised.base_status,
+                        bringup_ready && (!advertised.require_relay_load || model.relay_ready),
+                    )
+                    .into(),
                 };
-                Some((model_id.clone(), registration))
+                (model_id.clone(), registration)
             })
-            .collect()
+            .collect::<HashMap<_, _>>();
+        for model_id in advertised.relay_models.keys() {
+            registrations.entry(model_id.clone()).or_insert_with(|| {
+                InferenceServerModelRegistration {
+                    stats: Some(ModelStats::default()),
+                    status: InferenceServerStatus::Inactive.into(),
+                }
+            });
+        }
+        registrations
     }
 
     pub fn advertised_model_ids(&self) -> Vec<String> {
         let advertised = self.advertised.lock();
-        let mut model_ids = advertised
+        let model_ids = advertised
             .models
-            .iter()
-            .filter(|(_, model)| matches!(model.publication, ModelPublication::Admitted { .. }))
-            .map(|(model_id, _)| model_id.clone())
-            .collect::<Vec<_>>();
-        model_ids.sort_unstable();
-        model_ids
+            .keys()
+            .chain(advertised.relay_models.keys())
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        model_ids.into_iter().collect()
     }
 
     pub fn observe_request(&self, observation: RequestObservation) {
@@ -502,10 +569,6 @@ impl PylonRuntimeState {
             .update_active_output_tps(request_id, active_chat_output_tps)
     }
 
-    pub(crate) fn request_generation(&self, request_id: &str) -> Option<ModelGeneration> {
-        self.live_requests.request_generation(request_id)
-    }
-
     pub(crate) fn snapshot_live_model(&self, model_id: &str) -> QueueModelSnapshot {
         self.current_generation(model_id)
             .map_or_else(QueueModelSnapshot::default, |generation| {
@@ -583,6 +646,7 @@ pub(crate) fn gated_model_status(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
     use stargate_proto::pb::InferenceServerStatus;
@@ -708,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_generation_is_omitted_until_exact_publication() {
+    fn pending_generation_is_advertised_inactive_until_exact_publication() {
         let runtime_state = PylonRuntimeState::new(InferenceServerStatus::Active, &[]);
         let generation = ModelGeneration::new("model-a", 1);
 
@@ -721,7 +785,10 @@ mod tests {
             runtime_state.request_generation_admission("model-a"),
             RequestGenerationAdmission::Unavailable
         );
-        assert!(runtime_state.advertised_models().is_empty());
+        assert_eq!(
+            runtime_state.advertised_models()["model-a"].status,
+            InferenceServerStatus::Inactive as i32
+        );
 
         assert!(runtime_state.publish_generation(&generation));
         assert_eq!(
@@ -735,6 +802,59 @@ mod tests {
                 .cloned()
                 .collect::<Vec<_>>(),
             ["model-a"]
+        );
+        assert_eq!(
+            runtime_state.advertised_models()["model-a"].status,
+            InferenceServerStatus::Active as i32
+        );
+    }
+
+    #[test]
+    fn frontend_and_relay_model_union_is_advertised_with_intersection_active() {
+        let runtime_state = PylonRuntimeState::new(InferenceServerStatus::Active, &[]);
+        runtime_state.require_relay_load(true);
+        runtime_state.replace_relay_models(BTreeMap::from([("relay-only".to_string(), true)]));
+
+        assert_eq!(runtime_state.current_generation("relay-only"), None);
+        assert_eq!(
+            runtime_state.advertised_models()["relay-only"].status,
+            InferenceServerStatus::Inactive as i32
+        );
+
+        let relay_generation = ModelGeneration::new("relay-only", 1);
+        assert!(runtime_state.begin_generation(relay_generation.clone()));
+        assert!(runtime_state.publish_generation(&relay_generation));
+        assert_eq!(
+            runtime_state.advertised_models()["relay-only"].status,
+            InferenceServerStatus::Active as i32
+        );
+
+        assert!(runtime_state.retire_generation(&relay_generation).is_some());
+        assert_eq!(runtime_state.current_generation("relay-only"), None);
+        assert_eq!(
+            runtime_state.advertised_models()["relay-only"].status,
+            InferenceServerStatus::Inactive as i32
+        );
+
+        let frontend_generation = ModelGeneration::new("frontend-only", 2);
+        assert!(runtime_state.begin_generation(frontend_generation.clone()));
+        assert!(runtime_state.publish_generation(&frontend_generation));
+        assert_eq!(
+            runtime_state.advertised_models()["frontend-only"].status,
+            InferenceServerStatus::Inactive as i32
+        );
+
+        runtime_state.replace_relay_models(BTreeMap::from([
+            ("frontend-only".to_string(), true),
+            ("relay-only".to_string(), true),
+        ]));
+        assert_eq!(
+            runtime_state.advertised_models()["frontend-only"].status,
+            InferenceServerStatus::Active as i32
+        );
+        assert_eq!(
+            runtime_state.advertised_model_ids(),
+            ["frontend-only", "relay-only"]
         );
     }
 
@@ -759,7 +879,10 @@ mod tests {
             runtime_state.model_stats("model-a"),
             Some(super::CurrentModelStats::default())
         );
-        assert!(runtime_state.advertised_models().is_empty());
+        assert_eq!(
+            runtime_state.advertised_models()["model-a"].status,
+            InferenceServerStatus::Inactive as i32
+        );
     }
 
     #[test]

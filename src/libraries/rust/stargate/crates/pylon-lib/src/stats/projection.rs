@@ -21,9 +21,9 @@ use crate::runtime_state::ModelGeneration;
 use crate::{CurrentModelStats, RequestObservation, RequestObservationEvent};
 
 use super::aggregator::{
-    EmbeddingThroughputSample, InputThroughputSample, KvCacheStatsSnapshot, ModelMetricsState,
-    ModelStatsSnapshotInputs, StatsAggregator, apply_input_throughput_sample, current_unix_millis,
-    output_decode_duration, push_sample, tps_for_units,
+    EmbeddingThroughputSample, InputThroughputSample, KvCacheStatsEnvelope, KvCacheStatsSnapshot,
+    ModelMetricsState, ModelStatsSnapshotInputs, StatsAggregator, apply_input_throughput_sample,
+    current_unix_millis, output_decode_duration, push_sample, tps_for_units,
 };
 use super::collector::{
     FinalizeRequestUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsCollectorConfig,
@@ -92,18 +92,45 @@ impl StatsAggregator {
                 })
     }
 
+    #[cfg(test)]
     pub(super) fn apply_kv_cache_stats(
         &mut self,
         kv_cache: KvCacheStatsSnapshot,
     ) -> Option<super::aggregator::ModelStatsUpdate> {
         let model_id = kv_cache.model.clone();
         let model_state = self.per_model.get_mut(&model_id)?;
-        model_state.metrics.kv_cache = kv_cache;
+        model_state.metrics.kv_cache = valid_kv_cache(&kv_cache).then_some(kv_cache);
         model_state.metrics.kv_cache_stats_observed = true;
         model_state.metrics.stats_observed_at_unix_ms = current_unix_millis();
         let generation = model_state.generation.clone();
         let stats = self.snapshot(&model_id);
         Some((generation, stats))
+    }
+
+    pub(super) fn apply_kv_cache_snapshot(
+        &mut self,
+        snapshot: KvCacheStatsEnvelope,
+    ) -> Vec<super::aggregator::ModelStatsUpdate> {
+        let model_ids = self.per_model.keys().cloned().collect::<Vec<_>>();
+        let mut changed = Vec::new();
+        for model_id in model_ids {
+            let observed = snapshot.models.iter().find(|model| {
+                model.model == model_id || model.aliases.iter().any(|alias| alias == &model_id)
+            });
+            let next = observed.filter(|model| valid_kv_cache(model)).cloned();
+            let model_state = self
+                .per_model
+                .get_mut(&model_id)
+                .expect("model id came from the current generation map");
+            if model_state.metrics.kv_cache == next {
+                continue;
+            }
+            model_state.metrics.kv_cache = next;
+            model_state.metrics.kv_cache_stats_observed |= observed.is_some();
+            model_state.metrics.stats_observed_at_unix_ms = current_unix_millis();
+            changed.push(model_id);
+        }
+        self.snapshots(changed)
     }
 
     pub(super) fn snapshot(&self, model_id: &str) -> CurrentModelStats {
@@ -251,6 +278,15 @@ impl StatsAggregator {
             })
             .collect()
     }
+}
+
+fn valid_kv_cache(snapshot: &KvCacheStatsSnapshot) -> bool {
+    snapshot.complete
+        && snapshot.kv_cache_capacity_tokens > 0
+        && snapshot
+            .kv_cache_used_tokens
+            .checked_add(snapshot.kv_cache_free_tokens)
+            == Some(snapshot.kv_cache_capacity_tokens)
 }
 
 pub(super) fn fallback_update_from_observation(

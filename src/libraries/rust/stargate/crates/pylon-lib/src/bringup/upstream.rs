@@ -119,6 +119,9 @@ pub(super) async fn send_completion_request(
         .header(HEADER_MODEL, model_id)
         .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
         .json(request);
+    if let Some(observer) = observer.as_mut() {
+        observer.on_upstream_send();
+    }
     let response = match timeout {
         Some(timeout) => request.timeout(timeout),
         None => request,

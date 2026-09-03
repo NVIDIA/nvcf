@@ -203,7 +203,7 @@ pub(crate) async fn chat_completions(
     let request_id = optional_header(&headers, "x-request-id").unwrap_or_else(|| id.clone());
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
     if stream {
-        state.emit_counters(&request_id, &model, 0, 0, false);
+        state.emit_counters(&request_id, &model, input_tokens, 0, false);
     }
     let kv_cache_access = state
         .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
@@ -297,9 +297,9 @@ pub(crate) async fn responses(
     let output_tokens = response_output_tokens(&headers, &req, state.num_tokens);
     let id = format!("resp-mock-{}", rand_id());
     info!(id = %id, model = %model, "received responses request");
-    let request_id = optional_header(&headers, "x-request-id").unwrap_or_default();
+    let request_id = optional_header(&headers, "x-request-id").unwrap_or_else(|| id.clone());
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
-    state.emit_counters(&request_id, &model, 0, 0, false);
+    state.emit_counters(&request_id, &model, input_tokens, 0, false);
     let kv_cache_access = state
         .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
         .await;
@@ -435,12 +435,14 @@ impl AppState {
         output_tokens: impl Into<Option<usize>>,
         finished: bool,
     ) {
-        let _ = self.stats_events.send(StatsStreamEvent::Stats {
-            v: 1,
+        let _ = self.stats_events.send(StatsStreamEvent {
             request_id: request_id.to_string(),
             model: model.to_string(),
-            tokens_processed: Some(input_tokens as u64),
-            tokens_generated: output_tokens.into().map(|tokens| tokens as u64),
+            input_tokens: u64::try_from(input_tokens).unwrap_or(u64::MAX),
+            output_tokens: output_tokens
+                .into()
+                .and_then(|tokens| u64::try_from(tokens).ok())
+                .unwrap_or_default(),
             finished,
         });
     }
@@ -617,4 +619,8 @@ fn rand_id() -> String {
 
 fn current_unix_timestamp() -> u64 {
     time_since_epoch().as_secs()
+}
+
+pub(crate) fn unix_millis() -> u64 {
+    u64::try_from(time_since_epoch().as_millis()).unwrap_or(u64::MAX)
 }

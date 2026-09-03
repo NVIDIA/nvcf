@@ -36,6 +36,7 @@ macro_rules! owned_task_handle {
 mod aggregator;
 mod collector;
 mod engine_stats_stream;
+mod kv_stats;
 mod metrics;
 mod projection;
 pub(crate) mod token_metrics;
@@ -48,7 +49,7 @@ pub use collector::{
 };
 pub use engine_stats_stream::{
     EngineStatsStreamConfig, EngineStatsStreamHandle, EngineStatsStreamMode,
-    parse_engine_stats_line_for_benchmark, start_engine_stats_stream,
+    start_engine_stats_stream,
 };
 pub(crate) use metrics::CalibrationOutcome;
 pub use metrics::{MetricsServerHandle, PylonMetrics, start_metrics_server};

@@ -49,7 +49,8 @@ pub enum RequestObservationEndpoint {
 
 #[derive(Debug)]
 enum RequestLifecycleState {
-    UpstreamConnecting,
+    Queued,
+    UpstreamSent,
     Responding(ResponsePhaseData),
     Terminal {
         outcome: RequestTerminalOutcome,
@@ -77,7 +78,8 @@ impl RequestTerminalOutcome {
 impl RequestLifecycleState {
     fn observation_state(&self) -> RequestObservationState {
         match self {
-            Self::UpstreamConnecting => RequestObservationState::UpstreamConnecting,
+            Self::Queued => RequestObservationState::Queued,
+            Self::UpstreamSent => RequestObservationState::InputProcessing,
             Self::Responding(response) if response.first_output_at.is_none() => {
                 RequestObservationState::InputProcessing
             }
@@ -90,7 +92,7 @@ impl RequestLifecycleState {
         match self {
             Self::Responding(response) => Some(response),
             Self::Terminal { response, .. } => response.as_ref(),
-            Self::UpstreamConnecting => None,
+            Self::Queued | Self::UpstreamSent => None,
         }
     }
 }
@@ -180,7 +182,7 @@ impl RequestObserver {
             input_tokens,
             generation,
             embedding_items: None,
-            state: RequestLifecycleState::UpstreamConnecting,
+            state: RequestLifecycleState::Queued,
             runtime_state,
         };
         observer.emit();
@@ -195,14 +197,33 @@ impl RequestObserver {
         }
     }
 
+    pub(crate) fn on_upstream_send(&mut self) {
+        match self.state {
+            RequestLifecycleState::Queued => {}
+            RequestLifecycleState::UpstreamSent
+            | RequestLifecycleState::Responding(_)
+            | RequestLifecycleState::Terminal { .. } => {
+                panic!(
+                    "invalid upstream-send transition for request_id={} from state={:?}",
+                    self.request_id,
+                    self.state.observation_state()
+                )
+            }
+        }
+        self.state = RequestLifecycleState::UpstreamSent;
+        self.emit();
+    }
+
     pub(crate) fn on_upstream_response_headers(
         &mut self,
         _response_headers: &HeaderMap,
         status: u16,
     ) {
         match self.state {
-            RequestLifecycleState::UpstreamConnecting => {}
-            RequestLifecycleState::Responding(_) | RequestLifecycleState::Terminal { .. } => {
+            RequestLifecycleState::UpstreamSent => {}
+            RequestLifecycleState::Queued
+            | RequestLifecycleState::Responding(_)
+            | RequestLifecycleState::Terminal { .. } => {
                 panic!(
                     "invalid response-header transition for request_id={} from state={:?}",
                     self.request_id,
@@ -327,7 +348,9 @@ impl RequestObserver {
                 "invalid finish transition for request_id={} from state={outcome:?}",
                 self.request_id,
             ),
-            RequestLifecycleState::UpstreamConnecting => (RequestTerminalOutcome::Failed, None),
+            RequestLifecycleState::Queued | RequestLifecycleState::UpstreamSent => {
+                (RequestTerminalOutcome::Failed, None)
+            }
         };
         self.state = RequestLifecycleState::Terminal { outcome, response };
 
@@ -345,7 +368,7 @@ impl RequestObserver {
     fn terminate(&mut self, outcome: RequestTerminalOutcome, action: &'static str) {
         let response = match &self.state {
             RequestLifecycleState::Responding(response) => Some(*response),
-            RequestLifecycleState::UpstreamConnecting => None,
+            RequestLifecycleState::Queued | RequestLifecycleState::UpstreamSent => None,
             RequestLifecycleState::Terminal { outcome: prior, .. } => panic!(
                 "invalid {action} transition for request_id={} from state={prior:?}",
                 self.request_id,
@@ -579,6 +602,8 @@ mod tests {
         let (runtime_state, rx) = observed_runtime(8);
         let mut observer = test_observer(request_id, runtime_state);
         recv_observation(&rx, "initial observation should be emitted").await;
+        observer.on_upstream_send();
+        recv_observation(&rx, "upstream-send observation should be emitted").await;
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         let headers = recv_observation(&rx, "response-header observation should be emitted").await;
         (observer, rx, headers)
@@ -707,10 +732,7 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(observations.len(), 2);
             assert_eq!(observations[0].endpoint, endpoint);
-            assert_eq!(
-                observations[0].state,
-                RequestObservationState::UpstreamConnecting
-            );
+            assert_eq!(observations[0].state, RequestObservationState::Queued);
             assert_eq!(observations[1].endpoint, endpoint);
             assert_eq!(observations[1].state, RequestObservationState::Failed);
         }
@@ -730,6 +752,7 @@ mod tests {
                 None,
                 runtime_state,
             );
+            observer.on_upstream_send();
             observer.on_upstream_response_headers(&HeaderMap::new(), 200);
             if let Some(generation) = observer.generation_mut() {
                 generation.observe_output_message();
@@ -778,6 +801,7 @@ mod tests {
         let (runtime_state, rx) = observed_runtime(8);
         let mut observer = RequestObserver::accepted(embeddings_required_headers(), runtime_state);
         observer.update_embedding_items(Some(1));
+        observer.on_upstream_send();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.finish();
         while rx.try_recv().is_ok() {}
@@ -803,6 +827,7 @@ mod tests {
     #[tokio::test]
     async fn counts_sse_events_across_chunk_boundaries() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
+        observer.on_upstream_send();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.observe_output_message();
         observer.observe_output_message();
@@ -823,8 +848,13 @@ mod tests {
         let mut observer = test_observer("req-live", runtime_state);
 
         let initial = recv_observation(&rx, "initial observation should be emitted").await;
-        assert_eq!(initial.state, RequestObservationState::UpstreamConnecting);
+        assert_eq!(initial.state, RequestObservationState::Queued);
         assert!(!initial.is_terminal());
+
+        observer.on_upstream_send();
+        let sent = recv_observation(&rx, "upstream-send observation should be emitted").await;
+        assert_eq!(sent.state, RequestObservationState::InputProcessing);
+        assert!(!sent.is_terminal());
 
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         let first = recv_observation(&rx, "response-header observation should be emitted").await;
@@ -839,16 +869,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upstream_connecting_observation_is_emitted_when_request_starts() {
+    async fn queued_observation_is_emitted_when_request_starts() {
         let (runtime_state, rx) = observed_runtime(8);
         let _observer = test_observer("req-connect", runtime_state);
 
         let observation = recv_observation(&rx, "initial observation should be emitted").await;
         assert_eq!(observation.request_id, "req-connect");
-        assert_eq!(
-            observation.state,
-            RequestObservationState::UpstreamConnecting
-        );
+        assert_eq!(observation.state, RequestObservationState::Queued);
         assert_eq!(observation.upstream_status, None);
         assert!(!observation.is_terminal());
     }
@@ -858,7 +885,7 @@ mod tests {
         let (runtime_state, rx) = observed_runtime(8);
         let observer = test_observer("req-cancel", runtime_state);
         let initial = recv_observation(&rx, "initial observation should be emitted").await;
-        assert_eq!(initial.state, RequestObservationState::UpstreamConnecting);
+        assert_eq!(initial.state, RequestObservationState::Queued);
 
         drop(observer);
 
@@ -870,6 +897,7 @@ mod tests {
     #[tokio::test]
     async fn accumulates_output_tokens() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
+        observer.on_upstream_send();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.observe_output_message();
         observer.observe_output_tokens(3);
@@ -1092,6 +1120,7 @@ mod tests {
     #[test]
     fn finish_without_output_panics() {
         let mut observer = test_observer("req-2", PylonRuntimeState::default());
+        observer.on_upstream_send();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.finish()));
         assert!(panic.is_err());
@@ -1110,6 +1139,7 @@ mod tests {
     #[should_panic(expected = "invalid fail transition")]
     fn fail_after_complete_panics() {
         let mut observer = make_test_observer();
+        observer.on_upstream_send();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.observe_output_message();
         observer.finish();
@@ -1148,6 +1178,7 @@ mod tests {
 
         assert_terminal_response_header_panic(
             |observer| {
+                observer.on_upstream_send();
                 observer.on_upstream_response_headers(&HeaderMap::new(), 200);
                 observer.observe_output_message();
                 observer.finish();
@@ -1161,6 +1192,7 @@ mod tests {
     #[tokio::test]
     async fn failed_response_stays_failed() {
         let mut observer = test_observer("req-3", PylonRuntimeState::default());
+        observer.on_upstream_send();
         observer.on_upstream_response_headers(&HeaderMap::new(), 503);
         observer.finish();
 

@@ -15,5 +15,7 @@ rust_binary(
     edition = "2024",
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
-    deps = all_crate_deps(normal = True),
+    deps = [
+        "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    ] + all_crate_deps(normal = True),
 )

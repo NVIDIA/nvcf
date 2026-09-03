@@ -363,6 +363,15 @@ impl TunnelRequestLifecycle {
         }
     }
 
+    fn on_upstream_send(&mut self) {
+        if let Some(queue_request) = self.queue_request.as_mut() {
+            queue_request.on_upstream_send();
+        }
+        if let Some(observer) = self.observer.as_mut() {
+            observer.on_upstream_send();
+        }
+    }
+
     async fn relay_sse(
         &mut self,
         app: &TunnelServerApp,
@@ -534,13 +543,10 @@ async fn relay_upstream_response(
         &app.inference_server_id,
     )?;
     transport.send_response_head(status, response_head).await?;
-    if let Some(lifecycle) = lifecycle.as_mut() {
-        if let Some(queue_request) = lifecycle.queue_request.as_mut() {
-            queue_request.on_upstream_response_headers();
-        }
-        if let Some(observer) = lifecycle.observer.as_mut() {
-            observer.on_upstream_response_headers(response.headers(), status.as_u16());
-        }
+    if let Some(lifecycle) = lifecycle.as_mut()
+        && let Some(observer) = lifecycle.observer.as_mut()
+    {
+        observer.on_upstream_response_headers(response.headers(), status.as_u16());
     }
     if let Some(lifecycle) = lifecycle.as_mut()
         && lifecycle
@@ -677,9 +683,6 @@ pub(super) async fn forward_tunnel_request(
         }
     }
 
-    let priority = lifecycle
-        .as_ref()
-        .and_then(|lifecycle| lifecycle.required.priority);
     let response = match send_upstream_request(
         app,
         method,
@@ -687,7 +690,7 @@ pub(super) async fn forward_tunnel_request(
         &request_headers,
         body_bytes,
         health_request,
-        priority,
+        lifecycle.as_mut(),
     )
     .await
     {
@@ -727,8 +730,11 @@ async fn send_upstream_request(
     request_headers: &HeaderMap,
     body_bytes: Vec<u8>,
     health_request: bool,
-    priority: Option<u32>,
+    mut lifecycle: Option<&mut TunnelRequestLifecycle>,
 ) -> Result<Response, UpstreamRequestError> {
+    let priority = lifecycle
+        .as_ref()
+        .and_then(|lifecycle| lifecycle.required.priority);
     let span = if !health_request {
         let span = tracing::info_span!(
             "pylon_upstream_http_request",
@@ -751,7 +757,7 @@ async fn send_upstream_request(
     };
     let mut upstream_headers = HeaderMap::with_capacity(request_headers.len());
     for (name, value) in request_headers {
-        if should_forward_header(name, &app.retry) {
+        if should_forward_header(name, &app.retry, app.upstream_backend) {
             upstream_headers.append(name, value.clone());
         }
     }
@@ -772,6 +778,9 @@ async fn send_upstream_request(
     let send = async {
         let request_url = join_base_path(&app.upstream_http_base_url, path_and_query)
             .map_err(UpstreamRequestError::Build)?;
+        if let Some(lifecycle) = lifecycle.as_deref_mut() {
+            lifecycle.on_upstream_send();
+        }
         app.http_client
             .request(method, request_url)
             .headers(upstream_headers)
@@ -1108,9 +1117,15 @@ pub(super) fn join_base_path(base: &str, path_and_query: &str) -> Result<url::Ur
     .context("join upstream path failed")
 }
 
-pub(super) fn should_forward_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
+pub(super) fn should_forward_header(
+    name: &HeaderName,
+    retry: &PylonRetryConfig,
+    upstream_backend: UpstreamBackend,
+) -> bool {
     !is_tunnel_control_header(name, retry)
         && !backend::dynamo::is_stripped_engine_header(name)
+        && (upstream_backend != UpstreamBackend::Dynamo
+            || !backend::dynamo::is_platform_metadata_header(name))
         && !matches!(
             name.as_str(),
             "host" | "x-method" | "x-path" | HEADER_STARGATE_EXPECTED_QUEUE_MS

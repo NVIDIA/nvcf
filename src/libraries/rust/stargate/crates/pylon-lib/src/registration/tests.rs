@@ -40,7 +40,9 @@ use tower::util::MapRequestLayer;
 
 use crate::quic_http_tunnel::{TunnelError, TunnelForwardingConfig};
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
-use crate::runtime_state::{CurrentModelStats, PylonRuntimeState, gated_model_status};
+use crate::runtime_state::{
+    CurrentKvCacheStats, CurrentModelStats, PylonRuntimeState, gated_model_status,
+};
 use crate::stats::PylonMetrics;
 use crate::test_support::{RecordedTracingEvent, RecordingTracingSubscriber};
 
@@ -1369,6 +1371,12 @@ fn runtime_snapshot_forwards_bootstrap_and_collected_stats_exactly() {
             kv_cache_capacity_tokens: 7,
             kv_cache_used_tokens: 8,
             kv_cache_free_tokens: 9,
+            kv_cache: Some(CurrentKvCacheStats {
+                capacity_tokens: 7,
+                used_tokens: 3,
+                free_tokens: 4,
+                source_observed_at_unix_ms: 16,
+            }),
             num_running_queries: 10,
             max_engine_concurrency: Some(11),
             total_query_input_size: 12,
@@ -1388,6 +1396,13 @@ fn runtime_snapshot_forwards_bootstrap_and_collected_stats_exactly() {
     let stats = model.stats.as_ref().expect("stats should be present");
     assert_eq!(stats.last_mean_input_tps, 3.5);
     assert_eq!(stats.output_tps, 2.5);
+    assert_eq!(
+        stats
+            .kv_cache
+            .as_ref()
+            .map(|stats| stats.source_observed_at_unix_ms),
+        Some(16)
+    );
     assert_eq!(
         stats.queue_time_estimate_ms_by_priority,
         queue_time_estimate_ms_by_priority

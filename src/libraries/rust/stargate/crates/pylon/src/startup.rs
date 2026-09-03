@@ -224,7 +224,7 @@ fn model_source_from_args(args: &Args) -> Result<ModelSource> {
 
 struct RunningPylon {
     registration_client: InferenceServerRegistrationClient,
-    engine_stats_stream: Option<RunningEngineStatsStream>,
+    engine_stats_stream: Option<EngineStatsStreamHandle>,
     stats_collector: StatsCollectorHandle,
     model_lifecycle: ModelLifecycleHandle,
     metrics_server: MetricsServerHandle,
@@ -233,19 +233,13 @@ struct RunningPylon {
     initial_model_ids: Vec<String>,
 }
 
-struct RunningEngineStatsStream {
-    mode: EngineStatsStreamMode,
-    handle: EngineStatsStreamHandle,
-}
-
 impl RunningPylon {
     async fn run_until_shutdown<S>(mut self, signal: S) -> Result<()>
     where
         S: Future<Output = std::io::Result<&'static str>>,
     {
         tokio::pin!(signal);
-        loop {
-            let error = tokio::select! {
+        let error = tokio::select! {
                 result = signal.as_mut() => {
                     let result = result.context("failed to receive pylon termination signal");
                     if let Ok(signal) = &result {
@@ -257,20 +251,10 @@ impl RunningPylon {
                 result = self.registration_client.wait_for_exit() => critical_task_exit_error("registration session", result),
                 result = async {
                     match self.engine_stats_stream.as_mut() {
-                        Some(stream) => stream.handle.wait_for_exit().await,
+                        Some(stream) => stream.wait_for_exit().await,
                         None => std::future::pending().await,
                     }
-                } => {
-                    if engine_stats_exit_is_expected(
-                        self.engine_stats_stream.as_ref().map(|stream| stream.mode),
-                        &result,
-                    ) {
-                        info!("auto engine stats stream completed after enabling fallback");
-                        self.engine_stats_stream = None;
-                        continue;
-                    }
-                    critical_task_exit_error("engine stats stream", result)
-                }
+                } => critical_task_exit_error("engine stats stream", result),
                 result = self.stats_collector.wait_for_exit() => critical_task_exit_error("stats collector", result),
                 result = async {
                     self.model_lifecycle.wait_for_exit().await
@@ -284,11 +268,10 @@ impl RunningPylon {
                 } => {
                     critical_task_exit_error("direct tunnel accept loop", result)
                 }
-            };
-            error!(error = %error, "critical pylon task exited");
-            self.shutdown().await;
-            return Err(error);
-        }
+        };
+        error!(error = %error, "critical pylon task exited");
+        self.shutdown().await;
+        Err(error)
     }
 
     async fn shutdown(self) {
@@ -305,7 +288,7 @@ impl RunningPylon {
             registration_client.shutdown(),
             async move {
                 if let Some(stream) = engine_stats_stream {
-                    stream.handle.shutdown().await;
+                    stream.shutdown().await;
                 }
             },
             stats_collector.shutdown(),
@@ -327,10 +310,6 @@ fn critical_task_exit_error(name: &'static str, result: TaskExit) -> anyhow::Err
     }
 }
 
-fn engine_stats_exit_is_expected(mode: Option<EngineStatsStreamMode>, result: &TaskExit) -> bool {
-    mode == Some(EngineStatsStreamMode::Auto) && result.is_ok()
-}
-
 async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<RunningPylon> {
     let grpc_tls_ca_cert_pem = load_grpc_tls_ca_cert(args)?;
     let metrics = PylonMetrics::new()?;
@@ -342,21 +321,16 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
             .unwrap_or(""),
     );
     let metrics_server = start_metrics_server(plan.metrics_addr, metrics.registry()).await?;
-    let stats_config = stats_collector_config_from_args(args, &plan.upstream);
+    let stats_config = stats_collector_config_from_args(args);
     let (runtime_state, request_observation_rx) = PylonRuntimeState::observed(
         InferenceServerStatus::Active,
         &[],
         stats_config.observation_channel_capacity,
         Some(metrics.clone()),
     );
-    let (engine_stats_stream, stats_update_rx) = start_engine_stats_runtime(
-        args,
-        plan,
-        metrics.clone(),
-        &stats_config,
-        runtime_state.clone(),
-    )
-    .unzip();
+    let (engine_stats_stream, stats_update_rx) =
+        start_engine_stats_runtime(args, metrics.clone(), &stats_config, runtime_state.clone())
+            .unzip();
     let stats_collector = start_stats_collector_with_engine_stats(
         stats_config,
         request_observation_rx,
@@ -457,25 +431,19 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
 
 fn start_engine_stats_runtime(
     args: &Args,
-    plan: &PylonStartupPlan,
     metrics: Arc<PylonMetrics>,
     stats_config: &StatsCollectorConfig,
     runtime_state: PylonRuntimeState,
 ) -> Option<(
-    RunningEngineStatsStream,
+    EngineStatsStreamHandle,
     flume::Receiver<pylon_lib::StatsAggregatorUpdate>,
 )> {
     let (stats_update_tx, stats_update_rx) = stats_aggregator_update_channel(stats_config);
-    let mut config = EngineStatsStreamConfig::new(
-        &plan.upstream,
-        &args.engine_stats_stream_path,
-        args.engine_stats_stream,
-    );
+    let mut config =
+        EngineStatsStreamConfig::new(&args.dynamo_relay_grpc_url, args.engine_stats_stream);
     config.metrics = Some(metrics);
     config.runtime_state = Some(runtime_state);
-    let mode = config.mode;
-    start_engine_stats_stream(config, stats_update_tx)
-        .map(|handle| (RunningEngineStatsStream { mode, handle }, stats_update_rx))
+    start_engine_stats_stream(config, stats_update_tx).map(|handle| (handle, stats_update_rx))
 }
 
 async fn start_direct_tunnel_from_plan(
@@ -601,21 +569,9 @@ fn tunnel_forwarding_config_from_plan(
     }
 }
 
-pub(crate) fn stats_collector_config_from_args(
-    args: &Args,
-    upstream: &str,
-) -> StatsCollectorConfig {
+pub(crate) fn stats_collector_config_from_args(args: &Args) -> StatsCollectorConfig {
     StatsCollectorConfig {
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
-        // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
-        // real upstreams usually do not, so polling is explicit.
-        kv_cache_stats_url: args.kv_cache_stats_path.as_deref().map(|path| {
-            format!(
-                "{}/{}",
-                upstream.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            )
-        }),
         ..Default::default()
     }
 }
@@ -746,8 +702,8 @@ mod tests {
     use axum::{Json, Router};
     use clap::Parser;
     use pylon_lib::{
-        EngineStatsStreamMode, PylonMetrics, RequestObservation, RequestObservationEndpoint,
-        RequestObservationState, TunnelTransportProtocol,
+        PylonMetrics, RequestObservation, RequestObservationEndpoint, RequestObservationState,
+        TunnelTransportProtocol,
     };
     use stargate_proto::pb::stargate_control_plane_server::{
         StargateControlPlane, StargateControlPlaneServer,
@@ -1139,50 +1095,24 @@ mod tests {
 
     #[test]
     fn engine_stats_runtime_off_mode_leaves_stats_updates_unclaimed() {
-        let (args, plan) = startup(&["--engine-stats-stream", "off"]);
+        let (args, _) = startup(&["--engine-stats-stream", "off"]);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let config = StatsCollectorConfig::default();
         assert!(
-            start_engine_stats_runtime(
-                &args,
-                &plan,
-                metrics,
-                &config,
-                PylonRuntimeState::default(),
-            )
-            .is_none()
+            start_engine_stats_runtime(&args, metrics, &config, PylonRuntimeState::default(),)
+                .is_none()
         );
     }
 
     #[tokio::test]
     async fn engine_stats_runtime_required_mode_claims_stats_updates() {
-        let (args, plan) = startup(&["--engine-stats-stream", "required"]);
+        let (args, _) = startup(&["--engine-stats-stream", "required"]);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let config = StatsCollectorConfig::default();
-        let (engine_stats_stream, _stats_update_rx) = start_engine_stats_runtime(
-            &args,
-            &plan,
-            metrics,
-            &config,
-            PylonRuntimeState::default(),
-        )
-        .expect("required engine stats should start a stream task");
-        engine_stats_stream.handle.shutdown().await;
-    }
-
-    #[test]
-    fn only_successful_auto_engine_stats_completion_is_nonfatal() {
-        let completed = Ok(());
-
-        assert!(engine_stats_exit_is_expected(
-            Some(EngineStatsStreamMode::Auto),
-            &completed,
-        ));
-        assert!(!engine_stats_exit_is_expected(
-            Some(EngineStatsStreamMode::Required),
-            &completed,
-        ));
-        assert!(!engine_stats_exit_is_expected(None, &completed));
+        let (engine_stats_stream, _stats_update_rx) =
+            start_engine_stats_runtime(&args, metrics, &config, PylonRuntimeState::default())
+                .expect("required engine stats should start a stream task");
+        engine_stats_stream.shutdown().await;
     }
 
     #[tokio::test]
@@ -1614,19 +1544,10 @@ mod tests {
     }
 
     #[test]
-    fn stats_config_uses_normalized_upstream() {
-        let (args, plan) = startup(&[
-            "--engine-stats-stream",
-            "required",
-            "--kv-cache-stats-path",
-            "kv/live",
-        ]);
-        let stats = stats_collector_config_from_args(&args, &plan.upstream);
+    fn required_stats_config_disables_fallback() {
+        let (args, _) = startup(&["--engine-stats-stream", "required"]);
+        let stats = stats_collector_config_from_args(&args);
 
-        assert_eq!(
-            stats.kv_cache_stats_url.as_deref(),
-            Some("http://127.0.0.1:8090/kv/live")
-        );
         assert!(!stats.openai_fallback_stats_enabled);
     }
 
@@ -1634,7 +1555,7 @@ mod tests {
     async fn configured_input_tps_seeds_queue_estimates_before_engine_stats() {
         let (args, plan) = startup(&[]);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let mut config = stats_collector_config_from_args(&args, &plan.upstream);
+        let mut config = stats_collector_config_from_args(&args);
         config.openai_fallback_stats_enabled = true;
         let (runtime_state, request_observation_rx) = PylonRuntimeState::observed(
             InferenceServerStatus::Unknown,

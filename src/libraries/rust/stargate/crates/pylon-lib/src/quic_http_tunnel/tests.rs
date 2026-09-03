@@ -397,12 +397,33 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
     {
         assert!(!should_forward_header(
             &HeaderName::from_bytes(name.as_bytes())?,
-            &retry
+            &retry,
+            UpstreamBackend::Passthrough,
+        ));
+    }
+    for name in [
+        "Request-Id",
+        "X-Dynamo-Request-Id",
+        "X-Model",
+        "X-Routing-Key",
+        "X-Priority",
+    ] {
+        let name = HeaderName::from_bytes(name.as_bytes())?;
+        assert!(should_forward_header(
+            &name,
+            &retry,
+            UpstreamBackend::Passthrough,
+        ));
+        assert!(!should_forward_header(
+            &name,
+            &retry,
+            UpstreamBackend::Dynamo,
         ));
     }
     assert!(should_forward_header(
         &HeaderName::from_bytes(b"X-Request-Id")?,
-        &retry
+        &retry,
+        UpstreamBackend::Dynamo,
     ));
     Ok(())
 }
@@ -445,6 +466,26 @@ fn pylon_dynamo_priority_headers_are_always_emitted() {
     assert_eq!(emitted, 0);
     assert_eq!(headers["x-dynamo-request-priority"], "0");
     assert_eq!(headers["x-dynamo-request-strict-priority"], "0");
+}
+
+#[test]
+fn pylon_consumes_platform_metadata_instead_of_forwarding_it_to_dynamo() {
+    for name in [
+        "request-id",
+        "x-dynamo-request-id",
+        "x-model",
+        "x-routing-key",
+        "x-priority",
+    ] {
+        assert!(dynamo::is_platform_metadata_header(
+            &HeaderName::from_bytes(name.as_bytes()).unwrap()
+        ));
+    }
+    for name in ["x-request-id", "x-input-tokens"] {
+        assert!(!dynamo::is_platform_metadata_header(
+            &HeaderName::from_bytes(name.as_bytes()).unwrap()
+        ));
+    }
 }
 
 #[test]
@@ -943,20 +984,16 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     let app = Router::new().route(
         "/v1/responses",
         post(|req: Request| async move {
-            let model = req
-                .headers()
-                .get("x-model")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("missing")
-                .to_string();
+            let platform_model_header = req.headers().contains_key("x-model");
             let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
                 .await
                 .unwrap();
-            (
-                StatusCode::OK,
-                [(reqwest::header::CONTENT_TYPE.as_str(), "application/json")],
-                format!(r#"{{"model":"{model}","body_len":{}}}"#, body.len()),
-            )
+            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            Json(serde_json::json!({
+                "model": request["model"],
+                "body_len": body.len(),
+                "platform_model_header": platform_model_header,
+            }))
         }),
     );
     let mut config = test_tunnel_config_for(app).await;
@@ -967,11 +1004,12 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     headers.insert("x-model", "model-h3".parse().unwrap());
     headers.insert("x-input-tokens", "7".parse().unwrap());
     headers.insert("content-type", "application/json".parse().unwrap());
+    let request_body = br#"{"model":"model-h3","input":"hi","stream":true}"#;
     let response = send_direct_http3_json_request(
         tunnel.listen_addr(),
         "/v1/responses?source=http3",
         headers,
-        br#"{"input":"hi","stream":true}"#,
+        request_body,
     )
     .await;
 
@@ -983,8 +1021,9 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     );
     assert_eq!(
         payload.get("body_len").and_then(serde_json::Value::as_u64),
-        Some(28)
+        Some(request_body.len() as u64)
     );
+    assert_eq!(payload["platform_model_header"], false);
 
     tunnel.shutdown().await;
 }
@@ -1525,16 +1564,17 @@ async fn quic_tunnel_forwards_to_http_backend() {
     let app = Router::new().route(
             "/v1/chat/completions",
             post(|req: Request| async move {
-                let model = req
-                    .headers()
-                    .get("x-model")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("none");
+                let platform_model_header = req.headers().contains_key("x-model");
                 let saw_expected_queue_header =
                     req.headers().contains_key("x-stargate-expected-queue-ms");
                 let saw_retry_control_header = RETRY_CONTROL_REQUEST_HEADERS
                 .iter()
                 .any(|name| req.headers().contains_key(*name));
+                let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let model = request["model"].as_str().unwrap();
                 let mut sse = axum::response::Sse::new(async_stream::stream! {
                     yield Ok::<_, std::convert::Infallible>(
                         Event::default().data(r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"ok"}}]}"#)
@@ -1554,6 +1594,10 @@ async fn quic_tunnel_forwards_to_http_backend() {
                     HeaderName::from_static("x-saw-retry-control"),
                     HeaderValue::from_str(&saw_retry_control_header.to_string()).unwrap(),
                 );
+                sse.headers_mut().insert(
+                    HeaderName::from_static("x-saw-platform-model"),
+                    HeaderValue::from_str(&platform_model_header.to_string()).unwrap(),
+                );
                 *sse.status_mut() = StatusCode::OK;
                 sse
             }),
@@ -1569,7 +1613,10 @@ async fn quic_tunnel_forwards_to_http_backend() {
         headers.insert(name, "spoofed".parse().unwrap());
     }
     tunnel
-        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .send(
+            headers,
+            br#"{"model":"model-a","messages":[],"stream":true}"#,
+        )
         .await;
 
     let response_headers = tunnel.response_head(StatusCode::OK).await;
@@ -1590,6 +1637,7 @@ async fn quic_tunnel_forwards_to_http_backend() {
         "false"
     );
     assert_eq!(response_headers["x-saw-retry-control"], "false");
+    assert_eq!(response_headers["x-saw-platform-model"], "false");
 
     let response_text = read_response_text(&mut tunnel.recv).await;
     let events = parse_test_sse_events(&response_text);
@@ -1630,6 +1678,11 @@ fn dynamo_priority_echo_router() -> Router {
             };
             let dynamo_priority = echo_header("x-dynamo-request-priority");
             let dynamo_strict_priority = echo_header("x-dynamo-request-strict-priority");
+            let x_request_id = echo_header("x-request-id");
+            let dynamo_request_id = echo_header("request-id");
+            let platform_routing_identity_present = ["x-model", "x-routing-key"]
+                .into_iter()
+                .any(|name| req.headers().contains_key(name));
             let mut sse = axum::response::Sse::new(async_stream::stream! {
                 yield Ok::<_, std::convert::Infallible>(
                     Event::default().data(r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"ok"}}]}"#)
@@ -1645,6 +1698,18 @@ fn dynamo_priority_echo_router() -> Router {
                 HeaderName::from_static("x-echo-dynamo-strict-priority"),
                 HeaderValue::from_str(&dynamo_strict_priority).unwrap(),
             );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-echo-request-id"),
+                HeaderValue::from_str(&x_request_id).unwrap(),
+            );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-echo-dynamo-request-id"),
+                HeaderValue::from_str(&dynamo_request_id).unwrap(),
+            );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-saw-platform-routing-identity"),
+                HeaderValue::from_static(if platform_routing_identity_present { "true" } else { "false" }),
+            );
             *sse.status_mut() = StatusCode::OK;
             sse
         }),
@@ -1652,7 +1717,7 @@ fn dynamo_priority_echo_router() -> Router {
 }
 
 #[tokio::test]
-async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
+async fn quic_tunnel_translates_dynamo_request_headers() {
     let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
     let ceiling = config.forwarding.priority_ceiling;
     let mut tunnel = RawTunnelTest::start(config).await;
@@ -1663,6 +1728,15 @@ async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
     // Spoofed engine headers must be replaced by pylon-derived values.
     headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
     headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
+    headers.insert(
+        "request-id",
+        uuid::Uuid::new_v4().to_string().parse().unwrap(),
+    );
+    headers.insert(
+        "x-dynamo-request-id",
+        uuid::Uuid::new_v4().to_string().parse().unwrap(),
+    );
+    headers.insert("x-routing-key", "gateway-route".parse().unwrap());
     tunnel
         .send(headers, br#"{"messages":[],"stream":true}"#)
         .await;
@@ -1677,6 +1751,9 @@ async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
         (ceiling - 7).to_string()
     );
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");
+    assert_eq!(response_headers["x-echo-request-id"], "req-dynamo-1");
+    assert_eq!(response_headers["x-echo-dynamo-request-id"], "absent");
+    assert_eq!(response_headers["x-saw-platform-routing-identity"], "false");
 
     tunnel.shutdown().await;
 }
@@ -1760,6 +1837,8 @@ async fn quic_tunnel_passthrough_backend_strips_but_derives_nothing() {
     assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
     // Stripping inbound engine priority headers is not gated by the backend.
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "absent");
+    assert_eq!(response_headers["x-echo-request-id"], "req-dynamo-3");
+    assert_eq!(response_headers["x-echo-dynamo-request-id"], "absent");
 
     tunnel.shutdown().await;
 }
@@ -2590,17 +2669,19 @@ async fn assert_direct_embeddings_case(case: DirectEmbeddingsCase) {
             let hits = hits_for_app.clone();
             async move {
                 hits.fetch_add(1, Ordering::Relaxed);
+                let platform_model_header = req.headers().contains_key("x-model");
                 let path = req
                     .uri()
                     .path_and_query()
                     .map_or_else(|| req.uri().path().to_string(), |value| value.to_string());
-                let model = req.headers()["x-model"].to_str().unwrap().to_string();
                 let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
                     .await
                     .unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
                 Json(serde_json::json!({
                     "path": path,
-                    "model": model,
+                    "model": request["model"],
+                    "platform_model_header": platform_model_header,
                     "body": String::from_utf8(body.to_vec()).unwrap(),
                     "object": "list",
                     "data": serde_json::from_str::<serde_json::Value>(case.response_data_json)
@@ -2629,6 +2710,7 @@ async fn assert_direct_embeddings_case(case: DirectEmbeddingsCase) {
     let payload: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(payload["path"], case.success_path);
     assert_eq!(payload["model"], "model-embed");
+    assert_eq!(payload["platform_model_header"], false);
     assert_eq!(
         payload["body"],
         String::from_utf8(case.request_body.to_vec()).unwrap()

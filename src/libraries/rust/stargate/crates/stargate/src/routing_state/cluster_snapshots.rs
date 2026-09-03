@@ -33,13 +33,83 @@ use super::snapshots::{
 
 fn set_cluster_scoped_stats(stats: &mut ModelStats, src: &ModelStats) {
     stats.max_output_tps = src.max_output_tps;
-    stats.kv_cache_capacity_tokens = src.kv_cache_capacity_tokens;
-    stats.kv_cache_used_tokens = src.kv_cache_used_tokens;
-    stats.kv_cache_free_tokens = src.kv_cache_free_tokens;
     stats.num_running_queries = src.num_running_queries;
     stats.max_engine_concurrency = src.max_engine_concurrency;
     stats.total_query_input_size = src.total_query_input_size;
     stats.queue_time_estimate_ms_by_priority = src.queue_time_estimate_ms_by_priority.clone();
+}
+
+fn valid_kv_cache(stats: &ModelStats) -> bool {
+    stats.kv_cache.as_ref().is_some_and(|kv_cache| {
+        kv_cache.complete
+            && kv_cache.source_observed_at_unix_ms > 0
+            && kv_cache.capacity_tokens > 0
+            && kv_cache.used_tokens.checked_add(kv_cache.free_tokens)
+                == Some(kv_cache.capacity_tokens)
+    })
+}
+
+fn kv_cache_stats_disagree(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> bool {
+    let mut values = backends
+        .iter()
+        .filter(|backend| valid_kv_cache(&backend.stats))
+        .map(|backend| {
+            let stats = backend.stats.kv_cache.as_ref().unwrap();
+            (stats.capacity_tokens, stats.used_tokens, stats.free_tokens)
+        });
+    let Some(first) = values.next() else {
+        return false;
+    };
+    values.any(|value| value != first)
+}
+
+fn set_cluster_kv_stats(
+    stats: &mut ModelStats,
+    backends: &[Arc<RoutedInferenceServerSnapshot>],
+    legacy_source: &ModelStats,
+) {
+    let selected = backends
+        .iter()
+        .filter(|backend| valid_kv_cache(&backend.stats))
+        .max_by(|left, right| {
+            let left_time = left
+                .stats
+                .kv_cache
+                .as_ref()
+                .map(|stats| stats.source_observed_at_unix_ms)
+                .unwrap_or_default();
+            let right_time = right
+                .stats
+                .kv_cache
+                .as_ref()
+                .map(|stats| stats.source_observed_at_unix_ms)
+                .unwrap_or_default();
+            (left_time, left.inference_server_id.as_str())
+                .cmp(&(right_time, right.inference_server_id.as_str()))
+        });
+    if let Some(selected) = selected {
+        let kv_cache = selected
+            .stats
+            .kv_cache
+            .expect("selected backend has valid KV stats");
+        stats.kv_cache_capacity_tokens = kv_cache.capacity_tokens;
+        stats.kv_cache_used_tokens = kv_cache.used_tokens;
+        stats.kv_cache_free_tokens = kv_cache.free_tokens;
+        stats.kv_cache = Some(kv_cache);
+    } else if backends
+        .iter()
+        .all(|backend| backend.stats.kv_cache.is_none())
+    {
+        stats.kv_cache_capacity_tokens = legacy_source.kv_cache_capacity_tokens;
+        stats.kv_cache_used_tokens = legacy_source.kv_cache_used_tokens;
+        stats.kv_cache_free_tokens = legacy_source.kv_cache_free_tokens;
+        stats.kv_cache = None;
+    } else {
+        stats.kv_cache_capacity_tokens = 0;
+        stats.kv_cache_used_tokens = 0;
+        stats.kv_cache_free_tokens = 0;
+        stats.kv_cache = None;
+    }
 }
 
 fn append_unique_strings(target: &mut Vec<String>, values: &[String]) {
@@ -187,6 +257,7 @@ impl ClusterRoutingGeneration {
         }
         let mut stats = backend_stats;
         set_cluster_scoped_stats(&mut stats, &source_backend.stats);
+        set_cluster_kv_stats(&mut stats, &self.backends, &source_backend.stats);
         let base_snapshot = RoutedClusterSnapshot {
             cluster_id: source_backend.cluster_id.clone(),
             stats,
@@ -245,6 +316,10 @@ impl RoutedClusterState {
             generation: Mutex::default(),
             round_robin_counter: AtomicUsize::default(),
         }
+    }
+
+    pub(super) fn kv_cache_stats_disagree(&self) -> bool {
+        kv_cache_stats_disagree(&self.generation.lock().backends)
     }
 
     pub(super) fn upsert_backend(

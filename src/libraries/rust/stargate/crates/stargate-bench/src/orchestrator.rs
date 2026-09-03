@@ -291,7 +291,6 @@ fn build_compose_spec(
             "--backend-connectivity=reverse",
             "--quic-insecure",
             "--tunnel-protocol" => config.tunnel_protocol.to_string(),
-            "--kv-cache-stats-path" => "/kv-cache/stats",
             "--min-update-interval-ms" => "100",
             "--disable-bringup",
             "--active-canary-interval-ms=0",

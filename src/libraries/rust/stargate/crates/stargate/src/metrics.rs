@@ -114,6 +114,7 @@ define_stargate_metrics! {
     gauges {
         active_inference_servers("active_inference_servers", "Active inference servers available for a routing target", ["routing_key", "model"]);
         tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
+        kv_cache_stats_disagreement("kv_cache_stats_disagreement", "Whether complete KV cache observations disagree for a routing target", ["routing_key", "model"]);
     }
 }
 
@@ -209,6 +210,18 @@ impl StargateMetrics {
             .with_label_values(&[routing_key.unwrap_or(""), model])
             .set(count.try_into().unwrap_or(i64::MAX));
     }
+
+    #[inline]
+    pub fn set_kv_cache_stats_disagreement(
+        &self,
+        routing_key: Option<&str>,
+        model: &str,
+        disagrees: bool,
+    ) {
+        self.kv_cache_stats_disagreement
+            .with_label_values(&[routing_key.unwrap_or(""), model])
+            .set(i64::from(disagrees));
+    }
 }
 
 // -- Metrics HTTP server -----------------------------------------------------
@@ -290,6 +303,7 @@ mod tests {
                 "pulsar-wait-and-widen",
             )
             .inc();
+        metrics.set_kv_cache_stats_disagreement(Some("routing-a"), "model-a", true);
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
@@ -311,6 +325,12 @@ mod tests {
         assert!(
             body.contains("llm_request_router_routing_kv_free_token_fallback_selections_total"),
             "custom KV-free-token fallback counter prefix missing:\n{body}"
+        );
+        assert!(
+            body.contains(
+                r#"llm_request_router_kv_cache_stats_disagreement{model="model-a",routing_key="routing-a"} 1"#
+            ),
+            "KV-cache disagreement gauge missing:\n{body}"
         );
         assert!(
             !body.contains("stargate_requests_total"),

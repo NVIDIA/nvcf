@@ -23,6 +23,7 @@ use stargate_protocol::tunnel_contract::HEADER_STARGATE_UPSTREAM_RETRYABLE;
 const DEFAULT_PYLON_RETRYABLE_UPSTREAM_STATUS_CODES: &str = "429,503";
 const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = HEADER_STARGATE_UPSTREAM_RETRYABLE;
 const DEFAULT_OTEL_SERVICE_NAME: &str = "pylon";
+const DEFAULT_DYNAMO_RELAY_GRPC_URL: &str = "http://127.0.0.1:50051";
 
 mod startup;
 
@@ -32,6 +33,9 @@ struct Args {
     /// Base URL of the upstream HTTP inference server (for example http://127.0.0.1:8090)
     #[arg(long, value_name = "URL")]
     upstream_http_base_url: String,
+    /// KVDCRelay gRPC URL used for canonical load and KV-usage streams
+    #[arg(long, default_value = DEFAULT_DYNAMO_RELAY_GRPC_URL, value_name = "URL")]
+    dynamo_relay_grpc_url: String,
     /// QUIC tunnel listen address (advertised to stargate in forward mode)
     #[arg(long, default_value = "127.0.0.1:0", value_name = "ADDR")]
     quic_listen_addr: String,
@@ -110,15 +114,9 @@ struct Args {
     /// Timeout for calibration requests in milliseconds
     #[arg(long, default_value_t = 30000, value_name = "MS")]
     bringup_calibration_timeout_ms: u64,
-    /// Upstream HTTP path to poll for KV-cache stats. Omit to disable KV metric polling
-    #[arg(long, value_name = "PATH")]
-    kv_cache_stats_path: Option<String>,
-    /// Engine stats stream source selection mode
-    #[arg(long, default_value_t = EngineStatsStreamMode::Auto, value_name = "MODE")]
+    /// Dynamo Relay aggregate stats stream mode
+    #[arg(long, default_value_t = EngineStatsStreamMode::Required, value_name = "MODE")]
     engine_stats_stream: EngineStatsStreamMode,
-    /// Upstream HTTP path for the engine stats stream
-    #[arg(long, default_value = "/pylon/v1/stats/stream", value_name = "PATH")]
-    engine_stats_stream_path: String,
     /// Keep --initial-input-tps fixed for deterministic benchmark/test experiments
     #[arg(long, default_value_t = false, hide = true)]
     benchmark_pin_input_tps: bool,
@@ -278,7 +276,7 @@ mod tests {
     use reqwest::header::HeaderName;
 
     use super::startup::{
-        effective_cluster_id, normalize_base_url, pylon_queue_mismatch_retry_config_from_args,
+        effective_cluster_id, pylon_queue_mismatch_retry_config_from_args,
         pylon_retry_config_from_args, request_quality_monitor_config_from_args,
         stats_collector_config_from_args,
     };
@@ -580,48 +578,27 @@ mod tests {
     }
 
     #[test]
-    fn engine_stats_stream_defaults_to_auto_mode_and_v1_path() {
+    fn engine_stats_stream_is_required_by_default() {
         let args = parse_args("");
-        let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config = stats_collector_config_from_args(&args, &upstream);
+        let metrics_config = stats_collector_config_from_args(&args);
 
-        assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
-        assert_eq!(args.engine_stats_stream_path, "/pylon/v1/stats/stream");
-        assert!(metrics_config.kv_cache_stats_url.is_none());
-        assert!(
-            !metrics_config.openai_fallback_stats_enabled,
-            "auto mode should wait for a permanent unsupported stream response before fallback stats"
-        );
+        assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Required);
+        assert!(!metrics_config.openai_fallback_stats_enabled);
     }
 
     #[test]
     fn engine_stats_stream_can_be_disabled() {
         let args = parse_args("--engine-stats-stream off");
-        let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config = stats_collector_config_from_args(&args, &upstream);
+        let metrics_config = stats_collector_config_from_args(&args);
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Off);
-        assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(metrics_config.openai_fallback_stats_enabled);
-    }
-
-    #[test]
-    fn kv_cache_stats_path_enables_explicit_kv_cache_polling() {
-        let args = parse_args("--kv-cache-stats-path /kv-cache/stats");
-        let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config = stats_collector_config_from_args(&args, &upstream);
-
-        assert_eq!(
-            metrics_config.kv_cache_stats_url,
-            Some("http://127.0.0.1:8090/kv-cache/stats".to_string())
-        );
     }
 
     #[test]
     fn required_engine_stats_stream_disables_openai_fallback_stats() {
         let args = parse_args("--engine-stats-stream required");
-        let upstream = normalize_base_url(&args.upstream_http_base_url);
-        let metrics_config = stats_collector_config_from_args(&args, &upstream);
+        let metrics_config = stats_collector_config_from_args(&args);
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Required);
         assert!(!metrics_config.openai_fallback_stats_enabled);

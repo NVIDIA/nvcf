@@ -141,6 +141,15 @@ impl RoutingTargetState {
         }
     }
 
+    fn kv_cache_stats_disagree(&self) -> bool {
+        match &*self.generation.lock() {
+            RoutingTargetGeneration::Active { clusters, .. } => clusters
+                .values()
+                .any(|cluster| cluster.kv_cache_stats_disagree()),
+            RoutingTargetGeneration::Retired => false,
+        }
+    }
+
     fn retire_if_empty(&self) -> bool {
         let mut generation = self.generation.lock();
         let RoutingTargetGeneration::Active {
@@ -245,25 +254,35 @@ impl RoutingLifecycle {
         targets
     }
 
-    async fn publish_active_backend_count(&self, target: &RoutingTargetKey) {
+    async fn publish_target_metrics(&self, target: &RoutingTargetKey) {
         let Some(metrics) = &self.metrics else {
             return;
         };
         loop {
             let before = self.target_state(target).await;
-            let count = before
-                .as_ref()
-                .map_or(0, |target_state| target_state.active_backend_count());
+            let (count, kv_cache_disagrees) = before.as_ref().map_or((0, false), |target_state| {
+                (
+                    target_state.active_backend_count(),
+                    target_state.kv_cache_stats_disagree(),
+                )
+            });
             metrics.set_active_inference_servers(
                 target.routing_key.as_deref(),
                 &target.model_id,
                 count,
             );
+            metrics.set_kv_cache_stats_disagreement(
+                target.routing_key.as_deref(),
+                &target.model_id,
+                kv_cache_disagrees,
+            );
 
             let stable = match &before {
                 None => self.target_state(target).await.is_none(),
                 Some(before) => self.target_state(target).await.is_some_and(|after| {
-                    Arc::ptr_eq(before, &after) && after.active_backend_count() == count
+                    Arc::ptr_eq(before, &after)
+                        && after.active_backend_count() == count
+                        && after.kv_cache_stats_disagree() == kv_cache_disagrees
                 }),
             };
             if stable {
@@ -301,7 +320,7 @@ impl RoutingLifecycle {
             snapshot = rejected;
             let _ = self.remove_if_empty(target, target_state).await;
         }
-        self.publish_active_backend_count(target).await;
+        self.publish_target_metrics(target).await;
     }
 
     pub(super) async fn remove_inference_server_from_target(
@@ -315,7 +334,7 @@ impl RoutingLifecycle {
 
         target_state.remove_backend(registration);
         let _ = self.remove_if_empty(target, target_state).await;
-        self.publish_active_backend_count(target).await;
+        self.publish_target_metrics(target).await;
     }
 
     pub(super) async fn remove_inference_server_targets(

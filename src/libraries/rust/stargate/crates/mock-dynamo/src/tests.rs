@@ -53,8 +53,27 @@ fn test_state() -> AppState {
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
         stats_events: test_stats_events(),
+        stats_stream_enabled: Arc::new(AtomicBool::new(true)),
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
+}
+
+#[tokio::test]
+async fn stats_stream_test_control_does_not_disable_health() {
+    let state = test_state();
+    let status = update_stats_stream_test_control(
+        State(state.clone()),
+        Json(StatsStreamTestControlUpdate { enabled: false }),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+    assert!(
+        !state
+            .stats_stream_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+    );
+    assert_eq!(health(State(state)).await, "ok");
 }
 
 async fn spawn_test_app(app: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
@@ -657,7 +676,6 @@ async fn streaming_response_delays_first_data_frame_until_ttft() {
     };
     let app = Router::new()
         .route("/v1/chat/completions", post(chat_completions))
-        .route("/pylon/v1/stats/stream", get(stats_stream))
         .with_state(state);
     let (addr, server) = spawn_test_app(app).await;
 
@@ -682,77 +700,6 @@ async fn streaming_response_delays_first_data_frame_until_ttft() {
         .expect("SSE data should arrive after TTFT")
         .expect("SSE data read should succeed");
     server.abort();
-}
-
-#[tokio::test]
-async fn streaming_response_exposes_stats_stream_endpoint() {
-    let state = AppState {
-        num_tokens: 2,
-        ..test_state()
-    };
-    let app = Router::new()
-        .route("/v1/chat/completions", post(chat_completions))
-        .route("/pylon/v1/stats/stream", get(stats_stream))
-        .with_state(state);
-    let (addr, server) = spawn_test_app(app).await;
-
-    let body = r#"{"model":"dummy-model","messages":[{"role":"user","content":"hello world"}],"max_tokens":2,"stream":true}"#;
-    let mut stream = send_json_request(
-        addr,
-        "POST",
-        "/v1/chat/completions",
-        "x-request-id: req-contract\r\nx-input-tokens: 11",
-        body,
-    )
-    .await;
-
-    let response = read_until_done(&mut stream).await;
-    assert!(!response.contains(r#""usage":"#));
-
-    let mut stream = tokio::net::TcpStream::connect(addr)
-        .await
-        .expect("test client should connect");
-    stream
-        .write_all(
-            format!(
-                "GET /pylon/v1/stats/stream HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\n\r\n",
-            )
-            .as_bytes(),
-        )
-        .await
-        .expect("stats stream request should write");
-
-    let response = tokio::time::timeout(
-        Duration::from_secs(2),
-        read_until_contains(&mut stream, "application/x-ndjson"),
-    )
-    .await
-    .expect("stats stream headers should arrive")
-    .expect("stats stream response should read");
-    assert!(response.starts_with("HTTP/1.1 200 OK"));
-    assert!(response.contains("content-type: application/x-ndjson"));
-    server.abort();
-}
-
-#[test]
-fn stats_stream_events_are_ndjson() {
-    let event = StatsStreamEvent::Stats {
-        v: 1,
-        request_id: "req-1".to_string(),
-        model: "dummy-model".to_string(),
-        tokens_processed: Some(11),
-        tokens_generated: Some(2),
-        finished: true,
-    };
-
-    let line = String::from_utf8(ndjson_event(&event).to_vec()).unwrap();
-
-    assert_eq!(
-            line,
-            r#"{"type":"stats","v":1,"request_id":"req-1","model":"dummy-model","tokens_processed":11,"tokens_generated":2,"finished":true}"#
-                .to_string()
-                + "\n"
-        );
 }
 
 #[tokio::test]
@@ -866,25 +813,6 @@ async fn read_until_sse_data(stream: &mut tokio::net::TcpStream) -> std::io::Res
     }
 }
 
-async fn read_until_done(stream: &mut tokio::net::TcpStream) -> String {
-    let mut bytes = Vec::new();
-    let mut buffer = [0u8; 1024];
-    loop {
-        let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buffer))
-            .await
-            .expect("response should continue")
-            .expect("response should read");
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..read]);
-        if String::from_utf8_lossy(&bytes).contains("data: [DONE]") {
-            break;
-        }
-    }
-    String::from_utf8_lossy(&bytes).to_string()
-}
-
 async fn read_to_end(stream: &mut tokio::net::TcpStream) -> String {
     let mut bytes = Vec::new();
     stream
@@ -903,24 +831,4 @@ async fn raw_http_request(addr: std::net::SocketAddr, request: &str) -> String {
         .await
         .expect("request should write");
     read_to_end(&mut stream).await
-}
-
-async fn read_until_contains(
-    stream: &mut tokio::net::TcpStream,
-    needle: &str,
-) -> std::io::Result<String> {
-    let mut bytes = Vec::new();
-    let mut buffer = [0u8; 1024];
-    loop {
-        let read = stream.read(&mut buffer).await?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&buffer[..read]);
-        let text = String::from_utf8_lossy(&bytes);
-        if text.contains(needle) {
-            return Ok(text.to_string());
-        }
-    }
-    Ok(String::from_utf8_lossy(&bytes).to_string())
 }

@@ -51,6 +51,10 @@ impl TunnelRequestObserver {
         }
     }
 
+    pub(crate) fn on_upstream_send(&mut self) {
+        self.observer.on_upstream_send();
+    }
+
     pub(crate) fn on_upstream_response_headers(
         &mut self,
         response_headers: &HeaderMap,

@@ -59,6 +59,7 @@ pub(crate) fn next_generated_request_id(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn generated_request_generation(
     request_id: &str,
     model_id: &str,

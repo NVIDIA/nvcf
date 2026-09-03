@@ -59,7 +59,7 @@ rectangle "pylon" #e8f4fd {
 }
 
 rectangle "Dynamo Instance" #fdf5e6 {
-  rectangle "Upstream HTTP\n/v1/chat/completions\n/v1/responses\n/v1/embeddings\n/pylon/v1/stats/stream\n/health" as Upstream
+  rectangle "Dynamo Frontend\nOpenAI HTTP + /health\nFrontendStats gRPC\n/v1/stats/stream (debug)" as Upstream
 }
 
 cloud "Metrics / OTEL\nCollectors" as Obs

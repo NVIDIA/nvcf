@@ -16,13 +16,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde::Deserialize;
 use stargate_protocol::common::valid_last_mean_input_tps;
 use tokio::time::Instant as TokioInstant;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
 use crate::runtime_state::ModelGeneration;
-use crate::{CurrentModelStats, PylonRuntimeState};
+use crate::{CurrentKvCacheStats, CurrentModelStats, PylonRuntimeState};
 
 use super::collector::{
     FinalizeRequestUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsCollectorConfig,
@@ -40,12 +39,14 @@ pub(super) struct ModelMetricsState {
     pub(super) embedding_item_tps_sum: f64,
     pub(super) max_chat_output_tps: f64,
     pub(super) max_embedding_item_tps: f64,
-    pub(super) kv_cache: KvCacheStatsSnapshot,
+    pub(super) kv_cache: Option<KvCacheStatsSnapshot>,
+    pub(super) relay_load: Option<RelayLoadStatsSnapshot>,
     pub(super) input_tps_distribution: TpsDistribution,
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
     pub(super) kv_cache_stats_observed: bool,
+    pub(super) relay_load_stats_observed: bool,
     pub(super) engine_stream_stats_observed: bool,
     pub(super) last_stats_event_at: Option<TokioInstant>,
     pub(super) stats_observed_at_unix_ms: u64,
@@ -57,12 +58,41 @@ pub(super) struct GenerationMetricsState {
     pub(super) metrics: ModelMetricsState,
     pub(super) pinned_input_tps: Option<f64>,
 }
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub(super) struct KvCacheStatsSnapshot {
-    pub(super) model: String,
-    pub(super) kv_cache_capacity_tokens: u64,
-    pub(super) kv_cache_used_tokens: u64,
-    pub(super) kv_cache_free_tokens: u64,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KvCacheStatsSnapshot {
+    pub(crate) model: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) kv_cache_capacity_tokens: u64,
+    pub(crate) kv_cache_used_tokens: u64,
+    pub(crate) kv_cache_free_tokens: u64,
+    pub(crate) source_observed_at_unix_ms: u64,
+    pub(crate) complete: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KvCacheStatsEnvelope {
+    pub(crate) models: Vec<KvCacheStatsSnapshot>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RelayLoadStatsSnapshot {
+    pub(crate) model: String,
+    pub(crate) input_tps: Option<f64>,
+    pub(crate) output_tps: f64,
+    pub(crate) queue_size: u64,
+    pub(crate) queued_input_size: Option<u64>,
+    pub(crate) num_running_queries: u64,
+    pub(crate) max_engine_concurrency: Option<u64>,
+    pub(crate) total_query_input_size: Option<u64>,
+    pub(crate) input_processing_queries: u64,
+    pub(crate) output_generation_queries: u64,
+    pub(crate) source_observed_at_unix_ms: u64,
+    pub(crate) complete: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RelayLoadStatsEnvelope {
+    pub(crate) models: Vec<RelayLoadStatsSnapshot>,
 }
 struct RequestCounterState {
     generation: ModelGeneration,
@@ -323,19 +353,16 @@ impl StatsAggregator {
             StatsAggregatorUpdate::RequestCounters(update) => {
                 self.apply_request_counters_into(update, updated_models)
             }
+            StatsAggregatorUpdate::KvCache(snapshot) => {
+                updated_models.extend(self.apply_kv_cache_snapshot(snapshot))
+            }
+            StatsAggregatorUpdate::RelayLoad(snapshot) => {
+                updated_models.extend(self.apply_relay_load_snapshot(snapshot))
+            }
             StatsAggregatorUpdate::FinalizeRequest(update) => {
                 updated_models.extend(self.finalize_request(update))
             }
-            StatsAggregatorUpdate::EnableOpenAiFallback => self.enable_openai_fallback(),
         }
-    }
-
-    pub(super) fn apply_control_update(&mut self, update: &StatsAggregatorUpdate) -> bool {
-        if !matches!(update, StatsAggregatorUpdate::EnableOpenAiFallback) {
-            return false;
-        }
-        self.enable_openai_fallback();
-        true
     }
 
     pub(super) fn openai_fallback_stats_enabled(&self) -> bool {
@@ -488,6 +515,49 @@ impl StatsAggregator {
         let request_id = std::mem::take(&mut update.request_id);
         let samples = self.apply_request_counter_transition(request_id, &update);
         self.publish_request_counter_samples(update, samples, updated_models);
+    }
+
+    fn apply_relay_load_snapshot(
+        &mut self,
+        snapshot: RelayLoadStatsEnvelope,
+    ) -> Vec<ModelStatsUpdate> {
+        let by_model = snapshot
+            .models
+            .into_iter()
+            .map(|model| (model.model.clone(), model))
+            .collect::<HashMap<_, _>>();
+        let mut dirty = Vec::new();
+        for (model_id, generation) in &mut self.per_model {
+            let next = by_model.get(model_id).cloned();
+            generation.metrics.relay_load_stats_observed |= next.is_some();
+            let input_tps = next
+                .as_ref()
+                .filter(|load| load.complete)
+                .and_then(|load| load.input_tps)
+                .filter(|input_tps| valid_last_mean_input_tps(*input_tps));
+            let input_tps_changed = generation.pinned_input_tps.is_none()
+                && input_tps.is_some_and(|input_tps| {
+                    if generation.metrics.last_mean_input_tps == input_tps {
+                        false
+                    } else {
+                        generation.metrics.last_mean_input_tps = input_tps;
+                        true
+                    }
+                });
+            if generation.metrics.relay_load != next {
+                generation.metrics.relay_load = next;
+                if let Some(load) = &generation.metrics.relay_load {
+                    generation.metrics.stats_observed_at_unix_ms = load.source_observed_at_unix_ms;
+                }
+                dirty.push(model_id.clone());
+            } else if input_tps_changed {
+                dirty.push(model_id.clone());
+            }
+        }
+        dirty
+            .into_iter()
+            .map(|model_id| self.snapshot_update(model_id))
+            .collect()
     }
 
     fn prepare_request_counter_update(&mut self, update: &mut RequestCounterUpdate) -> bool {
@@ -759,21 +829,6 @@ impl StatsAggregator {
         true
     }
 
-    fn enable_openai_fallback(&mut self) {
-        if self.config.openai_fallback_stats_enabled {
-            return;
-        }
-        self.config.openai_fallback_stats_enabled = true;
-        tracing::warn!("OpenAI fallback stats enabled after engine stats stream was unsupported");
-        if let Some(metrics) = self.runtime_state.metrics() {
-            metrics.observe_engine_stats_source_transition(
-                ENGINE_STATS_SOURCE,
-                "openai_fallback",
-                "unsupported",
-            );
-        }
-    }
-
     fn snapshot_update(&self, model_id: String) -> ModelStatsUpdate {
         let generation = self
             .current_generation(&model_id)
@@ -870,34 +925,62 @@ impl ModelMetricsState {
 
     pub(super) fn current_stats(&self, inputs: ModelStatsSnapshotInputs) -> CurrentModelStats {
         let (stats_capabilities, stats_sources) = self.stats_labels();
+        let kv_cache = self.kv_cache.as_ref().filter(|snapshot| snapshot.complete);
         let active_chat_output_tps = if self.counter_output_tps_authoritative {
             0.0
         } else {
             inputs.active_chat_output_tps
         };
+        let relay = self.relay_load.as_ref().filter(|load| load.complete);
         CurrentModelStats {
             last_mean_input_tps: self.last_mean_input_tps,
-            output_tps: active_chat_output_tps.max(average_with_sum(
-                &self.chat_output_tps_samples,
-                self.chat_output_tps_sum,
-            )),
+            output_tps: relay.map_or_else(
+                || {
+                    active_chat_output_tps.max(average_with_sum(
+                        &self.chat_output_tps_samples,
+                        self.chat_output_tps_sum,
+                    ))
+                },
+                |load| load.output_tps,
+            ),
             embedding_item_tps: average_with_sum(
                 &self.embedding_item_tps_samples,
                 self.embedding_item_tps_sum,
             ),
             max_output_tps: self.max_chat_output_tps,
             max_embedding_item_tps: self.max_embedding_item_tps,
-            queue_size: inputs.queue_size,
-            queued_input_size: inputs.queued_input_size,
-            kv_cache_capacity_tokens: self.kv_cache.kv_cache_capacity_tokens,
-            kv_cache_used_tokens: self.kv_cache.kv_cache_used_tokens,
-            kv_cache_free_tokens: self.kv_cache.kv_cache_free_tokens,
-            num_running_queries: inputs.num_running_queries,
-            max_engine_concurrency: None,
-            total_query_input_size: inputs.total_query_input_size,
+            queue_size: relay.map_or(inputs.queue_size, |load| load.queue_size),
+            queued_input_size: relay
+                .and_then(|load| load.queued_input_size)
+                .unwrap_or(inputs.queued_input_size),
+            kv_cache_capacity_tokens: kv_cache
+                .map(|snapshot| snapshot.kv_cache_capacity_tokens)
+                .unwrap_or_default(),
+            kv_cache_used_tokens: kv_cache
+                .map(|snapshot| snapshot.kv_cache_used_tokens)
+                .unwrap_or_default(),
+            kv_cache_free_tokens: kv_cache
+                .map(|snapshot| snapshot.kv_cache_free_tokens)
+                .unwrap_or_default(),
+            kv_cache: kv_cache.map(|snapshot| CurrentKvCacheStats {
+                capacity_tokens: snapshot.kv_cache_capacity_tokens,
+                used_tokens: snapshot.kv_cache_used_tokens,
+                free_tokens: snapshot.kv_cache_free_tokens,
+                source_observed_at_unix_ms: snapshot.source_observed_at_unix_ms,
+            }),
+            num_running_queries: relay
+                .map_or(inputs.num_running_queries, |load| load.num_running_queries),
+            max_engine_concurrency: relay.and_then(|load| load.max_engine_concurrency),
+            total_query_input_size: relay
+                .and_then(|load| load.total_query_input_size)
+                .unwrap_or(inputs.total_query_input_size),
             queue_time_estimate_ms_by_priority: None,
-            input_processing_queries: inputs.input_processing_queries,
-            output_generation_queries: inputs.output_generation_queries,
+            input_processing_queries: relay.map_or(inputs.input_processing_queries, |load| {
+                load.input_processing_queries
+            }),
+            output_generation_queries: relay.map_or(inputs.output_generation_queries, |load| {
+                load.output_generation_queries
+            }),
             stats_observed_at_unix_ms: self.stats_observed_at_unix_ms,
             stats_capabilities,
             stats_sources,
@@ -912,7 +995,9 @@ impl ModelMetricsState {
             self.engine_stream_stats_observed
                 .then_some(("model.throughput.engine_stream", ENGINE_STATS_SOURCE)),
             self.kv_cache_stats_observed
-                .then_some(("machine.kv_cache.http", "kv_cache_stats")),
+                .then_some(("machine.kv_cache.dynamo_relay", "dynamo_relay_kv_usage")),
+            self.relay_load_stats_observed
+                .then_some(("model.load.dynamo_relay", "dynamo_relay_load")),
         ]
         .into_iter()
         .flatten()
