@@ -28,9 +28,20 @@ The `Dockerfile` uses the official `cassandra:5.0.9` base image and builds both 
 
 ```bash
 docker build \
-  --build-arg TARGETARCH=amd64 \
+  --platform linux/amd64 \
   -t <your-registry>/<your-org>/nvcf-cassandra-migrations:<version> .
 ```
+
+To build and publish both supported architectures:
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --push \
+  -t <your-registry>/<your-org>/nvcf-cassandra-migrations:<version> .
+```
+
+BuildKit sets `TARGETARCH` from each selected target platform so the downloaded and compiled binaries match the final image architecture.
 
 ## Running the migrations
 
