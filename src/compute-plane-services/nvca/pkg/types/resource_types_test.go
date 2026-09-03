@@ -1509,10 +1509,11 @@ func TestCalculateAvailability(t *testing.T) {
 
 func TestMultiplierMultiNode(t *testing.T) {
 	tests := []struct {
-		name         string
-		input        string
-		want         string
-		expNodeCount int
+		name             string
+		input            string
+		want             string
+		expNodeCount     int
+		expGPUMultiplier int
 	}{
 		{
 			name:         "no multiplier",
@@ -1521,22 +1522,32 @@ func TestMultiplierMultiNode(t *testing.T) {
 			expNodeCount: 1,
 		},
 		{
-			name:         "multiplier",
-			input:        "ON-PREM.GPU.A100_2x",
-			want:         "ON-PREM.GPU.A100",
-			expNodeCount: 1,
+			name:             "multiplier",
+			input:            "ON-PREM.GPU.A100_2x",
+			want:             "ON-PREM.GPU.A100",
+			expNodeCount:     1,
+			expGPUMultiplier: 2,
 		},
 		{
-			name:         "multiplier with node count",
-			input:        "ON-PREM.GPU.A100_2x.x2",
-			want:         "ON-PREM.GPU.A100",
-			expNodeCount: 2,
+			name:             "multiplier with node count",
+			input:            "ON-PREM.GPU.A100_2x.x2",
+			want:             "ON-PREM.GPU.A100",
+			expNodeCount:     2,
+			expGPUMultiplier: 2,
 		},
 		{
-			name:         "multiplier with node count",
-			input:        "ON-PREM.GPU.A100_2x.x212314212",
-			want:         "ON-PREM.GPU.A100",
-			expNodeCount: 212314212,
+			name:             "multiplier with node count",
+			input:            "ON-PREM.GPU.A100_2x.x212314212",
+			want:             "ON-PREM.GPU.A100",
+			expNodeCount:     212314212,
+			expGPUMultiplier: 2,
+		},
+		{
+			name:             "GB300 four-GPU nodes across two nodes",
+			input:            "AWS.GPU.GB300_4x.x2",
+			want:             "AWS.GPU.GB300",
+			expNodeCount:     2,
+			expGPUMultiplier: 4,
 		},
 	}
 
@@ -1545,6 +1556,7 @@ func TestMultiplierMultiNode(t *testing.T) {
 			itn := InstanceName(tt.input)
 			assert.Equal(t, tt.want, itn.WithoutMultiplierMultiNode())
 			assert.Equal(t, tt.expNodeCount, itn.GetNodeCount())
+			assert.Equal(t, tt.expGPUMultiplier, itn.GetGPUMultiplier())
 		})
 	}
 }

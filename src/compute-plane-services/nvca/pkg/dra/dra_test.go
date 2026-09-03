@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -178,6 +179,7 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 		name       string
 		objs       []client.Object
 		keyToHash  string
+		minGPUs    int64
 		expObjs    []client.Object
 		expDRAObjs []client.Object
 		expError   string
@@ -554,7 +556,7 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			gotObjs, gotDRAObjs, err := TransformNVLinkOptimizedDRAObjects(tt.objs, tt.keyToHash)
+			gotObjs, gotDRAObjs, err := TransformNVLinkOptimizedDRAObjects(tt.objs, tt.keyToHash, tt.minGPUs)
 			if tt.expError != "" {
 				assert.EqualError(t, err, tt.expError)
 			} else if assert.NoError(t, err) && assert.Len(t, gotObjs, len(tt.expObjs)) && assert.Len(t, gotDRAObjs, len(tt.expDRAObjs)) {
@@ -565,6 +567,183 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 					assert.Equal(t, tt.expDRAObjs[i], gotDRAObjs[i])
 				}
 			}
+		})
+	}
+}
+
+func TestComputeDomainChannelPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		instanceType string
+		expMinGPUs   int64
+		expNeeded    bool
+	}{
+		{
+			name:         "multi-node instance type gates on a whole node of GPUs",
+			instanceType: "AWS.GPU.GB300_4x.x2",
+			expMinGPUs:   4,
+			expNeeded:    true,
+		},
+		{
+			name:         "wider multi-node instance type uses the same per-node count",
+			instanceType: "AWS.GPU.GB300_4x.x4",
+			expMinGPUs:   4,
+			expNeeded:    true,
+		},
+		{
+			name:         "single-node instance type never needs a channel",
+			instanceType: "AWS.GPU.GB300_1x",
+			expNeeded:    false,
+		},
+		{
+			name:         "whole-node single-node instance type never needs a channel",
+			instanceType: "DGX-CLOUD.GPU.GB200_4x",
+			expNeeded:    false,
+		},
+		{
+			name:         "explicit single node suffix never needs a channel",
+			instanceType: "AWS.GPU.GB300_4x.x1",
+			expNeeded:    false,
+		},
+		{
+			name:         "unrecognised instance type falls back to claiming for every GPU container",
+			instanceType: "AWS.GPU.GB300",
+			expNeeded:    true,
+		},
+		{
+			name:         "empty instance type falls back to claiming for every GPU container",
+			instanceType: "",
+			expNeeded:    true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			minGPUs, needed := ComputeDomainChannelPolicy(tt.instanceType)
+			assert.Equal(t, tt.expNeeded, needed)
+			assert.Equal(t, tt.expMinGPUs, minGPUs)
+		})
+	}
+}
+
+func TestSetComputeDomainToGPUPodResourceClaims_MinGPUs(t *testing.T) {
+	gpuPod := func(gpus string) *corev1.Pod {
+		return &corev1.Pod{
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "worker",
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{
+							corev1.ResourceName("nvidia.com/gpu"): resource.MustParse(gpus),
+						},
+					},
+				}},
+			},
+		}
+	}
+
+	for _, tt := range []struct {
+		name      string
+		pod       *corev1.Pod
+		minGPUs   int64
+		expClaims bool
+	}{
+		{
+			name:      "whole-node worker claims a channel",
+			pod:       gpuPod("4"),
+			minGPUs:   4,
+			expClaims: true,
+		},
+		{
+			name:      "worker larger than one node still claims a channel",
+			pod:       gpuPod("8"),
+			minGPUs:   4,
+			expClaims: true,
+		},
+		{
+			name:      "single-GPU worker on a four-GPU node is skipped",
+			pod:       gpuPod("1"),
+			minGPUs:   4,
+			expClaims: false,
+		},
+		{
+			name:      "two-GPU worker on a four-GPU node is skipped",
+			pod:       gpuPod("2"),
+			minGPUs:   4,
+			expClaims: false,
+		},
+		{
+			name:      "zero threshold keeps the legacy claim-everything behaviour",
+			pod:       gpuPod("1"),
+			minGPUs:   0,
+			expClaims: true,
+		},
+		{
+			name:      "single-GPU nodes claim for every GPU worker",
+			pod:       gpuPod("1"),
+			minGPUs:   1,
+			expClaims: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cd := NewSingleChannelComputeDomain()
+			SetComputeDomainToGPUPodResourceClaims(cd, tt.minGPUs, tt.pod)
+
+			if !tt.expClaims {
+				assert.Empty(t, tt.pod.Spec.ResourceClaims)
+				assert.Empty(t, tt.pod.Spec.Containers[0].Resources.Claims)
+				return
+			}
+			assert.Equal(t, []corev1.PodResourceClaim{{
+				Name:                      defaultComputeDomainName,
+				ResourceClaimTemplateName: ptr.To(defaultComputeDomainChannelName),
+			}}, tt.pod.Spec.ResourceClaims)
+			assert.Equal(t, []corev1.ResourceClaim{{Name: defaultComputeDomainName}},
+				tt.pod.Spec.Containers[0].Resources.Claims)
+		})
+	}
+}
+
+func Test_containerWholeGPUCount(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		c    corev1.Container
+		want int64
+	}{
+		{
+			name: "no resources",
+			c:    corev1.Container{},
+			want: 0,
+		},
+		{
+			name: "whole GPUs in limits",
+			c: corev1.Container{Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("4")},
+			}},
+			want: 4,
+		},
+		{
+			name: "whole GPUs in requests only",
+			c: corev1.Container{Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceName("nvidia.com/pgpu"): resource.MustParse("2")},
+			}},
+			want: 2,
+		},
+		{
+			name: "MIG slices are not whole GPUs",
+			c: corev1.Container{Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceName("nvidia.com/mig-1g.10gb"): resource.MustParse("1")},
+			}},
+			want: 0,
+		},
+		{
+			name: "shared GPUs are not whole GPUs",
+			c: corev1.Container{Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu.shared"): resource.MustParse("2")},
+			}},
+			want: 0,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, containerWholeGPUCount(tt.c))
 		})
 	}
 }

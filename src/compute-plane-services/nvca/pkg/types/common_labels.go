@@ -47,6 +47,7 @@ const (
 	InstanceCountKey                    = "instance-count"
 	GPUNameKey                          = "gpu-name"
 	MessageBatchIDKey                   = "nvcf.nvidia.io/message-batch-id"
+	InstanceTypeNameAnnotationKey       = "nvcf.nvidia.io/instance-type-name"
 	ShaderCacheLabelKey                 = labelFQDNPrefix + "/gxcache-client-inject"
 	GXCacheSkipInjectionAnnotationKey   = "gxcache.nvcf.nvidia.com/injected-at"
 	GXCacheSkipInjectionAnnotationValue = "skip"

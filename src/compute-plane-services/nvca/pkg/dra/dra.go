@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	nvresourcev1beta1 "github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -47,6 +48,7 @@ const (
 func TransformNVLinkOptimizedDRAObjects(
 	sourceObjs []client.Object,
 	keyToHash string,
+	minGPUs int64,
 ) (retObjs, draObjs []client.Object, err error) {
 	if keyToHash == "" {
 		return nil, nil, fmt.Errorf("key to partition NVLink domains is empty")
@@ -74,7 +76,7 @@ func TransformNVLinkOptimizedDRAObjects(
 	}
 
 	cd := NewSingleChannelComputeDomain()
-	SetComputeDomainToGPUPodResourceClaims(cd, sourceObjs...)
+	SetComputeDomainToGPUPodResourceClaims(cd, minGPUs, sourceObjs...)
 
 	SetPreferredNVLinkDomainSchedulingParameters(keyToHash, prefNVDObjs...)
 	for idx, objs := range objsByReqNVDIndex {
@@ -138,6 +140,35 @@ const (
 	defaultComputeDomainChannelName = "nvcf-cd-channel-0"
 )
 
+// ComputeDomainChannelPolicy reports whether workloads running on
+// instanceTypeName need ComputeDomain IMEX channels at all and, when they do, the
+// whole-GPU request a container must make to be given one.
+//
+// An IMEX channel exists so that GPUs in *different* nodes can share memory over
+// NVLink. Only a multi-node instance type ("<base>_<N>x.x<M>", M > 1) spans nodes,
+// and inside one only a container that owns a whole node (N GPUs) is part of the
+// multi-node gang. A sub-node worker fits within a single node and has nothing to
+// share across one.
+//
+// Handing a channel to a sub-node worker is actively harmful rather than merely
+// redundant: every node advertises exactly one channel device and the
+// compute-domain-default-channel device class pins it to id 0, so the claim makes
+// the worker the node's exclusive GPU tenant and strands the remaining GPUs.
+//
+// A name with no "_Nx" multiplier is not recognised, and returns (0, true) to
+// preserve the historical behaviour of claiming a channel for every GPU container.
+func ComputeDomainChannelPolicy(instanceTypeName string) (minGPUs int64, needed bool) {
+	name := nvcatypes.InstanceName(instanceTypeName)
+	gpusPerNode := name.GetGPUMultiplier()
+	if gpusPerNode == 0 {
+		return 0, true
+	}
+	if name.GetNodeCount() <= 1 {
+		return 0, false
+	}
+	return int64(gpusPerNode), true
+}
+
 func NewSingleChannelComputeDomain() *nvresourcev1beta1.ComputeDomain {
 	cd := &nvresourcev1beta1.ComputeDomain{
 		ObjectMeta: metav1.ObjectMeta{
@@ -154,15 +185,21 @@ func NewSingleChannelComputeDomain() *nvresourcev1beta1.ComputeDomain {
 	return cd
 }
 
+// SetComputeDomainToGPUPodResourceClaims attaches cd's channel claim to the GPU
+// containers of objs. minGPUs is the whole-GPU capacity of one node, as returned
+// by ComputeDomainChannelPolicy; containers requesting less than that are skipped
+// because they cannot take part in multi-node NVLink. A minGPUs of 0 or 1 claims a
+// channel for every GPU container.
 func SetComputeDomainToGPUPodResourceClaims(
 	cd *nvresourcev1beta1.ComputeDomain,
+	minGPUs int64,
 	objs ...client.Object,
 ) {
 	mf := func(pts *corev1.PodTemplateSpec) {
 		ps := &pts.Spec
 		anyUpdated := false
 		for ci, c := range append(ps.Containers, ps.InitContainers...) {
-			if containerRequestsStaticGPU(c) {
+			if containerNeedsComputeDomainChannel(c, minGPUs) {
 				anyUpdated = true
 				c.Resources.Claims = append(c.Resources.Claims, corev1.ResourceClaim{
 					Name: cd.Name,
@@ -341,7 +378,41 @@ var (
 	gpuResourcePrefixes = []string{
 		"nvidia.com/mig-",
 	}
+	// wholeGPUResourceKeys are the resources measured in whole GPUs, so the only
+	// ones that can be compared against a node's GPU capacity.
+	wholeGPUResourceKeys = []corev1.ResourceName{
+		corev1.ResourceName("nvidia.com/gpu"),
+		corev1.ResourceName("nvidia.com/pgpu"),
+	}
 )
+
+// containerNeedsComputeDomainChannel reports whether c should be given an IMEX
+// channel claim, given that one node holds minGPUs whole GPUs.
+func containerNeedsComputeDomainChannel(c corev1.Container, minGPUs int64) bool {
+	if !containerRequestsStaticGPU(c) {
+		return false
+	}
+	if minGPUs <= 1 {
+		return true
+	}
+	return containerWholeGPUCount(c) >= minGPUs
+}
+
+// containerWholeGPUCount returns the largest number of whole GPUs c asks for.
+// Fractional and MIG resources are deliberately not counted: a container holding
+// a slice of one GPU can never own a whole node, and so can never take part in
+// multi-node NVLink.
+func containerWholeGPUCount(c corev1.Container) int64 {
+	var count int64
+	for _, rl := range []corev1.ResourceList{c.Resources.Limits, c.Resources.Requests} {
+		for _, rk := range wholeGPUResourceKeys {
+			if q, ok := rl[rk]; ok && q.Value() > count {
+				count = q.Value()
+			}
+		}
+	}
+	return count
+}
 
 func containerRequestsStaticGPU(c corev1.Container) bool {
 	var rls []corev1.ResourceList

@@ -1458,3 +1458,112 @@ func volumeMountKeys(vms []corev1.VolumeMount) []string {
 	}
 	return keys
 }
+
+// TestMiniserviceOperatorWebhook_Pod_ComputeDomainChannelByWorkerSize covers the
+// placement bug where every GPU worker on an NVLinkOptimized cluster was given a
+// ComputeDomain IMEX channel claim. A node advertises exactly one channel device,
+// so the claim made each worker the sole GPU tenant of its node and stranded the
+// rest of that node's GPUs. Only workers that own a whole node may claim one.
+func TestMiniserviceOperatorWebhook_Pod_ComputeDomainChannelByWorkerSize(t *testing.T) {
+	ctx := t.Context()
+
+	gpuPod := func(gpus string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dynamo-worker",
+				Namespace: testNamespace,
+				Labels:    miniserviceNameLabels(),
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name:  "worker",
+					Image: "worker:latest",
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{
+							corev1.ResourceName("nvidia.com/gpu"): resource.MustParse(gpus),
+						},
+					},
+				}},
+			},
+		}
+	}
+
+	for _, tt := range []struct {
+		name         string
+		instanceType string
+		gpus         string
+		expClaim     bool
+	}{
+		{
+			name:         "whole-node worker on a multi-node instance type claims a channel",
+			instanceType: "AWS.GPU.GB300_4x.x2",
+			gpus:         "4",
+			expClaim:     true,
+		},
+		{
+			name:         "single-GPU worker on a multi-node instance type does not",
+			instanceType: "AWS.GPU.GB300_4x.x2",
+			gpus:         "1",
+			expClaim:     false,
+		},
+		{
+			name:         "two-GPU worker on a four-GPU node does not",
+			instanceType: "AWS.GPU.GB300_4x.x2",
+			gpus:         "2",
+			expClaim:     false,
+		},
+		{
+			name:         "single-node instance type never claims a channel",
+			instanceType: "AWS.GPU.GB300_1x",
+			gpus:         "1",
+			expClaim:     false,
+		},
+		{
+			name:         "unrecognised instance type keeps the legacy behaviour",
+			instanceType: "ON-PREM.GPU.A100",
+			gpus:         "1",
+			expClaim:     true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := nvcatypes.MiniserviceMetadata{
+				MessageAction: common.FunctionCreationAction,
+				Labels:        miniserviceNameLabels(),
+				Annotations: map[string]string{
+					nvcatypes.InstanceTypeNameAnnotationKey: tt.instanceType,
+				},
+			}
+			wh := makeWebhook(t, createConfigMapFromMeta(t, testNamespace, meta))
+			wh.fff = &featureflagmock.Fetcher{
+				EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized},
+			}
+
+			raw, err := json.Marshal(gpuPod(tt.gpus))
+			require.NoError(t, err)
+			req := admission.Request{}
+			req.Namespace = testNamespace
+			req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+			req.Operation = admissionv1.Create
+			req.Object = runtime.RawExtension{Raw: raw}
+
+			resp := wh.Handle(ctx, req)
+			require.True(t, resp.Allowed, "expected Allowed, got: %v", resp.Result)
+
+			var got corev1.Pod
+			require.NoError(t, json.Unmarshal(applyPatches(t, raw, resp.Patches), &got))
+
+			if !tt.expClaim {
+				assert.Empty(t, got.Spec.ResourceClaims,
+					"sub-node worker must not take exclusive ownership of the node's only IMEX channel")
+				assert.Empty(t, got.Spec.Containers[0].Resources.Claims)
+				return
+			}
+			require.Len(t, got.Spec.ResourceClaims, 1)
+			assert.Equal(t, "nvcf-cd-index-0", got.Spec.ResourceClaims[0].Name)
+			require.NotNil(t, got.Spec.ResourceClaims[0].ResourceClaimTemplateName)
+			assert.Equal(t, "nvcf-cd-channel-0", *got.Spec.ResourceClaims[0].ResourceClaimTemplateName)
+			assert.Equal(t, []corev1.ResourceClaim{{Name: "nvcf-cd-index-0"}},
+				got.Spec.Containers[0].Resources.Claims)
+		})
+	}
+}

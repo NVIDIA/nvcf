@@ -851,7 +851,12 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	infraObjs = append(infraObjs, utilsPod)
 
 	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-		infraObjs = append(infraObjs, nvcfdra.NewSingleChannelComputeDomain())
+		// Single-node instance types cannot span NVLink-connected nodes, so no pod
+		// in this MiniService will claim a channel from the domain. Creating one
+		// anyway would leave an unclaimed ComputeDomain behind.
+		if _, needed := nvcfdra.ComputeDomainChannelPolicy(icmsReq.Spec.CreationMsgInfo.InstanceTypeName); needed {
+			infraObjs = append(infraObjs, nvcfdra.NewSingleChannelComputeDomain())
+		}
 	}
 
 	// Create the miniservice metadata ConfigMap before any objects are created

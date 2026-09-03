@@ -690,6 +690,28 @@ func (n InstanceName) WithoutMultiplierMultiNode() string {
 	return multiNodeInstanceTypeRE.ReplaceAllString(string(n), "")
 }
 
+// gpuMultiplierInstanceTypeRE captures the "_Nx" GPU multiplier of an instance
+// type name, with or without a trailing ".xM" multi-node suffix.
+var gpuMultiplierInstanceTypeRE = regexp.MustCompile(`_(\d+)x(?:\.x\d+)?$`)
+
+// GetGPUMultiplier returns the "_Nx" GPU multiplier encoded in an instance type
+// name, or 0 when the name carries no multiplier suffix.
+//
+// The multiplier means different things either side of the multi-node suffix.
+// For a multi-node name ("_Nx.xM") it is the GPU count of one whole node, because
+// such names are built from a single-node instance type by WithMultiNode. For a
+// plain "_Nx" name it is the size of a sub-node slice of a node whose real GPU
+// capacity is not recoverable from the name. Callers that need a per-node
+// capacity must therefore check GetNodeCount() > 1 first.
+func (n InstanceName) GetGPUMultiplier() int {
+	matches := gpuMultiplierInstanceTypeRE.FindStringSubmatch(string(n))
+	if len(matches) < 2 {
+		return 0
+	}
+	gpus, _ := strconv.Atoi(matches[1])
+	return gpus
+}
+
 func (n InstanceName) GetNodeCount() int {
 	matches := multiNodeInstanceTypeRE.FindStringSubmatch(string(n))
 	if len(matches) < 2 {

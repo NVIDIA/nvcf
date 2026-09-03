@@ -329,7 +329,7 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 		if isCreate {
 			// NVLink DRA mutations for claims/scheduling.
 			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-				w.mutateNVLinkDRA(obj.GetNamespace(), t)
+				w.mutateNVLinkDRA(obj.GetNamespace(), t, meta)
 			}
 
 			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {
@@ -396,10 +396,23 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 	}
 }
 
-func (w *miniserviceMutatingWebhook) mutateNVLinkDRA(key string, pod *corev1.Pod) {
-	// The ComputeDomain's fields are static for the workload so recreating it here is fine.
-	cd := nvcfdra.NewSingleChannelComputeDomain()
-	nvcfdra.SetComputeDomainToGPUPodResourceClaims(cd, pod)
+func (w *miniserviceMutatingWebhook) mutateNVLinkDRA(key string, pod *corev1.Pod, meta nvcatypes.MiniserviceMetadata) {
+	// Only whole-node workers on a multi-node instance type can share GPU memory
+	// across nodes, so only they need an IMEX channel. Claiming one for a sub-node
+	// worker would make it the exclusive GPU tenant of its node: each node
+	// advertises a single channel device, so the claim strands every other GPU on
+	// that node. The agent stamps the instance type name onto meta.Annotations.
+	if minGPUs, needed := nvcfdra.ComputeDomainChannelPolicy(
+		meta.Annotations[nvcatypes.InstanceTypeNameAnnotationKey],
+	); needed {
+		// The ComputeDomain's fields are static for the workload so recreating it here is fine.
+		cd := nvcfdra.NewSingleChannelComputeDomain()
+		nvcfdra.SetComputeDomainToGPUPodResourceClaims(cd, minGPUs, pod)
+	}
+
+	// NVLink domain placement is independent of the channel claim: it only
+	// expresses which NVLink domain a pod prefers, so it still applies to
+	// sub-node workers.
 	annos := pod.GetAnnotations()
 	if idxStr := annos[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; idxStr != "" {
 		nvcfdra.SetRequiredNVLinkDomainSchedulingParameters(key, idxStr, pod)
