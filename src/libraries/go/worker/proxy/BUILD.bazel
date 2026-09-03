@@ -84,6 +84,7 @@ go_test(
         "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_nats_io_nats_go//jetstream",
         "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@com_github_quic_go_quic_go//:quic-go",
         "@com_github_quic_go_quic_go//http3",
         "@com_github_quic_go_quic_go//integrationtests/tools",
         "@com_github_stretchr_testify//require",

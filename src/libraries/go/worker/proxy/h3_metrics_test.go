@@ -20,9 +20,11 @@ package proxy
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/quic-go/quic-go"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
 )
@@ -144,5 +146,54 @@ func TestTunnelGaugeStaysBalancedAcrossRepeatedRemoval(t *testing.T) {
 
 	if got := testutil.ToFloat64(nvcf.QuicTunnelGauge) - before; got != 0 {
 		t.Errorf("after repeated removal: gauge moved by %v, want 0", got)
+	}
+}
+
+func skips(reason string) float64 {
+	return testutil.ToFloat64(nvcf.QuicDialSkipCounter.WithLabelValues(reason))
+}
+
+// Each skip path is otherwise a silent return, and a silent return that reads
+// as "nothing wrong" is the defect class this area keeps producing. Counting
+// them separates "rotation never fired" from "rotation fired and did not help".
+func TestSkipPathsAreCountedByReason(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	tr, err := c.transport()
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+
+	// A non-timeout error must not count toward rotation, and must be recorded.
+	before := skips(nvcf.DialSkipNotTimeout)
+	c.noteDialResult(context.Background(), tr, "dest-a", errors.New("connection refused"))
+	if got := skips(nvcf.DialSkipNotTimeout) - before; got != 1 {
+		t.Errorf("not_timeout skips moved by %v, want 1", got)
+	}
+	if c.dialFailures["dest-a"] != 0 {
+		t.Error("a non-timeout error incremented the rotation counter")
+	}
+
+	// A cancelled context is attributed separately, not lumped in with it.
+	beforeCtx := skips(nvcf.DialSkipCtxCancelled)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.noteDialResult(ctx, tr, "dest-b", &net.DNSError{IsTimeout: true})
+	if got := skips(nvcf.DialSkipCtxCancelled) - beforeCtx; got != 1 {
+		t.Errorf("ctx_cancelled skips moved by %v, want 1", got)
+	}
+
+	// A dial from a superseded transport is attributed to staleness.
+	beforeStale := skips(nvcf.DialSkipStaleTransport)
+	c.noteDialResult(context.Background(), &quic.Transport{}, "dest-c", &net.DNSError{IsTimeout: true})
+	if got := skips(nvcf.DialSkipStaleTransport) - beforeStale; got != 1 {
+		t.Errorf("stale_transport skips moved by %v, want 1", got)
+	}
+
+	// A genuine network timeout on the current transport still counts.
+	c.noteDialResult(context.Background(), tr, "dest-d", &net.DNSError{IsTimeout: true})
+	if c.dialFailures["dest-d"] != 1 {
+		t.Errorf("dialFailures[dest-d] = %d, want 1", c.dialFailures["dest-d"])
 	}
 }

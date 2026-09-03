@@ -148,6 +148,7 @@ func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Tra
 	// This check therefore has to come before both the reset and the
 	// increment, not after them.
 	if t.quicTransport == nil || t.quicTransport != dialed {
+		logSkip(&skippedStaleDial, nvcf.DialSkipStaleTransport, "dial predates the current transport", destination, dialErr)
 		return
 	}
 	if dialErr == nil {
@@ -155,6 +156,16 @@ func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Tra
 		return
 	}
 	if !isTransportDialFailure(ctx, dialErr) {
+		// Two very different reasons land here and they need telling apart: a
+		// cancelled context means the dial never got a verdict, while a
+		// non-timeout error means the socket reached something. Reporting them
+		// as one silent return makes "rotation never fired" indistinguishable
+		// from "rotation fired and did not help".
+		if cause := context.Cause(ctx); cause != nil {
+			logSkip(&skippedCtxCancelled, nvcf.DialSkipCtxCancelled, "dial context cancelled", destination, cause)
+		} else {
+			logSkip(&skippedNotTimeout, nvcf.DialSkipNotTimeout, "error is not a network timeout", destination, dialErr)
+		}
 		return
 	}
 	if t.dialFailures == nil {
@@ -181,6 +192,31 @@ func dialFailureReason(ctx context.Context, dialErr error) string {
 	default:
 		return nvcf.DialFailureOther
 	}
+}
+
+// Occurrence counts for the skip paths. These back the log rate limiter only;
+// the exported series is nvcf.QuicDialSkipCounter, which is what alerts read.
+var (
+	skippedStaleDial    atomic.Int64
+	skippedCtxCancelled atomic.Int64
+	skippedNotTimeout   atomic.Int64
+)
+
+// logSkip records the skip and reports the first occurrence, then every
+// 1000th. Under a real blackhole these paths are hit thousands of times a
+// second, so logging each one would drown the signal it exists to provide.
+// The metric is incremented every time regardless; only the log is sampled.
+func logSkip(counter *atomic.Int64, reason, detail, destination string, err error) {
+	nvcf.QuicDialSkipCounter.WithLabelValues(reason).Inc()
+	n := counter.Add(1)
+	if n != 1 && n%1000 != 0 {
+		return
+	}
+	zap.L().Warn("dial failure did not count toward rotation",
+		zap.String("reason", detail),
+		zap.String("destination", destination),
+		zap.Int64("occurrences", n),
+		zap.Error(err))
 }
 
 func isTransportDialFailure(ctx context.Context, dialErr error) bool {

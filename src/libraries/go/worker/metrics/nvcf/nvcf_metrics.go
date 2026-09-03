@@ -40,6 +40,16 @@ const (
 	DialFailureOther   = "other"
 )
 
+// Reasons a dial failure was declined for rotation. Each of these is a silent
+// return in the dial path, and a silent return that reads as "nothing wrong"
+// is what made the original defect hard to find. Counting them separates
+// "rotation never fired" from "rotation fired and did not help".
+const (
+	DialSkipStaleTransport = "stale_transport"
+	DialSkipCtxCancelled   = "ctx_cancelled"
+	DialSkipNotTimeout     = "not_timeout"
+)
+
 // NVCF metrics shared between utils and niclls containers
 var (
 	RequestCounter = promauto.NewCounter(
@@ -103,6 +113,13 @@ var (
 			Name:      "transport_rotation_total",
 			Help:      "total quic transport rotations after consecutive dial failures",
 		})
+
+	QuicDialSkipCounter = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: QuicNamespace,
+			Name:      "dial_skip_total",
+			Help:      "dial failures that did not count toward rotation, by reason",
+		}, []string{"reason"})
 
 	QuicTunnelGauge = promauto.NewGauge(
 		prometheus.GaugeOpts{
@@ -181,5 +198,8 @@ var (
 func init() {
 	for _, reason := range []string{DialFailureTimeout, DialFailureAuth, DialFailureOther} {
 		QuicDialFailureCounter.WithLabelValues(reason)
+	}
+	for _, reason := range []string{DialSkipStaleTransport, DialSkipCtxCancelled, DialSkipNotTimeout} {
+		QuicDialSkipCounter.WithLabelValues(reason)
 	}
 }
