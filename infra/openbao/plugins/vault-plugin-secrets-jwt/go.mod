@@ -3,12 +3,12 @@ module github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt
 go 1.27.0
 
 require (
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-test/deep v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/vault/api v1.15.0
 	github.com/hashicorp/vault/sdk v0.15.2
-	gopkg.in/square/go-jose.v2 v2.6.0
 )
 
 require (
@@ -25,7 +25,6 @@ require (
 	github.com/evanphx/json-patch/v5 v5.6.0 // indirect
 	github.com/fatih/color v1.17.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect

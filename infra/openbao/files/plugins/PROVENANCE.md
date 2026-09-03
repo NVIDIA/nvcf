@@ -22,7 +22,7 @@ Held deliberately, not incidental to a `go mod tidy`:
 - `golang.org/x/net v0.57.0` - selected by `golang.org/x/crypto v0.55.0`
 - `golang.org/x/text v0.41.0` - selected by `golang.org/x/crypto v0.55.0`
 - `google.golang.org/grpc v1.83.1` - security floor
-- `github.com/go-jose/go-jose/v4 v4.1.4` - security floor
+- `github.com/go-jose/go-jose/v4 v4.1.4` - direct JWT/JWS implementation and security floor
 - `github.com/hashicorp/vault/api v1.15.0`
 - `github.com/hashicorp/vault/sdk v0.15.2`
 

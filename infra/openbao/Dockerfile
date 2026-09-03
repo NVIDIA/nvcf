@@ -31,9 +31,12 @@ FROM openbao/openbao:${BAO_VERSION}
 # Upgrade packages inherited from the upstream image before installing the
 # runtime tools. This ensures security fixes from the pinned Alpine branch are
 # applied even when the upstream image predates them.
+USER root
 # hadolint ignore=DL3018
 RUN apk upgrade --no-cache && \
     apk add --no-cache curl jq bash && \
     mkdir -p /openbao/plugins
 
 COPY --from=plugin-build --chmod=0555 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
+
+USER openbao

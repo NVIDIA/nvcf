@@ -21,10 +21,10 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
-	"gopkg.in/square/go-jose.v2"
-	"gopkg.in/square/go-jose.v2/jwt"
 )
 
 const (
@@ -184,7 +184,7 @@ func (b *backend) pathSignWrite(ctx context.Context, req *logical.Request, d *fr
 		signer.SignerOptions = signer.SignerOptions.WithHeader(jose.HeaderKey(headerName), headerValue)
 	}
 
-	token, err := jwt.Signed(signer).Claims(claims).CompactSerialize()
+	token, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		return logical.ErrorResponse("error serializing jwt: %v", err), err
 	}

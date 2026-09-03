@@ -60,6 +60,13 @@ changes were made to the original work:
    install script, Makefile and linter configuration. Source, tests, and
    license material were retained in full.
 
+11. plugin/backend.go, plugin/config.go, plugin/path_config.go,
+    plugin/path_config_test.go, plugin/path_jwks.go, plugin/path_jwks_test.go,
+    plugin/path_sign.go, plugin/path_sign_test.go, plugin/policy_signer.go, and
+    test/jwtverify/jwtverify.go: JSON Web Signature and JWT handling was
+    migrated from square/go-jose v2 to go-jose v4. Parser calls now explicitly
+    restrict accepted signature algorithms to the configured supported set.
+
 Files carrying an NVIDIA copyright header are NVIDIA-authored. Every
 upstream-originated file retains the upstream Outfox, Inc. header. AGENTS.md
 and CLAUDE.md carry neither, being repository guidance rather than distributed
