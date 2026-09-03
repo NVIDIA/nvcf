@@ -1112,6 +1112,37 @@ func (c K8sComputeBackend) CreatePodArtifact(ctx context.Context, podArt functio
 	return nil
 }
 
+// podInstanceExists reports whether the Pod backing instance id is still present, using the
+// same lister-backed check AllInstancesTerminatedAndReported relies on so both agree on what
+// "gone" means.
+func (c K8sComputeBackend) podInstanceExists(id string) bool {
+	_, err := c.bk8s.podSpecLister.Get(id)
+	return err == nil || !apierrors.IsNotFound(err)
+}
+
+// miniServiceInstanceExists reports whether the MiniService backing instance id is still
+// present.
+func (c K8sComputeBackend) miniServiceInstanceExists(ctx context.Context, id string) bool {
+	ms := &v1alpha1.MiniService{}
+	ms.Name = id
+	err := c.clients.HelmV2.Get(ctx, client.ObjectKeyFromObject(ms), ms)
+	return err == nil || !apierrors.IsNotFound(err)
+}
+
+// instanceObjectExists reports whether the underlying object for inst (a Pod or MiniService)
+// still exists in the cluster. Used to confirm an instance is actually gone, not just that a
+// delete has been issued/accepted, before it is treated as terminated.
+func (c K8sComputeBackend) instanceObjectExists(ctx context.Context, inst nvcav2beta1.InstanceStatus) bool {
+	switch inst.Type {
+	case nvcav2beta1.InstanceTypePod:
+		return c.podInstanceExists(inst.ID)
+	case nvcav2beta1.InstanceTypeMiniService:
+		return c.miniServiceInstanceExists(ctx, inst.ID)
+	default:
+		return false
+	}
+}
+
 func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1.ICMSRequest,
 	terminatedInstances map[string]nvcav2beta1.InstanceStatus, id string) bool {
 	log := core.GetLogger(ctx).WithField("instance_id", id)
@@ -1147,6 +1178,14 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 			}
 		}
 
+		// A successful Delete only initiates removal; the MiniService object (and the
+		// resources it owns) can remain present until its own finalizer is released.
+		// Do not report the instance as terminated until it is actually gone.
+		if c.miniServiceInstanceExists(ctx, id) {
+			log.Debug("Miniservice delete requested but instance still present, will retry")
+			return false
+		}
+
 		if _, ok := terminatedInstances[id]; !ok {
 			terminatedInstances[id] = nvcav2beta1.InstanceStatus{
 				ID:                    id,
@@ -1167,6 +1206,13 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 		} else if err != nil && apierrors.IsNotFound(err) {
 			log.Debug("Pod not found, report as terminated")
 		} else {
+			// A successful Delete only initiates removal (sets DeletionTimestamp); the pod
+			// can remain present indefinitely if a finalizer is blocking it. Do not report
+			// the instance as terminated until it is actually gone.
+			if c.podInstanceExists(id) {
+				log.Debug("Pod delete requested but pod still present, will retry")
+				return false
+			}
 			log.Debug("Terminated Pod")
 			c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal,
 				string(types.EventCategoryInstanceTermination), "Stopped instance %v/%v", instanceUpdate(id), c.bk8s.podInstanceNamespace, id)
@@ -2296,22 +2342,11 @@ func (c K8sComputeBackend) AllInstancesTerminatedAndReported(ctx context.Context
 		return false
 	}
 	for _, inst := range req.Status.Instances {
-		switch inst.Type {
-		case nvcav2beta1.InstanceTypePod:
-			_, err := c.bk8s.podSpecLister.Get(inst.ID)
-			if err == nil || !apierrors.IsNotFound(err) {
-				// if pod is found or any other error, consider not terminated
-				return false
-			}
-			log.Debugf("Pod %s not running", inst.ID)
-		case nvcav2beta1.InstanceTypeMiniService:
-			msKey := client.ObjectKey{Name: inst.ID}
-			err := c.clients.HelmV2.Get(ctx, msKey, &v1alpha1.MiniService{})
-			if err == nil || !apierrors.IsNotFound(err) {
-				return false
-			}
-			log.Debugf("Miniservice %s does not exist", inst.ID)
+		// if the object is found (or any other error occurs looking it up), consider not terminated
+		if c.instanceObjectExists(ctx, inst) {
+			return false
 		}
+		log.Debugf("Instance %s (%s) no longer exists", inst.ID, inst.Type)
 		// if the termination was reported to ICMS
 		if inst.LastReportedStatus != string(types.ICMSInstanceTerminated) {
 			return false
