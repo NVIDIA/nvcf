@@ -428,6 +428,14 @@ curl -v localhost:10083/metrics
 `llm api gateway` check probes `/healthz` on `LLM_GATEWAY_ENDPOINT`, since the
 LLM Gateway does not serve `/health`.
 
+The two checks differ in what a failure does. A failing `nvcf api` check returns
+`503`, because that upstream serves every route. A failing `llm api gateway`
+check is reported in the response body but still returns `200`: deployments wire
+`/health` to both the readiness and liveness probes, so failing it would restart
+every pod and drop invocation-service routing when only the LLM Gateway is down.
+Requests for an LLM-routed model return `502` for as long as that upstream is
+unreachable, and everything else keeps serving.
+
 `nvcf_ai_api_gateway_shadow_requests_dropped_total` counts shadow dispatches
 dropped before replay. The `openai_model_name` label identifies the shadow
 target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,

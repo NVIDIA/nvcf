@@ -403,3 +403,37 @@ func TestOpenAIDirector_LLMModelStripsCallerRoutingHeaders(t *testing.T) {
 	assert.Equal(t, "999", received.headers.Get("NVCF-POLL-SECONDS"),
 		"poll seconds is a caller knob the invocation path honors too, not a routing header")
 }
+
+// /health is wired to both the readiness and liveness probes, so a gating LLM
+// check would restart every pod whenever the LLM Gateway is down, taking
+// invocation-service routing with it. The nvcf api is a dependency of every
+// request, so that one stays gating.
+func TestBuildChiMux_LLMGatewayOutageDoesNotFailHealth(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(down.Close)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(up.Close)
+
+	probe := func(nvcfEndpoint, llmEndpoint string) (int, string) {
+		mux := openAIMux(t, llmMappings(llmModelEntry()), nvcfEndpoint, llmEndpoint)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		req.Host = openAIHost
+		mux.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+
+	code, body := probe(up.URL, down.URL)
+	assert.Equal(t, http.StatusOK, code, "an LLM Gateway outage must not fail the probes")
+	assert.Contains(t, body, "llm api gateway", "the failure must still be reported in the body")
+
+	code, _ = probe(down.URL, up.URL)
+	assert.Equal(t, http.StatusServiceUnavailable, code, "an nvcf api outage must still fail the probes")
+
+	code, _ = probe(up.URL, up.URL)
+	assert.Equal(t, http.StatusOK, code, "both upstreams healthy is OK")
+}
