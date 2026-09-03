@@ -146,15 +146,20 @@ was the previous shared-filesystem reader.
 6. Catalog, feature-gate, and StorageClass changes after step 4 never alter the
    binding. NVCA never switches a live cache to another provider.
 
+Steps 1 and 2 and persisting the selection on the request are implemented.
+Steps 3, 4, and 6 land with the binding controller.
+
 ## What runs today
 
 Public `main` selects by StorageClass presence: `nvcf-sc-30` present selects
 NVMesh; `nvcf-miniservice-sc` present selects the shared-filesystem path;
 `HelmSharedStorage` enabled with the model cache class present selects a Samba
 re-export of an `nvcf-sc` volume; otherwise a per-pod `emptyDir` with an init
-download. The catalog is installed but not
-read by reconciliation. No controller creates a binding. Garbage collection is
-an idle sweep keyed on a last-referenced annotation. The mutating webhook
+download. That is the path for a request with no persisted selection. A new
+request carries a selection derived from the catalog when it is created, and
+Helm backend selection follows it; the regular workflow records it but does not
+act on it yet. No controller creates a binding. Garbage collection is an idle
+sweep keyed on a last-referenced annotation. The mutating webhook
 injects the reader PVC into workload pods as `model-data`.
 
 ## Qualification
