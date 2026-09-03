@@ -57,9 +57,6 @@ const (
 )
 
 const (
-	// NVMeshStorageClassName, when present in the cluster, signals that
-	// NVMesh 3.x (with cross-namespace PV sharing) is installed.
-	NVMeshStorageClassName = "nvcf-sc-30"
 	// HelmCacheSharedStorageClassName is the shared storage class used for
 	// non-NVMesh cross-namespace model caching. It is either pre-provisioned
 	// by the operator or created by NVCA pointing at a Samba server.
@@ -81,14 +78,20 @@ func ModelCacheStorageClassName(override string) string {
 
 // SelectHelmCacheBackend resolves the Helm model-cache storage backend. All
 // caching is gated on CachingSupport plus the HelmModelCaching sub-gate; the
-// mechanism is then chosen by which storage class the cluster provides,
-// falling back to Samba (when HelmSharedStorage is enabled and the block class
-// Samba needs exists) and finally to a per-pod ephemeral cache:
+// mechanism is then chosen from the cluster's storage classes, falling back to
+// Samba (when HelmSharedStorage is enabled and the block class Samba needs
+// exists) and finally to a per-pod ephemeral cache:
 //
-//  1. nvcf-sc-30 present    -> NVMesh 3.x installed      -> NVMesh
-//  2. nvcf-miniservice-sc present  -> operator shared storage   -> SharedFS
+//  1. model cache class provisioned by NVMesh -> NVMesh
+//  2. nvcf-miniservice-sc present             -> operator shared storage -> SharedFS
 //  3. HelmSharedStorage on, model cache class present -> NVCA deploys Samba -> Samba
-//  4. otherwise             -> per-pod emptyDir fallback  -> Ephemeral
+//  4. otherwise                               -> per-pod emptyDir fallback -> Ephemeral
+//
+// NVMesh is identified by the provisioner on the model cache class, the same
+// way any other backend is. It was previously identified by the presence of a
+// marker class, nvcf-sc-30, which deployment templates no longer render; every
+// NVMesh deployment now runs a version with cross-namespace volume sharing, so
+// the marker distinguished nothing.
 //
 // modelCacheStorageClass is Agent.ModelCache.StorageClassName, the same config
 // value the storage controller provisions model cache volumes with; empty
@@ -104,11 +107,12 @@ func SelectHelmCacheBackend(
 		return HelmCacheBackendNone, nil
 	}
 
-	nvmeshPresent, err := storageClassExists(ctx, c, NVMeshStorageClassName)
+	dataClass := ModelCacheStorageClassName(modelCacheStorageClass)
+	provisioner, dataClassPresent, err := storageClassProvisioner(ctx, c, dataClass)
 	if err != nil {
 		return "", err
 	}
-	if nvmeshPresent {
+	if dataClassPresent && provisioner == NVMeshStorageClassProvisioner {
 		return HelmCacheBackendNVMesh, nil
 	}
 
@@ -128,11 +132,6 @@ func SelectHelmCacheBackend(
 		// threshold: the ModelCacheRequest would requeue indefinitely and block
 		// the install instead of degrading. Verify the class first and take the
 		// ephemeral cache when it is missing.
-		dataClass := ModelCacheStorageClassName(modelCacheStorageClass)
-		dataClassPresent, err := storageClassExists(ctx, c, dataClass)
-		if err != nil {
-			return "", err
-		}
 		if dataClassPresent {
 			return HelmCacheBackendSamba, nil
 		}
@@ -147,13 +146,20 @@ func SelectHelmCacheBackend(
 // storageClassExists reports whether a cluster-scoped StorageClass exists,
 // treating NotFound as a clean negative.
 func storageClassExists(ctx context.Context, c client.Client, name string) (bool, error) {
+	_, found, err := storageClassProvisioner(ctx, c, name)
+	return found, err
+}
+
+// storageClassProvisioner returns the provisioner of a cluster-scoped
+// StorageClass and whether it exists, treating NotFound as a clean negative.
+func storageClassProvisioner(ctx context.Context, c client.Client, name string) (string, bool, error) {
 	sc := &storagev1.StorageClass{}
 	switch err := c.Get(ctx, client.ObjectKey{Name: name}, sc); {
 	case apierrors.IsNotFound(err):
-		return false, nil
+		return "", false, nil
 	case err != nil:
-		return false, fmt.Errorf("get storageclass %q: %w", name, err)
+		return "", false, fmt.Errorf("get storageclass %q: %w", name, err)
 	default:
-		return true, nil
+		return sc.Provisioner, true, nil
 	}
 }
