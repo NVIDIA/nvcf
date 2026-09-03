@@ -39,23 +39,15 @@ func failures(reason string) float64 {
 // flow poisoning; a 403 is the backlog wedge. Conflating them is what made the
 // original incident untriageable.
 func TestDialFailureReasonSeparatesTimeoutFromAuth(t *testing.T) {
-	c := newTestCache()
-	defer c.Close()
-
-	tr, err := c.transport()
-	if err != nil {
-		t.Fatalf("transport: %v", err)
-	}
-
 	before := map[string]float64{
 		nvcf.DialFailureTimeout: failures(nvcf.DialFailureTimeout),
 		nvcf.DialFailureAuth:    failures(nvcf.DialFailureAuth),
 		nvcf.DialFailureOther:   failures(nvcf.DialFailureOther),
 	}
 
-	c.noteDialResult(context.Background(), tr, testDestination, dialTimeoutError{})
-	c.noteDialResult(context.Background(), c.quicTransport, testDestination, ErrAuth)
-	c.noteDialResult(context.Background(), c.quicTransport, testDestination, errors.New("tls: bad certificate"))
+	recordDialAttempt(context.Background(), dialTimeoutError{})
+	recordDialAttempt(context.Background(), ErrAuth)
+	recordDialAttempt(context.Background(), errors.New("tls: bad certificate"))
 
 	for reason, want := range map[string]float64{
 		nvcf.DialFailureTimeout: 1,
@@ -71,18 +63,10 @@ func TestDialFailureReasonSeparatesTimeoutFromAuth(t *testing.T) {
 // A successful dial must not register as a failure, otherwise the alert
 // expression pages on healthy traffic.
 func TestSuccessfulDialRecordsNoFailure(t *testing.T) {
-	c := newTestCache()
-	defer c.Close()
-
-	tr, err := c.transport()
-	if err != nil {
-		t.Fatalf("transport: %v", err)
-	}
-
 	dialsBefore := testutil.ToFloat64(nvcf.QuicDialCounter)
 	before := failures(nvcf.DialFailureTimeout)
 
-	c.noteDialResult(context.Background(), tr, testDestination, nil)
+	recordDialAttempt(context.Background(), nil)
 
 	if got := failures(nvcf.DialFailureTimeout) - before; got != 0 {
 		t.Errorf("successful dial recorded %v failures, want 0", got)
@@ -195,5 +179,36 @@ func TestSkipPathsAreCountedByReason(t *testing.T) {
 	c.noteDialResult(context.Background(), tr, "dest-d", &net.DNSError{IsTimeout: true})
 	if c.dialFailures["dest-d"] != 1 {
 		t.Errorf("dialFailures[dest-d] = %d, want 1", c.dialFailures["dest-d"])
+	}
+}
+
+// Close clears the client map directly. The cache-removal callback cannot cover
+// it: cl.Close fires that callback on another goroutine, which blocks on the
+// cache mutex until Close returns and then finds the map already nil. Without
+// an explicit decrement the gauge leaks every tunnel the cache ever held.
+func TestTunnelGaugeReturnsToZeroAfterClose(t *testing.T) {
+	c := newTestCache()
+
+	before := testutil.ToFloat64(nvcf.QuicTunnelGauge)
+
+	c.mutex.Lock()
+	for _, h := range []string{"a.example:443", "b.example:443", "c.example:443"} {
+		dialed := make(chan struct{})
+		close(dialed) // Close waits on this; a live dial would block the test
+		c.clients[h] = &roundTripperWithCount{cancel: func() {}, dialing: dialed}
+		nvcf.QuicTunnelGauge.Inc()
+	}
+	c.mutex.Unlock()
+
+	if got := testutil.ToFloat64(nvcf.QuicTunnelGauge) - before; got != 3 {
+		t.Fatalf("after three adds: gauge moved by %v, want 3", got)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got := testutil.ToFloat64(nvcf.QuicTunnelGauge) - before; got != 0 {
+		t.Errorf("after Close: gauge moved by %v, want 0 (tunnels leaked)", got)
 	}
 }

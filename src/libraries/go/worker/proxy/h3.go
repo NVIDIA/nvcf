@@ -130,14 +130,6 @@ func (t *h3ConnectionCache) transportLocked() (*quic.Transport, error) {
 // A success resets only that destination, so unrelated flows cannot suppress
 // or trigger rotation.
 func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Transport, destination string, dialErr error) {
-	// Counted before the staleness guard below. That guard governs rotation
-	// bookkeeping only; a dial that happened still happened, and hiding it
-	// here would understate the failure rate the alert depends on.
-	nvcf.QuicDialCounter.Inc()
-	if dialErr != nil {
-		nvcf.QuicDialFailureCounter.WithLabelValues(dialFailureReason(ctx, dialErr)).Inc()
-	}
-
 	t.transportMu.Lock()
 	defer t.transportMu.Unlock()
 
@@ -177,6 +169,17 @@ func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Tra
 		return
 	}
 	t.rotateLocked(destination, failures)
+}
+
+// recordDialAttempt counts every dial and classifies its failure. It is
+// deliberately separate from noteDialResult: that function governs rotation
+// bookkeeping and is reached only from the default dial path, whereas every
+// dial regardless of path must be measured.
+func recordDialAttempt(ctx context.Context, dialErr error) {
+	nvcf.QuicDialCounter.Inc()
+	if dialErr != nil {
+		nvcf.QuicDialFailureCounter.WithLabelValues(dialFailureReason(ctx, dialErr)).Inc()
+	}
 }
 
 // dialFailureReason labels a failure for the metric. It mirrors
@@ -387,6 +390,11 @@ func (t *h3ConnectionCache) dial(ctx context.Context, hostname string) (*quic.Co
 		}
 	}
 	conn, err := dial(ctx, hostname, tlsConf, t.wrappedTransport.QUICConfig)
+	// Counted here rather than in noteDialResult so that a configured
+	// wrappedTransport.Dial is measured too. noteDialResult is reached only
+	// from the default dial path, so leaving the counters there would make
+	// the metrics silently go quiet if that field were ever set.
+	recordDialAttempt(ctx, err)
 	if err != nil {
 		zap.L().Warn("failed to dial quic connection", zap.Error(err), zap.String("hostname", hostname))
 		return nil, nil, err
@@ -439,7 +447,13 @@ func (t *h3ConnectionCache) deleteClientLocked(hostname string) {
 func (t *h3ConnectionCache) Close() error {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
-	for _, cl := range t.clients {
+	for hostname, cl := range t.clients {
+		// Decrement here rather than relying on the cache-removal callback.
+		// cl.Close triggers that callback on another goroutine, which blocks
+		// on t.mutex until this function returns and then finds the map
+		// already nil, so it would never decrement and the gauge would leak.
+		delete(t.clients, hostname)
+		nvcf.QuicTunnelGauge.Dec()
 		if err := cl.Close(); err != nil {
 			return err
 		}
