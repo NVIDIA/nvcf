@@ -135,7 +135,11 @@ pub(super) async fn send_canary_request(
         .headers()
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("text/event-stream"));
+        .is_some_and(|value| {
+            value.split(';').next().is_some_and(|media_type| {
+                media_type.trim().eq_ignore_ascii_case("text/event-stream")
+            })
+        });
     if !is_event_stream {
         return Err(BringupError::InvalidResponse(
             "canary response is not an SSE stream".to_string(),

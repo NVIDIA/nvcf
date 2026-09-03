@@ -365,6 +365,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canary_request_accepts_case_insensitive_event_stream_content_type() {
+        let base_url = spawn_test_server(TestServerState {
+            event_stream_content_type: Some("Text/Event-Stream; charset=utf-8".to_string()),
+            ..TestServerState::default()
+        })
+        .await;
+
+        send_canary_request(
+            &reqwest::Client::new(),
+            &base_url,
+            &test_generation(),
+            Duration::from_secs(1),
+            7,
+        )
+        .await
+        .expect("a parameterized SSE content type should be accepted");
+    }
+
+    #[tokio::test]
     async fn canary_error_without_json_message_does_not_echo_body() {
         let base_url = spawn_test_server(TestServerState {
             error_body: Some("sensitive upstream response".to_string()),
@@ -896,6 +915,7 @@ mod tests {
     struct TestServerState {
         completion_tokens: u32,
         error_body: Option<String>,
+        event_stream_content_type: Option<String>,
         prompt_too_long_above: Option<usize>,
         calibration_barrier: Option<Arc<Barrier>>,
         completions_before_block: Option<Arc<AtomicUsize>>,
@@ -915,6 +935,7 @@ mod tests {
             Self {
                 completion_tokens: 1,
                 error_body: None,
+                event_stream_content_type: None,
                 prompt_too_long_above: None,
                 calibration_barrier: None,
                 completions_before_block: None,
@@ -1113,8 +1134,12 @@ mod tests {
             if request.get("stream").and_then(Value::as_bool) != Some(true) {
                 return StatusCode::BAD_REQUEST.into_response();
             }
+            let content_type = state
+                .event_stream_content_type
+                .as_deref()
+                .unwrap_or("text/event-stream");
             return (
-                [("content-type", "text/event-stream")],
+                [("content-type", content_type)],
                 format!(
                     "data: {{\"object\":\"chat.completion.chunk\",\"choices\":[{{\"delta\":{{\"content\":\"2\"}}}}],\"usage\":{{\"completion_tokens\":{completion_tokens}}}}}\n\ndata: [DONE]\n\n"
                 ),
