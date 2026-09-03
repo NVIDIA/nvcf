@@ -24,6 +24,60 @@ tolerations:
 {{- end -}}
 {{- end -}}
 
+{{/*
+highAvailability helpers.
+
+global.yaml.gotmpl maps highAvailability.* onto chart values (replicaCount,
+affinity, PDB, update strategy).
+
+When highAvailability.enabled is false, callers keep existing env/chart defaults
+(local / CI / BDD). When true, apply HA sizing: stateless replicaCount ≥2,
+preferred hostname anti-affinity, PDBs; Cassandra/NATS/OpenBao sized to 3.
+Requires ≥3 schedulable nodes. Nested keys under stateless/nats/openbao/cassandra
+override those defaults.
+
+In-scope charts MUST expose the required value hooks.
+*/}}
+{{- define "nvcf.ha.statelessReplicaCount" -}}
+{{- dig "highAvailability" "stateless" "replicaCount" 2 . -}}
+{{- end -}}
+
+{{/* Soft/hard pod anti-affinity on hostname for a Helm release instance name.
+     Context: dict "Values" $.Values "instance" "<release-instance>" */}}
+{{- define "nvcf.ha.statelessAffinity" -}}
+{{- if dig "highAvailability" "enabled" false .Values -}}
+{{- $paa := dig "highAvailability" "stateless" "podAntiAffinity" dict .Values -}}
+{{- if dig "enabled" true $paa -}}
+{{- $type := dig "type" "preferred" $paa -}}
+affinity:
+  podAntiAffinity:
+{{- if eq $type "required" }}
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/instance
+              operator: In
+              values:
+                - {{ .instance | quote }}
+        topologyKey: kubernetes.io/hostname
+{{- else }}
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  - {{ .instance | quote }}
+          topologyKey: kubernetes.io/hostname
+{{- end }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- $haEnabled := dig "highAvailability" "enabled" false .Values }}
+
 cassandra:
   global:
     {{- if .Values.global.imagePullSecrets }}
@@ -36,12 +90,19 @@ cassandra:
     defaultStorageClass: {{ .Values.global.storageClass }}
     {{- end }}
 
-  replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
+  replicaCount: {{ if $haEnabled }}{{ dig "highAvailability" "cassandra" "replicaCount" 3 .Values }}{{ else }}{{ dig "cassandra" "replicaCount" 3 .Values }}{{ end }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- if $haEnabled }}
+  {{- with dig "highAvailability" "cassandra" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
@@ -155,7 +216,7 @@ openbao:
     {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
     {{- . | nindent 4 }}
     {{- end }}
-    replicas: {{ .Values.openbao.injector.replicas }}
+    replicas: {{ if $haEnabled }}{{ dig "highAvailability" "openbao" "injector" "replicas" 2 .Values }}{{ else }}{{ .Values.openbao.injector.replicas }}{{ end }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
     {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
@@ -193,6 +254,10 @@ openbao:
       size: {{ .Values.global.storageSize | default "10Gi" }}
 
     ha:
+      {{- if $haEnabled }}
+      enabled: {{ dig "highAvailability" "openbao" "ha" "enabled" true .Values }}
+      replicas: {{ dig "highAvailability" "openbao" "ha" "replicas" 3 .Values }}
+      {{- end }}
       {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
@@ -251,6 +316,11 @@ nats:
     merge:
       server_tags:
         {{- toYaml $natsServerTags | nindent 8 }}
+    {{- if $haEnabled }}
+    cluster:
+      enabled: true
+      replicas: {{ dig "highAvailability" "nats" "replicas" 3 .Values }}
+    {{- end }}
     {{- if .Values.global.storageClass }}
     jetstream:
       fileStore:
@@ -258,9 +328,16 @@ nats:
           storageClassName: {{ .Values.global.storageClass }}
     {{- end }}
 
+  {{- if $haEnabled }}
+  {{- with dig "highAvailability" "nats" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 apikeys:
@@ -467,6 +544,9 @@ natsAuthCalloutService:
 {{- $apiRemoteConfigData = mergeOverwrite $apiRemoteConfigData $stackApiRemoteConfigData }}
 api:
   fullnameOverride: nvcf-api
+  {{- if $haEnabled }}
+  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -483,6 +563,9 @@ api:
   {{- . | nindent 2 }}
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "api") }}
   {{- . | nindent 2 }}
   {{- end }}
   {{- if $apiRemoteConfigData }}
@@ -591,6 +674,9 @@ invocation:
   {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
+  {{- if $haEnabled }}
+  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -602,6 +688,9 @@ invocation:
   {{- . | nindent 2 }}
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "invocation-service") }}
   {{- . | nindent 2 }}
   {{- end }}
 
@@ -618,9 +707,16 @@ invocation:
     baggageAttributeAllowlist:
     {{- toYaml . | nindent 6 }}
   {{- end }}
+  {{- if $haEnabled }}
+  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 nvctApi:
@@ -666,6 +762,9 @@ nvctApi:
 
 grpcproxy:
   fullnameOverride: grpc-proxy
+  {{- if $haEnabled }}
+  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -678,6 +777,13 @@ grpcproxy:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- $grpcAffinity := include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "grpc-proxy") }}
+  {{- if $grpcAffinity }}
+  deployment:
+    {{- $grpcAffinity | nindent 4 }}
+  {{- end }}
   {{- end }}
   {{- with $grpcProxyWorkerConnectBaseURL }}
   workerConnectBaseURL: {{ . | quote }}
@@ -700,9 +806,16 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
+  {{- if $haEnabled }}
+  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 rateLimiter:
@@ -818,6 +931,9 @@ sis:
 
 adminIssuerProxy:
   fullnameOverride: admin-token-issuer-proxy
+  {{- if $haEnabled }}
+  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -831,6 +947,9 @@ adminIssuerProxy:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "admin-token-issuer-proxy") }}
+  {{- . | nindent 2 }}
+  {{- end }}
   gateway:
     enabled: true
     namespace: {{ .Values.ingress.gatewayApi.gateways.shared.namespace }}
@@ -838,9 +957,16 @@ adminIssuerProxy:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
     hostname: "api-keys.{{ .Values.global.domain }}"
     path: "/v1/admin/keys"
+  {{- if $haEnabled }}
+  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else }}
   {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 
 stateMetrics:
