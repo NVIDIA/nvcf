@@ -371,6 +371,47 @@ const (
 // Sessions with a worker already attached are deliberately not touched. Those
 // can reattach through another pod, and their work request has already left the
 // queue anyway.
+// purgeDepartedClientWork drops the queued work for a request whose client
+// stopped waiting before any worker attached.
+//
+// This is the trigger the evidence points at. A worker auth token is valid for
+// consts.Timeout, the same budget after which the client is sent a gateway
+// timeout, so the two are matched by design. Under load the work sits in the
+// queue well past that: measured token age at CONNECT ran to 30-60s against a
+// 30s budget. Every one of those is fetched, occupies a worker slot, attempts
+// a CONNECT and is correctly rejected, for a client that has already given up.
+//
+// Left queued they are still delivered, and it is that delivery, not the
+// rejection, that keeps a saturated function at zero goodput. Dropping them
+// here removes work that provably cannot be served while leaving every live
+// request untouched, since a session that reaches this point has no client.
+func (s *StreamDirector) purgeDepartedClientWork(requestId uuid.UUID, functionVersionId string) {
+	purger, ok := s.functionInvoker.(pendingWorkPurger)
+	if !ok {
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipUnsupported).Inc()
+		return
+	}
+	s.pendingWork.Delete(requestId)
+
+	ctx, cancel := context.WithTimeout(context.Background(), consts.Timeout)
+	defer cancel()
+
+	if err := purger.PurgePendingWork(ctx, requestId, functionVersionId); err != nil {
+		metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeFailed, metrics.PurgeTriggerClientDeparted).Inc()
+		// Warning rather than error: the request is already lost to its
+		// client either way, and the purge is what stops a worker spending a
+		// slot on it later.
+		zap.L().Warn("failed to purge work for a client that stopped waiting",
+			zap.Stringer("request_id", requestId),
+			zap.String("function_version_id", functionVersionId),
+			zap.Error(err))
+		return
+	}
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeSucceeded, metrics.PurgeTriggerClientDeparted).Inc()
+	zap.L().Debug("purged queued work for a client that stopped waiting",
+		zap.Stringer("request_id", requestId))
+}
+
 func (s *StreamDirector) purgePendingWork() {
 	purger, ok := s.functionInvoker.(pendingWorkPurger)
 	if !ok {
@@ -413,8 +454,8 @@ func (s *StreamDirector) purgePendingWork() {
 		purged++
 	}
 
-	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeSucceeded).Add(float64(purged))
-	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeFailed).Add(float64(failed))
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeSucceeded, metrics.PurgeTriggerShutdown).Add(float64(purged))
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeFailed, metrics.PurgeTriggerShutdown).Add(float64(failed))
 	zap.L().Info("purged pending stateful work requests on shutdown",
 		zap.Int("purged", purged),
 		zap.Int("failed", failed))
@@ -661,8 +702,11 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 		if cancelInvokingWorker != nil {
 			go func() {
 				// once a connection shows up or the context goes away we should stop looking for a worker
-				workerConnection.WaitForConnection(ctx)
+				_, connected := workerConnection.WaitForConnection(ctx)
 				cancelInvokingWorker()
+				if !connected {
+					s.purgeDepartedClientWork(invokeResponse.RequestId, apiFunctionVersionId)
+				}
 			}()
 		}
 		return workerConnection, nil

@@ -208,6 +208,18 @@ const (
 	PurgeSucceeded = "succeeded"
 	PurgeFailed    = "failed"
 
+	// What caused a purge. Kept as a label rather than separate deployments so
+	// one image can say which trigger actually did the work.
+	//
+	// PurgeTriggerShutdown drops work whose token existed only in a departing
+	// pod's memory. PurgeTriggerClientDeparted drops work whose client stopped
+	// waiting before any worker attached, which is the larger population under
+	// load: measured token age at CONNECT runs well past the client timeout,
+	// so the work is fetched, attempted and rejected for a client that has
+	// already been sent a gateway timeout.
+	PurgeTriggerShutdown       = "shutdown"
+	PurgeTriggerClientDeparted = "client_departed"
+
 	// Reasons the shutdown purge did no work. Without these a reading of
 	// zero purged and zero failed is ambiguous: it cannot distinguish a
 	// purge that ran and found nothing from one that never ran at all.
@@ -216,6 +228,8 @@ const (
 )
 
 var PurgeResults = []string{PurgeSucceeded, PurgeFailed}
+
+var PurgeTriggers = []string{PurgeTriggerShutdown, PurgeTriggerClientDeparted}
 
 var PurgeSkipReasons = []string{PurgeSkipUnsupported, PurgeSkipNothing}
 
@@ -424,8 +438,8 @@ var (
 		prometheus.CounterOpts{
 			Namespace: RootNamespace,
 			Name:      "pending_work_purged_total",
-			Help:      "queued stateful work requests dropped at shutdown, by outcome",
-		}, []string{"result"})
+			Help:      "queued stateful work requests dropped, by outcome and trigger",
+		}, []string{"result", "trigger"})
 
 	// ClientConnectionWorkerTunnelsAtClose records how many worker tunnels a
 	// client connection was still holding when it closed. Anything above zero
@@ -482,7 +496,9 @@ func init() {
 		NatsFailureCounter.WithLabelValues(reason)
 	}
 	for _, result := range PurgeResults {
-		PendingWorkPurgedTotal.WithLabelValues(result)
+		for _, trigger := range PurgeTriggers {
+			PendingWorkPurgedTotal.WithLabelValues(result, trigger)
+		}
 	}
 	for _, reason := range PurgeSkipReasons {
 		PendingWorkPurgeSkippedTotal.WithLabelValues(reason)

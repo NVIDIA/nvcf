@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +19,10 @@ package proxy
 import (
 	"context"
 	"errors"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"net"
+	"nvcf-grpc-proxy/proxy/metrics"
 	"sync"
 	"testing"
 
@@ -121,4 +124,45 @@ func TestClosePurgeSkippedWhenInvokerCannotPurge(t *testing.T) {
 	director.pendingWork.Set(uuid.New(), pendingWorkInfo{functionVersionId: "version-1"}, ttlcache.DefaultTTL)
 
 	require.NoError(t, director.Close())
+}
+
+// purgeCount reads one series of the purge counter. The counters are
+// process-global, so every assertion below is a delta.
+func purgeCount(t *testing.T, result, trigger string) float64 {
+	t.Helper()
+	return testutil.ToFloat64(metrics.PendingWorkPurgedTotal.WithLabelValues(result, trigger))
+}
+
+// The departure trigger is the one the evidence points at: work whose client
+// stopped waiting is still delivered, occupies a worker slot, and is rejected
+// for nobody. Purging it must be attributed separately from the shutdown
+// trigger so a single deployment can say which one actually did the work.
+func TestClientDepartureTriggerPurgesAndIsAttributed(t *testing.T) {
+	reqID := uuid.New()
+	purger := newRecordingPurger()
+	s := &StreamDirector{
+		functionInvoker: purger,
+		pendingWork:     ttlcache.New[uuid.UUID, pendingWorkInfo](),
+	}
+	s.pendingWork.Set(reqID, pendingWorkInfo{functionVersionId: "ver"}, ttlcache.NoTTL)
+
+	before := purgeCount(t, metrics.PurgeSucceeded, metrics.PurgeTriggerClientDeparted)
+	shutdownBefore := purgeCount(t, metrics.PurgeSucceeded, metrics.PurgeTriggerShutdown)
+
+	s.purgeDepartedClientWork(reqID, "ver")
+
+	if got := purger.purgedRequests(); len(got) != 1 || got[reqID] != "ver" {
+		t.Fatalf("expected the departed client's work to be purged, got %v", got)
+	}
+	if got := purgeCount(t, metrics.PurgeSucceeded, metrics.PurgeTriggerClientDeparted) - before; got != 1 {
+		t.Errorf("client_departed purges moved by %v, want 1", got)
+	}
+	if got := purgeCount(t, metrics.PurgeSucceeded, metrics.PurgeTriggerShutdown) - shutdownBefore; got != 0 {
+		t.Errorf("shutdown trigger moved by %v on a departure purge, want 0", got)
+	}
+	// Dropped from the cache so a later shutdown cannot purge it again and
+	// double count the same work.
+	if s.pendingWork.Get(reqID) != nil {
+		t.Error("pending work entry survived the departure purge")
+	}
 }
