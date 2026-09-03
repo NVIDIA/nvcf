@@ -104,6 +104,7 @@ go_test(
         "@com_github_gorilla_websocket//:websocket",
         "@com_github_hellofresh_health_go_v5//:health-go",
         "@com_github_jellydator_ttlcache_v3//:ttlcache",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
