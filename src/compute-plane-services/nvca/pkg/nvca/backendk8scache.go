@@ -187,8 +187,14 @@ type BackendK8sCache struct {
 	// Use Function Deployment Stages to log state transition events.
 	fndsClient fnds.Client
 
-	icmsRequestWQ workqueue.RateLimitingInterface
-	nodeUpdateWQ  workqueue.RateLimitingInterface
+	icmsRequestWQ      workqueue.RateLimitingInterface
+	nodeUpdateWQ       workqueue.RateLimitingInterface
+	notFoundInstanceWQ workqueue.RateLimitingInterface
+	// notFoundInstanceReporter posts a terminated status to ICMS for an
+	// instance whose ICMSRequest CR was deleted locally before ICMS itself
+	// was ever told the instance is gone. Wired by Agent, which owns the
+	// ICMS HTTP client; nil in builds/tests that don't need it.
+	notFoundInstanceReporter func(ctx context.Context, reqID, instanceID string) error
 
 	podLister                            listersv1.PodLister
 	podSpecLister                        listersv1.PodNamespaceLister
@@ -454,6 +460,17 @@ func (b *BackendK8sCacheBuilder) WithFNDSClient(client fnds.Client) *BackendK8sC
 	return &next
 }
 
+// WithNotFoundInstanceStatusReporter wires the callback used to tell ICMS an
+// instance is terminated immediately when its ICMSRequest CR is deleted
+// locally, instead of waiting for the next periodic instance status sync.
+func (b *BackendK8sCacheBuilder) WithNotFoundInstanceStatusReporter(
+	reporter func(ctx context.Context, reqID, instanceID string) error,
+) *BackendK8sCacheBuilder {
+	next := *b
+	next.notFoundInstanceReporter = reporter
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) WithPVCRebind(on bool) *BackendK8sCacheBuilder {
 	next := *b
 	next.pvcRebindEnabled = on
@@ -534,6 +551,8 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		autoPurgeDegradedWorkers:             b.autoPurgeDegradedWorkers,
 		icmsRequestWQ:                        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		nodeUpdateWQ:                         workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceWQ:                   workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter:             b.notFoundInstanceReporter,
 		featureFlagFetcher:                   b.featureFlagFetcher,
 		nsightProfilingAllowlist:             profiling.New(),
 		lowLatencyStreamingEnabled:           b.lowLatencyStreamingEnabled,
@@ -556,6 +575,10 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	go func() {
 		<-ctx.Done()
 		c.nodeUpdateWQ.ShutDown()
+	}()
+	go func() {
+		<-ctx.Done()
+		c.notFoundInstanceWQ.ShutDown()
 	}()
 
 	if c.systemNamespace == "" {
@@ -828,6 +851,9 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 				}
 				c.icmsRequestWQ.Add(makeNamespacedName(req))
 			},
+			DeleteFunc: func(obj interface{}) {
+				c.enqueueNotFoundInstancesOnDelete(ctx, obj)
+			},
 		})
 		if err != nil {
 			log.WithError(err).Error("failed to add event handler for ICMS requests")
@@ -905,7 +931,52 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		}()
 	}
 
+	if c.notFoundInstanceReporter != nil {
+		log.Info("Starting not-found instance status worker")
+		go func() {
+			for c.processNotFoundInstanceWork(ctx) {
+			}
+		}()
+	}
+
 	return c, out, nil
+}
+
+// notFoundInstanceKey identifies one instance to report to ICMS as
+// terminated because its ICMSRequest CR was deleted locally without ICMS
+// ever being told the instance is gone.
+type notFoundInstanceKey struct {
+	RequestID  string
+	InstanceID string
+}
+
+// enqueueNotFoundInstancesOnDelete handles an ICMSRequest informer delete
+// event. Once the CR is gone, nothing will ever enumerate its instances
+// again to tell ICMS they're terminated (see PostICMSInstanceRequestStatusUpdates,
+// which only walks currently-existing CRs), so this reports them now instead
+// of waiting for the periodic instance status sync to notice the CR is
+// missing.
+func (c *BackendK8sCache) enqueueNotFoundInstancesOnDelete(ctx context.Context, obj interface{}) {
+	log := core.GetLogger(ctx)
+
+	req, ok := obj.(*nvcav2beta1new.ICMSRequest)
+	if !ok {
+		if _, isTombstone := obj.(cache.DeletedFinalStateUnknown); isTombstone {
+			// The informer lost the object before delivering its delete
+			// event, so its last known status.instances isn't available
+			// here. The periodic instance status sync remains the fallback
+			// for this case.
+			log.Warn("ICMS request delete tombstone: last known instance status unavailable, " +
+				"deferring to periodic instance status sync")
+			return
+		}
+		log.Errorf("Wrong object type in ICMS request delete event handler: %T", obj)
+		return
+	}
+
+	for instanceID := range req.Status.Instances {
+		c.notFoundInstanceWQ.Add(notFoundInstanceKey{RequestID: req.Spec.RequestID, InstanceID: instanceID})
+	}
 }
 
 type eventWatcher func(ctx context.Context, event *corev1.Event)
@@ -1170,6 +1241,44 @@ func (c *BackendK8sCache) processICMSRequestWork(ctx context.Context) bool {
 		log.Debug("Successfully synced ICMS request")
 	}()
 
+	return true
+}
+
+// processNotFoundInstanceWork drains notFoundInstanceWQ, reporting each
+// queued instance to ICMS as terminated via notFoundInstanceReporter. This
+// is the same corrective action the periodic instance status sync takes for
+// an instance ICMS still thinks is live but that has no local ICMSRequest CR
+// (see ReconcileInstanceStatus), just triggered immediately by the CR's
+// deletion instead of waiting for the next periodic pass.
+func (c *BackendK8sCache) processNotFoundInstanceWork(ctx context.Context) bool {
+	log := core.GetLogger(ctx)
+
+	obj, shutdown := c.notFoundInstanceWQ.Get()
+	if shutdown {
+		log.Info("Not-found instance worker shutting down")
+		return false
+	}
+	defer c.notFoundInstanceWQ.Done(obj)
+
+	key, ok := obj.(notFoundInstanceKey)
+	if !ok {
+		c.notFoundInstanceWQ.Forget(obj)
+		log.Errorf("Unexpected dequeued object type: %T", obj)
+		return true
+	}
+
+	log = log.WithFields(logrus.Fields{
+		"requestID":  key.RequestID,
+		"instanceID": key.InstanceID,
+	})
+	if err := c.notFoundInstanceReporter(ctx, key.RequestID, key.InstanceID); err != nil {
+		log.WithError(err).Error("Failed to report not-found instance as terminated, requeuing")
+		c.notFoundInstanceWQ.AddRateLimited(obj)
+		return true
+	}
+
+	c.notFoundInstanceWQ.Forget(obj)
+	log.Debug("Reported not-found instance as terminated")
 	return true
 }
 
