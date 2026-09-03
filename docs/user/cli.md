@@ -983,10 +983,18 @@ LLM model updates can also be provided in the input file:
   --model-name dummy-model \
   --inference-url /v1/embeddings \
   --request-body '{"input":"NVCF embeddings check"}'
+
+# Invoke through a Vanity Gateway mapping (exact host header)
+./nvcf-cli function invoke \
+  --vanity-host vanity.example.com \
+  --path /v1/chat/completions \
+  --request-body '{"messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 Note: The CLI `function invoke` command detects LLM functions automatically.
 For LLM functions, `--model-name` and `--inference-url` are required. The CLI uses the LLM invocation route and sets the OpenAI `model` value to `<function-id>/<model-name>`.
+
+For Vanity Gateway invocation, use `--vanity-host` with `--path` (or `--inference-url`). This sends the request to the exact configured host, without prefixing it with the function ID, and is REST-only (not supported with `--grpc`). The saved function API key and existing authentication handling still apply.
 
 For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](./llm-gateway.md).
 
@@ -1003,6 +1011,8 @@ Additional `function invoke` flags:
 | `--grpc-method` | gRPC method name |
 | `--grpc-plaintext` | Use plaintext (insecure) gRPC |
 | `--inference-url` | Function path, or OpenAI-compatible path for LLM functions (required for LLM) |
+| `--path` | Mapped request path for Vanity Gateway invocation (alternative to `--inference-url`) |
+| `--vanity-host` | Exact Vanity Gateway host header (preserves host without prefixing function ID) |
 | `--model-name` | OpenAI model name for LLM functions |
 | `--timeout` | Request timeout in seconds (default: 60) |
 | `--poll-duration` | Invocation hold-open duration in seconds (default: 5) |
