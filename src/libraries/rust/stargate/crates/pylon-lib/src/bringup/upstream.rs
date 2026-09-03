@@ -15,14 +15,19 @@
 
 use std::time::Duration;
 
+use crate::DEFAULT_MAX_SSE_BUFFER_BYTES;
 use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
+use crate::output_token_parser::{OutputTokenParser, OutputTokenProgress};
 use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
 };
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
+use crate::sse_message_stream::{SseMessage, upstream_sse_message_stream};
 use crate::upstream_health::UpstreamHealthPaths;
 use crate::upstream_url::upstream_endpoint;
+use futures::StreamExt;
 use reqwest::StatusCode;
+use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
 use stargate_protocol::tunnel_contract::{HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_REQUEST_ID};
 
@@ -59,23 +64,91 @@ pub(super) async fn send_canary_request(
         "seed": 33,
         "temperature": 0.7,
         "top_p": 1.0,
-        "stream": false,
+        "stream": true,
+        "stream_options": {"include_usage": true},
     });
 
-    let completion = send_completion_request(
-        http_client,
-        upstream_http_base_url,
-        Some(timeout),
-        &request,
-        GeneratedRequestKind::Canary,
-        generation,
-        None,
-    )
-    .await?;
-    if completion.usage.completion_tokens == canary_max_generation_threshold {
-        return Err(BringupError::RunawayGeneration {
-            tokens: completion.usage.completion_tokens,
-        });
+    let request_id = next_generated_request_id(GeneratedRequestKind::Canary, generation);
+    let input_tokens = request
+        .pointer("/messages/0/content")
+        .and_then(serde_json::Value::as_str)
+        .map_or(1, str::len);
+    let response = http_client
+        .post(upstream_endpoint(
+            upstream_http_base_url,
+            "/v1/chat/completions",
+        ))
+        .header(HEADER_REQUEST_ID, request_id)
+        .header(HEADER_MODEL, generation.model_id())
+        .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
+        .timeout(timeout)
+        .json(&request)
+        .send()
+        .await?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.bytes().await?;
+        let message = extract_error_message(&body);
+        return if is_prompt_too_long(status, &message) {
+            Err(BringupError::PromptTooLong)
+        } else {
+            Err(BringupError::Api {
+                status,
+                message: message.unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
+            })
+        };
+    }
+    let is_event_stream = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"));
+    if !is_event_stream {
+        return Err(BringupError::InvalidResponse(
+            "canary response is not an SSE stream".to_string(),
+        ));
+    }
+
+    let mut messages = upstream_sse_message_stream(
+        response.bytes_stream(),
+        timeout,
+        timeout,
+        DEFAULT_MAX_SSE_BUFFER_BYTES,
+    );
+    let mut output_tokens = OutputTokenParser::new();
+    let mut observed_tokens = 0_u64;
+    let mut completed = false;
+    while let Some(message) = messages.next().await {
+        match message
+            .map_err(|error| BringupError::InvalidResponse(error.to_string()))?
+            .message
+        {
+            SseMessage::Done => {
+                completed = true;
+                break;
+            }
+            SseMessage::ChatCompletionChunk { parsed } => {
+                if let Some(progress) = output_tokens.observe_json(parsed.as_ref()) {
+                    observed_tokens = match progress {
+                        OutputTokenProgress::ExplicitCumulative { tokens, .. } => tokens,
+                        OutputTokenProgress::EstimatedDelta { delta } => {
+                            observed_tokens.saturating_add(delta)
+                        }
+                    };
+                    if observed_tokens >= u64::from(canary_max_generation_threshold) {
+                        return Err(BringupError::RunawayGeneration {
+                            tokens: u32::try_from(observed_tokens).unwrap_or(u32::MAX),
+                        });
+                    }
+                }
+            }
+            SseMessage::OtherData => {}
+        }
+    }
+    if !completed || observed_tokens == 0 {
+        return Err(BringupError::InvalidResponse(
+            "canary stream must contain output and end with [DONE]".to_string(),
+        ));
     }
     Ok(())
 }

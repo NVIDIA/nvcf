@@ -1035,6 +1035,19 @@ mod tests {
             }
         }
 
+        if prompt == "1+1=" {
+            if request.get("stream").and_then(Value::as_bool) != Some(true) {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            return (
+                [("content-type", "text/event-stream")],
+                format!(
+                    "data: {{\"object\":\"chat.completion.chunk\",\"choices\":[{{\"delta\":{{\"content\":\"2\"}}}}],\"usage\":{{\"completion_tokens\":{completion_tokens}}}}}\n\ndata: [DONE]\n\n"
+                ),
+            )
+                .into_response();
+        }
+
         Json(serde_json::json!({
             "usage": {"completion_tokens": completion_tokens}
         }))

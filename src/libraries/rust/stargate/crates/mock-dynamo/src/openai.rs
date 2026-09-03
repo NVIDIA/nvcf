@@ -26,11 +26,11 @@ use tracing::info;
 use crate::AppState;
 use crate::kv_cache::{KvCacheAccess, KvCacheStats, insert_kv_cache_headers};
 use crate::stats_stream::StatsStreamEvent;
-use crate::test_control::{TestEndpoint, TestRequestClass, request_class};
+use crate::test_control::{TestEndpoint, TestRequestClass, is_canary_request, request_class};
 use crate::timing::{
-    embedding_item_count, jitter_ms, non_streaming_delay, optional_header, prefill_delay,
-    request_embedding_tokens, request_input_tokens, request_output_tokens, response_input_tokens,
-    response_output_tokens, token_delay,
+    bounded_output_tokens, embedding_item_count, jitter_ms, non_streaming_delay, optional_header,
+    prefill_delay, request_embedding_tokens, request_input_tokens, response_input_tokens,
+    select_output_tokens, token_delay,
 };
 
 #[derive(Serialize)]
@@ -67,6 +67,7 @@ const DUMMY_TOKENS: &[&str] = &[
     " helpful", " AI", " assistant", ".", " Let", " me", " know", " what", " you", " need", ".",
     " I", "'m", " here", " to", " assist", " you", "!",
 ];
+const CANARY_ANSWER: &str = "2";
 
 #[derive(Deserialize)]
 pub(crate) struct ChatRequest {
@@ -169,6 +170,7 @@ struct StreamResponseConfig {
     kv_cache_access: KvCacheAccess,
     request_slot: Option<OwnedSemaphorePermit>,
     kind: StreamKind,
+    canary: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -194,13 +196,31 @@ pub(crate) async fn chat_completions(
             }),
         );
     }
-    let request_slot = state.acquire_request_slot().await;
     let input_tokens = request_input_tokens(&headers, &req);
-    let output_tokens = request_output_tokens(&headers, &req, state.num_tokens);
-    let stream = req.stream == Some(true);
+    let canary = is_canary_request(&headers);
     let id = format!("chatcmpl-mock-{}", rand_id());
-    info!(id = %id, model = %model, stream = stream, "received chat/completions request");
     let request_id = optional_header(&headers, "x-request-id").unwrap_or_else(|| id.clone());
+    let selected_output_tokens = if canary {
+        1
+    } else {
+        select_output_tokens(&headers, &request_id, state.output_tokens, req.max_tokens)
+    };
+    let Some(output_tokens) = bounded_output_tokens(
+        input_tokens,
+        selected_output_tokens,
+        state.context_length_tokens,
+    ) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "input token count {input_tokens} leaves no output capacity within the context length of {} tokens",
+                state.context_length_tokens
+            ),
+        );
+    };
+    let request_slot = state.acquire_request_slot().await;
+    let stream = req.stream == Some(true);
+    info!(id = %id, model = %model, stream = stream, "received chat/completions request");
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
     if stream {
         state.emit_counters(&request_id, &model, 0, 0, false);
@@ -233,6 +253,7 @@ pub(crate) async fn chat_completions(
             kv_cache_access,
             request_slot,
             kind: StreamKind::Chat,
+            canary,
         });
     }
 
@@ -244,12 +265,16 @@ pub(crate) async fn chat_completions(
     ))
     .await;
 
-    let content: String = DUMMY_TOKENS
-        .iter()
-        .cycle()
-        .take(output_tokens)
-        .copied()
-        .collect();
+    let content = if canary {
+        CANARY_ANSWER.to_string()
+    } else {
+        DUMMY_TOKENS
+            .iter()
+            .cycle()
+            .take(output_tokens)
+            .copied()
+            .collect()
+    };
 
     info!(id = %id, status = 200, "responding with JSON");
     state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
@@ -292,12 +317,30 @@ pub(crate) async fn responses(
     state
         .record_request(&headers, TestEndpoint::Responses, &model)
         .await;
-    let request_slot = state.acquire_request_slot().await;
     let input_tokens = response_input_tokens(&headers, &req);
-    let output_tokens = response_output_tokens(&headers, &req, state.num_tokens);
     let id = format!("resp-mock-{}", rand_id());
+    let request_id = optional_header(&headers, "x-request-id").unwrap_or_else(|| id.clone());
+    let selected_output_tokens = select_output_tokens(
+        &headers,
+        &request_id,
+        state.output_tokens,
+        req.max_output_tokens,
+    );
+    let Some(output_tokens) = bounded_output_tokens(
+        input_tokens,
+        selected_output_tokens,
+        state.context_length_tokens,
+    ) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "input token count {input_tokens} leaves no output capacity within the context length of {} tokens",
+                state.context_length_tokens
+            ),
+        );
+    };
+    let request_slot = state.acquire_request_slot().await;
     info!(id = %id, model = %model, "received responses request");
-    let request_id = optional_header(&headers, "x-request-id").unwrap_or_default();
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
     state.emit_counters(&request_id, &model, 0, 0, false);
     let kv_cache_access = state
@@ -319,6 +362,7 @@ pub(crate) async fn responses(
         kind: StreamKind::Responses {
             created_at: current_unix_timestamp(),
         },
+        canary: false,
     })
 }
 
@@ -491,6 +535,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         kv_cache_access,
         request_slot,
         kind,
+        canary,
     } = config;
     let stream = async_stream::stream! {
         let _request_slot = request_slot;
@@ -524,7 +569,11 @@ fn stream_response(config: StreamResponseConfig) -> Response {
             if i > 0 {
                 tokio::time::sleep(token_delay(&state, &request_id, i)).await;
             }
-            let token = DUMMY_TOKENS[i % DUMMY_TOKENS.len()];
+            let token = if canary {
+                CANARY_ANSWER
+            } else {
+                DUMMY_TOKENS[i % DUMMY_TOKENS.len()]
+            };
             let event = match kind {
                 StreamKind::Chat => chat_sse_event(&id, &model, ChatStreamChunk::Content(token)),
                 StreamKind::Responses { .. } => {
