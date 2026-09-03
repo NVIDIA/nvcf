@@ -13,7 +13,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/lestrrat-go/jwx v1.2.31
-	github.com/olric-data/olric v0.7.1
+	github.com/olric-data/olric v0.7.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -153,3 +153,12 @@ exclude (
 )
 
 replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2
+
+// olric is redirected to a fork carrying two changes that are not upstream: the
+// CompareAndSwap primitive the LLM gateway needs, and a routing table rebuild
+// that probes partitions concurrently instead of serially. The serial rebuild
+// stalled the coordinator long enough for joining pods to miss their bootstrap
+// timeout and crashloop. The fork keeps upstream's module path, so this must
+// stay identical to the replace in llm-api-gateway/go.mod; the Bazel build
+// resolves one olric for the whole workspace.
+replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260903172631-1d7a94c91260
