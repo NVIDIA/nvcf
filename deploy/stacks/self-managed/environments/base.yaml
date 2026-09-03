@@ -514,6 +514,12 @@ rateLimiter:
     enabled: false
     maxUnavailable: 1
 
+# Bundled in-cluster ICMS -- the sis release (spot-instance-service). Gated by a
+# helmfile condition; defaults to true so existing installs are unchanged. Set to
+# false to skip it when scheduling workers through an external/production ICMS.
+icms:
+  enabled: true
+
 # PDB knobs for control-plane services. Disabled by default.
 # Set enabled: true for any service running more than one replica.
 
