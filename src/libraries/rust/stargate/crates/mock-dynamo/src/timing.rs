@@ -185,7 +185,7 @@ pub(crate) fn distributed_output_rate(
     min_tokens_per_s: f64,
     max_tokens_per_s: f64,
 ) -> f64 {
-    let position = deterministic_hash(request_id, "output-rate") as f64 / u64::MAX as f64;
+    let position = deterministic_hash_domain(request_id, HashDomain::Rate) as f64 / u64::MAX as f64;
     min_tokens_per_s + position * (max_tokens_per_s - min_tokens_per_s)
 }
 
@@ -196,18 +196,20 @@ pub(crate) fn sample_output_tokens(request_id: &str, config: OutputTokenConfig) 
     match config.distribution {
         OutputTokenDistribution::Uniform => {
             let width = (config.max - config.min) as u128 + 1;
-            let offset = u128::from(deterministic_hash(request_id, "output-tokens-uniform"))
-                * width
+            let offset = u128::from(deterministic_hash_domain(
+                request_id,
+                HashDomain::TokensUniform,
+            )) * width
                 / (u128::from(u64::MAX) + 1);
             config.min + offset as usize
         }
         OutputTokenDistribution::Gaussian => {
-            let unit = |salt| {
-                let value = deterministic_hash(request_id, salt) >> 11;
+            let unit = |domain| {
+                let value = deterministic_hash_domain(request_id, domain) >> 11;
                 (value as f64 + 1.0) / ((1_u64 << 53) as f64 + 1.0)
             };
-            let standard_normal = (-2.0 * unit("output-tokens-gaussian-radius").ln()).sqrt()
-                * (std::f64::consts::TAU * unit("output-tokens-gaussian-angle")).cos();
+            let standard_normal = (-2.0 * unit(HashDomain::TokensGaussianRadius).ln()).sqrt()
+                * (std::f64::consts::TAU * unit(HashDomain::TokensGaussianAngle)).cos();
             let min = config.min as f64;
             let max = config.max as f64;
             let sample = ((min + max) / 2.0 + standard_normal * (max - min) / 6.0)
@@ -218,10 +220,26 @@ pub(crate) fn sample_output_tokens(request_id: &str, config: OutputTokenConfig) 
     }
 }
 
+#[derive(Clone, Copy)]
+enum HashDomain {
+    Rate,
+    TokensUniform,
+    TokensGaussianRadius,
+    TokensGaussianAngle,
+}
+
 fn deterministic_hash(request_id: &str, salt: &str) -> u64 {
+    deterministic_hash_bytes(request_id, salt.bytes())
+}
+
+fn deterministic_hash_domain(request_id: &str, domain: HashDomain) -> u64 {
+    deterministic_hash_bytes(request_id, [domain as u8])
+}
+
+fn deterministic_hash_bytes(request_id: &str, salt: impl IntoIterator<Item = u8>) -> u64 {
     request_id
         .bytes()
-        .chain(salt.bytes())
+        .chain(salt)
         .fold(1469598103934665603, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(1099511628211)
         })

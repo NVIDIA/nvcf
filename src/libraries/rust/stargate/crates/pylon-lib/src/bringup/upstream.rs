@@ -31,6 +31,8 @@ use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
 use stargate_protocol::tunnel_contract::{HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_REQUEST_ID};
 
+const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
+
 pub(crate) async fn check_upstream_health(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
@@ -56,16 +58,39 @@ async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response
         return Ok(response);
     }
 
-    let body = response.bytes().await?;
-    let message = extract_error_message(&body);
+    let (body, truncated) = read_error_body(response).await?;
+    let message = (!truncated).then(|| extract_error_message(&body)).flatten();
     if is_prompt_too_long(status, &message) {
         Err(BringupError::PromptTooLong)
     } else {
         Err(BringupError::Api {
             status,
-            message: message.unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
+            message: message.unwrap_or_else(|| {
+                if truncated {
+                    format!(
+                        "upstream returned HTTP status {status} with an error body exceeding {MAX_UPSTREAM_ERROR_BODY_BYTES} bytes"
+                    )
+                } else {
+                    format!("upstream returned HTTP status {status} without a JSON error message")
+                }
+            }),
         })
     }
+}
+
+async fn read_error_body(response: reqwest::Response) -> Result<(Vec<u8>, bool), reqwest::Error> {
+    let mut body = Vec::with_capacity(MAX_UPSTREAM_ERROR_BODY_BYTES);
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let remaining = MAX_UPSTREAM_ERROR_BODY_BYTES.saturating_sub(body.len());
+        if chunk.len() > remaining {
+            body.extend_from_slice(&chunk[..remaining]);
+            return Ok((body, true));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok((body, false))
 }
 
 pub(super) async fn send_canary_request(
@@ -143,7 +168,7 @@ pub(super) async fn send_canary_request(
                             observed_tokens.saturating_add(delta)
                         }
                     };
-                    if observed_tokens >= u64::from(canary_max_generation_threshold) {
+                    if observed_tokens > u64::from(canary_max_generation_threshold) {
                         return Err(BringupError::RunawayGeneration {
                             tokens: u32::try_from(observed_tokens).unwrap_or(u32::MAX),
                         });
