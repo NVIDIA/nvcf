@@ -566,12 +566,17 @@ func TestGetPrimaryPV(t *testing.T) {
 }
 
 // newMountOptionDefaultsObjects builds the storage class and ConfigMap that the
-// reconciler consults to decide which mount option defaults apply.
+// reconciler consults to decide which mount option defaults apply. The
+// StorageClass is named NVMeshStorageClassName, not
+// DefaultModelCacheStorageClassName: newMountOptionsReconciler builds its
+// Reconciler with no storage class override, so it resolves the NVMesh
+// default (see TestModelCacheStorageClassResolvedOnce) and that is the class
+// name modelCacheProvisionerName looks up.
 func newMountOptionDefaultsObjects(provisioner string, cmData map[string]string) []client.Object {
 	objs := []client.Object{}
 	if provisioner != "" {
 		objs = append(objs, &storagev1.StorageClass{
-			ObjectMeta:  metav1.ObjectMeta{Name: DefaultModelCacheStorageClassName},
+			ObjectMeta:  metav1.ObjectMeta{Name: NVMeshStorageClassName},
 			Provisioner: provisioner,
 		})
 	}
@@ -746,9 +751,15 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 
 // TestModelCacheStorageClassResolvedOnce covers the storage class NewReconciler
 // resolves for the life of the reconciler: the option override first (tests),
-// then the agent config value, then the default. The config value is the single
-// production source, read here and by model cache backend selection, so the
-// class that is checked cannot drift from the class volumes are created on.
+// then the agent config value, then the NVMesh default. The config value is
+// the single production source, read here and by model cache backend
+// selection, so the class that is checked cannot drift from the class volumes
+// are created on. This reconciler only provisions on the NVMesh path
+// (doModelCacheNVMesh), so the unconfigured default must be
+// NVMeshStorageClassName ("nvcf-sc-30"), not the Samba-oriented
+// DefaultModelCacheStorageClassName ("nvcf-sc") — see
+// TestNvmeshModelCacheStorageClassNameResolution for the regression this
+// guards against.
 func TestModelCacheStorageClassResolvedOnce(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -757,8 +768,8 @@ func TestModelCacheStorageClassResolvedOnce(t *testing.T) {
 		want     string
 	}{
 		{
-			name: "unset falls back to the default",
-			want: DefaultModelCacheStorageClassName,
+			name: "unset falls back to the NVMesh default",
+			want: NVMeshStorageClassName,
 		},
 		{
 			name:     "option override wins",
@@ -784,6 +795,47 @@ func TestModelCacheStorageClassResolvedOnce(t *testing.T) {
 			if got := r.modelCacheStorageClass; got != tt.want {
 				t.Errorf("modelCacheStorageClass = %q, want %q", got, tt.want)
 			}
+		})
+	}
+}
+
+// TestSambaModelCacheStorageClassResolvedOnce covers the Samba-side sibling of
+// modelCacheStorageClass: it must resolve to DefaultModelCacheStorageClassName
+// ("nvcf-sc") when unconfigured, independent of modelCacheStorageClass having
+// been changed to default to NVMeshStorageClassName ("nvcf-sc-30"). Regression
+// test: doModelCacheSamba (modelcache.go) must read
+// sambaModelCacheStorageClass, not modelCacheStorageClass, or the Samba
+// backend's backing PVC would try to land on the NVMesh class whenever no
+// explicit override is configured.
+func TestSambaModelCacheStorageClassResolvedOnce(t *testing.T) {
+	tests := []struct {
+		name     string
+		override string
+		agentCfg string
+		want     string
+	}{
+		{
+			name: "unset falls back to the Samba default",
+			want: DefaultModelCacheStorageClassName,
+		},
+		{
+			name:     "option override wins",
+			override: "custom-sc",
+			want:     "custom-sc",
+		},
+		{
+			name:     "agent config value is used when there is no override",
+			agentCfg: "cfg-sc",
+			want:     "cfg-sc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newModelCacheStorageClassReconciler(t, tt.agentCfg, tt.override)
+			assert.Equal(t, tt.want, r.sambaModelCacheStorageClass)
+			assert.NotEqual(t, NVMeshStorageClassName, r.sambaModelCacheStorageClass,
+				"Samba class must never silently resolve to the NVMesh class")
 		})
 	}
 }
@@ -819,10 +871,10 @@ func TestApplyModelCacheStorageClass(t *testing.T) {
 		want       string
 	}{
 		{
-			name:       "spec value is replaced by the default",
+			name:       "spec value is replaced by the NVMesh default",
 			configured: "",
 			specSC:     ptr("some-other-sc"),
-			want:       DefaultModelCacheStorageClassName,
+			want:       NVMeshStorageClassName,
 		},
 		{
 			name:       "spec value is replaced by the configured override",
@@ -1571,6 +1623,20 @@ func TestReconcile_ModelCacheSamba(t *testing.T) {
 		assert.Equal(t, "", *rwPVC.Spec.StorageClassName, "Samba RW PVC must bind a static PV, not a StorageClass")
 	}
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "samba-rw-pv-" + cacheHandle}, &corev1.PersistentVolume{}))
+
+	// The Samba server's own backing data PVC must stay on the Samba-oriented
+	// default (nvcf-sc), not the NVMesh default (nvcf-sc-30), even though this
+	// reconciler is built with no explicit override (nvcaCfg above). Regression
+	// test: doModelCacheSamba used to read the NVMesh-resolved
+	// r.modelCacheStorageClass for this PVC too, which would have pointed the
+	// Samba backing storage at nvcf-sc-30 whenever it was unconfigured.
+	dataPVC := &corev1.PersistentVolumeClaim{}
+	require.NoError(t, c.Get(ctx,
+		client.ObjectKey{Name: SambaModelCacheBackingPVCName(cacheHandle), Namespace: ModelCacheInitNamespace}, dataPVC))
+	if assert.NotNil(t, dataPVC.Spec.StorageClassName) {
+		assert.Equal(t, DefaultModelCacheStorageClassName, *dataPVC.Spec.StorageClassName,
+			"Samba backing data PVC must default to nvcf-sc, not the NVMesh class")
+	}
 
 	// Drive the writer pod to running so the request moves to InitRunning.
 	initJobPod := &corev1.Pod{}

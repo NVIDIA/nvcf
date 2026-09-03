@@ -190,6 +190,18 @@ func TestModelCacheStorageClassNameResolution(t *testing.T) {
 	assert.Equal(t, "custom-block-sc", ModelCacheStorageClassName("custom-block-sc"))
 }
 
+// TestNvmeshModelCacheStorageClassNameResolution pins the NVMesh path's
+// unconfigured default to NVMeshStorageClassName ("nvcf-sc-30"), not
+// DefaultModelCacheStorageClassName ("nvcf-sc"). Regression test for the bug
+// where doModelCacheNVMesh provisioned volumes on nvcf-sc even when
+// SelectHelmCacheBackend had already confirmed nvcf-sc-30 (NVMesh) was
+// available and selected the NVMesh backend.
+func TestNvmeshModelCacheStorageClassNameResolution(t *testing.T) {
+	assert.Equal(t, NVMeshStorageClassName, nvmeshModelCacheStorageClassName(""))
+	assert.Equal(t, "custom-nvmesh-sc", nvmeshModelCacheStorageClassName("custom-nvmesh-sc"))
+	assert.NotEqual(t, DefaultModelCacheStorageClassName, nvmeshModelCacheStorageClassName(""))
+}
+
 // TestSelectHelmCacheBackend_SambaClassLookupError proves a failed lookup of the
 // Samba backing class surfaces as an error rather than silently degrading to the
 // ephemeral cache: a transient API error must be retried, not treated as an

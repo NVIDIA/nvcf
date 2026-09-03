@@ -201,7 +201,19 @@ func NewReconciler(
 
 	// Resolve the model cache storage class once: it cannot change for the life
 	// of the reconciler, so every later use reads the field directly.
-	reconciler.modelCacheStorageClass = ModelCacheStorageClassName(reconciler.modelCacheStorageClass)
+	// modelCacheStorageClassOverride is the same unresolved value (option, then
+	// Agent.ModelCache) used to resolve both the NVMesh and Samba class names
+	// below, and the value model cache backend selection checks against
+	// independently. It is deliberately resolved twice, with different
+	// defaults, because doModelCacheNVMesh and doModelCacheSamba are only ever
+	// reached for their respective backend and need different unconfigured
+	// defaults (NVMeshStorageClassName vs. the Samba-oriented
+	// DefaultModelCacheStorageClassName) — a single shared resolved value would
+	// hand doModelCacheSamba the NVMesh class (or vice versa) whenever the
+	// operator has not set an explicit override.
+	modelCacheStorageClassOverride := reconciler.modelCacheStorageClass
+	reconciler.modelCacheStorageClass = nvmeshModelCacheStorageClassName(modelCacheStorageClassOverride)
+	reconciler.sambaModelCacheStorageClass = ModelCacheStorageClassName(modelCacheStorageClassOverride)
 
 	return reconciler
 }
@@ -220,20 +232,26 @@ type Reconciler struct {
 	k8sTimeConfig         *k8sutil.TimeConfig
 	csiVolumeMountOptions []string
 
-	// modelCacheStorageClass is the storage class model cache volumes are
-	// provisioned on and whose provisioner selects the mount option defaults.
-	// NewReconciler resolves it once (option, then Agent.ModelCache, then the
-	// default), so it is always a concrete class name. NVCA owns this choice
-	// rather than taking it from the request spec, so every model cache volume
-	// in a cluster lands on the same class; model cache backend selection reads
-	// the same config value before choosing a backend that needs the class.
+	// modelCacheStorageClass is the storage class NVMesh model cache volumes
+	// are provisioned on and whose provisioner selects the mount option
+	// defaults. NewReconciler resolves it once (option, then Agent.ModelCache,
+	// then NVMeshStorageClassName), so it is always a concrete class name.
+	// NVCA owns this choice rather than taking it from the request spec, so
+	// every NVMesh model cache volume in a cluster lands on the same class.
+	// sambaModelCacheStorageClass is the analogous resolved class for the
+	// Samba backend's own backing PVC (doModelCacheSamba), resolved from the
+	// same unconfigured override but defaulting to
+	// DefaultModelCacheStorageClassName instead — see NewReconciler. Model
+	// cache backend selection reads the unresolved config value independently,
+	// before choosing a backend that needs one of these classes.
 	// cacheMountOptionsConfigMap holds the mount option defaults per
 	// provisioner. modelCacheProvisioner is the one time init: a StorageClass
 	// provisioner is immutable, so it is read once and kept. The ConfigMap is
 	// read on each use so operator edits take effect.
-	modelCacheStorageClass     string
-	cacheMountOptionsConfigMap string
-	modelCacheProvisioner      atomic.Pointer[string]
+	modelCacheStorageClass      string
+	sambaModelCacheStorageClass string
+	cacheMountOptionsConfigMap  string
+	modelCacheProvisioner       atomic.Pointer[string]
 
 	tracer            oteltrace.Tracer
 	nowFunc           func() time.Time

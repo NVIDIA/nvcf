@@ -457,7 +457,7 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 		func(ctx context.Context) error {
 			var e error
 			infraState, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
-				r.cfg.Agent.SharedStorage.Server.Image, r.modelCacheStorageClass, smbResources, capacity)
+				r.cfg.Agent.SharedStorage.Server.Image, r.sambaModelCacheStorageClass, smbResources, capacity)
 			return e
 		},
 		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.handle", cacheHandle)),
@@ -488,7 +488,7 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonSambaInfraTimeout,
 				fmt.Errorf("samba model cache server for handle %s still unavailable after %s, "+
 					"its backing PVC on storage class %s may be unbindable",
-					cacheHandle, waited.Round(time.Second), r.modelCacheStorageClass))
+					cacheHandle, waited.Round(time.Second), r.sambaModelCacheStorageClass))
 		}
 		log.V(1).Info("Samba model cache server not ready, requeuing", "waited", waited.Round(time.Second))
 		return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
