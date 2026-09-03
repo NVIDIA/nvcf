@@ -447,6 +447,36 @@ func TestValidateDeploymentPodReadinessFailsOnCrashedContainerDespiteCleanCRStat
 	}
 }
 
+// TestValidateDeploymentPodReadinessFailsOnCrashedInitContainer confirms an
+// init container's terminated state is inspected the same way as a regular
+// container's, instead of only pod.Status.ContainerStatuses -- otherwise a
+// failing init container falls through to the generic Ready=False message.
+func TestValidateDeploymentPodReadinessFailsOnCrashedInitContainer(t *testing.T) {
+	pod := fakeTerminatedPod(testRequestsNS, "inst-a", "setup", 1, "Error")
+	pod.Status.InitContainerStatuses = pod.Status.ContainerStatuses
+	pod.Status.ContainerStatuses = nil
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{
+			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
+			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "starting"}),
+		},
+		[]runtime.Object{pod},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	got := checkByName(t, out.Checks, "pod-readiness")
+	if got.Status != CheckFailed {
+		t.Errorf("pod-readiness = %s, want FAIL (%s)", got.Status, got.Message)
+	}
+	if !strings.Contains(got.Message, "setup") || !strings.Contains(got.Message, "exit code 1") {
+		t.Errorf("pod-readiness message = %q, want it to name the init container and exit code", got.Message)
+	}
+}
+
 // TestValidateDeploymentPodReadinessFailsOnCrashLoop covers the case where
 // restartPolicy: Always has already cycled the container back to Waiting by
 // the time the check runs, so its *current* state isn't Terminated -- the

@@ -503,7 +503,10 @@ func getMiniServiceUtilsPod(ctx context.Context, dc dynamic.Interface, cs kubern
 		return nil, fmt.Errorf("reading MiniService %s: %w", instanceID, err)
 	}
 	msNamespace, found, err := unstructured.NestedString(ms.Object, "spec", "namespace")
-	if err != nil || !found || msNamespace == "" {
+	if err != nil {
+		return nil, fmt.Errorf("MiniService %s spec.namespace: %w", instanceID, err)
+	}
+	if !found || msNamespace == "" {
 		return nil, fmt.Errorf("MiniService %s has no spec.namespace", instanceID)
 	}
 	return cs.CoreV1().Pods(msNamespace).Get(ctx, utilsPodName, metav1.GetOptions{})
@@ -531,13 +534,13 @@ func podUnhealthyReason(pod *corev1.Pod) (string, bool) {
 		}
 	}
 
-	for _, cs := range pod.Status.ContainerStatuses {
+	for _, cs := range allContainers {
 		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
 			return fmt.Sprintf("container %s terminated: %s (exit code %d)", cs.Name, t.Reason, t.ExitCode), true
 		}
 	}
 
-	for _, cs := range pod.Status.ContainerStatuses {
+	for _, cs := range allContainers {
 		if cs.RestartCount < podReadinessRestartThreshold {
 			continue
 		}
