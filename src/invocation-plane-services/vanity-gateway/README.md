@@ -271,7 +271,11 @@ v2config:
 Callers send the public `modelName`, exactly as they do for any other model on
 this host. The gateway looks the model up, rewrites the request `model` to
 `functionID/modelName`, and forwards it to `LLM_GATEWAY_ENDPOINT`, which routes
-on that prefix. Callers never see the function ID.
+on that prefix, so a caller never has to supply a function ID.
+
+Only the request is rewritten. The LLM Gateway echoes the model it was given,
+so the `model` field of the response carries `functionID/modelName` back to the
+caller.
 
 `function-id`, `function-version-id`, and `nvcf-function-id` are stripped from
 these requests. The LLM Gateway resolves the function from the model, so the
