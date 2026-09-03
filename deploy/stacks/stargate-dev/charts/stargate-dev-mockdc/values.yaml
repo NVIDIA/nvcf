@@ -22,29 +22,13 @@ images:
 
 imagePullSecrets: []
 
-# Approximate Llama 3.1 8B on one H100 near 25 concurrent requests.
-# Keep output below Pylon's 237-token runaway-generation threshold.
 mockDynamo:
   backend0:
-    numTokens: 128
-    tokenDelayMs: 5
-    decodeJitterMs: 2
-    ttftMs: 10
-    ttftJitterMs: 20
-    prefillTokensPerSecond: 7000
-    maxConcurrentRequests: 25
+    profile: h100-llama-3.1-8b
     healthDelayMs: 0
-    kvCacheCapacityTokens: 400000
   backend1:
-    numTokens: 128
-    tokenDelayMs: 5
-    decodeJitterMs: 2
-    ttftMs: 10
-    ttftJitterMs: 20
-    prefillTokensPerSecond: 7000
-    maxConcurrentRequests: 25
+    profile: h100-llama-3.1-8b
     healthDelayMs: 0
-    kvCacheCapacityTokens: 400000
 
 pylon:
   doCalibration: false

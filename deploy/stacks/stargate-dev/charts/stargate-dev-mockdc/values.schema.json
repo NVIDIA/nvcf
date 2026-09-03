@@ -79,27 +79,10 @@
     "mockDynamo": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "numTokens",
-        "tokenDelayMs",
-        "decodeJitterMs",
-        "ttftMs",
-        "ttftJitterMs",
-        "prefillTokensPerSecond",
-        "maxConcurrentRequests",
-        "healthDelayMs",
-        "kvCacheCapacityTokens"
-      ],
+      "required": ["profile", "healthDelayMs"],
       "properties": {
-        "numTokens": {"type": "integer", "minimum": 1},
-        "tokenDelayMs": {"type": "integer", "minimum": 0},
-        "decodeJitterMs": {"type": "integer", "minimum": 0},
-        "ttftMs": {"type": "integer", "minimum": 0},
-        "ttftJitterMs": {"type": "integer", "minimum": 0},
-        "prefillTokensPerSecond": {"type": "number", "minimum": 0},
-        "maxConcurrentRequests": {"type": "integer", "minimum": 0},
-        "healthDelayMs": {"type": "integer", "minimum": 0},
-        "kvCacheCapacityTokens": {"type": "integer", "minimum": 0}
+        "profile": {"enum": ["h100-llama-3.1-8b"]},
+        "healthDelayMs": {"type": "integer", "minimum": 0}
       }
     }
   }

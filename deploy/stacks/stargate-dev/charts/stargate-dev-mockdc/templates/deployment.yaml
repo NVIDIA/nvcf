@@ -71,15 +71,8 @@ spec:
           args:
             - --http-listen-addr=0.0.0.0:8090
             - --model-name={{ $modelName }}
-            - --num-tokens={{ $mock.numTokens }}
-            - --token-delay-ms={{ $mock.tokenDelayMs }}
-            - --decode-jitter-ms={{ $mock.decodeJitterMs }}
-            - --ttft-ms={{ $mock.ttftMs }}
-            - --ttft-jitter-ms={{ $mock.ttftJitterMs }}
-            - --prefill-tokens-per-s={{ $mock.prefillTokensPerSecond }}
-            - --max-concurrent-requests={{ $mock.maxConcurrentRequests }}
+            - --profile={{ $mock.profile }}
             - --health-delay-ms={{ $mock.healthDelayMs }}
-            - --kv-cache-capacity-tokens={{ $mock.kvCacheCapacityTokens }}
           ports:
             - name: mock-http
               containerPort: 8090
