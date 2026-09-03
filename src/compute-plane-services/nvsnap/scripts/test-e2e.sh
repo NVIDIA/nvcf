@@ -107,6 +107,73 @@ case "$WORKLOAD" in
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp-restore.yaml"
         ;;
+    vllm-70b-criu)
+        # Llama-3.1-70B TP=4 on criu-v2. ~270G checkpoint at util 0.85, so the
+        # default 600s CHECKPOINT_TIMEOUT is not enough; the runner raises it.
+        POD_NAME="vllm-70b-criu"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="vllm-70b-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="meta-llama/Llama-3.1-70B-Instruct"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"meta-llama/Llama-3.1-70B-Instruct","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"meta-llama/Llama-3.1-70B-Instruct","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu-restore.yaml"
+        ;;
+    nim-qwen3-32b-criu)
+        # NIM (TRT-LLM) TP=2 on criu-v2. Tests whether multi-GPU criu-v2 works
+        # on an engine other than vLLM. No CUDA-graph disable: TRT-LLM sets
+        # graphs at engine build and the image exposes no env for it, which is
+        # acceptable for capture since graphs fail at restore-inference.
+        POD_NAME="nim-qwen3-32b-criu"
+        CONTAINER_NAME="nim"
+        RESTORE_POD_NAME="nim-qwen3-32b-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="qwen/qwen3-32b"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"qwen/qwen3-32b","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"qwen/qwen3-32b","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/nim-qwen3-32b-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/nim-qwen3-32b-criu-restore.yaml"
+        ;;
+    sglang-tp2-criu)
+        # SGLang TP=2 on criu-v2. Tests whether the peer-state sever recipe
+        # generalises beyond vLLM. SGLang's --disable-cuda-graph is the
+        # --enforce-eager analogue; the NCCL knobs are engine-independent.
+        POD_NAME="sglang-tp2-criu"
+        CONTAINER_NAME="sglang"
+        RESTORE_POD_NAME="sglang-tp2-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=30000
+        MODEL="meta-llama/Llama-3.1-8B-Instruct"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"meta-llama/Llama-3.1-8B-Instruct","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"meta-llama/Llama-3.1-8B-Instruct","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/sglang-tp2-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/sglang-tp2-criu-restore.yaml"
+        ;;
+    vllm-tp2-criu)
+        # Multi-GPU on the criu-v2 engine. Separate from vllm-tp2 (which stays
+        # on the rootfs/cachedir path) so the two do not share a manifest.
+        # Needs the agent started with NVSNAP_MULTI_GPU_CRIU=1 and the run
+        # invoked with CAPTURE_PATH=criu-v2. Every cross-GPU transport is off
+        # in the manifest: cuda-checkpoint blocks if any peer mapping exists.
+        # See docs/proposals/multi-gpu-criu-v2.md.
+        POD_NAME="vllm-tp2-criu"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="vllm-tp2-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-tp2-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-tp2-criu-restore.yaml"
+        ;;
     vllm-tp2)
         # E1 multi-GPU ladder: TinyLlama TP=2 eager. Force the CRIU engine
         # with CAPTURE_PATH=criu-v2 (multi-GPU otherwise defaults to rootfs).
@@ -276,22 +343,25 @@ NAMESPACE="nvsnap-system"
 
 # Timeouts (seconds) — 70B needs longer for model download + GPU memory dump/restore
 if [[ "$WORKLOAD" == *"70b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: 70B model download + load
+    # A COLD 70B run does not fit 30min: the HF pull alone is ~140G and a
+    # measured cold start needed >32min just to reach Ready. Warm caches finish
+    # well inside this; the ceiling is here for the cold case.
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-4200}   # 70min: 140G pull + load
     MODELS_POLL_TIMEOUT=1200    # 20min
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=1200  # 20min: CRIU + 4x GPU memory restore
 elif [[ "$WORKLOAD" == trtllm-* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~25GB image pull + TRT engine compilation
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-1800}   # 30min: ~25GB image pull + TRT engine compilation
     MODELS_POLL_TIMEOUT=1200    # 20min
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=600   # 10min
-elif [[ "$WORKLOAD" == *"qwen32b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~64GB fp16 model download + load
+elif [[ "$WORKLOAD" == *"qwen32b"* || "$WORKLOAD" == *"qwen3-32b"* ]]; then
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-1800}   # 30min: ~64GB fp16 model download + load
     MODELS_POLL_TIMEOUT=1200    # 20min
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=1200  # 20min: CRIU restore of ~64GB host-staged GPU memory
 else
-    POD_READY_TIMEOUT=600       # 10min
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-600}    # 10min
     MODELS_POLL_TIMEOUT=600
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=600   # 10min

@@ -17,14 +17,14 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: vllm-tp2
+  name: vllm-tp2-criu
   namespace: nvsnap-system
   labels:
-    app: vllm-tp2
+    app: vllm-tp2-criu
     nvsnap.io/demo: "true"
   annotations:
     nvsnap.io/demo-name: "vLLM TP=2 eager"
-    nvsnap.io/desc: "TinyLlama 1.1B on vLLM, TP=2 eager (multi-GPU cachedir)"
+    nvsnap.io/desc: "criu-v2 TinyLlama 1.1B on vLLM, TP=2 eager (multi-GPU cachedir)"
     nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     nvsnap.io/port: "8000"
     nvsnap.io/gpus: "2"
@@ -33,7 +33,7 @@ metadata:
     # anything requesting >= 2 GPUs here. Declaring "criu" made the manifest
     # generator emit a criu-v2 restore placeholder that nothing ever drives,
     # so the restore pod idled until the readiness timeout.
-    nvsnap.io/path: "rootfs"
+    nvsnap.io/path: "criu"
 spec:
   automountServiceAccountToken: false
   tolerations:

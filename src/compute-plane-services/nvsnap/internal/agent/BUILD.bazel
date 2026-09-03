@@ -88,6 +88,7 @@ go_test(
         "cascade_fetch_test.go",
         "catalog_test.go",
         "checkpoint_plan_a_test.go",
+        "checkpoint_v2_gpuguard_test.go",
         "fsstore_test.go",
         "l2_integration_test.go",
         "l2_promote_async_test.go",
