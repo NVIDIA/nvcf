@@ -22,6 +22,7 @@ test:
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
 	@tests/apikeys-env-wiring.sh
+	@tests/ess-base-url-wiring.sh
 	@tests/nats-placement-tags.sh
 
 test-published-charts:
