@@ -1077,7 +1077,7 @@ mod tests {
         assert!(!initial.input_tokens_explicit());
         observer.submit_now();
         recv_observation(&rx, "backend-submission observation should be emitted").await;
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         recv_observation(&rx, "response-header observation should be emitted").await;
 
         observer.observe_input_tokens_total(7);

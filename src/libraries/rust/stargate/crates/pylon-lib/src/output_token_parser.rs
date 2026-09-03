@@ -53,7 +53,7 @@ pub(crate) struct EstimatedOutputUpdate {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExactOutputUpdate {
-    Applied { delta: u64 },
+    Applied,
     Regressed,
 }
 
@@ -101,10 +101,9 @@ impl OutputTokenParser {
         {
             return ExactOutputUpdate::Regressed;
         }
-        let delta = completion_tokens.saturating_sub(self.exact_baseline.unwrap_or_default());
         self.exact_baseline = Some(completion_tokens);
         self.estimated_tail_characters = OutputCharacters::default();
-        ExactOutputUpdate::Applied { delta }
+        ExactOutputUpdate::Applied
     }
 }
 
@@ -173,7 +172,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(5),
-            ExactOutputUpdate::Applied { delta: 5 }
+            ExactOutputUpdate::Applied
         );
         assert_eq!(
             parser.observe_generated_characters(text("x")),
@@ -185,7 +184,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(6),
-            ExactOutputUpdate::Applied { delta: 1 }
+            ExactOutputUpdate::Applied
         );
     }
 
@@ -196,7 +195,7 @@ mod tests {
 
         assert_eq!(
             parser.observe_exact_output_tokens(2),
-            ExactOutputUpdate::Applied { delta: 2 }
+            ExactOutputUpdate::Applied
         );
     }
 
@@ -211,7 +210,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(5),
-            ExactOutputUpdate::Applied { delta: 5 }
+            ExactOutputUpdate::Applied
         );
         assert_eq!(
             parser
@@ -221,7 +220,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(6),
-            ExactOutputUpdate::Applied { delta: 1 }
+            ExactOutputUpdate::Applied
         );
     }
 
@@ -237,7 +236,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(7),
-            ExactOutputUpdate::Applied { delta: 2 }
+            ExactOutputUpdate::Applied
         );
     }
 

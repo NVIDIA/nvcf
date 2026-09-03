@@ -478,11 +478,10 @@ impl TunnelRequestLifecycle {
             }
             if let Some(output_tokens) = exact_usage.output_tokens {
                 match parser.observe_exact_output_tokens(output_tokens) {
-                    ExactOutputUpdate::Applied { delta } => {
+                    ExactOutputUpdate::Applied => {
                         obs.observe_output_tokens_generated_so_far(output_tokens);
                         quality_progress = Some(RequestOutputTokenProgress::Cumulative {
                             tokens: output_tokens,
-                            delta,
                         });
                     }
                     ExactOutputUpdate::Regressed => {
