@@ -25,8 +25,10 @@ Concretely:
   - Any CRD.
 
 A failure during cleanup aborts the suite. Only NotFound is
-swallowed via `--ignore-not-found`; timeouts, permission errors,
-finalizer stalls, and unreachable kube contexts propagate.
+swallowed via `--ignore-not-found`. Timeouts, permission errors,
+and finalizer stalls propagate. An unreachable single-cluster
+kube context is excluded: `destroy-stack.sh single` skips
+cluster-resource cleanup and still runs `clean_stack_out`.
 
 ## Goals
 
@@ -214,14 +216,19 @@ with explicit kube-context flags; it belongs in the dev wrapper.
 destroy-stack-single: ## Uninstall NVCF stack from one cluster; leaves k3d running
 	@CTX="k3d-$(CLUSTER_NAME)"; \
 	if ! kubectl --context "$$CTX" cluster-info >/dev/null 2>&1; then \
-		echo "Context $$CTX unreachable; nothing to clean."; \
-		exit 0; \
+		echo "Context $$CTX unreachable; skipping cluster resources."; \
+	else \
+		$(MAKE) _delete-stack-crs    CTX="$$CTX" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
+		$(MAKE) _uninstall-stack-releases CTX="$$CTX" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
+		$(MAKE) _delete-stack-namespaces CTX="$$CTX" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
 	fi; \
-	$(MAKE) _delete-stack-crs    CTX="$$CTX" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
-	$(MAKE) _uninstall-stack-releases CTX="$$CTX" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
-	$(MAKE) _delete-stack-namespaces CTX="$$CTX" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
 	$(MAKE) _clean-stack-out
 ```
+
+When the single-cluster context (`k3d-$(CLUSTER_NAME)`) is
+unreachable, cluster-resource cleanup is skipped and
+`clean_stack_out` still runs. That unreachable context does not
+abort the suite.
 
 #### New target: destroy-stack-multi
 

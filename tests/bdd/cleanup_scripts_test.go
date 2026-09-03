@@ -144,6 +144,7 @@ func TestDestroyStackMultiCleansWorkerNamespacesOnControlPlane(t *testing.T) {
 		"kubectl --context k3d-ncp-local-cp delete namespace nvca-operator",
 		"kubectl --context k3d-ncp-local-cp delete namespace nvca-system",
 		"kubectl --context k3d-ncp-local-cp delete namespace nvcf-backend",
+		"kubectl --context k3d-ncp-local-cp -n nvca-operator delete nvcfbackend --all",
 		"helm --kube-context k3d-ncp-local-compute-1 uninstall nvca-operator -n nvca-operator",
 		"helm --kube-context k3d-ncp-local-cp uninstall nats -n nats-system",
 	} {
@@ -258,7 +259,12 @@ set -euo pipefail
 printf 'kubectl %s\n' "$*" >>"$FAKE_COMMAND_LOG"
 case "$*" in
   *"cluster-info"*) exit 0 ;;
+  *"get namespace nvca-operator"*) exit 0 ;;
   *"get namespace"*) exit 1 ;;
+  *"-n nvca-operator get nvcfbackend -o name"*)
+    printf 'nvcfbackend/ncp-local-cp\n'
+    ;;
+  *"-n nvca-operator get nvcfbackend"*) exit 0 ;;
   *"get nvcfbackend"*) exit 1 ;;
 esac
 `)
