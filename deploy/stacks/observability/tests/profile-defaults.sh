@@ -2,6 +2,7 @@
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_dir="$(cd "$stack_dir/../../.." && pwd)"
 golden_file="$stack_dir/tests/golden/profile-matrix.txt"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
@@ -34,12 +35,18 @@ helmfile_args=(
 profile_release_json() {
   local profile="$1"
   shift
+  local output_file="$work_dir/list-$profile.json"
+  local log_file="$work_dir/list-$profile.log"
 
-  HELMFILE_ENV=local helmfile \
+  if ! HELMFILE_ENV=local helmfile \
     "${helmfile_args[@]}" \
     --state-values-set "observability.profile=$profile" \
     "$@" \
-    list --output json --skip-charts 2>/dev/null
+    list --output json --skip-charts >"$output_file" 2>"$log_file"; then
+    cat "$log_file" >&2
+    fail "helmfile list failed for $profile"
+  fi
+  cat "$output_file"
 }
 
 profile_releases_csv() {
@@ -98,15 +105,21 @@ release_needs_csv() {
   local profile="$1"
   local release="$2"
   shift 2
+  local output_file="$work_dir/needs-$profile-$release.yaml"
+  local log_file="$work_dir/needs-$profile-$release.log"
 
-  HELMFILE_ENV=local helmfile \
+  if ! HELMFILE_ENV=local helmfile \
     "${helmfile_args[@]}" \
     --state-values-set "observability.profile=$profile" \
     "$@" \
     --selector "name=$release" \
     --chart "$stack_dir/charts/nvcf-otel-collector" \
-    build 2>/dev/null |
-    yq -r '.releases[]? | select(.name == "'"$release"'") | .needs[]?' |
+    build >"$output_file" 2>"$log_file"; then
+    cat "$log_file" >&2
+    fail "helmfile build failed for $profile $release"
+  fi
+  yq -r '.releases[]? | select(.name == "'"$release"'") | .needs[]?' \
+    "$output_file" |
     sort -u |
     paste -sd, -
 }
@@ -322,6 +335,41 @@ assert_equal "$(monitor_targets_csv "$work_dir/chart-control")" \
   "$control_monitors" "chart control monitor defaults"
 assert_equal "$(monitor_targets_csv "$work_dir/chart-compute")" \
   "$compute_monitors" "chart compute monitor defaults"
+
+# The application chart owns its Service labels. Compare them with the shared
+# ServiceMonitor selector so an application label change cannot silently break
+# discovery.
+helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
+  --namespace nvcf \
+  --set functionautoscaler.image.registry=nvcr.io \
+  --set functionautoscaler.image.repository=test/nvcf-function-autoscaler \
+  >"$work_dir/function-autoscaler-manifests.yaml"
+autoscaler_service_name_label="$(
+  yq -r \
+    'select(.kind == "Service" and .metadata.name == "function-autoscaler") | .metadata.labels."app.kubernetes.io/name"' \
+    "$work_dir/function-autoscaler-manifests.yaml"
+)"
+autoscaler_service_instance_label="$(
+  yq -r \
+    'select(.kind == "Service" and .metadata.name == "function-autoscaler") | .metadata.labels."app.kubernetes.io/instance"' \
+    "$work_dir/function-autoscaler-manifests.yaml"
+)"
+autoscaler_monitor_name_label="$(
+  yq -r \
+    'select(.kind == "ServiceMonitor" and .metadata.name == "nvcf-default-monitors-function-autoscaler") | .spec.selector.matchLabels."app.kubernetes.io/name"' \
+    "$work_dir/chart-control/manifests.yaml"
+)"
+autoscaler_monitor_instance_label="$(
+  yq -r \
+    'select(.kind == "ServiceMonitor" and .metadata.name == "nvcf-default-monitors-function-autoscaler") | .spec.selector.matchLabels."app.kubernetes.io/instance"' \
+    "$work_dir/chart-control/manifests.yaml"
+)"
+assert_equal "$autoscaler_monitor_name_label" \
+  "$autoscaler_service_name_label" \
+  'function autoscaler ServiceMonitor application name selector'
+assert_equal "$autoscaler_monitor_instance_label" \
+  "$autoscaler_service_instance_label" \
+  'function autoscaler ServiceMonitor application instance selector'
 
 helm template otel-collector "$stack_dir/charts/nvcf-otel-collector" \
   >"$work_dir/collector-manifests.yaml"
