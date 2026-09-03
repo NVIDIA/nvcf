@@ -36,6 +36,8 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/ca"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/utils"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
 )
 
 var quicInsecure = os.Getenv("QUIC_INSECURE") == "true"
@@ -128,6 +130,14 @@ func (t *h3ConnectionCache) transportLocked() (*quic.Transport, error) {
 // A success resets only that destination, so unrelated flows cannot suppress
 // or trigger rotation.
 func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Transport, destination string, dialErr error) {
+	// Counted before the staleness guard below. That guard governs rotation
+	// bookkeeping only; a dial that happened still happened, and hiding it
+	// here would understate the failure rate the alert depends on.
+	nvcf.QuicDialCounter.Inc()
+	if dialErr != nil {
+		nvcf.QuicDialFailureCounter.WithLabelValues(dialFailureReason(ctx, dialErr)).Inc()
+	}
+
 	t.transportMu.Lock()
 	defer t.transportMu.Unlock()
 
@@ -156,6 +166,21 @@ func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Tra
 		return
 	}
 	t.rotateLocked(destination, failures)
+}
+
+// dialFailureReason labels a failure for the metric. It mirrors
+// isTransportDialFailure so that the "timeout" series counts exactly the
+// failures that drive rotation, which is what makes the two comparable in an
+// alert expression.
+func dialFailureReason(ctx context.Context, dialErr error) string {
+	switch {
+	case isTransportDialFailure(ctx, dialErr):
+		return nvcf.DialFailureTimeout
+	case errors.Is(dialErr, ErrAuth):
+		return nvcf.DialFailureAuth
+	default:
+		return nvcf.DialFailureOther
+	}
 }
 
 func isTransportDialFailure(ctx context.Context, dialErr error) bool {
@@ -192,6 +217,7 @@ func (t *h3ConnectionCache) rotateLocked(destination string, failures int) {
 	t.quicTransport = &quic.Transport{Conn: udpConn}
 	clear(t.dialFailures)
 	closeTransport(old)
+	nvcf.QuicTransportRotationCounter.Inc()
 }
 
 // closeTransport releases a transport and its socket. Errors are logged rather
@@ -269,11 +295,12 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 			})
 		}()
 		t.clients[hostname] = cl
+		nvcf.QuicTunnelGauge.Inc()
 	}
 	select {
 	case <-cl.dialing:
 		if cl.dialErr != nil {
-			delete(t.clients, hostname)
+			t.deleteClientLocked(hostname)
 			return nil, false, cl.dialErr
 		}
 		select {
@@ -357,7 +384,19 @@ func (t *h3ConnectionCache) removeClient(hostname string) {
 	if t.clients == nil {
 		return
 	}
+	t.deleteClientLocked(hostname)
+}
+
+// deleteClientLocked drops a cached client and keeps the tunnel gauge balanced
+// with it. The presence check is what keeps them balanced: removal is reached
+// from more than one path for the same hostname, and decrementing on a key
+// that is already gone would drive the gauge negative.
+func (t *h3ConnectionCache) deleteClientLocked(hostname string) {
+	if _, ok := t.clients[hostname]; !ok {
+		return
+	}
 	delete(t.clients, hostname)
+	nvcf.QuicTunnelGauge.Dec()
 }
 
 // Close closes the QUIC connections that this Transport has used.
