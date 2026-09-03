@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Test that the bundled sis release honors a helmfile condition driven from
 # environments/<env>.yaml. The sis release (spot-instance-service) had no
-# condition, so it installed on every deploy and sis.enabled had no effect.
-# It is now gated by `condition: sis.enabled`, defaulted to true in base.yaml so
+# condition, so it installed on every deploy and icms.enabled had no effect.
+# It is now gated by `condition: icms.enabled`, defaulted to true in base.yaml so
 # existing installs are unchanged. This guards two things: (a) with the default
-# the release stays enabled (backward-compatible), and (b) sis.enabled: false in
+# the release stays enabled (backward-compatible), and (b) icms.enabled: false in
 # an environment file disables it, while leaving the other releases enabled.
 set -euo pipefail
 
@@ -75,7 +75,7 @@ write_env() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Default: sis.enabled unset in the env file, so the base.yaml default (true)
+# 1. Default: icms.enabled unset in the env file, so the base.yaml default (true)
 #    stands and the release stays enabled -- existing installs are unchanged.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
@@ -90,7 +90,7 @@ render_list "$default_list"
 assert_enabled "$default_list" sis true
 
 # ---------------------------------------------------------------------------
-# 2. Override: sis.enabled: false disables the release, while the other releases
+# 2. Override: icms.enabled: false disables the release, while the other releases
 #    (e.g. api) stay enabled -- the condition gates only sis.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
@@ -98,7 +98,7 @@ global:
   image:
     registry: nvcr.io
     repository: test/nvcf
-sis:
+icms:
   enabled: false
 EOF
 
