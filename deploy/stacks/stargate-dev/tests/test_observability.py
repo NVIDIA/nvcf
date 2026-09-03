@@ -131,16 +131,12 @@ class DashboardTests(unittest.TestCase):
             if panel["title"] == "% Requests sent to each backend"
         )
         self.assertEqual(
-            request_share["fieldConfig"]["defaults"]["custom"]["stacking"][
-                "mode"
-            ],
+            request_share["fieldConfig"]["defaults"]["custom"]["stacking"]["mode"],
             "percent",
         )
 
         queries = "\n".join(
-            target["expr"]
-            for panel in panels
-            for target in panel.get("targets", [])
+            target["expr"] for panel in panels for target in panel.get("targets", [])
         )
         for metric in (
             "stargate_requests_total",
