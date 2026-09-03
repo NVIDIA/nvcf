@@ -170,12 +170,11 @@ struct StreamResponseConfig {
     kv_cache_access: KvCacheAccess,
     request_slot: Option<OwnedSemaphorePermit>,
     kind: StreamKind,
-    canary: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamKind {
-    Chat,
+    Chat { canary: bool },
     Responses { created_at: u64 },
 }
 
@@ -252,8 +251,7 @@ pub(crate) async fn chat_completions(
             output_tokens,
             kv_cache_access,
             request_slot,
-            kind: StreamKind::Chat,
-            canary,
+            kind: StreamKind::Chat { canary },
         });
     }
 
@@ -293,7 +291,7 @@ pub(crate) async fn chat_completions(
         usage: ChatUsage {
             prompt_tokens: input_tokens,
             completion_tokens: output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            total_tokens: input_tokens.saturating_add(output_tokens),
         },
     })
     .into_response();
@@ -362,7 +360,6 @@ pub(crate) async fn responses(
         kind: StreamKind::Responses {
             created_at: current_unix_timestamp(),
         },
-        canary: false,
     })
 }
 
@@ -535,7 +532,6 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         kv_cache_access,
         request_slot,
         kind,
-        canary,
     } = config;
     let stream = async_stream::stream! {
         let _request_slot = request_slot;
@@ -561,7 +557,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         state.emit_counters(&request_id, &model, input_tokens, 0, false);
 
-        if kind == StreamKind::Chat {
+        if matches!(kind, StreamKind::Chat { .. }) {
             yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role));
         }
 
@@ -569,13 +565,15 @@ fn stream_response(config: StreamResponseConfig) -> Response {
             if i > 0 {
                 tokio::time::sleep(token_delay(&state, &request_id, i)).await;
             }
-            let token = if canary {
+            let token = if matches!(kind, StreamKind::Chat { canary: true }) {
                 CANARY_ANSWER
             } else {
                 DUMMY_TOKENS[i % DUMMY_TOKENS.len()]
             };
             let event = match kind {
-                StreamKind::Chat => chat_sse_event(&id, &model, ChatStreamChunk::Content(token)),
+                StreamKind::Chat { .. } => {
+                    chat_sse_event(&id, &model, ChatStreamChunk::Content(token))
+                }
                 StreamKind::Responses { .. } => {
                     output_text.push_str(token);
                     responses_sse_event(
@@ -595,7 +593,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         }
 
         let completed = match kind {
-            StreamKind::Chat => chat_sse_event(&id, &model, ChatStreamChunk::Stop),
+            StreamKind::Chat { .. } => chat_sse_event(&id, &model, ChatStreamChunk::Stop),
             StreamKind::Responses { created_at } => responses_sse_event(
                 "response.completed",
                 &serde_json::json!({
@@ -620,7 +618,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
                         "usage": {
                             "input_tokens": input_tokens,
                             "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens,
+                            "total_tokens": input_tokens.saturating_add(output_tokens),
                         },
                     },
                 }),
@@ -630,7 +628,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
 
-        if kind == StreamKind::Chat {
+        if matches!(kind, StreamKind::Chat { .. }) {
             yield Ok(Event::default().data("[DONE]"));
         }
     };

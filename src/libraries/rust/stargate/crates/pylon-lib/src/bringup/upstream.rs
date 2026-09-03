@@ -50,6 +50,24 @@ pub(crate) async fn check_upstream_health(
     false
 }
 
+async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, BringupError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = response.bytes().await?;
+    let message = extract_error_message(&body);
+    if is_prompt_too_long(status, &message) {
+        Err(BringupError::PromptTooLong)
+    } else {
+        Err(BringupError::Api {
+            status,
+            message: message.unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
+        })
+    }
+}
+
 pub(super) async fn send_canary_request(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
@@ -73,31 +91,21 @@ pub(super) async fn send_canary_request(
         .pointer("/messages/0/content")
         .and_then(serde_json::Value::as_str)
         .map_or(1, str::len);
-    let response = http_client
-        .post(upstream_endpoint(
-            upstream_http_base_url,
-            "/v1/chat/completions",
-        ))
-        .header(HEADER_REQUEST_ID, request_id)
-        .header(HEADER_MODEL, generation.model_id())
-        .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
-        .timeout(timeout)
-        .json(&request)
-        .send()
-        .await?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.bytes().await?;
-        let message = extract_error_message(&body);
-        return if is_prompt_too_long(status, &message) {
-            Err(BringupError::PromptTooLong)
-        } else {
-            Err(BringupError::Api {
-                status,
-                message: message.unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
-            })
-        };
-    }
+    let response = ensure_success(
+        http_client
+            .post(upstream_endpoint(
+                upstream_http_base_url,
+                "/v1/chat/completions",
+            ))
+            .header(HEADER_REQUEST_ID, request_id)
+            .header(HEADER_MODEL, generation.model_id())
+            .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
+            .timeout(timeout)
+            .json(&request)
+            .send()
+            .await?,
+    )
+    .await?;
     let is_event_stream = response
         .headers()
         .get(CONTENT_TYPE)
@@ -198,26 +206,14 @@ pub(super) async fn send_completion_request(
     }
     .send()
     .await?;
-
     let status = response.status();
     observe_response_headers(&mut observer, &response, status);
+    let response = ensure_success(response).await?;
     let body = response.bytes().await?;
-    if status.is_success() {
-        let completion = serde_json::from_slice::<ChatCompletionResponse>(&body)
-            .map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
-        finish_observation(&mut observer, &completion);
-        Ok(completion)
-    } else {
-        let message = extract_error_message(&body);
-        if is_prompt_too_long(status, &message) {
-            Err(BringupError::PromptTooLong)
-        } else {
-            Err(BringupError::Api {
-                status,
-                message: message.unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned()),
-            })
-        }
-    }
+    let completion = serde_json::from_slice::<ChatCompletionResponse>(&body)
+        .map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
+    finish_observation(&mut observer, &completion);
+    Ok(completion)
 }
 
 fn observe_response_headers(

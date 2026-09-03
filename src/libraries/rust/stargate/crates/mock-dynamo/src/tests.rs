@@ -663,6 +663,30 @@ fn selected_output_tokens_are_bounded_by_remaining_context() {
     assert_eq!(bounded_output_tokens(usize::MAX, 64, 0), Some(64));
 }
 
+#[tokio::test]
+async fn chat_completion_saturates_total_tokens_at_usize_max() {
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(test_state());
+    let (addr, server) = spawn_test_app(app).await;
+
+    let response = json_response(
+        addr,
+        "POST",
+        "/v1/chat/completions",
+        &format!(
+            "connection: close\r\nx-input-tokens: {}\r\nx-output-tokens: 1",
+            usize::MAX
+        ),
+        r#"{"model":"dummy-model","messages":[],"stream":false}"#,
+    )
+    .await;
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains(&format!(r#""total_tokens":{}"#, usize::MAX)));
+    server.abort();
+}
+
 #[test]
 fn prefill_delay_scales_with_input_tokens() {
     assert_eq!(prefill_delay(4_000, 2_000.0), Duration::from_secs(2));
