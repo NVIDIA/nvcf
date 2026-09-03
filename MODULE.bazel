@@ -441,12 +441,12 @@ oci.pull(
 
 # NVIDIA distroless java: the base for Java service images, matching the
 # distroless_go / distroless_cc bases the Go and Rust services use and the base
-# the pre-Bazel nvct-service Dockerfile used (25-jdk-v4.0.8). Publicly
+# the pre-Bazel nvct-service Dockerfile used. Publicly
 # pullable, multi-arch. Pinned by digest like the other distroless bases.
 # JDK 25 matches --java_language_version=25 above.
 oci.pull(
     name = "distroless_java",
-    digest = "sha256:cc9dbc2560e39f6e0a67cd85421370e46fd818b1660800b507b82819a79ea21f",
+    digest = "sha256:df076cd3d77bd2ae6cd2e9bbe90ec66a661c44a8471008b76c5de6b048a79815",
     image = "nvcr.io/nvidia/distroless/java",
     platforms = [
         "linux/amd64",
@@ -459,7 +459,7 @@ oci.pull(
 # rather than an internal-only path.
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:938bd28ce4ddb800118a951774203e7563c2067a72b20ae6b85d2c7da165a178",
+    digest = "sha256:731531712c92ee24001a4a6e0a0897c4fa542432d7186c5d73b0110ba6d0da16",
     image = "nvcr.io/nvidia/distroless/go",
     platforms = [
         "linux/amd64",
@@ -473,7 +473,7 @@ oci.pull(
 # platform string literally when it names the generated child repository.
 oci.pull(
     name = "distroless_cc",
-    digest = "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
+    digest = "sha256:d2b9ccba4833f76861a3edae3d5df18a6c29050970a8a4500a0fa6b31f880da8",
     image = "nvcr.io/nvidia/distroless/cc",
     platforms = [
         "linux/amd64",
@@ -714,7 +714,9 @@ maven.install(
         "org.apache.cassandra:java-driver-mapper-runtime",
         "org.apache.cassandra:java-driver-query-builder",
         "org.assertj:assertj-core",
-        "org.apache.httpcomponents.client5:httpclient5",
+        "org.apache.httpcomponents.client5:httpclient5:5.6.4",
+        "org.apache.httpcomponents.core5:httpcore5:5.4.3",
+        "org.apache.httpcomponents.core5:httpcore5-h2:5.4.3",
         "org.awaitility:awaitility",
         "org.junit.jupiter:junit-jupiter-params",
         "org.mapstruct:mapstruct:1.5.2.Final",
@@ -744,6 +746,7 @@ maven.install(
         "org.testcontainers:testcontainers-localstack",
     ],
     boms = [
+        "io.netty:netty-bom:4.2.16.Final",
         "net.javacrumbs.shedlock:shedlock-bom:7.7.0",
         "org.springframework.boot:spring-boot-dependencies:4.0.7",
         "org.springframework.cloud:spring-cloud-dependencies:2025.1.2",
