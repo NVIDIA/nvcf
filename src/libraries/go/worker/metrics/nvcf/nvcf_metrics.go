@@ -40,10 +40,14 @@ const (
 	DialFailureOther   = "other"
 )
 
-// Reasons a dial failure was declined for rotation. Each of these is a silent
+// Reasons a dial result was declined for rotation. Each of these is a silent
 // return in the dial path, and a silent return that reads as "nothing wrong"
 // is what made the original defect hard to find. Counting them separates
 // "rotation never fired" from "rotation fired and did not help".
+//
+// stale_transport covers successful dials as well as failed ones: the
+// staleness guard runs before the error is examined, so a dial that succeeded
+// on a superseded socket lands here too.
 const (
 	DialSkipStaleTransport = "stale_transport"
 	DialSkipCtxCancelled   = "ctx_cancelled"
@@ -118,7 +122,7 @@ var (
 		prometheus.CounterOpts{
 			Namespace: QuicNamespace,
 			Name:      "dial_skip_total",
-			Help:      "dial failures that did not count toward rotation, by reason",
+			Help:      "dial results that did not count toward rotation, by reason",
 		}, []string{"reason"})
 
 	QuicTunnelGauge = promauto.NewGauge(

@@ -25,6 +25,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics/nvcf"
 )
@@ -210,5 +211,35 @@ func TestTunnelGaugeReturnsToZeroAfterClose(t *testing.T) {
 
 	if got := testutil.ToFloat64(nvcf.QuicTunnelGauge) - before; got != 0 {
 		t.Errorf("after Close: gauge moved by %v, want 0 (tunnels leaked)", got)
+	}
+}
+
+// A dial that cannot obtain a socket is still a dial attempt. If it were not
+// counted, a worker unable to bind would report no dial activity rather than
+// failures, which reads as idle rather than broken. That is the same
+// silent-zero shape as the defect this package exists to make visible.
+func TestTransportInitFailureIsCountedAsADialAttempt(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+	c.wrappedTransport = &http3.Transport{}
+
+	orig := listenUDP
+	listenUDP = func(string, *net.UDPAddr) (*net.UDPConn, error) {
+		return nil, errors.New("bind: cannot allocate memory")
+	}
+	defer func() { listenUDP = orig }()
+
+	dialsBefore := testutil.ToFloat64(nvcf.QuicDialCounter)
+	failBefore := failures(nvcf.DialFailureOther)
+
+	if _, _, err := c.dial(context.Background(), "proxy.example:443"); err == nil {
+		t.Fatal("expected dial to fail when the socket cannot be bound")
+	}
+
+	if got := testutil.ToFloat64(nvcf.QuicDialCounter) - dialsBefore; got != 1 {
+		t.Errorf("dial attempts moved by %v, want 1", got)
+	}
+	if got := failures(nvcf.DialFailureOther) - failBefore; got != 1 {
+		t.Errorf("other failures moved by %v, want 1", got)
 	}
 }

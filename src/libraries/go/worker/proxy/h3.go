@@ -114,9 +114,14 @@ func (t *h3ConnectionCache) transport() (*quic.Transport, error) {
 	return t.transportLocked()
 }
 
+// listenUDP is a seam so tests can exercise the socket-bind failure path,
+// which is otherwise unreachable: binding an ephemeral UDP port essentially
+// never fails outside fd exhaustion.
+var listenUDP = net.ListenUDP
+
 func (t *h3ConnectionCache) transportLocked() (*quic.Transport, error) {
 	if t.quicTransport == nil {
-		udpConn, err := net.ListenUDP("udp", nil)
+		udpConn, err := listenUDP("udp", nil)
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +243,7 @@ func isTransportDialFailure(ctx context.Context, dialErr error) bool {
 // rotation without any outward sign that it had failed.
 func (t *h3ConnectionCache) rotateLocked(destination string, failures int) {
 	old := t.quicTransport
-	udpConn, err := net.ListenUDP("udp", nil)
+	udpConn, err := listenUDP("udp", nil)
 	if err != nil {
 		// Keep the existing socket rather than leaving the worker with none.
 		// The next failure retries the rotation.
@@ -376,6 +381,10 @@ func (t *h3ConnectionCache) dial(ctx context.Context, hostname string) (*quic.Co
 	if dial == nil {
 		quicTransport, err := t.transport()
 		if err != nil {
+			// A dial that cannot get a socket is still a dial attempt. Without
+			// this, a worker unable to bind would report no dial activity at
+			// all rather than failures, which reads as idle instead of broken.
+			recordDialAttempt(ctx, err)
 			return nil, nil, err
 		}
 		dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
