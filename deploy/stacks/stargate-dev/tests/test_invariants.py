@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import os
 import re
@@ -209,12 +210,35 @@ class RenderedStackTests(unittest.TestCase):
             for _, resource in self.resources("ConfigMap")
             if resource["metadata"]["name"] == "llm-request-router-lb"
         )
-        self.assertEqual(
-            json.loads(load_balancer_config["data"]["lb-config.json"]),
-            {
-                "default": "groq-multiregion",
-                "request_algorithms": {"power-of-n": "power-of-n"},
+        expected_load_balancer_config = {
+            "default": "wait-and-widen",
+            "request_algorithms": {
+                "power-of-n": {
+                    "algorithm": "power-of-n",
+                    "sample_count": 2,
+                    "comparator": "ttft",
+                }
             },
+            "models": {
+                "stargate-dev-model": {
+                    "algorithm": "wait-and-widen",
+                    "comparator": "ttft",
+                    "require_cache_affinity_key": True,
+                    "require_input_tokens": True,
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_virtual_nodes": 150,
+                }
+            },
+        }
+        raw_load_balancer_config = load_balancer_config["data"]["lb-config.json"]
+        self.assertEqual(
+            json.loads(raw_load_balancer_config), expected_load_balancer_config
+        )
+        self.assertEqual(
+            router["spec"]["template"]["metadata"]["annotations"][
+                "checksum/load-balancer-config"
+            ],
+            hashlib.sha256(raw_load_balancer_config.encode()).hexdigest(),
         )
 
         backend_router = next(
@@ -286,16 +310,14 @@ class RenderedStackTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(cluster_ids, {"mockdc-usw2-a", "mockdc-usw2-b"})
-        self.assertEqual(
-            inference_server_ids,
-            {
-                "mockdc-usw2-a-backend-0",
-                "mockdc-usw2-a-backend-1",
-                "mockdc-usw2-b-backend-0",
-                "mockdc-usw2-b-backend-1",
-            },
-        )
+        expected_backend_ids = {
+            "mockdc-usw2-a-backend-0",
+            "mockdc-usw2-a-backend-1",
+            "mockdc-usw2-b-backend-0",
+            "mockdc-usw2-b-backend-1",
+        }
+        self.assertEqual(cluster_ids, expected_backend_ids)
+        self.assertEqual(inference_server_ids, expected_backend_ids)
 
     def test_images_secrets_and_metrics_follow_one_contract(self) -> None:
         for _, deployment in self.resources("Deployment"):
@@ -425,9 +447,7 @@ class RenderedStackTests(unittest.TestCase):
             for _, resource in self.resources("Deployment")
             if resource["metadata"]["name"] == "stargate-dev-grafana"
         )
-        self.assertEqual(
-            grafana["metadata"]["namespace"], "stargate-dev-observability"
-        )
+        self.assertEqual(grafana["metadata"]["namespace"], "stargate-dev-observability")
         self.assertEqual(grafana["spec"]["replicas"], 1)
         grafana_container = grafana["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual(
@@ -462,9 +482,7 @@ class RenderedStackTests(unittest.TestCase):
             "datasources"
         ][0]
         self.assertEqual(datasource["uid"], "stargate-dev-amp")
-        self.assertEqual(
-            datasource["type"], "grafana-amazonprometheus-datasource"
-        )
+        self.assertEqual(datasource["type"], "grafana-amazonprometheus-datasource")
         self.assertEqual(datasource["jsonData"]["sigV4AuthType"], "default")
 
         dashboard_names = {

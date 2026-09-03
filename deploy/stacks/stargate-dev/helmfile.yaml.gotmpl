@@ -69,7 +69,26 @@ releases:
             digest: {{ .Values.images.stargate.digest }}
           loadBalancer:
             config: |
-              {"default":"groq-multiregion","request_algorithms":{"power-of-n":"power-of-n"}}
+              {
+                "default": "wait-and-widen",
+                "request_algorithms": {
+                  "power-of-n": {
+                    "algorithm": "power-of-n",
+                    "sample_count": 2,
+                    "comparator": "ttft"
+                  }
+                },
+                "models": {
+                  {{ .Values.modelName | quote }}: {
+                    "algorithm": "wait-and-widen",
+                    "comparator": "ttft",
+                    "require_cache_affinity_key": true,
+                    "require_input_tokens": true,
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_virtual_nodes": 150
+                  }
+                }
+              }
           readiness:
             stabilizationSampleIntervalMs: null
             stabilizationWindow: null

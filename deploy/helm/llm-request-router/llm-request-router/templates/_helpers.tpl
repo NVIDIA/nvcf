@@ -513,6 +513,10 @@ Generate all pod annotations
 {{- $annotations = merge $annotations .Values.llmRequestRouter.podAnnotations -}}
 {{- end -}}
 
+{{- if .Values.llmRequestRouter.loadBalancer.config -}}
+{{- $_ := set $annotations "checksum/load-balancer-config" (.Values.llmRequestRouter.loadBalancer.config | sha256sum) -}}
+{{- end -}}
+
 {{- if not (and .Values.llmRequestRouter.vault .Values.llmRequestRouter.vault.noVaultAnnotations) -}}
 {{- $vaultAnnotations := include "llm-request-router.vaultAnnotations" . | fromYaml -}}
 {{- if $vaultAnnotations -}}

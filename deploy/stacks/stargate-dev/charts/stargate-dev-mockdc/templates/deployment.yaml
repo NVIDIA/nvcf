@@ -11,6 +11,7 @@
 {{- end -}}
 {{- $backends := list .Values.mockDynamo.backend0 .Values.mockDynamo.backend1 -}}
 {{- range $index, $mock := $backends }}
+{{- $backendId := printf "%s-backend-%d" $clusterId $index -}}
 {{- if gt $index 0 }}
 ---
 {{- end }}
@@ -32,7 +33,7 @@ spec:
       labels:
         {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 8 }}
         app.kubernetes.io/component: mock-backend
-        stargate.nvidia.com/backend-id: {{ printf "%s-backend-%d" $clusterId $index | quote }}
+        stargate.nvidia.com/backend-id: {{ $backendId | quote }}
         stargate.nvidia.com/backend-index: {{ $index | quote }}
       annotations:
         prometheus.io/scrape: "true"
@@ -102,8 +103,8 @@ spec:
             - --upstream-health-path=/health
             - --model-name={{ $modelName }}
             - --stargate-address={{ $stargateAddress }}
-            - --inference-server-id={{ $clusterId }}-backend-{{ $index }}
-            - --cluster-id={{ $clusterId }}
+            - --inference-server-id={{ $backendId }}
+            - --cluster-id={{ $backendId }}
             - --backend-connectivity=reverse
             - --tunnel-protocol=raw-quic
             - --tls-cert-path=/var/run/stargate/tls/{{ $.Values.stargate.quicCaSecretKey }}
