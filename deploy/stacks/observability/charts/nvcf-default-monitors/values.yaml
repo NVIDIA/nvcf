@@ -33,6 +33,11 @@ controlPlane:
       selector:
         app.kubernetes.io/instance: state-metrics
         app.kubernetes.io/name: helm-nvcf-state-metrics
+    - name: function-autoscaler
+      enabled: true
+      selector:
+        app.kubernetes.io/instance: function-autoscaler
+        app.kubernetes.io/name: helm-nvcf-function-autoscaler
     - name: grpc-proxy
       enabled: true
       selector:

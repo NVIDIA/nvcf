@@ -101,6 +101,9 @@ jobs:
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
 
+      - name: Run observability Helmfile profile tests
+        run: make -C deploy/stacks/observability test
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail

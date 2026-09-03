@@ -141,3 +141,16 @@ make template HELMFILE_ENV=local
 make test
 git diff --check
 ```
+
+The profile test compares resolved release names and rendered monitor resource
+names with `tests/golden/profile-matrix.txt`. It does not snapshot third-party
+chart output. After an intentional profile or monitor change, update the
+fixture and review its diff:
+
+```sh
+make generate-test-golden
+git diff -- tests/golden/profile-matrix.txt
+```
+
+Confirm that every changed row matches the intended profile contract before
+committing the fixture.
