@@ -86,6 +86,11 @@ Important settings to review before deployment:
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 
+When `sis.lls.hmacRotation.image.digest` is set, the chart renders both LLS
+workloads with `registry/repository@digest`; the digest takes precedence over
+the tag. `icms-api/values.versions.yaml` pins the multi-architecture OCI index
+for the configured migration-image tag.
+
 ## Remote Config RBAC
 
 `spring-cloud-kubernetes` (5.0.2, shipped in icms-service `1.2.x`) calls `listNamespacedConfigMap` without a `fieldSelector=metadata.name` filter and matches the target name in memory. Because the API request is unfiltered, the Role must grant `list`/`watch` on the configmaps collection itself, with no `resourceNames` scoping for those verbs, so the `sis-api` SA can read every ConfigMap in the namespace. Chart assumes none are sensitive; clusters that block broad namespace reads need a policy exception.
