@@ -127,6 +127,7 @@ public final class NatsConfiguration {
             builder.reconnectJitter(reconnectJitter).reconnectJitterTls(reconnectJitter);
         }
 
+        // By default, the client reconnects 60 times.
         if (natsConfigurationProperties.isUnlimitedReconnects()) {
             builder = builder.maxReconnects(-1);
         }

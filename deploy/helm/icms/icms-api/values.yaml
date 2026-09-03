@@ -199,5 +199,3 @@ sis:
     HOSTNAME: "sis-api"
     AWS_REGION: "ncp"
 
-    # NATS Configuration
-    NATS_UNLIMITED_RECONNECTS: "true"
