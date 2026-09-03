@@ -497,8 +497,8 @@ fn render_warnings(out: &mut String, context: &ReportContext, entries: &[ReportE
 mod tests {
     use super::*;
     use crate::config::{
-        ArrivalPatternConfig, BackendConfig, BackendProfile, RegistrationConfig, ServiceTimeConfig,
-        StargateConfig, TokenDistributionConfig, TrafficPatternConfig, UniformTrafficConfig,
+        ArrivalPatternConfig, BackendConfig, BackendProfile, ServiceTimeConfig, StargateConfig,
+        TokenDistributionConfig, TrafficPatternConfig, UniformTrafficConfig,
     };
     use crate::score::{
         BackendSummary, CacheSummary, FailureSummary, QueueAdmissionSummary,
@@ -531,10 +531,7 @@ mod tests {
                         ttft_jitter_ms: 0,
                         decode_tokens_per_s: 1,
                         decode_jitter_ms: 0,
-                        prefill_tokens_per_s: None,
-                    },
-                    registration: RegistrationConfig {
-                        last_mean_input_tps: 1.0,
+                        prefill_tokens_per_s: 1.0,
                     },
                 },
             },
