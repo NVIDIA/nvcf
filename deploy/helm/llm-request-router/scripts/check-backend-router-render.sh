@@ -42,6 +42,18 @@ assert_contains() {
   fi
 }
 
+assert_occurrences() {
+  local pattern="$1"
+  local expected="$2"
+  local message="$3"
+  local actual
+  actual="$(grep -Fc -- "$pattern" "$rendered")"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "FAIL: ${message}; rendered ${actual} occurrence(s), expected ${expected}" >&2
+    exit 1
+  fi
+}
+
 assert_render_fails() {
   local expected_error="$1"
   local error_file
@@ -193,6 +205,10 @@ assert_contains "command:" \
   "backend router must override the Stargate image entrypoint"
 assert_contains "/usr/local/bin/stargate-k8s-router" \
   "Stargate image must include the Kubernetes router binary"
+assert_occurrences "--shutdown-drain-timeout-ms=30000" "2" \
+  "both Stargate and the backend router must use the configured graceful shutdown budget"
+assert_occurrences "terminationGracePeriodSeconds: 35" "2" \
+  "both workloads must leave Kubernetes time beyond their configured drain budget"
 assert_contains "--target-service-name=llm-request-router-headless" \
   "backend router must watch the headless Service so warming pods accept pylon connections"
 assert_contains "--advertised-hostname-template={pod_name}.llm-request-router-headless.nvcf.svc.cluster.local" \
