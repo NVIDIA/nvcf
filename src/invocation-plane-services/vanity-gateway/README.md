@@ -273,9 +273,10 @@ this host. The gateway looks the model up, rewrites the request `model` to
 `functionID/modelName`, and forwards it to `LLM_GATEWAY_ENDPOINT`, which routes
 on that prefix, so a caller never has to supply a function ID.
 
-Only the request is rewritten. The LLM Gateway echoes the model it was given,
-so the `model` field of the response carries `functionID/modelName` back to the
-caller.
+Only the request is rewritten. On `/v1/chat/completions` the LLM Gateway echoes
+the model it was given, so the `model` field of the response, and of every
+streamed chunk, carries `functionID/modelName` back to the caller.
+`/v1/responses` and `/v1/embeddings` return the public model name instead.
 
 `function-id`, `function-version-id`, and `nvcf-function-id` are stripped from
 these requests. The LLM Gateway resolves the function from the model, so the
