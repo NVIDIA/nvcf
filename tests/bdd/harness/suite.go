@@ -79,9 +79,6 @@ func NewSuite(t *testing.T) (*Suite, error) {
 		EnvLedger: NewEnvLedger(),
 		Cache:     NewCommandCache(),
 	}
-	if err := CheckExternalTools([]string{"grpcurl"}); err != nil {
-		return nil, err
-	}
 	// Pre-suite destructive cleanup (BDD_CLEANUP_MODE) runs BEFORE
 	// snapshotting the CLI state file. Rationale: any destructive
 	// mode invalidates the operator's pre-suite admin JWT (the cluster

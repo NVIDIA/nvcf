@@ -2366,6 +2366,9 @@ func TestMultiClusterHelmfileLLMRegistrationTLS(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
+	if err := harness.CheckExternalTools([]string{"grpcurl"}); err != nil {
+		t.Fatal(err)
+	}
 	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-tls.feature")
 }
 
