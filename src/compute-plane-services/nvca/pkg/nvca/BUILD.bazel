@@ -159,20 +159,6 @@ go_library(
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
-        "//src/libraries/go/lib/pkg/auth",
-        "//src/libraries/go/lib/pkg/core",
-        "//src/libraries/go/lib/pkg/fnds/client",
-        "//src/libraries/go/lib/pkg/http",
-        "//src/libraries/go/lib/pkg/icms-translate/translate",
-        "//src/libraries/go/lib/pkg/icms-translate/translate/common",
-        "//src/libraries/go/lib/pkg/icms-translate/translate/function",
-        "//src/libraries/go/lib/pkg/icms-translate/translate/task",
-        "//src/libraries/go/lib/pkg/icms-translate/translate/util",
-        "//src/libraries/go/lib/pkg/imagecredential",
-        "//src/libraries/go/lib/pkg/nvkit/tracing",
-        "//src/libraries/go/lib/pkg/otel",
-        "//src/libraries/go/lib/pkg/types/nvca/config",
-        "//src/libraries/go/lib/pkg/version",
     ],
 )
 
@@ -335,6 +321,5 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/fake",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
-        "//src/libraries/go/lib/pkg/oauth",
     ],
 )
