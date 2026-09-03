@@ -30,6 +30,14 @@
       "name": "Logback Classic Module",
       "url": "http://logback.qos.ch"
     },
+    "ch.qos.logback:logback-classic:1.5.38": {
+      "licenses": [
+        "EPL-2.0",
+        "LGPL-2.1-only"
+      ],
+      "name": "Logback Classic Module",
+      "url": "http://logback.qos.ch"
+    },
     "ch.qos.logback:logback-core:1.5.34": {
       "licenses": [
         "EPL-2.0",
@@ -39,6 +47,14 @@
       "url": "http://logback.qos.ch"
     },
     "ch.qos.logback:logback-core:1.5.37": {
+      "licenses": [
+        "EPL-2.0",
+        "LGPL-2.1-only"
+      ],
+      "name": "Logback Core Module",
+      "url": "http://logback.qos.ch"
+    },
+    "ch.qos.logback:logback-core:1.5.38": {
       "licenses": [
         "EPL-2.0",
         "LGPL-2.1-only"
@@ -67,7 +83,21 @@
       "name": "Jackson-core",
       "url": "https://github.com/FasterXML/jackson-core"
     },
+    "com.fasterxml.jackson.core:jackson-core:2.21.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
     "com.fasterxml.jackson.core:jackson-databind:2.21.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
+    "com.fasterxml.jackson.core:jackson-databind:2.21.5": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -81,7 +111,21 @@
       "name": "Jackson-dataformat-YAML",
       "url": "https://github.com/FasterXML/jackson-dataformats-text"
     },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.21.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-dataformat-YAML",
+      "url": "https://github.com/FasterXML/jackson-dataformats-text"
+    },
     "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson datatype: JSR310",
+      "url": "https://github.com/FasterXML/jackson-modules-java8"
+    },
+    "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.21.5": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -297,6 +341,13 @@
       "name": "OAuth 2.0 SDK with OpenID Connect extensions",
       "url": "https://bitbucket.org/connect2id/oauth-2.0-sdk-with-openid-connect-extensions"
     },
+    "com.nimbusds:oauth2-oidc-sdk:11.38.2": {
+      "licenses": [
+        "Apache License, version 2.0"
+      ],
+      "name": "OAuth 2.0 SDK with OpenID Connect and Federation extensions",
+      "url": "https://bitbucket.org/connect2id/oauth-2.0-sdk-with-openid-connect-extensions"
+    },
     "com.squareup.okhttp3:okhttp-jvm:5.2.1": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -304,7 +355,21 @@
       "name": "okhttp",
       "url": "https://square.github.io/okhttp/"
     },
+    "com.squareup.okhttp3:okhttp-jvm:5.3.2": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "okhttp",
+      "url": "https://square.github.io/okhttp/"
+    },
     "com.squareup.okio:okio-jvm:3.16.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "okio",
+      "url": "https://github.com/square/okio/"
+    },
+    "com.squareup.okio:okio-jvm:3.16.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -319,6 +384,13 @@
       "url": "https://github.com/lightbend/config"
     },
     "commons-codec:commons-codec:1.19.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Codec",
+      "url": "https://commons.apache.org/proper/commons-codec/"
+    },
+    "commons-codec:commons-codec:1.21.0": {
       "licenses": [
         "Apache-2.0"
       ],
@@ -367,7 +439,21 @@
       "name": "micrometer-commons",
       "url": "https://github.com/micrometer-metrics/micrometer"
     },
+    "io.micrometer:micrometer-commons:1.17.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-commons",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
     "io.micrometer:micrometer-core:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-core",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.micrometer:micrometer-core:1.17.1": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -381,7 +467,21 @@
       "name": "micrometer-jakarta9",
       "url": "https://github.com/micrometer-metrics/micrometer"
     },
+    "io.micrometer:micrometer-jakarta9:1.17.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-jakarta9",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
     "io.micrometer:micrometer-observation:1.16.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-observation",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
+    "io.micrometer:micrometer-observation:1.17.1": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -395,7 +495,21 @@
       "name": "micrometer-tracing-bridge-otel",
       "url": "https://github.com/micrometer-metrics/tracing"
     },
+    "io.micrometer:micrometer-tracing-bridge-otel:1.7.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-tracing-bridge-otel",
+      "url": "https://github.com/micrometer-metrics/tracing"
+    },
     "io.micrometer:micrometer-tracing:1.6.6": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-tracing",
+      "url": "https://github.com/micrometer-metrics/tracing"
+    },
+    "io.micrometer:micrometer-tracing:1.7.1": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -423,6 +537,13 @@
       "name": "Netty/Buffer",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-buffer:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Buffer",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-base:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -431,6 +552,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-codec-base:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Base",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-base:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -451,6 +579,13 @@
       "name": "Netty/Codec/Classes/Quic",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-classes-quic:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Classes/Quic",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-compression:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -459,6 +594,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-codec-compression:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Compression",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-compression:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -479,6 +621,13 @@
       "name": "Netty/Codec/DNS",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-dns:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/DNS",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-http2:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -487,6 +636,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-codec-http2:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/HTTP2",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-http2:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -507,6 +663,13 @@
       "name": "Netty/Codec/Http3",
       "url": "https://netty.io/netty-codec-http3/"
     },
+    "io.netty:netty-codec-http3:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Http3",
+      "url": "https://netty.io/netty-codec-http3/"
+    },
     "io.netty:netty-codec-http:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -515,6 +678,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-codec-http:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/HTTP",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-http:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -535,6 +705,13 @@
       "name": "Netty/Codec/Socks",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-socks:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Socks",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-common:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -543,6 +720,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-common:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Common",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-common:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -563,6 +747,13 @@
       "name": "Netty/Handler/Proxy",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-handler-proxy:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Handler/Proxy",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-handler:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -571,6 +762,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-handler:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Handler",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-handler:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -591,6 +789,13 @@
       "name": "Netty/Resolver/DNS",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-resolver-dns:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-resolver:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -599,6 +804,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-resolver:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -619,6 +831,13 @@
       "name": "Netty/Transport/Native/Unix/Common",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport-native-unix-common:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Native/Unix/Common",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-transport:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -633,7 +852,21 @@
       "name": "Netty/Transport",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport",
+      "url": "https://netty.io/"
+    },
     "io.opentelemetry.semconv:opentelemetry-semconv:1.37.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Semantic Conventions Java",
+      "url": "https://github.com/open-telemetry/semantic-conventions-java"
+    },
+    "io.opentelemetry.semconv:opentelemetry-semconv:1.41.1": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -647,7 +880,21 @@
       "name": "OpenTelemetry Java",
       "url": "https://github.com/open-telemetry/opentelemetry-java"
     },
+    "io.opentelemetry:opentelemetry-api:1.62.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
     "io.opentelemetry:opentelemetry-common:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-common:1.62.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -661,7 +908,21 @@
       "name": "OpenTelemetry Java",
       "url": "https://github.com/open-telemetry/opentelemetry-java"
     },
+    "io.opentelemetry:opentelemetry-context:1.62.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
     "io.opentelemetry:opentelemetry-exporter-common:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-exporter-common:1.62.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -675,7 +936,21 @@
       "name": "OpenTelemetry Java",
       "url": "https://github.com/open-telemetry/opentelemetry-java"
     },
+    "io.opentelemetry:opentelemetry-exporter-otlp-common:1.62.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
     "io.opentelemetry:opentelemetry-exporter-otlp:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-exporter-otlp:1.62.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -689,7 +964,21 @@
       "name": "OpenTelemetry Java",
       "url": "https://github.com/open-telemetry/opentelemetry-java"
     },
+    "io.opentelemetry:opentelemetry-exporter-sender-okhttp:1.62.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
     "io.opentelemetry:opentelemetry-extension-trace-propagators:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-extension-trace-propagators:1.62.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -703,7 +992,21 @@
       "name": "OpenTelemetry Java",
       "url": "https://github.com/open-telemetry/opentelemetry-java"
     },
+    "io.opentelemetry:opentelemetry-sdk-common:1.62.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
     "io.opentelemetry:opentelemetry-sdk-extension-autoconfigure-spi:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk-extension-autoconfigure-spi:1.62.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -717,7 +1020,21 @@
       "name": "OpenTelemetry Java",
       "url": "https://github.com/open-telemetry/opentelemetry-java"
     },
+    "io.opentelemetry:opentelemetry-sdk-logs:1.62.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
     "io.opentelemetry:opentelemetry-sdk-metrics:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk-metrics:1.62.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -731,7 +1048,21 @@
       "name": "OpenTelemetry Java",
       "url": "https://github.com/open-telemetry/opentelemetry-java"
     },
+    "io.opentelemetry:opentelemetry-sdk-trace:1.62.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
     "io.opentelemetry:opentelemetry-sdk:1.55.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "OpenTelemetry Java",
+      "url": "https://github.com/open-telemetry/opentelemetry-java"
+    },
+    "io.opentelemetry:opentelemetry-sdk:1.62.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],
@@ -745,6 +1076,13 @@
       "name": "Core functionality for the Reactor Netty library",
       "url": "https://github.com/reactor/reactor-netty"
     },
+    "io.projectreactor.netty:reactor-netty-core:1.3.7": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Core functionality for the Reactor Netty library",
+      "url": "https://github.com/reactor/reactor-netty"
+    },
     "io.projectreactor.netty:reactor-netty-http:1.3.6": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -752,7 +1090,21 @@
       "name": "HTTP functionality for the Reactor Netty library",
       "url": "https://github.com/reactor/reactor-netty"
     },
+    "io.projectreactor.netty:reactor-netty-http:1.3.7": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "HTTP functionality for the Reactor Netty library",
+      "url": "https://github.com/reactor/reactor-netty"
+    },
     "io.projectreactor:reactor-core:3.8.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Non-Blocking Reactive Foundation for the JVM",
+      "url": "https://github.com/reactor/reactor-core"
+    },
+    "io.projectreactor:reactor-core:3.8.7": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -865,7 +1217,21 @@
       "name": "Apache Log4j API",
       "url": "https://logging.apache.org/log4j/2.x/"
     },
+    "org.apache.logging.log4j:log4j-api:2.25.5": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Log4j API",
+      "url": "https://logging.apache.org/log4j/2.x/"
+    },
     "org.apache.logging.log4j:log4j-to-slf4j:2.25.4": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Log4j API to SLF4J Adapter",
+      "url": "https://logging.apache.org/log4j/2.x/"
+    },
+    "org.apache.logging.log4j:log4j-to-slf4j:2.25.5": {
       "licenses": [
         "Apache-2.0"
       ],
@@ -915,6 +1281,13 @@
       "name": "Hibernate Validator Engine",
       "url": "https://hibernate.org/validator"
     },
+    "org.hibernate.validator:hibernate-validator:9.1.3.Final": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "Hibernate Validator Engine",
+      "url": "https://hibernate.org/validator"
+    },
     "org.jboss.logging:jboss-logging:3.6.3.Final": {
       "licenses": [
         "Apache License 2.0"
@@ -923,6 +1296,13 @@
       "url": "https://www.jboss.org"
     },
     "org.jetbrains.kotlin:kotlin-stdlib:2.2.21": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Kotlin Stdlib",
+      "url": "https://kotlinlang.org/"
+    },
+    "org.jetbrains.kotlin:kotlin-stdlib:2.3.21": {
       "licenses": [
         "Apache-2.0"
       ],
@@ -942,6 +1322,13 @@
       ],
       "name": "JSpecify annotations",
       "url": "http://jspecify.org/"
+    },
+    "org.jspecify:jspecify:1.0.1": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "JSpecify annotations",
+      "url": "https://jspecify.dev/"
     },
     "org.latencyutils:LatencyUtils:2.0.3": {
       "licenses": [
@@ -1041,7 +1428,21 @@
       "name": "spring-boot-actuator-autoconfigure",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-actuator-autoconfigure:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-actuator-autoconfigure",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-actuator:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-actuator",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-actuator:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1055,7 +1456,21 @@
       "name": "spring-boot-autoconfigure",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-autoconfigure:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-autoconfigure",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-cassandra:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-cassandra",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-cassandra:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1069,7 +1484,21 @@
       "name": "spring-boot-data-cassandra",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-data-cassandra:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-data-cassandra",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-data-commons:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-data-commons",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-data-commons:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1083,7 +1512,21 @@
       "name": "spring-boot-health",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-health:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-health",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-http-client:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-http-client",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-http-client:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1097,7 +1540,21 @@
       "name": "spring-boot-http-codec",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-http-codec:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-http-codec",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-http-converter:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-http-converter",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-http-converter:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1111,7 +1568,21 @@
       "name": "spring-boot-jackson",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-jackson:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-jackson",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-micrometer-metrics:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-metrics",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-micrometer-metrics:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1125,7 +1596,21 @@
       "name": "spring-boot-micrometer-observation",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-micrometer-observation:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-observation",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-tracing-opentelemetry",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1139,7 +1624,21 @@
       "name": "spring-boot-micrometer-tracing",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-micrometer-tracing:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-micrometer-tracing",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-netty:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-netty",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-netty:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1153,7 +1652,21 @@
       "name": "spring-boot-opentelemetry",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-opentelemetry:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-opentelemetry",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-persistence:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-persistence",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-persistence:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1167,7 +1680,21 @@
       "name": "spring-boot-reactor-netty",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-reactor-netty:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-reactor-netty",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-reactor:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-reactor",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-reactor:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1181,7 +1708,21 @@
       "name": "spring-boot-security-oauth2-client",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-security-oauth2-client:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-security-oauth2-client",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-security-oauth2-resource-server:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-security-oauth2-resource-server",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-security-oauth2-resource-server:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1195,7 +1736,21 @@
       "name": "spring-boot-security",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-security:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-security",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-servlet:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-servlet",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-servlet:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1209,7 +1764,21 @@
       "name": "spring-boot-starter-actuator",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-actuator:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-actuator",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-data-cassandra:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-data-cassandra",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-data-cassandra:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1223,7 +1792,21 @@
       "name": "spring-boot-starter-jackson",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-jackson:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-jackson",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-logging:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-logging",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-logging:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1237,7 +1820,21 @@
       "name": "spring-boot-starter-micrometer-metrics",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-micrometer-metrics:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-micrometer-metrics",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-reactor-netty:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-reactor-netty",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-reactor-netty:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1251,7 +1848,21 @@
       "name": "spring-boot-starter-security-oauth2-client",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-security-oauth2-client:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-security-oauth2-client",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-security-oauth2-resource-server",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1265,7 +1876,21 @@
       "name": "spring-boot-starter-security",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-security:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-security",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-validation:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-validation",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-validation:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1279,7 +1904,21 @@
       "name": "spring-boot-starter-webflux",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-webflux:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-webflux",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1293,7 +1932,21 @@
       "name": "spring-boot-validation",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-validation:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-validation",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-web-server:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-web-server",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-web-server:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1307,7 +1960,21 @@
       "name": "spring-boot-webclient",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-webclient:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-webclient",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-webflux:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-webflux",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-webflux:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1321,7 +1988,21 @@
       "name": "spring-boot-webmvc",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-webmvc:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-webmvc",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1363,7 +2044,21 @@
       "name": "Spring Data for Apache Cassandra Core",
       "url": "https://projects.spring.io/spring-data-cassandra/"
     },
+    "org.springframework.data:spring-data-cassandra:5.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Data for Apache Cassandra Core",
+      "url": "https://projects.spring.io/spring-data-cassandra/"
+    },
     "org.springframework.data:spring-data-commons:4.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Data Core",
+      "url": "https://spring.io/projects/spring-data"
+    },
+    "org.springframework.data:spring-data-commons:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1377,7 +2072,21 @@
       "name": "spring-security-config",
       "url": "https://spring.io/projects/spring-security"
     },
+    "org.springframework.security:spring-security-config:7.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-config",
+      "url": "https://spring.io/projects/spring-security"
+    },
     "org.springframework.security:spring-security-core:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-core",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-core:7.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1391,7 +2100,21 @@
       "name": "spring-security-crypto",
       "url": "https://spring.io/projects/spring-security"
     },
+    "org.springframework.security:spring-security-crypto:7.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-crypto",
+      "url": "https://spring.io/projects/spring-security"
+    },
     "org.springframework.security:spring-security-oauth2-client:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-client",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-oauth2-client:7.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1405,7 +2128,21 @@
       "name": "spring-security-oauth2-core",
       "url": "https://spring.io/projects/spring-security"
     },
+    "org.springframework.security:spring-security-oauth2-core:7.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-core",
+      "url": "https://spring.io/projects/spring-security"
+    },
     "org.springframework.security:spring-security-oauth2-jose:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-jose",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-oauth2-jose:7.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1419,7 +2156,21 @@
       "name": "spring-security-oauth2-resource-server",
       "url": "https://spring.io/projects/spring-security"
     },
+    "org.springframework.security:spring-security-oauth2-resource-server:7.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-oauth2-resource-server",
+      "url": "https://spring.io/projects/spring-security"
+    },
     "org.springframework.security:spring-security-web:7.0.6": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-security-web",
+      "url": "https://spring.io/projects/spring-security"
+    },
+    "org.springframework.security:spring-security-web:7.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1433,7 +2184,21 @@
       "name": "Spring AOP",
       "url": "https://github.com/spring-projects/spring-framework"
     },
+    "org.springframework:spring-aop:7.0.9": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring AOP",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
     "org.springframework:spring-beans:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Beans",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-beans:7.0.9": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1447,7 +2212,21 @@
       "name": "Spring Context",
       "url": "https://github.com/spring-projects/spring-framework"
     },
+    "org.springframework:spring-context:7.0.9": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Context",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
     "org.springframework:spring-core:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Core",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-core:7.0.9": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1461,7 +2240,21 @@
       "name": "Spring Expression Language (SpEL)",
       "url": "https://github.com/spring-projects/spring-framework"
     },
+    "org.springframework:spring-expression:7.0.9": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Expression Language (SpEL)",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
     "org.springframework:spring-tx:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Transaction",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-tx:7.0.9": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1475,6 +2268,13 @@
       "name": "Spring Web",
       "url": "https://github.com/spring-projects/spring-framework"
     },
+    "org.springframework:spring-web:7.0.9": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Web",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
     "org.springframework:spring-webflux:7.0.8": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -1482,7 +2282,21 @@
       "name": "Spring WebFlux",
       "url": "https://github.com/spring-projects/spring-framework"
     },
+    "org.springframework:spring-webflux:7.0.9": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring WebFlux",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
     "org.springframework:spring-webmvc:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Web MVC",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-webmvc:7.0.9": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1497,6 +2311,13 @@
       "url": "http://wiremock.org"
     },
     "org.yaml:snakeyaml:2.5": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "SnakeYAML",
+      "url": "https://bitbucket.org/snakeyaml/snakeyaml"
+    },
+    "org.yaml:snakeyaml:2.6": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -1629,6 +2450,13 @@
       "name": "Jackson-core",
       "url": "https://github.com/FasterXML/jackson-core"
     },
+    "tools.jackson.core:jackson-core:3.1.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson-core",
+      "url": "https://github.com/FasterXML/jackson-core"
+    },
     "tools.jackson.core:jackson-databind:3.1.4": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -1636,7 +2464,21 @@
       "name": "jackson-databind",
       "url": "https://github.com/FasterXML/jackson"
     },
+    "tools.jackson.core:jackson-databind:3.1.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "jackson-databind",
+      "url": "https://github.com/FasterXML/jackson"
+    },
     "tools.jackson.module:jackson-module-blackbird:3.1.4": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson module: Blackbird",
+      "url": "https://github.com/FasterXML/jackson-modules-base"
+    },
+    "tools.jackson.module:jackson-module-blackbird:3.1.5": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],

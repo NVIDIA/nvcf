@@ -49,6 +49,13 @@
       "name": "Jackson dataformat: CBOR",
       "url": "https://github.com/FasterXML/jackson-dataformats-binary"
     },
+    "com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.21.5": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Jackson dataformat: CBOR",
+      "url": "https://github.com/FasterXML/jackson-dataformats-binary"
+    },
     "com.google.code.gson:gson:2.13.2": {
       "licenses": [
         "Apache-2.0"
@@ -147,6 +154,13 @@
       "name": "micrometer-registry-prometheus",
       "url": "https://github.com/micrometer-metrics/micrometer"
     },
+    "io.micrometer:micrometer-registry-prometheus:1.17.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-registry-prometheus",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
     "io.nats:jnats-json:2.0.1": {
       "licenses": [
         "The Apache License, Version 2.0"
@@ -182,6 +196,13 @@
       "name": "Netty/Codec/Marshalling",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-marshalling:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Marshalling",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-native-quic:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -190,6 +211,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-codec-native-quic:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Native/Quic",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-native-quic:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -210,6 +238,13 @@
       "name": "Netty/Codec/Protobuf",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-protobuf:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Protobuf",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -218,6 +253,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-codec:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -238,6 +280,13 @@
       "name": "Netty/Resolver/DNS/Classes/MacOS",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-resolver-dns-classes-macos:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Classes/MacOS",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-resolver-dns-native-macos:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -246,6 +295,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-resolver-dns-native-macos:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Native/MacOS",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver-dns-native-macos:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -266,6 +322,13 @@
       "name": "Netty/Transport/Classes/Epoll",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport-classes-epoll:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Classes/Epoll",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-transport-native-epoll:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -280,7 +343,21 @@
       "name": "Netty/Transport/Native/Epoll",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport-native-epoll:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Native/Epoll",
+      "url": "https://netty.io/"
+    },
     "io.prometheus:prometheus-metrics-config:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Config",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-config:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -294,7 +371,21 @@
       "name": "Prometheus Metrics Core",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-core:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Core",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-exposition-formats:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-exposition-formats:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -308,6 +399,13 @@
       "name": "Prometheus Metrics Exposition Text Formats",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-exposition-textformats:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Text Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-model:1.4.3": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -315,7 +413,21 @@
       "name": "Prometheus Metrics Model",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-model:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Model",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-tracer-common:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Tracer Common",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-tracer-common:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -525,7 +637,21 @@
       "name": "Kotlin Stdlib Jdk7",
       "url": "https://kotlinlang.org/"
     },
+    "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.21": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Kotlin Stdlib Jdk7",
+      "url": "https://kotlinlang.org/"
+    },
     "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.2.21": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Kotlin Stdlib Jdk8",
+      "url": "https://kotlinlang.org/"
+    },
+    "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.21": {
       "licenses": [
         "Apache-2.0"
       ],
@@ -555,7 +681,21 @@
       "name": "spring-boot-jarmode-tools",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-jarmode-tools:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-jarmode-tools",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-aspectj:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-aspectj",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-aspectj:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -569,7 +709,21 @@
       "name": "spring-boot-starter-tomcat-runtime",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-tomcat-runtime:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat-runtime",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-tomcat:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-tomcat:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -583,7 +737,21 @@
       "name": "spring-boot-starter-webmvc",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-webmvc:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-webmvc",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-tomcat:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-tomcat:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],

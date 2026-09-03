@@ -7,7 +7,21 @@
       "name": "micrometer-registry-prometheus",
       "url": "https://github.com/micrometer-metrics/micrometer"
     },
+    "io.micrometer:micrometer-registry-prometheus:1.17.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-registry-prometheus",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
     "io.prometheus:prometheus-metrics-config:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Config",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-config:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -21,7 +35,21 @@
       "name": "Prometheus Metrics Core",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-core:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Core",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-exposition-formats:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-exposition-formats:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -35,6 +63,13 @@
       "name": "Prometheus Metrics Exposition Text Formats",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-exposition-textformats:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Text Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-model:1.4.3": {
       "licenses": [
         "The Apache Software License, Version 2.0"
@@ -42,7 +77,21 @@
       "name": "Prometheus Metrics Model",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-model:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Model",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-tracer-common:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Tracer Common",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-tracer-common:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -91,7 +140,21 @@
       "name": "spring-boot-jarmode-tools",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-jarmode-tools:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-jarmode-tools",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-restclient:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-restclient",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-restclient:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -105,7 +168,21 @@
       "name": "spring-boot-starter-aspectj",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-aspectj:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-aspectj",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-tomcat-runtime:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat-runtime",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-tomcat-runtime:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -119,6 +196,13 @@
       "name": "spring-boot-starter-tomcat",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-tomcat:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-webmvc:4.0.7": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -126,7 +210,21 @@
       "name": "spring-boot-starter-webmvc",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-webmvc:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-webmvc",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-tomcat:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-tomcat:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
