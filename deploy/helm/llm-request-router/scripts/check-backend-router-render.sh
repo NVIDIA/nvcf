@@ -11,8 +11,9 @@ disabled="$(mktemp)"
 external_service_account="$(mktemp)"
 wildcard_certificate="$(mktemp)"
 zero_config="$(mktemp)"
+unaligned_shutdown="$(mktemp)"
 service_monitor_namespace_file="$(mktemp)"
-trap 'rm -f "$rendered" "$disabled" "$external_service_account" "$wildcard_certificate" "$zero_config" "$service_monitor_namespace_file"' EXIT
+trap 'rm -f "$rendered" "$disabled" "$external_service_account" "$wildcard_certificate" "$zero_config" "$unaligned_shutdown" "$service_monitor_namespace_file"' EXIT
 
 helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
@@ -46,8 +47,9 @@ assert_occurrences() {
   local pattern="$1"
   local expected="$2"
   local message="$3"
+  local rendered_file="${4:-$rendered}"
   local actual
-  actual="$(grep -Fc -- "$pattern" "$rendered")"
+  actual="$(grep -Fc -- "$pattern" "$rendered_file" || true)"
   if [[ "$actual" != "$expected" ]]; then
     echo "FAIL: ${message}; rendered ${actual} occurrence(s), expected ${expected}" >&2
     exit 1
@@ -209,6 +211,16 @@ assert_occurrences "--shutdown-drain-timeout-ms=30000" "2" \
   "both Stargate and the backend router must use the configured graceful shutdown budget"
 assert_occurrences "terminationGracePeriodSeconds: 35" "2" \
   "both workloads must leave Kubernetes time beyond their configured drain budget"
+
+helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.shutdown.drainTimeoutMs=30001 \
+  >"$unaligned_shutdown"
+assert_occurrences "terminationGracePeriodSeconds: 36" "2" \
+  "pod grace must round a partial drain second up before adding its exit margin" \
+  "$unaligned_shutdown"
 assert_contains "--target-service-name=llm-request-router-headless" \
   "backend router must watch the headless Service so warming pods accept pylon connections"
 assert_contains "--advertised-hostname-template={pod_name}.llm-request-router-headless.nvcf.svc.cluster.local" \
