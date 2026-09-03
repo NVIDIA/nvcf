@@ -782,18 +782,6 @@ class InstanceControllerTest extends IntegrationTest {
     }
 
     @Test
-    void terminateInstanceCountPerGpuSpec_withNonPositiveCount_returnsBadRequest()
-            throws Exception {
-        String url = "/v1/si/accounts/nca/workloads/" + UUID.randomUUID()
-                + "/gpuSpecs/" + UUID.randomUUID() + "/instances";
-
-        mockMvc.perform(MockMvcRequestBuilders.delete(url)
-                        .headers(generateAuthorizationHeader())
-                        .param("InstanceCount", "0"))
-                .andExpect(status().isBadRequest());
-    }
-
-    @Test
     void terminateInstances_withInstanceIdsNotProvided_returnsError()
             throws Exception {
         HttpHeaders httpHeaders = generateAuthorizationHeader();

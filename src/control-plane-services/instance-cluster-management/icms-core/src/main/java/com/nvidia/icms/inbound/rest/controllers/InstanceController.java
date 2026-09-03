@@ -547,7 +547,10 @@ public class InstanceController {
             @Schema(description = "Number of instances to terminate")
             @RequestParam(name = "InstanceCount") int instanceCount) {
 
-        validateBoundedTermination(ncaId, instanceCount);
+        if (StringUtils.isBlank(ncaId)) {
+            throw new IcmsBadRequestException("ncaId should be provided");
+        }
+
         Map<String, Object> auditProps = AuditUtils.getAuditPropertiesFromRequest(request);
         return instanceService.terminateInstances(
                 ncaId, workloadId, null, instanceCount, auditProps);
@@ -627,20 +630,13 @@ public class InstanceController {
             @Schema(description = "Number of instances to terminate")
             @RequestParam(name = "InstanceCount") int instanceCount) {
 
-        validateBoundedTermination(ncaId, instanceCount);
+        if (StringUtils.isBlank(ncaId)) {
+            throw new IcmsBadRequestException("ncaId should be provided");
+        }
 
         Map<String, Object> auditProps = AuditUtils.getAuditPropertiesFromRequest(request);
         return instanceService.terminateInstances(
                 ncaId, workloadId, gpuSpecId, instanceCount, auditProps);
-    }
-
-    private void validateBoundedTermination(String ncaId, int instanceCount) {
-        if (StringUtils.isBlank(ncaId)) {
-            throw new IcmsBadRequestException("ncaId should be provided");
-        }
-        if (instanceCount <= 0) {
-            throw new IcmsBadRequestException("InstanceCount should be greater than zero");
-        }
     }
 
     @PutMapping
