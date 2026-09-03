@@ -47,6 +47,7 @@ type Config struct {
 	InstanceType           string
 	ICMSEnvironment        string
 	ZoneName               string
+	ClusterId              string
 	NspectId               string
 	StartupTime            time.Time
 	InfraHeartbeatInterval time.Duration
@@ -72,6 +73,8 @@ type inferenceEventDataProperties struct {
 	Gpus              int               `json:"gpus"`
 	GpuType           string            `json:"gpu_type"`
 	OwnerNcaId        string            `json:"owner_nca_id"`
+	ClusterId         string            `json:"cluster_id,omitempty"`
+	Region            string            `json:"region,omitempty"`
 	UserFunctionTags  []string          `json:"user_function_tags,omitempty"`
 	BillingHeaders    map[string]string `json:"billing_headers,omitempty"`
 }
@@ -147,6 +150,8 @@ func (e *EventDetails) Log() error {
 				Gpus:              e.config.GpuCount,
 				GpuType:           e.config.GpuType,
 				OwnerNcaId:        e.config.NcaId,
+				ClusterId:         e.config.ClusterId,
+				Region:            e.config.ZoneName,
 				UserFunctionTags:  e.config.FunctionTags,
 				BillingHeaders:    e.BillingHeaders,
 			},
