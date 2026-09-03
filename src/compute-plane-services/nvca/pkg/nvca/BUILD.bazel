@@ -6,7 +6,6 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "nvca",
     srcs = [
-        "modelcache_storage_selection_test.go",
         "modelcache_storage_selection.go",
         "agent.go",
         "agent_http_debug.go",
@@ -38,7 +37,6 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
         "//src/compute-plane-services/nvca/internal/auth",
         "//src/compute-plane-services/nvca/internal/clustervalidator",
         "//src/compute-plane-services/nvca/internal/gc",
@@ -161,6 +159,20 @@ go_library(
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
+        "//src/libraries/go/lib/pkg/auth",
+        "//src/libraries/go/lib/pkg/core",
+        "//src/libraries/go/lib/pkg/fnds/client",
+        "//src/libraries/go/lib/pkg/http",
+        "//src/libraries/go/lib/pkg/icms-translate/translate",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/task",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/util",
+        "//src/libraries/go/lib/pkg/imagecredential",
+        "//src/libraries/go/lib/pkg/nvkit/tracing",
+        "//src/libraries/go/lib/pkg/otel",
+        "//src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/libraries/go/lib/pkg/version",
     ],
 )
 
@@ -198,6 +210,7 @@ go_test(
         "transport_tls_test.go",
         "validator_summary_reconciler_test.go",
         "workloadwatcher_test.go",
+        "modelcache_storage_selection_test.go",
     ],
     data = glob(["testdata/**"]),
     embed = [":nvca"],
@@ -303,7 +316,6 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/labels",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
-        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/validation",
@@ -322,5 +334,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/fake",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
+        "//src/libraries/go/lib/pkg/oauth",
     ],
 )

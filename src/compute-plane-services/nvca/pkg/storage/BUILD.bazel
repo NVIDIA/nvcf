@@ -6,8 +6,6 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "storage",
     srcs = [
-        "storage_resolution_test.go",
-        "modelcache_selection_test.go",
         "modelcache_selection.go",
         "cachebackend.go",
         "cachebackend_samba.go",
@@ -30,7 +28,6 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage",
     visibility = ["//visibility:public"],
     deps = [
-        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
         "//src/compute-plane-services/nvca/internal/logging",
         "//src/compute-plane-services/nvca/internal/metrics",
@@ -92,6 +89,13 @@ go_library(
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/predicate",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/reconcile",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/libraries/go/lib/pkg/core",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/task",
+        "//src/libraries/go/lib/pkg/otel",
+        "//src/libraries/go/lib/pkg/types/nvca/config",
     ],
 )
 
@@ -120,6 +124,8 @@ go_test(
         "storagerequest_test.go",
         "translate_workload_test.go",
         "types_test.go",
+        "modelcache_selection_test.go",
+        "storage_resolution_test.go",
     ],
     data = [
         "//src/compute-plane-services/nvca:storage-capability-catalog",
@@ -168,14 +174,12 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/coordination/v1:coordination",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
         "//src/compute-plane-services/nvca/vendor/k8s.io/api/networking/v1:networking",
-        "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
-        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
@@ -188,5 +192,6 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/reconcile",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
     ],
 )
