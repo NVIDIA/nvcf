@@ -101,6 +101,16 @@ func TestValidateInvokeConfigVanityGateway(t *testing.T) {
 			wantErrText: "request body is required",
 		},
 		{
+			name: "path without vanity-host fails",
+			config: &InvokeConfig{
+				FunctionID:  "func-123",
+				VersionID:   "ver-123",
+				Path:        "/bdd/echo",
+				RequestBody: map[string]interface{}{"message": "test"},
+			},
+			wantErrText: "--path is only supported with --vanity-host",
+		},
+		{
 			name: "standard invoke requires function ID",
 			config: &InvokeConfig{
 				VersionID:   "ver-123",
@@ -153,11 +163,36 @@ func TestInvokeOptionsFromConfigVanityGateway(t *testing.T) {
 	if opts.Path != "/bdd/echo" {
 		t.Fatalf("opts.Path = %q, want %q", opts.Path, "/bdd/echo")
 	}
-	if opts.InferenceURL != "/bdd/echo" {
-		t.Fatalf("opts.InferenceURL = %q, want %q", opts.InferenceURL, "/bdd/echo")
+	// InferenceURL must stay scoped to config.InferenceURL: the client's
+	// Vanity Gateway branch falls back from Path to InferenceURL on its own,
+	// and letting --path leak into InferenceURL here would let a plain REST
+	// invocation (no --vanity-host) silently route to --path instead of the
+	// function's configured endpoint.
+	if opts.InferenceURL != "" {
+		t.Fatalf("opts.InferenceURL = %q, want empty (Path must not populate InferenceURL)", opts.InferenceURL)
 	}
 	if opts.PollDurationSeconds != 15 {
 		t.Fatalf("opts.PollDurationSeconds = %d, want 15", opts.PollDurationSeconds)
+	}
+}
+
+func TestInvokeOptionsFromConfigDoesNotLeakPathIntoInferenceURLForStandardInvoke(t *testing.T) {
+	t.Parallel()
+
+	// Regression test: --path must never override the function's inference
+	// URL for a standard (non-Vanity-Gateway) invocation.
+	config := &InvokeConfig{
+		FunctionID:   "func-123",
+		VersionID:    "ver-456",
+		InferenceURL: "/v1/chat/completions",
+	}
+
+	opts := invokeOptionsFromConfig(config)
+	if opts == nil {
+		t.Fatal("expected invokeOptionsFromConfig to return non-nil options")
+	}
+	if opts.InferenceURL != "/v1/chat/completions" {
+		t.Fatalf("opts.InferenceURL = %q, want %q", opts.InferenceURL, "/v1/chat/completions")
 	}
 }
 

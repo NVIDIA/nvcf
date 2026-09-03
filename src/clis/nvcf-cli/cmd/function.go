@@ -2320,6 +2320,9 @@ func validateInvokeConfig(config *InvokeConfig, useGRPC bool) error {
 	if config.VersionID == "" {
 		return fmt.Errorf("version ID is required (use --version-id, specify in JSON file, or create a function first)")
 	}
+	if config.Path != "" {
+		return fmt.Errorf("--path is only supported with --vanity-host (use --inference-url otherwise)")
+	}
 	if config.RequestBody == nil {
 		return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
 	}
@@ -2352,12 +2355,8 @@ func invokeOptionsFromConfig(config *InvokeConfig) *client.InvokeFunctionOptions
 	if config.InferenceURL == "" && config.Path == "" && config.VanityHost == "" && config.ModelName == "" && config.PollDurationSeconds <= 0 {
 		return nil
 	}
-	reqPath := config.Path
-	if reqPath == "" {
-		reqPath = config.InferenceURL
-	}
 	return &client.InvokeFunctionOptions{
-		InferenceURL:        reqPath,
+		InferenceURL:        config.InferenceURL,
 		Path:                config.Path,
 		VanityHost:          config.VanityHost,
 		ModelName:           config.ModelName,
