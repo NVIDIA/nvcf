@@ -24,53 +24,57 @@ clusters:
       nodeInstanceType: t3.medium
       nodeCount: 2
       quicCaSecretName: stargate-router-ca
+      # Approximate Llama 3.1 8B on one H100 near 25 concurrent requests.
+      # Keep output below Pylon's 237-token runaway-generation threshold.
       mockDynamo:
         backend0:
-          numTokens: 10
-          tokenDelayMs: 100
-          decodeJitterMs: 0
-          ttftMs: 50
-          ttftJitterMs: 0
-          prefillTokensPerSecond: 0
-          maxConcurrentRequests: 0
+          numTokens: 128
+          tokenDelayMs: 5
+          decodeJitterMs: 2
+          ttftMs: 10
+          ttftJitterMs: 20
+          prefillTokensPerSecond: 7000
+          maxConcurrentRequests: 25
           healthDelayMs: 0
-          kvCacheCapacityTokens: 0
+          kvCacheCapacityTokens: 400000
         backend1:
-          numTokens: 10
-          tokenDelayMs: 100
-          decodeJitterMs: 0
-          ttftMs: 50
-          ttftJitterMs: 0
-          prefillTokensPerSecond: 0
-          maxConcurrentRequests: 0
+          numTokens: 128
+          tokenDelayMs: 5
+          decodeJitterMs: 2
+          ttftMs: 10
+          ttftJitterMs: 20
+          prefillTokensPerSecond: 7000
+          maxConcurrentRequests: 25
           healthDelayMs: 0
-          kvCacheCapacityTokens: 0
+          kvCacheCapacityTokens: 400000
     - name: mockdc-usw2-b
       kubeContext: mockdc-usw2-b
       nodeInstanceType: t3.medium
       nodeCount: 2
       quicCaSecretName: stargate-router-ca
+      # Approximate Llama 3.1 8B on one H100 near 25 concurrent requests.
+      # Keep output below Pylon's 237-token runaway-generation threshold.
       mockDynamo:
         backend0:
-          numTokens: 10
-          tokenDelayMs: 100
-          decodeJitterMs: 0
-          ttftMs: 50
-          ttftJitterMs: 0
-          prefillTokensPerSecond: 0
-          maxConcurrentRequests: 0
+          numTokens: 128
+          tokenDelayMs: 5
+          decodeJitterMs: 2
+          ttftMs: 10
+          ttftJitterMs: 20
+          prefillTokensPerSecond: 7000
+          maxConcurrentRequests: 25
           healthDelayMs: 0
-          kvCacheCapacityTokens: 0
+          kvCacheCapacityTokens: 400000
         backend1:
-          numTokens: 10
-          tokenDelayMs: 100
-          decodeJitterMs: 0
-          ttftMs: 50
-          ttftJitterMs: 0
-          prefillTokensPerSecond: 0
-          maxConcurrentRequests: 0
+          numTokens: 128
+          tokenDelayMs: 5
+          decodeJitterMs: 2
+          ttftMs: 10
+          ttftJitterMs: 20
+          prefillTokensPerSecond: 7000
+          maxConcurrentRequests: 25
           healthDelayMs: 0
-          kvCacheCapacityTokens: 0
+          kvCacheCapacityTokens: 400000
 
 router:
   hostname: router.usw2.stargate-dev.example.invalid
