@@ -79,6 +79,55 @@ func ModelCacheStorageClassName(override string) string {
 	return DefaultModelCacheStorageClassName
 }
 
+// HelmCacheBackendFromSelection maps an immutable request selection to the
+// existing Helm execution path.
+func HelmCacheBackendFromSelection(
+	selection *PersistedModelCacheStorageSelection,
+) (HelmCacheBackend, error) {
+	if err := selection.Validate(); err != nil {
+		return "", err
+	}
+	if selection.Workflow != ModelCacheWorkflowHelm {
+		return "", fmt.Errorf("model cache selection workflow %q is not Helm", selection.Workflow)
+	}
+	switch selection.Mode {
+	case ModelCacheSelectionNone:
+		return HelmCacheBackendNone, nil
+	case ModelCacheSelectionEphemeral:
+		return HelmCacheBackendEphemeral, nil
+	case ModelCacheSelectionDurable:
+		// Both durable shapes derive a read-only reader PV in the request
+		// namespace from the volume the writer populated. They differ in the
+		// writer claim and in whether the CSI volume handle has to be rewritten
+		// for the reader, which deriveReaderVolumeHandle decides.
+		switch selection.Transition {
+		case ModelCacheTransitionROXReadOnly:
+			return HelmCacheBackendNVMesh, nil
+		case ModelCacheTransitionRWXReadOnly:
+			return HelmCacheBackendSharedFS, nil
+		default:
+			return "", fmt.Errorf("unsupported durable Helm model cache transition %q", selection.Transition)
+		}
+	default:
+		return "", fmt.Errorf("unsupported Helm model cache selection mode %q", selection.Mode)
+	}
+}
+
+// PersistedHelmCacheBackend parses the coarse backend stored on a legacy
+// StorageRequest. Empty means NVMesh for backward compatibility.
+func PersistedHelmCacheBackend(raw string) (HelmCacheBackend, error) {
+	backend := HelmCacheBackend(raw)
+	if backend == "" {
+		return HelmCacheBackendNVMesh, nil
+	}
+	switch backend {
+	case HelmCacheBackendNVMesh, HelmCacheBackendSharedFS, HelmCacheBackendSamba:
+		return backend, nil
+	default:
+		return "", fmt.Errorf("unsupported persisted Helm model cache backend %q", raw)
+	}
+}
+
 // SelectHelmCacheBackend resolves the Helm model-cache storage backend. All
 // caching is gated on CachingSupport plus the HelmModelCaching sub-gate; the
 // mechanism is then chosen by which storage class the cluster provides,

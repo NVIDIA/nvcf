@@ -6,6 +6,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "miniservice",
     srcs = [
+        "modelcache_storage_selection_test.go",
+        "modelcache_storage_selection.go",
         "controller.go",
         "decode.go",
         "gvkcache.go",

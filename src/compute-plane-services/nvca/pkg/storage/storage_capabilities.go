@@ -19,10 +19,19 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 )
@@ -43,13 +52,48 @@ const (
 	// ModelCacheTransitionROXReadOnly populates a writer claim and publishes a
 	// separate ReadOnlyMany reader claim with read-only Pod mounts.
 	ModelCacheTransitionROXReadOnly = "roxReadOnly"
-	// ModelCacheTransitionRWXReadOnly populates one ReadWriteMany claim and
-	// serves that same claim through read-only Pod mounts.
+	// ModelCacheTransitionRWXReadOnly selects a regular model-cache transition
+	// that populates one ReadWriteMany claim and serves that same claim through
+	// read-only Pod mounts.
 	ModelCacheTransitionRWXReadOnly = "rwxReadOnly"
 	// ModelCacheProviderNVMesh is the provider id the catalog uses for NVMesh.
 	// It names a driver family; it does not gate what a driver may run.
 	ModelCacheProviderNVMesh = "nvmesh"
 )
+
+var (
+	// ErrModelCacheStorageClassNotFound means nvcf-sc is absent. Callers may map
+	// this to a documented non-durable fallback.
+	ErrModelCacheStorageClassNotFound = errors.New("model cache StorageClass not found")
+	// ErrModelCacheStorageSelectionDrift marks a deterministic mismatch between
+	// a persisted selection and its live StorageClass or catalog input. Callers
+	// can fail the request without treating transient API errors as drift.
+	ErrModelCacheStorageSelectionDrift = errors.New("model cache storage selection drift")
+)
+
+// ModelCacheWorkflow selects one transition column from the catalog.
+type ModelCacheWorkflow string
+
+const (
+	ModelCacheWorkflowRegular ModelCacheWorkflow = "regularModelCache"
+	ModelCacheWorkflowHelm    ModelCacheWorkflow = "helmModelCache"
+)
+
+// ModelCacheStorageSelection is the durable-storage decision derived from the
+// live nvcf-sc object and the public capability catalog. It deliberately does
+// not infer behavior from a provider name or access mode.
+type ModelCacheStorageSelection struct {
+	StorageClassName     string
+	StorageClassUID      types.UID
+	StorageClassDigest   string
+	ProfileDigest        string
+	CatalogRevision      string
+	Provider             string
+	Provisioner          string
+	Transition           string
+	RequiredAccessModes  []corev1.PersistentVolumeAccessMode
+	RequiredMountOptions []string
+}
 
 type storageCapabilityCatalog struct {
 	APIVersion string                       `json:"apiVersion"`
@@ -76,6 +120,50 @@ type storageDriverSpec struct {
 	ReaderMountOptions *[]string `json:"readerMountOptions"`
 }
 
+// transitionForWorkflow derives how a driver caches, from what it proved.
+//
+// The catalog states qualified PVC access modes. Everything else follows:
+//
+//	ReadWriteMany            -> one shared claim, readers mount it read-only
+//	ReadWriteOnce+ReadOnlyMany -> writer takes the claim, readers get ROX on it
+//
+// Regular caching keeps its readers in the request namespace, so either shape
+// works. Helm caching must reach other namespaces, which a ReadWriteMany claim
+// does natively. The ROX shape does not, except on NVMesh, whose CSI volume
+// handles encode the namespace so NVCA can derive a reader PV for another
+// namespace from the writer's volume. That is the one exception in this
+// mapping, and it is a property of NVMesh, not something a mode expresses.
+//
+// A driver that proved nothing usable returns disabled.
+func transitionForWorkflow(driver storageDriverSpec, workflow ModelCacheWorkflow) string {
+	modes := map[string]bool{}
+	if driver.AccessModes != nil {
+		for _, mode := range *driver.AccessModes {
+			modes[mode] = true
+		}
+	}
+	rwx := modes[string(corev1.ReadWriteMany)]
+	rox := modes[string(corev1.ReadWriteOnce)] && modes[string(corev1.ReadOnlyMany)]
+
+	switch workflow {
+	case ModelCacheWorkflowRegular:
+		switch {
+		case rwx:
+			return ModelCacheTransitionRWXReadOnly
+		case rox:
+			return ModelCacheTransitionROXReadOnly
+		}
+	case ModelCacheWorkflowHelm:
+		switch {
+		case rwx:
+			return ModelCacheTransitionRWXReadOnly
+		case rox && driver.Provider == ModelCacheProviderNVMesh:
+			return ModelCacheTransitionROXReadOnly
+		}
+	}
+	return ModelCacheTransitionDisabled
+}
+
 func loadStorageCapabilityCatalog(
 	ctx context.Context,
 	c client.Client,
@@ -97,6 +185,36 @@ func loadStorageCapabilityCatalog(
 			namespace, StorageCapabilityConfigMapName, StorageCapabilityConfigMapKey)
 	}
 
+	return parseStorageCapabilityCatalog(raw)
+}
+
+func loadStorageCapabilityCatalogSnapshot(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+) (*storageCapabilityCatalog, string, error) {
+	if namespace == "" {
+		return nil, "", fmt.Errorf("storage capability ConfigMap namespace is empty")
+	}
+
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: StorageCapabilityConfigMapName}, cm); err != nil {
+		return nil, "", fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
+			namespace, StorageCapabilityConfigMapName, err)
+	}
+	raw, ok := cm.Data[StorageCapabilityConfigMapKey]
+	if !ok || raw == "" {
+		return nil, "", fmt.Errorf("storage capability ConfigMap %s/%s has no %q data",
+			namespace, StorageCapabilityConfigMapName, StorageCapabilityConfigMapKey)
+	}
+	catalog, err := parseStorageCapabilityCatalog(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	return catalog, digestCatalogPayload(raw), nil
+}
+
+func parseStorageCapabilityCatalog(raw string) (*storageCapabilityCatalog, error) {
 	catalog := &storageCapabilityCatalog{}
 	if err := yaml.UnmarshalStrict([]byte(raw), catalog); err != nil {
 		return nil, fmt.Errorf("parse storage capability catalog: %w", err)
@@ -105,6 +223,368 @@ func loadStorageCapabilityCatalog(
 		return nil, err
 	}
 	return catalog, nil
+}
+
+// ResolveModelCacheStorage resolves the exact transition for a workflow. A
+// missing nvcf-sc is returned as a sentinel so callers that support an
+// ephemeral cache can choose that fallback. Invalid or unsafe configuration is
+// an error and must not silently select another durable provider.
+func ResolveModelCacheStorage(
+	ctx context.Context,
+	c client.Client,
+	catalogNamespace string,
+	workflow ModelCacheWorkflow,
+) (*ModelCacheStorageSelection, error) {
+	sc := &storagev1.StorageClass{}
+	if err := c.Get(ctx, client.ObjectKey{Name: DefaultModelCacheStorageClassName}, sc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, ErrModelCacheStorageClassNotFound
+		}
+		return nil, fmt.Errorf("get model cache StorageClass %q: %w", DefaultModelCacheStorageClassName, err)
+	}
+
+	catalog, catalogDigest, err := loadStorageCapabilityCatalogSnapshot(ctx, c, catalogNamespace)
+	if err != nil {
+		return nil, err
+	}
+	return selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow)
+}
+
+// ResolveModelCacheStorageWithClientset provides the same decision to the
+// regular container model-cache path, which uses client-go rather than a
+// controller-runtime client.
+func ResolveModelCacheStorageWithClientset(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	catalogNamespace string,
+	workflow ModelCacheWorkflow,
+) (*ModelCacheStorageSelection, error) {
+	if catalogNamespace == "" {
+		return nil, fmt.Errorf("storage capability ConfigMap namespace is empty")
+	}
+
+	sc, err := k8sClient.StorageV1().StorageClasses().Get(
+		ctx, DefaultModelCacheStorageClassName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, ErrModelCacheStorageClassNotFound
+		}
+		return nil, fmt.Errorf("get model cache StorageClass %q: %w", DefaultModelCacheStorageClassName, err)
+	}
+	cm, err := k8sClient.CoreV1().ConfigMaps(catalogNamespace).Get(
+		ctx, StorageCapabilityConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
+			catalogNamespace, StorageCapabilityConfigMapName, err)
+	}
+	raw, ok := cm.Data[StorageCapabilityConfigMapKey]
+	if !ok || raw == "" {
+		return nil, fmt.Errorf("storage capability ConfigMap %s/%s has no %q data",
+			catalogNamespace, StorageCapabilityConfigMapName, StorageCapabilityConfigMapKey)
+	}
+	catalog, err := parseStorageCapabilityCatalog(raw)
+	if err != nil {
+		return nil, err
+	}
+	return selectModelCacheStorageFromObjects(sc, catalog, digestCatalogPayload(raw), workflow)
+}
+
+func selectModelCacheStorageFromObjects(
+	sc *storagev1.StorageClass,
+	catalog *storageCapabilityCatalog,
+	catalogDigest string,
+	workflow ModelCacheWorkflow,
+) (*ModelCacheStorageSelection, error) {
+	if sc.ReclaimPolicy == nil || *sc.ReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		return nil, fmt.Errorf("model cache StorageClass %q must use reclaimPolicy Retain",
+			DefaultModelCacheStorageClassName)
+	}
+	if strings.TrimSpace(sc.Provisioner) == "" {
+		return nil, fmt.Errorf("model cache StorageClass %q has an empty provisioner",
+			DefaultModelCacheStorageClassName)
+	}
+
+	driver, ok := catalog.Drivers[sc.Provisioner]
+	if !ok {
+		return nil, fmt.Errorf("model cache StorageClass %q uses provisioner %q with no catalog entry",
+			DefaultModelCacheStorageClassName, sc.Provisioner)
+	}
+
+	switch workflow {
+	case ModelCacheWorkflowRegular, ModelCacheWorkflowHelm:
+	default:
+		return nil, fmt.Errorf("unknown model cache workflow %q", workflow)
+	}
+	transition := transitionForWorkflow(driver, workflow)
+	var requiredMountOptions []string
+	if transition == ModelCacheTransitionROXReadOnly {
+		requiredMountOptions = append([]string(nil), (*driver.ReaderMountOptions)...)
+	}
+
+	return &ModelCacheStorageSelection{
+		StorageClassName:     sc.Name,
+		StorageClassUID:      sc.UID,
+		StorageClassDigest:   digestStorageClass(sc),
+		ProfileDigest:        digestDriverProfile(sc.Provisioner, driver, workflow, transition),
+		CatalogRevision:      catalogDigest,
+		Provider:             driver.Provider,
+		Provisioner:          sc.Provisioner,
+		Transition:           transition,
+		RequiredAccessModes:  requiredAccessModesForTransition(transition),
+		RequiredMountOptions: requiredMountOptions,
+	}, nil
+}
+
+func requiredAccessModesForTransition(transition string) []corev1.PersistentVolumeAccessMode {
+	switch transition {
+	case ModelCacheTransitionROXReadOnly:
+		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany}
+	case ModelCacheTransitionRWXReadOnly:
+		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+	default:
+		return nil
+	}
+}
+
+type canonicalStorageClassParameter struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type canonicalStorageClass struct {
+	Provisioner       string                           `json:"provisioner"`
+	Parameters        []canonicalStorageClassParameter `json:"parameters"`
+	ReclaimPolicy     string                           `json:"reclaimPolicy"`
+	VolumeBindingMode string                           `json:"volumeBindingMode"`
+	MountOptions      []string                         `json:"mountOptions"`
+	AllowedTopologies []corev1.TopologySelectorTerm    `json:"allowedTopologies"`
+}
+
+func digestStorageClass(sc *storagev1.StorageClass) string {
+	parameterNames := make([]string, 0, len(sc.Parameters))
+	for name := range sc.Parameters {
+		parameterNames = append(parameterNames, name)
+	}
+	sort.Strings(parameterNames)
+	parameters := make([]canonicalStorageClassParameter, 0, len(parameterNames))
+	for _, name := range parameterNames {
+		parameters = append(parameters, canonicalStorageClassParameter{Name: name, Value: sc.Parameters[name]})
+	}
+
+	reclaimPolicy := ""
+	if sc.ReclaimPolicy != nil {
+		reclaimPolicy = string(*sc.ReclaimPolicy)
+	}
+	volumeBindingMode := ""
+	if sc.VolumeBindingMode != nil {
+		volumeBindingMode = string(*sc.VolumeBindingMode)
+	}
+	canonical := canonicalStorageClass{
+		Provisioner:       sc.Provisioner,
+		Parameters:        parameters,
+		ReclaimPolicy:     reclaimPolicy,
+		VolumeBindingMode: volumeBindingMode,
+		MountOptions:      append([]string{}, sc.MountOptions...),
+		AllowedTopologies: append([]corev1.TopologySelectorTerm{}, sc.AllowedTopologies...),
+	}
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		panic(fmt.Sprintf("marshal canonical StorageClass: %v", err))
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("v1:sha256:%x", sum)
+}
+
+// canonicalDriverProfile is the stable, marshalled form of the one catalog
+// entry a decision depends on. Field order is fixed by the struct, so the
+// digest is independent of how the catalog YAML happens to be written.
+type canonicalDriverProfile struct {
+	Provisioner        string   `json:"provisioner"`
+	Provider           string   `json:"provider"`
+	Workflow           string   `json:"workflow"`
+	Transition         string   `json:"transition"`
+	AccessModes        []string `json:"accessModes"`
+	ReaderMountOptions []string `json:"readerMountOptions,omitempty"`
+}
+
+// digestDriverProfile hashes the qualified profile behind a decision. Two
+// catalogs that describe this driver and workflow identically produce the same
+// digest even if they differ elsewhere, which is what lets an existing binding
+// be reused across an unrelated catalog edit.
+func digestDriverProfile(
+	provisioner string,
+	driver storageDriverSpec,
+	workflow ModelCacheWorkflow,
+	transition string,
+) string {
+	profile := canonicalDriverProfile{
+		Provisioner: provisioner,
+		Provider:    driver.Provider,
+		Workflow:    string(workflow),
+		Transition:  transition,
+	}
+	if driver.AccessModes != nil {
+		profile.AccessModes = append([]string(nil), (*driver.AccessModes)...)
+		sort.Strings(profile.AccessModes)
+	}
+	if driver.ReaderMountOptions != nil {
+		// Order is behavior for mount options, so it is preserved.
+		profile.ReaderMountOptions = append([]string(nil), (*driver.ReaderMountOptions)...)
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil {
+		// canonicalDriverProfile contains only strings and string slices.
+		panic(fmt.Sprintf("marshal canonical driver profile: %v", err))
+	}
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("sha256:%x", sum)
+}
+
+func digestCatalogPayload(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("sha256:%x", sum)
+}
+
+// ValidateModelCacheStorageSelectionLive verifies that a persisted durable
+// decision still points at the same immutable StorageClass before its first
+// storage side effect. It does not reselect from the current catalog.
+func ValidateModelCacheStorageSelectionLive(
+	ctx context.Context,
+	c client.Client,
+	selection *PersistedModelCacheStorageSelection,
+) error {
+	if err := selection.Validate(); err != nil {
+		return err
+	}
+	if selection.Mode != ModelCacheSelectionDurable {
+		return nil
+	}
+
+	sc := &storagev1.StorageClass{}
+	if err := c.Get(ctx, client.ObjectKey{Name: selection.StorageClassName}, sc); err != nil {
+		return fmt.Errorf("get selected model cache StorageClass %q: %w", selection.StorageClassName, err)
+	}
+	return validateSelectedStorageClass(sc, selection)
+}
+
+// ValidateModelCacheStorageSelectionLiveWithClientset is the client-go
+// equivalent used by the regular container model-cache path.
+func ValidateModelCacheStorageSelectionLiveWithClientset(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	selection *PersistedModelCacheStorageSelection,
+) error {
+	if err := selection.Validate(); err != nil {
+		return err
+	}
+	if selection.Mode != ModelCacheSelectionDurable {
+		return nil
+	}
+	sc, err := k8sClient.StorageV1().StorageClasses().Get(
+		ctx, selection.StorageClassName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get selected model cache StorageClass %q: %w", selection.StorageClassName, err)
+	}
+	return validateSelectedStorageClass(sc, selection)
+}
+
+// ValidateModelCacheStorageSelectionInputsWithClientset verifies every live
+// input captured by a durable selection immediately before its first binding
+// is created. Once the binding exists, callers use the immutable binding and
+// must not reselect from a later catalog revision.
+func ValidateModelCacheStorageSelectionInputsWithClientset(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	catalogNamespace string,
+	selection *PersistedModelCacheStorageSelection,
+) error {
+	if err := ValidateModelCacheStorageSelectionLiveWithClientset(ctx, k8sClient, selection); err != nil {
+		return err
+	}
+	if selection.Mode != ModelCacheSelectionDurable {
+		return nil
+	}
+	if strings.TrimSpace(catalogNamespace) == "" {
+		return fmt.Errorf("%w: storage capability ConfigMap namespace is empty",
+			ErrModelCacheStorageSelectionDrift)
+	}
+
+	cm, err := k8sClient.CoreV1().ConfigMaps(catalogNamespace).Get(
+		ctx, StorageCapabilityConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get storage capability ConfigMap %s/%s before binding creation: %w",
+			catalogNamespace, StorageCapabilityConfigMapName, err)
+	}
+	raw, ok := cm.Data[StorageCapabilityConfigMapKey]
+	if !ok || raw == "" {
+		return fmt.Errorf("%w: storage capability ConfigMap %s/%s has no %q data",
+			ErrModelCacheStorageSelectionDrift,
+			catalogNamespace, StorageCapabilityConfigMapName, StorageCapabilityConfigMapKey)
+	}
+	catalog, err := parseStorageCapabilityCatalog(raw)
+	if err != nil {
+		return fmt.Errorf("%w: selected storage capability catalog is invalid: %v",
+			ErrModelCacheStorageSelectionDrift, err)
+	}
+	driver, ok := catalog.Drivers[selection.Provisioner]
+	if !ok {
+		return fmt.Errorf("%w: selected provisioner %q has no catalog entry",
+			ErrModelCacheStorageSelectionDrift, selection.Provisioner)
+	}
+	if driver.Provider != selection.Provider {
+		return fmt.Errorf("%w: selected provisioner %q provider changed from %q to %q",
+			ErrModelCacheStorageSelectionDrift,
+			selection.Provisioner, selection.Provider, driver.Provider)
+	}
+	switch selection.Workflow {
+	case ModelCacheWorkflowRegular, ModelCacheWorkflowHelm:
+	default:
+		return fmt.Errorf("%w: unknown model cache workflow %q",
+			ErrModelCacheStorageSelectionDrift, selection.Workflow)
+	}
+	transition := transitionForWorkflow(driver, selection.Workflow)
+	if transition != selection.Transition {
+		return fmt.Errorf("%w: selected provisioner %q transition for %s changed from %q to %q",
+			ErrModelCacheStorageSelectionDrift,
+			selection.Provisioner, selection.Workflow, selection.Transition, transition)
+	}
+	// Compare the qualified profile rather than the whole catalog payload, so
+	// an unrelated catalog edit does not invalidate this selection while a
+	// change to the driver's own qualified capabilities still does.
+	if digest := digestDriverProfile(
+		selection.Provisioner, driver, selection.Workflow, transition,
+	); digest != selection.ProfileDigest {
+		return fmt.Errorf("%w: selected provisioner %q qualified profile digest changed from %q to %q",
+			ErrModelCacheStorageSelectionDrift, selection.Provisioner, selection.ProfileDigest, digest)
+	}
+	return nil
+}
+
+func validateSelectedStorageClass(
+	sc *storagev1.StorageClass,
+	selection *PersistedModelCacheStorageSelection,
+) error {
+	if sc.UID != selection.StorageClassUID {
+		return fmt.Errorf("%w: selected model cache StorageClass %q UID changed from %q to %q",
+			ErrModelCacheStorageSelectionDrift,
+			selection.StorageClassName, selection.StorageClassUID, sc.UID)
+	}
+	if sc.Provisioner != selection.Provisioner {
+		return fmt.Errorf("%w: selected model cache StorageClass %q provisioner changed from %q to %q",
+			ErrModelCacheStorageSelectionDrift,
+			selection.StorageClassName, selection.Provisioner, sc.Provisioner)
+	}
+	if sc.ReclaimPolicy == nil || *sc.ReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		return fmt.Errorf("%w: selected model cache StorageClass %q no longer uses reclaimPolicy Retain",
+			ErrModelCacheStorageSelectionDrift,
+			selection.StorageClassName)
+	}
+	if digest := digestStorageClass(sc); digest != selection.StorageClassDigest {
+		return fmt.Errorf("%w: selected model cache StorageClass %q configuration digest changed from %q to %q",
+			ErrModelCacheStorageSelectionDrift,
+			selection.StorageClassName, selection.StorageClassDigest, digest)
+	}
+	return nil
 }
 
 func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
@@ -160,10 +640,6 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			accessModes[mode] = true
 		}
 
-		// A driver qualified for the ReadWriteOnce plus ReadOnlyMany shape gets
-		// reader PVs that NVCA creates, so it must say how to mount them
-		// read-only. The shared claim shape creates no reader PV, so it needs
-		// no options.
 		// ReadOnlyMany describes readers. Without a writer mode alongside it
 		// there is nothing to populate the cache.
 		if accessModes[string(corev1.ReadOnlyMany)] &&
@@ -173,6 +649,10 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 					"it needs ReadWriteOnce or ReadWriteMany",
 				provisioner)
 		}
+		// A driver qualified for the ReadWriteOnce plus ReadOnlyMany shape gets
+		// reader PVs that NVCA creates, so it must say how to mount them
+		// read-only. The shared claim shape creates no reader PV, so it needs
+		// no options.
 		if accessModes[string(corev1.ReadWriteOnce)] && accessModes[string(corev1.ReadOnlyMany)] &&
 			!readerMountOptions["ro"] {
 			return fmt.Errorf(
