@@ -15,27 +15,31 @@
 
 #[derive(Debug, Default)]
 pub(crate) struct OutputTokenParser {
-    last_exact_tokens: Option<u64>,
+    reported_tokens: u64,
+    saw_exact_tokens: bool,
 }
 
 impl OutputTokenParser {
     pub(crate) fn new() -> Self {
-        Self {
-            last_exact_tokens: None,
-        }
+        Self::default()
     }
 
     pub(crate) fn observe_estimated_output_tokens(&mut self, delta: u64) -> Option<u64> {
-        (self.last_exact_tokens.is_none() && delta > 0).then_some(delta)
+        if self.saw_exact_tokens || delta == 0 {
+            return None;
+        }
+        self.reported_tokens = self.reported_tokens.saturating_add(delta);
+        Some(delta)
     }
 
-    pub(crate) fn observe_exact_output_tokens(&mut self, completion_tokens: u64) -> (u64, u64) {
-        let tokens = self
-            .last_exact_tokens
-            .map_or(completion_tokens, |prior| prior.max(completion_tokens));
-        let delta = tokens.saturating_sub(self.last_exact_tokens.unwrap_or_default());
-        self.last_exact_tokens = Some(tokens);
-        (tokens, delta)
+    pub(crate) fn observe_exact_output_tokens(&mut self, completion_tokens: u64) -> u64 {
+        self.reported_tokens = if self.saw_exact_tokens {
+            self.reported_tokens.max(completion_tokens)
+        } else {
+            completion_tokens
+        };
+        self.saw_exact_tokens = true;
+        self.reported_tokens
     }
 }
 
@@ -44,32 +48,20 @@ pub(crate) fn estimate_token_like_units(content: &str) -> u64 {
     if trimmed.is_empty() {
         return 0;
     }
-    let whitespace_units = trimmed.split_whitespace().count();
-    let units = if whitespace_units > 0 {
-        whitespace_units
-    } else {
-        trimmed.chars().count()
-    };
-    u64::try_from(units).unwrap_or(u64::MAX)
+    u64::try_from(trimmed.split_whitespace().count()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    impl OutputTokenParser {
-        fn observe_exact_delta(&mut self, tokens: u64) -> u64 {
-            self.observe_exact_output_tokens(tokens).1
-        }
-    }
-
     #[test]
-    fn parser_tracks_continuous_exact_usage_deltas() {
+    fn parser_tracks_continuous_exact_usage() {
         let mut parser = OutputTokenParser::new();
 
-        assert_eq!(parser.observe_exact_output_tokens(1), (1, 1));
-        assert_eq!(parser.observe_exact_output_tokens(2), (2, 1));
-        assert_eq!(parser.observe_exact_output_tokens(2), (2, 0));
+        assert_eq!(parser.observe_exact_output_tokens(1), 1);
+        assert_eq!(parser.observe_exact_output_tokens(2), 2);
+        assert_eq!(parser.observe_exact_output_tokens(2), 2);
     }
 
     #[test]
@@ -77,14 +69,14 @@ mod tests {
         let mut parser = OutputTokenParser::new();
 
         assert_eq!(parser.observe_estimated_output_tokens(1), Some(1));
-        assert_eq!(parser.observe_exact_output_tokens(7), (7, 7));
+        assert_eq!(parser.observe_exact_output_tokens(7), 7);
     }
 
     #[test]
     fn explicit_counter_disables_later_text_estimates() {
         let mut parser = OutputTokenParser::new();
 
-        assert_eq!(parser.observe_exact_output_tokens(2), (2, 2));
+        assert_eq!(parser.observe_exact_output_tokens(2), 2);
         assert_eq!(parser.observe_estimated_output_tokens(2), None);
     }
 
@@ -96,20 +88,11 @@ mod tests {
     }
 
     #[test]
-    fn parser_never_subtracts_when_cumulative_usage_regresses() {
-        let mut parser = OutputTokenParser::new();
-
-        assert_eq!(parser.observe_exact_delta(5), 5);
-        assert_eq!(parser.observe_exact_delta(3), 0);
-        assert_eq!(parser.observe_exact_delta(7), 2);
-    }
-
-    #[test]
     fn parser_returns_monotonic_tokens_after_first_explicit_counter() {
         let mut parser = OutputTokenParser::new();
 
-        assert_eq!(parser.observe_exact_output_tokens(10), (10, 10));
-        assert_eq!(parser.observe_exact_output_tokens(5), (10, 0));
+        assert_eq!(parser.observe_exact_output_tokens(10), 10);
+        assert_eq!(parser.observe_exact_output_tokens(5), 10);
     }
 
     #[test]
@@ -117,8 +100,8 @@ mod tests {
         let mut parser = OutputTokenParser::new();
 
         assert_eq!(parser.observe_estimated_output_tokens(5), Some(5));
-        assert_eq!(parser.observe_exact_output_tokens(3), (3, 3));
-        assert_eq!(parser.observe_exact_output_tokens(4), (4, 1));
+        assert_eq!(parser.observe_exact_output_tokens(3), 3);
+        assert_eq!(parser.observe_exact_output_tokens(4), 4);
     }
 
     #[test]

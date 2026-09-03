@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use reqwest::header::HeaderMap;
 use std::time::Instant;
 
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
@@ -56,13 +55,8 @@ impl TunnelRequestObserver {
         self.observer.on_backend_submission(submitted_at);
     }
 
-    pub(crate) fn on_upstream_response_headers(
-        &mut self,
-        response_headers: &HeaderMap,
-        status: u16,
-    ) {
-        self.observer
-            .on_upstream_response_headers(response_headers, status);
+    pub(crate) fn on_upstream_response_headers(&mut self, status: u16) {
+        self.observer.on_upstream_response_headers(status);
     }
 
     pub(crate) fn complete(&mut self) {

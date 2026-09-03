@@ -24,7 +24,7 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::output_token_parser::estimate_token_like_units;
 
 const SSE_DONE_SENTINEL: &str = "[DONE]";
-const SSE_DELIVERY_BUFFER_EVENTS: usize = 16;
+const SSE_DELIVERY_BUFFER_EVENTS: usize = 1;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct GeneratedOutput {
@@ -39,7 +39,7 @@ pub(crate) struct ExactUsage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SseTerminalOutcome {
+pub(crate) enum RelayOutcome {
     Complete,
     Failed,
 }
@@ -48,7 +48,7 @@ pub(crate) enum SseTerminalOutcome {
 pub(crate) struct SseEventFacts {
     pub(crate) generated_output: Option<GeneratedOutput>,
     pub(crate) exact_usage: Option<ExactUsage>,
-    pub(crate) terminal: Option<SseTerminalOutcome>,
+    pub(crate) terminal: Option<RelayOutcome>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -167,38 +167,8 @@ async fn produce_sse_messages<S>(
     let mut sse_messages = SseMessageBuffer::default();
     let mut timeout_phase = SseReadTimeoutPhase::FirstOutput;
     let mut deadline = first_output_deadline;
-    let mut buffered_received_at: Option<tokio::time::Instant> = None;
-    let mut delivery_pause = Duration::ZERO;
 
     loop {
-        let processing_started_at = tokio::time::Instant::now();
-        if let Some(mut parsed_message) = sse_messages.next() {
-            let received_at = buffered_received_at
-                .expect("buffered SSE messages should retain their receipt timestamp");
-            let generated_output = parsed_message.facts.generated_output.is_some();
-            let terminal = parsed_message.facts.terminal.is_some();
-            if generated_output {
-                timeout_phase = SseReadTimeoutPhase::SubsequentOutput;
-                deadline = received_at + output_chunk_timeout + delivery_pause;
-            }
-            parsed_message.received_at = received_at.into_std();
-
-            let Ok(permit) = delivery_tx.reserve().await else {
-                return;
-            };
-            let processing_pause =
-                tokio::time::Instant::now().saturating_duration_since(processing_started_at);
-            delivery_pause += processing_pause;
-            deadline += processing_pause;
-            permit.send(Ok(parsed_message));
-            if terminal {
-                return;
-            }
-            continue;
-        }
-
-        buffered_received_at = None;
-        delivery_pause = Duration::ZERO;
         let deadline_sleep = tokio::time::sleep_until(deadline);
         tokio::pin!(deadline_sleep);
         tokio::select! {
@@ -232,7 +202,61 @@ async fn produce_sse_messages<S>(
                                 .await;
                             return;
                         }
-                        buffered_received_at = Some(received_at);
+
+                        let mut messages = Vec::new();
+                        let mut terminal = false;
+                        for mut message in sse_messages.by_ref() {
+                            message.received_at = received_at.into_std();
+                            if message.facts.generated_output.is_some() {
+                                timeout_phase = SseReadTimeoutPhase::SubsequentOutput;
+                                deadline = received_at + output_chunk_timeout;
+                            }
+                            terminal = message.facts.terminal.is_some();
+                            messages.push(message);
+                            if terminal {
+                                break;
+                            }
+                        }
+
+                        let mut timed_out = false;
+                        for message in messages {
+                            if timed_out || terminal {
+                                if delivery_tx.send(Ok(message)).await.is_err() {
+                                    return;
+                                }
+                                continue;
+                            }
+
+                            let deadline_sleep = tokio::time::sleep_until(deadline);
+                            tokio::pin!(deadline_sleep);
+                            let permit = tokio::select! {
+                                biased;
+                                _ = &mut deadline_sleep => None,
+                                _ = delivery_tx.closed() => return,
+                                permit = delivery_tx.reserve() => match permit {
+                                    Ok(permit) => Some(permit),
+                                    Err(_) => return,
+                                },
+                            };
+                            if let Some(permit) = permit {
+                                permit.send(Ok(message));
+                            } else {
+                                timed_out = true;
+                                if delivery_tx.send(Ok(message)).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+
+                        if terminal {
+                            return;
+                        }
+                        if timed_out {
+                            let _ = delivery_tx
+                                .send(Err(UpstreamSseReadError::Timeout(timeout_phase)))
+                                .await;
+                            return;
+                        }
                     }
                     Some(Err(error)) => {
                         let _ = delivery_tx
@@ -251,8 +275,8 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
     let trimmed = data.trim();
     if trimmed == SSE_DONE_SENTINEL {
         let terminal = match terminal_outcome(event_name) {
-            Some(SseTerminalOutcome::Failed) => SseTerminalOutcome::Failed,
-            _ => SseTerminalOutcome::Complete,
+            Some(RelayOutcome::Failed) => RelayOutcome::Failed,
+            _ => RelayOutcome::Complete,
         };
         return (
             None,
@@ -267,7 +291,18 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
         .then(|| sonic_rs::from_str::<Value>(trimmed).ok())
         .flatten();
     let Some(value) = parsed.as_ref() else {
-        return (parsed, SseEventFacts::default());
+        let terminal = if trimmed.is_empty() {
+            None
+        } else {
+            terminal_outcome(event_name)
+        };
+        return (
+            parsed,
+            SseEventFacts {
+                terminal,
+                ..SseEventFacts::default()
+            },
+        );
     };
     let json_event_type = value["type"].as_str();
     let event_type = json_event_type.or(event_name);
@@ -481,26 +516,24 @@ fn exact_usage(value: &Value) -> Option<ExactUsage> {
     })
 }
 
-fn terminal_outcome(event_type: Option<&str>) -> Option<SseTerminalOutcome> {
+fn terminal_outcome(event_type: Option<&str>) -> Option<RelayOutcome> {
     match event_type {
-        Some("response.completed") => Some(SseTerminalOutcome::Complete),
-        Some("response.failed" | "response.incomplete" | "error") => {
-            Some(SseTerminalOutcome::Failed)
-        }
+        Some("response.completed") => Some(RelayOutcome::Complete),
+        Some("response.failed" | "response.incomplete" | "error") => Some(RelayOutcome::Failed),
         _ => None,
     }
 }
 
 fn merge_terminal_outcomes(
-    first: Option<SseTerminalOutcome>,
-    second: Option<SseTerminalOutcome>,
-) -> Option<SseTerminalOutcome> {
+    first: Option<RelayOutcome>,
+    second: Option<RelayOutcome>,
+) -> Option<RelayOutcome> {
     match (first, second) {
-        (Some(SseTerminalOutcome::Failed), _) | (_, Some(SseTerminalOutcome::Failed)) => {
-            Some(SseTerminalOutcome::Failed)
+        (Some(RelayOutcome::Failed), _) | (_, Some(RelayOutcome::Failed)) => {
+            Some(RelayOutcome::Failed)
         }
-        (Some(SseTerminalOutcome::Complete), _) | (_, Some(SseTerminalOutcome::Complete)) => {
-            Some(SseTerminalOutcome::Complete)
+        (Some(RelayOutcome::Complete), _) | (_, Some(RelayOutcome::Complete)) => {
+            Some(RelayOutcome::Complete)
         }
         (None, None) => None,
     }
@@ -834,25 +867,32 @@ mod tests {
     fn classifies_explicit_terminal_outcomes_without_output() {
         assert_eq!(
             parse_data("[DONE]").facts.terminal,
-            Some(SseTerminalOutcome::Complete)
+            Some(RelayOutcome::Complete)
         );
         let completed = parse_data(r#"{"type":"response.completed"}"#);
-        assert_eq!(completed.facts.terminal, Some(SseTerminalOutcome::Complete));
+        assert_eq!(completed.facts.terminal, Some(RelayOutcome::Complete));
         assert_eq!(completed.facts.generated_output, None);
         for event_type in ["response.failed", "response.incomplete", "error"] {
             let parsed = parse_data(&format!(r#"{{"type":"{event_type}"}}"#));
-            assert_eq!(parsed.facts.terminal, Some(SseTerminalOutcome::Failed));
+            assert_eq!(parsed.facts.terminal, Some(RelayOutcome::Failed));
             assert_eq!(parsed.facts.generated_output, None);
         }
 
         let named_error = parse_event("event: error\ndata: {\"message\":\"bad\"}\n\n");
-        assert_eq!(named_error.facts.terminal, Some(SseTerminalOutcome::Failed));
+        assert_eq!(named_error.facts.terminal, Some(RelayOutcome::Failed));
+
+        let plain_text_error = parse_event("event: error\ndata: overloaded\n\n");
+        assert_eq!(plain_text_error.facts.terminal, Some(RelayOutcome::Failed));
 
         let typed_named_error = parse_event("event: error\ndata: {\"type\":\"server_error\"}\n\n");
-        assert_eq!(
-            typed_named_error.facts.terminal,
-            Some(SseTerminalOutcome::Failed)
-        );
+        assert_eq!(typed_named_error.facts.terminal, Some(RelayOutcome::Failed));
+    }
+
+    #[test]
+    fn empty_named_events_are_not_terminal() {
+        let empty_error = parse_event("event: error\ndata:\n\n");
+
+        assert_eq!(empty_error.facts.terminal, None);
     }
 
     #[tokio::test]
@@ -1096,7 +1136,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn bounded_delivery_backpressure_pauses_the_unobservable_upstream_deadline() {
+    async fn bounded_delivery_backpressure_does_not_pause_the_upstream_deadline() {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let mut messages = upstream_sse_message_stream(
             tokio_stream::wrappers::ReceiverStream::new(rx),
@@ -1123,21 +1163,12 @@ mod tests {
             assert_eq!(message.received_at, received_at);
         }
 
-        let output = Bytes::from_static(
-            b"data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n",
-        );
-        tx.send(Ok(output)).await.unwrap();
-        assert!(
-            messages
-                .next()
-                .await
-                .unwrap()
-                .unwrap()
-                .facts
-                .generated_output
-                .is_some(),
-            "local delivery saturation must not become an upstream timeout"
-        );
+        assert!(matches!(
+            messages.next().await,
+            Some(Err(UpstreamSseReadError::Timeout(
+                SseReadTimeoutPhase::FirstOutput
+            )))
+        ));
     }
 
     #[tokio::test]
@@ -1154,7 +1185,7 @@ mod tests {
 
         let terminal = messages.next().await.unwrap().unwrap();
         assert_eq!(terminal.raw_event, Bytes::from_static(b"data: [DONE]\n\n"));
-        assert_eq!(terminal.facts.terminal, Some(SseTerminalOutcome::Complete));
+        assert_eq!(terminal.facts.terminal, Some(RelayOutcome::Complete));
         assert!(messages.next().await.is_none());
     }
 }

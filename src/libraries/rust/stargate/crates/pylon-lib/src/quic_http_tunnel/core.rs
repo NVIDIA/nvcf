@@ -52,7 +52,7 @@ use crate::request_quality_monitor::{
 };
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState, RequestGenerationAdmission};
 use crate::sse_message_stream::{
-    ParsedSseMessage, SseReadTimeoutPhase, SseTerminalOutcome, UpstreamSseMessageStream,
+    ParsedSseMessage, RelayOutcome, SseReadTimeoutPhase, UpstreamSseMessageStream,
     UpstreamSseReadError, upstream_sse_message_stream,
 };
 use crate::stats::PylonMetrics;
@@ -263,12 +263,6 @@ fn relay_sse_error(error: UpstreamSseReadError) -> anyhow::Error {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RequestRelayOutcome {
-    Complete,
-    Failed,
-}
-
 #[derive(Debug, thiserror::Error)]
 enum ResponseRelayError {
     #[error("upstream response relay failed: {0}")]
@@ -397,7 +391,7 @@ impl TunnelRequestLifecycle {
         &mut self,
         mut upstream_messages: UpstreamSseMessageStream,
         transport: &mut impl TunnelRequestTransport,
-    ) -> Result<RequestRelayOutcome, ResponseRelayError> {
+    ) -> Result<RelayOutcome, ResponseRelayError> {
         let mut output_token_parser = OutputTokenParser::new();
         let mut saw_output = false;
         loop {
@@ -406,24 +400,24 @@ impl TunnelRequestLifecycle {
                 .await
                 .map_err(|error| ResponseRelayError::Upstream(relay_sse_error(error)))?;
             let Some(parsed_message) = parsed_message else {
+                if saw_output {
+                    return Ok(RelayOutcome::Complete);
+                }
                 return Err(ResponseRelayError::Upstream(anyhow!(
-                    "upstream SSE stream ended before a terminal event"
+                    "upstream SSE stream ended before generated output or a terminal event"
                 )));
             };
             let terminal = self.observe_sse_message(
                 &mut output_token_parser,
                 &parsed_message,
                 &mut saw_output,
-            )?;
+            );
             transport
                 .send_body_event(parsed_message.raw_event)
                 .await
                 .map_err(ResponseRelayError::Downstream)?;
             if let Some(terminal) = terminal {
-                return Ok(match terminal {
-                    SseTerminalOutcome::Complete => RequestRelayOutcome::Complete,
-                    SseTerminalOutcome::Failed => RequestRelayOutcome::Failed,
-                });
+                return Ok(terminal);
             }
         }
     }
@@ -433,16 +427,12 @@ impl TunnelRequestLifecycle {
         parser: &mut OutputTokenParser,
         message: &ParsedSseMessage,
         saw_output: &mut bool,
-    ) -> Result<Option<SseTerminalOutcome>, ResponseRelayError> {
+    ) -> Option<RelayOutcome> {
         let obs = self
             .observer
             .as_mut()
             .and_then(TunnelRequestObserver::generation_mut)
-            .ok_or_else(|| {
-                ResponseRelayError::Upstream(anyhow!(
-                    "observer missing for observed streaming request"
-                ))
-            })?;
+            .expect("streaming relay requires a generation observer");
         obs.observe_upstream_event(message.received_at);
         let mut quality_progress = None;
         if let Some(generated_output) = message.facts.generated_output.as_ref() {
@@ -463,9 +453,9 @@ impl TunnelRequestLifecycle {
                 obs.observe_input_tokens_total(input_tokens);
             }
             if let Some(output_tokens) = exact_usage.output_tokens {
-                let (tokens, delta) = parser.observe_exact_output_tokens(output_tokens);
+                let tokens = parser.observe_exact_output_tokens(output_tokens);
                 obs.observe_output_tokens_generated_so_far(tokens);
-                quality_progress = Some(RequestOutputTokenProgress::Cumulative { tokens, delta });
+                quality_progress = Some(RequestOutputTokenProgress::Cumulative { tokens });
             }
         }
         if (message.facts.generated_output.is_some() || message.facts.exact_usage.is_some())
@@ -475,20 +465,20 @@ impl TunnelRequestLifecycle {
                 .recorder
                 .observe_json_chunk(message.parsed.as_ref(), quality_progress);
         }
-        Ok(message.facts.terminal)
+        message.facts.terminal
     }
 
-    fn finish(&mut self, app: &TunnelServerApp, outcome: RequestRelayOutcome) {
+    fn finish(&mut self, app: &TunnelServerApp, outcome: RelayOutcome) {
         if let Some(observer) = self.observer.as_mut() {
             match outcome {
-                RequestRelayOutcome::Complete => observer.complete(),
-                RequestRelayOutcome::Failed => observer.fail(),
+                RelayOutcome::Complete => observer.complete(),
+                RelayOutcome::Failed => observer.fail(),
             }
         }
         if let Some(queue_request) = self.queue_request.as_mut() {
             queue_request.finish();
         }
-        if outcome != RequestRelayOutcome::Complete {
+        if outcome != RelayOutcome::Complete {
             return;
         }
         let Some((quality_check, metrics)) = self
@@ -568,7 +558,7 @@ async fn relay_upstream_response(
     mut lifecycle: Option<&mut TunnelRequestLifecycle>,
     response: Response,
     transport: &mut impl TunnelRequestTransport,
-) -> Result<RequestRelayOutcome, ResponseRelayError> {
+) -> Result<RelayOutcome, ResponseRelayError> {
     let status = response.status();
     let response_head = build_response_headers(
         status,
@@ -581,19 +571,15 @@ async fn relay_upstream_response(
     if let Some(lifecycle) = lifecycle.as_mut()
         && let Some(observer) = lifecycle.observer.as_mut()
     {
-        observer.on_upstream_response_headers(response.headers(), status.as_u16());
+        observer.on_upstream_response_headers(status.as_u16());
     }
-    let relay_as_sse = lifecycle.as_ref().is_some_and(|lifecycle| {
+    let observed_streaming = lifecycle.as_ref().is_some_and(|lifecycle| {
         lifecycle
             .observer
             .as_ref()
             .is_some_and(TunnelRequestObserver::is_streaming)
-            && response
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.starts_with("text/event-stream"))
     });
+    let relay_as_sse = observed_streaming && is_sse_content_type(response.headers());
     if relay_as_sse {
         let upstream_messages = upstream_sse_message_stream(
             response.bytes_stream(),
@@ -613,7 +599,7 @@ async fn relay_upstream_response(
         return Ok(if status.is_success() {
             outcome
         } else {
-            RequestRelayOutcome::Failed
+            RelayOutcome::Failed
         });
     }
 
@@ -622,6 +608,7 @@ async fn relay_upstream_response(
         .await
         .map_err(ResponseRelayError::Downstream)?;
     if status.is_success()
+        && !observed_streaming
         && let Some(lifecycle) = lifecycle.as_mut()
     {
         if let Some(queue_request) = lifecycle.queue_request.as_mut() {
@@ -647,11 +634,19 @@ async fn relay_upstream_response(
             .await
             .map_err(ResponseRelayError::Downstream)?;
     }
-    Ok(if status.is_success() {
-        RequestRelayOutcome::Complete
+    Ok(if status.is_success() && !observed_streaming {
+        RelayOutcome::Complete
     } else {
-        RequestRelayOutcome::Failed
+        RelayOutcome::Failed
     })
+}
+
+fn is_sse_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
 }
 
 pub(super) async fn forward_tunnel_request(
@@ -1375,17 +1370,38 @@ mod tests {
         TestTransport,
         Vec<crate::RequestObservationEvent>,
     ) {
+        run_observed_response(
+            path,
+            request_body,
+            status,
+            Some("text/event-stream"),
+            response_body,
+        )
+        .await
+    }
+
+    async fn run_observed_response(
+        path: &'static str,
+        request_body: &'static [u8],
+        status: StatusCode,
+        response_content_type: Option<&'static str>,
+        response_body: impl Into<String>,
+    ) -> (
+        anyhow::Result<()>,
+        TestTransport,
+        Vec<crate::RequestObservationEvent>,
+    ) {
         let response_body = response_body.into();
         let upstream = TestHttpServer::spawn(Router::new().route(
             path,
             post(move || {
                 let response_body = response_body.clone();
                 async move {
-                    AxumResponse::builder()
-                        .status(status)
-                        .header(CONTENT_TYPE, "text/event-stream")
-                        .body(Body::from(response_body))
-                        .unwrap()
+                    let mut response = AxumResponse::builder().status(status);
+                    if let Some(content_type) = response_content_type {
+                        response = response.header(CONTENT_TYPE, content_type);
+                    }
+                    response.body(Body::from(response_body)).unwrap()
                 }
             }),
         ))
@@ -1398,6 +1414,22 @@ mod tests {
         let result = forward_tunnel_request(&app, observed_request(path), &mut transport).await;
         let observations = observations.try_iter().collect();
         (result, transport, observations)
+    }
+
+    #[test]
+    fn sse_content_type_requires_an_exact_case_insensitive_media_type() {
+        for (value, expected) in [
+            ("text/event-stream", true),
+            ("Text/Event-Stream; charset=utf-8", true),
+            (" text/event-stream ; charset=utf-8", true),
+            ("text/event-streamfoo", false),
+            ("application/json", false),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, value.parse().unwrap());
+            assert_eq!(is_sse_content_type(&headers), expected, "{value}");
+        }
+        assert!(!is_sse_content_type(&HeaderMap::new()));
     }
 
     #[test]
@@ -1671,6 +1703,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exact_usage_corrects_prior_stream_estimates() {
+        let raw = concat!(
+            "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"one two three four five\"}}]}\n\n",
+            "data: {\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"completion_tokens\":3}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (result, _, observations) = run_observed_sse(
+            "/v1/chat/completions",
+            br#"{"messages":[],"stream":true}"#,
+            StatusCode::OK,
+            raw,
+        )
+        .await;
+        result.expect("exact usage should complete the SSE response");
+
+        let terminal = observations.last().unwrap().observation();
+        assert_eq!(terminal.state, crate::RequestObservationState::Complete);
+        assert_eq!(terminal.output_tokens, 3);
+        assert!(terminal.output_tokens_explicit);
+    }
+
+    #[tokio::test]
     async fn failed_responses_terminals_override_generated_output() {
         for (event_type, request_id_suffix) in [
             ("response.failed", "failed"),
@@ -1716,7 +1770,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eof_before_terminal_is_an_upstream_error_even_after_generated_output() {
+    async fn clean_eof_completes_only_after_generated_output() {
         let (output_result, _, output_observations) = run_observed_sse(
             "/v1/chat/completions",
             br#"{"messages":[],"stream":true}"#,
@@ -1724,15 +1778,10 @@ mod tests {
             "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n",
         )
         .await;
-        assert!(
-            output_result
-                .expect_err("truncated output stream should fail")
-                .to_string()
-                .contains("ended before a terminal event")
-        );
+        output_result.expect("clean EOF after generated output should complete");
         assert_eq!(
             output_observations.last().unwrap().observation().state,
-            crate::RequestObservationState::Failed
+            crate::RequestObservationState::Complete
         );
 
         let (metadata_result, _, metadata_observations) = run_observed_sse(
@@ -1746,11 +1795,57 @@ mod tests {
             metadata_result
                 .expect_err("truncated metadata stream should fail")
                 .to_string()
-                .contains("ended before a terminal event")
+                .contains("ended before generated output or a terminal event")
         );
         assert_eq!(
             metadata_observations.last().unwrap().observation().state,
             crate::RequestObservationState::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn observed_streaming_requires_an_sse_response_media_type() {
+        for content_type in [None, Some("application/json"), Some("text/event-streamfoo")] {
+            let (result, transport, observations) = run_observed_response(
+                "/v1/chat/completions",
+                br#"{"messages":[],"stream":true}"#,
+                StatusCode::OK,
+                content_type,
+                r#"{"message":"wrong response framing"}"#,
+            )
+            .await;
+            result.expect("the wire response should still be forwarded");
+
+            assert_eq!(
+                transport.response_events,
+                [bytes::Bytes::from_static(
+                    br#"{"message":"wrong response framing"}"#
+                )]
+            );
+            let terminal = observations.last().unwrap().observation();
+            assert_eq!(terminal.state, crate::RequestObservationState::Failed);
+            assert_eq!(terminal.output_messages, 0);
+            assert_eq!(terminal.time_to_first_output, None);
+            assert!(!observations.iter().any(|event| {
+                event.observation().state == crate::RequestObservationState::OutputGeneration
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn observed_streaming_accepts_case_insensitive_sse_media_type() {
+        let (result, _, observations) = run_observed_response(
+            "/v1/chat/completions",
+            br#"{"messages":[],"stream":true}"#,
+            StatusCode::OK,
+            Some("Text/Event-Stream; charset=utf-8"),
+            "data: [DONE]\n\n",
+        )
+        .await;
+        result.expect("valid SSE media type should use the streaming relay");
+        assert_eq!(
+            observations.last().unwrap().observation().state,
+            crate::RequestObservationState::Complete
         );
     }
 }

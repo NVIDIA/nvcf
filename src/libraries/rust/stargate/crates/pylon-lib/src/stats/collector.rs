@@ -746,22 +746,6 @@ mod tests {
         aggregator.apply_fallback_observation(&event)
     }
 
-    fn apply_fallback_observation_with_input_processing_duration(
-        aggregator: &mut StatsAggregator,
-        observation: &RequestObservation,
-        duration: Duration,
-    ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
-        let mut event = aggregator
-            .runtime_state
-            .transition_request_observation(observation.clone());
-        let submitted_at = std::time::Instant::now();
-        event.input_interval = Some(crate::runtime_state::RequestInputInterval {
-            submitted_at,
-            first_generated_output_at: submitted_at + duration,
-        });
-        aggregator.apply_fallback_observation(&event)
-    }
-
     fn apply_stream_observation(
         aggregator: &mut StatsAggregator,
         observation: &RequestObservation,
@@ -1141,23 +1125,6 @@ mod tests {
                 assert_stats!(stats; $($field: $expected),+);
             }
         };
-    }
-
-    #[test]
-    fn fallback_input_tps_uses_backend_submission_interval() {
-        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
-        for index in 0..5 {
-            apply_fallback_observation_with_input_processing_duration(
-                &mut aggregator,
-                &identified(
-                    completed_observation(100, 1, 10, seconds(10), seconds(12)),
-                    format!("req-input-interval-{index}"),
-                ),
-                seconds(2),
-            );
-        }
-
-        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
     }
 
     #[test]
@@ -2153,20 +2120,6 @@ mod tests {
         completed_observation(120, 6, 30, seconds(3), seconds(9));
         last_mean_input_tps: 0.0, output_tps: 5.0, max_output_tps: 5.0
     );
-
-    #[test]
-    fn fallback_output_tps_excludes_downstream_delivery_delay() {
-        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
-        let observation = completed_observation(120, 6, 100, seconds(1), seconds(11));
-        let mut event = aggregator
-            .runtime_state
-            .transition_request_observation(observation);
-        event.upstream_duration = Some(seconds(2));
-
-        let stats = published_stats(aggregator.apply_fallback_observation(&event));
-
-        assert_stats!(stats; output_tps: 100.0, max_output_tps: 100.0);
-    }
 
     fallback_snapshot_test!(
         ignores_observations_below_duration_floor,

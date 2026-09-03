@@ -17,12 +17,12 @@ use std::time::{Duration, Instant};
 
 use crate::DEFAULT_MAX_SSE_BUFFER_BYTES;
 use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
-use crate::output_token_parser::{OutputTokenParser, OutputTokenProgress};
+use crate::output_token_parser::OutputTokenParser;
 use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
 };
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
-use crate::sse_message_stream::{SseMessage, upstream_sse_message_stream};
+use crate::sse_message_stream::{RelayOutcome, upstream_sse_message_stream};
 use crate::upstream_health::UpstreamHealthPaths;
 use crate::upstream_url::upstream_endpoint;
 use futures::StreamExt;
@@ -156,30 +156,32 @@ pub(super) async fn send_canary_request(
     let mut observed_tokens = 0_u64;
     let mut completed = false;
     while let Some(message) = messages.next().await {
-        match message
-            .map_err(|error| BringupError::InvalidResponse(error.to_string()))?
-            .message
+        let message = message.map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
+        if let Some(generated_output) = message.facts.generated_output
+            && let Some(delta) = output_tokens
+                .observe_estimated_output_tokens(generated_output.estimated_token_units)
         {
-            SseMessage::Done => {
+            observed_tokens = observed_tokens.saturating_add(delta);
+        }
+        if let Some(tokens) = message
+            .facts
+            .exact_usage
+            .and_then(|usage| usage.output_tokens)
+        {
+            observed_tokens = output_tokens.observe_exact_output_tokens(tokens);
+        }
+        if observed_tokens > u64::from(canary_max_generation_threshold) {
+            return Err(BringupError::RunawayGeneration {
+                tokens: u32::try_from(observed_tokens).unwrap_or(u32::MAX),
+            });
+        }
+        match message.facts.terminal {
+            Some(RelayOutcome::Complete) => {
                 completed = true;
                 break;
             }
-            SseMessage::ChatCompletionChunk { parsed } => {
-                if let Some(progress) = output_tokens.observe_json(parsed.as_ref()) {
-                    observed_tokens = match progress {
-                        OutputTokenProgress::ExplicitCumulative { tokens, .. } => tokens,
-                        OutputTokenProgress::EstimatedDelta { delta } => {
-                            observed_tokens.saturating_add(delta)
-                        }
-                    };
-                    if observed_tokens > u64::from(canary_max_generation_threshold) {
-                        return Err(BringupError::RunawayGeneration {
-                            tokens: u32::try_from(observed_tokens).unwrap_or(u32::MAX),
-                        });
-                    }
-                }
-            }
-            SseMessage::OtherData => {}
+            Some(RelayOutcome::Failed) => break,
+            None => {}
         }
     }
     if !completed || observed_tokens == 0 {
@@ -241,7 +243,7 @@ pub(super) async fn send_completion_request(
         let response = http_client.execute(request).await?;
 
         let status = response.status();
-        observe_response_headers(&mut observer, &response, status);
+        observe_response_headers(&mut observer, status);
         let response = ensure_success(response).await?;
         let body = response.bytes().await?;
         serde_json::from_slice::<ChatCompletionResponse>(&body)
@@ -262,13 +264,9 @@ pub(super) async fn send_completion_request(
     }
 }
 
-fn observe_response_headers(
-    observer: &mut Option<TunnelRequestObserver>,
-    response: &reqwest::Response,
-    status: StatusCode,
-) {
+fn observe_response_headers(observer: &mut Option<TunnelRequestObserver>, status: StatusCode) {
     if let Some(observer) = observer {
-        observer.on_upstream_response_headers(response.headers(), status.as_u16());
+        observer.on_upstream_response_headers(status.as_u16());
     }
 }
 

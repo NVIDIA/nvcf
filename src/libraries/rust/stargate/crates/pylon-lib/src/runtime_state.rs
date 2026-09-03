@@ -95,7 +95,15 @@ pub struct RequestObservationEvent {
     pub(crate) observation: RequestObservation,
     pub(crate) generation: Option<ModelGeneration>,
     pub(crate) changed_generations: Vec<ModelGeneration>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by the stacked throughput projection")
+    )]
     pub(crate) input_interval: Option<RequestInputInterval>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by the stacked throughput projection")
+    )]
     pub(crate) upstream_duration: Option<Duration>,
 }
 
@@ -103,13 +111,6 @@ pub struct RequestObservationEvent {
 pub(crate) struct RequestInputInterval {
     pub(crate) submitted_at: Instant,
     pub(crate) first_generated_output_at: Instant,
-}
-
-impl RequestInputInterval {
-    pub(crate) fn duration(self) -> Duration {
-        self.first_generated_output_at
-            .saturating_duration_since(self.submitted_at)
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -612,17 +613,12 @@ impl RequestObservationEvent {
         self.observation
     }
 
-    pub(crate) fn input_processing_duration(&self) -> Option<Duration> {
-        self.input_interval().map(RequestInputInterval::duration)
-    }
-
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by the stacked throughput projection")
+    )]
     pub(crate) fn input_interval(&self) -> Option<RequestInputInterval> {
         self.input_interval
-    }
-
-    pub(crate) fn output_duration(&self) -> Duration {
-        self.upstream_duration
-            .unwrap_or(self.observation.total_duration)
     }
 }
 

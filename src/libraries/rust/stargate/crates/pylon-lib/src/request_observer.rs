@@ -15,6 +15,7 @@
 
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use reqwest::header::HeaderMap;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
@@ -218,11 +219,7 @@ impl RequestObserver {
         self.emit();
     }
 
-    pub(crate) fn on_upstream_response_headers(
-        &mut self,
-        _response_headers: &HeaderMap,
-        status: u16,
-    ) {
+    pub(crate) fn on_upstream_response_headers(&mut self, status: u16) {
         let backend = Self::backend_mut(&mut self.state, &self.request_id, "response-header");
         if backend.response_headers_at.is_some() {
             return;
@@ -596,7 +593,7 @@ mod tests {
         recv_observation(&rx, "initial observation should be emitted").await;
         observer.submit_now();
         recv_observation(&rx, "backend-submission observation should be emitted").await;
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         let headers = recv_observation(&rx, "response-header observation should be emitted").await;
         (observer, rx, headers)
     }
@@ -748,7 +745,7 @@ mod tests {
                 runtime_state,
             );
             observer.on_backend_submission(Instant::now());
-            observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+            observer.on_upstream_response_headers(200);
             if let Some(generation) = observer.generation_mut() {
                 generation.observe_output_message();
             }
@@ -797,7 +794,7 @@ mod tests {
         let mut observer = RequestObserver::accepted(embeddings_required_headers(), runtime_state);
         observer.update_embedding_items(Some(1));
         observer.submit_now();
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         observer.finish();
         while rx.try_recv().is_ok() {}
 
@@ -825,7 +822,7 @@ mod tests {
     async fn counts_sse_events_across_chunk_boundaries() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
         observer.submit_now();
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         observer.observe_output_message();
         observer.observe_output_message();
         observer.finish();
@@ -854,7 +851,7 @@ mod tests {
         assert_eq!(submitted.state, RequestObservationState::InputProcessing);
         assert_eq!(submitted.upstream_status, None);
 
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         let first = recv_observation(&rx, "response-header observation should be emitted").await;
         assert_eq!(first.state, RequestObservationState::InputProcessing);
         assert!(!first.is_terminal());
@@ -879,15 +876,15 @@ mod tests {
             submitted.observation().state,
             RequestObservationState::InputProcessing
         );
-        assert_eq!(submitted.input_processing_duration(), None);
+        assert_eq!(submitted.input_interval(), None);
 
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         let headers = rx.try_recv().unwrap();
         assert_eq!(
             headers.observation().state,
             RequestObservationState::InputProcessing
         );
-        assert_eq!(headers.input_processing_duration(), None);
+        assert_eq!(headers.input_interval(), None);
 
         let first_generated_output_at = submitted_at + Duration::from_millis(10);
         observer.observe_generated_output(first_generated_output_at, true);
@@ -899,26 +896,13 @@ mod tests {
                 first_generated_output_at,
             })
         );
-        assert_eq!(
-            output.input_processing_duration(),
-            Some(Duration::from_millis(10))
-        );
-
         observer.observe_output_tokens(2);
         let tokens = rx.try_recv().unwrap();
         assert_eq!(tokens.input_interval(), output.input_interval());
-        assert_eq!(
-            tokens.input_processing_duration(),
-            Some(Duration::from_millis(10))
-        );
 
         observer.complete();
         let terminal = rx.try_recv().unwrap();
         assert_eq!(terminal.input_interval(), output.input_interval());
-        assert_eq!(
-            terminal.input_processing_duration(),
-            Some(Duration::from_millis(10))
-        );
     }
 
     #[test]
@@ -949,7 +933,7 @@ mod tests {
         observer.observe_upstream_event(first_output_at);
         observer.observe_generated_output(first_output_at, true);
         let output = rx.try_recv().unwrap();
-        assert_eq!(output.output_duration(), Duration::from_secs(1));
+        assert_eq!(output.upstream_duration, Some(Duration::from_secs(1)));
 
         observer.observe_output_tokens(100);
         rx.try_recv().unwrap();
@@ -957,7 +941,7 @@ mod tests {
         observer.complete();
         let terminal = rx.try_recv().unwrap();
 
-        assert_eq!(terminal.output_duration(), Duration::from_secs(2));
+        assert_eq!(terminal.upstream_duration, Some(Duration::from_secs(2)));
         assert!(terminal.observation().total_duration >= Duration::from_secs(9));
     }
 
@@ -994,7 +978,7 @@ mod tests {
     async fn accumulates_output_tokens() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
         observer.submit_now();
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         observer.observe_output_message();
         observer.observe_output_tokens(3);
         observer.observe_output_message();
@@ -1240,7 +1224,7 @@ mod tests {
     fn explicit_success_can_complete_without_output() {
         let mut observer = test_observer("req-2", PylonRuntimeState::default());
         observer.submit_now();
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         observer.finish();
         assert_eq!(
             observer.state.observation_state(),
@@ -1254,7 +1238,7 @@ mod tests {
     fn terminalization_is_idempotent() {
         let mut observer = make_test_observer();
         observer.submit_now();
-        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        observer.on_upstream_response_headers(200);
         observer.observe_output_message();
         observer.finish();
         observer.fail();
@@ -1284,7 +1268,7 @@ mod tests {
             terminalize(&mut observer);
 
             let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+                observer.on_upstream_response_headers(200);
             }))
             .expect_err("response headers after terminal state should panic");
 
@@ -1297,7 +1281,7 @@ mod tests {
         assert_terminal_response_header_panic(
             |observer| {
                 observer.submit_now();
-                observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+                observer.on_upstream_response_headers(200);
                 observer.observe_output_message();
                 observer.finish();
             },
@@ -1311,7 +1295,7 @@ mod tests {
     async fn failed_response_stays_failed() {
         let mut observer = test_observer("req-3", PylonRuntimeState::default());
         observer.submit_now();
-        observer.on_upstream_response_headers(&HeaderMap::new(), 503);
+        observer.on_upstream_response_headers(503);
         observer.fail();
 
         let response = response(&observer);
