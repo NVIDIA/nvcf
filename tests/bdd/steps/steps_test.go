@@ -1492,6 +1492,39 @@ func TestCommandOutputAssertionsRejectValuesThatInterpolateToEmpty(t *testing.T)
 	}
 }
 
+func TestCommandOutputShouldNotMatchRejectsDashedPodIPAlias(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	const pattern = `([0-9]{1,3}-){3}[0-9]{1,3}\.`
+
+	sc.LastResult = harness.Result{Stdout: "llm-request-router-region-b-0.nvcf.svc.cluster.local"}
+	if err := sc.commandOutputShouldNotMatch(pattern); err != nil {
+		t.Fatalf("stable identity should pass: %v", err)
+	}
+
+	sc.LastResult = harness.Result{Stdout: "10-42-0-7.llm-request-router-region-b-headless.nvcf.svc.cluster.local"}
+	if err := sc.commandOutputShouldNotMatch(pattern); err == nil {
+		t.Fatal("expected dashed pod-IP alias failure")
+	}
+}
+
+func TestCommandOutputShouldHaveDistinctMatchesCountsUniqueIdentities(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	sc.LastResult = harness.Result{
+		Stdout: "llm-request-router-region-b-0 llm-request-router-region-b-1 llm-request-router-region-b-0",
+	}
+
+	if err := sc.commandOutputShouldHaveDistinctMatches(2, "llm-request-router-region-b-[0-9]+"); err != nil {
+		t.Fatalf("two distinct identities should pass: %v", err)
+	}
+	err := sc.commandOutputShouldHaveDistinctMatches(3, "llm-request-router-region-b-[0-9]+")
+	if err == nil {
+		t.Fatal("expected distinct match count failure")
+	}
+	if !strings.Contains(err.Error(), "want 3") {
+		t.Fatalf("error = %q, want expected-count detail", err)
+	}
+}
+
 func TestISuccessfullyObserveWatchStargatesRunsExplicitCommand(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0, Stdout: "{\n  \"stargates\": []\n}\n"}

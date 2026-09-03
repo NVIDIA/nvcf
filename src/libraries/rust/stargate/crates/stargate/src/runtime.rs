@@ -45,7 +45,7 @@ use server_tasks::{
     spawn_model_discovery_grpc_server,
 };
 
-pub const DEFAULT_READINESS_WARMUP: Duration = Duration::from_secs(60);
+pub use crate::http_proxy::ReadinessState;
 
 pub struct StargateRuntimeConfig {
     /// Stable process/pod identity used in logs, metrics, and routing snapshots.
@@ -56,8 +56,6 @@ pub struct StargateRuntimeConfig {
     pub model_discovery_listen_addr: SocketAddr,
     /// Local HTTP socket for OpenAI-compatible proxy traffic and health probes.
     pub http_listen_addr: SocketAddr,
-    /// Minimum runtime age before the HTTP readiness endpoint accepts traffic.
-    pub readiness_warmup: Duration,
     /// Optional local TCP socket for Prometheus metrics.
     pub metrics_listen_addr: Option<SocketAddr>,
     /// Discovery address before hostname rendering; outside Kubernetes this is usually `WatchStargates.stargates[*].advertise_addr`.
@@ -86,6 +84,19 @@ pub struct StargateRuntimeConfig {
     pub forwarding: Option<Arc<dyn ForwardingResolver>>,
     /// Authenticates worker registrations and tunneled requests.
     pub authenticator: Arc<dyn WorkerAuthenticator>,
+    /// Startup readiness warmup configuration.
+    pub warmup: WarmupConfig,
+}
+
+/// Startup readiness warmup and stabilization configuration.
+#[derive(Clone, Debug)]
+pub struct WarmupConfig {
+    /// Maximum warmup duration. Zero disables warmup entirely.
+    pub warmup_duration: Duration,
+    /// How often the stabilization sampler polls the active backend count.
+    pub sample_interval: Duration,
+    /// Number of consecutive stable nonzero samples required to promote readiness.
+    pub stabilization_window: u32,
 }
 
 pub struct ReverseTunnelConfig {
@@ -346,9 +357,19 @@ impl StargateRuntime {
             authenticator: self.config.authenticator,
         });
 
+        let (readiness, ready_token) = if self.config.warmup.warmup_duration.is_zero() {
+            (ReadinessState::already_ready(), None)
+        } else {
+            let token = tokio_util::sync::CancellationToken::new();
+            (ReadinessState::warming_up(token.clone()), Some(token))
+        };
+
         let proxy_router = make_router(ProxyAppState {
             state: service.state(),
-            traffic: ProxyTrafficState::new(tasks.shutdown_signal(), self.config.readiness_warmup),
+            traffic: ProxyTrafficState {
+                shutdown: tasks.shutdown_signal(),
+            },
+            readiness: readiness.clone(),
             quic_proxy,
             lb_router,
             metrics: metrics.clone(),
@@ -366,6 +387,22 @@ impl StargateRuntime {
                 direct_quic_connections: self.config.proxy_transport.quic.direct_quic_connections,
             },
         });
+
+        // Spawn the warmup stabilization sampler when a nonzero warmup window is configured.
+        if let Some(ready_token) = ready_token {
+            let warmup_state = shared_state.clone();
+            let warmup_config = self.config.warmup.clone();
+            let shutdown = tasks.shutdown_signal();
+            tasks.task_tracker().spawn(async move {
+                run_warmup_stabilization(
+                    warmup_state,
+                    warmup_config,
+                    ready_token,
+                    shutdown,
+                )
+                .await;
+            });
+        }
 
         if let Some(metrics_listener) = metrics_listener {
             let metrics_registry = metrics.registry();
@@ -385,6 +422,17 @@ impl StargateRuntime {
             metrics,
             state: shared_state,
         })
+    }
+}
+
+/// Warmup disabled by default; `warmup_duration` of zero means the replica is ready immediately.
+impl Default for WarmupConfig {
+    fn default() -> Self {
+        Self {
+            warmup_duration: Duration::ZERO,
+            sample_interval: Duration::from_secs(1),
+            stabilization_window: 5,
+        }
     }
 }
 
@@ -488,6 +536,65 @@ impl ReverseTunnelConfig {
     }
 }
 
+/// Runs the warmup stabilization sampler; cancels `ready_token` on stabilization or timeout.
+async fn run_warmup_stabilization(
+    state: Arc<StargateState>,
+    config: WarmupConfig,
+    ready_token: tokio_util::sync::CancellationToken,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    let deadline = tokio::time::sleep(config.warmup_duration);
+    tokio::pin!(deadline);
+
+    let mut stable_count: u32 = 0;
+    let mut last_backend_count: Option<usize> = None;
+    let mut sample_interval = tokio::time::interval(config.sample_interval);
+    sample_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Skip the first tick which fires immediately.
+    sample_interval.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+            // Fixed-window upper bound: promote unconditionally when time runs out.
+            () = &mut deadline => {
+                tracing::info!(
+                    warmup_ms = config.warmup_duration.as_millis(),
+                    "readiness warmup window elapsed; promoting replica to ready"
+                );
+                ready_token.cancel();
+                return;
+            }
+            // Shutdown: cancel the token so the pod does not get stuck not-ready during teardown.
+            () = shutdown.cancelled() => {
+                ready_token.cancel();
+                return;
+            }
+            // Stabilization sample.
+            _ = sample_interval.tick() => {
+                let count = state.total_active_backend_count().await;
+                let stable = last_backend_count == Some(count) && count > 0;
+                if stable {
+                    stable_count = stable_count.saturating_add(1);
+                } else {
+                    stable_count = 0;
+                }
+                last_backend_count = Some(count);
+
+                if stable_count >= config.stabilization_window {
+                    tracing::info!(
+                        active_backends = count,
+                        stable_samples = stable_count,
+                        "backend count stabilized; promoting replica to ready before warmup window elapses"
+                    );
+                    ready_token.cancel();
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,7 +610,6 @@ mod tests {
             grpc_listen_addr: "127.0.0.1:0".parse().unwrap(),
             model_discovery_listen_addr: "127.0.0.1:0".parse().unwrap(),
             http_listen_addr: "127.0.0.1:0".parse().unwrap(),
-            readiness_warmup: DEFAULT_READINESS_WARMUP,
             metrics_listen_addr: None,
             advertise_addr: "127.0.0.1:0".parse().unwrap(),
             stargate_discovery_dns_name: "localhost".to_string(),
@@ -533,6 +639,7 @@ mod tests {
             metrics_prefix: crate::metrics::DEFAULT_PREFIX.to_string(),
             forwarding: None,
             authenticator: Arc::new(crate::auth::OpenAuthenticator),
+            warmup: WarmupConfig::default(),
         }
     }
 
@@ -810,5 +917,63 @@ mod tests {
             );
             interval.tick().await;
         }
+    }
+
+    #[tokio::test]
+    async fn warmup_stabilization_promotes_after_fixed_window_with_no_backends() {
+        let state = Arc::new(StargateState::new());
+        let ready_token = tokio_util::sync::CancellationToken::new();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+
+        let config = WarmupConfig {
+            warmup_duration: Duration::from_millis(50),
+            sample_interval: Duration::from_millis(10),
+            stabilization_window: 100, // very high: timeout fires first
+        };
+
+        assert!(
+            !ready_token.is_cancelled(),
+            "ready token should start uncancelled"
+        );
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            run_warmup_stabilization(state, config, ready_token.clone(), shutdown),
+        )
+        .await
+        .expect("warmup task should complete within timeout");
+
+        assert!(
+            ready_token.is_cancelled(),
+            "ready token should be cancelled after warmup window"
+        );
+    }
+
+    #[tokio::test]
+    async fn warmup_stabilization_cancels_ready_token_on_shutdown() {
+        let state = Arc::new(StargateState::new());
+        let ready_token = tokio_util::sync::CancellationToken::new();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+
+        // Trigger shutdown immediately; ready_token must still be cancelled.
+        shutdown.cancel();
+
+        let config = WarmupConfig {
+            warmup_duration: Duration::from_secs(60), // long window: shutdown fires first
+            sample_interval: Duration::from_millis(10),
+            stabilization_window: 5,
+        };
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            run_warmup_stabilization(state, config, ready_token.clone(), shutdown),
+        )
+        .await
+        .expect("warmup task should complete on shutdown");
+
+        assert!(
+            ready_token.is_cancelled(),
+            "ready token should be cancelled when shutdown fires during warmup"
+        );
     }
 }

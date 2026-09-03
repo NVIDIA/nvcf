@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "segment",
+    srcs = ["segment.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "segment_test",
+    srcs = ["segment_test.go"],
+    embed = [":segment"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":segment",
+    visibility = ["//visibility:public"],
+)

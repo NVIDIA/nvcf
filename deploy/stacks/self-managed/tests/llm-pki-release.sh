@@ -132,7 +132,16 @@ if ! render_pki_image_case default-image-tag \
   cat "$work_dir/default-image-tag.log" >&2
   fail "managed LLM PKI must render when both PKI image tags are omitted"
 fi
-assert_pki_image_case default-image-tag 0.16.2
+# Read the compatible-stack-default tag from global.yaml.gotmpl itself rather
+# than hardcoding it, so this check does not need updating every time the
+# floor is bumped.
+default_pki_tag="$(
+  (grep '\$pkiImageTag :=' "$stack_dir/global.yaml.gotmpl" || true) |
+    sed 's/.*default "\([^"]*\)".*/\1/'
+)"
+test -n "$default_pki_tag" ||
+  fail "could not read the default LLM PKI image tag from global.yaml.gotmpl"
+assert_pki_image_case default-image-tag "$default_pki_tag"
 
 render_pki_image_case legacy-image-tag \
   --state-values-set-string openbao.migrations.image.tag=legacy-tag \

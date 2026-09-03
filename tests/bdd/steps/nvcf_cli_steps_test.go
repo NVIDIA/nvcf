@@ -20,6 +20,8 @@ package steps
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +119,76 @@ func TestNVCFCLIInvocationAdaptersExposeAllArguments(t *testing.T) {
 				t.Fatalf("runs = %+v, want command %q", fake.runs, test.want)
 			}
 		})
+	}
+}
+
+func TestVanityGatewayInvocationUsesExactHostAndKeepsAPIKeyOutOfCommand(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sc.NVCFCLIConfig = "config.yaml"
+	const apiKey = "sensitive-function-api-key"
+	statePath := filepath.Join(home, ".nvcf-cli.config.state")
+	if err := os.WriteFile(statePath, []byte(`{"apiKey":"`+apiKey+`"}`), 0o600); err != nil {
+		t.Fatalf("write CLI state: %v", err)
+	}
+	fake.result = harness.Result{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`}
+
+	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
+		context.Background(),
+		"vanity.localhost",
+		"/bdd/echo",
+		"120",
+		&godog.DocString{Content: `{"message":"vanity"}`},
+	)
+	if err != nil {
+		t.Fatalf("invoke through Vanity Gateway: %v", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %+v, want one request", fake.runs)
+	}
+	run := fake.runs[0]
+	for _, expected := range []string{
+		"curl --silent --show-error --fail-with-body",
+		"Host: vanity.localhost",
+		"Content-Type: application/json",
+		`{"message":"vanity"}`,
+		"--retry 24 --retry-all-errors --retry-delay 5 --retry-max-time 120",
+		"http://127.0.0.1:8080/bdd/echo",
+	} {
+		if !strings.Contains(run.command, expected) {
+			t.Fatalf("command = %q, want %q", run.command, expected)
+		}
+	}
+	if strings.Contains(run.command, apiKey) {
+		t.Fatalf("command contains function API key: %q", run.command)
+	}
+	if run.sensitiveStdin != apiKey {
+		t.Fatalf("sensitive stdin length = %d, want %d", len(run.sensitiveStdin), len(apiKey))
+	}
+}
+
+func TestFunctionAPIKeyGenerationSuppressesSecretBearingStdout(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 0}
+	options := docTable(t, [][]string{
+		{"option", "value"},
+		{"--description", "bdd key"},
+	})
+
+	if err := sc.iSuccessfullyGenerateFunctionAPIKey(context.Background(), options); err != nil {
+		t.Fatalf("generate function API key: %v", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %+v, want one request", fake.runs)
+	}
+	command := fake.runs[0].command
+	for _, expected := range []string{"/bin/sh -c", `exec "$@" >/dev/null`, "api-key generate --for function", "--description 'bdd key'"} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("command = %q, want %q", command, expected)
+		}
 	}
 }
 

@@ -28,7 +28,6 @@ use super::reverse::{
     reverse_quic_dial_candidates, reverse_quic_sni,
 };
 use super::*;
-use std::collections::BTreeMap;
 use std::error::Error as _;
 use std::fs;
 use std::net::SocketAddr;
@@ -62,101 +61,11 @@ use crate::request_observer::{
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
 use crate::runtime_state::ModelGeneration;
 use crate::stats::PylonMetrics;
+use crate::test_support::{
+    RecordingTracingSubscriber, assert_tracing_event_field, tracing_event_by_message,
+};
 use crate::upstream_health::UpstreamHealthPaths;
 use crate::{PylonRuntimeState, StatsCollectorConfig, start_stats_collector};
-
-#[derive(Clone, Default)]
-struct RecordingDebugSubscriber {
-    events: Arc<std::sync::Mutex<Vec<BTreeMap<String, String>>>>,
-}
-
-impl RecordingDebugSubscriber {
-    fn take_events(&self) -> Vec<BTreeMap<String, String>> {
-        std::mem::take(
-            &mut *self
-                .events
-                .lock()
-                .expect("recorded tracing events should not be poisoned"),
-        )
-    }
-}
-
-fn event_by_message<'a>(
-    events: &'a [BTreeMap<String, String>],
-    message: &str,
-) -> &'a BTreeMap<String, String> {
-    events
-        .iter()
-        .find(|event| event.get("message").map(String::as_str) == Some(message))
-        .unwrap_or_else(|| panic!("missing tracing event {message:?}"))
-}
-
-fn assert_event_field(event: &BTreeMap<String, String>, field: &str, expected: &str) {
-    assert_eq!(
-        event.get(field).map(String::as_str),
-        Some(expected),
-        "unexpected {field} field in {event:?}"
-    );
-}
-
-impl tracing::Subscriber for RecordingDebugSubscriber {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.level() <= &tracing::Level::DEBUG
-    }
-
-    fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-
-    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut visitor = RecordingFieldVisitor::default();
-        event.record(&mut visitor);
-        self.events
-            .lock()
-            .expect("recorded tracing events should not be poisoned")
-            .push(visitor.fields);
-    }
-
-    fn enter(&self, _span: &tracing::span::Id) {}
-
-    fn exit(&self, _span: &tracing::span::Id) {}
-}
-
-#[derive(Default)]
-struct RecordingFieldVisitor {
-    fields: BTreeMap<String, String>,
-}
-
-impl tracing::field::Visit for RecordingFieldVisitor {
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.fields
-            .insert(field.name().to_string(), format!("{value:?}"));
-    }
-}
 
 type TestWebTransportConnectStream = h3::client::RequestStream<
     <h3_quinn::OpenStreams as h3::quic::OpenStreams<Bytes>>::BidiStream,
@@ -3270,7 +3179,7 @@ async fn reverse_quic_endpoint_connect_logs_attempt_resolution_and_connection_me
     );
     config.quic_insecure = true;
     config.tunnel_protocol = TunnelTransportProtocol::Http3;
-    let subscriber = RecordingDebugSubscriber::default();
+    let subscriber = RecordingTracingSubscriber::default();
     let reverse_connection = {
         let dispatch = tracing::Dispatch::new(subscriber.clone());
         let _default_guard = tracing::dispatcher::set_default(&dispatch);
@@ -3281,28 +3190,30 @@ async fn reverse_quic_endpoint_connect_logs_attempt_resolution_and_connection_me
 
     let events = subscriber.take_events();
     let server_addr = server_addr.to_string();
-    let attempt_event = event_by_message(&events, "attempting Stargate reverse QUIC connection");
-    assert_event_field(attempt_event, "target_addr", &server_addr);
-    assert_event_field(attempt_event, "tunnel_protocol", "http3");
-    assert_event_field(attempt_event, "alpn_protocols", "[\"h3\"]");
-    assert_event_field(attempt_event, "quic_insecure", "true");
-    let resolved_event = event_by_message(&events, "resolved Stargate reverse QUIC target");
+    let attempt_event =
+        tracing_event_by_message(&events, "attempting Stargate reverse QUIC connection");
+    assert_tracing_event_field(attempt_event, "target_addr", &server_addr);
+    assert_tracing_event_field(attempt_event, "tunnel_protocol", "http3");
+    assert_tracing_event_field(attempt_event, "alpn_protocols", "[\"h3\"]");
+    assert_tracing_event_field(attempt_event, "quic_insecure", "true");
+    let resolved_event = tracing_event_by_message(&events, "resolved Stargate reverse QUIC target");
     let expected_candidates = format!("[{server_addr}]");
-    assert_event_field(resolved_event, "dial_candidates", &expected_candidates);
-    assert_event_field(resolved_event, "tunnel_protocol", "http3");
-    assert_event_field(resolved_event, "alpn_protocols", "[\"h3\"]");
-    assert_event_field(resolved_event, "quic_insecure", "true");
-    let connected_event = event_by_message(&events, "Stargate reverse QUIC connection established");
-    assert_event_field(connected_event, "transport", "quic");
+    assert_tracing_event_field(resolved_event, "dial_candidates", &expected_candidates);
+    assert_tracing_event_field(resolved_event, "tunnel_protocol", "http3");
+    assert_tracing_event_field(resolved_event, "alpn_protocols", "[\"h3\"]");
+    assert_tracing_event_field(resolved_event, "quic_insecure", "true");
+    let connected_event =
+        tracing_event_by_message(&events, "Stargate reverse QUIC connection established");
+    assert_tracing_event_field(connected_event, "transport", "quic");
     for field in ["target_addr", "dial_target", "remote_addr"] {
-        assert_event_field(connected_event, field, &server_addr);
+        assert_tracing_event_field(connected_event, field, &server_addr);
     }
     assert!(
-        connected_event.contains_key("stable_id"),
+        connected_event.fields.contains_key("stable_id"),
         "connected event should include the Quinn stable connection id"
     );
     assert!(
-        connected_event.contains_key("stats"),
+        connected_event.fields.contains_key("stats"),
         "connected event should include Quinn connection stats"
     );
 

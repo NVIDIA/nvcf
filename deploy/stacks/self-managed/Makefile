@@ -8,6 +8,7 @@ test:
 	@tests/llm-router-local-chart.sh
 	@tests/llm-servicemonitor-defaults.sh
 	@tests/gateway-routes-local-chart.sh
+	@tests/gateway-routes-enable-wiring.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh
@@ -20,6 +21,8 @@ test:
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
+	@tests/apikeys-env-wiring.sh
+	@tests/ess-base-url-wiring.sh
 	@tests/nats-placement-tags.sh
 
 test-published-charts:

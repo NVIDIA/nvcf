@@ -15,6 +15,8 @@
 
 .PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-cluster-lifecycle-make test-destroy-all-ncp-local test-multicluster-make test-validate-gateway-route setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
 
+.PHONY: test-gateway-timeout-compatibility
+
 # === Cluster Configuration ===
 CLUSTER_NAME := ncp-local
 K3D_CONFIG_FILE := k3d-config.yaml
@@ -314,6 +316,9 @@ test-destroy-all-ncp-local: ## Run dry Makefile tests for host-wide local-cluste
 
 test-validate-gateway-route: ## Run Gateway route retry tests
 	@tests/test-validate-gateway-route.sh
+
+test-gateway-timeout-compatibility: ## Run Envoy Gateway timeout capability tests
+	@tests/test-gateway-timeout-compatibility.sh
 
 # --- Load Balancer & Gateway API Setup ---
 setup-gateway-api:

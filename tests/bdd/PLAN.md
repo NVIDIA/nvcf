@@ -130,7 +130,7 @@ They preserve the real command output for subsequent assertions.
 
 | Step | Command |
 |------|---------|
-| `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority, and requires a streamed response before accepting the expected client deadline. |
+| `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority with W3C trace context propagated through a generated `traceparent` header, and requires a streamed response before accepting the expected client deadline. |
 
 #### Function lifecycle command adapters
 
@@ -155,10 +155,11 @@ original order. Repeated options and empty values are preserved.
 | `Given I use NVCF CLI config {string}` | Interpolates and stores the supplied config argument without resolving or checking the path. Later lifecycle steps pass it to `--config`. |
 | `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
 | `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
-| `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows. |
+| `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows and suppresses secret-bearing stdout. |
 | `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
 | `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
 | `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
+| `When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host {string} path {string} with timeout {string} seconds:` (JSON docstring) | Sends an exact-host HTTP request through the local Envoy listener with the saved function API key passed over sensitive stdin, never argv or command logs. |
 | `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. |
 
 ### Assertions (Then / And)
@@ -169,6 +170,8 @@ original order. Repeated options and empty values are preserved.
 | `Then the command should fail` | Requires a non-zero last-run exit code. It does not accept a runner error that prevented command execution and never records the failed command in the successful-command cache. |
 | `Then the command output should contain {string}` | Substring match on combined stdout + stderr. The interpolated value must not be empty or whitespace-only. |
 | `Then the command output should not contain {string}` | Negative substring match. The interpolated value must not be empty or whitespace-only. |
+| `Then the command output should not match {string}` | Negative Go regular-expression match on combined stdout + stderr. The interpolated pattern must be non-empty and compile. Use it for shapes a fixed string cannot express, such as a dashed pod-IP hostname alias. |
+| `Then the command output should have exactly {string} distinct matches of {string}` | Counts unique substrings matched by the interpolated Go regular expression in combined stdout + stderr. Repeated occurrences of the same substring count once. |
 | `Then the command output should contain all:` (table) | Requires a `text` header and one or more strings. Every interpolated string must be non-empty and appear in combined stdout + stderr. |
 | `Then the command output should contain one of:` (table) | Requires a `text` header and one or more strings. Every interpolated candidate must be non-empty, and at least one must appear in combined stdout + stderr. |
 | `Then file {string} should exist` | |

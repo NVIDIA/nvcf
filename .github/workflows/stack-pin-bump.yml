@@ -49,6 +49,10 @@ jobs:
           # would carry whatever the stack looked like then onto a branch cut
           # from today's main.
           ref: ${{ github.event.repository.default_branch }}
+          # The shared bump branch can predate new release metadata. Its pin
+          # commits must be rebased onto the complete default-branch history
+          # before the resolver runs there.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -86,6 +90,7 @@ jobs:
         if: steps.tag.outputs.applies == 'true'
         env:
           BRANCH: chore/stack-pin-bumps
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           # The bump is applied ON the pull request branch, not on the default
@@ -94,15 +99,11 @@ jobs:
           # a bump for the same pin, and a swallowed stash conflict either drops
           # that earlier bump or commits conflict markers. Starting here also
           # makes the tool idempotent: it sees the existing value and reports
-          # "already <version>".
+          # "already <version>". Refreshing from the default branch first keeps
+          # new release metadata available without dropping accumulated pins.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "${BRANCH}" || true
-          if git rev-parse --verify -q "origin/${BRANCH}" >/dev/null; then
-            git checkout -B "${BRANCH}" "origin/${BRANCH}"
-          else
-            git checkout -B "${BRANCH}"
-          fi
+          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}"
 
       - name: Apply the bump
         id: bump

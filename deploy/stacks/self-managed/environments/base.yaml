@@ -177,8 +177,20 @@ functionAutoscaler:
 # global.sidecars (or global.image) at version 0.14.1.
 api:
   env: {}
+  # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
+  # global.workerEndpoints.essServiceURL. In split-plane deployments that value
+  # is the public ESS URL for remote workers, so set this to the in-cluster
+  # ess-api Service to keep control-plane ESS calls off the public edge, e.g.
+  # http://ess-api.ess.svc.cluster.local:8080. The worker alias
+  # (NVCF_ESS_WORKER_BASE_URL) stays on essServiceURL.
+  essBaseURL: ""
   remoteConfig:
     configData: {}
+
+# NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
+# global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
+nvctApi:
+  essBaseURL: ""
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
@@ -454,6 +466,7 @@ addons:
     config:
       mappingPath: /etc/vanity-gateway/config/config.yaml
       nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
+      llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
       # Empty by default because the Vanity Gateway chart does not create Vault
       # Agent injection. Set this only when another component mounts the secrets
       # file into the pod.
@@ -505,6 +518,13 @@ rateLimiter:
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
+  # Operator-set api-keys service env, deep-merged over the chart defaults
+  # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
+  # api-keys service authorizes keys against. Leave unset to keep the chart
+  # defaults only. Non-secret configuration only -- secrets belong in
+  # secrets/<env>-secrets.yaml.
+  # env:
+  #   NVCF_NCA_ID: "nca-xxxxxxxx"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
@@ -569,7 +589,20 @@ ingress:
           enabled: false
           # Defaults to tasks-grpc.<global.domain> when enabled. Set to override.
           hostnames: []
+      # apiKeys, sis, and reval are enabled by default in the gateway-routes
+      # chart, which owns that default. Leave enabled unset to keep the chart
+      # default; uncomment enabled: false to drop the route -- for example, to
+      # keep api-keys off the public edge in a split/multi-cluster deployment, or
+      # to remove the unused sis/reval routes when they have no external consumer.
+      # The stack forwards enabled only when it is set here.
       apiKeys:
+        # enabled: false
+        routeAnnotations: {}
+      sis:
+        # enabled: false
+        routeAnnotations: {}
+      reval:
+        # enabled: false
         routeAnnotations: {}
       invocation:
         routeAnnotations: {}
