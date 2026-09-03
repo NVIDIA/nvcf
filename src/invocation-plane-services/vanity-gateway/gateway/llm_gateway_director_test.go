@@ -21,6 +21,7 @@ import (
 	config "ai-api-gateway-service/gateway_config"
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -429,7 +430,15 @@ func TestBuildChiMux_LLMGatewayOutageDoesNotFailHealth(t *testing.T) {
 
 	code, body := probe(up.URL, down.URL)
 	assert.Equal(t, http.StatusOK, code, "an LLM Gateway outage must not fail the probes")
-	assert.Contains(t, body, "llm api gateway", "the failure must still be reported in the body")
+
+	var reported struct {
+		Status   string            `json:"status"`
+		Failures map[string]string `json:"failures"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &reported))
+	assert.Equal(t, "Partially Available", reported.Status)
+	assert.Contains(t, reported.Failures, "llm api gateway",
+		"the failed check must still be reported so alerting can see it")
 
 	code, _ = probe(down.URL, up.URL)
 	assert.Equal(t, http.StatusServiceUnavailable, code, "an nvcf api outage must still fail the probes")
@@ -547,8 +556,17 @@ func TestOpenAIDirector_LLMShortCircuitSuppressesShadow(t *testing.T) {
 			mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
 				`{"model":"`+publicModel+`","messages":[]}`))
 			assert.Equal(t, tc.want, rec.Code)
-			assert.Empty(t, llmRequests, "no shadow may be dispatched after a short circuit")
-			assert.Empty(t, nvcfRequests)
+			// Shadow dispatch runs on its own goroutine, so give it time to
+			// arrive rather than sampling the channel once.
+			for name, requests := range map[string]chan capturedRequest{
+				"LLM Gateway": llmRequests, "invocation service": nvcfRequests,
+			} {
+				select {
+				case got := <-requests:
+					t.Fatalf("a short circuit dispatched a shadow to the %s: %+v", name, got)
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
 		})
 	}
 }
@@ -578,6 +596,8 @@ func TestOpenAIDirector_LLMModelLegacyShadowModelName(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	bodies := awaitRequest(t, llmRequests).body + awaitRequest(t, llmRequests).body
+	assert.Contains(t, bodies, `"model":"`+llmFunctionID+"/"+publicModel+`"`,
+		"the primary must still be dispatched with its own model")
 	assert.Contains(t, bodies, `"model":"llm-shadow-func/meta/llama-shadow"`,
 		"the legacy singular field must dispatch on an LLM entry")
 }
