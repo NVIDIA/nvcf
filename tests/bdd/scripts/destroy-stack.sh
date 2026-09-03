@@ -24,8 +24,10 @@
 #
 # Every kubectl and helm call carries an explicit --context /
 # --kube-context flag; no global `kubectl config use-context`
-# switching. Errors other than NotFound propagate (the recipes use
-# --ignore-not-found for that single case).
+# switching. Only documented NotFound and a truly unreachable kube
+# context (missing context or connection refused) are skipped.
+# Permission errors, timeouts, API failures, missing binaries, and
+# finalizer-patch failures abort cleanup.
 #
 # Usage:
 #   tests/bdd/scripts/destroy-stack.sh single [CLUSTER_NAME=ncp-local]
@@ -55,9 +57,19 @@ case "$mode" in
 esac
 
 # Both modes need jq: the force-clear path in delete_stack_namespaces
-# builds the /finalize subresource patch with jq.
+# builds the /finalize subresource patch with jq. kubectl and helm
+# must also be present; a missing binary is not an unreachable
+# cluster and must not be treated as a successful no-op.
 command -v jq >/dev/null 2>&1 || {
   echo "destroy-stack.sh requires jq; install it and retry." >&2
+  exit 1
+}
+command -v kubectl >/dev/null 2>&1 || {
+  echo "destroy-stack.sh requires kubectl; install it and retry." >&2
+  exit 1
+}
+command -v helm >/dev/null 2>&1 || {
+  echo "destroy-stack.sh requires helm; install it and retry." >&2
   exit 1
 }
 
@@ -138,24 +150,126 @@ STACK_CRS_WORKER=(
 
 # --- Helpers ---
 
+# Capture kubectl stdout+stderr in _kubectl_out and return kubectl's
+# exit code. Used so callers can classify NotFound / unreachable
+# without treating every non-zero as a skip.
+kubectl_capture() {
+  local rc
+  set +e
+  _kubectl_out=$(kubectl "$@" 2>&1)
+  rc=$?
+  set -e
+  return "$rc"
+}
+
+# Missing context or connection refused. Timeouts, Forbidden,
+# Unauthorized, and missing binaries are not unreachable.
+kubectl_is_unreachable() {
+  local msg="$1"
+  case "$msg" in
+    *"does not exist"*|*"connection refused"*|*"was refused"*|*"no such host"*|*"no route to host"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+kubectl_is_not_found() {
+  local msg="$1"
+  case "$msg" in
+    *"(NotFound)"*|*" not found"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+kubectl_is_missing_type() {
+  local msg="$1"
+  case "$msg" in
+    *"doesn't have a resource type"*|*"could not find the requested resource"*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Return 0 if the API answers, 1 if the context or cluster is absent.
+# Any other cluster-info failure prints the error and aborts.
+cluster_is_reachable() {
+  local ctx="$1"
+  if kubectl_capture --context "$ctx" cluster-info; then
+    return 0
+  fi
+  if kubectl_is_unreachable "$_kubectl_out"; then
+    return 1
+  fi
+  printf '%s\n' "$_kubectl_out" >&2
+  echo "cluster-info failed for $ctx" >&2
+  exit 1
+}
+
+namespace_exists() {
+  local ctx="$1"
+  local ns="$2"
+  if kubectl_capture --context "$ctx" get namespace "$ns"; then
+    return 0
+  fi
+  if kubectl_is_not_found "$_kubectl_out"; then
+    return 1
+  fi
+  printf '%s\n' "$_kubectl_out" >&2
+  echo "get namespace $ns failed on $ctx" >&2
+  exit 1
+}
+
+cr_available() {
+  local ctx="$1"
+  local ns="$2"
+  local cr="$3"
+  if kubectl_capture --context "$ctx" -n "$ns" get "$cr"; then
+    return 0
+  fi
+  if kubectl_is_missing_type "$_kubectl_out" || kubectl_is_not_found "$_kubectl_out"; then
+    return 1
+  fi
+  printf '%s\n' "$_kubectl_out" >&2
+  echo "get $cr in $ns failed on $ctx" >&2
+  exit 1
+}
+
+patch_cr_finalizers() {
+  local ctx="$1"
+  local ns="$2"
+  local cr="$3"
+  local names obj
+  names=$(kubectl --context "$ctx" -n "$ns" get "$cr" -o name)
+  while IFS= read -r obj; do
+    [[ -z "$obj" ]] && continue
+    if kubectl_capture --context "$ctx" -n "$ns" patch "$obj" \
+        --type=merge -p '{"metadata":{"finalizers":[]}}'; then
+      continue
+    fi
+    if kubectl_is_not_found "$_kubectl_out"; then
+      continue
+    fi
+    printf '%s\n' "$_kubectl_out" >&2
+    echo "patch $obj in $ns failed on $ctx" >&2
+    return 1
+  done <<< "$names"
+}
+
 delete_stack_crs() {
   local ctx="$1"
   shift
   local namespaces=("$@")
   for ns in "${namespaces[@]}"; do
-    if ! kubectl --context "$ctx" get namespace "$ns" >/dev/null 2>&1; then
+    if ! namespace_exists "$ctx" "$ns"; then
       continue
     fi
     for cr in "${STACK_CRS_WORKER[@]}"; do
-      # If the CRD is absent (a prior topology destroy wiped it, or
-      # a partial install never registered it), there is nothing to
-      # clean. Skip the finalizer patch AND the delete call -- both
-      # `kubectl get <crd>` and `kubectl delete <crd> --ignore-not-
-      # found` exit non-zero on "resource type does not exist"
-      # (--ignore-not-found covers missing instances, not missing
-      # types), and `set -o pipefail` would otherwise abort the
-      # whole script.
-      if ! kubectl --context "$ctx" -n "$ns" get "$cr" >/dev/null 2>&1; then
+      # Missing CRD or NotFound is a skip. Other get failures abort.
+      if ! cr_available "$ctx" "$ns" "$cr"; then
         continue
       fi
       # Clear finalizers BEFORE delete: the nvca-operator controller
@@ -163,12 +277,10 @@ delete_stack_crs() {
       # own finalizers, which causes the CR delete and the
       # subsequent namespace delete to hang. The stack is being
       # destroyed, so finalizer-driven reconciliation is moot.
-      kubectl --context "$ctx" -n "$ns" get "$cr" -o name 2>/dev/null | \
-        while read -r obj; do
-          kubectl --context "$ctx" -n "$ns" patch "$obj" \
-            --type=merge -p '{"metadata":{"finalizers":[]}}' \
-            >/dev/null 2>&1 || true
-        done
+      # NotFound on an individual object is fine; other patch
+      # failures abort so cleanup cannot report success with CRs
+      # still blocked.
+      patch_cr_finalizers "$ctx" "$ns" "$cr"
       echo "  delete $cr in $ns"
       kubectl --context "$ctx" -n "$ns" delete "$cr" --all \
         --ignore-not-found --timeout=60s
@@ -181,13 +293,21 @@ delete_stack_crs() {
 # namespace's own spec.finalizers can hold it in Terminating. nvca-
 # operator and nvcf-backend are the typical offenders. This clears
 # those via the /finalize subresource so namespace teardown completes.
+# NotFound means the namespace already went away. Other failures abort.
 force_clear_namespace_finalizers() {
   local ctx="$1"
   local ns="$2"
-  kubectl --context "$ctx" get namespace "$ns" -o json 2>/dev/null | \
-    jq '.spec.finalizers = []' | \
-    kubectl --context "$ctx" replace --raw "/api/v1/namespaces/$ns/finalize" -f - \
-      >/dev/null 2>&1 || true
+  local json
+  if ! json=$(kubectl --context "$ctx" get namespace "$ns" -o json 2>&1); then
+    if kubectl_is_not_found "$json"; then
+      return 0
+    fi
+    printf '%s\n' "$json" >&2
+    echo "get namespace $ns -o json failed on $ctx" >&2
+    return 1
+  fi
+  printf '%s' "$json" | jq '.spec.finalizers = []' | \
+    kubectl --context "$ctx" replace --raw "/api/v1/namespaces/$ns/finalize" -f -
 }
 
 uninstall_stack_releases() {
@@ -214,7 +334,7 @@ delete_stack_namespaces() {
     # after the controller is gone), drop into the force-clear path
     # rather than hang the BDD cleanup.
     if ! kubectl --context "$ctx" delete namespace "$ns" \
-        --ignore-not-found --wait --timeout=60s 2>/dev/null; then
+        --ignore-not-found --wait --timeout=60s; then
       echo "  force-clear finalizers on $ns (stuck Terminating)"
       force_clear_namespace_finalizers "$ctx" "$ns"
     fi
@@ -258,9 +378,7 @@ clean_stack_out() {
 
 if [[ "$mode" == "single" ]]; then
   ctx="k3d-$CLUSTER_NAME"
-  if ! kubectl --context "$ctx" cluster-info >/dev/null 2>&1; then
-    echo "Context $ctx unreachable; skipping cluster resources."
-  else
+  if cluster_is_reachable "$ctx"; then
     delete_stack_crs "$ctx" "nvca-operator"
     uninstall_stack_releases "$ctx" \
       "${STACK_RELEASES_WORKER[@]}" \
@@ -268,6 +386,8 @@ if [[ "$mode" == "single" ]]; then
     delete_stack_namespaces "$ctx" \
       "${STACK_NAMESPACES_WORKER[@]}" \
       "${STACK_NAMESPACES_CP[@]}"
+  else
+    echo "Context $ctx unreachable; skipping cluster resources."
   fi
   clean_stack_out
   exit 0
@@ -289,19 +409,20 @@ for name in "${COMPUTES[@]:-}"; do
   [[ -z "$name" ]] && continue
   ctx="k3d-$name"
   echo ">>> Cleaning compute cluster $ctx"
-  if ! kubectl --context "$ctx" cluster-info >/dev/null 2>&1; then
+  if cluster_is_reachable "$ctx"; then
+    delete_stack_crs "$ctx" "nvca-operator"
+    uninstall_stack_releases "$ctx" "${STACK_RELEASES_WORKER[@]}"
+    delete_stack_namespaces "$ctx" "${STACK_NAMESPACES_WORKER[@]}"
+  else
     echo "Context $ctx unreachable; skipping."
     continue
   fi
-  delete_stack_crs "$ctx" "nvca-operator"
-  uninstall_stack_releases "$ctx" "${STACK_RELEASES_WORKER[@]}"
-  delete_stack_namespaces "$ctx" "${STACK_NAMESPACES_WORKER[@]}"
 done
 
 if k3d cluster get ncp-local-cp >/dev/null 2>&1; then
   echo ">>> Cleaning control-plane cluster k3d-ncp-local-cp"
   ctx="k3d-ncp-local-cp"
-  if kubectl --context "$ctx" cluster-info >/dev/null 2>&1; then
+  if cluster_is_reachable "$ctx"; then
     # Worker allow-lists apply on the CP cluster too: multi-cluster
     # Backgrounds create nvca-operator (namespace + pull secret, and
     # sometimes the helm release) on k3d-ncp-local-cp. Compute clusters

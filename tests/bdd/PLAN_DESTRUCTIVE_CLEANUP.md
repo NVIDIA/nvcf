@@ -24,11 +24,15 @@ Concretely:
     `envoy-gateway-system` and `cert-manager`.
   - Any CRD.
 
-A failure during cleanup aborts the suite. Only NotFound is
-swallowed via `--ignore-not-found`. Timeouts, permission errors,
-and finalizer stalls propagate. An unreachable single-cluster
-kube context is excluded: `destroy-stack.sh single` skips
-cluster-resource cleanup and still runs `clean_stack_out`.
+A failure during cleanup aborts the suite. Only documented
+NotFound is swallowed via `--ignore-not-found` or an explicit
+NotFound check. A truly unreachable single-cluster kube context
+(missing context or connection refused) is also excluded:
+`destroy-stack.sh single` skips cluster-resource cleanup and
+still runs `clean_stack_out`. Permission errors, timeouts, API
+failures, missing binaries, and finalizer-patch failures
+propagate so cleanup cannot report success with resources left
+behind.
 
 ## Goals
 
@@ -214,7 +218,8 @@ with explicit kube-context flags; it belongs in the dev wrapper.
 
 ```make
 destroy-stack-single: ## Uninstall NVCF stack from one cluster; leaves k3d running
-	@CTX="k3d-$(CLUSTER_NAME)"; \
+	@set -euo pipefail; \
+	CTX="k3d-$(CLUSTER_NAME)"; \
 	if ! kubectl --context "$$CTX" cluster-info >/dev/null 2>&1; then \
 		echo "Context $$CTX unreachable; skipping cluster resources."; \
 	else \
@@ -225,8 +230,14 @@ destroy-stack-single: ## Uninstall NVCF stack from one cluster; leaves k3d runni
 	$(MAKE) _clean-stack-out
 ```
 
+`set -euo pipefail` is required so a failed nested `$(MAKE)` helper
+aborts before `_clean-stack-out` and cannot return 0. The live
+implementation is `tests/bdd/scripts/destroy-stack.sh`, which also
+classifies `cluster-info` and `kubectl get` errors: only a missing
+context or connection refused is unreachable. Other failures abort.
+
 When the single-cluster context (`k3d-$(CLUSTER_NAME)`) is
-unreachable, cluster-resource cleanup is skipped and
+truly unreachable, cluster-resource cleanup is skipped and
 `clean_stack_out` still runs. That unreachable context does not
 abort the suite.
 
@@ -239,11 +250,11 @@ use-context` anywhere; every command carries `--context` /
 
 ```make
 destroy-stack-multi: ## Uninstall NVCF stack from CP plus every discovered compute cluster
-	@command -v jq >/dev/null 2>&1 || { \
+	@set -euo pipefail; \
+	command -v jq >/dev/null 2>&1 || { \
 		echo "destroy-stack-multi requires jq; install it and retry." >&2; \
 		exit 1; \
-	}
-	@set -o pipefail; \
+	}; \
 	COMPUTES=$$(k3d cluster list -o json | jq -r '.[] | select(.name|startswith("ncp-local-compute-")) | .name'); \
 	for name in $$COMPUTES; do \
 		CTX="k3d-$$name"; \
@@ -258,17 +269,25 @@ destroy-stack-multi: ## Uninstall NVCF stack from CP plus every discovered compu
 	done; \
 	if k3d cluster get ncp-local-cp >/dev/null 2>&1; then \
 		echo ">>> Cleaning control-plane cluster k3d-ncp-local-cp"; \
-		$(MAKE) _delete-stack-crs CTX="k3d-ncp-local-cp" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
-		$(MAKE) _uninstall-stack-releases CTX="k3d-ncp-local-cp" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
-		$(MAKE) _delete-stack-namespaces CTX="k3d-ncp-local-cp" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
-	fi
-	@$(MAKE) _clean-stack-out
+		if kubectl --context k3d-ncp-local-cp cluster-info >/dev/null 2>&1; then \
+			$(MAKE) _delete-stack-crs CTX="k3d-ncp-local-cp" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
+			$(MAKE) _uninstall-stack-releases CTX="k3d-ncp-local-cp" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
+			$(MAKE) _delete-stack-namespaces CTX="k3d-ncp-local-cp" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
+		else \
+			echo "Context k3d-ncp-local-cp unreachable; skipping."; \
+		fi; \
+	fi; \
+	$(MAKE) _clean-stack-out
 ```
 
 The live implementation is `tests/bdd/scripts/destroy-stack.sh`, not these
-Make recipes. Multi-cluster control-plane cleanup must apply the worker
-allow-lists: feature Backgrounds create `nvca-operator` (and its pull
-secret) on `k3d-ncp-local-cp`, not only on compute clusters.
+Make recipes. `k3d cluster get ncp-local-cp` only proves the cluster
+exists; helm and kubectl cleanup still require a succeeding
+`kubectl --context k3d-ncp-local-cp cluster-info` first. Multi-cluster
+control-plane cleanup must apply the worker allow-lists: feature
+Backgrounds create `nvca-operator` (and its pull secret) on
+`k3d-ncp-local-cp`, not only on compute clusters. `set -euo pipefail`
+keeps `_clean-stack-out` from masking a failed helper.
 
 #### New internal helpers
 

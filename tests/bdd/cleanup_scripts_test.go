@@ -145,6 +145,7 @@ func TestDestroyStackMultiCleansWorkerNamespacesOnControlPlane(t *testing.T) {
 		"kubectl --context k3d-ncp-local-cp delete namespace nvca-system",
 		"kubectl --context k3d-ncp-local-cp delete namespace nvcf-backend",
 		"kubectl --context k3d-ncp-local-cp -n nvca-operator delete nvcfbackend --all",
+		"kubectl --context k3d-ncp-local-compute-1 -n nvca-operator delete nvcfbackend --all",
 		"helm --kube-context k3d-ncp-local-compute-1 uninstall nvca-operator -n nvca-operator",
 		"helm --kube-context k3d-ncp-local-cp uninstall nats -n nats-system",
 	} {
@@ -196,6 +197,7 @@ func TestDestroyStackCleanOutRemovesHelmfileTreesAndRegistration(t *testing.T) {
 	binDir := t.TempDir()
 	writeFakeBin(t, binDir, "kubectl", `#!/usr/bin/env bash
 set -euo pipefail
+echo "The connection to the server 127.0.0.1:6443 was refused - did you specify the right host or port?" >&2
 exit 1
 `)
 	writeFakeBin(t, binDir, "helm", `#!/usr/bin/env bash
@@ -234,6 +236,63 @@ exit 0
 	if got := string(body); got != "keep me\n" {
 		t.Fatalf("ad-hoc out/ note contents = %q", got)
 	}
+}
+
+func TestDestroyStackPropagatesClusterInfoAPIFailure(t *testing.T) {
+	output := runDestroyStackSingleExpectFailure(t,
+		`#!/usr/bin/env bash
+set -euo pipefail
+echo "Error from server (Forbidden): nodes is forbidden" >&2
+exit 1
+`,
+		`#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+`)
+	if !strings.Contains(output, "Forbidden") && !strings.Contains(output, "cluster-info failed") {
+		t.Fatalf("expected cluster-info API failure to propagate, got:\n%s", output)
+	}
+}
+
+func TestDestroyStackPropagatesHelmUninstallFailure(t *testing.T) {
+	output := runDestroyStackSingleExpectFailure(t,
+		`#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"cluster-info"*) exit 0 ;;
+  *"get namespace"*)
+    echo 'Error from server (NotFound): namespaces "nvca-operator" not found' >&2
+    exit 1
+    ;;
+esac
+`,
+		`#!/usr/bin/env bash
+set -euo pipefail
+echo "helm uninstall failed: timeout" >&2
+exit 1
+`)
+	if !strings.Contains(output, "helm uninstall failed") && !strings.Contains(strings.ToLower(output), "exit") {
+		t.Fatalf("expected helm uninstall failure to abort cleanup, got:\n%s", output)
+	}
+}
+
+func runDestroyStackSingleExpectFailure(t *testing.T, kubectlBody, helmBody string) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	writeFakeBin(t, binDir, "kubectl", kubectlBody)
+	writeFakeBin(t, binDir, "helm", helmBody)
+
+	cmd := exec.Command("bash", "scripts/destroy-stack.sh", "single")
+	cmd.Env = append(os.Environ(),
+		"BDD_REPO_ROOT="+t.TempDir(),
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected destroy-stack.sh single to fail, got success:\n%s", output)
+	}
+	return string(output)
 }
 
 func runDestroyStackMulti(t *testing.T) string {
