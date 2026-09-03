@@ -1390,6 +1390,20 @@ func parseErrorEventMessage(event *corev1.Event) (message string, include, isErr
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/controller_utils.go#L596C75-L596C89
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/statefulset/stateful_pod_control.go#L297-L300
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/statefulset/stateful_pod_control.go#L314-L317
+		//
+		// A transient webhook-unavailability signature is retryable, not
+		// terminal: marking it terminal force-purges the object and
+		// regenerates the load that caused the failure.
+		if isTransientWebhookUnavailableMessage(event.Message) {
+			return event.Message, event.Type == corev1.EventTypeWarning, false
+		}
+		isError = true
+	case "BindingError":
+		// Same transient-webhook carve-out as FailedCreate/FailedUpdate;
+		// BindingError can carry the same webhook-unavailable signature.
+		if isTransientWebhookUnavailableMessage(event.Message) {
+			return event.Message, event.Type == corev1.EventTypeWarning, false
+		}
 		isError = true
 	case "ReplicaSetCreateError":
 		// ReplicaSetCreateError is set when Deployments fail to create their ReplicaSet's.
@@ -1411,6 +1425,30 @@ func parseErrorEventMessage(event *corev1.Event) (message string, include, isErr
 	}
 
 	return event.Message, isError || event.Type == corev1.EventTypeWarning, isError
+}
+
+// Webhook-unavailability message substrings.
+var transientWebhookUnavailableSignatures = []string{
+	"the server is currently unable to handle the request",
+	"has prevented the request from succeeding",
+	"EOF",
+	"i/o timeout",
+	"context deadline exceeded",
+	"connection refused",
+}
+
+// isTransientWebhookUnavailableMessage reports whether an event message
+// matches a known webhook-unavailable signature, not a permanent failure.
+func isTransientWebhookUnavailableMessage(message string) bool {
+	if !strings.Contains(message, "failed calling webhook") {
+		return false
+	}
+	for _, signature := range transientWebhookUnavailableSignatures {
+		if strings.Contains(message, signature) {
+			return true
+		}
+	}
+	return false
 }
 
 var (

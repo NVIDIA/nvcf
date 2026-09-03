@@ -29,6 +29,7 @@ import (
 	cleanupns "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/namespace"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/persistentvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/pod"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/recreationbudget"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc/storageclass"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -63,7 +64,7 @@ type Runnable struct {
 
 // NewRunnable creates a new garbage collection controller with the specified interval
 // requestsNamespace is the namespace where ICMSRequests are created (defaults to types.DefaultICMSRequestNamespace if empty)
-func NewRunnable(clients *kubeclients.KubeClients, m *metrics.Metrics, interval time.Duration, requestsNamespace string) *Runnable {
+func NewRunnable(clients *kubeclients.KubeClients, m *metrics.Metrics, interval time.Duration, requestsNamespace, systemNamespace string) *Runnable {
 	icmsGetter := &nvcaICMSRequestGetter{client: clients.BART, icmsRequestNamespace: requestsNamespace}
 
 	// Default to types.DefaultICMSRequestNamespace if not specified
@@ -77,6 +78,7 @@ func NewRunnable(clients *kubeclients.KubeClients, m *metrics.Metrics, interval 
 			persistentvolume.NewCleaner(clients.K8s, icmsGetter, m),
 			cleanupns.NewCleaner(clients.K8s, clients.BART, icmsGetter, m),
 			pod.NewCleaner(clients.K8s, icmsGetter, m, requestsNamespace),
+			recreationbudget.NewCleaner(clients.K8s, systemNamespace, m),
 		},
 		interval: interval,
 	}

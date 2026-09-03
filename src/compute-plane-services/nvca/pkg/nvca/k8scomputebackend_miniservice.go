@@ -27,6 +27,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -343,10 +344,40 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 
 		// Handle cleanup. The miniservice controller "understands" both function and task cleanup procedures.
 		if purgeInstance {
-			log.Warn("MiniService instance is in a bad state and will be force-purged")
-			// Let the miniservice controller handle top-level resource deletion.
-			if err := c.clients.HelmV2.Delete(ctx, ms); err != nil && !apierrors.IsNotFound(err) {
-				log.WithError(err).Error("Failed to delete MiniService")
+			functionID := req.Spec.FunctionDetails.FunctionID
+			functionVersionID := req.Spec.FunctionDetails.FunctionVersionID
+			budgetLog := log.WithFields(logrus.Fields{
+				"request_id":          req.Spec.RequestID,
+				"function_id":         functionID,
+				"function_version_id": functionVersionID,
+			})
+			reserved, reservedAt, terr := c.tryReserveRecreationSlot(ctx, functionID, functionVersionID)
+			if terr != nil {
+				// Fail closed: an unreadable/unwritable budget store is exactly
+				// the kind of trouble that can accompany a purge storm, so treat
+				// it the same as budget-exhausted rather than bypassing the cap.
+				budgetLog.WithError(terr).Warn("Failed to reserve MiniService recreation budget slot, skipping purge this cycle")
+				reserved = false
+			}
+			if !reserved {
+				// Budget spent (or unreachable): skip purging so we don't regenerate the load.
+				budgetLog.Warnf("MiniService instance is in a bad state, but %d or more instances for this "+
+					"function+version have already been force-purged within the last %s (or the "+
+					"budget could not be checked); skipping purge this cycle instead of regenerating "+
+					"the load that caused the failure",
+					recreationBudgetMaxPurges, recreationBudgetWindow)
+			} else {
+				log.Warn("MiniService instance is in a bad state and will be force-purged")
+				// Let the miniservice controller handle top-level resource deletion.
+				if err := c.clients.HelmV2.Delete(ctx, ms); err != nil && !apierrors.IsNotFound(err) {
+					log.WithError(err).Error("Failed to delete MiniService")
+					// The purge didn't actually happen, so don't burn the budget
+					// slot for it -- a real transient delete failure would
+					// otherwise exhaust the cap without ever making progress.
+					if rerr := c.releaseRecreationSlot(ctx, functionID, functionVersionID, reservedAt); rerr != nil {
+						log.WithError(rerr).Warn("Failed to release MiniService recreation budget slot after a failed delete")
+					}
+				}
 			}
 		} else {
 			log.Warn("MiniService instance is in bad state, skipping purge since autoPurgeDegradedWorkers is disabled")

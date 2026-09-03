@@ -1599,6 +1599,7 @@ func TestMetricsInitializedToZero(t *testing.T) {
 			metricsgctypes.ResourceTypePersistentVolume,
 			metricsgctypes.ResourceTypePVC,
 			metricsgctypes.ResourceTypePod,
+			metricsgctypes.ResourceTypeRecreationBudget,
 			metricsgctypes.ResourceTypeStorageClass,
 			metricsgctypes.ResourceTypeStorageRequest,
 		}
@@ -1640,6 +1641,7 @@ func TestMetricsInitializedToZero(t *testing.T) {
 			"NamespaceCleaner",
 			"PersistentVolumeCleaner",
 			"PodCleaner",
+			"RecreationBudgetCleaner",
 			"StorageClassCleaner",
 		}
 		for _, cleanerName := range expectedCleanerNames {

@@ -38,7 +38,7 @@ const (
 	defaultSambaModelCacheReadyThreshold             = 30 * time.Minute
 	defaultMaxImagePullErrorThreshold                = 1 * time.Minute
 	defaultNamespaceStuckTimeout                     = 5 * time.Minute
-	defaultFailingObjectsBackoffTimeout              = 90 * time.Second
+	defaultFailingObjectsBackoffTimeout              = 5 * time.Minute
 	defaultFailingObjectsBackoffRequeueInterval      = 30 * time.Second
 )
 

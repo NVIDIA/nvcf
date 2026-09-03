@@ -15,21 +15,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package gctypes
+package recreationbudget
 
-// Resource types for GC metrics labeling
-const (
-	ResourceTypeNamespace        = "namespace"
-	ResourceTypeStorageRequest   = "storage_request"
-	ResourceTypePVC              = "persistent_volume_claim"
-	ResourceTypeStorageClass     = "storage_class"
-	ResourceTypePersistentVolume = "persistent_volume"
-	ResourceTypePod              = "pod"
-	ResourceTypeRecreationBudget = "recreation_budget_configmap"
-)
+import "time"
 
-// Status values for GC metrics labeling
+// These must stay in sync with pkg/nvca/recreation_budget.go's own
+// unexported constants of the same values. Not imported directly to avoid
+// an import cycle (pkg/nvca -> internal/gc -> internal/gc/recreationbudget
+// -> pkg/nvca).
 const (
-	StatusSuccess = "success"
-	StatusFailure = "failure"
+	purposeLabel           = "nvca.nvcf.nvidia.io/purpose"
+	purposeValue           = "recreation-budget"
+	timestampsKey          = "purgeTimestamps"
+	recreationBudgetWindow = 15 * time.Minute
 )
