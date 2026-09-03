@@ -13,13 +13,13 @@ stacks_dir="$(cd "$stack_dir/.." && pwd)"
 work_dir="$(mktemp -d)"
 test_stacks_dir="$work_dir/stacks"
 test_stack_dir="$test_stacks_dir/self-managed"
-environment_name="sis-condition-wiring-test"
+environment_name="icms-condition-wiring-test"
 environment_file="$test_stack_dir/environments/$environment_name.yaml"
 secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
-  echo "sis-condition-wiring: $*" >&2
+  echo "icms-condition-wiring: $*" >&2
   exit 1
 }
 
@@ -107,4 +107,4 @@ render_list "$off_list"
 assert_enabled "$off_list" sis false
 assert_enabled "$off_list" api true
 
-echo "sis-condition-wiring: all checks passed"
+echo "icms-condition-wiring: all checks passed"
