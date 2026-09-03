@@ -251,11 +251,17 @@ destroy-stack-multi: ## Uninstall NVCF stack from CP plus every discovered compu
 	done; \
 	if k3d cluster get ncp-local-cp >/dev/null 2>&1; then \
 		echo ">>> Cleaning control-plane cluster k3d-ncp-local-cp"; \
-		$(MAKE) _uninstall-stack-releases CTX="k3d-ncp-local-cp" RELEASE_LIST="$(STACK_RELEASES_CP)"; \
-		$(MAKE) _delete-stack-namespaces CTX="k3d-ncp-local-cp" NS_LIST="$(STACK_NAMESPACES_CP)"; \
+		$(MAKE) _delete-stack-crs CTX="k3d-ncp-local-cp" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
+		$(MAKE) _uninstall-stack-releases CTX="k3d-ncp-local-cp" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
+		$(MAKE) _delete-stack-namespaces CTX="k3d-ncp-local-cp" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
 	fi
 	@$(MAKE) _clean-stack-out
 ```
+
+The live implementation is `tests/bdd/scripts/destroy-stack.sh`, not these
+Make recipes. Multi-cluster control-plane cleanup must apply the worker
+allow-lists: feature Backgrounds create `nvca-operator` (and its pull
+secret) on `k3d-ncp-local-cp`, not only on compute clusters.
 
 #### New internal helpers
 
@@ -321,16 +327,21 @@ _delete-stack-namespaces:
 
 ##### _clean-stack-out
 
-Runs from `deploy/stacks/self-managed/`, so the path is `out/*.yaml`.
+The script equivalent lives in `clean_stack_out` in
+`tests/bdd/scripts/destroy-stack.sh`. It removes:
 
-```make
-_clean-stack-out:
-	@echo "  clean out/"
-	@rm -f out/*.yaml
-```
+- Root-level `*.yaml` under `deploy/stacks/self-managed/out/` and
+  `deploy/stacks/nvcf-compute-plane/out/` (CLI handoff files such as
+  `control-plane-profile.yaml`).
+- Helmfile `--output-dir` render trees (subdirectories under those
+  `out/` directories). This is the explicit-path equivalent of each
+  stack's `make clean`.
+- Generated compute registration values
+  `deploy/stacks/nvcf-compute-plane/registration/*.yaml`. The
+  compute-plane `make clean` target does not remove this directory.
 
-Only `*.yaml` so developer ad-hoc text notes in the same directory
-survive.
+Ad-hoc non-yaml notes at the `out/` root survive. Do not `rm -rf` the
+`out/` directory itself, and do not delete `testdata/registration/`.
 
 ### tests/bdd/harness/cleanup.go (new file)
 
