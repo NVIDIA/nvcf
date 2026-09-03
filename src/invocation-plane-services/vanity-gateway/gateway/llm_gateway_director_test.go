@@ -437,3 +437,193 @@ func TestBuildChiMux_LLMGatewayOutageDoesNotFailHealth(t *testing.T) {
 	code, _ = probe(up.URL, up.URL)
 	assert.Equal(t, http.StatusOK, code, "both upstreams healthy is OK")
 }
+
+// Shadow targets are resolved from the same table as the primary, so an
+// invocation-service primary can shadow an LLM model. An implementation that
+// branched on the primary alone would send this shadow to the wrong upstream.
+func TestOpenAIDirector_DefaultModelShadowsToLLMGateway(t *testing.T) {
+	llmRequests := make(chan capturedRequest, 2)
+	llmBackend := captureServer(t, llmRequests, nil)
+	nvcfRequests := make(chan capturedRequest, 2)
+	nvcfBackend := captureServer(t, nvcfRequests, nil)
+
+	primary := config.ModelFunctionDetails{
+		ModelName:        "microsoft/phi-2",
+		FunctionID:       "plain-func",
+		ShadowModelNames: []string{publicModel},
+	}
+	mappings := llmMappings(llmModelEntry())
+	mappings.OpenAI.ChatCompletions["plain"] = primary
+	require.NoError(t, mappings.Validate())
+
+	mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+		`{"model":"microsoft/phi-2","messages":[{"role":"user","content":"hi"}]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	primaryReq := awaitRequest(t, nvcfRequests)
+	assert.Equal(t, "plain-func", primaryReq.headers.Get("function-id"),
+		"the primary must still reach the invocation service")
+	assert.Contains(t, primaryReq.body, `"model":"microsoft/phi-2"`, "the primary is not rewritten")
+
+	shadowReq := awaitRequest(t, llmRequests)
+	assert.Contains(t, shadowReq.body, `"model":"`+llmFunctionID+"/"+publicModel+`"`,
+		"the shadow is rewritten by its own functionType and sent to the LLM Gateway")
+}
+
+// One request fans out to both upstreams when the shadow list names an LLM
+// model and an invocation-service model.
+func TestOpenAIDirector_ShadowFanOutReachesBothUpstreams(t *testing.T) {
+	llmRequests := make(chan capturedRequest, 3)
+	llmBackend := captureServer(t, llmRequests, nil)
+	nvcfRequests := make(chan capturedRequest, 3)
+	nvcfBackend := captureServer(t, nvcfRequests, nil)
+
+	primary := llmModelEntry()
+	primary.ShadowModelNames = []string{"meta/llama-shadow", "microsoft/phi-2"}
+
+	llmShadow := llmModelEntry()
+	llmShadow.ModelName = "meta/llama-shadow"
+	llmShadow.FunctionID = "llm-shadow-func"
+
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"llm":        primary,
+		"llm-shadow": llmShadow,
+		"plain":      {ModelName: "microsoft/phi-2", FunctionID: "plain-func"},
+	}
+	require.NoError(t, mappings.Validate())
+
+	mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+		`{"model":"`+publicModel+`","messages":[{"role":"user","content":"hi"}]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Primary plus the LLM shadow, each with its own function ID.
+	llmBodies := awaitRequest(t, llmRequests).body + awaitRequest(t, llmRequests).body
+	assert.Contains(t, llmBodies, `"model":"`+llmFunctionID+"/"+publicModel+`"`)
+	assert.Contains(t, llmBodies, `"model":"llm-shadow-func/meta/llama-shadow"`,
+		"the LLM shadow uses its own function ID, not the primary's")
+
+	plain := awaitRequest(t, nvcfRequests)
+	assert.Equal(t, "plain-func", plain.headers.Get("function-id"))
+	assert.Contains(t, plain.body, `"model":"microsoft/phi-2"`, "the invocation-service shadow is not rewritten")
+}
+
+// The status short-circuits run before shadow dispatch, so an offline or
+// expired primary must not replay traffic to either upstream.
+func TestOpenAIDirector_LLMShortCircuitSuppressesShadow(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.ModelFunctionDetails)
+		want   int
+	}{
+		{"offline", func(e *config.ModelFunctionDetails) { e.OfflineMessage = "down for maintenance" }, http.StatusServiceUnavailable},
+		{"expired eol", func(e *config.ModelFunctionDetails) { e.EOL = time.Now().Add(-time.Hour) }, http.StatusGone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			llmRequests := make(chan capturedRequest, 2)
+			llmBackend := captureServer(t, llmRequests, nil)
+			nvcfRequests := make(chan capturedRequest, 2)
+			nvcfBackend := captureServer(t, nvcfRequests, nil)
+
+			primary := llmModelEntry()
+			primary.ShadowModelNames = []string{"meta/llama-shadow"}
+			tc.mutate(&primary)
+			shadow := llmModelEntry()
+			shadow.ModelName = "meta/llama-shadow"
+
+			mappings := &config.GatewayConfig{}
+			mappings.OpenAI.Host = openAIHost
+			mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+				"llm": primary, "llm-shadow": shadow,
+			}
+			mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+				`{"model":"`+publicModel+`","messages":[]}`))
+			assert.Equal(t, tc.want, rec.Code)
+			assert.Empty(t, llmRequests, "no shadow may be dispatched after a short circuit")
+			assert.Empty(t, nvcfRequests)
+		})
+	}
+}
+
+// The singular legacy field must dispatch on an LLM entry too.
+func TestOpenAIDirector_LLMModelLegacyShadowModelName(t *testing.T) {
+	llmRequests := make(chan capturedRequest, 2)
+	llmBackend := captureServer(t, llmRequests, nil)
+
+	primary := llmModelEntry()
+	primary.ShadowModelName = "meta/llama-shadow"
+	shadow := llmModelEntry()
+	shadow.ModelName = "meta/llama-shadow"
+	shadow.FunctionID = "llm-shadow-func"
+
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"llm": primary, "llm-shadow": shadow,
+	}
+	require.NoError(t, mappings.Validate())
+
+	mux := openAIMux(t, mappings, "http://nvcf.invalid", llmBackend.URL)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+		`{"model":"`+publicModel+`","messages":[]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	bodies := awaitRequest(t, llmRequests).body + awaitRequest(t, llmRequests).body
+	assert.Contains(t, bodies, `"model":"llm-shadow-func/meta/llama-shadow"`,
+		"the legacy singular field must dispatch on an LLM entry")
+}
+
+// Mappings are per section: functionType does not make a model reachable on
+// every route the LLM Gateway happens to serve.
+func TestOpenAIDirector_LLMModelIsNotReachableOnUnmappedEndpoints(t *testing.T) {
+	llmRequests := make(chan capturedRequest, 1)
+	llmBackend := captureServer(t, llmRequests, nil)
+
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", llmBackend.URL)
+
+	for _, path := range []string{"/v1/responses", "/v1/embeddings", "/v1/completions"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, openAIRequest(t, path, `{"model":"`+publicModel+`","input":"hi"}`))
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+			assert.Empty(t, llmRequests, "an unmapped endpoint must not reach the upstream")
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`))
+	require.Equal(t, http.StatusOK, rec.Code, "the mapped endpoint still serves")
+}
+
+// Only the three routing headers are stripped. This pins the rest of the
+// contract, including the internal shadow tag, so a change is deliberate.
+func TestOpenAIDirector_LLMModelForwardsNonRoutingHeaders(t *testing.T) {
+	requests := make(chan capturedRequest, 1)
+	backend := captureServer(t, requests, nil)
+
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", backend.URL)
+	req := openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`)
+	req.Header.Set("Authorization", "Bearer caller-token")
+	req.Header.Set("X-Priority", "5")
+	req.Header.Set("NVCF-POLL-SECONDS", "120")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	received := awaitRequest(t, requests)
+	assert.Equal(t, "Bearer caller-token", received.headers.Get("Authorization"))
+	assert.Equal(t, "120", received.headers.Get("NVCF-POLL-SECONDS"),
+		"a caller value passes through; the gateway injects no default here")
+	assert.Equal(t, "5", received.headers.Get("X-Priority"),
+		"the gateway does not strip X-Priority; the LLM Gateway rejects it upstream")
+}
