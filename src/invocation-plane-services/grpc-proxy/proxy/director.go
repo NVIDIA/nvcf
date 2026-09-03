@@ -374,10 +374,17 @@ const (
 func (s *StreamDirector) purgePendingWork() {
 	purger, ok := s.functionInvoker.(pendingWorkPurger)
 	if !ok {
+		// Silent here would be indistinguishable from a clean shutdown that
+		// had nothing queued, which is the reading that made the last stage
+		// deployment of this change look like a no-op with no way to tell.
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipUnsupported).Inc()
+		zap.L().Info("pending work purge skipped, invoker cannot reach the work queue")
 		return
 	}
 	pending := s.pendingWork.Items()
 	if len(pending) == 0 {
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipNothing).Inc()
+		zap.L().Info("pending work purge found nothing queued")
 		return
 	}
 
