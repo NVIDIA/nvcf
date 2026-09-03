@@ -21,9 +21,9 @@ use super::reservations::update_reserved_priority_queue_time;
 use super::snapshots::{ClusterBackendUpsert, RoutedClusterState, RoutingTargetGeneration};
 use super::*;
 use crate::load_balancer::{
-    LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmSettings,
-    LoadBalancerConfig, LoadBalancerModelConfig, LoadBalancerRequest, LoadBalancerRouter,
-    WaitAndWidenAlgorithmConfig,
+    ClusterComparator, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
+    LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
+    LoadBalancerRequest, LoadBalancerRouter, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
 };
 use InferenceServerStatus::{Active, Inactive};
 use stargate_proto::pb::InferenceServerModelRegistration;
@@ -988,9 +988,7 @@ async fn shared_cluster_reservation_updates_cluster_snapshot_even_when_other_bac
     scenario.publish_connected(&running_b, &update_b).await;
 
     let cluster = scenario.only_cluster("model-reserved").await;
-    // Reservation delta uses summed backend input capacity:
-    // existing 5ms + ceil(37 tokens / 200 input TPS * 1000) = 190ms.
-    assert_queue_stats(&cluster.stats, 8, 1, 107, 37, 4, 190);
+    assert_queue_stats(&cluster.stats, 11, 1, 137, 37, 4, 185);
 }
 
 #[tokio::test]
@@ -1425,7 +1423,7 @@ fn cluster_snapshot_rtt_mean_handles_three_near_max_durations() {
 fn cluster_generation_derives_cluster_source_from_stored_backends() {
     let observed_at = Instant::now();
     let mut backend_a = backend!("cluster-derived-source", "backend-a", 1.0, 100.0, 10);
-    backend_a.stats.max_output_tps = 10.0;
+    backend_a.stats.max_engine_concurrency = 10;
     backend_a.snapshot_updated_at = observed_at;
     let cluster_state = Arc::new(RoutedClusterState::new(
         backend_a.registration.cluster_generation.clone(),
@@ -1435,13 +1433,13 @@ fn cluster_generation_derives_cluster_source_from_stored_backends() {
         backend_a.registration.cluster_generation.clone() =>
         "cluster-derived-source", "backend-c", 3.0, 100.0, 30
     );
-    backend_c.stats.max_output_tps = 30.0;
+    backend_c.stats.max_engine_concurrency = 30;
     backend_c.snapshot_updated_at = observed_at + Duration::from_millis(1);
     let mut backend_b = backend!(
         backend_a.registration.cluster_generation.clone() =>
         "cluster-derived-source", "backend-b", 2.0, 100.0, 20
     );
-    backend_b.stats.max_output_tps = 20.0;
+    backend_b.stats.max_engine_concurrency = 20;
     backend_b.snapshot_updated_at = observed_at + Duration::from_millis(2);
     let backend_b_registration = backend_b.registration.clone();
 
@@ -1455,15 +1453,15 @@ fn cluster_generation_derives_cluster_source_from_stored_backends() {
     let snapshot = cluster_state
         .routing_snapshot()
         .expect("latest backend should publish the cluster-scoped source");
-    assert_eq!(snapshot.stats.max_output_tps, 20.0);
+    assert_eq!(snapshot.stats.max_engine_concurrency, 20);
     assert_eq!(snapshot.stats.queue_size, 1);
 
-    backend_b.stats.max_output_tps = 25.0;
+    backend_b.stats.max_engine_concurrency = 25;
     cluster_state.upsert_backend(Arc::new(backend_b));
     let snapshot = cluster_state
         .routing_snapshot()
         .expect("source heartbeat should retain another backend's reservation");
-    assert_eq!(snapshot.stats.max_output_tps, 25.0);
+    assert_eq!(snapshot.stats.max_engine_concurrency, 25);
     assert_eq!(snapshot.stats.queue_size, 1);
 
     cluster_state.remove_backend(&backend_b_registration);
@@ -1471,7 +1469,7 @@ fn cluster_generation_derives_cluster_source_from_stored_backends() {
         .routing_snapshot()
         .expect("source removal should derive a surviving source");
     assert_eq!(snapshot.active_backend_count, 2);
-    assert_eq!(snapshot.stats.max_output_tps, 30.0);
+    assert_eq!(snapshot.stats.max_engine_concurrency, 30);
     assert_eq!(snapshot.stats.queue_size, 1);
 }
 
@@ -2168,12 +2166,403 @@ async fn shared_cluster_registration_exposes_one_aggregated_cluster_candidate() 
         kv_cache_capacity_tokens: 2000,
         kv_cache_used_tokens: 500,
         kv_cache_free_tokens: 1500,
-        num_running_queries: 7,
+        num_running_queries: 18,
         max_engine_concurrency: 77,
-        total_query_input_size: 777,
-        queue_time_estimate_ms_by_priority: HashMap::from([(1, 222), (2, 333)]),
+        total_query_input_size: 1888,
+        queue_time_estimate_ms_by_priority: HashMap::from([(1, 172), (2, 233)]),
     );
     assert_eq!(cluster.rtt, Duration::from_micros(7_500));
+}
+
+#[tokio::test]
+async fn shared_cluster_aggregation_is_independent_of_heartbeat_order() {
+    let scenario = RegistrationScenario::new(Some("rk-order"));
+    let running_a = scenario.start_in("inst-a", "cluster-order", 1111);
+    let running_b = scenario.start_in("inst-b", "cluster-order", 2222);
+    let mut stats_a = shared_backend_a_stats();
+    let stats_b = shared_backend_b_stats();
+    stats_a.kv_cache_capacity_tokens = stats_b.kv_cache_capacity_tokens;
+    stats_a.kv_cache_used_tokens = stats_b.kv_cache_used_tokens;
+    stats_a.kv_cache_free_tokens = stats_b.kv_cache_free_tokens;
+    stats_a.max_engine_concurrency = stats_b.max_engine_concurrency;
+    let update_a = scenario.update(&running_a, "model-order", Active, stats_a);
+    let update_b = scenario.update(&running_b, "model-order", Active, stats_b);
+
+    scenario.publish_connected(&running_a, &update_a).await;
+    scenario.publish_connected(&running_b, &update_b).await;
+    let b_last = scenario.only_cluster("model-order").await.stats;
+    scenario.publish_connected(&running_a, &update_a).await;
+    let a_last = scenario.only_cluster("model-order").await.stats;
+
+    assert_eq!(a_last, b_last);
+}
+
+#[tokio::test]
+async fn three_shared_backends_merge_sparse_priority_maps() {
+    let scenario = RegistrationScenario::new(Some("rk-three"));
+    let running_a = scenario.start_in("inst-a", "cluster-three", 1111);
+    let running_b = scenario.start_in("inst-b", "cluster-three", 2222);
+    let running_c = scenario.start_in("inst-c", "cluster-three", 3333);
+    let competing = scenario.start_in("inst-competing", "cluster-competing", 4444);
+    let stats = [
+        ModelStats {
+            last_mean_input_tps: 100.0,
+            output_tps: 10.0,
+            queue_size: 1,
+            queued_input_size: 100,
+            num_running_queries: 1,
+            total_query_input_size: 100,
+            input_processing_queries: 1,
+            queue_time_estimate_ms_by_priority: HashMap::from([(1, 100), (3, 300)]),
+            ..ModelStats::default()
+        },
+        ModelStats {
+            last_mean_input_tps: 200.0,
+            output_tps: 20.0,
+            queue_size: 1,
+            queued_input_size: 200,
+            num_running_queries: 2,
+            total_query_input_size: 200,
+            output_generation_queries: 2,
+            queue_time_estimate_ms_by_priority: HashMap::from([(2, 200)]),
+            ..ModelStats::default()
+        },
+        ModelStats {
+            last_mean_input_tps: 100.0,
+            output_tps: 0.0,
+            num_running_queries: 3,
+            total_query_input_size: 300,
+            queue_time_estimate_ms_by_priority: HashMap::from([(3, 900)]),
+            ..ModelStats::default()
+        },
+    ];
+
+    for (running, stats) in [
+        (&running_a, stats[0].clone()),
+        (&running_b, stats[1].clone()),
+        (&running_c, stats[2].clone()),
+    ] {
+        scenario
+            .publish(running, "model-three", Active, stats, Some(5))
+            .await;
+    }
+
+    let cluster = scenario.only_cluster("model-three").await;
+    assert_stats!(cluster.stats,
+        last_mean_input_tps: 400.0,
+        output_tps: 30.0,
+        queue_size: 2,
+        queued_input_size: 300,
+        num_running_queries: 6,
+        total_query_input_size: 600,
+        input_processing_queries: 1,
+        output_generation_queries: 2,
+        queue_time_estimate_ms_by_priority: HashMap::from([(1, 25), (2, 125), (3, 175)]),
+    );
+
+    scenario
+        .publish(
+            &competing,
+            "model-three",
+            Active,
+            priority_stats(100.0, [(3, 180)]),
+            Some(5),
+        )
+        .await;
+    let target = scenario.target("model-three");
+    let snapshot = scenario
+        .state
+        .routing_target_snapshot(&target)
+        .await
+        .expect("registered backends should publish a routable target");
+    let router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
+        default: LoadBalancerAlgorithm::PowerOfN,
+        request_algorithms: HashMap::new(),
+        models: HashMap::from([(
+            "model-three".to_string(),
+            LoadBalancerModelConfig::Detailed(Box::new(LoadBalancerAlgorithmConfig {
+                settings: LoadBalancerAlgorithmSettings::PowerOfN(PowerOfNAlgorithmConfig {
+                    sample_count: 2,
+                    comparator: ClusterComparator::QueueTime,
+                }),
+                ..LoadBalancerAlgorithmConfig::default()
+            })),
+        )]),
+    })
+    .expect("power-of-n router should initialize");
+    let request = LoadBalancerRequest {
+        routing_target: &target,
+        cache_affinity_key: None,
+        input_tokens: None,
+        priority: 3,
+        received_at: Instant::now(),
+        request_slo: None,
+        excluded_cluster_ids: None,
+    };
+    let choice = router
+        .choose_candidate(snapshot.load_balancers(), &request, snapshot.clusters())
+        .expect("one cluster should be selected");
+    assert_eq!(
+        snapshot.clusters()[choice.candidate_index].cluster_id,
+        "cluster-three"
+    );
+}
+
+#[tokio::test]
+async fn shared_cluster_aggregation_saturates_gauges_and_ignores_invalid_rates() {
+    let stats_a = ModelStats {
+        last_mean_input_tps: 100.0,
+        output_tps: 10.0,
+        max_output_tps: 50.0,
+        queue_size: u64::MAX,
+        queued_input_size: u64::MAX,
+        num_running_queries: u64::MAX,
+        total_query_input_size: u64::MAX,
+        input_processing_queries: u64::MAX,
+        output_generation_queries: u64::MAX,
+        ..ModelStats::default()
+    };
+    let stats_b = ModelStats {
+        last_mean_input_tps: 200.0,
+        output_tps: 20.0,
+        max_output_tps: 60.0,
+        queue_size: 1,
+        queued_input_size: 1,
+        num_running_queries: 1,
+        total_query_input_size: 1,
+        input_processing_queries: 1,
+        output_generation_queries: 1,
+        ..ModelStats::default()
+    };
+    let (scenario, running_a, running_b) = published_shared_cluster(stats_a, stats_b, 5).await;
+
+    let stats = scenario.only_cluster("shared-model").await.stats;
+    assert_stats!(stats,
+        last_mean_input_tps: 300.0,
+        output_tps: 30.0,
+        max_output_tps: 60.0,
+        queue_size: u64::MAX,
+        queued_input_size: u64::MAX,
+        num_running_queries: u64::MAX,
+        total_query_input_size: u64::MAX,
+        input_processing_queries: u64::MAX,
+        output_generation_queries: u64::MAX,
+    );
+
+    scenario
+        .publish(
+            &running_a,
+            "shared-model",
+            Active,
+            ModelStats {
+                last_mean_input_tps: 125.0,
+                output_tps: 7.5,
+                max_output_tps: 50.0,
+                ..ModelStats::default()
+            },
+            Some(5),
+        )
+        .await;
+    scenario
+        .publish(
+            &running_b,
+            "shared-model",
+            Active,
+            ModelStats {
+                last_mean_input_tps: f64::NAN,
+                output_tps: f64::INFINITY,
+                max_output_tps: -1.0,
+                ..ModelStats::default()
+            },
+            Some(5),
+        )
+        .await;
+    let stats = scenario.only_cluster("shared-model").await.stats;
+    assert_stats!(stats,
+        last_mean_input_tps: 125.0,
+        output_tps: 7.5,
+        max_output_tps: 50.0,
+    );
+}
+
+#[tokio::test]
+async fn shared_cluster_priority_weights_stay_within_source_bounds() {
+    let scenario = RegistrationScenario::new(Some("rk-convex"));
+    let backends = [
+        (scenario.start_in("inst-a", "cluster-convex", 1111), 6.0, 5),
+        (
+            scenario.start_in("inst-b", "cluster-convex", 2222),
+            23.0,
+            20,
+        ),
+        (scenario.start_in("inst-c", "cluster-convex", 3333), 1.0, 50),
+    ];
+    for (running, input_tps, wait_ms) in &backends {
+        scenario
+            .publish(
+                running,
+                "model-convex",
+                Active,
+                ModelStats {
+                    last_mean_input_tps: *input_tps,
+                    queue_size: 1,
+                    queued_input_size: 1,
+                    queue_time_estimate_ms_by_priority: HashMap::from([(0, *wait_ms)]),
+                    ..ModelStats::default()
+                },
+                Some(5),
+            )
+            .await;
+    }
+    assert_eq!(
+        scenario
+            .only_cluster("model-convex")
+            .await
+            .stats
+            .queue_time_estimate_ms_by_priority,
+        HashMap::from([(0, 18)])
+    );
+}
+
+#[tokio::test]
+async fn shared_cluster_missing_priority_inputs_select_scalar_fallback() {
+    let scenario = RegistrationScenario::new(Some("rk-fallback"));
+    let running_a = scenario.start_in("inst-a", "cluster-fallback", 1111);
+    let running_b = scenario.start_in("inst-b", "cluster-fallback", 2222);
+    let missing_map = ModelStats {
+        last_mean_input_tps: 100.0,
+        queue_size: 1,
+        queued_input_size: 100,
+        ..ModelStats::default()
+    };
+    let valid = priority_stats(200.0, [(0, 10)]);
+
+    scenario
+        .publish(&running_a, "model-fallback", Active, missing_map, Some(5))
+        .await;
+    scenario
+        .publish(&running_b, "model-fallback", Active, valid.clone(), Some(5))
+        .await;
+    let stats = scenario.only_cluster("model-fallback").await.stats;
+    assert!(stats.queue_time_estimate_ms_by_priority.is_empty());
+    assert_eq!(
+        crate::queue_estimate::queue_time_estimate_ms_for_priority(&stats, 0),
+        Some(334)
+    );
+
+    let invalid_rate = ModelStats {
+        queue_size: 1,
+        queued_input_size: 100,
+        queue_time_estimate_ms_by_priority: HashMap::from([(0, 20)]),
+        ..ModelStats::default()
+    };
+    scenario
+        .publish(&running_a, "model-fallback", Active, invalid_rate, Some(5))
+        .await;
+    let stats = scenario.only_cluster("model-fallback").await.stats;
+    assert!(stats.queue_time_estimate_ms_by_priority.is_empty());
+    assert_eq!(
+        crate::queue_estimate::queue_time_estimate_ms_for_priority(&stats, 0),
+        Some(500)
+    );
+}
+
+#[tokio::test]
+async fn shared_cluster_backend_removal_recomputes_request_load() {
+    let (scenario, running_a, running_b) =
+        published_shared_cluster(shared_backend_a_stats(), shared_backend_b_stats(), 10).await;
+    assert_eq!(
+        scenario
+            .only_cluster("shared-model")
+            .await
+            .stats
+            .num_running_queries,
+        18
+    );
+
+    scenario.state.end_registration(running_b).await;
+    let stats = scenario.only_cluster("shared-model").await.stats;
+    assert_stats!(stats,
+        last_mean_input_tps: 100.0,
+        output_tps: 2.0,
+        max_output_tps: 50.0,
+        queue_size: 1,
+        queued_input_size: 100,
+        num_running_queries: 11,
+        total_query_input_size: 1111,
+        input_processing_queries: 1,
+        output_generation_queries: 2,
+        queue_time_estimate_ms_by_priority: HashMap::from([(1, 111)]),
+    );
+    scenario.state.end_registration(running_a).await;
+    assert!(scenario.clusters("shared-model").await.is_empty());
+}
+
+#[tokio::test]
+async fn routing_uses_load_from_every_shared_cluster_backend() {
+    let scenario = RegistrationScenario::new(Some("rk-routing-load"));
+    let shared_a = scenario.start_in("shared-a", "cluster-shared", 1111);
+    let shared_b = scenario.start_in("shared-b", "cluster-shared", 2222);
+    let light = scenario.start_in("light", "cluster-light", 3333);
+    for (running, wait_ms) in [(&shared_a, 900), (&shared_b, 100), (&light, 300)] {
+        let stats = ModelStats {
+            last_mean_input_tps: 100.0,
+            queue_size: 1,
+            queued_input_size: 100,
+            queue_time_estimate_ms_by_priority: HashMap::from([(0, wait_ms)]),
+            ..ModelStats::default()
+        };
+        scenario
+            .publish(running, "model-routing-load", Active, stats, Some(5))
+            .await;
+    }
+    let target = scenario.target("model-routing-load");
+    let snapshot = scenario
+        .state
+        .routing_target_snapshot(&target)
+        .await
+        .expect("registered backends should publish a routable target");
+    let shared = snapshot
+        .clusters()
+        .iter()
+        .find(|cluster| cluster.cluster_id == "cluster-shared")
+        .expect("shared cluster should be present");
+    assert_eq!(
+        shared.stats.queue_time_estimate_ms_by_priority,
+        HashMap::from([(0, 500)])
+    );
+
+    let router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
+        default: LoadBalancerAlgorithm::PowerOfN,
+        request_algorithms: HashMap::new(),
+        models: HashMap::from([(
+            "model-routing-load".to_string(),
+            LoadBalancerModelConfig::Detailed(Box::new(LoadBalancerAlgorithmConfig {
+                settings: LoadBalancerAlgorithmSettings::PowerOfN(PowerOfNAlgorithmConfig {
+                    sample_count: 2,
+                    comparator: ClusterComparator::QueueTime,
+                }),
+                ..LoadBalancerAlgorithmConfig::default()
+            })),
+        )]),
+    })
+    .expect("power-of-n router should initialize");
+    let request = LoadBalancerRequest {
+        routing_target: &target,
+        cache_affinity_key: None,
+        input_tokens: None,
+        priority: 0,
+        received_at: Instant::now(),
+        request_slo: None,
+        excluded_cluster_ids: None,
+    };
+    let choice = router
+        .choose_candidate(snapshot.load_balancers(), &request, snapshot.clusters())
+        .expect("one cluster should be selected");
+    assert_eq!(
+        snapshot.clusters()[choice.candidate_index].cluster_id,
+        "cluster-light"
+    );
 }
 
 #[tokio::test]

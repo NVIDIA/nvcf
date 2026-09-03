@@ -34,6 +34,13 @@ mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
+const BUILD_VERSION: &str = match option_env!("STARGATE_BUILD_VERSION") {
+    Some(version) => version,
+    None => match built_info::GIT_COMMIT_HASH {
+        Some(commit) => commit,
+        None => "unknown",
+    },
+};
 const DEFAULT_PROXY_MAX_REPLAY_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 fn parse_nonzero_millis(value: &str) -> std::result::Result<u64, String> {
@@ -75,7 +82,7 @@ fn parse_grpc_pylon_dial_uri(value: &str) -> std::result::Result<String, String>
 }
 
 #[derive(clap::Parser, Debug)]
-#[command(name = "stargate")]
+#[command(name = "stargate", version = BUILD_VERSION)]
 struct Args {
     /// Stable Stargate process or pod identity.
     #[arg(long, value_name = "ID")]
@@ -412,7 +419,7 @@ async fn run(args: Args) -> Result<()> {
 
 fn log_startup(args: &Args) {
     info!(
-        version = built_info::PKG_VERSION,
+        version = BUILD_VERSION,
         commit_short_sha = built_info::GIT_COMMIT_HASH_SHORT.unwrap_or("unknown"),
         config = ?args,
         "starting stargate"
@@ -613,7 +620,7 @@ mod tests {
         let (_, output) = capture_logs(tracing::Level::INFO, || log_startup(&args));
         let expected_commit = built_info::GIT_COMMIT_HASH_SHORT.unwrap_or("unknown");
         for expected in [
-            format!("version=\"{}\"", built_info::PKG_VERSION),
+            format!("version=\"{BUILD_VERSION}\""),
             format!("commit_short_sha=\"{expected_commit}\""),
             format!("config={args:?}"),
         ] {
@@ -1160,7 +1167,10 @@ mod tests {
     #[test]
     fn readiness_warmup_defaults_and_overrides_parse() {
         let defaults = parse_args("");
-        assert_eq!(defaults.readiness_warmup_ms, 0, "warmup defaults to disabled");
+        assert_eq!(
+            defaults.readiness_warmup_ms, 0,
+            "warmup defaults to disabled"
+        );
         assert_eq!(defaults.readiness_stabilization_sample_interval_ms, 1000);
         assert_eq!(defaults.readiness_stabilization_window, 5);
 

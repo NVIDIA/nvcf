@@ -5,13 +5,17 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
 )
 
@@ -36,11 +40,8 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 		HealthAddr:    ":8011",
 		ScanInterval:  config.DefaultScanInterval,
 	}
-	svc, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	if err := svc.Initialize(); err != nil {
+	svc := NewWithBackend(cfg, &stubBackend{})
+	if err := svc.Initialize(context.Background()); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
 	}
 	for path, want := range map[string]int{
@@ -63,10 +64,7 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 }
 
 func TestHTTPServerTimeouts(t *testing.T) {
-	svc, err := New(config.Config{HealthAddr: ":8011"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+	svc := NewWithBackend(config.Config{HealthAddr: ":8011"}, &stubBackend{})
 	server := svc.httpServer()
 	if server.ReadHeaderTimeout != 5*time.Second {
 		t.Errorf("ReadHeaderTimeout = %v, want %v", server.ReadHeaderTimeout, 5*time.Second)
@@ -84,17 +82,138 @@ func TestHTTPServerTimeouts(t *testing.T) {
 
 func TestInitializeRejectsUnreadableSecret(t *testing.T) {
 	root := t.TempDir()
-	svc, err := New(config.Config{
+	svc := NewWithBackend(config.Config{
 		SourceDir:     root,
 		SegmentPrefix: "request-trace",
 		SecretsFile:   filepath.Join(root, "missing.json"),
 		StateDir:      filepath.Join(root, "state"),
 		QuarantineDir: filepath.Join(root, "quarantine"),
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	if err := svc.Initialize(); err == nil {
+	}, &stubBackend{})
+	if err := svc.Initialize(context.Background()); err == nil {
 		t.Fatal("Initialize() error = nil, want error")
+	}
+}
+
+// stubBackend stands in for a real destination and records what it was asked
+// to do, so a test can tell "the segment was submitted" apart from "nothing
+// happened".
+type stubBackend struct {
+	submitted []string
+	statuses  []string
+}
+
+func (b *stubBackend) Submit(_ context.Context, request backend.SubmitRequest) (string, error) {
+	b.submitted = append(b.submitted, request.Path)
+	return fmt.Sprintf("stub-%d", request.Segment.Index), nil
+}
+
+func (b *stubBackend) Status(_ context.Context, id string) (backend.Status, error) {
+	b.statuses = append(b.statuses, id)
+	return backend.StatusSuccess, nil
+}
+
+func TestRefreshSubmitsEveryClosedSegment(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"request-trace.000000.jsonl.gz",
+		"request-trace.000001.jsonl.gz",
+		"request-trace.000002.jsonl.gz",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stub := &stubBackend{}
+	svc := NewWithBackend(config.Config{
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+		StateDir:      filepath.Join(root, "state"),
+		QuarantineDir: filepath.Join(root, "quarantine"),
+	}, stub)
+
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+
+	// Index 2 is the active segment and must not be submitted.
+	want := []string{
+		filepath.Join(root, "request-trace.000000.jsonl.gz"),
+		filepath.Join(root, "request-trace.000001.jsonl.gz"),
+	}
+	if !reflect.DeepEqual(stub.submitted, want) {
+		t.Errorf("submitted = %v, want %v", stub.submitted, want)
+	}
+	if !reflect.DeepEqual(stub.statuses, []string{"stub-0", "stub-1"}) {
+		t.Errorf("statuses = %v, want the id from each submit", stub.statuses)
+	}
+	for _, path := range want {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("source %s was removed: %v", filepath.Base(path), err)
+		}
+	}
+}
+
+func TestRefreshStopsOnCancellation(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"request-trace.000000.jsonl.gz",
+		"request-trace.000001.jsonl.gz",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stub := &stubBackend{}
+	svc := NewWithBackend(config.Config{
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+	}, stub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := svc.Refresh(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Refresh() error = %v, want context.Canceled", err)
+	}
+	if len(stub.submitted) != 0 {
+		t.Errorf("submitted = %v, want nothing after cancellation", stub.submitted)
+	}
+}
+
+func TestInitializeStopsOnCancellation(t *testing.T) {
+	root := t.TempDir()
+	secretsFile := filepath.Join(root, "secrets.json")
+	if err := os.WriteFile(secretsFile, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"request-trace.000000.jsonl.gz",
+		"request-trace.000001.jsonl.gz",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stub := &stubBackend{}
+	svc := NewWithBackend(config.Config{
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+		SecretsFile:   secretsFile,
+		StateDir:      filepath.Join(root, "state"),
+		QuarantineDir: filepath.Join(root, "quarantine"),
+	}, stub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := svc.Initialize(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Initialize() error = %v, want context.Canceled", err)
+	}
+	if len(stub.submitted) != 0 {
+		t.Errorf("submitted = %v, want nothing after cancellation", stub.submitted)
 	}
 }
