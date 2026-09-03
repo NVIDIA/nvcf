@@ -21,7 +21,7 @@ use anyhow::{Context, Result};
 use quinn::{ClientConfig, Endpoint};
 use stargate_forwarding::{
     HostnameMatcher, PeerTarget, RelayEndpointConfig, RelayEndpoints, build_relay_endpoints,
-    forward_quic_connection,
+    forward_quic_connection_until_shutdown,
 };
 use tokio::sync::watch;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -140,7 +140,11 @@ impl QuicRouterRuntime {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    self.endpoint.close(0u32.into(), b"shutdown");
+                    self.endpoint.set_server_config(None);
+                    info!(
+                        active_connections = self.endpoint.open_connections(),
+                        "QUIC router stopped accepting new connections; draining active streams"
+                    );
                     return Ok(());
                 }
                 result = &mut reload_task => {
@@ -229,6 +233,7 @@ async fn dispatch_incoming(
     shutdown: CancellationToken,
 ) -> Result<()> {
     let connection = tokio::select! {
+        biased;
         _ = shutdown.cancelled() => return Ok(()),
         connection = incoming => connection.context("accept QUIC connection")?,
     };
@@ -269,20 +274,14 @@ async fn dispatch_incoming(
             return Ok(());
         }
     };
-    let relay = forward_quic_connection(
-        connection.clone(),
+    let relay_result = forward_quic_connection_until_shutdown(
+        connection,
         &peer,
         &relay.endpoints,
         relay.connect_timeout,
-    );
-    tokio::pin!(relay);
-    let relay_result = tokio::select! {
-        _ = shutdown.cancelled() => {
-            connection.close(0u32.into(), b"router shutdown");
-            return Ok(());
-        }
-        result = &mut relay => result,
-    };
+        shutdown.cancelled_owned(),
+    )
+    .await;
     metrics.observe_quic_connection(if relay_result.is_ok() {
         "completed"
     } else {
