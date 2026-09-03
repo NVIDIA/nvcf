@@ -35,7 +35,7 @@ nvcaImage:
 ## @param otelCollector.resources.requests.cpu CPU request for the OTel collector container
 ## @param otelCollector.resources.requests.memory Memory request for the OTel collector container
 otelCollector:
-  enabled: false
+  enabled: true
   imageRepository: ""
   imageTag: 0.157.9
   resources:
@@ -318,7 +318,7 @@ helmManaged:
   ## @param helmManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param helmManaged.otelCollector.imageTag (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.
   otelCollector:
-    enabled: false
+    enabled: true
     imageRepository: ""
     imageTag: 0.157.9
 ## @section Self Managed NVCF Backend Configuration
