@@ -11,7 +11,7 @@ This repository ships:
 - Numbered shell migrations under `migrations/` that run in order against an OpenBao leader
 - Helper utilities under `migrations/utils/`
 - The `jwker` CLI used by the install pipeline to convert Kubernetes JWKS material to PEM
-- Verified `jwker` binary and signed-package `kubectl` copied from downloader stages
+- Reproducible `jwker` source build and checksum-verified official `kubectl` binary copied from build stages
 - Optional addons under `addons/` (e.g., LLS / TURN secret rotation)
 - An example Kubernetes Job manifest (`job.yaml`)
 - A Docker-based integration test for the helper functions (`tests/`)
@@ -42,12 +42,10 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 ## Building the container
 
 The `Dockerfile` uses the public upstream OpenBao image (`openbao/openbao:2.5.5`) as the base. To use a different base, edit the `FROM` line directly.
-`kubectl` is installed from Alpine's signed package repository and pinned with `KUBECTL_APK_VERSION`.
+It builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0 and downloads the official Kubernetes v1.36.4 `kubectl` binary for the target architecture. The build verifies both the published Kubernetes checksum and the pinned per-architecture checksum.
 
 ```bash
-docker build \
-  --build-arg KUBECTL_APK_VERSION=1.34.2-r6 \
-  -t <your-registry>/<your-org>/openbao-migrations:<version> .
+docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
 
 ## Running the migrations
