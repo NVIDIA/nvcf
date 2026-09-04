@@ -35,6 +35,8 @@ use headers::MissingRequiredHeaderError;
 pub(crate) use headers::{RequiredTunnelHeaders, validate_required_tunnel_headers};
 pub(crate) use tunnel::TunnelRequestObserver;
 
+const MAX_TRACKED_CHAT_CHOICES: usize = 128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestObservationState {
     Queued,
@@ -367,6 +369,13 @@ impl RequestObserver {
         let event_after_finish =
             state.choices.get(&choice.index) == Some(&ChatChoiceState::Finished);
         if event_after_finish {
+            self.observe_output_calibration_details(None, true);
+            return;
+        }
+        if !state.choices.contains_key(&choice.index)
+            && state.choices.len() >= MAX_TRACKED_CHAT_CHOICES
+        {
+            self.chat_calibration = None;
             self.observe_output_calibration_details(None, true);
             return;
         }
@@ -704,6 +713,55 @@ mod tests {
             assert_eq!(observer.output_token_calibration_enabled(), enabled);
             assert_eq!(observer.chat_calibration.is_some(), expected_state);
         }
+    }
+
+    #[test]
+    fn chat_calibration_stops_tracking_after_the_choice_limit() {
+        let (runtime_state, _rx) = observed_runtime(4);
+        let mut observer = test_observer(
+            "req-choice-limit",
+            runtime_state.with_single_pylon_output_token_calibration(),
+        );
+        observer.submit_now();
+
+        for index in 0..MAX_TRACKED_CHAT_CHOICES as u64 {
+            observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+                index,
+                safely_finished: false,
+            });
+        }
+        assert_eq!(
+            observer
+                .chat_calibration
+                .as_ref()
+                .expect("choice tracking should remain active at the limit")
+                .choices
+                .len(),
+            MAX_TRACKED_CHAT_CHOICES
+        );
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: 0,
+            safely_finished: false,
+        });
+        assert!(observer.chat_calibration.is_some());
+
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: MAX_TRACKED_CHAT_CHOICES as u64,
+            safely_finished: false,
+        });
+
+        assert!(observer.chat_calibration.is_none());
+        assert!(
+            response(&observer)
+                .output_calibration
+                .calibration_ineligible
+        );
+
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: MAX_TRACKED_CHAT_CHOICES as u64 + 1,
+            safely_finished: false,
+        });
+        assert!(observer.chat_calibration.is_none());
     }
 
     #[test]
