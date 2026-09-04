@@ -1301,7 +1301,9 @@ func newModelCacheICMSSpec(cacheHandle string) nvcav2beta1.ICMSRequestSpec {
 // the given agent config, returning a context, the manager client, and the
 // manager error channel. Several model-cache envtests run in one process, so
 // controller name validation is skipped.
-func startModelCacheController(t *testing.T, agentCfg nvcaconfig.Config) (context.Context, client.Client, <-chan error) {
+func startModelCacheController(
+	t *testing.T, agentCfg nvcaconfig.Config,
+) (context.Context, client.Client, <-chan error, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -1331,13 +1333,15 @@ func startModelCacheController(t *testing.T, agentCfg nvcaconfig.Config) (contex
 	mgr.GetCache().WaitForCacheSync(cctx)
 	ccancel()
 
-	return ctx, mgr.GetClient(), mgrErrCh
+	return ctx, mgr.GetClient(), mgrErrCh, cancel
 }
 
 // createSharedFSModelCacheRequest creates the namespaces, ICMSRequest, and a
 // StorageRequest already routed to the shared filesystem backend for
 // cacheHandle, and returns the workload namespace.
-func createSharedFSModelCacheRequest(t *testing.T, ctx context.Context, c client.Client, cacheHandle, workloadNSName string) *corev1.Namespace {
+func createSharedFSModelCacheRequest(
+	t *testing.T, ctx context.Context, c client.Client, cacheHandle, workloadNSName string,
+) (*corev1.Namespace, *nvcav2beta1.ICMSRequest, *nvcav1new.StorageRequest) {
 	t.Helper()
 	srNamespace := &corev1.Namespace{}
 	srNamespace.Name = types.DefaultICMSRequestNamespace
@@ -1363,7 +1367,7 @@ func createSharedFSModelCacheRequest(t *testing.T, ctx context.Context, c client
 		Backend:     string(HelmCacheBackendSharedFS),
 	}
 	require.NoError(t, c.Create(ctx, st))
-	return workloadNS
+	return workloadNS, sr, st
 }
 
 // TestReconcile_ModelCacheSharedFSWriterHonorsClassOverride pins that the shared
@@ -1372,11 +1376,11 @@ func createSharedFSModelCacheRequest(t *testing.T, ctx context.Context, c client
 // and this assertion cannot pass against it.
 func TestReconcile_ModelCacheSharedFSWriterHonorsClassOverride(t *testing.T) {
 	const override = "custom-block-sc"
-	ctx, c, _ := startModelCacheController(t, nvcaconfig.Config{
+	ctx, c, _, _ := startModelCacheController(t, nvcaconfig.Config{
 		Agent: nvcaconfig.AgentConfig{ModelCache: nvcaconfig.ModelCacheConfig{StorageClassName: override}},
 	})
 	cacheHandle := "sharedfsoverride"
-	createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs-override")
+	_, _, _ = createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs-override")
 
 	rwPVC := &corev1.PersistentVolumeClaim{}
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -1391,7 +1395,7 @@ func TestReconcile_ModelCacheSharedFSWriterHonorsClassOverride(t *testing.T) {
 }
 
 func TestReconcile_ModelCacheSharedFS(t *testing.T) {
-	ctx, c, mgrErrCh := startModelCacheController(t, nvcaconfig.Config{})
+	ctx, c, mgrErrCh, cancel := startModelCacheController(t, nvcaconfig.Config{})
 
 	// The shared class exists (operator- or Samba-provided).
 	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
@@ -1400,7 +1404,7 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 	}))
 
 	cacheHandle := "sharedfshandle"
-	workloadNS := createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs")
+	workloadNS, sr, st := createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs")
 	srNamespace := &corev1.Namespace{}
 	srNamespace.Name = types.DefaultICMSRequestNamespace
 
