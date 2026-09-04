@@ -13,7 +13,22 @@ metadata:
   namespace: {{ include "llm-request-router.namespace" . }}
   labels:
     {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+  {{- with .Values.llmRequestRouter.backendRouter.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
+  type: {{ .Values.llmRequestRouter.backendRouter.service.type }}
+  {{- with .Values.llmRequestRouter.backendRouter.service.loadBalancerClass }}
+  loadBalancerClass: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.llmRequestRouter.backendRouter.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.llmRequestRouter.backendRouter.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
   {{- /*
   Each router replica terminates QUIC itself and cannot resume a session that
   began on another replica. Pin a client to one replica so a rehash mid-session
@@ -32,6 +47,20 @@ spec:
       port: {{ .Values.llmRequestRouter.backendRouter.service.reverseTunnelPort }}
       targetPort: quic
       protocol: UDP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}-health
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+    app.kubernetes.io/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 4 }}
+  ports:
     - name: health
       port: {{ .Values.llmRequestRouter.backendRouter.service.healthPort }}
       targetPort: health
@@ -102,6 +131,9 @@ spec:
             {{- with .Values.llmRequestRouter.tls.keyPath }}
             - --tls-key-path={{ . }}
             {{- end }}
+            {{- with .Values.llmRequestRouter.tls.upstreamCaPath }}
+            - --upstream-tls-cert-path={{ . }}
+            {{- end }}
             {{- if .Values.llmRequestRouter.tls.quicInsecure }}
             - --quic-insecure
             {{- end }}
@@ -145,6 +177,10 @@ spec:
                 path: {{ base .Values.llmRequestRouter.tls.certPath | quote }}
               - key: tls.key
                 path: {{ base .Values.llmRequestRouter.tls.keyPath | quote }}
+              {{- with .Values.llmRequestRouter.tls.upstreamCaPath }}
+              - key: ca.crt
+                path: {{ base . | quote }}
+              {{- end }}
       {{- end }}
       {{- with .Values.llmRequestRouter.backendRouter.nodeSelector }}
       nodeSelector:

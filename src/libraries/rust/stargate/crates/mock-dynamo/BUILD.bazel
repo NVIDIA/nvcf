@@ -1,12 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Test/dev helper used by integration tests. Not packaged into an OCI
-# image (matches the upstream Dockerfile which builds it as a debug
-# helper only).
-
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//rules/oci:defs.bzl", "rust_oci_image")
 
 rust_binary(
     name = "mock-dynamo",
@@ -16,4 +14,23 @@ rust_binary(
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True),
+)
+
+rust_oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    binary = ":mock-dynamo",
+    binary_path = "/usr/local/bin/mock-dynamo",
+    tags = ["mock-dynamo"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["//src/libraries/rust/stargate/tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :image_layer)",
+        "/usr/local/bin/mock-dynamo",
+    ],
+    data = [":image_layer"],
 )

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["clusterId", "modelName", "workerToken", "stargate", "images"],
+  "properties": {
+    "clusterId": {"type": "string", "minLength": 1},
+    "modelName": {"type": "string", "minLength": 1},
+    "workerToken": {"type": "string", "minLength": 1},
+    "stargate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "quicCaSecretName", "quicCaSecretKey"],
+      "properties": {
+        "address": {"type": "string", "pattern": "^https://[^/]+(:[0-9]+)?$"},
+        "quicCaSecretName": {"type": "string", "minLength": 1},
+        "quicCaSecretKey": {"type": "string", "minLength": 1}
+      }
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mockDynamo", "pylon"],
+      "properties": {
+        "mockDynamo": {"$ref": "#/$defs/image"},
+        "pylon": {"$ref": "#/$defs/image"}
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {"name": {"type": "string", "minLength": 1}}
+      }
+    },
+    "mockDynamo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend0", "backend1"],
+      "properties": {
+        "backend0": {"$ref": "#/$defs/mockDynamo"},
+        "backend1": {"$ref": "#/$defs/mockDynamo"}
+      }
+    },
+    "pylon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["doCalibration", "initialInputTps"],
+      "properties": {
+        "doCalibration": {"type": "boolean"},
+        "initialInputTps": {
+          "oneOf": [
+            {"type": "string", "maxLength": 0},
+            {"type": "number", "exclusiveMinimum": 0}
+          ]
+        }
+      }
+    },
+    "resources": {"type": "object"},
+    "podAnnotations": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "mockDynamo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "healthDelayMs"],
+      "properties": {
+        "profile": {"enum": ["h100-llama-3.1-8b"]},
+        "healthDelayMs": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

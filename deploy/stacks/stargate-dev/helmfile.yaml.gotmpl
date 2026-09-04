@@ -1,0 +1,496 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+environments:
+  us-west-2:
+    values:
+      - environments/us-west-2.yaml
+      - values/versions.yaml
+      - {{ requiredEnv "STARGATE_DEV_VALUES_FILE" }}
+
+---
+
+{{- $credentials := dict -}}
+{{- $credentialsPath := env "STARGATE_DEV_CREDENTIALS_FILE" -}}
+{{- if $credentialsPath -}}
+{{- $credentials = readFile $credentialsPath | fromJson -}}
+{{- end -}}
+{{- if and $credentialsPath (ne ($credentials.region | toString) .Environment.Name) -}}
+{{- fail "credential bundle region does not match the Helmfile environment" -}}
+{{- end -}}
+{{- $workerToken := sprigGet $credentials "workerToken" | default "" -}}
+
+helmDefaults:
+  atomic: true
+  cleanupOnFail: true
+  createNamespace: true
+  wait: true
+  timeout: 600
+
+repositories:
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+  - name: grafana-community
+    url: https://grafana-community.github.io/helm-charts
+
+releases:
+  - name: stargate-dev-auth
+    namespace: {{ .Values.namespace }}
+    kubeContext: {{ .Values.clusters.stargate.kubeContext }}
+    chart: ./charts/stargate-dev-auth
+    labels:
+      phase: stargate
+      component: auth
+    values:
+      - image:
+          repository: {{ .Values.images.auth.repository }}
+          digest: {{ .Values.images.auth.digest }}
+        credentials:
+          serviceToken: {{ sprigGet $credentials "serviceToken" | default "" | quote }}
+          clientToken: {{ sprigGet $credentials "clientToken" | default "" | quote }}
+          workers:
+            - token: {{ $workerToken | quote }}
+              routingKey: {{ required "routingKey is required" $.Values.routingKey | quote }}
+
+  - name: llm-request-router
+    namespace: {{ .Values.namespace }}
+    kubeContext: {{ .Values.clusters.stargate.kubeContext }}
+    chart: ../../helm/llm-request-router/llm-request-router
+    needs:
+      - {{ .Values.namespace }}/stargate-dev-auth
+    labels:
+      phase: stargate
+      component: router
+    values:
+      - llmRequestRouter:
+          replicaCount: 3
+          image:
+            repository: {{ .Values.images.stargate.repository }}
+            digest: {{ .Values.images.stargate.digest }}
+          loadBalancer:
+            config: |
+              {
+                "default": "wait-and-widen",
+                "request_algorithms": {
+                  "power-of-n": {
+                    "algorithm": "power-of-n",
+                    "sample_count": 2,
+                    "comparator": "ttft"
+                  }
+                },
+                "models": {
+                  {{ .Values.modelName | quote }}: {
+                    "algorithm": "wait-and-widen",
+                    "comparator": "ttft",
+                    "require_cache_affinity_key": true,
+                    "require_input_tokens": true,
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_virtual_nodes": 150,
+                    "max_queue_time_floor_ms": 100,
+                    "max_queue_time_ceil_ms": 5000
+                  }
+                }
+              }
+          readiness:
+            stabilizationSampleIntervalMs: null
+            stabilizationWindow: null
+          podAnnotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/path: /metrics
+            prometheus.io/port: "9090"
+          podDisruptionBudget:
+            enabled: true
+            minAvailable: 2
+            maxUnavailable: ""
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    topologyKey: kubernetes.io/hostname
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: llm-request-router
+                        app.kubernetes.io/instance: llm-request-router
+                - weight: 90
+                  podAffinityTerm:
+                    topologyKey: topology.kubernetes.io/zone
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: llm-request-router
+                        app.kubernetes.io/instance: llm-request-router
+          kubernetes:
+            advertisedHostnameTemplate: "{pod_name}.{{ .Values.router.hostname }}"
+          backendRouter:
+            enabled: true
+            replicaCount: 3
+            pylonGrpcDialAddress: https://{{ .Values.router.hostname }}:50071
+            pylonReverseTunnelDialAddress: {{ .Values.router.hostname }}:50072
+            podAnnotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/path: /metrics
+              prometheus.io/port: "8080"
+            podDisruptionBudget:
+              enabled: true
+              minAvailable: 2
+              maxUnavailable: ""
+            affinity:
+              podAntiAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      topologyKey: kubernetes.io/hostname
+                      labelSelector:
+                        matchLabels:
+                          app.kubernetes.io/name: llm-request-router-backend-router
+                          app.kubernetes.io/instance: llm-request-router
+                  - weight: 90
+                    podAffinityTerm:
+                      topologyKey: topology.kubernetes.io/zone
+                      labelSelector:
+                        matchLabels:
+                          app.kubernetes.io/name: llm-request-router-backend-router
+                          app.kubernetes.io/instance: llm-request-router
+            service:
+              type: LoadBalancer
+              loadBalancerClass: service.k8s.aws/nlb
+              loadBalancerSourceRanges:
+                {{- toYaml .Values.router.loadBalancerSourceRanges | nindent 16 }}
+              annotations:
+                service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+                service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+                service.beta.kubernetes.io/aws-load-balancer-ssl-cert: {{ .Values.router.acmCertificateArn | quote }}
+                service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "50071"
+                service.beta.kubernetes.io/aws-load-balancer-alpn-policy: HTTP2Only
+                service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+                service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+                service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
+                service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+                {{- if .Values.router.externalDnsEnabled }}
+                external-dns.alpha.kubernetes.io/hostname: {{ .Values.router.hostname | quote }}
+                {{- end }}
+          auth:
+            workerAuthEndpoint: http://stargate-dev-auth.{{ .Values.namespace }}.svc.cluster.local:50051
+            existingSecret:
+              name: stargate-dev-auth-credentials
+              key: service-token.json
+              mountPath: /var/run/secrets/stargate-auth
+              jsonPath: nvcfApiToken
+          vault:
+            noVaultAnnotations: true
+          tls:
+            mode: existingSecret
+            secretName: {{ .Values.router.tlsSecretName }}
+            mountPath: /var/run/stargate/tls
+            certPath: /var/run/stargate/tls/tls.crt
+            keyPath: /var/run/stargate/tls/tls.key
+            upstreamCaPath: /var/run/stargate/tls/ca.crt
+            quicInsecure: false
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: false
+
+{{- range $mockdc := .Values.clusters.mockdcs }}
+  - name: {{ $mockdc.name }}
+    namespace: {{ $.Values.namespace }}
+    kubeContext: {{ $mockdc.kubeContext }}
+    chart: ./charts/stargate-dev-mockdc
+    labels:
+      phase: mockdc
+      component: mockdc
+      cluster: {{ $mockdc.name }}
+    values:
+      - clusterId: {{ $mockdc.name }}
+        modelName: {{ $.Values.modelName }}
+        workerToken: {{ $workerToken | quote }}
+        stargate:
+          address: https://{{ $.Values.router.hostname }}:50071
+          quicCaSecretName: {{ $mockdc.quicCaSecretName }}
+        images:
+          mockDynamo:
+            repository: {{ $.Values.images.mockDynamo.repository }}
+            digest: {{ $.Values.images.mockDynamo.digest }}
+          pylon:
+            repository: {{ $.Values.images.pylon.repository }}
+            digest: {{ $.Values.images.pylon.digest }}
+        mockDynamo:
+          {{- toYaml $mockdc.mockDynamo | nindent 10 }}
+{{- end }}
+
+{{- $observability := required "observability is required" .Values.observability }}
+{{- $amp := required "observability.amp is required" $observability.amp }}
+{{- $alloy := required "observability.alloy is required" $observability.alloy }}
+{{- $grafana := required "observability.grafana is required" $observability.grafana }}
+  - name: stargate-dev-grafana
+    namespace: {{ $observability.namespace }}
+    kubeContext: {{ .Values.clusters.stargate.kubeContext }}
+    chart: grafana-community/grafana
+    version: {{ $grafana.chartVersion | quote }}
+    labels:
+      phase: observability
+      component: grafana
+    values:
+      - fullnameOverride: stargate-dev-grafana
+        replicas: 1
+        image:
+          registry: docker.io
+          repository: {{ $grafana.image.repository }}
+          tag: {{ $grafana.image.tag | quote }}
+          sha: {{ $grafana.image.digest | trimPrefix "sha256:" | quote }}
+        testFramework:
+          enabled: false
+        rbac:
+          create: false
+        serviceAccount:
+          create: true
+          name: stargate-dev-grafana
+          automountServiceAccountToken: true
+          annotations:
+            eks.amazonaws.com/role-arn: {{ required "observability.grafana.readerRoleArn is required" $grafana.readerRoleArn | quote }}
+        service:
+          type: ClusterIP
+        persistence:
+          enabled: false
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        podAnnotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/path: /metrics
+          prometheus.io/port: "3000"
+        env:
+          AWS_DEFAULT_REGION: {{ .Values.region | quote }}
+          AWS_REGION: {{ .Values.region | quote }}
+          AWS_SDK_LOAD_CONFIG: "true"
+        grafana.ini:
+          analytics:
+            check_for_updates: false
+            check_for_plugin_updates: false
+            reporting_enabled: false
+          auth.anonymous:
+            enabled: false
+          aws:
+            allowed_auth_providers: default
+            forward_settings_to_plugins: grafana-amazonprometheus-datasource
+          plugins:
+            plugin_admin_enabled: false
+            preinstall_auto_update: false
+          users:
+            allow_sign_up: false
+        plugins:
+          - {{ printf "grafana-amazonprometheus-datasource@%s" $grafana.pluginVersion | quote }}
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Stargate dev AMP
+                uid: stargate-dev-amp
+                type: grafana-amazonprometheus-datasource
+                access: proxy
+                url: {{ printf "https://aps-workspaces.%s.amazonaws.com/workspaces/%s" .Values.region (required "observability.amp.workspaceId is required" $amp.workspaceId) | quote }}
+                isDefault: true
+                editable: false
+                jsonData:
+                  httpMethod: POST
+                  manageAlerts: false
+                  sigV4Auth: true
+                  sigV4AuthType: default
+                  sigV4Region: {{ .Values.region }}
+                  sigv4Service: aps
+        dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: default
+                orgId: 1
+                folder: ""
+                folderUid: ""
+                type: file
+                disableDeletion: true
+                allowUiUpdates: false
+                options:
+                  path: /var/lib/grafana/dashboards/default
+        dashboardsConfigMaps:
+          default: stargate-dev-grafana-dashboards
+        extraObjects:
+          - apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: stargate-dev-grafana-dashboards
+              namespace: {{ $observability.namespace }}
+            binaryData:
+              stargate-services.json: {{ readFile "dashboards/stargate-services.json" | b64enc | quote }}
+              stargate-backend-balance.json: {{ readFile "dashboards/stargate-backend-balance.json" | b64enc | quote }}
+
+{{- $metricsClusters := list (dict
+      "name" .Values.clusters.stargate.name
+      "kubeContext" .Values.clusters.stargate.kubeContext
+      "role" "stargate") }}
+{{- range $mockdc := .Values.clusters.mockdcs }}
+{{- $metricsClusters = append $metricsClusters (dict
+      "name" $mockdc.name
+      "kubeContext" $mockdc.kubeContext
+      "role" "mockdc") }}
+{{- end }}
+{{- range $cluster := $metricsClusters }}
+  - name: metrics-{{ $cluster.name }}
+    namespace: {{ $observability.namespace }}
+    kubeContext: {{ $cluster.kubeContext }}
+    chart: grafana/alloy
+    version: {{ $alloy.chartVersion | quote }}
+    labels:
+      phase: observability
+      component: metrics-collector
+      cluster: {{ $cluster.name }}
+    values:
+      - fullnameOverride: stargate-dev-alloy
+        crds:
+          create: false
+        global:
+          podSecurityContext:
+            runAsNonRoot: true
+            runAsUser: 473
+            runAsGroup: 473
+            fsGroup: 473
+            seccompProfile:
+              type: RuntimeDefault
+        image:
+          repository: {{ $alloy.image.repository }}
+          digest: {{ $alloy.image.digest }}
+        serviceAccount:
+          create: true
+          name: stargate-dev-alloy
+          annotations:
+            eks.amazonaws.com/role-arn: {{ required "observability.amp.writerRoleArn is required" $amp.writerRoleArn | quote }}
+        rbac:
+          create: true
+          namespaces:
+            - {{ $.Values.namespace }}
+            - {{ $observability.namespace }}
+          rules:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch"]
+          clusterRules: []
+        configReloader:
+          enabled: false
+        service:
+          enabled: false
+        controller:
+          type: deployment
+          replicas: 1
+          volumes:
+            extra:
+              - name: storage
+                emptyDir: {}
+        alloy:
+          enableReporting: false
+          storagePath: /var/lib/alloy
+          mounts:
+            extra:
+              - name: storage
+                mountPath: /var/lib/alloy
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 473
+            runAsGroup: 473
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          configMap:
+            content: |
+              discovery.kubernetes "stargate_pods" {
+                role = "pod"
+                namespaces {
+                  names = [{{ $.Values.namespace | quote }}, {{ $observability.namespace | quote }}]
+                }
+              }
+
+              discovery.relabel "stargate_pods" {
+                targets = discovery.kubernetes.stargate_pods.targets
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+                  regex         = "true"
+                  action        = "keep"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_phase"]
+                  regex         = "Running"
+                  action        = "keep"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_container_port_number"]
+                  target_label  = "__meta_kubernetes_pod_annotation_prometheus_io_port"
+                  action        = "keepequal"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+                  regex         = "(.+)"
+                  target_label  = "__metrics_path__"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_namespace"]
+                  target_label  = "namespace"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_name"]
+                  target_label  = "pod"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_name"]
+                  target_label  = "instance"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+                  target_label  = "job"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_label_stargate_nvidia_com_backend_id"]
+                  regex         = "(.+)"
+                  target_label  = "backend"
+                }
+              }
+
+              prometheus.scrape "stargate_pods" {
+                targets         = discovery.relabel.stargate_pods.output
+                scrape_interval = "30s"
+                scrape_timeout  = "10s"
+                forward_to      = [prometheus.remote_write.amp.receiver]
+              }
+
+              prometheus.remote_write "amp" {
+                external_labels = {
+                  region       = {{ $.Values.region | quote }},
+                  cluster      = {{ $cluster.name | quote }},
+                  cluster_role = {{ $cluster.role | quote }},
+                }
+
+                endpoint {
+                  url = {{ printf "https://aps-workspaces.%s.amazonaws.com/workspaces/%s/api/v1/remote_write" $.Values.region (required "observability.amp.workspaceId is required" $amp.workspaceId) | quote }}
+                  sigv4 {
+                    region = {{ $.Values.region | quote }}
+                  }
+                }
+              }
+{{- end }}

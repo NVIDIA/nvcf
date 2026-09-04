@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+clusterId: ""
+modelName: ""
+workerToken: ""
+
+stargate:
+  address: ""
+  quicCaSecretName: ""
+  quicCaSecretKey: ca.crt
+
+images:
+  mockDynamo:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  pylon:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+mockDynamo:
+  backend0:
+    profile: h100-llama-3.1-8b
+    healthDelayMs: 0
+  backend1:
+    profile: h100-llama-3.1-8b
+    healthDelayMs: 0
+
+pylon:
+  doCalibration: false
+  initialInputTps: ""
+
+resources:
+  mockDynamo:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  pylon:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+podAnnotations: {}

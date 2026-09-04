@@ -1,0 +1,1118 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Traffic, latency, and backend health for Stargate dev.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "title": "backend_balance",
+      "type": "link",
+      "url": "/d/stargate-backend-balance"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "displayMode": "lcd",
+        "legend": {
+          "showLegend": false
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (inference_server_id) (rate(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__rate_interval])) > 0",
+          "legendFormat": "{{inference_server_id}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Average request rate for each backend (over period)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "continuous-GrYlRd"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "displayMode": "lcd",
+        "legend": {
+          "showLegend": false
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (backend) (rate(pylon_request_input_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval])) + sum by (backend) (rate(pylon_request_output_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval])) > 0",
+          "legendFormat": "{{backend}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Average token rate for each backend (over period)",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "panels": [],
+      "title": "Traffic",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 50,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "percent"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (inference_server_id) (rate(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{inference_server_id}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "% Requests sent to each backend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 50,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "percent"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (backend) (rate(pylon_request_input_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval])) + sum by (backend) (rate(pylon_request_output_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{backend}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "% Tokens sent to each backend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 50,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (backend) (rate(pylon_request_input_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval])) + sum by (backend) (rate(pylon_request_output_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{backend}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Token rate sent to each backend",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (inference_server_id) (rate(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{inference_server_id}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Backend request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (backend) (rate(pylon_request_input_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{backend}} input",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum by (backend) (rate(pylon_request_output_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{backend}} output",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(pylon_request_input_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval])) + sum(rate(pylon_request_output_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__rate_interval]))",
+          "legendFormat": "Total",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Input and output token rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max(sum by (inference_server_id) (rate(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__rate_interval])))",
+          "legendFormat": "Max",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "min(sum by (inference_server_id) (rate(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__rate_interval])))",
+          "legendFormat": "Min",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "avg(sum by (inference_server_id) (rate(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__rate_interval])))",
+          "legendFormat": "Avg",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Backend request rate max/min/avg",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 81
+      },
+      "id": 10,
+      "panels": [],
+      "title": "Latency",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 0,
+        "y": 82
+      },
+      "id": 11,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(stargate_routing_duration_seconds_bucket{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval])))",
+          "legendFormat": "P95",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(stargate_routing_duration_seconds_bucket{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval])))",
+          "legendFormat": "P50",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Routing decision time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 12,
+        "y": 82
+      },
+      "id": 12,
+      "options": {
+        "calculate": false,
+        "cellGap": 2,
+        "color": {
+          "mode": "scheme",
+          "reverse": true,
+          "scheme": "YlGnBu",
+          "steps": 64
+        },
+        "tooltip": {
+          "mode": "single",
+          "showColorScale": false,
+          "yHistogram": false
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (le) (increase(stargate_routing_duration_seconds_bucket{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval]))",
+          "format": "heatmap",
+          "legendFormat": "{{le}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Routing decision heatmap",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 0,
+        "y": 94
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(stargate_proxy_duration_seconds_bucket{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval])))",
+          "legendFormat": "P95",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(stargate_proxy_duration_seconds_bucket{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval])))",
+          "legendFormat": "P50",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Upstream time to first byte",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 12,
+        "y": 94
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(pylon_request_time_to_first_token_seconds_bucket{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval])))",
+          "legendFormat": "P95",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(pylon_request_time_to_first_token_seconds_bucket{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval])))",
+          "legendFormat": "P50",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Backend time to first token",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 106
+      },
+      "id": 15,
+      "panels": [],
+      "title": "Health Check",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 107
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max by (routing_key) (stargate_active_inference_servers{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"})",
+          "legendFormat": "{{routing_key}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "description": "Each series is a routing key. Its value is the number of active backends registered for the selected model.",
+      "title": "Active backend count",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 107
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max by (backend) (pylon_model_queue_size{region=~\"$region\",model=~\"$model\",backend!=\"\"})",
+          "legendFormat": "{{backend}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Backend queue depth",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 107
+      },
+      "id": 18,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "min by (backend) (pylon_registration_stream_connected{region=~\"$region\",backend!=\"\"})",
+          "instant": true,
+          "legendFormat": "{{backend}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Pylon registration connected",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 115
+      },
+      "id": 19,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(stargate_proxy_retries_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Proxy retry rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 115
+      },
+      "id": 20,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (status) (rate(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\"}[$__rate_interval]))",
+          "legendFormat": "HTTP {{status}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Request rate by status",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 123
+      },
+      "id": 21,
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "max by (backend) (pylon_requests_inflight{region=~\"$region\",model=~\"$model\",backend!=\"\"})",
+          "legendFormat": "{{backend}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "In-flight requests",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 123
+      },
+      "id": 22,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "min by (backend) (pylon_reverse_tunnel_connected{region=~\"$region\",backend!=\"\"})",
+          "instant": true,
+          "legendFormat": "{{backend}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Reverse tunnel connected",
+      "type": "stat"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 41,
+  "tags": [
+    "stargate-dev"
+  ],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".+",
+        "current": {},
+        "datasource": {
+          "type": "grafana-amazonprometheus-datasource",
+          "uid": "stargate-dev-amp"
+        },
+        "definition": "label_values(stargate_active_inference_servers, region)",
+        "includeAll": true,
+        "label": "Region",
+        "multi": true,
+        "name": "region",
+        "options": [],
+        "query": {
+          "query": "label_values(stargate_active_inference_servers, region)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".+",
+        "current": {},
+        "datasource": {
+          "type": "grafana-amazonprometheus-datasource",
+          "uid": "stargate-dev-amp"
+        },
+        "definition": "label_values(stargate_active_inference_servers{region=~\"$region\"}, model)",
+        "includeAll": true,
+        "label": "Model",
+        "multi": true,
+        "name": "model",
+        "options": [],
+        "query": {
+          "query": "label_values(stargate_active_inference_servers{region=~\"$region\"}, model)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "grafana-amazonprometheus-datasource",
+          "uid": "stargate-dev-amp"
+        },
+        "definition": "label_values(stargate_active_inference_servers{region=~\"$region\",model=~\"$model\"}, routing_key)",
+        "includeAll": true,
+        "label": "Routing key",
+        "multi": true,
+        "name": "routing_key",
+        "options": [],
+        "query": {
+          "query": "label_values(stargate_active_inference_servers{region=~\"$region\",model=~\"$model\"}, routing_key)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Stargate",
+  "uid": "stargate-dev-services",
+  "version": 2
+}

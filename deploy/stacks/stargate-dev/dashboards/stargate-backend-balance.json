@@ -1,0 +1,228 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Share of Stargate requests and tokens handled by each backend.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 16,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "displayLabels": [
+          "name",
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "stargate-dev-amp"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum by (inference_server_id) (increase(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__range])) / scalar(clamp_min(sum(increase(stargate_requests_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",inference_server_id!=\"\"}[$__range])), 1))",
+          "instant": true,
+          "legendFormat": "{{inference_server_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Request share by backend",
+      "type": "piechart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "stargate-dev-amp"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 16,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "displayLabels": [
+          "name",
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "stargate-dev-amp"
+          },
+          "editorMode": "code",
+          "expr": "100 * (sum by (backend) (increase(pylon_request_input_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__range])) + sum by (backend) (increase(pylon_request_output_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__range]))) / scalar(clamp_min(sum(increase(pylon_request_input_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__range])) + sum(increase(pylon_request_output_tokens_total{region=~\"$region\",model=~\"$model\",routing_key=~\"$routing_key\",backend!=\"\"}[$__range])), 1))",
+          "instant": true,
+          "legendFormat": "{{backend}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Token share by backend",
+      "type": "piechart"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": [
+    "stargate-dev",
+    "backend-balance"
+  ],
+  "templating": {
+    "list": [
+      {
+        "allValue": ".+",
+        "current": {},
+        "datasource": {
+          "type": "grafana-amazonprometheus-datasource",
+          "uid": "stargate-dev-amp"
+        },
+        "definition": "label_values(stargate_active_inference_servers, region)",
+        "includeAll": true,
+        "label": "Region",
+        "multi": true,
+        "name": "region",
+        "options": [],
+        "query": {
+          "query": "label_values(stargate_active_inference_servers, region)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".+",
+        "current": {},
+        "datasource": {
+          "type": "grafana-amazonprometheus-datasource",
+          "uid": "stargate-dev-amp"
+        },
+        "definition": "label_values(stargate_active_inference_servers{region=~\"$region\"}, model)",
+        "includeAll": true,
+        "label": "Model",
+        "multi": true,
+        "name": "model",
+        "options": [],
+        "query": {
+          "query": "label_values(stargate_active_inference_servers{region=~\"$region\"}, model)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "grafana-amazonprometheus-datasource",
+          "uid": "stargate-dev-amp"
+        },
+        "definition": "label_values(stargate_active_inference_servers{region=~\"$region\",model=~\"$model\"}, routing_key)",
+        "includeAll": true,
+        "label": "Routing key",
+        "multi": true,
+        "name": "routing_key",
+        "options": [],
+        "query": {
+          "query": "label_values(stargate_active_inference_servers{region=~\"$region\",model=~\"$model\"}, routing_key)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Stargate backend_balance",
+  "uid": "stargate-backend-balance",
+  "version": 1
+}
