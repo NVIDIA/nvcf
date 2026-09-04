@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,6 +23,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"sync"
 	"time"
 
 	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
@@ -63,6 +64,8 @@ type FunctionInvoker struct {
 	requestRegistration *StatefulRequestRegistration
 	geoLookup           geoLookuper
 	rateLimit           rateLimiter
+	// Resolved work-stream handles, keyed by stream name. See workStream.
+	workStreams sync.Map
 }
 
 func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths ConnectPaths, jetstreamPlacementTag, region string, geoLookup geoLookuper, rateLimit rateLimiter) (*FunctionInvoker, error) {

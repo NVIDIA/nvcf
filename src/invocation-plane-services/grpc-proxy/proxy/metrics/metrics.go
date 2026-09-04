@@ -203,6 +203,43 @@ var (
 		})
 )
 
+// Outcomes of the shutdown purge of queued stateful work requests.
+const (
+	PurgeSucceeded = "succeeded"
+	PurgeFailed    = "failed"
+
+	// What caused a purge. Kept as a label rather than separate deployments so
+	// one image can say which trigger actually did the work.
+	//
+	// PurgeTriggerShutdown drops work whose token existed only in a departing
+	// pod's memory. PurgeTriggerClientDeparted drops work whose client stopped
+	// waiting before any worker attached, which is the larger population under
+	// load: measured token age at CONNECT runs well past the client timeout,
+	// so the work is fetched, attempted and rejected for a client that has
+	// already been sent a gateway timeout.
+	PurgeTriggerShutdown       = "shutdown"
+	PurgeTriggerClientDeparted = "client_departed"
+
+	// Reasons the shutdown purge did no work. Without these a reading of
+	// zero purged and zero failed is ambiguous: it cannot distinguish a
+	// purge that ran and found nothing from one that never ran at all.
+	PurgeSkipUnsupported     = "invoker_unsupported"
+	PurgeSkipNothing         = "nothing_pending"
+	PurgeSkipShuttingDown    = "shutting_down"
+	PurgeSkipBudgetExhausted = "budget_exhausted"
+)
+
+var PurgeResults = []string{PurgeSucceeded, PurgeFailed}
+
+var PurgeTriggers = []string{PurgeTriggerShutdown, PurgeTriggerClientDeparted}
+
+var PurgeSkipReasons = []string{
+	PurgeSkipUnsupported,
+	PurgeSkipNothing,
+	PurgeSkipShuttingDown,
+	PurgeSkipBudgetExhausted,
+}
+
 // Close reasons reported when a worker tunnel goes away. The three "deleted"
 // variants matter: a bare `deleted` cannot distinguish the client hanging up
 // from the worker hanging up from a proxy shutdown, and which side went first
@@ -389,6 +426,28 @@ var (
 			Buckets:   []float64{1, 5, 8, 10, 15, 30, 45, 60, 120, 300, 600, 1800, 3600},
 		})
 
+	// PendingWorkPurgedTotal counts stateful work requests dropped from the
+	// work queue during shutdown because this pod held the only copy of their
+	// worker token. A persistent failed count usually means this service lacks
+	// purge rights on the work queue rather than a transient NATS error.
+	// PendingWorkPurgeSkippedTotal records a shutdown that purged nothing and
+	// why. Paired with PendingWorkPurgedTotal it makes the zero case legible:
+	// an unexplained zero means the purge did not run, which is a different
+	// problem from an empty queue.
+	PendingWorkPurgeSkippedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "pending_work_purge_skipped_total",
+			Help:      "shutdowns where the pending work purge did nothing, by reason",
+		}, []string{"reason"})
+
+	PendingWorkPurgedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "pending_work_purged_total",
+			Help:      "queued stateful work requests dropped, by outcome and trigger",
+		}, []string{"result", "trigger"})
+
 	// ClientConnectionWorkerTunnelsAtClose records how many worker tunnels a
 	// client connection was still holding when it closed. Anything above zero
 	// means that close tore down live tunnels.
@@ -442,6 +501,14 @@ func init() {
 	}
 	for _, reason := range NatsErrorReasons {
 		NatsFailureCounter.WithLabelValues(reason)
+	}
+	for _, result := range PurgeResults {
+		for _, trigger := range PurgeTriggers {
+			PendingWorkPurgedTotal.WithLabelValues(result, trigger)
+		}
+	}
+	for _, reason := range PurgeSkipReasons {
+		PendingWorkPurgeSkippedTotal.WithLabelValues(reason)
 	}
 }
 
