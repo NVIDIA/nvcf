@@ -101,9 +101,8 @@ This release does not wire the catalog into backend selection. Runtime use requi
 
 | Name                                | Description                                   | Value   |
 | ----------------------------------- | --------------------------------------------- | ------- |
-| `webhook.resources.limits.cpu`      | CPU limit for the nvca webhook container      | `200m`  |
 | `webhook.resources.limits.memory`   | Memory limit for the nvca webhook container   | `200Mi` |
-| `webhook.resources.requests.cpu`    | CPU request for the nvca webhook container    | `50m`   |
+| `webhook.resources.requests.cpu`    | CPU request for the nvca webhook container    | `500m`  |
 | `webhook.resources.requests.memory` | Memory request for the nvca webhook container | `50Mi`  |
 
 ### NGC Configuration
