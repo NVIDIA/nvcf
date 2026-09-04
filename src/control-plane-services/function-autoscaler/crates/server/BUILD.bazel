@@ -8,19 +8,30 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//rules/oci:defs.bzl", "rust_oci_image")
 
-# Stamp the real release version into the binary so CARGO_PKG_VERSION (used by
-# `--version`, startup logs, and the OTel service.version resource attribute)
-# reflects the released image tag instead of the placeholder 0.0.0-dev. The
+# Stamp the real release version and commit into the binary so
+# CARGO_PKG_VERSION (used by `--version`, startup logs, the OTel
+# service.version resource attribute, and the GET /info handler) reflects the
+# released image tag instead of the placeholder 0.0.0-dev, and NVCF_GIT_COMMIT
+# (consumed by GET /info) reflects the real commit instead of "unknown". The
 # legacy Dockerfile did this via CICD_NEXT_VERSION -> build.rs; the Bazel build
-# dropped it. tools/workspace_status.sh emits STABLE_VERSION; expand_template
-# substitutes it on --stamp (release) builds and falls back to 0.0.0-dev
-# otherwise. Fed to the Rust targets via rustc_env_files.
+# dropped it. tools/workspace_status.sh emits STABLE_VERSION/STABLE_GIT_COMMIT_FULL;
+# expand_template substitutes them on --stamp (release) builds and falls back
+# to dev defaults otherwise. Fed to the Rust targets via rustc_env_files.
 expand_template(
     name = "version_env",
     out = "version.env",
-    stamp_substitutions = {"{VERSION}": "{{STABLE_VERSION}}"},
-    substitutions = {"{VERSION}": "0.0.0-dev"},
-    template = ["CARGO_PKG_VERSION={VERSION}"],
+    stamp_substitutions = {
+        "{VERSION}": "{{STABLE_VERSION}}",
+        "{GIT_COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}",
+    },
+    substitutions = {
+        "{VERSION}": "0.0.0-dev",
+        "{GIT_COMMIT}": "unknown",
+    },
+    template = [
+        "CARGO_PKG_VERSION={VERSION}",
+        "NVCF_GIT_COMMIT={GIT_COMMIT}",
+    ],
 )
 
 # build.rs uses tonic-build + prost-build to compile crates/server/proto/nvcf.proto.
@@ -61,7 +72,10 @@ rust_library(
     proc_macro_deps = all_crate_deps(proc_macro = True),
     rustc_env_files = [":version_env"],
     visibility = ["//visibility:public"],
-    deps = [":build_script"] + all_crate_deps(normal = True),
+    deps = [
+        ":build_script",
+        "//src/libraries/rust/nvcf-info:nvcf-info-autoscaler",
+    ] + all_crate_deps(normal = True),
 )
 
 rust_binary(

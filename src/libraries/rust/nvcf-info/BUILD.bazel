@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Shared GET /info schema for the Rust NVCF services (function-autoscaler,
+# http-invocation) so the response shape matches the Go go-lib version package
+# and the Java nv-boot-starter-core /info controller instead of being
+# hand-duplicated per service.
+#
+# One target per consuming crate universe, same src/lib.rs. Each Rust service
+# resolves its third-party crates from its own crate_universe repo, so
+# @rs_autoscaler_crates//:serde and @nvcf_invocation_crates//:serde are two
+# distinct serde crates and therefore two distinct Serialize traits. A single
+# shared target would compile, but InfoResponse would implement the wrong
+# crate's Serialize for one of the two callers and fail at the axum::Json
+# bound. Building the same source once per universe keeps each service's
+# InfoResponse on that service's own serde.
+#
+# For the same reason this is not a cargo path dependency of either service:
+# cargo-bazel splices each workspace into a temp dir rooted at that workspace,
+# so a path dep pointing outside the service directory resolves above the
+# splice root and fails to load.
+#
+# No axum dependency here on purpose: the two services pin different axum
+# majors, so this crate stays framework-agnostic (plain serde struct plus a
+# macro) and callers wrap the result in their own axum::Json.
+[
+    rust_library(
+        name = "nvcf-info-%s" % universe,
+        srcs = ["src/lib.rs"],
+        crate_name = "nvcf_info",
+        edition = "2021",
+        visibility = ["//visibility:public"],
+        deps = ["@%s//:serde" % repo],
+    )
+    for universe, repo in [
+        ("autoscaler", "rs_autoscaler_crates"),
+        ("invocation", "nvcf_invocation_crates"),
+    ]
+]
+
+rust_test(
+    name = "nvcf_info_test",
+    crate = ":nvcf-info-autoscaler",
+    deps = [
+        "@rs_autoscaler_crates//:serde",
+        "@rs_autoscaler_crates//:serde_json",
+    ],
+)
