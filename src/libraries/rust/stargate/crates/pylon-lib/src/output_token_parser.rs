@@ -39,7 +39,7 @@ impl OutputCharacters {
     }
 
     fn bootstrap_units(self) -> u64 {
-        let ascii_units = (self.ascii / 4).saturating_add(u64::from(!self.ascii.is_multiple_of(4)));
+        let ascii_units = self.ascii.div_ceil(4);
         ascii_units.saturating_add(self.non_ascii)
     }
 }
