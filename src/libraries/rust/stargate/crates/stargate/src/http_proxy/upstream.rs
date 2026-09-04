@@ -15,6 +15,7 @@
 
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use futures::{Stream, StreamExt};
 use stargate_protocol::common::is_hop_by_hop_header;
 use stargate_protocol::tunnel_contract::{
     HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
@@ -60,22 +61,51 @@ pub(super) async fn proxy_via_quic_streaming(
 
     let status = streaming_resp.status;
     let headers = streaming_resp.headers;
-    let mut body_stream = streaming_resp.body_stream;
-
-    let body = Body::from_stream(async_stream::stream! {
-        while let Some(chunk) = body_stream.recv_body().await.transpose() {
-            let failed = chunk.is_err();
-            yield chunk.map_err(|error| std::io::Error::other(error.to_string()));
-            if failed {
-                break;
-            }
-        }
+    let chunks = futures::stream::unfold(streaming_resp.body_stream, |mut body_stream| async {
+        body_stream
+            .recv_body()
+            .await
+            .transpose()
+            .map(|chunk| (chunk, body_stream))
     });
 
     Ok(UpstreamStreamingResponse {
         status,
         headers,
-        body,
+        body: upstream_body(inference_server_id.to_owned(), status, chunks),
+    })
+}
+
+/// Relays upstream body chunks to the client. A mid-stream failure is the only
+/// signal an in-flight request has died with its backend, so it is logged here
+/// with the backend and how far the response got.
+fn upstream_body(
+    inference_server_id: String,
+    status: StatusCode,
+    chunks: impl Stream<Item = anyhow::Result<bytes::Bytes>> + Send + 'static,
+) -> Body {
+    Body::from_stream(async_stream::stream! {
+        let mut chunks = std::pin::pin!(chunks);
+        let mut streamed_bytes: u64 = 0;
+        while let Some(chunk) = chunks.next().await {
+            match chunk {
+                Ok(chunk) => {
+                    streamed_bytes += chunk.len() as u64;
+                    yield Ok(chunk);
+                }
+                Err(error) => {
+                    warn!(
+                        inference_server_id = %inference_server_id,
+                        status = status.as_u16(),
+                        streamed_bytes,
+                        error = %error,
+                        "upstream response body stream failed"
+                    );
+                    yield Err(std::io::Error::other(error.to_string()));
+                    break;
+                }
+            }
+        }
     })
 }
 
@@ -134,6 +164,7 @@ mod tests {
     use super::super::retry::ReplayableRequestBody;
     use super::super::test_support::test_proxy_app_state;
     use super::*;
+    use crate::test_logs::capture_logs_async;
 
     fn headers<const N: usize>(entries: [(&'static str, &'static str); N]) -> HeaderMap {
         entries
@@ -234,5 +265,52 @@ mod tests {
         let attempt_body = replay_body.body_for_attempt().unwrap();
         let attempt_bytes = axum::body::to_bytes(attempt_body, 1024).await.unwrap();
         assert_eq!(attempt_bytes, "still-available");
+    }
+
+    #[tokio::test]
+    async fn upstream_body_logs_mid_stream_failure_with_backend_and_progress() {
+        let chunks = futures::stream::iter([
+            Ok(bytes::Bytes::from_static(b"hello")),
+            Err(anyhow::anyhow!("relay connection reset")),
+        ]);
+        let body = upstream_body("inst-a".to_string(), StatusCode::OK, chunks);
+
+        let (result, logs) =
+            capture_logs_async(tracing::Level::WARN, axum::body::to_bytes(body, 1024)).await;
+
+        assert!(
+            result.is_err(),
+            "client body should surface the upstream failure"
+        );
+        for expected in [
+            "upstream response body stream failed",
+            "inference_server_id=inst-a",
+            "status=200",
+            "streamed_bytes=5",
+            "relay connection reset",
+        ] {
+            assert!(
+                logs.contains(expected),
+                "expected {expected:?} in body failure log, got:\n{logs}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn upstream_body_is_quiet_when_stream_completes() {
+        let chunks = futures::stream::iter([
+            Ok(bytes::Bytes::from_static(b"hel")),
+            Ok(bytes::Bytes::from_static(b"lo")),
+        ]);
+        let body = upstream_body("inst-a".to_string(), StatusCode::OK, chunks);
+
+        let (result, logs) =
+            capture_logs_async(tracing::Level::WARN, axum::body::to_bytes(body, 1024)).await;
+
+        assert_eq!(result.unwrap(), "hello");
+        assert!(
+            logs.is_empty(),
+            "clean completion should not log, got:\n{logs}"
+        );
     }
 }

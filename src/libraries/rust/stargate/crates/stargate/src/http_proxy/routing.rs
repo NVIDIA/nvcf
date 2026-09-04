@@ -150,29 +150,27 @@ pub(super) fn finalize_no_routing_choice(
             .inc();
         Span::current().record("proxy.retry_reason", "no_eligible_backend");
     }
+    let status = match context.finalization {
+        NoRoutingFinalization::NoCandidatesNotFound => StatusCode::NOT_FOUND,
+        NoRoutingFinalization::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+    };
     warn!(
         routing_key = ?context.target.routing_key,
         model_id = %model_id,
+        status = status.as_u16(),
         failed_backend_count = context.failed_backend_count,
+        failed_cluster_count = context.failed_cluster_count,
         routing_retry_attempts = context.routing_retry_attempts,
         "no inference server candidates for routing target"
     );
+    context
+        .metrics
+        .requests_total(rk_ref, model_id, "", &status.as_u16().to_string())
+        .inc();
 
     match context.finalization {
-        NoRoutingFinalization::NoCandidatesNotFound => {
-            context
-                .metrics
-                .requests_total(rk_ref, model_id, "", "404")
-                .inc();
-            Ok(no_eligible_candidates_response())
-        }
-        NoRoutingFinalization::ServiceUnavailable => {
-            context
-                .metrics
-                .requests_total(rk_ref, model_id, "", "503")
-                .inc();
-            Err(StatusCode::SERVICE_UNAVAILABLE)
-        }
+        NoRoutingFinalization::NoCandidatesNotFound => Ok(no_eligible_candidates_response()),
+        NoRoutingFinalization::ServiceUnavailable => Err(status),
     }
 }
 

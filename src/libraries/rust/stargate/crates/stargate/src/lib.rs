@@ -21,6 +21,8 @@ pub mod load_balancer;
 pub mod metrics;
 pub(crate) mod routing_state;
 pub mod runtime;
+#[cfg(test)]
+pub(crate) mod test_logs;
 pub(crate) mod tunnel;
 
 pub(crate) mod queue_estimate {
