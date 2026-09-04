@@ -138,6 +138,7 @@ go_test(
         "//src/clis/nvcf-cli/internal/selfhosted",
         "//src/clis/nvcf-cli/internal/selfhosted/auth",
         "//src/clis/nvcf-cli/internal/selfhosted/controlplaneprofile",
+        "//src/clis/nvcf-cli/internal/selfhosted/kubectx",
         "//src/clis/nvcf-cli/internal/selfhosted/progress",
         "//src/clis/nvcf-cli/internal/selfhosted/reachability",
         "//src/clis/nvcf-cli/internal/selfhosted/teardown",
