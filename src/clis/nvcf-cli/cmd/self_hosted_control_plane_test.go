@@ -502,6 +502,142 @@ func TestWriteControlPlaneProfileSourcesOpenBaoRootCA(t *testing.T) {
 	assert.Equal(t, wantFingerprint, result.Profile.TransportTLS.TrustBundleFingerprint)
 }
 
+func TestWriteControlPlaneProfileSourcesRootCAOnlyWhenLLMPKIEnabled(t *testing.T) {
+	tests := []struct {
+		name              string
+		baseValues        string
+		environmentValues string
+		wantFetch         bool
+	}{
+		{
+			name: "LLM disabled with boolean",
+			baseValues: `addons:
+  llm:
+    enabled: false
+    pki:
+      enabled: true
+`,
+			wantFetch: false,
+		},
+		{
+			name: "LLM disabled with quoted boolean",
+			baseValues: `addons:
+  llm:
+    enabled: "false"
+    pki:
+      enabled: "true"
+`,
+			wantFetch: false,
+		},
+		{
+			name: "LLM PKI disabled",
+			baseValues: `addons:
+  llm:
+    enabled: true
+    pki:
+      enabled: false
+`,
+			wantFetch: false,
+		},
+		{
+			name: "LLM PKI enabled",
+			baseValues: `addons:
+  llm:
+    enabled: true
+    pki:
+      enabled: true
+`,
+			wantFetch: true,
+		},
+		{
+			name:       "settings undeclared",
+			baseValues: "global:\n  domain: example.test\n",
+			wantFetch:  true,
+		},
+		{
+			name: "selected environment disables LLM",
+			baseValues: `addons:
+  llm:
+    enabled: true
+    pki:
+      enabled: true
+`,
+			environmentValues: `addons:
+  llm:
+    enabled: "false"
+`,
+			wantFetch: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stackDir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "environments"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "base.yaml"), []byte(tc.baseValues), 0o600))
+			if tc.environmentValues != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "local.yaml"), []byte(tc.environmentValues), 0o600))
+			}
+
+			fetched := false
+			prevFetch := fetchControlPlaneRootCAPEM
+			fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+				fetched = true
+				return "", nil
+			}
+			t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
+
+			_, err := writeControlPlaneProfile(controlPlaneProfileWriteRequest{
+				StackPath:    stackDir,
+				Env:          "local",
+				SourceRootCA: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFetch, fetched)
+		})
+	}
+}
+
+func TestShouldSourceControlPlaneRootCARejectsMalformedLLMSettings(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    string
+		fieldPath string
+	}{
+		{
+			name: "invalid scalar",
+			values: `addons:
+  llm:
+    enabled: sometimes
+`,
+			fieldPath: "addons.llm.enabled",
+		},
+		{
+			name: "null",
+			values: `addons:
+  llm:
+    enabled: true
+    pki:
+      enabled: null
+`,
+			fieldPath: "addons.llm.pki.enabled",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stackDir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "environments"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "base.yaml"), []byte(tc.values), 0o600))
+
+			_, err := shouldSourceControlPlaneRootCA(stackDir, "local")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.fieldPath)
+			assert.Contains(t, err.Error(), "expected true or false")
+		})
+	}
+}
+
 func TestRewriteURLHost(t *testing.T) {
 	cases := []struct {
 		name    string
