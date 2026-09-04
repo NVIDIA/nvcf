@@ -43,7 +43,7 @@
                 "enabled": {
                     "type": "boolean",
                     "description": "Enable OTel collector sidecar for K8s event collection",
-                    "default": false
+                    "default": true
                 },
                 "imageRepository": {
                     "type": "string",
@@ -734,7 +734,7 @@
                         "enabled": {
                             "type": "boolean",
                             "description": "Enable OTel collector sidecar for helm-managed clusters",
-                            "default": false
+                            "default": true
                         },
                         "imageRepository": {
                             "type": "string",
