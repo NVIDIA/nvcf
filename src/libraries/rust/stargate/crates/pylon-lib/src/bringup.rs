@@ -140,6 +140,40 @@ mod tests {
         crate::runtime_state::ModelGeneration::new("test-model", 0)
     }
 
+    async fn send_observed_completion(
+        upstream_http_base_url: &str,
+    ) -> (
+        Result<ChatCompletionResponse, BringupError>,
+        Vec<crate::RequestObservationState>,
+    ) {
+        let (runtime_state, observations) = PylonRuntimeState::observed(
+            InferenceServerStatus::Active,
+            &["test-model".to_string()],
+            8,
+            None,
+        );
+        let result = send_completion_request(
+            &reqwest::Client::new(),
+            upstream_http_base_url,
+            Some(Duration::from_secs(1)),
+            &serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 1,
+                "stream": false,
+            }),
+            crate::generated_request_id::GeneratedRequestKind::Calibration,
+            &test_generation(),
+            Some(&runtime_state),
+        )
+        .await;
+        let states = observations
+            .try_iter()
+            .map(|event| event.into_observation().state)
+            .collect();
+        (result, states)
+    }
+
     fn test_stats_collector() -> (PylonRuntimeState, StatsCollectorHandle) {
         let config = StatsCollectorConfig {
             duration_floor: Duration::ZERO,
@@ -185,6 +219,72 @@ mod tests {
         );
         assert_eq!(paths.resolved_path().as_deref(), Some("/v1/health/ready"));
 
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn calibration_execute_failure_is_recorded_as_failed_after_submission() {
+        let (result, states) = send_observed_completion("http://127.0.0.1:0").await;
+
+        assert!(matches!(result, Err(BringupError::Http(_))));
+        assert_eq!(
+            states,
+            [
+                crate::RequestObservationState::UpstreamConnecting,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::Failed,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn calibration_non_success_response_is_recorded_as_failed() {
+        let server = TestHttpServer::spawn(Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": {"message": "backend failed"}})),
+                )
+            }),
+        ))
+        .await;
+
+        let (result, states) = send_observed_completion(server.as_str()).await;
+
+        assert!(matches!(result, Err(BringupError::Api { .. })));
+        assert_eq!(
+            states,
+            [
+                crate::RequestObservationState::UpstreamConnecting,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::Failed,
+            ]
+        );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn calibration_invalid_response_is_recorded_as_failed() {
+        let server = TestHttpServer::spawn(Router::new().route(
+            "/v1/chat/completions",
+            post(|| async { (StatusCode::OK, "not-json") }),
+        ))
+        .await;
+
+        let (result, states) = send_observed_completion(server.as_str()).await;
+
+        assert!(matches!(result, Err(BringupError::InvalidResponse(_))));
+        assert_eq!(
+            states,
+            [
+                crate::RequestObservationState::UpstreamConnecting,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::Failed,
+            ]
+        );
         server.shutdown().await;
     }
 
