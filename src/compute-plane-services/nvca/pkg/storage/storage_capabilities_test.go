@@ -51,8 +51,9 @@ func capabilityClient(t *testing.T, cm *corev1.ConfigMap) *fake.ClientBuilder {
 const validCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
-  nvmesh-csi.excelero.com:
+  - name: nvmesh-csi.excelero.com
     provider: nvmesh
+    encryptionSupported: true
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro, norecovery, nouuid]
 `
@@ -518,4 +519,29 @@ func TestSelectionFollowsQualifiedModes(t *testing.T) {
 		assert.Empty(t, selection.RequiredMountOptions, workflow,
 			"a shared claim is mounted read-only by the Pod, so NVCA sets no reader options")
 	}
+}
+
+func TestLoadStorageCapabilityCatalogRejectsDuplicateAndBlankNames(t *testing.T) {
+	dup := strings.Replace(validCatalog, "drivers:\n", "drivers:\n  - name: nvmesh-csi.excelero.com\n    provider: nvmesh\n    accessModes: []\n    readerMountOptions: []\n", 1)
+	_, err := parseStorageCapabilityCatalog(dup)
+	require.ErrorContains(t, err, `lists driver "nvmesh-csi.excelero.com" twice`)
+
+	blank := strings.Replace(validCatalog, "  - name: nvmesh-csi.excelero.com", "  - name: \"\"", 1)
+	_, err = parseStorageCapabilityCatalog(blank)
+	require.ErrorContains(t, err, "blank name")
+}
+
+func TestStorageCapabilityCatalogEncryptionSupported(t *testing.T) {
+	c := capabilityClient(t, capabilityCatalogConfigMap(validCatalog)).Build()
+	catalog, err := loadStorageCapabilityCatalog(t.Context(), c, testCatalogNamespace)
+	require.NoError(t, err)
+	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
+	assert.True(t, nvmesh.EncryptionSupported, "the fixture lists encryption support")
+
+	without := nvmesh
+	without.EncryptionSupported = false
+	assert.NotEqual(t,
+		digestDriverProfile(NVMeshStorageClassProvisioner, nvmesh, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
+		digestDriverProfile(NVMeshStorageClassProvisioner, without, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
+		"encryption support is part of the driver profile digest")
 }

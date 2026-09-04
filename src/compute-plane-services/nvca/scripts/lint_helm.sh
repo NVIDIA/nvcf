@@ -127,8 +127,8 @@ assert_storage_capability_catalog() (
 
   invalid_catalog="${tmpdir}/invalid-catalog.yaml"
   for mutation in \
-    'del(.drivers."csi.weka.io".accessModes)' \
-    '.drivers."csi.weka.io".accessModes = null'; do
+    'del((.drivers[] | select(.name == "csi.weka.io")).accessModes)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).accessModes = null'; do
     yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
     if "${schema_python}" -c "${schema_check}" \
       "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -139,8 +139,8 @@ assert_storage_capability_catalog() (
   echo "PASS: schema rejects missing and null accessModes"
 
   for mutation in \
-    'del(.drivers."csi.weka.io".readerMountOptions)' \
-    '.drivers."csi.weka.io".readerMountOptions = null'; do
+    'del((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = null'; do
     yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
     if "${schema_python}" -c "${schema_check}" \
       "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -150,7 +150,7 @@ assert_storage_capability_catalog() (
   done
   echo "PASS: schema rejects missing and null readerMountOptions"
 
-  yq '.drivers."nvmesh-csi.excelero.com".readerMountOptions = ["ro", " norecovery", "nouuid"]' \
+  yq '(.drivers[] | select(.name == "nvmesh-csi.excelero.com")).readerMountOptions = ["ro", " norecovery", "nouuid"]' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
     "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -159,7 +159,7 @@ assert_storage_capability_catalog() (
   fi
   echo "PASS: schema rejects readerMountOptions with surrounding whitespace"
 
-  yq '.drivers."csi.weka.io".transitions.regularModelCache = "roxReadOnly"' \
+  yq '(.drivers[] | select(.name == "csi.weka.io")).transitions.regularModelCache = "roxReadOnly"' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
     "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -172,7 +172,7 @@ assert_storage_capability_catalog() (
     '["ro", "rw", "norecovery", "nouuid"]' \
     '["ro", "recovery", "norecovery", "nouuid"]' \
     '["ro", "norecovery", "uuid", "nouuid"]'; do
-    yq ".drivers.\"nvmesh-csi.excelero.com\".readerMountOptions = ${options}" \
+    yq "(.drivers[] | select(.name == \"nvmesh-csi.excelero.com\")).readerMountOptions = ${options}" \
       "${service_chart}/${catalog}" >"${invalid_catalog}"
     if "${schema_python}" -c "${schema_check}" \
       "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -182,8 +182,8 @@ assert_storage_capability_catalog() (
   done
   echo "PASS: schema rejects conflicting readerMountOptions"
 
-  yq '(.drivers."csi.weka.io".accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
-      (.drivers."csi.weka.io".readerMountOptions = [])' \
+  yq '((.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
+      ((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = [])' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
     "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -192,7 +192,7 @@ assert_storage_capability_catalog() (
   fi
   echo "PASS: schema rejects a ReadOnlyMany reader shape without a read-only mount"
 
-  yq '.drivers."csi.weka.io".accessModes = ["ReadOnlyMany"]' \
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadOnlyMany"]' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
     "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -201,7 +201,7 @@ assert_storage_capability_catalog() (
   fi
   echo "PASS: schema rejects ReadOnlyMany with no writer mode"
 
-  yq '.drivers."csi.weka.io".accessModes = ["ReadWriteMany"]' \
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteMany"]' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if ! "${schema_python}" -c "${schema_check}" \
     "${service_chart}/${schema}" "${invalid_catalog}"; then
@@ -210,7 +210,16 @@ assert_storage_capability_catalog() (
   fi
   echo "PASS: schema accepts a shared claim driver with no reader options"
 
-  yq '.drivers."csi.weka.io".unexpected = true' \
+  yq 'del((.drivers[] | select(.name == "csi.weka.io")).name)' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a driver with no name" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a driver with no name"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).unexpected = true' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
     "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then

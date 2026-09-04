@@ -83,6 +83,7 @@ const (
 // live nvcf-sc object and the public capability catalog. It deliberately does
 // not infer behavior from a provider name or access mode.
 type ModelCacheStorageSelection struct {
+	EncryptionSupported  bool
 	StorageClassName     string
 	StorageClassUID      types.UID
 	StorageClassDigest   string
@@ -96,16 +97,14 @@ type ModelCacheStorageSelection struct {
 }
 
 type storageCapabilityCatalog struct {
-	APIVersion string                       `json:"apiVersion"`
-	Kind       string                       `json:"kind"`
-	Drivers    map[string]storageDriverSpec `json:"drivers"`
+	APIVersion string
+	Kind       string
+	// Drivers is keyed by exact CSI provisioner. The wire format is a list of
+	// named entries (storageCapabilityCatalogWire); it is indexed on load so
+	// every runtime lookup stays a map access.
+	Drivers map[string]storageDriverSpec
 }
 
-// storageDriverSpec records what a qualification run established for one exact
-// CSI provisioner, and nothing more. How NVCA caches on that driver is derived
-// from the access modes, not declared here: a ReadWriteMany claim is shared and
-// mounted read-only, a ReadWriteOnce plus ReadOnlyMany pair gives readers their
-// own claim, and neither means no durable cache.
 type storageDriverSpec struct {
 	Provider string `json:"provider"`
 	// AccessModes are the modes qualified end to end in a cache workflow, not
@@ -118,6 +117,46 @@ type storageDriverSpec struct {
 	// belong here rather than in code: norecovery and nouuid are NVMesh XFS
 	// requirements and apply to no other driver.
 	ReaderMountOptions *[]string `json:"readerMountOptions"`
+	// EncryptionSupported records that an encrypted cache has been qualified on
+	// this driver. Absent means false. It is a capability, not a switch: the
+	// ModelCacheEncryption feature flag decides whether to encrypt, and only a
+	// driver that lists support can be encrypted.
+	EncryptionSupported bool `json:"encryptionSupported,omitempty"`
+}
+
+// storageCapabilityCatalogWire is the on-disk shape: drivers are a list of
+// named entries, as Kubernetes API conventions prefer for stable ordering and
+// diffs, rather than a map keyed by provisioner.
+type storageCapabilityCatalogWire struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Drivers    []storageDriverWire `json:"drivers"`
+}
+
+type storageDriverWire struct {
+	// Name is the exact CSI provisioner string, the lookup key.
+	Name string `json:"name"`
+	storageDriverSpec
+}
+
+// indexStorageCapabilityCatalog turns the wire list into the provisioner map,
+// rejecting blank and duplicate names, which a list cannot prevent on its own.
+func indexStorageCapabilityCatalog(wire *storageCapabilityCatalogWire) (*storageCapabilityCatalog, error) {
+	catalog := &storageCapabilityCatalog{
+		APIVersion: wire.APIVersion,
+		Kind:       wire.Kind,
+		Drivers:    make(map[string]storageDriverSpec, len(wire.Drivers)),
+	}
+	for i, d := range wire.Drivers {
+		if strings.TrimSpace(d.Name) == "" {
+			return nil, fmt.Errorf("storage capability catalog driver %d has a blank name", i)
+		}
+		if _, dup := catalog.Drivers[d.Name]; dup {
+			return nil, fmt.Errorf("storage capability catalog lists driver %q twice", d.Name)
+		}
+		catalog.Drivers[d.Name] = d.storageDriverSpec
+	}
+	return catalog, nil
 }
 
 // transitionForWorkflow derives how a driver caches, from what it proved.
@@ -215,9 +254,13 @@ func loadStorageCapabilityCatalogSnapshot(
 }
 
 func parseStorageCapabilityCatalog(raw string) (*storageCapabilityCatalog, error) {
-	catalog := &storageCapabilityCatalog{}
-	if err := yaml.UnmarshalStrict([]byte(raw), catalog); err != nil {
+	wire := &storageCapabilityCatalogWire{}
+	if err := yaml.UnmarshalStrict([]byte(raw), wire); err != nil {
 		return nil, fmt.Errorf("parse storage capability catalog: %w", err)
+	}
+	catalog, err := indexStorageCapabilityCatalog(wire)
+	if err != nil {
+		return nil, err
 	}
 	if err := validateStorageCapabilityCatalog(catalog); err != nil {
 		return nil, err
@@ -328,6 +371,7 @@ func selectModelCacheStorageFromObjects(
 		ProfileDigest:        digestDriverProfile(sc.Provisioner, driver, workflow, transition),
 		CatalogRevision:      catalogDigest,
 		Provider:             driver.Provider,
+		EncryptionSupported:  driver.EncryptionSupported,
 		Provisioner:          sc.Provisioner,
 		Transition:           transition,
 		RequiredAccessModes:  requiredAccessModesForTransition(transition),
@@ -405,6 +449,9 @@ type canonicalDriverProfile struct {
 	Transition         string   `json:"transition"`
 	AccessModes        []string `json:"accessModes"`
 	ReaderMountOptions []string `json:"readerMountOptions,omitempty"`
+	// EncryptionSupported is part of the profile: flipping it changes what a
+	// new cache on this driver is allowed to do.
+	EncryptionSupported bool `json:"encryptionSupported"`
 }
 
 // digestDriverProfile hashes the qualified profile behind a decision. Two
@@ -418,10 +465,11 @@ func digestDriverProfile(
 	transition string,
 ) string {
 	profile := canonicalDriverProfile{
-		Provisioner: provisioner,
-		Provider:    driver.Provider,
-		Workflow:    string(workflow),
-		Transition:  transition,
+		Provisioner:         provisioner,
+		Provider:            driver.Provider,
+		Workflow:            string(workflow),
+		Transition:          transition,
+		EncryptionSupported: driver.EncryptionSupported,
 	}
 	if driver.AccessModes != nil {
 		profile.AccessModes = append([]string(nil), (*driver.AccessModes)...)

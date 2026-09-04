@@ -43,7 +43,7 @@ const (
 	selectionCatalogNVMesh    = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
-  nvmesh-csi.excelero.com:
+  - name: nvmesh-csi.excelero.com
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro, norecovery, nouuid]
@@ -51,7 +51,7 @@ drivers:
 	selectionCatalogDisabled = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
-  nvmesh-csi.excelero.com:
+  - name: nvmesh-csi.excelero.com
     provider: nvmesh
     accessModes: []
     readerMountOptions: []
@@ -59,7 +59,7 @@ drivers:
 	selectionCatalogRWXReadOnly = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
-  csi.weka.io:
+  - name: csi.weka.io
     provider: weka
     accessModes: [ReadWriteMany, ReadOnlyMany]
     readerMountOptions: []

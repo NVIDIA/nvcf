@@ -32,7 +32,7 @@ import (
 const (
 	// ModelCacheStorageSelectionAnnotationKey persists the storage decision on
 	// the ICMSRequest before any cache storage side effect.
-	ModelCacheStorageSelectionAnnotationKey = "nvca.nvcf.nvidia.io/model-cache-storage-selection"
+	ModelCacheStorageSelectionAnnotationKey = "storage.nvcf.nvidia.io/model-cache-selection"
 
 	// ModelCacheStorageSelectionVersion is the annotation contract version.
 	ModelCacheStorageSelectionVersion = "v1alpha1"

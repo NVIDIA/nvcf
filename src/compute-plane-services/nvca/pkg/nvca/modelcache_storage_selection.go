@@ -100,9 +100,15 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 	if err != nil {
 		return fmt.Errorf("build model cache storage selection: %w", err)
 	}
+	// Encryption is a catalog capability gated by a feature flag. Only the
+	// ReadOnlyMany reader shape implements an encrypted cache today, so the
+	// decision is scoped to it even when a driver lists support. The legacy
+	// NVMeshEncryption flag keeps working for existing NVMesh deployments.
 	if selection.Mode == nvcastorage.ModelCacheSelectionDurable &&
-		selection.Transition == nvcastorage.ModelCacheTransitionROXReadOnly {
-		selection.EncryptionRequired = c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.NVMeshEncryption)
+		selection.Transition == nvcastorage.ModelCacheTransitionROXReadOnly &&
+		resolved != nil && resolved.EncryptionSupported {
+		selection.EncryptionRequired = c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.ModelCacheEncryption) ||
+			c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.NVMeshEncryption)
 	}
 	payload, err := selection.Marshal()
 	if err != nil {

@@ -42,7 +42,7 @@ import (
 const splitTransitionCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
-  csi.weka.io:
+  - name: csi.weka.io
     provider: weka
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro]
@@ -468,7 +468,7 @@ func TestProfileDigestIgnoresUnrelatedCatalogEdits(t *testing.T) {
 
 	t.Run("adding an unrelated disabled driver does not change the profile", func(t *testing.T) {
 		edited := validCatalog + `
-  csi.unrelated.example.com:
+  - name: csi.unrelated.example.com
     provider: unrelated
     accessModes: []
     readerMountOptions: []

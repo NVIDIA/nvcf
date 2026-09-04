@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# NVCA owns this catalog and installs it with the NVCA chart. It records, for
-# each exact CSI provisioner, the PVC access modes qualified end to end in an
+# NVCA owns this catalog and installs it with the NVCA chart. Each entry is
+# named by exact CSI provisioner and records the PVC access modes qualified end to end in an
 # NVCF cache workflow. Nothing else is declared: NVCA derives how caching runs
 # from these modes.
 #
@@ -29,8 +29,11 @@
 apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
-  nvmesh-csi.excelero.com:
+  - name: nvmesh-csi.excelero.com
     provider: nvmesh
+    # Encrypted caches are qualified on NVMesh, through a derived StorageClass
+    # and a per-sharing-domain Secret.
+    encryptionSupported: true
     accessModes:
       - ReadWriteOnce
       - ReadOnlyMany
@@ -40,20 +43,20 @@ drivers:
       - ro
       - norecovery
       - nouuid
-  csi.weka.io:
+  - name: csi.weka.io
     provider: weka
     # Fresh ReadWriteMany and ReadOnlyMany claims were tested, but a cache
     # workflow was not, so nothing is qualified yet.
     accessModes: []
     readerMountOptions: []
-  fss.csi.oraclecloud.com:
+  - name: fss.csi.oraclecloud.com
     provider: ociFss
     # A ReadWriteMany claim was tested; its readers used read-only Pod mounts,
     # which is not evidence for a ReadOnlyMany claim. No cache workflow was
     # qualified.
     accessModes: []
     readerMountOptions: []
-  lustre.csi.oraclecloud.com:
+  - name: lustre.csi.oraclecloud.com
     provider: ociLustre
     # No PVC access mode has been qualified in an NVCF cache workflow.
     accessModes: []

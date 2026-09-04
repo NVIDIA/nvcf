@@ -101,13 +101,11 @@ func validatePersistedModelCacheStorageRequest(
 	selectionPayload string,
 	backend nvcastorage.HelmCacheBackend,
 ) error {
-	conflict := func(reason string) error {
-		return fmt.Errorf(
-			"existing model cache StorageRequest %s/%s conflicts with persisted selection: %s",
-			existing.Namespace, existing.Name, reason)
-	}
 	if existing == nil {
 		return fmt.Errorf("existing model cache StorageRequest is nil")
+	}
+	conflict := func(reason string) error {
+		return &storageSelectionConflictError{namespace: existing.Namespace, name: existing.Name, reason: reason}
 	}
 	if existing.Name != nvcav2beta1.ModelCacheRequest.Name() ||
 		existing.Spec.Type != nvcav2beta1.ModelCacheRequest {
@@ -163,4 +161,15 @@ func persistedDurableHelmCacheSelection(req *nvcav2beta1.ICMSRequest) (bool, err
 		return false, fmt.Errorf("persisted model cache workflow %q is not Helm", selection.Workflow)
 	}
 	return selection.Mode == nvcastorage.ModelCacheSelectionDurable, nil
+}
+
+// storageSelectionConflictError reports an existing model cache StorageRequest
+// that does not match the selection persisted on its request.
+type storageSelectionConflictError struct {
+	namespace, name, reason string
+}
+
+func (e *storageSelectionConflictError) Error() string {
+	return fmt.Sprintf("existing model cache StorageRequest %s/%s conflicts with persisted selection: %s",
+		e.namespace, e.name, e.reason)
 }

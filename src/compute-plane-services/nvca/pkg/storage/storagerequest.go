@@ -69,11 +69,12 @@ func NewModelCacheStorageRequest(req *nvcav2beta1.ICMSRequest, fff featureflag.F
 		st.Labels = map[string]string{}
 	}
 	st.Labels[modelCacheHandleLabelKey] = cacheLaunchSpec.CacheHandle
-	if raw := req.Annotations[ModelCacheStorageSelectionAnnotationKey]; raw != "" {
+	selectionRaw := req.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if selectionRaw != "" {
 		if st.Annotations == nil {
 			st.Annotations = map[string]string{}
 		}
-		st.Annotations[ModelCacheStorageSelectionAnnotationKey] = raw
+		st.Annotations[ModelCacheStorageSelectionAnnotationKey] = selectionRaw
 	}
 	if req.UID != "" {
 		if st.Annotations == nil {
@@ -82,8 +83,8 @@ func NewModelCacheStorageRequest(req *nvcav2beta1.ICMSRequest, fff featureflag.F
 		st.Annotations[ICMSRequestUIDAnnotationKey] = string(req.UID)
 	}
 	encryptionRequired := fff.IsFeatureFlagEnabled(featureflag.NVMeshEncryption)
-	if raw := req.Annotations[ModelCacheStorageSelectionAnnotationKey]; raw != "" {
-		selection, err := ParsePersistedModelCacheStorageSelection(raw)
+	if selectionRaw != "" {
+		selection, err := ParsePersistedModelCacheStorageSelection(selectionRaw)
 		if err != nil {
 			return nil, fmt.Errorf("parse persisted model cache storage selection: %w", err)
 		}

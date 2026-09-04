@@ -19,14 +19,10 @@
       "const": "StorageCapabilityCatalog"
     },
     "drivers": {
-      "type": "object",
-      "minProperties": 1,
-      "propertyNames": {
-        "type": "string",
-        "minLength": 1,
-        "pattern": "\\S"
-      },
-      "additionalProperties": {
+      "description": "One entry per exact CSI provisioner, named by that provisioner. Names must be unique; the loader rejects duplicates.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
         "$ref": "#/$defs/driver"
       }
     }
@@ -44,11 +40,18 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "name",
         "provider",
         "accessModes",
         "readerMountOptions"
       ],
       "properties": {
+        "name": {
+          "description": "Exact StorageClass.provisioner string, the lookup key.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
         "provider": {
           "type": "string",
           "minLength": 1,
@@ -119,6 +122,10 @@
               }
             }
           ]
+        },
+        "encryptionSupported": {
+          "description": "An encrypted cache has been qualified on this driver. Absent means false. The ModelCacheEncryption feature flag decides whether to encrypt.",
+          "type": "boolean"
         }
       },
       "allOf": [

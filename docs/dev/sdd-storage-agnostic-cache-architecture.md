@@ -55,15 +55,31 @@ by a packaged JSON Schema and by the Go loader with the same rules.
 
 ```yaml
 drivers:
-  nvmesh-csi.excelero.com:
+  - name: nvmesh-csi.excelero.com
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro, norecovery, nouuid]
-  csi.weka.io:
+    encryptionSupported: true
+  - name: csi.weka.io
     provider: weka
     accessModes: []
     readerMountOptions: []
 ```
+
+Drivers are a list named by exact provisioner, following Kubernetes API
+conventions for stable ordering and diffs; the loader indexes them by name and
+rejects duplicates. `encryptionSupported` records that an encrypted cache has
+been qualified on the driver. It is a capability, not a switch: the
+`ModelCacheEncryption` feature flag decides whether to encrypt, and only a
+driver that lists support can be. Today only the `ReadWriteOnce` plus
+`ReadOnlyMany` shape implements encryption.
+
+The catalog is a ConfigMap rather than a custom resource because it is release
+data, not runtime state: the chart ships it, a JSON schema validates it in CI,
+nothing reconciles or writes it on a cluster, and an operator edits it to enable
+a backend. A custom resource would add install ordering and a schema version to
+manage for a file. The cache binding, which is runtime state with a lifecycle,
+is the custom resource.
 
 | Qualified modes | Derived flow |
 |---|---|
@@ -160,7 +176,7 @@ request carries a selection derived from the catalog when it is created, and
 Helm backend selection follows it; the regular workflow records it but does not
 act on it yet. No controller creates a binding. Garbage collection is an idle
 sweep keyed on a last-referenced annotation. The mutating webhook
-injects the reader PVC into workload pods as `model-data`.
+injects the reader PVC into workload pods as a volume named `model-data`.
 
 ## Qualification
 
