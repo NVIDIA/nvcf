@@ -777,8 +777,11 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			},
 			{
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
-				Resources: []string{"storagerequests", "storagerequests/status"},
-				Verbs:     crudVerbs,
+				Resources: []string{
+					"modelcachebindings", "modelcachebindings/status",
+					"storagerequests", "storagerequests/status",
+				},
+				Verbs: crudVerbs,
 			},
 			{
 				APIGroups: []string{"storage.k8s.io"},
