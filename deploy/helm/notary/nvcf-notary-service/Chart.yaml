@@ -19,4 +19,4 @@ description: A Helm chart for NVCF Notary Service deployment
 
 type: application
 version: 0.0.0 # autoversioning enabled via release pipeline
-appVersion: "1.8.1"
+appVersion: "1.13.4"

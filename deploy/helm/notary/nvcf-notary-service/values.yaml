@@ -18,7 +18,7 @@ notary:
     registry: "" # must be supplied
     repository: "" # must be supplied
     pullPolicy: IfNotPresent
-    tag: "1.8.1"
+    tag: "1.13.4"
 
   # Namespace to deploy the resources. The default value is the release name.
   namespace: ""
