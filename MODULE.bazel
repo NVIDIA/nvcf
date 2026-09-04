@@ -632,9 +632,9 @@ maven.install(
         "org.ow2.asm:asm-analysis:9.10.1",
         "org.ow2.asm:asm-util:9.10.1",
         "org.projectlombok:lombok",
-        "org.springdoc:springdoc-openapi-starter-webflux-api:3.0.3",
-        "org.springdoc:springdoc-openapi-starter-webflux-ui:3.0.3",
-        "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3",
+        "org.springdoc:springdoc-openapi-starter-webflux-api:3.1.0",
+        "org.springdoc:springdoc-openapi-starter-webflux-ui:3.1.0",
+        "org.springdoc:springdoc-openapi-starter-webmvc-api:3.1.0",
         "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry",
         "org.springframework.boot:spring-boot-restclient",
         # Spring Boot's Maven repackage goal injects this into executable jars.
@@ -681,9 +681,9 @@ maven.install(
         # coordinates are managed by the shared BOMs above; explicit versions
         # match the imported ICMS Maven baseline unless a newer shared root is
         # already pinned for another Java service.
-        "com.amazonaws:aws-java-sdk-sns:1.12.696",
-        "com.amazonaws:aws-java-sdk-sqs:1.12.696",
-        "com.amazonaws:aws-java-sdk-sts:1.12.696",
+        "com.amazonaws:aws-java-sdk-sns:1.12.797",
+        "com.amazonaws:aws-java-sdk-sqs:1.12.797",
+        "com.amazonaws:aws-java-sdk-sts:1.12.797",
         "com.vdurmont:semver4j:3.1.0",
         "io.nats:jwt-java:2.2.0",
         "net.logstash.logback:logstash-logback-encoder:8.1",
@@ -708,7 +708,7 @@ maven.install(
         "org.apache.httpcomponents.core5:httpcore5-h2:5.4.3",
         "org.awaitility:awaitility",
         "org.junit.jupiter:junit-jupiter-params",
-        "org.mapstruct:mapstruct:1.5.2.Final",
+        "org.mapstruct:mapstruct:1.6.3",
         "org.mockito:mockito-core",
         "org.mockito:mockito-junit-jupiter",
         "org.ow2.asm:asm:9.10.1",
@@ -735,7 +735,6 @@ maven.install(
         "org.testcontainers:testcontainers-localstack",
     ],
     boms = [
-        "io.netty:netty-bom:4.2.16.Final",
         "net.javacrumbs.shedlock:shedlock-bom:7.9.0",
         "org.springframework.boot:spring-boot-dependencies:4.1.1",
         "org.springframework.cloud:spring-cloud-dependencies:2025.1.3",

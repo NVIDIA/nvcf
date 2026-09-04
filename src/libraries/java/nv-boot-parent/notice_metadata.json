@@ -530,6 +530,13 @@
       "name": "jnats",
       "url": "https://github.com/nats-io/nats.java"
     },
+    "io.nats:jnats:2.26.2": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "jnats",
+      "url": "https://github.com/nats-io/nats.java"
+    },
     "io.netty:netty-buffer:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -1125,6 +1132,13 @@
       "name": "swagger-annotations-jakarta",
       "url": "https://github.com/swagger-api/swagger-core"
     },
+    "io.swagger.core.v3:swagger-annotations-jakarta:2.2.52": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "swagger-annotations-jakarta",
+      "url": "https://github.com/swagger-api/swagger-core"
+    },
     "io.swagger.core.v3:swagger-core-jakarta:2.2.47": {
       "licenses": [
         "Apache License 2.0"
@@ -1132,7 +1146,21 @@
       "name": "swagger-core-jakarta",
       "url": "https://github.com/swagger-api/swagger-core"
     },
+    "io.swagger.core.v3:swagger-core-jakarta:2.2.52": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "swagger-core-jakarta",
+      "url": "https://github.com/swagger-api/swagger-core"
+    },
     "io.swagger.core.v3:swagger-models-jakarta:2.2.47": {
+      "licenses": [
+        "Apache License 2.0"
+      ],
+      "name": "swagger-models-jakarta",
+      "url": "https://github.com/swagger-api/swagger-core"
+    },
+    "io.swagger.core.v3:swagger-models-jakarta:2.2.52": {
       "licenses": [
         "Apache License 2.0"
       ],
@@ -1265,6 +1293,13 @@
       ],
       "name": "Bouncy Castle Provider",
       "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
+    },
+    "org.bouncycastle:bcprov-lts8on:2.73.10": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle Provider (LTS Distribution)",
+      "url": "https://www.bouncycastle.org/lts-java"
     },
     "org.bouncycastle:bcprov-lts8on:2.73.8": {
       "licenses": [
@@ -1456,6 +1491,13 @@
       "name": "springdoc-openapi-starter-common",
       "url": "https://springdoc.org/"
     },
+    "org.springdoc:springdoc-openapi-starter-common:3.1.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-common",
+      "url": "https://springdoc.org/"
+    },
     "org.springdoc:springdoc-openapi-starter-webflux-api:3.0.3": {
       "licenses": [
         "The Apache License, Version 2.0"
@@ -1463,7 +1505,21 @@
       "name": "springdoc-openapi-starter-webflux-api",
       "url": "https://springdoc.org/"
     },
+    "org.springdoc:springdoc-openapi-starter-webflux-api:3.1.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-webflux-api",
+      "url": "https://springdoc.org/"
+    },
     "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-webmvc-api",
+      "url": "https://springdoc.org/"
+    },
+    "org.springdoc:springdoc-openapi-starter-webmvc-api:3.1.0": {
       "licenses": [
         "The Apache License, Version 2.0"
       ],

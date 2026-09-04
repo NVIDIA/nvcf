@@ -289,6 +289,13 @@
       "name": "springdoc-openapi-starter-webflux-ui",
       "url": "https://springdoc.org/"
     },
+    "org.springdoc:springdoc-openapi-starter-webflux-ui:3.1.0": {
+      "licenses": [
+        "The Apache License, Version 2.0"
+      ],
+      "name": "springdoc-openapi-starter-webflux-ui",
+      "url": "https://springdoc.org/"
+    },
     "org.springframework.boot:spring-boot-cache:4.0.7": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -372,6 +379,13 @@
       ],
       "name": "Spring Context Support",
       "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.webjars:swagger-ui:5.32.11": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Swagger UI",
+      "url": "https://www.webjars.org"
     },
     "org.webjars:swagger-ui:5.32.2": {
       "licenses": [

@@ -7,7 +7,21 @@
       "name": "AWS SDK for Java - Core",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "com.amazonaws:aws-java-sdk-core:1.12.797": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS SDK for Java - Core",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "com.amazonaws:aws-java-sdk-sns:1.12.696": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK for Amazon SNS",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "com.amazonaws:aws-java-sdk-sns:1.12.797": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -21,6 +35,13 @@
       "name": "AWS Java SDK for Amazon SQS",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "com.amazonaws:aws-java-sdk-sqs:1.12.797": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK for Amazon SQS",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "com.amazonaws:aws-java-sdk-sts:1.12.696": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -28,7 +49,21 @@
       "name": "AWS Java SDK for AWS STS",
       "url": "https://aws.amazon.com/sdkforjava"
     },
+    "com.amazonaws:aws-java-sdk-sts:1.12.797": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "AWS Java SDK for AWS STS",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
     "com.amazonaws:jmespath-java:1.12.696": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "JMES Path Query library",
+      "url": "https://aws.amazon.com/sdkforjava"
+    },
+    "com.amazonaws:jmespath-java:1.12.797": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -457,6 +492,13 @@
       "name": "javax.annotation API",
       "url": "http://jcp.org/en/jsr/detail?id=250"
     },
+    "joda-time:joda-time:2.12.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Joda-Time",
+      "url": "https://www.joda.org/joda-time/"
+    },
     "joda-time:joda-time:2.8.1": {
       "licenses": [
         "Apache 2"
@@ -706,6 +748,13 @@
       ],
       "name": "MapStruct Core",
       "url": "http://mapstruct.org/mapstruct/"
+    },
+    "org.mapstruct:mapstruct:1.6.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "MapStruct Core",
+      "url": "https://mapstruct.org/mapstruct/"
     },
     "org.reflections:reflections:0.10.2": {
       "designated_license": "Apache-2.0",
