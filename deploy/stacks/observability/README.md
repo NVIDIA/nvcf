@@ -128,8 +128,10 @@ kind renders all targets from values.
 
 All default monitors carry
 `nvcf.nvidia.com/observability-target: "true"` for Target Allocator discovery.
-Compute defaults select NVCA in `nvca-system`, DCGM pods by their NVCA metrics
-label, and NVCA-managed workload pods by `icms-request-id`.
+Control-plane defaults scrape state-metrics, invocation-service, grpc-proxy,
+llm-api-gateway, and function-autoscaler in `nvcf`. Compute defaults select
+NVCA in `nvca-system`, DCGM pods by their NVCA metrics label, and NVCA-managed
+workload pods by `icms-request-id`.
 
 The default observability namespace is `monitoring`. A different namespace
 also requires NetworkPolicy reachability to the collector.

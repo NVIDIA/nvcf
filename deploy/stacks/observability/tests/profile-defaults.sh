@@ -139,7 +139,7 @@ grep -q '^    - key: icms-request-id$' "$worker_monitor_manifest" ||
 grep -q '^      operator: Exists$' "$worker_monitor_manifest" ||
   fail "worker PodMonitor label expression must use Exists"
 
-for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
+for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway function-autoscaler; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_control_manifests" ||
     fail "monitor chart control defaults are missing $monitor monitor"
   grep -q "nvcf-default-monitors-$monitor" $control_manifests ||
@@ -155,6 +155,31 @@ for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
     fail "compute profile rendered $monitor control-plane monitor"
   fi
 done
+
+autoscaler_monitor_manifest="$work_dir/chart-autoscaler-servicemonitor.yaml"
+awk '
+  BEGIN { keep = 0 }
+  /^---$/ { keep = 0 }
+  /name: nvcf-default-monitors-function-autoscaler/ { keep = 1 }
+  keep { print }
+' "$chart_control_manifests" >"$autoscaler_monitor_manifest"
+test -s "$autoscaler_monitor_manifest" ||
+  fail "function-autoscaler ServiceMonitor was not extracted from chart control defaults"
+grep -q '^      app.kubernetes.io/instance: function-autoscaler$' "$autoscaler_monitor_manifest" ||
+  fail "function-autoscaler monitor must select app.kubernetes.io/instance=function-autoscaler"
+grep -q '^      app.kubernetes.io/name: helm-nvcf-function-autoscaler$' "$autoscaler_monitor_manifest" ||
+  fail "function-autoscaler monitor must select app.kubernetes.io/name=helm-nvcf-function-autoscaler"
+grep -q '^    - port: "metrics"$' "$autoscaler_monitor_manifest" ||
+  fail "function-autoscaler monitor must scrape the metrics port"
+grep -q '^      path: "/metrics"$' "$autoscaler_monitor_manifest" ||
+  fail "function-autoscaler monitor must scrape /metrics"
+
+disabled_dir="$work_dir/disabled-default-monitors"
+HELMFILE_ENV=local helmfile   --file "$stack_dir/helmfile.d"   --environment default   --allow-no-matching-release   --state-values-set observability.profile=disabled   --selector name=default-monitors   template --output-dir "$disabled_dir" >/dev/null
+if find "$disabled_dir" -type f -name '*.yaml' -print 2>/dev/null |
+  xargs grep -l "nvcf-default-monitors-function-autoscaler" >/dev/null 2>&1; then
+  fail "disabled profile rendered the function-autoscaler monitor"
+fi
 
 for monitor in nvca dcgm worker; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_compute_manifests" ||
