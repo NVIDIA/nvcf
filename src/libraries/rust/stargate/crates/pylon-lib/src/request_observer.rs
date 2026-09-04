@@ -253,8 +253,19 @@ impl RequestObserver {
     }
 
     pub(crate) fn observe_input_tokens_total(&mut self, input_tokens: u64) {
-        if self.input_tokens_explicit && input_tokens == self.input_tokens {
-            return;
+        if self.input_tokens_explicit {
+            if input_tokens < self.input_tokens {
+                tracing::warn!(
+                    request_id = self.request_id,
+                    prior_input_tokens = self.input_tokens,
+                    input_tokens,
+                    "ignoring regressing explicit input token counter"
+                );
+                return;
+            }
+            if input_tokens == self.input_tokens {
+                return;
+            }
         }
         self.input_tokens = input_tokens;
         self.input_tokens_explicit = true;
@@ -1027,6 +1038,23 @@ mod tests {
         assert_eq!(usage.input_tokens, 7);
         assert_eq!(usage.time_to_first_output, None);
         assert_eq!(usage.time_to_first_token, None);
+    }
+
+    #[tokio::test]
+    async fn exact_input_usage_does_not_regress() {
+        let (mut observer, rx, _) = responding_observer("req-input-regression").await;
+
+        observer.observe_input_tokens_total(7);
+        let first = recv_observation(&rx, "first input usage should be emitted").await;
+        assert_eq!(first.input_tokens, 7);
+
+        observer.observe_input_tokens_total(9);
+        let increased = recv_observation(&rx, "increased input usage should be emitted").await;
+        assert_eq!(increased.input_tokens, 9);
+
+        observer.observe_input_tokens_total(8);
+        assert!(rx.is_empty(), "regressing input usage should not emit");
+        assert_eq!(observer.input_tokens, 9);
     }
 
     #[tokio::test]

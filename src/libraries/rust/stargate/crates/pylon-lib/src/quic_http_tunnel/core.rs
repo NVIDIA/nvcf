@@ -59,10 +59,9 @@ use crate::stats::PylonMetrics;
 use crate::upstream_health::UpstreamHealthPaths;
 
 pub(super) const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
-// This bounds only one upstream SSE event waiting for its blank-line delimiter,
-// not the request body or completed response events. One MiB accommodates
-// unusually large structured chunks while a missing delimiter cannot make the
-// pylon retain unbounded upstream bytes.
+// This bounds each upstream SSE event, including its blank-line delimiter.
+// Complete events are delivered incrementally, so one input chunk cannot make
+// the pylon retain an unbounded batch of parsed events.
 pub const DEFAULT_MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024;
 pub(super) const DEFAULT_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const DEFAULT_OUTPUT_CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -245,21 +244,29 @@ fn sse_timeout_phase_name(phase: SseReadTimeoutPhase) -> &'static str {
     }
 }
 
-fn relay_sse_error(error: UpstreamSseReadError) -> anyhow::Error {
+fn relay_sse_error(error: UpstreamSseReadError) -> ResponseRelayError {
     use UpstreamSseReadError::*;
     match error {
-        Timeout(phase) => anyhow!(
+        Timeout(phase) => ResponseRelayError::Upstream(anyhow!(
             "timed out waiting for {} output event from upstream",
             sse_timeout_phase_name(phase)
-        ),
+        )),
         BufferLimitExceeded {
             max_buffer_bytes,
             buffered_bytes,
-        } => anyhow!(
-            "upstream SSE buffer exceeded {max_buffer_bytes} bytes while waiting for an event boundary (buffered {buffered_bytes} bytes)"
+        } => ResponseRelayError::Upstream(anyhow!(
+            "upstream SSE event exceeded the {max_buffer_bytes}-byte buffer limit (buffered {buffered_bytes} bytes)"
+        )),
+        DeliveryBackpressure(phase) => ResponseRelayError::Downstream(anyhow!(
+            "downstream did not accept an SSE event before the {} output deadline",
+            sse_timeout_phase_name(phase)
+        )),
+        Upstream(error) => {
+            ResponseRelayError::Upstream(error.context("failed to read upstream response message"))
+        }
+        Producer(error) => ResponseRelayError::Upstream(
+            anyhow::Error::new(error).context("upstream SSE producer task failed"),
         ),
-        Upstream(error) => error.context("failed to read upstream response message"),
-        Producer(error) => anyhow::Error::new(error).context("upstream SSE producer task failed"),
     }
 }
 
@@ -398,7 +405,7 @@ impl TunnelRequestLifecycle {
             let parsed_message = upstream_messages
                 .try_next()
                 .await
-                .map_err(|error| ResponseRelayError::Upstream(relay_sse_error(error)))?;
+                .map_err(relay_sse_error)?;
             let Some(parsed_message) = parsed_message else {
                 if saw_output {
                     return Ok(RelayOutcome::Complete);
@@ -1262,6 +1269,22 @@ mod tests {
     use crate::test_support::TestHttpServer;
 
     use super::*;
+
+    #[test]
+    fn classifies_sse_delivery_backpressure_as_downstream_failure() {
+        assert!(matches!(
+            relay_sse_error(UpstreamSseReadError::DeliveryBackpressure(
+                SseReadTimeoutPhase::FirstOutput
+            )),
+            ResponseRelayError::Downstream(_)
+        ));
+        assert!(matches!(
+            relay_sse_error(UpstreamSseReadError::Timeout(
+                SseReadTimeoutPhase::FirstOutput
+            )),
+            ResponseRelayError::Upstream(_)
+        ));
+    }
 
     #[derive(Clone)]
     struct ResponseHeadGate {

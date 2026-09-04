@@ -69,18 +69,39 @@ impl SseMessageBuffer {
         self.buffer.extend_from_slice(chunk);
     }
 
-    fn push_bytes_limited(&mut self, chunk: &[u8], max_buffer_bytes: usize) -> Option<usize> {
-        self.push_bytes(chunk);
-        let buffered_bytes = self.unterminated_event_bytes();
-        (buffered_bytes > max_buffer_bytes).then_some(buffered_bytes)
+    fn push_bounded_prefix(&mut self, chunk: &[u8], max_buffer_bytes: usize) -> usize {
+        let buffer_limit = max_buffer_bytes.saturating_add(1);
+        let bytes_to_push = chunk
+            .len()
+            .min(buffer_limit.saturating_sub(self.buffer.len()));
+        self.push_bytes(&chunk[..bytes_to_push]);
+        bytes_to_push
     }
 
-    fn unterminated_event_bytes(&self) -> usize {
-        let mut remaining = self.buffer.as_ref();
-        while let Some(event_end) = find_sse_event_end(remaining) {
-            remaining = &remaining[event_end..];
+    fn next_limited(&mut self, max_buffer_bytes: usize) -> Result<Option<ParsedSseMessage>, usize> {
+        let Some(event_end) = find_sse_event_end(&self.buffer) else {
+            return if self.buffer.len() > max_buffer_bytes {
+                Err(self.buffer.len())
+            } else {
+                Ok(None)
+            };
+        };
+        if event_end > max_buffer_bytes {
+            return Err(event_end);
         }
-        remaining.len()
+        Ok(Some(self.pop_event(event_end)))
+    }
+
+    fn pop_event(&mut self, event_end: usize) -> ParsedSseMessage {
+        let raw_event = self.buffer.split_to(event_end).freeze();
+        let fields = extract_sse_fields(raw_event.as_ref());
+        let (parsed, facts) = classify_sse_event(fields.event_name.as_deref(), &fields.data);
+        ParsedSseMessage {
+            raw_event,
+            parsed,
+            facts,
+            received_at: Instant::now(),
+        }
     }
 }
 
@@ -89,15 +110,7 @@ impl Iterator for SseMessageBuffer {
 
     fn next(&mut self) -> Option<Self::Item> {
         let event_end = find_sse_event_end(&self.buffer)?;
-        let raw_event = self.buffer.split_to(event_end).freeze();
-        let fields = extract_sse_fields(raw_event.as_ref());
-        let (parsed, facts) = classify_sse_event(fields.event_name.as_deref(), &fields.data);
-        Some(ParsedSseMessage {
-            raw_event,
-            parsed,
-            facts,
-            received_at: Instant::now(),
-        })
+        Some(self.pop_event(event_end))
     }
 }
 
@@ -111,13 +124,13 @@ pub(crate) enum SseReadTimeoutPhase {
 pub(crate) enum UpstreamSseReadError {
     #[error("timed out waiting for {0:?} SSE message")]
     Timeout(SseReadTimeoutPhase),
-    #[error(
-        "upstream SSE buffer exceeded {max_buffer_bytes} bytes while waiting for an event boundary"
-    )]
+    #[error("upstream SSE event exceeded the {max_buffer_bytes}-byte buffer limit")]
     BufferLimitExceeded {
         max_buffer_bytes: usize,
         buffered_bytes: usize,
     },
+    #[error("downstream SSE delivery remained backpressured through the {0:?} output deadline")]
+    DeliveryBackpressure(SseReadTimeoutPhase),
     #[error("failed to read upstream SSE bytes: {0}")]
     Upstream(#[source] anyhow::Error),
     #[error("upstream SSE producer task failed: {0}")]
@@ -191,71 +204,47 @@ async fn produce_sse_messages<S>(
                 match next {
                     Some(Ok(chunk)) if chunk.is_empty() => {}
                     Some(Ok(chunk)) => {
-                        if let Some(buffered_bytes) =
-                            sse_messages.push_bytes_limited(chunk.as_ref(), max_buffer_bytes)
-                        {
-                            let _ = delivery_tx
-                                .send(Err(UpstreamSseReadError::BufferLimitExceeded {
-                                    max_buffer_bytes,
-                                    buffered_bytes,
-                                }))
-                                .await;
-                            return;
-                        }
-
-                        let mut messages = Vec::new();
-                        let mut terminal = false;
-                        for mut message in sse_messages.by_ref() {
-                            message.received_at = received_at.into_std();
-                            if message.facts.generated_output.is_some() {
-                                timeout_phase = SseReadTimeoutPhase::SubsequentOutput;
-                                deadline = received_at + output_chunk_timeout;
-                            }
-                            terminal = message.facts.terminal.is_some();
-                            messages.push(message);
-                            if terminal {
-                                break;
-                            }
-                        }
-
-                        let mut timed_out = false;
-                        for message in messages {
-                            if timed_out || terminal {
-                                if delivery_tx.send(Ok(message)).await.is_err() {
-                                    return;
+                        let mut remaining = chunk.as_ref();
+                        loop {
+                            match sse_messages.next_limited(max_buffer_bytes) {
+                                Ok(Some(mut message)) => {
+                                    message.received_at = received_at.into_std();
+                                    if message.facts.generated_output.is_some() {
+                                        timeout_phase = SseReadTimeoutPhase::SubsequentOutput;
+                                        deadline = received_at + output_chunk_timeout;
+                                    }
+                                    let terminal = message.facts.terminal.is_some();
+                                    if !deliver_sse_message(
+                                        &delivery_tx,
+                                        message,
+                                        deadline,
+                                        timeout_phase,
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
+                                    if terminal {
+                                        return;
+                                    }
                                 }
-                                continue;
-                            }
-
-                            let deadline_sleep = tokio::time::sleep_until(deadline);
-                            tokio::pin!(deadline_sleep);
-                            let permit = tokio::select! {
-                                biased;
-                                _ = &mut deadline_sleep => None,
-                                _ = delivery_tx.closed() => return,
-                                permit = delivery_tx.reserve() => match permit {
-                                    Ok(permit) => Some(permit),
-                                    Err(_) => return,
-                                },
-                            };
-                            if let Some(permit) = permit {
-                                permit.send(Ok(message));
-                            } else {
-                                timed_out = true;
-                                if delivery_tx.send(Ok(message)).await.is_err() {
+                                Ok(None) if remaining.is_empty() => break,
+                                Ok(None) => {
+                                    let pushed = sse_messages
+                                        .push_bounded_prefix(remaining, max_buffer_bytes);
+                                    debug_assert!(pushed > 0);
+                                    remaining = &remaining[pushed..];
+                                }
+                                Err(buffered_bytes) => {
+                                    let _ = delivery_tx
+                                        .send(Err(UpstreamSseReadError::BufferLimitExceeded {
+                                            max_buffer_bytes,
+                                            buffered_bytes,
+                                        }))
+                                        .await;
                                     return;
                                 }
                             }
-                        }
-
-                        if terminal {
-                            return;
-                        }
-                        if timed_out {
-                            let _ = delivery_tx
-                                .send(Err(UpstreamSseReadError::Timeout(timeout_phase)))
-                                .await;
-                            return;
                         }
                     }
                     Some(Err(error)) => {
@@ -269,6 +258,42 @@ async fn produce_sse_messages<S>(
             }
         }
     }
+}
+
+async fn deliver_sse_message(
+    delivery_tx: &tokio::sync::mpsc::Sender<Result<ParsedSseMessage, UpstreamSseReadError>>,
+    message: ParsedSseMessage,
+    deadline: tokio::time::Instant,
+    timeout_phase: SseReadTimeoutPhase,
+) -> bool {
+    if let Ok(permit) = delivery_tx.try_reserve() {
+        permit.send(Ok(message));
+        return true;
+    }
+    if delivery_tx.is_closed() {
+        return false;
+    }
+
+    let deadline_sleep = tokio::time::sleep_until(deadline);
+    tokio::pin!(deadline_sleep);
+    let permit = tokio::select! {
+        biased;
+        _ = &mut deadline_sleep => None,
+        permit = delivery_tx.reserve() => match permit {
+            Ok(permit) => Some(permit),
+            Err(_) => return false,
+        },
+    };
+    let Some(permit) = permit else {
+        let _ = delivery_tx
+            .send(Err(UpstreamSseReadError::DeliveryBackpressure(
+                timeout_phase,
+            )))
+            .await;
+        return false;
+    };
+    permit.send(Ok(message));
+    true
 }
 
 fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, SseEventFacts) {
@@ -914,7 +939,7 @@ mod tests {
                 buffered_bytes,
             })) => {
                 assert_eq!(max_buffer_bytes, 11);
-                assert_eq!(buffered_bytes, 14);
+                assert_eq!(buffered_bytes, 12);
             }
             unexpected => panic!(
                 "an upstream peer must not keep an unterminated SSE event buffered indefinitely: {unexpected:?}"
@@ -923,10 +948,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepts_a_large_chunk_when_it_contains_complete_small_events() {
+    async fn rejects_a_complete_event_that_exceeds_the_buffer_limit() {
         let byte_stream = futures::stream::iter([Ok::<_, reqwest::Error>(Bytes::from_static(
-            b"data: one\n\ndata: two\n\n",
+            b"data: 123456\n\n",
         ))]);
+        let mut messages = upstream_sse_message_stream(
+            byte_stream,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            13,
+        );
+
+        assert!(matches!(
+            messages.next().await,
+            Some(Err(UpstreamSseReadError::BufferLimitExceeded {
+                max_buffer_bytes: 13,
+                buffered_bytes: 14,
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn streams_many_small_events_from_a_chunk_larger_than_the_buffer_limit() {
+        let event_count = 128;
+        let chunk = (0..event_count)
+            .map(|index| format!("data: {index}\n\n"))
+            .collect::<String>();
+        let byte_stream = futures::stream::iter([Ok::<_, reqwest::Error>(Bytes::from(chunk))]);
         let mut messages = upstream_sse_message_stream(
             byte_stream,
             Duration::from_secs(1),
@@ -934,24 +982,14 @@ mod tests {
             11,
         );
 
-        let first = messages
-            .next()
-            .await
-            .expect("first complete SSE event should be emitted")
-            .expect("first complete SSE event should not fail");
-        assert_eq!(first.raw_event, Bytes::from_static(b"data: one\n\n"));
-        assert_eq!(first.facts, SseEventFacts::default());
-        let second = messages
-            .next()
-            .await
-            .expect("second complete SSE event should be emitted")
-            .expect("second complete SSE event should not fail");
-        assert_eq!(second.raw_event, Bytes::from_static(b"data: two\n\n"));
-        assert_eq!(second.facts, SseEventFacts::default());
-        assert!(
-            messages.next().await.is_none(),
-            "the byte stream should be exhausted after both events"
-        );
+        let mut received = 0;
+        while let Some(message) = messages.next().await {
+            let message = message.expect("complete small SSE events should not fail");
+            assert!(message.raw_event.len() <= 11);
+            assert_eq!(message.facts, SseEventFacts::default());
+            received += 1;
+        }
+        assert_eq!(received, event_count);
     }
 
     #[tokio::test]
@@ -1136,7 +1174,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn bounded_delivery_backpressure_does_not_pause_the_upstream_deadline() {
+    async fn delivery_backpressure_is_not_reported_as_an_upstream_timeout() {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let mut messages = upstream_sse_message_stream(
             tokio_stream::wrappers::ReceiverStream::new(rx),
@@ -1157,15 +1195,12 @@ mod tests {
         tokio::time::advance(Duration::from_secs(10)).await;
         tokio::task::yield_now().await;
 
-        for _ in 1..20 {
-            let message = messages.next().await.unwrap().unwrap();
-            assert_eq!(message.facts, SseEventFacts::default());
-            assert_eq!(message.received_at, received_at);
-        }
-
+        let second = messages.next().await.unwrap().unwrap();
+        assert_eq!(second.facts, SseEventFacts::default());
+        assert_eq!(second.received_at, received_at);
         assert!(matches!(
             messages.next().await,
-            Some(Err(UpstreamSseReadError::Timeout(
+            Some(Err(UpstreamSseReadError::DeliveryBackpressure(
                 SseReadTimeoutPhase::FirstOutput
             )))
         ));
