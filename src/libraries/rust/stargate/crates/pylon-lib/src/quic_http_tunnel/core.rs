@@ -750,12 +750,17 @@ pub(super) async fn forward_tunnel_request(
         let rewrite_result = if app.force_chat_completions_include_usage
             && observation_endpoint == Some(RequestObservationEndpoint::ChatCompletions)
         {
-            let chat_usage_rewrite_permit = app
-                .chat_usage_rewrite_permits
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("chat usage rewrite semaphore should remain open");
+            let Ok(chat_usage_rewrite_permit) =
+                app.chat_usage_rewrite_permits.clone().try_acquire_owned()
+            else {
+                lifecycle.fail();
+                return send_problem_response(
+                    transport,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "chat completions request rewrite capacity exhausted",
+                )
+                .await;
+            };
             let rewrite_task = AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
                 let _chat_usage_rewrite_permit = chat_usage_rewrite_permit;
                 force_chat_completions_include_usage(body_bytes)
@@ -1451,6 +1456,39 @@ mod tests {
                 .expect_err("blocked request task should be cancelled")
                 .is_cancelled()
         );
+    }
+
+    #[tokio::test]
+    async fn saturated_chat_usage_rewrite_capacity_rejects_without_waiting() {
+        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
+        app.force_chat_completions_include_usage = true;
+        let capacity = app.chat_usage_rewrite_permits.available_permits();
+        let _permits = (0..capacity)
+            .map(|_| {
+                app.chat_usage_rewrite_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("configured rewrite capacity should be available")
+            })
+            .collect::<Vec<_>>();
+        let mut transport = TestTransport {
+            request_body: br#"{"messages":[],"stream":true}"#.to_vec(),
+            ..TestTransport::default()
+        };
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            forward_tunnel_request(
+                &app,
+                observed_request("/v1/chat/completions"),
+                &mut transport,
+            ),
+        )
+        .await
+        .expect("rewrite saturation should not queue the buffered request")
+        .expect("rewrite saturation should return a problem response");
+
+        assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
     }
 
     #[test]
