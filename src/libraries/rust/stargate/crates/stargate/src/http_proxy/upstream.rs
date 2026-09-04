@@ -61,7 +61,8 @@ pub(super) async fn proxy_via_quic_streaming(
     let status = streaming_resp.status;
     let headers = streaming_resp.headers;
     let mut body_stream = streaming_resp.body_stream;
-    let inference_server_id = inference_server_id.to_owned();
+    // Arc clone, not a String copy: this runs on every successful response.
+    let registration = registration.clone();
 
     let body = Body::from_stream(async_stream::stream! {
         let mut streamed_bytes: u64 = 0;
@@ -75,7 +76,7 @@ pub(super) async fn proxy_via_quic_streaming(
                     // A mid-stream failure is the only router-side signal that an
                     // in-flight request died with its backend.
                     warn!(
-                        inference_server_id = %inference_server_id,
+                        inference_server_id = %registration.inference_server_id(),
                         status = status.as_u16(),
                         streamed_bytes,
                         error = %error,

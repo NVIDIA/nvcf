@@ -349,7 +349,9 @@ fn finish_attempt(
     upstream: Result<UpstreamStreamingResponse, StatusCode>,
 ) -> ProxyAttemptOutcome {
     let metrics = &run.app.metrics;
-    let failure = RequestFailureContext::new(&disposition, &upstream);
+    // Decide before consuming `upstream` so the success path does no capture work.
+    let failure = should_log_failure(&disposition, upstream_status(&upstream))
+        .then(|| RequestFailureContext::new(&disposition, &upstream));
     if let Some(retry_reason) = disposition.retry_reason() {
         Span::current().record("proxy.retry_reason", retry_reason);
     }
@@ -372,7 +374,7 @@ fn finish_attempt(
             &status.as_u16().to_string(),
         )
         .inc();
-    if failure.should_log(status) {
+    if let Some(failure) = failure {
         failure.log(run, chosen, status);
     }
     match upstream.and_then(|upstream| build_proxy_response(upstream, chosen)) {
@@ -381,10 +383,18 @@ fn finish_attempt(
     }
 }
 
+/// Client errors passed through unchanged are the caller's problem; every
+/// server-side or capacity failure, and every locally decided final status,
+/// must be visible in router logs.
+fn should_log_failure(disposition: &FinalRetryDisposition, upstream_status: StatusCode) -> bool {
+    !matches!(disposition, FinalRetryDisposition::PassThrough)
+        || upstream_status.is_server_error()
+        || upstream_status == StatusCode::TOO_MANY_REQUESTS
+}
+
 /// Fields captured before the upstream result is consumed, so a final failure
 /// can be logged with the backend that produced it and why no retry happened.
 struct RequestFailureContext {
-    pass_through: bool,
     disposition: &'static str,
     retry_reason: Option<String>,
     source: &'static str,
@@ -404,7 +414,6 @@ impl RequestFailureContext {
                 .map(str::to_owned)
         };
         Self {
-            pass_through: matches!(disposition, FinalRetryDisposition::PassThrough),
             disposition: disposition.label(),
             retry_reason: disposition.retry_reason().map(str::to_owned),
             source: if upstream.is_ok() {
@@ -415,13 +424,6 @@ impl RequestFailureContext {
             upstream_retryable: upstream_header(HEADER_STARGATE_RETRYABLE),
             upstream_retry_reason: upstream_header(HEADER_STARGATE_RETRY_REASON),
         }
-    }
-
-    /// Client errors passed through unchanged are the caller's problem; every
-    /// server-side or capacity failure, and every locally decided final status,
-    /// must be visible in router logs.
-    fn should_log(&self, status: StatusCode) -> bool {
-        !self.pass_through || status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS
     }
 
     fn log(
