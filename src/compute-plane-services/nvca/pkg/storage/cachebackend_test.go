@@ -19,6 +19,8 @@ package storage
 
 import (
 	"context"
+	corev1 "k8s.io/api/core/v1"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -266,4 +268,67 @@ func TestSelectHelmCacheBackend_ModelCacheClassLookupError(t *testing.T) {
 			assert.Contains(t, err.Error(), DefaultModelCacheStorageClassName)
 		})
 	}
+}
+
+func TestPersistedHelmCacheBackend(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		raw     string
+		want    HelmCacheBackend
+		wantErr bool
+	}{
+		{name: "empty legacy value", want: HelmCacheBackendNVMesh},
+		{name: "NVMesh", raw: string(HelmCacheBackendNVMesh), want: HelmCacheBackendNVMesh},
+		{name: "shared filesystem", raw: string(HelmCacheBackendSharedFS), want: HelmCacheBackendSharedFS},
+		{name: "Samba", raw: string(HelmCacheBackendSamba), want: HelmCacheBackendSamba},
+		{name: "none is not durable", raw: string(HelmCacheBackendNone), wantErr: true},
+		{name: "ephemeral is not durable", raw: string(HelmCacheBackendEphemeral), wantErr: true},
+		{name: "unknown", raw: "invented", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PersistedHelmCacheBackend(tt.raw)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHelmCacheBackendFromSelectionRoutesBothShapes(t *testing.T) {
+	selection := func(transition string, modes []corev1.PersistentVolumeAccessMode,
+		options []string) *PersistedModelCacheStorageSelection {
+		return &PersistedModelCacheStorageSelection{
+			Version:              ModelCacheStorageSelectionVersion,
+			Workflow:             ModelCacheWorkflowHelm,
+			Mode:                 ModelCacheSelectionDurable,
+			StorageClassName:     DefaultModelCacheStorageClassName,
+			StorageClassUID:      "uid-1",
+			StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+			ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+			Provider:             "weka",
+			Provisioner:          "csi.weka.io",
+			Transition:           transition,
+			RequiredAccessModes:  modes,
+			RequiredMountOptions: options,
+		}
+	}
+
+	rwx := selection(ModelCacheTransitionRWXReadOnly,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}, nil)
+	backend, err := HelmCacheBackendFromSelection(rwx)
+	require.NoError(t, err, "a ReadWriteMany backend must have a durable Helm path")
+	assert.Equal(t, HelmCacheBackendSharedFS, backend)
+
+	rox := selection(ModelCacheTransitionROXReadOnly,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
+		[]string{"ro", "norecovery", "nouuid"})
+	rox.Provider = ModelCacheProviderNVMesh
+	rox.Provisioner = NVMeshStorageClassProvisioner
+	backend, err = HelmCacheBackendFromSelection(rox)
+	require.NoError(t, err)
+	assert.Equal(t, HelmCacheBackendNVMesh, backend)
 }
