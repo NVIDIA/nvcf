@@ -53,12 +53,8 @@ impl From<ComponentHealth> for ComponentHealthResponse {
     }
 }
 
-/// GET /info: service/version/commit, via the shared nvcf-info crate (same
-/// schema as NVCF's Go and Java /info endpoints). version and commit come
-/// from CARGO_PKG_VERSION/NVCF_GIT_COMMIT, stamped at Bazel --stamp build
-/// time by crates/server/BUILD.bazel's version_env expand_template (see
-/// tools/workspace_status.sh for the underlying git values); unstamped/local
-/// builds fall back to "0.0.0-dev"/"unknown".
+/// Build metadata. Version and commit are stamped by the version_env template
+/// in crates/server/BUILD.bazel on --stamp builds.
 pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
     Json(nvcf_info::info_response!("nvcf-function-autoscaler"))
 }

@@ -46,18 +46,13 @@ cargo test -p rs-autoscaler
 cargo deny check advisories
 ```
 
-The `crates/server` crate depends on `//src/libraries/rust/nvcf-info` (the
-shared GET /info schema) as a Bazel target only, so the cargo commands above
-do not resolve it. Use Bazel to build or test that crate:
+`crates/server` depends on `//src/libraries/rust/nvcf-info` as a Bazel target
+only, so the cargo commands above do not resolve it. Build and test that crate
+with Bazel from the monorepo root:
 
 ```bash
 bazel test //src/control-plane-services/function-autoscaler/crates/server:all
 ```
-
-The dependency cannot be a cargo path dependency: `cargo-bazel splice` roots
-each service workspace in a temp dir, so a path pointing outside this
-directory resolves above the splice root. See
-`src/libraries/rust/nvcf-info/AGENTS.md`.
 
 CI subproject id: `function-autoscaler`. Native Bazel validation and release
 wiring live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI

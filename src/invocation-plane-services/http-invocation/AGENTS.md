@@ -44,12 +44,9 @@ cargo run --package nvcf-invocation-service --bin server --release -- \
 The staging-local config connects to staging NVCF. Keep secrets and bearer
 tokens out of committed config and examples.
 
-`crates/server` depends on `//src/libraries/rust/nvcf-info` (the shared GET
-/info schema) as a Bazel target only, so plain cargo builds of that crate do
-not resolve it. Use `bazel build`/`bazel test` instead. The dependency cannot
-be a cargo path dependency: `cargo-bazel splice` roots each service workspace
-in a temp dir, so a path pointing outside this directory resolves above the
-splice root. See `src/libraries/rust/nvcf-info/AGENTS.md`.
+`crates/server` depends on `//src/libraries/rust/nvcf-info` as a Bazel target
+only, so plain cargo builds of that crate do not resolve it. Use `bazel build`
+and `bazel test` for it instead.
 
 ## Local Gotchas
 
