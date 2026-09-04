@@ -1137,6 +1137,66 @@ func TestGetEventsV3_Success(t *testing.T) {
 	assert.NotZero(t, response.Events[0].UpdatedAt)
 }
 
+// TestGetEventsV3_AttributeFilter verifies the optional generic attribute filter
+// narrows the result to events whose details attribute matches, reusing the
+// existing EventsV3Response type (no resource-specific model or namespace scan).
+func TestGetEventsV3_AttributeFilter(t *testing.T) {
+	logger := testutils.InitTestLogger(t)
+	server := NewServer(
+		Connections{DbHandlerV2: &mockDBHandlerV3{}},
+		logger, nil, "test", &config.HTTPClientConfig{}, config.PaginationConfig{}, config.StatsConfig{},
+	)
+
+	newReq := func(query string) *http.Request {
+		req := httptest.NewRequest("GET", "/v3/ledger/namespace/test-namespace/events"+query, nil)
+		ctx := req.Context()
+		ctx = context.WithValue(ctx, logging.LoggerKey, logging.NewTraceLogger(ctx, logger))
+		req = req.WithContext(ctx)
+		return mux.SetURLVars(req, map[string]string{"namespace": "test-namespace"})
+	}
+
+	// pod-1 has two events: "ready" (key2=value2) and "pending" (key1=value1).
+	// Filtering by key2=value2 returns only the "ready" event.
+	w := httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2&attribute_value=value2"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var filtered EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &filtered))
+	require.Len(t, filtered.Events, 1)
+	assert.Equal(t, "ready", filtered.Events[0].EventName)
+	assert.Equal(t, "value2", filtered.Events[0].Details.Attributes["key2"])
+
+	// A non-matching value excludes all events.
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2&attribute_value=nope"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var none EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &none))
+	assert.Empty(t, none.Events)
+
+	// Omitting the filter returns both events (filter disabled).
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var all EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &all))
+	assert.Len(t, all.Events, 2)
+
+	// attribute_key and attribute_value must be provided together. Supplying
+	// only one is rejected so a value-only request cannot silently disable the
+	// filter and return every event.
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_value=value2"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 // Test GetEventsV3 with empty result
 func TestGetEventsV3_EmptyResult(t *testing.T) {
 	mockDB := &mockDBHandlerV3{}
