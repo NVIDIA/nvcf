@@ -65,27 +65,22 @@ pub(super) async fn proxy_via_quic_streaming(
     let registration = registration.clone();
 
     let body = Body::from_stream(async_stream::stream! {
-        let mut streamed_bytes: u64 = 0;
         while let Some(chunk) = body_stream.recv_body().await.transpose() {
-            match chunk {
-                Ok(chunk) => {
-                    streamed_bytes += chunk.len() as u64;
-                    yield Ok(chunk);
-                }
-                Err(error) => {
-                    // A mid-stream failure is the only router-side signal that an
-                    // in-flight request died with its backend.
-                    warn!(
-                        inference_server_id = %registration.inference_server_id(),
-                        cluster_id = %registration.cluster_id(),
-                        status = status.as_u16(),
-                        streamed_bytes,
-                        error = %error,
-                        "upstream response body stream failed"
-                    );
-                    yield Err(std::io::Error::other(error.to_string()));
-                    break;
-                }
+            let failed = chunk.is_err();
+            if let Err(error) = &chunk {
+                // A mid-stream failure is the only router-side signal that an
+                // in-flight request died with its backend.
+                warn!(
+                    inference_server_id = %registration.inference_server_id(),
+                    cluster_id = %registration.cluster_id(),
+                    status = status.as_u16(),
+                    error = %error,
+                    "upstream response body stream failed"
+                );
+            }
+            yield chunk.map_err(|error| std::io::Error::other(error.to_string()));
+            if failed {
+                break;
             }
         }
     });
