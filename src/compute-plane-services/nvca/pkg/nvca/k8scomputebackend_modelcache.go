@@ -124,6 +124,13 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 		return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 	}
 
+	// A shared claim (ReadWriteMany selection) is mounted by every request for
+	// the handle and is reclaimed by the reference sweep once no request names
+	// it. Deleting it here would pull the cache out from under other readers.
+	if regularModelCacheKeepsSharedClaim(req) {
+		log.Debugf("leaving shared cache claim %v for the reference sweep", rwPVC.Name)
+		return nil
+	}
 	// now purge the RWPVC
 	err = c.clients.K8s.CoreV1().PersistentVolumeClaims(c.bk8s.podInstanceNamespace).Delete(ctx, rwPVC.Name, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {

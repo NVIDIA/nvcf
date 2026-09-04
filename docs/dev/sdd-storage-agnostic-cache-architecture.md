@@ -173,8 +173,10 @@ NVMesh; `nvcf-miniservice-sc` present selects the shared-filesystem path;
 re-export of an `nvcf-sc` volume; otherwise a per-pod `emptyDir` with an init
 download. That is the path for a request with no persisted selection. A new
 request carries a selection derived from the catalog when it is created, and
-Helm backend selection follows it; the regular workflow records it but does not
-act on it yet. No controller creates a binding. Garbage collection is an idle
+Helm backend selection follows it, and the regular workflow follows a
+`ReadWriteMany` selection onto one shared claim per cache handle, populated once
+and mounted read-only by every reader; its `ReadOnlyMany` shape still takes the
+NVMesh path. No controller creates a binding. Garbage collection is an idle
 sweep keyed on a last-referenced annotation. The mutating webhook
 injects the reader PVC into workload pods as a volume named `model-data`.
 

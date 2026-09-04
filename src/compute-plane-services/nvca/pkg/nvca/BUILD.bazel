@@ -6,6 +6,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "nvca",
     srcs = [
+        "k8scomputebackend_modelcache_rwx_readonly.go",
         "modelcache_storage_selection.go",
         "agent.go",
         "agent_http_debug.go",
@@ -172,6 +173,7 @@ alias(
 go_test(
     name = "nvca_test",
     srcs = [
+        "k8scomputebackend_modelcache_rwx_readonly_test.go",
         "agent_http_debug_test.go",
         "agent_manager_test.go",
         "agent_metrics_test.go",
