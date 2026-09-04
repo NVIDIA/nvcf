@@ -34,8 +34,20 @@ test "$default_chart" = 'nvcf/nvcf-gateway-routes' || {
   echo "gateway-routes-local-chart: expected default chart, got ${default_chart:-missing}" >&2
   exit 1
 }
-test "$default_version" = '1.17.0' || {
-  echo "gateway-routes-local-chart: expected default version 1.17.0, got ${default_version:-missing}" >&2
+
+# Read the pinned version from the ingress release itself rather than
+# hardcoding it, so this check does not need updating every pin bump.
+pinned_version="$(
+  awk '/- name: ingress/{f=1} f && /^ *version:/{print; exit}' \
+    "$stack_dir/helmfile.d/02-core.yaml.gotmpl" |
+    sed 's/.*version: *//'
+)"
+test -n "$pinned_version" || {
+  echo "gateway-routes-local-chart: could not read the pinned version from 02-core.yaml.gotmpl" >&2
+  exit 1
+}
+test "$default_version" = "$pinned_version" || {
+  echo "gateway-routes-local-chart: expected default version $pinned_version, got ${default_version:-missing}" >&2
   exit 1
 }
 
