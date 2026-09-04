@@ -245,17 +245,15 @@ agent:
       cpu: 100m
       memory: 200Mi
 ## @section Webhook Container Resource configuration
-## @param webhook.resources.limits.cpu CPU limit for the nvca webhook container
 ## @param webhook.resources.limits.memory Memory limit for the nvca webhook container
 ## @param webhook.resources.requests.cpu CPU request for the nvca webhook container
 ## @param webhook.resources.requests.memory Memory request for the nvca webhook container
 webhook:
   resources:
     limits:
-      cpu: 200m
       memory: 200Mi
     requests:
-      cpu: 50m
+      cpu: 500m
       memory: 50Mi
 ## @section NGC Configuration
 
