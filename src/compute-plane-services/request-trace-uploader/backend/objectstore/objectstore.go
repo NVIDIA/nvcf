@@ -47,8 +47,10 @@ type credentials struct {
 }
 
 // New builds the object-store backend from the loaded configuration. It fails
-// fast on a missing bucket, region, or credential so a wiring mistake reports
-// at startup rather than at the first upload.
+// fast on a missing bucket, region, or credential, and on a non-https
+// endpoint, so a wiring mistake reports at startup rather than at the first
+// upload. config.Load already rejects a non-https endpoint, but New enforces
+// it again: a config.Config can also be constructed directly, bypassing Load.
 func New(cfg config.Config) (backend.Client, error) {
 	return newClient(cfg, nil)
 }
@@ -80,6 +82,9 @@ func newClient(cfg config.Config, httpClient *http.Client) (backend.Client, erro
 		UsePathStyle: cfg.ObjectStore.PathStyle,
 	}
 	if cfg.ObjectStore.Endpoint != "" {
+		if !strings.HasPrefix(cfg.ObjectStore.Endpoint, "https://") {
+			return nil, fmt.Errorf("%s must be an absolute https:// URL; a non-TLS endpoint would send credentials and segment data in cleartext", config.EnvObjectStoreEndpoint)
+		}
 		options.BaseEndpoint = aws.String(cfg.ObjectStore.Endpoint)
 	}
 	if httpClient != nil {
