@@ -67,7 +67,8 @@ helm template llm-request-router "$stack_dir/../../helm/llm-request-router/llm-r
   --values "$values_file" >"$local_manifest"
 
 main_registry="$(yq -r '.llmRequestRouter.image.registry' "$values_file")"
-expected_stargate_image="${main_registry:+${main_registry}/}${main_repository}:0.14.2"
+chart_app_version="$(yq -r '.appVersion' "$stack_dir/../../helm/llm-request-router/llm-request-router/Chart.yaml")"
+expected_stargate_image="${main_registry:+${main_registry}/}${main_repository}:${chart_app_version}"
 main_image="$(yq ea -r \
   'select(.kind == "Deployment" and .metadata.name == "llm-request-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[0].image' \
   "$local_manifest")"
