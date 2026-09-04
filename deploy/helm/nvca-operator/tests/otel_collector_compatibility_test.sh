@@ -6,11 +6,11 @@ set -euo pipefail
 
 chart_root="$(cd "$(dirname "$0")/.." && pwd)"
 workspace_root="$(cd "${chart_root}/../../.." && pwd)"
-collector_root="${workspace_root}/src/compute-plane-services/byoo-otel-collector"
 config_template="${workspace_root}/src/compute-plane-services/nvca/pkg/operator/reconcile/manifests/otel_collector_config.yaml"
 compatible_tag="0.157.0-nv-0.2.1"
 tmp_dir="$(mktemp -d)"
 
+# Remove rendered test inputs even when image validation fails.
 cleanup() {
   rm -rf "${tmp_dir}"
 }
@@ -18,10 +18,7 @@ trap cleanup EXIT
 
 manifest="${tmp_dir}/manifest.yaml"
 config="${tmp_dir}/config.yaml"
-collector="${NVCF_OTEL_COLLECTOR_BINARY:-${tmp_dir}/otelcol-contrib}"
 token_file="${tmp_dir}/service-api-key"
-build_parallelism="${GO_BUILD_P:-4}"
-go_build_cache="${NVCF_OTEL_COMPAT_GOCACHE:-${TMPDIR:-/tmp}/nvcf-otel-compat-go-build-cache}"
 
 helm template nvca-operator "${chart_root}/nvca-operator" \
   --namespace nvca-operator \
@@ -64,6 +61,8 @@ for selected_tag in "${operator_tag}" "${backend_tag}" "${helm_managed_tag}"; do
   fi
 done
 
+collector_image="${operator_repository}:${operator_tag}"
+
 # Select the service API key branch from the same Go template that NVCA renders
 # into its collector ConfigMap. This leaves runtime env substitutions intact for
 # the collector's env provider to resolve below.
@@ -74,37 +73,20 @@ awk '
   !in_auth || include { print }
 ' "${config_template}" > "${config}"
 
-if ! grep -Fq 'k8sobjectsreceiver v0.157.0' "${collector_root}/otel-collector-build.yaml"; then
-  echo "collector distribution for ${compatible_tag} does not declare the k8sobjects receiver" >&2
-  exit 1
-fi
-
-# Both release image targets use this checked-in otelcol module. Build the same
-# collector-only entrypoint as nvcf-otel-collector unless release validation
-# supplies the binary it already built for the image.
-if [[ -z "${NVCF_OTEL_COLLECTOR_BINARY:-}" ]]; then
-  (
-    cd "${collector_root}/otelcol"
-    mkdir -p "${go_build_cache}"
-    GOWORK=off GOCACHE="${go_build_cache}" GOMAXPROCS="${GOMAXPROCS:-${build_parallelism}}" \
-      go build -p "${build_parallelism}" -trimpath -o "${collector}" .
-  )
-elif [[ ! -x "${collector}" ]]; then
-  echo "NVCF_OTEL_COLLECTOR_BINARY is not executable: ${collector}" >&2
-  exit 1
-fi
-
-# Let the binary's validate command check every receiver, processor, exporter,
-# extension, and setting in NVCA's generated configuration.
+# Pull and run the image selected by the rendered chart. A local source build
+# can pass even when the published release image has a different component set.
 
 printf 'test-token\n' > "${token_file}"
-NGC_SERVICE_API_KEY_FILE="${token_file}" \
-NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE=75 \
-NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE=20 \
-NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT=13133 \
-NVCA_OTEL_COLLECTOR_FNDS_ENDPOINT=http://127.0.0.1:4318 \
-NVCA_OTEL_COLLECTOR_METRICS_PORT=8888 \
-NVCA_OTEL_COLLECTOR_AUTHENTICATOR=bearertokenauth \
-  "${collector}" validate --config="${config}"
+docker run --rm --pull=always \
+  --env NGC_SERVICE_API_KEY_FILE=/etc/otelcol/service-api-key \
+  --env NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE=75 \
+  --env NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE=20 \
+  --env NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT=13133 \
+  --env NVCA_OTEL_COLLECTOR_FNDS_ENDPOINT=http://127.0.0.1:4318 \
+  --env NVCA_OTEL_COLLECTOR_METRICS_PORT=8888 \
+  --env NVCA_OTEL_COLLECTOR_AUTHENTICATOR=bearertokenauth \
+  --volume "${config}:/etc/otelcol/config.yaml:ro" \
+  --volume "${token_file}:/etc/otelcol/service-api-key:ro" \
+  "${collector_image}" validate --config=/etc/otelcol/config.yaml
 
-echo "validated generated NVCA config with ${operator_repository}:${operator_tag} collector source"
+echo "validated generated NVCA config with published image ${collector_image}"
