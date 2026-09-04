@@ -7,6 +7,7 @@ set -eu
 chart_dir="${1:-./llm-request-router}"
 release="${RELEASE:-llm-request-router}"
 namespace="${NAMESPACE:-nvcf}"
+compatible_stargate_version="0.15.1"
 tmp_dir="$(mktemp -d)"
 
 cleanup() {
@@ -73,6 +74,7 @@ service_field() {
 default_manifest="${tmp_dir}/default.yaml"
 render "${default_manifest}"
 
+[ "$(yq -r '.appVersion' "${chart_dir}/Chart.yaml")" = "${compatible_stargate_version}" ] || fail "chart appVersion must identify the compatible Stargate ${compatible_stargate_version} release"
 [ "$(workload_field "${default_manifest}" Deployment .kind)" = "Deployment" ] || fail "default render did not create Deployment"
 [ -z "$(workload_field "${default_manifest}" StatefulSet .kind)" ] || fail "default render also created StatefulSet"
 [ "$(workload_field "${default_manifest}" Deployment .spec.replicas)" = "3" ] || fail "default replica count is not 3"
@@ -88,6 +90,7 @@ render "${default_manifest}"
 [ -z "$(service_field "${default_manifest}" "llm-request-router-headless" '.spec.ports[] | select(.name == "http") | .port')" ] || fail "headless discovery Service must not expose request-facing HTTP"
 default_backend_kind="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router") | .kind' "${default_manifest}" | head -n1)"
 [ "${default_backend_kind}" = "Deployment" ] || fail "default multi-replica Deployment did not infer backend-router enablement"
+[ "$(workload_field "${default_manifest}" Deployment '.spec.template.spec.containers[0].image')" = "stargate:${compatible_stargate_version}" ] || fail "default Deployment must render the Stargate ${compatible_stargate_version} compatibility pin"
 
 default_args="$(workload_args "${default_manifest}" Deployment)"
 default_backend_args="$(backend_router_args "${default_manifest}")"
@@ -95,6 +98,8 @@ printf '%s\n' "${default_args}" | grep -qx -- "--advertised-hostname-template={p
 printf '%s\n' "${default_args}" | grep -qx -- "--grpc-pylon-dial-addr=http://llm-request-router-backend-router.${namespace}.svc.cluster.local:50071" || fail "default Deployment missing explicit inferred backend-router gRPC dial URI"
 printf '%s\n' "${default_args}" | grep -qx -- "--watch-heartbeat-ms=5000" || fail "default Deployment missing Watch heartbeat arg"
 printf '%s\n' "${default_args}" | grep -qx -- '--readiness-warmup-ms=60000' || fail "default Deployment missing 60-second readiness warm-up"
+printf '%s\n' "${default_args}" | grep -qx -- '--readiness-stabilization-sample-interval-ms=1000' || fail "default Deployment missing readiness stabilization sample interval"
+printf '%s\n' "${default_args}" | grep -qx -- '--readiness-stabilization-window=5' || fail "default Deployment missing readiness stabilization window"
 printf '%s\n' "${default_backend_args}" | grep -qx -- "--watch-heartbeat-ms=5000" || fail "backend router missing Watch heartbeat arg"
 
 multi_deployment_manifest="${tmp_dir}/multi-deployment.yaml"

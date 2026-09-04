@@ -35,24 +35,18 @@ require (
 	go.opentelemetry.io/collector/confmap/provider/httpsprovider v1.63.0
 	go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.63.0
 	go.opentelemetry.io/collector/connector v0.157.0
-	go.opentelemetry.io/collector/consumer v1.63.0
 	go.opentelemetry.io/collector/exporter v1.63.0
 	go.opentelemetry.io/collector/exporter/debugexporter v0.157.0
 	go.opentelemetry.io/collector/exporter/otlpexporter v0.157.0
 	go.opentelemetry.io/collector/exporter/otlphttpexporter v0.157.0
 	go.opentelemetry.io/collector/extension v1.63.0
 	go.opentelemetry.io/collector/otelcol v0.157.0
-	go.opentelemetry.io/collector/pdata v1.63.0
 	go.opentelemetry.io/collector/processor v1.63.0
 	go.opentelemetry.io/collector/processor/batchprocessor v0.157.0
 	go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.157.0
-	go.opentelemetry.io/collector/processor/processorhelper v0.157.0
 	go.opentelemetry.io/collector/receiver v1.63.0
 	go.opentelemetry.io/collector/receiver/otlpreceiver v0.157.0
 	go.opentelemetry.io/collector/service v0.157.0
-	go.opentelemetry.io/otel v1.44.1-0.20260622141720-fbe3d073ba93
-	go.opentelemetry.io/otel/metric v1.44.1-0.20260622141720-fbe3d073ba93
-	go.uber.org/zap v1.28.0
 	golang.org/x/sys v0.47.0
 )
 
@@ -457,6 +451,7 @@ require (
 	go.opentelemetry.io/collector/confmap/xconfmap v0.157.0 // indirect
 	go.opentelemetry.io/collector/connector/connectortest v0.157.0 // indirect
 	go.opentelemetry.io/collector/connector/xconnector v0.157.0 // indirect
+	go.opentelemetry.io/collector/consumer v1.63.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumererror v0.157.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumererror/xconsumererror v0.157.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumertest v0.157.0 // indirect
@@ -477,11 +472,13 @@ require (
 	go.opentelemetry.io/collector/internal/memorylimiter v0.157.0 // indirect
 	go.opentelemetry.io/collector/internal/sharedcomponent v0.157.0 // indirect
 	go.opentelemetry.io/collector/internal/telemetry v0.157.0 // indirect
+	go.opentelemetry.io/collector/pdata v1.63.0 // indirect
 	go.opentelemetry.io/collector/pdata/pprofile v0.157.0 // indirect
 	go.opentelemetry.io/collector/pdata/testdata v0.157.0 // indirect
 	go.opentelemetry.io/collector/pdata/xpdata v0.157.0 // indirect
 	go.opentelemetry.io/collector/pipeline v1.63.0 // indirect
 	go.opentelemetry.io/collector/pipeline/xpipeline v0.157.0 // indirect
+	go.opentelemetry.io/collector/processor/processorhelper v0.157.0 // indirect
 	go.opentelemetry.io/collector/processor/processorhelper/xprocessorhelper v0.157.0 // indirect
 	go.opentelemetry.io/collector/processor/processortest v0.157.0 // indirect
 	go.opentelemetry.io/collector/processor/xprocessor v0.157.0 // indirect
@@ -499,6 +496,7 @@ require (
 	go.opentelemetry.io/contrib/propagators/b3 v1.44.0 // indirect
 	go.opentelemetry.io/contrib/propagators/jaeger v1.44.0 // indirect
 	go.opentelemetry.io/contrib/propagators/ot v1.44.0 // indirect
+	go.opentelemetry.io/otel v1.44.1-0.20260622141720-fbe3d073ba93 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.20.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.20.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.44.0 // indirect
@@ -511,6 +509,7 @@ require (
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.44.0 // indirect
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.44.0 // indirect
 	go.opentelemetry.io/otel/log v0.20.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.1-0.20260622141720-fbe3d073ba93 // indirect
 	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
 	go.opentelemetry.io/otel/sdk/log v0.20.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.44.1-0.20260622141720-fbe3d073ba93 // indirect
@@ -522,6 +521,7 @@ require (
 	go.uber.org/fx v1.24.0 // indirect
 	go.uber.org/goleak v1.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.28.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
@@ -533,7 +533,7 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
@@ -563,3 +563,7 @@ require (
 replace github.com/DataDog/datadog-agent/comp/core/delegatedauth => github.com/DataDog/datadog-agent/comp/core/delegatedauth v0.79.0-devel.0.20260402163801-bfa4eff6c991
 
 replace github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws => github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws v0.79.0-devel.0.20260402163801-bfa4eff6c991
+
+replace golang.org/x/crypto => golang.org/x/crypto v0.55.0
+
+replace google.golang.org/grpc => google.golang.org/grpc v1.83.1

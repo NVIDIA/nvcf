@@ -52,6 +52,10 @@ type Backend string
 const (
 	BackendObjectStore Backend = "objectstore"
 	BackendKratos      Backend = "kratos"
+	// BackendDebug reads and reports segments without exporting them. It
+	// exists so the read path can be exercised against a real Dynamo without
+	// credentials or a destination.
+	BackendDebug Backend = "debug"
 )
 
 // LookupFunc obtains one environment setting.
@@ -223,10 +227,10 @@ func backendValue(lookup LookupFunc, name string) (Backend, error) {
 		return "", fmt.Errorf("%s is required", name)
 	}
 	switch Backend(value) {
-	case BackendObjectStore, BackendKratos:
+	case BackendObjectStore, BackendKratos, BackendDebug:
 		return Backend(value), nil
 	default:
-		return "", fmt.Errorf("%s must be %q or %q", name, BackendObjectStore, BackendKratos)
+		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, BackendObjectStore, BackendKratos, BackendDebug)
 	}
 }
 

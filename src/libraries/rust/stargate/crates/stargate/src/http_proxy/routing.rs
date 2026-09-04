@@ -153,7 +153,9 @@ pub(super) fn finalize_no_routing_choice(
     warn!(
         routing_key = ?context.target.routing_key,
         model_id = %model_id,
+        finalization = ?context.finalization,
         failed_backend_count = context.failed_backend_count,
+        failed_cluster_count = context.failed_cluster_count,
         routing_retry_attempts = context.routing_retry_attempts,
         "no inference server candidates for routing target"
     );

@@ -37,7 +37,7 @@ RUN cd otelcol && \
 ####
 ### Stage 2: Create distroless image for nvcf-otel-collector
 ####
-FROM nvcr.io/nvidia/distroless/go:v4.0.4 AS nvcf-otel-collector
+FROM nvcr.io/nvidia/distroless/go:v4.1.2 AS nvcf-otel-collector
 
 LABEL description="NVCF OpenTelemetry Collector - Custom build with curated components for NVCF services"
 LABEL version="0.157.0"

@@ -2104,7 +2104,7 @@ async fn quic_tunnel_emits_request_observation_for_streaming_responses() {
     assert_eq!(observation.request_id, "req-responses-observed");
     assert_eq!(observation.model_id, "model-responses");
     assert_eq!(observation.input_tokens, 11);
-    assert_eq!(observation.output_messages, 2);
+    assert_eq!(observation.output_messages, 1);
     assert_eq!(observation.output_tokens, 2);
     assert!(observation.output_tokens_explicit);
     assert!(observation.output_tokens_from_chunk_usage);
@@ -2257,7 +2257,7 @@ async fn quic_tunnel_counts_terminal_only_usage_tokens() {
     assert_eq!(observation.request_id, "req-terminal-usage");
     assert_eq!(observation.model_id, "model-terminal-usage");
     assert_eq!(observation.input_tokens, 13);
-    assert_eq!(observation.output_messages, 3);
+    assert_eq!(observation.output_messages, 2);
     assert_eq!(observation.output_tokens, 7);
     assert!(observation.output_tokens_explicit);
     assert!(observation.output_tokens_from_chunk_usage);

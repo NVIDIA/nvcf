@@ -16,41 +16,42 @@
 use axum::http::HeaderMap;
 use std::time::Duration;
 
-use crate::AppState;
 use crate::openai::{ChatRequest, ResponsesRequest};
+use crate::{AppState, DecodeRate, OutputTokenConfig, OutputTokenDistribution};
 
 pub(crate) fn request_input_tokens(headers: &HeaderMap, request: &ChatRequest) -> usize {
     input_tokens(headers, || estimate_prompt_tokens(&request.messages))
 }
 
-pub(crate) fn request_output_tokens(
+pub(crate) fn select_output_tokens(
     headers: &HeaderMap,
-    request: &ChatRequest,
-    default_tokens: usize,
+    request_id: &str,
+    config: OutputTokenConfig,
+    request_limit: Option<usize>,
 ) -> usize {
-    output_tokens(headers, request.max_tokens, default_tokens)
+    if let Some(tokens) = header_usize(headers, "x-output-tokens") {
+        return at_least_one_token(tokens);
+    }
+    let sampled = sample_output_tokens(request_id, config);
+    request_limit.map_or(sampled, |limit| sampled.min(at_least_one_token(limit)))
+}
+
+pub(crate) fn bounded_output_tokens(
+    input_tokens: usize,
+    selected_output_tokens: usize,
+    context_length_tokens: usize,
+) -> Option<usize> {
+    if context_length_tokens == 0 {
+        return Some(selected_output_tokens);
+    }
+    let available_output_tokens = context_length_tokens.checked_sub(input_tokens)?;
+    (available_output_tokens > 0).then(|| selected_output_tokens.min(available_output_tokens))
 }
 
 pub(crate) fn response_input_tokens(headers: &HeaderMap, request: &ResponsesRequest) -> usize {
     input_tokens(headers, || {
         estimate_response_input_tokens(request.input.as_ref())
     })
-}
-
-pub(crate) fn response_output_tokens(
-    headers: &HeaderMap,
-    request: &ResponsesRequest,
-    default_tokens: usize,
-) -> usize {
-    output_tokens(headers, request.max_output_tokens, default_tokens)
-}
-
-fn output_tokens(headers: &HeaderMap, requested: Option<usize>, default_tokens: usize) -> usize {
-    if let Some(tokens) = header_usize(headers, "x-output-tokens") {
-        return at_least_one_token(tokens);
-    }
-    let default_tokens = at_least_one_token(default_tokens);
-    at_least_one_token(requested.unwrap_or(default_tokens).min(default_tokens))
 }
 
 pub(crate) fn request_embedding_tokens(headers: &HeaderMap, input: &serde_json::Value) -> usize {
@@ -150,12 +151,18 @@ pub(crate) fn non_streaming_delay(
 }
 
 pub(crate) fn token_delay(state: &AppState, request_id: &str, token_index: usize) -> Duration {
-    state.token_delay
-        + Duration::from_millis(jitter_ms(
-            request_id,
-            &format!("decode-{token_index}"),
-            state.decode_jitter_ms,
-        ))
+    match state.decode_rate {
+        DecodeRate::TokenDelay { base_ms, jitter_ms } => {
+            Duration::from_millis(base_ms)
+                + Duration::from_millis(jitter_ms_for_token(request_id, token_index, jitter_ms))
+        }
+        DecodeRate::Uniform {
+            min_tokens_per_s,
+            max_tokens_per_s,
+        } => Duration::from_secs_f64(
+            1.0 / distributed_output_rate(request_id, min_tokens_per_s, max_tokens_per_s),
+        ),
+    }
 }
 
 pub(crate) fn jitter_ms(request_id: &str, salt: &str, max_jitter_ms: u64) -> u64 {
@@ -163,13 +170,77 @@ pub(crate) fn jitter_ms(request_id: &str, salt: &str, max_jitter_ms: u64) -> u64
         return 0;
     }
 
-    let hash = request_id
-        .bytes()
-        .chain(salt.bytes())
-        .fold(1469598103934665603, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(1099511628211)
-        });
+    let hash = deterministic_hash(request_id, salt);
     max_jitter_ms
         .checked_add(1)
         .map_or(hash, |range| hash % range)
+}
+
+fn jitter_ms_for_token(request_id: &str, token_index: usize, max_jitter_ms: u64) -> u64 {
+    jitter_ms(request_id, &format!("decode-{token_index}"), max_jitter_ms)
+}
+
+pub(crate) fn distributed_output_rate(
+    request_id: &str,
+    min_tokens_per_s: f64,
+    max_tokens_per_s: f64,
+) -> f64 {
+    let position = deterministic_hash_domain(request_id, HashDomain::Rate) as f64 / u64::MAX as f64;
+    min_tokens_per_s + position * (max_tokens_per_s - min_tokens_per_s)
+}
+
+pub(crate) fn sample_output_tokens(request_id: &str, config: OutputTokenConfig) -> usize {
+    if config.min == config.max {
+        return config.min;
+    }
+    match config.distribution {
+        OutputTokenDistribution::Uniform => {
+            let width = (config.max - config.min) as u128 + 1;
+            let offset = u128::from(deterministic_hash_domain(
+                request_id,
+                HashDomain::TokensUniform,
+            )) * width
+                / (u128::from(u64::MAX) + 1);
+            config.min + offset as usize
+        }
+        OutputTokenDistribution::Gaussian => {
+            let unit = |domain| {
+                let value = deterministic_hash_domain(request_id, domain) >> 11;
+                (value as f64 + 1.0) / ((1_u64 << 53) as f64 + 1.0)
+            };
+            let standard_normal = (-2.0 * unit(HashDomain::TokensGaussianRadius).ln()).sqrt()
+                * (std::f64::consts::TAU * unit(HashDomain::TokensGaussianAngle)).cos();
+            let min = config.min as f64;
+            let max = config.max as f64;
+            let sample = ((min + max) / 2.0 + standard_normal * (max - min) / 6.0)
+                .round()
+                .clamp(min, max);
+            sample as usize
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HashDomain {
+    Rate,
+    TokensUniform,
+    TokensGaussianRadius,
+    TokensGaussianAngle,
+}
+
+fn deterministic_hash(request_id: &str, salt: &str) -> u64 {
+    deterministic_hash_bytes(request_id, salt.bytes())
+}
+
+fn deterministic_hash_domain(request_id: &str, domain: HashDomain) -> u64 {
+    deterministic_hash_bytes(request_id, [domain as u8])
+}
+
+fn deterministic_hash_bytes(request_id: &str, salt: impl IntoIterator<Item = u8>) -> u64 {
+    request_id
+        .bytes()
+        .chain(salt)
+        .fold(1469598103934665603, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(1099511628211)
+        })
 }

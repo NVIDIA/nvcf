@@ -59,7 +59,7 @@ curl -X POST http://localhost:8080/v3/ledger/cloudevents \
 ```
 
 `namespace` is required. The optional context fields are `instanceId`,
-`deploymentId`, `gpuSpecificationId`, and `clusterId`.
+`deploymentId`, `gpuSpecificationId`, `clusterId`, and `resourceId`.
 
 ### Send OTLP log records
 
@@ -73,13 +73,14 @@ Each log record must include these string attributes:
 - `namespace`
 - `source`
 
-It may also include `instance_id`, `deployment_id`, `gpu_specification_id`, and
-`cluster_id`.
+It may also include `instance_id`, `deployment_id`, `gpu_specification_id`,
+`cluster_id`, and `resource_id`.
 
 ### Read events
 
-Pass the same context fields as query parameters. Context values may contain
-letters, numbers, and dashes. Instance IDs may also contain dots between
+Pass the context fields as query parameters: `instance_id`, `deployment_id`,
+`gpu_specification_id`, `cluster_id`, and `resource_id`. Context values may
+contain letters, numbers, and dashes. Instance IDs may also contain dots between
 non-empty segments.
 
 ```bash
@@ -88,6 +89,28 @@ curl 'http://localhost:8080/v3/ledger/namespace/example/events?instance_id=insta
 
 Events are returned newest first. If no context parameters are supplied, the
 endpoint returns events stored without a context.
+
+`resource_id` is a generic context field for events that have no other
+distinguishing context field, keyed by a producer-supplied identifier. It is
+part of the context key, so a lookup by `resource_id` is a direct read:
+
+```bash
+curl 'http://localhost:8080/v3/ledger/namespace/example/events?resource_id=request-123'
+```
+
+#### Filter by a details attribute
+
+The optional `attribute_key` and `attribute_value` parameters narrow the result
+to events whose `details.attributes[attribute_key]` equals `attribute_value`.
+This is a generic correlation filter over any producer-supplied attribute. The
+two parameters must be provided together: omitting both disables filtering and
+all events are returned, while supplying only one returns `400 Bad Request`.
+Filtering runs over the events of the queried context, so it is combined with
+the context parameters above.
+
+```bash
+curl 'http://localhost:8080/v3/ledger/namespace/example/events?instance_id=instance-1&attribute_key=correlation_id&attribute_value=request-123'
+```
 
 ### Read stats
 

@@ -639,6 +639,92 @@ func TestExtractK8sEvent(t *testing.T) {
 	assert.Equal(t, "extra_value", attrs["extra_field"])
 }
 
+// TestEventContextToCanonical_Ordering verifies the canonical string uses the
+// fixed field order and omits empty fields.
+func TestEventContextToCanonical_Ordering(t *testing.T) {
+	tests := []struct {
+		name   string
+		ctx    ContextV3
+		expect string
+	}{
+		{
+			name:   "pod shape omits empty resource_id",
+			ctx:    ContextV3{ClusterID: "clus-1", DeploymentID: "dep-1", InstanceID: "inst-1"},
+			expect: "cluster_id=clus-1,deployment_id=dep-1,instance_id=inst-1",
+		},
+		{
+			name:   "resource_id participates and sorts last",
+			ctx:    ContextV3{ClusterID: "clus-1", ResourceID: "icms-1"},
+			expect: "cluster_id=clus-1,resource_id=icms-1",
+		},
+		{
+			name:   "resource_id alone",
+			ctx:    ContextV3{ResourceID: "icms-1"},
+			expect: "resource_id=icms-1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := eventContextToCanonical(tc.ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expect, got)
+		})
+	}
+}
+
+// TestExtractK8sEvent_ResourceID verifies that resource_id participates in the
+// canonical context so resources without other unique fields stay distinct.
+func TestExtractK8sEvent_ResourceID(t *testing.T) {
+	lr := createOTLPLogRecord("instance.creation", "tenant-123", "nvca", "", map[string]string{
+		"cluster_id":  "clus-1",
+		"resource_id": "icms-abc",
+	})
+
+	event, err := extractK8sEvent(lr)
+	require.NoError(t, err)
+
+	// resource_id participates in the context (sorted last), keeping the row unique.
+	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-abc", event.Context)
+}
+
+// TestExtractK8sEvent_DistinctResourceIDsDoNotCollide verifies two resources with
+// the same non-resource context but different resource_id produce distinct contexts.
+func TestExtractK8sEvent_DistinctResourceIDsDoNotCollide(t *testing.T) {
+	makeCtx := func(resourceID string) string {
+		lr := createOTLPLogRecord("instance.creation", "tenant-123", "nvca", "", map[string]string{
+			"cluster_id":  "clus-1",
+			"resource_id": resourceID,
+		})
+		event, err := extractK8sEvent(lr)
+		require.NoError(t, err)
+		return event.Context
+	}
+
+	assert.NotEqual(t, makeCtx("icms-1"), makeCtx("icms-2"))
+}
+
+// TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails verifies that a Pod event
+// carrying an unmapped attribute (e.g. icms_request_id) keeps it in details and
+// excludes it from the context.
+func TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails(t *testing.T) {
+	lr := createOTLPLogRecord("pod.ready", "tenant-123", "kubernetes", "pod-1", map[string]string{
+		"cluster_id":      "clus-1",
+		"icms_request_id": "icms-xyz",
+	})
+
+	event, err := extractK8sEvent(lr)
+	require.NoError(t, err)
+
+	// Pod context stays the original shape and excludes the unmapped attribute.
+	assert.Equal(t, "cluster_id=clus-1,instance_id=pod-1", event.Context)
+	assert.NotContains(t, event.Context, "icms_request_id")
+
+	var details map[string]any
+	require.NoError(t, json.Unmarshal(event.DetailsJSON, &details))
+	attrs := details["attributes"].(map[string]any)
+	assert.Equal(t, "icms-xyz", attrs["icms_request_id"])
+}
+
 // Test extractCloudEvent validates source is required
 func TestExtractCloudEvent_SourceRequired(t *testing.T) {
 	ce := cloudevents.NewEvent()
@@ -676,6 +762,22 @@ func TestExtractCloudEvent_IdRequired(t *testing.T) {
 	_, err := extractCloudEvent(&ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: id")
+}
+
+// TestExtractCloudEvent_ResourceID verifies the resourceId extension maps into
+// the canonical context, mirroring OTLP ingestion so rows stay queryable.
+func TestExtractCloudEvent_ResourceID(t *testing.T) {
+	ce := cloudevents.NewEvent()
+	ce.SetID("test-id")
+	ce.SetType("test.event")
+	ce.SetSource("/test")
+	ce.SetExtension("namespace", "tenant-1")
+	ce.SetExtension("clusterId", "clus-1")
+	ce.SetExtension("resourceId", "icms-1")
+
+	event, err := extractCloudEvent(&ce)
+	require.NoError(t, err)
+	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-1", event.Context)
 }
 
 // ======================
@@ -1033,6 +1135,66 @@ func TestGetEventsV3_Success(t *testing.T) {
 	assert.NotZero(t, response.Events[0].Timestamp)
 	assert.NotZero(t, response.Events[0].CreatedAt)
 	assert.NotZero(t, response.Events[0].UpdatedAt)
+}
+
+// TestGetEventsV3_AttributeFilter verifies the optional generic attribute filter
+// narrows the result to events whose details attribute matches, reusing the
+// existing EventsV3Response type (no resource-specific model or namespace scan).
+func TestGetEventsV3_AttributeFilter(t *testing.T) {
+	logger := testutils.InitTestLogger(t)
+	server := NewServer(
+		Connections{DbHandlerV2: &mockDBHandlerV3{}},
+		logger, nil, "test", &config.HTTPClientConfig{}, config.PaginationConfig{}, config.StatsConfig{},
+	)
+
+	newReq := func(query string) *http.Request {
+		req := httptest.NewRequest("GET", "/v3/ledger/namespace/test-namespace/events"+query, nil)
+		ctx := req.Context()
+		ctx = context.WithValue(ctx, logging.LoggerKey, logging.NewTraceLogger(ctx, logger))
+		req = req.WithContext(ctx)
+		return mux.SetURLVars(req, map[string]string{"namespace": "test-namespace"})
+	}
+
+	// pod-1 has two events: "ready" (key2=value2) and "pending" (key1=value1).
+	// Filtering by key2=value2 returns only the "ready" event.
+	w := httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2&attribute_value=value2"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var filtered EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &filtered))
+	require.Len(t, filtered.Events, 1)
+	assert.Equal(t, "ready", filtered.Events[0].EventName)
+	assert.Equal(t, "value2", filtered.Events[0].Details.Attributes["key2"])
+
+	// A non-matching value excludes all events.
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2&attribute_value=nope"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var none EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &none))
+	assert.Empty(t, none.Events)
+
+	// Omitting the filter returns both events (filter disabled).
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var all EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &all))
+	assert.Len(t, all.Events, 2)
+
+	// attribute_key and attribute_value must be provided together. Supplying
+	// only one is rejected so a value-only request cannot silently disable the
+	// filter and return every event.
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_value=value2"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // Test GetEventsV3 with empty result
