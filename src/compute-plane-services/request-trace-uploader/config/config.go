@@ -31,6 +31,11 @@ const (
 	EnvRetryInitialBackoff  = "REQUEST_TRACE_UPLOADER_RETRY_INITIAL_BACKOFF"
 	EnvRetryMaximumBackoff  = "REQUEST_TRACE_UPLOADER_RETRY_MAX_BACKOFF"
 	EnvRetryMultiplier      = "REQUEST_TRACE_UPLOADER_RETRY_MULTIPLIER"
+	EnvObjectStoreBucket    = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_BUCKET"
+	EnvObjectStoreRegion    = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_REGION"
+	EnvObjectStoreEndpoint  = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_ENDPOINT"
+	EnvObjectStoreKeyPrefix = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_KEY_PREFIX"
+	EnvObjectStorePathStyle = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_PATH_STYLE"
 	DefaultSecretsFile      = "/var/secrets/secrets.json"
 	DefaultHealthAddr       = ":8011"
 	DefaultSegmentPrefix    = "request-trace"
@@ -77,6 +82,24 @@ type Config struct {
 	ScanInterval  time.Duration
 	RetryPolicy   RetryPolicy
 	Kratos        KratosPolicy
+	ObjectStore   ObjectStorePolicy
+}
+
+// ObjectStorePolicy configures the generic S3-compatible backend. Bucket and
+// Region are validated by that backend's constructor, not here, because they
+// only matter when Backend is objectstore.
+type ObjectStorePolicy struct {
+	Bucket string
+	Region string
+	// Endpoint overrides the AWS endpoint resolution for an S3-compatible
+	// store that is not AWS. Empty uses the SDK default for Region.
+	Endpoint string
+	// KeyPrefix is joined with each segment's file name to form its object
+	// key. Empty uploads to the bucket root.
+	KeyPrefix string
+	// PathStyle selects path-style bucket addressing, which most non-AWS
+	// S3-compatible stores require.
+	PathStyle bool
 }
 
 // KratosPolicy bounds the asynchronous job polling that only the Kratos Bulk
@@ -160,6 +183,14 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	}
 	multiplier := floatValue(lookup, EnvRetryMultiplier, DefaultRetryMultiplier, 1.1, 10.0, &warnings)
 
+	objectStore := ObjectStorePolicy{
+		Bucket:    strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreBucket, "")),
+		Region:    strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreRegion, "")),
+		Endpoint:  strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreEndpoint, "")),
+		KeyPrefix: strings.Trim(strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreKeyPrefix, "")), "/"),
+		PathStyle: boolValue(lookup, EnvObjectStorePathStyle, false, &warnings),
+	}
+
 	return Config{
 		SourceDir:     sourceDir,
 		SegmentPrefix: segmentPrefix,
@@ -181,6 +212,7 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 			MaximumBackoff:   maximumBackoff,
 			Multiplier:       multiplier,
 		},
+		ObjectStore: objectStore,
 	}, warnings, nil
 }
 
@@ -284,6 +316,19 @@ func integer(lookup LookupFunc, name string, fallback, minimum, maximum int, war
 	}
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || parsed < minimum || parsed > maximum {
+		*warnings = append(*warnings, name)
+		return fallback
+	}
+	return parsed
+}
+
+func boolValue(lookup LookupFunc, name string, fallback bool, warnings *[]string) bool {
+	value, ok := lookup(name)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
 		*warnings = append(*warnings, name)
 		return fallback
 	}

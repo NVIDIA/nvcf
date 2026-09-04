@@ -102,6 +102,18 @@ func (c *Client) Status(context.Context, string) (backend.Status, error) {
 	return backend.StatusSuccess, nil
 }
 
+// Capabilities declares that debug exports nothing, so a caller must never
+// delete a source segment on the strength of a debug Submit succeeding.
+func (c *Client) Capabilities() backend.Capabilities {
+	return backend.Capabilities{
+		ResubmitSafe:        true,
+		TerminalOutcomeSync: true,
+		OutOfOrderTolerant:  true,
+		AcceptedFormats:     []backend.Format{backend.FormatGzipJSONL},
+		Exports:             false,
+	}
+}
+
 // formatCounts renders the per-event-type counts in a stable order so log
 // lines from different runs compare directly.
 func formatCounts(counts map[record.EventType]int) string {
