@@ -425,12 +425,8 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 // fake runner is pre-loaded with canned JSON for the Helm release assertion.
 func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	const vanityInvokeScript = `IFS= read -r api_key || [ -n "$api_key" ]; exec curl --silent --show-error --fail-with-body --header "Authorization: Bearer ${api_key}" "$@"`
-	const vanityFunctionIDCommand = `/bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json |` +
-		` jq -er ".currentFunction | select(.hasFunction == true) | .functionId"'` +
-		` bdd-vanity-function-id /usr/bin/nvcf-cli /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml`
-	const vanityVersionIDCommand = `/bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json |` +
-		` jq -er ".currentFunction | select(.hasFunction == true) | .versionId"'` +
-		` bdd-vanity-version-id /usr/bin/nvcf-cli /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml`
+	const selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
+	const selectedFunctionStatusJSON = `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`
 	vanityInvokeCommand := dsl.BuildCommand(
 		"/bin/sh", "-c", vanityInvokeScript, "vanity-gateway-request",
 		"--request", "POST",
@@ -461,13 +457,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
 		},
-		vanityFunctionIDCommand: {
+		selectedFunctionStatusCommand: {
 			ExitCode: 0,
-			Stdout:   "function-1\n",
-		},
-		vanityVersionIDCommand: {
-			ExitCode: 0,
-			Stdout:   "version-1\n",
+			Stdout:   selectedFunctionStatusJSON,
 		},
 		vanityInvokeCommand: {
 			ExitCode: 0,
@@ -921,6 +913,15 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 			` --namespace nvca-system --from-file=ngc-service-api-key=/dev/stdin --dry-run=client -o yaml |` +
 			` kubectl --context k3d-ncp-local apply -f -'`
 		restartNVCACommand = "kubectl --context k3d-ncp-local delete pod --namespace nvca-system --selector app.kubernetes.io/name=nvca --wait=false"
+
+		selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
+		selectedFunctionStatusJSON    = `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`
+		listFunctionsCommand          = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml` +
+			` cluster agent list-functions --compute-plane-context k3d-ncp-local` +
+			` --kubeconfig /repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml --json`
+		getFunctionCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml` +
+			` cluster agent get-function function-1 version-1 --compute-plane-context k3d-ncp-local` +
+			` --kubeconfig /repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml --json`
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
@@ -950,6 +951,20 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-autoscaler-echo\",\"repeats\":1}' --timeout 600 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-autoscaler-echo\"}\n",
+		},
+		// The autoscaler scenario reads the selected function identity, proves the
+		// compute plane holds no instances for it, then polls until one runs.
+		selectedFunctionStatusCommand: {
+			ExitCode: 0,
+			Stdout:   selectedFunctionStatusJSON,
+		},
+		listFunctionsCommand: {
+			ExitCode: 0,
+			Stdout:   `[{"functionId":"other","functionVersionId":"other-version","instanceCount":2}]`,
+		},
+		getFunctionCommand: {
+			ExitCode: 0,
+			Stdout:   `{"instanceCount":1,"instances":[{"id":"i-1","status":"RUNNING"}]}`,
 		},
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
@@ -1016,21 +1031,14 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		"--max-instances 1") {
 		t.Fatal("autoscaler smoke function was not deployed from zero with a one-instance ceiling")
 	}
-	if !commandRanThatContainsAll(runs,
-		"cluster agent list-functions",
-		"--compute-plane-context \"$3\"",
-		"--kubeconfig \"$4\"",
-		"ncp-local-observability-all-kubeconfig.yaml",
-		"all(.instanceCount == 0)") {
+	// The expected instance count and status now live in the feature text, so the
+	// canned compute-plane reads above are what prove them: the scenario only
+	// passes because the seeded list reports no row for the selected identity and
+	// the seeded detail reports one running instance.
+	if !commandRanExactly(runs, listFunctionsCommand) {
 		t.Fatal("autoscaler smoke did not prove the selected function started at zero instances")
 	}
-	if !commandRanThatContainsAll(runs,
-		"cluster agent get-function \"$function_id\" \"$version_id\"",
-		"--compute-plane-context \"$3\"",
-		"--kubeconfig \"$4\"",
-		"ncp-local-observability-all-kubeconfig.yaml",
-		".instanceCount == 1",
-		"--json") {
+	if !commandRanExactly(runs, getFunctionCommand) {
 		t.Fatal("autoscaler smoke did not observe the selected function on the compute plane")
 	}
 	assertFunctionDeploymentsUseInstanceType(t, runs, "NCP.GPU.H100_1x", 1)

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,8 @@ import (
 )
 
 var modelInvocationRetryInterval = time.Second
+
+var selectedFunctionPollInterval = 5 * time.Second
 
 type cliAuthState struct {
 	APIKey string `json:"apiKey"`
@@ -48,6 +51,9 @@ func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I successfully invoke model "([^"]*)" at "([^"]*)" with timeout "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeModel)
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI through Vanity Gateway host "([^"]*)" path "([^"]*)" with timeout "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionThroughVanityGateway)
 	ctx.Step(`^I successfully undeploy the function selected by NVCF CLI$`, sc.iSuccessfullyUndeploySelectedFunction)
+	ctx.Step(`^I export the function selected by NVCF CLI to environment variables "([^"]*)" and "([^"]*)"$`, sc.iExportSelectedFunctionIdentity)
+	ctx.Step(`^the function selected by NVCF CLI should have no scheduled compute-plane instances using context "([^"]*)" and kubeconfig "([^"]*)"$`, sc.selectedFunctionShouldHaveNoScheduledInstances)
+	ctx.Step(`^the function selected by NVCF CLI should report "([^"]*)" compute-plane instances with status "([^"]*)" using context "([^"]*)" and kubeconfig "([^"]*)" within "([^"]*)"$`, sc.selectedFunctionShouldReportInstances)
 }
 
 func (sc *ScenarioContext) iUseNVCFCLIConfig(config string) error {
@@ -316,4 +322,164 @@ func nvcfCLIOptions(table *godog.Table) ([]string, error) {
 		options = append(options, row.Cells[0].Value, row.Cells[1].Value)
 	}
 	return options, nil
+}
+
+// selectedFunctionIdentity reads the function and version IDs the CLI reports
+// as selected. Parsing lives in dsl so the handler stays a command adapter.
+func (sc *ScenarioContext) selectedFunctionIdentity(ctx context.Context) (string, string, error) {
+	if err := sc.runNVCFCLI(ctx, "status", "--json"); err != nil {
+		return "", "", err
+	}
+	return dsl.SelectedFunctionIdentity(sc.LastResult.Stdout)
+}
+
+// validateEnvVarName checks that an environment variable name is non-empty and
+// does not contain '=' or NUL characters that would be rejected by os.Setenv.
+func validateEnvVarName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name must be non-empty")
+	}
+	if strings.ContainsAny(name, "=\x00") {
+		return fmt.Errorf("name %q contains invalid characters '=' or NUL", name)
+	}
+	return nil
+}
+
+// iExportSelectedFunctionIdentity exports the selected function and version IDs
+// under the two named environment variables. Both names stay visible in
+// Gherkin. The EnvLedger snapshots each name before the write so suite teardown
+// restores the operator's original environment. Both variable names are validated
+// before executing the CLI command.
+func (sc *ScenarioContext) iExportSelectedFunctionIdentity(ctx context.Context, functionVariable, versionVariable string) error {
+	functionVariable = strings.TrimSpace(functionVariable)
+	versionVariable = strings.TrimSpace(versionVariable)
+	if err := validateEnvVarName(functionVariable); err != nil {
+		return fmt.Errorf("export selected function: function env var %w", err)
+	}
+	if err := validateEnvVarName(versionVariable); err != nil {
+		return fmt.Errorf("export selected function: version env var %w", err)
+	}
+	if functionVariable == versionVariable {
+		return fmt.Errorf("export selected function: env var names must differ, both are %q", functionVariable)
+	}
+	functionID, versionID, err := sc.selectedFunctionIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	for _, export := range []struct{ name, value string }{
+		{name: functionVariable, value: functionID},
+		{name: versionVariable, value: versionID},
+	} {
+		if err := sc.Suite.EnvLedger.Snapshot(export.name); err != nil {
+			return fmt.Errorf("export to %s: snapshot: %w", export.name, err)
+		}
+		if err := os.Setenv(export.name, export.value); err != nil {
+			return fmt.Errorf("export to %s: setenv: %w", export.name, err)
+		}
+	}
+	return nil
+}
+
+// selectedFunctionShouldHaveNoScheduledInstances proves the selected function
+// is idle before demand exists. The compute-plane context and kubeconfig stay
+// visible in Gherkin.
+func (sc *ScenarioContext) selectedFunctionShouldHaveNoScheduledInstances(ctx context.Context, kubeContext, kubeconfig string) error {
+	functionID, versionID, err := sc.selectedFunctionIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	if err := sc.runNVCFCLI(ctx,
+		"cluster", "agent", "list-functions",
+		"--compute-plane-context", kubeContext,
+		"--kubeconfig", kubeconfig,
+		"--json",
+	); err != nil {
+		return err
+	}
+	if err := dsl.ScheduledFunctionInstancesAbsent(sc.LastResult.Stdout, functionID, versionID); err != nil {
+		return fmt.Errorf("selected function is not idle on the compute plane: %w", err)
+	}
+	return nil
+}
+
+// selectedFunctionShouldReportInstances polls the compute-plane CLI until the
+// selected function reports the expected instance count and status. Each
+// attempt is a separate runner invocation so every poll reaches the per-command
+// logs. The count, status, context, kubeconfig, and timeout stay visible in
+// Gherkin.
+func (sc *ScenarioContext) selectedFunctionShouldReportInstances(ctx context.Context, count, status, kubeContext, kubeconfig, timeout string) error {
+	expectedCount, err := strconv.Atoi(strings.TrimSpace(dsl.Interpolate(count)))
+	if err != nil || expectedCount < 0 {
+		return fmt.Errorf("instance count %q must be a non-negative integer", count)
+	}
+	expectedStatus := strings.TrimSpace(dsl.Interpolate(status))
+	if expectedStatus == "" {
+		return fmt.Errorf("instance status must be non-empty")
+	}
+	budget, err := time.ParseDuration(strings.TrimSpace(dsl.Interpolate(timeout)))
+	if err != nil || budget <= 0 {
+		return fmt.Errorf("timeout %q must be a positive Go duration such as 10m", timeout)
+	}
+
+	functionID, versionID, err := sc.selectedFunctionIdentity(ctx)
+	if err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(budget)
+	pollCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+
+	var lastErr error
+	for {
+		lastErr = sc.observeSelectedFunctionInstances(pollCtx, functionID, versionID, kubeContext, kubeconfig, expectedCount, expectedStatus)
+		if lastErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Until(deadline) <= 0 {
+			break
+		}
+		timer := time.NewTimer(min(selectedFunctionPollInterval, time.Until(deadline)))
+		select {
+		case <-pollCtx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Until(deadline) <= 0 {
+			break
+		}
+	}
+	return fmt.Errorf("function %s version %s did not report %d instances with status %q within %s: %w",
+		functionID, versionID, expectedCount, expectedStatus, budget, lastErr)
+}
+
+// observeSelectedFunctionInstances runs one get-function attempt. A runner
+// failure, a non-zero exit, and an unmet expectation are all retryable, so the
+// caller keeps polling until its deadline.
+func (sc *ScenarioContext) observeSelectedFunctionInstances(
+	ctx context.Context,
+	functionID, versionID, kubeContext, kubeconfig string,
+	expectedCount int,
+	expectedStatus string,
+) error {
+	command := dsl.BuildCommand(sc.nvcfCLICommandArgs(
+		"cluster", "agent", "get-function", functionID, versionID,
+		"--compute-plane-context", kubeContext,
+		"--kubeconfig", kubeconfig,
+		"--json",
+	)...)
+	if err := sc.runAndRecord(ctx, command); err != nil {
+		return err
+	}
+	if sc.LastResult.ExitCode != 0 {
+		return fmt.Errorf("cluster agent get-function exited %d (see %s for stdout/stderr)",
+			sc.LastResult.ExitCode, sc.Suite.Config.CommandLogDir)
+	}
+	return dsl.FunctionInstancesReady(sc.LastResult.Stdout, expectedCount, expectedStatus)
 }

@@ -329,3 +329,250 @@ func TestNVCFCLIOptionsValidateOnlyTableShape(t *testing.T) {
 		t.Fatalf("error = %v, want structural header error", err)
 	}
 }
+
+const selectedFunctionStatusJSON = `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`
+
+func TestExportSelectedFunctionIdentityExportsBothNamedVariables(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Cleanup(func() { _ = sc.Suite.EnvLedger.RestoreAll() })
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 0, Stdout: selectedFunctionStatusJSON}
+
+	err := sc.iExportSelectedFunctionIdentity(context.Background(), "BDD_TEST_FUNCTION_ID", "BDD_TEST_VERSION_ID")
+	if err != nil {
+		t.Fatalf("export selected function identity: %v", err)
+	}
+	want := "nvcf-cli --config config.yaml status --json"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %+v, want a single %q", fake.runs, want)
+	}
+	if got := os.Getenv("BDD_TEST_FUNCTION_ID"); got != "function-1" {
+		t.Fatalf("BDD_TEST_FUNCTION_ID = %q, want function-1", got)
+	}
+	if got := os.Getenv("BDD_TEST_VERSION_ID"); got != "version-1" {
+		t.Fatalf("BDD_TEST_VERSION_ID = %q, want version-1", got)
+	}
+}
+
+func TestExportSelectedFunctionIdentityRestoresTheEnvironment(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	t.Setenv("BDD_TEST_FUNCTION_ID", "preexisting")
+	t.Cleanup(func() { _ = sc.Suite.EnvLedger.RestoreAll() })
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 0, Stdout: selectedFunctionStatusJSON}
+
+	if err := sc.iExportSelectedFunctionIdentity(context.Background(), "BDD_TEST_FUNCTION_ID", "BDD_TEST_VERSION_ID"); err != nil {
+		t.Fatalf("export selected function identity: %v", err)
+	}
+	if err := sc.Suite.EnvLedger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := os.Getenv("BDD_TEST_FUNCTION_ID"); got != "preexisting" {
+		t.Fatalf("BDD_TEST_FUNCTION_ID = %q, want the pre-suite value", got)
+	}
+	if _, present := os.LookupEnv("BDD_TEST_VERSION_ID"); present {
+		t.Fatal("BDD_TEST_VERSION_ID should be removed by teardown")
+	}
+}
+
+func TestExportSelectedFunctionIdentityRejectsUnusableNames(t *testing.T) {
+	tests := []struct {
+		name             string
+		function, verion string
+	}{
+		{name: "empty function name", function: "", verion: "BDD_TEST_VERSION_ID"},
+		{name: "empty version name", function: "BDD_TEST_FUNCTION_ID", verion: "  "},
+		{name: "identical names", function: "BDD_TEST_ID", verion: "BDD_TEST_ID"},
+		{name: "function name contains equals", function: "BAD=NAME", verion: "BDD_TEST_VERSION_ID"},
+		{name: "version name contains equals", function: "BDD_TEST_FUNCTION_ID", verion: "BAD=NAME"},
+		{name: "function name contains null byte", function: "BAD\x00NAME", verion: "BDD_TEST_VERSION_ID"},
+		{name: "version name contains null byte", function: "BDD_TEST_FUNCTION_ID", verion: "BAD\x00NAME"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			t.Setenv("BDD_TEST_FUNCTION_ID", "sentinel-function")
+			t.Setenv("BDD_TEST_VERSION_ID", "sentinel-version")
+
+			if err := sc.iExportSelectedFunctionIdentity(context.Background(), test.function, test.verion); err == nil {
+				t.Fatal("expected an error for unusable env var names")
+			}
+			if len(fake.runs) != 0 {
+				t.Fatalf("runs = %d, want no command before validation passes", len(fake.runs))
+			}
+			if got := os.Getenv("BDD_TEST_FUNCTION_ID"); got != "sentinel-function" {
+				t.Fatalf("BDD_TEST_FUNCTION_ID = %q, want sentinel-function", got)
+			}
+			if got := os.Getenv("BDD_TEST_VERSION_ID"); got != "sentinel-version" {
+				t.Fatalf("BDD_TEST_VERSION_ID = %q, want sentinel-version", got)
+			}
+		})
+	}
+}
+
+func TestExportSelectedFunctionIdentityFailsWhenNoFunctionSelected(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	t.Setenv("BDD_TEST_FUNCTION_ID", "sentinel-function")
+	t.Setenv("BDD_TEST_VERSION_ID", "sentinel-version")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 0, Stdout: `{"currentFunction":{"hasFunction":false}}`}
+
+	err := sc.iExportSelectedFunctionIdentity(context.Background(), "BDD_TEST_FUNCTION_ID", "BDD_TEST_VERSION_ID")
+	if err == nil || !strings.Contains(err.Error(), "no selected function") {
+		t.Fatalf("error = %v, want a no-selected-function failure", err)
+	}
+	if got := os.Getenv("BDD_TEST_FUNCTION_ID"); got != "sentinel-function" {
+		t.Fatalf("BDD_TEST_FUNCTION_ID = %q, want sentinel-function", got)
+	}
+	if got := os.Getenv("BDD_TEST_VERSION_ID"); got != "sentinel-version" {
+		t.Fatalf("BDD_TEST_VERSION_ID = %q, want sentinel-version", got)
+	}
+}
+
+func TestSelectedFunctionHasNoScheduledInstancesKeepsContextAndKubeconfigVisible(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	t.Setenv("BDD_TEST_KUBECONFIG", "/tmp/bdd kubeconfig.yaml")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: selectedFunctionStatusJSON},
+		{ExitCode: 0, Stdout: `[{"functionId":"other","functionVersionId":"other-version","instanceCount":3}]`},
+	}
+
+	err := sc.selectedFunctionShouldHaveNoScheduledInstances(
+		context.Background(), "k3d-ncp-local", "${BDD_TEST_KUBECONFIG}")
+	if err != nil {
+		t.Fatalf("no scheduled instances: %v", err)
+	}
+	want := "nvcf-cli --config config.yaml cluster agent list-functions" +
+		" --compute-plane-context k3d-ncp-local --kubeconfig '/tmp/bdd kubeconfig.yaml' --json"
+	if len(fake.runs) != 2 || fake.runs[1].command != want {
+		t.Fatalf("runs = %+v, want second command %q", fake.runs, want)
+	}
+}
+
+func TestSelectedFunctionHasNoScheduledInstancesFailsWhenAlreadyScheduled(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: selectedFunctionStatusJSON},
+		{ExitCode: 0, Stdout: `[{"functionId":"function-1","functionVersionId":"version-1","instanceCount":1}]`},
+	}
+
+	err := sc.selectedFunctionShouldHaveNoScheduledInstances(
+		context.Background(), "k3d-ncp-local", "/tmp/kubeconfig.yaml")
+	if err == nil || !strings.Contains(err.Error(), "reports 1 scheduled instances") {
+		t.Fatalf("error = %v, want the observed instance count", err)
+	}
+}
+
+func TestSelectedFunctionReportsInstancesQueriesTheSelectedIdentity(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	t.Setenv("BDD_TEST_KUBECONFIG", "/tmp/kubeconfig.yaml")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: selectedFunctionStatusJSON},
+		{ExitCode: 0, Stdout: `{"instanceCount":1,"instances":[{"id":"i-1","status":"RUNNING"}]}`},
+	}
+
+	err := sc.selectedFunctionShouldReportInstances(
+		context.Background(), "1", "running", "k3d-ncp-local", "${BDD_TEST_KUBECONFIG}", "10m")
+	if err != nil {
+		t.Fatalf("report instances: %v", err)
+	}
+	want := "nvcf-cli --config config.yaml cluster agent get-function function-1 version-1" +
+		" --compute-plane-context k3d-ncp-local --kubeconfig /tmp/kubeconfig.yaml --json"
+	if len(fake.runs) != 2 || fake.runs[1].command != want {
+		t.Fatalf("runs = %+v, want second command %q", fake.runs, want)
+	}
+}
+
+func TestSelectedFunctionReportsInstancesPollsUntilReady(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: selectedFunctionStatusJSON},
+		{ExitCode: 1, Stderr: "not scheduled yet"},
+		{ExitCode: 0, Stdout: `{"instanceCount":1,"instances":[{"status":"pending"}]}`},
+		{ExitCode: 0, Stdout: `{"instanceCount":1,"instances":[{"status":"running"}]}`},
+	}
+	previousInterval := selectedFunctionPollInterval
+	selectedFunctionPollInterval = time.Nanosecond
+	t.Cleanup(func() { selectedFunctionPollInterval = previousInterval })
+
+	err := sc.selectedFunctionShouldReportInstances(
+		context.Background(), "1", "running", "k3d-ncp-local", "/tmp/kubeconfig.yaml", "1m")
+	if err != nil {
+		t.Fatalf("report instances: %v", err)
+	}
+	if len(fake.runs) != 4 {
+		t.Fatalf("runs = %d, want one status read and three polls", len(fake.runs))
+	}
+}
+
+func TestSelectedFunctionReportsInstancesFailsAtTheVisibleTimeout(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0, Stdout: selectedFunctionStatusJSON},
+		{ExitCode: 0, Stdout: `{"instanceCount":0,"instances":[]}`},
+	}
+	previousInterval := selectedFunctionPollInterval
+	selectedFunctionPollInterval = time.Second
+	t.Cleanup(func() { selectedFunctionPollInterval = previousInterval })
+
+	err := sc.selectedFunctionShouldReportInstances(
+		context.Background(), "1", "running", "k3d-ncp-local", "/tmp/kubeconfig.yaml", "50ms")
+	if err == nil {
+		t.Fatal("expected a timeout failure")
+	}
+	for _, fragment := range []string{
+		`function-1 version version-1`,
+		`1 instances with status "running"`,
+		`within 50ms`,
+		`instance count = 0, want 1`,
+	} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("error = %v, want it to name %q", err, fragment)
+		}
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want no poll after the deadline", len(fake.runs))
+	}
+}
+
+func TestSelectedFunctionReportsInstancesValidatesGherkinInputs(t *testing.T) {
+	tests := []struct {
+		name                     string
+		count, status, timeoutIn string
+	}{
+		{name: "non-numeric count", count: "one", status: "running", timeoutIn: "10m"},
+		{name: "negative count", count: "-1", status: "running", timeoutIn: "10m"},
+		{name: "empty status", count: "1", status: "  ", timeoutIn: "10m"},
+		{name: "non-duration timeout", count: "1", status: "running", timeoutIn: "600"},
+		{name: "zero timeout", count: "1", status: "running", timeoutIn: "0s"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			t.Setenv("NVCF_CLI", "nvcf-cli")
+			sc.NVCFCLIConfig = "config.yaml"
+
+			err := sc.selectedFunctionShouldReportInstances(
+				context.Background(), test.count, test.status, "k3d-ncp-local", "/tmp/kubeconfig.yaml", test.timeoutIn)
+			if err == nil {
+				t.Fatal("expected a validation error")
+			}
+			if len(fake.runs) != 0 {
+				t.Fatalf("runs = %d, want no command before validation passes", len(fake.runs))
+			}
+		})
+	}
+}
