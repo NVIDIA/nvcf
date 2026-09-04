@@ -22,12 +22,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
 	"github.com/hashicorp/vault/api"
 )
+
+const vaultTokenHeader = "X-Vault-Token"
 
 // VaultSigner defines the interface for interacting with Vault's signing endpoint.
 type VaultSigner interface {
@@ -54,9 +57,20 @@ func NewVaultClient(addr string) (VaultSigner, error) {
 	return &VaultClient{client: client}, nil
 }
 
-// SetToken sets the Vault token for authentication
+// SetToken sets the Vault token for authentication.
 func (v *VaultClient) SetToken(token string) {
 	v.client.SetToken(token)
+
+	headers := v.client.Headers()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	if token == "" {
+		headers.Del(vaultTokenHeader)
+	} else {
+		headers.Set(vaultTokenHeader, token)
+	}
+	v.client.SetHeaders(headers)
 }
 
 // SignToken calls the Vault sign endpoint to mint a JWT
