@@ -64,14 +64,14 @@ NVCA uses the first matching backend in this order:
 | Priority | Cluster condition | Backend | Reuse behavior |
 | --- | --- | --- | --- |
 | 1 | The model cache StorageClass (`nvcf-sc` unless overridden) is provisioned by `nvmesh-csi.excelero.com` | NVMesh | Durable reuse across namespaces |
-| 2 | `nvcf-miniservice-sc` exists and supports `ReadOnlyMany` or `ReadWriteMany` | Operator-provided shared filesystem | Durable reuse across namespaces |
+| 2 | `nvcf-miniservice-sc` exists | Shared filesystem on the model cache StorageClass | Durable reuse across namespaces |
 | 3 | `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
 | 4 | No shared backend is available | `emptyDir` | Pod-local caching only |
 
-NVCA does not create `nvcf-miniservice-sc`. If you provide this StorageClass,
-it must support `ReadOnlyMany` or `ReadWriteMany`, and separate claims must
-expose the same underlying cached data. NVCA prefers `ReadOnlyMany` for reader
-claims and uses `ReadWriteMany` as a fallback. A provisioner that creates an
+NVCA does not create `nvcf-miniservice-sc`. Its presence only tells NVCA that
+the cluster has a shared filesystem; the cache itself is written to the model
+cache StorageClass (`nvcf-sc` unless overridden), and readers are derived from
+the writer's volume rather than provisioned separately. A provisioner that creates an
 isolated directory, access point, or subvolume for every claim does not provide
 cross-namespace reuse through this backend.
 
@@ -194,7 +194,7 @@ The PV identifies the attachment type:
   primary volume.
 - A Samba reader uses the `smb.csi.k8s.io` driver and points to the cache
   handle's SMB share.
-- A shared-filesystem reader is provisioned through `nvcf-miniservice-sc`.
+- A shared-filesystem reader is a static PV on the writer's volume, on the model cache StorageClass.
 
 Repeat these checks for every workload namespace. Later workloads with the same
 cache handle should receive their own read-only attachment without creating

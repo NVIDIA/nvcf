@@ -1369,11 +1369,14 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		assert.NoError(ct, err)
 	}, 5*time.Second, 50*time.Millisecond)
 
-	// The writer RW PVC is on the shared class, not an NVMesh class.
+	// The writer RW PVC lands on the model cache class like every other
+	// backend. nvcf-miniservice-sc only selected the path; provisioning on it
+	// would strand the cache on a cluster that has only the model cache class.
 	rwPVC := &corev1.PersistentVolumeClaim{}
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC))
 	if assert.NotNil(t, rwPVC.Spec.StorageClassName) {
-		assert.Equal(t, HelmCacheSharedStorageClassName, *rwPVC.Spec.StorageClassName)
+		assert.Equal(t, DefaultModelCacheStorageClassName, *rwPVC.Spec.StorageClassName,
+			"the shared-FS writer must use the model cache class, not the detection class")
 	}
 
 	// Drive the writer job to "started" so the request moves to InitRunning.
@@ -1406,7 +1409,7 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
 			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
-			StorageClassName:              HelmCacheSharedStorageClassName,
+			StorageClassName:              DefaultModelCacheStorageClassName,
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				CSI: &corev1.CSIPersistentVolumeSource{
 					Driver:       SMBCSIDriverName,
