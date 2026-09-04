@@ -235,6 +235,84 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 	assertYAMLConfigEqual(t, expectedCfg, gotCfg)
 }
 
+// Federated scrape jobs read samples from an upstream Prometheus that may run
+// several replicas behind a single service. Each replica keeps its own scrape
+// clock, so federated samples for the same series can arrive with timestamps
+// that move backwards. A Prometheus-compatible receiver rejects the whole write
+// request in that case, which also drops unrelated metrics batched with it.
+// honor_timestamps: false makes the collector stamp federated samples with its
+// own monotonic scrape time, so the federated path stays correct no matter how
+// the upstream Prometheus is deployed.
+func TestFederatedScrapeJobsDisableHonorTimestamps(t *testing.T) {
+	for _, backendType := range []BackendType{K8s, VM} {
+		for _, workloadType := range []WorkloadType{Container, Helm} {
+			t.Run(fmt.Sprintf("%s-%s", backendType, workloadType), func(t *testing.T) {
+				gotCfg, err := RenderOtelConfigFromBytes(
+					[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),
+					TemplateConfig{
+						BackendType:       backendType,
+						WorkloadType:      workloadType,
+						Namespace:         "sr-fake-namespace",
+						FunctionID:        "fake-function-id",
+						FunctionVersionID: "fake-function-version-id",
+						InstanceID:        "fake-instance-id",
+						ZoneName:          "fake-zone-name",
+					},
+				)
+				assert.NoError(t, err)
+
+				otelConfig := &OpenTelemetryConfig{}
+				assert.NoError(t, yaml.Unmarshal(gotCfg, otelConfig))
+
+				federatedJobs := 0
+				for _, scrapeConfig := range prometheusScrapeConfigs(t, otelConfig) {
+					if scrapeConfig["metrics_path"] != "/federate" {
+						continue
+					}
+					federatedJobs++
+					assert.Equal(t, false, scrapeConfig["honor_timestamps"],
+						"federated job %v must set honor_timestamps: false", scrapeConfig["job_name"])
+				}
+
+				if backendType == K8s {
+					assert.NotZero(t, federatedJobs, "expected the k8s template to federate")
+					return
+				}
+				// The vm templates scrape every target directly, so
+				// honor_timestamps has nothing to override there.
+				assert.Zero(t, federatedJobs, "the vm template is not expected to federate")
+			})
+		}
+	}
+}
+
+func prometheusScrapeConfigs(t *testing.T, otelConfig *OpenTelemetryConfig) []map[string]interface{} {
+	t.Helper()
+
+	prometheusReceiver, ok := otelConfig.Receivers["prometheus"]
+	if !ok {
+		t.Fatalf("rendered config has no prometheus receiver")
+	}
+	receiverConfig, ok := prometheusReceiver["config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("prometheus receiver has no config map, got %T", prometheusReceiver["config"])
+	}
+	rawScrapeConfigs, ok := receiverConfig["scrape_configs"].([]interface{})
+	if !ok {
+		t.Fatalf("prometheus receiver has no scrape_configs list, got %T", receiverConfig["scrape_configs"])
+	}
+
+	scrapeConfigs := make([]map[string]interface{}, 0, len(rawScrapeConfigs))
+	for i, rawScrapeConfig := range rawScrapeConfigs {
+		scrapeConfig, ok := rawScrapeConfig.(map[string]interface{})
+		if !ok {
+			t.Fatalf("scrape_configs[%d] is not a map, got %T", i, rawScrapeConfig)
+		}
+		scrapeConfigs = append(scrapeConfigs, scrapeConfig)
+	}
+	return scrapeConfigs
+}
+
 func assertYAMLConfigEqual(t *testing.T, expectedYAML, actualYAML []byte) {
 	t.Helper()
 

@@ -12,6 +12,7 @@ receivers:
     config:
       scrape_configs:
         - honor_labels: true
+          honor_timestamps: false
           job_name: nvcf-worker
           metric_relabel_configs:
             - action: labelkeep
@@ -26,6 +27,7 @@ receivers:
             - targets:
                 - nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090
         - honor_labels: true
+          honor_timestamps: false
           job_name: nvca
           metric_relabel_configs:
             - action: labelkeep
@@ -72,6 +74,7 @@ receivers:
             - targets:
                 - nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090
         - honor_labels: true
+          honor_timestamps: false
           job_name: kube-state-metrics
           metric_relabel_configs:
             - regex: .*kube-state-metrics.*
@@ -125,6 +128,7 @@ receivers:
             - targets:
                 - nvcf-byoo-prometheus-kube-prometheus.monitoring.svc.cluster.local:9090
         - honor_labels: true
+          honor_timestamps: false
           job_name: nvidia-dcgm-exporter
           metric_relabel_configs:
             - action: labelmap
