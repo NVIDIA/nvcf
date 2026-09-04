@@ -107,6 +107,8 @@ func TestLoadRejectsInvalidRequiredValues(t *testing.T) {
 		{name: "missing backend", env: map[string]string{EnvSourceDir: "/records"}},
 		{name: "unknown backend", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "s3"}},
 		{name: "prefix with separator", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvSegmentPrefix: "nested/prefix"}},
+		{name: "http objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "http://minio.internal:9000"}},
+		{name: "schemeless objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "minio.internal:9000"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,6 +116,20 @@ func TestLoadRejectsInvalidRequiredValues(t *testing.T) {
 				t.Fatal("Load() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsAnHTTPSObjectStoreEndpoint(t *testing.T) {
+	cfg, _, err := Load(testLookup(map[string]string{
+		EnvSourceDir:           "/records",
+		EnvBackend:             "objectstore",
+		EnvObjectStoreEndpoint: "https://minio.internal:9000",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.ObjectStore.Endpoint != "https://minio.internal:9000" {
+		t.Fatalf("endpoint = %q, want the configured https endpoint", cfg.ObjectStore.Endpoint)
 	}
 }
 
