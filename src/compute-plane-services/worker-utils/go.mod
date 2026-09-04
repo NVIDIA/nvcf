@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260902221359-b62eeeca37a7
+	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260903135415-10c9eba7e15d
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/cenkalti/backoff/v4 v4.3.0
