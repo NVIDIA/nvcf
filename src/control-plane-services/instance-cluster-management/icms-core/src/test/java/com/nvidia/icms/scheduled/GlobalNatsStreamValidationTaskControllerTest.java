@@ -34,7 +34,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.outbound.nats.NatsStreamManager;
 import com.nvidia.icms.service.LockProviderService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;

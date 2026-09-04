@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.icms.configuration.bean;
+package com.nvidia.icms.configuration.nats;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -31,15 +31,15 @@ import org.springframework.context.annotation.Configuration;
 @Slf4j
 public class NatsConfigurationProperties {
 
-    private boolean natsEnabled;
+    private boolean enabled;
     private String natsUrl;
+    private int maxPoolSize = 8;
     private boolean createNatsStreams;
-    private boolean createNatsConsumers;
     private Duration connectionTimeout = Duration.ZERO;
     private Duration pingInterval = Duration.ZERO;
     private Duration reconnectWait = Duration.ZERO;
     private Duration reconnectJitter = Duration.ZERO;
-    private boolean reconnectAllowed;
+    private boolean unlimitedReconnects;
     private Duration forceReconnectFlush = Duration.ZERO;
     private Duration delayBetweenMessages = Duration.ZERO;
     private Duration messageTtl = Duration.ZERO;

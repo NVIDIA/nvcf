@@ -45,7 +45,6 @@ ICMS_CORE_DEPS = [
     "@nv_third_party_deps//:io_micrometer_micrometer_registry_prometheus",
     "@nv_third_party_deps//:io_micrometer_micrometer_tracing",
     "@nv_third_party_deps//:io_nats_jnats",
-    "@nv_third_party_deps//:io_nats_jwt_java",
     "@nv_third_party_deps//:io_netty_netty_transport",
     "@nv_third_party_deps//:io_netty_netty_handler",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_exporter_otlp",
