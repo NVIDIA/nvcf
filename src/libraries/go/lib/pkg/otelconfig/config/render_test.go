@@ -231,3 +231,34 @@ func Test_generateExportersAndService(t *testing.T) {
 		})
 	}
 }
+
+// The remote-write exporter builds target_info from resource attributes alone.
+// The metrics pipeline deletes service.instance.id and adds the identifying
+// labels (function_id, instance_id, nca_id) as datapoint labels instead, so
+// every collector on a cluster would emit a byte-identical target_info series
+// and conflict on write. The series is also unselectable by any of those
+// labels, so nothing consumes it.
+func Test_exporterMetrics_disablesTargetInfo(t *testing.T) {
+	for _, provider := range []Provider{ProviderThanos, ProviderPrometheus} {
+		t.Run(string(provider), func(t *testing.T) {
+			config := TelemetryConfig{
+				Telemetries: Telemetries{
+					Metrics: &Telemetry{
+						Name:     "example-metrics",
+						Protocol: "http",
+						Provider: provider,
+						Endpoint: "https://metrics.example.invalid/api/v1/write",
+					},
+				},
+			}
+			otelConfig := &OpenTelemetryConfig{}
+			initializeConfigMaps(otelConfig)
+
+			exporterId, err := exporterMetrics(config, otelConfig)
+
+			assert.NoError(t, err)
+			assert.Equal(t, map[string]interface{}{"enabled": false},
+				otelConfig.Exporters[exporterId]["target_info"])
+		})
+	}
+}

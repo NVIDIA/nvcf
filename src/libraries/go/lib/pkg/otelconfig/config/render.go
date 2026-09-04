@@ -296,6 +296,14 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"endpoint": config.Telemetries.Metrics.Endpoint,
 			"tls":      exporterCredential,
+			// target_info is derived from resource attributes only. The metrics
+			// pipeline deletes service.instance.id and carries function_id,
+			// instance_id and nca_id as datapoint labels, so the generated series
+			// is identical for every collector on a cluster and unselectable by
+			// any of those labels. Emitting it only risks write conflicts.
+			"target_info": map[string]interface{}{
+				"enabled": false,
+			},
 		}
 
 	case ProviderDatadog:
