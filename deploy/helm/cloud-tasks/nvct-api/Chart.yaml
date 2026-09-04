@@ -4,4 +4,4 @@ description: NCP Compatible deployment of NVCT API (nvct-service)
 
 type: application
 version: 0.0.0 # autoversioning enabled via release pipeline
-appVersion: "1.64.1"
+appVersion: "1.65.0"
