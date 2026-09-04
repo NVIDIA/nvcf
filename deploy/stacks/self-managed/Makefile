@@ -32,3 +32,4 @@ test-published-charts:
 	@tests/llm-router-published-chart.sh
 	@tests/gateway-routes-published-chart.sh
 	@tests/openbao-published-chart.sh
+	@tests/cassandra-autoscaler-published-compatibility.sh

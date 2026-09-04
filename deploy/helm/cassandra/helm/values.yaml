@@ -196,7 +196,9 @@ cassandra:
       # repository: must be supplied in additional values
       registry: ""
       repository: ""
-      tag: 0.17.1
+      # 0.17.1 and later drop tables used by the published function autoscaler.
+      # Advance this only with a compatible autoscaler release.
+      tag: 0.17.0
       pullPolicy: Always
 
   dbUser:
