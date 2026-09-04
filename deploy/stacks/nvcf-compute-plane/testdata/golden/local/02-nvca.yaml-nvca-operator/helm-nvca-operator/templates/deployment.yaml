@@ -93,9 +93,9 @@ spec:
         - name: OTEL_COLLECTOR_ENABLED
           value: "false"
         - name: OTEL_COLLECTOR_IMAGE_REPO
-          value: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
+          value: "nvcr.io/0651155215864979/ncp-dev/nvcf-otel-collector"
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: "0.157.9"
+          value: "0.157.0-nv-0.2.1"
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiIxR2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjI1Nk1pIn19"
         - name: OPERATOR_NAMESPACE

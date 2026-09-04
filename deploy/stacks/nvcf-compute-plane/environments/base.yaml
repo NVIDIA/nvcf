@@ -38,7 +38,7 @@ global:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.
         enabled: false
-        imageTag: "0.157.9"
+        imageTag: "0.157.0-nv-0.2.1"
       # ICMS (SIS) service URL: required; set per environment.
       icmsServiceURL: ""
       icmsServiceHostHeaderOverride: ""

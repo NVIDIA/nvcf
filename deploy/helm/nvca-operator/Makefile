@@ -44,7 +44,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci sync-chart check-synced-chart render-values-from-stack install-from-stack test-render-values test-vendor-chart-image-tag test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-image-pull-secret-defaults test-pod-disruption-budget
+.PHONY: install uninstall status lint template validate clean package push-oci sync-chart check-synced-chart render-values-from-stack install-from-stack test-render-values test-vendor-chart-image-tag test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-otel-collector-compatibility test-image-pull-secret-defaults test-pod-disruption-budget
 
 install:
 ifndef values
@@ -115,6 +115,9 @@ test-release-sbom-wrapper:
 
 test-self-managed-nvca-image-reference:
 	@bash ./tests/self_managed_nvca_image_reference_test.sh
+
+test-otel-collector-compatibility:
+	@bash ./tests/otel_collector_compatibility_test.sh
 
 test-image-pull-secret-defaults:
 	@bash ./tests/image_pull_secret_defaults_test.sh

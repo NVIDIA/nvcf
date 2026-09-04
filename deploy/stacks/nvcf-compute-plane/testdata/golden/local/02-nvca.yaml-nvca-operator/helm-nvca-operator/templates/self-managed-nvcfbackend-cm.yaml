@@ -64,7 +64,7 @@ data:
       enabled: false
       imageConfig:
         repository: "nvcr.io/0651155215864979/ncp-dev/nvcf-otel-collector"
-        tag: "0.157.9"
+        tag: "0.157.0-nv-0.2.1"
     agent:
       natsURL: "nats://nats.nats-system.svc.cluster.local:4222"
       helmReValStageOAuthTokenURL: ""
