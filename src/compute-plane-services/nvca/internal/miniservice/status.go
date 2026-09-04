@@ -1374,6 +1374,8 @@ func (r *Reconciler) getUnexpectedEventsForObject(
 // parseErrorEventMessage parses event.Message to make it more human-readable and remove
 // internal cluster details when possible. It returns false when event is not an error message.
 func parseErrorEventMessage(event *corev1.Event) (message string, include, isError bool) {
+	const emStrForbidden = "forbidden:"
+
 	switch event.Reason {
 	case "FailedCreate", "FailedUpdate":
 		// FailedCreate/Update is added to an event and/or in a ReplicaSet or StatefulSet condition
@@ -1390,7 +1392,23 @@ func parseErrorEventMessage(event *corev1.Event) (message string, include, isErr
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/controller_utils.go#L596C75-L596C89
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/statefulset/stateful_pod_control.go#L297-L300
 		// https://github.com/kubernetes/kubernetes/blob/25f1248/pkg/controller/statefulset/stateful_pod_control.go#L314-L317
+		//
+		// A transient webhook-unavailability signature is retryable, not
+		// terminal: marking it terminal force-purges the object and
+		// regenerates the load that caused the failure.
+		if isTransientWebhookUnavailableMessage(event.Message) {
+			return event.Message, event.Type == corev1.EventTypeWarning, false
+		}
 		isError = true
+	case "BindingError":
+		// Same transient-webhook carve-out as FailedCreate/FailedUpdate;
+		// BindingError can carry the same webhook-unavailable signature.
+		if isTransientWebhookUnavailableMessage(event.Message) {
+			return event.Message, event.Type == corev1.EventTypeWarning, false
+		}
+		// Non-webhook messages (e.g. a routine resourceVersion conflict)
+		// fall back to the same forbidden:-only rule as default.
+		isError = strings.Contains(event.Message, emStrForbidden)
 	case "ReplicaSetCreateError":
 		// ReplicaSetCreateError is set when Deployments fail to create their ReplicaSet's.
 		//
@@ -1406,11 +1424,49 @@ func parseErrorEventMessage(event *corev1.Event) (message string, include, isErr
 	default:
 		// Controllers for objects that create Pods may observe "forbidden" errors,
 		// but these do not necessarily fail the controller object.
-		const emStrForbidden = "forbidden:"
 		isError = isError || strings.Contains(event.Message, emStrForbidden)
 	}
 
 	return event.Message, isError || event.Type == corev1.EventTypeWarning, isError
+}
+
+// Webhook-unavailability message substrings.
+var transientWebhookUnavailableSignatures = []string{
+	// Webhook Service has no ready endpoints, e.g. during a rollout or after node loss.
+	"no endpoints available for service",
+
+	// Webhook returned 5xx or the API server could not read a response.
+	"the server is currently unable to handle the request",
+	"has prevented the request from succeeding",
+	"too many requests",
+
+	// Connection could not be established or was lost mid-request.
+	"connection refused",
+	"connection reset by peer",
+	"broken pipe",
+	"http2: client connection lost",
+	"EOF",
+
+	// Webhook did not respond in time.
+	"i/o timeout",
+	"context deadline exceeded",
+	"net/http: TLS handshake timeout",
+	"net/http: request canceled",
+}
+
+// isTransientWebhookUnavailableMessage reports whether an event message
+// matches a known webhook-unavailable signature, not a permanent failure.
+func isTransientWebhookUnavailableMessage(message string) bool {
+	lowerMessage := strings.ToLower(message)
+	if !strings.Contains(lowerMessage, "failed calling webhook") {
+		return false
+	}
+	for _, signature := range transientWebhookUnavailableSignatures {
+		if strings.Contains(lowerMessage, strings.ToLower(signature)) {
+			return true
+		}
+	}
+	return false
 }
 
 var (
