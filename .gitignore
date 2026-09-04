@@ -4,6 +4,7 @@
 /bazel-*
 
 # IDE / editor
+.bazelbsp/
 .idea/
 .vscode/
 *.swp
