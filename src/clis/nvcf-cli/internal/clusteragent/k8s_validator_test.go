@@ -28,6 +28,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ func newFakeValidator(httpCli *http.Client, dynObjs, k8sObjs []runtime.Object) *
 	gvrToListKind := map[schema.GroupVersionResource]string{
 		nvcfBackendGVR: "NVCFBackendList",
 		icmsRequestGVR: "ICMSRequestList",
+		miniServiceGVR: "MiniServiceList",
 	}
 	dc := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind, dynObjs...)
 	cs := k8sfake.NewSimpleClientset(k8sObjs...)
@@ -153,6 +155,56 @@ func icmsWithInstances(ns, name, fid, vid, requestStatus string, instanceStatuse
 		"spec":       map[string]interface{}{"functionDetails": map[string]interface{}{"functionId": fid, "functionVersionId": vid}},
 		"status":     map[string]interface{}{"requestStatus": requestStatus, "instances": insts},
 	}}
+}
+
+// fakePod builds a minimal Pod for the fake typed clientset with a given
+// PodReady condition and no container statuses (a clean-ready or
+// not-yet-scheduled case).
+func fakePod(ns, name string, ready corev1.ConditionStatus) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: ready}},
+		},
+	}
+}
+
+// fakeTerminatedPod builds a not-ready Pod whose container is currently
+// terminated with a non-zero exit code, matching a container that just
+// crashed (Pod phase stays Running under restartPolicy: Always, only the
+// container state reflects the crash).
+func fakeTerminatedPod(ns, name, containerName string, exitCode int32, reason string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  containerName,
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: exitCode, Reason: reason}},
+			}},
+		},
+	}
+}
+
+// fakeCrashLoopingPod builds a not-ready Pod whose container is currently
+// cycling (Waiting) but has restarted past the failure threshold, with its
+// last crash recorded in LastTerminationState -- the case where the
+// container is never caught mid-Terminated by a point-in-time check.
+func fakeCrashLoopingPod(ns, name, containerName string, restartCount, lastExitCode int32, lastReason string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:         containerName,
+				RestartCount: restartCount,
+				State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				LastTerminationState: corev1.ContainerState{
+					Terminated: &corev1.ContainerStateTerminated{ExitCode: lastExitCode, Reason: lastReason},
+				},
+			}},
+		},
+	}
 }
 
 // checkByName returns the result for one check, failing the test if it is absent.
@@ -367,13 +419,197 @@ func TestValidateDeploymentPodReadinessFails(t *testing.T) {
 	}
 }
 
+// TestValidateDeploymentPodReadinessFailsOnCrashedContainerDespiteCleanCRStatus
+// is the direct regression test for the bug this fix addresses: the
+// ICMSRequest CR's mirrored status string looks healthy (NVCA hasn't
+// reconciled the crash into it yet), but the real Pod's container has
+// terminated with a non-zero exit code. pod-readiness must fail from the
+// live Pod, not the stale CR string.
+func TestValidateDeploymentPodReadinessFailsOnCrashedContainerDespiteCleanCRStatus(t *testing.T) {
+	v := newFakeValidator(nil,
+		[]runtime.Object{
+			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
+			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "starting"}),
+		},
+		[]runtime.Object{fakeTerminatedPod(testRequestsNS, "inst-a", "inference", 127, "Error")},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	got := checkByName(t, out.Checks, "pod-readiness")
+	if got.Status != CheckFailed {
+		t.Errorf("pod-readiness = %s, want FAIL (%s)", got.Status, got.Message)
+	}
+	if !strings.Contains(got.Message, "exit code 127") {
+		t.Errorf("pod-readiness message = %q, want it to mention exit code 127", got.Message)
+	}
+}
+
+// TestValidateDeploymentPodReadinessFailsOnCrashedInitContainer confirms an
+// init container's terminated state is inspected the same way as a regular
+// container's, instead of only pod.Status.ContainerStatuses -- otherwise a
+// failing init container falls through to the generic Ready=False message.
+func TestValidateDeploymentPodReadinessFailsOnCrashedInitContainer(t *testing.T) {
+	pod := fakeTerminatedPod(testRequestsNS, "inst-a", "setup", 1, "Error")
+	pod.Status.InitContainerStatuses = pod.Status.ContainerStatuses
+	pod.Status.ContainerStatuses = nil
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{
+			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
+			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "starting"}),
+		},
+		[]runtime.Object{pod},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	got := checkByName(t, out.Checks, "pod-readiness")
+	if got.Status != CheckFailed {
+		t.Errorf("pod-readiness = %s, want FAIL (%s)", got.Status, got.Message)
+	}
+	if !strings.Contains(got.Message, "setup") || !strings.Contains(got.Message, "exit code 1") {
+		t.Errorf("pod-readiness message = %q, want it to name the init container and exit code", got.Message)
+	}
+}
+
+// TestValidateDeploymentPodReadinessFailsOnCrashLoop covers the case where
+// restartPolicy: Always has already cycled the container back to Waiting by
+// the time the check runs, so its *current* state isn't Terminated -- the
+// crash is only visible via RestartCount + LastTerminationState.
+func TestValidateDeploymentPodReadinessFailsOnCrashLoop(t *testing.T) {
+	v := newFakeValidator(nil,
+		[]runtime.Object{
+			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
+			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "starting"}),
+		},
+		[]runtime.Object{fakeCrashLoopingPod(testRequestsNS, "inst-a", "inference", 5, 127, "Error")},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	got := checkByName(t, out.Checks, "pod-readiness")
+	if got.Status != CheckFailed {
+		t.Errorf("pod-readiness = %s, want FAIL (%s)", got.Status, got.Message)
+	}
+	if !strings.Contains(got.Message, "restarted 5 times") || !strings.Contains(got.Message, "exit code 127") {
+		t.Errorf("pod-readiness message = %q, want it to mention the restart count and exit code", got.Message)
+	}
+}
+
+func TestValidateDeploymentPodReadinessFailsWhenPodMissing(t *testing.T) {
+	v := newFakeValidator(nil,
+		[]runtime.Object{
+			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
+			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "starting"}),
+		},
+		nil,
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	if got := checkByName(t, out.Checks, "pod-readiness"); got.Status != CheckFailed {
+		t.Errorf("pod-readiness = %s, want FAIL (%s)", got.Status, got.Message)
+	}
+}
+
+// icmsWithMiniServiceInstance builds an ICMSRequest with one MiniService-typed
+// instance, plus the MiniService CR it resolves to.
+func icmsWithMiniServiceInstance(ns, name, fid, vid, requestStatus, instanceID, crStatus, msNamespace string) (*unstructured.Unstructured, *unstructured.Unstructured) {
+	req := icmsWithInstances(ns, name, fid, vid, requestStatus, nil)
+	unstructured.SetNestedMap(req.Object, map[string]interface{}{
+		instanceID: map[string]interface{}{"id": instanceID, "type": "MiniService", "status": crStatus},
+	}, "status", "instances")
+
+	ms := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "nvca.nvcf.nvidia.io/v1alpha1",
+		"kind":       "MiniService",
+		"metadata":   map[string]interface{}{"name": instanceID},
+		"spec":       map[string]interface{}{"namespace": msNamespace},
+	}}
+	return req, ms
+}
+
+// TestValidateDeploymentPodReadinessPassesForHealthyMiniServiceInstance
+// confirms a MiniService (Helm)-backed instance is checked the same way as a
+// plain container function's Pod: resolved to its "utils" Pod via the
+// MiniService CR's spec.namespace, not just trusted from the CR status string.
+func TestValidateDeploymentPodReadinessPassesForHealthyMiniServiceInstance(t *testing.T) {
+	req, ms := icmsWithMiniServiceInstance(testRequestsNS, "r1", "fn-1", "v1", statusCompleted, "inst-a", "Active", "ms-inst-a-ns")
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{validatorBackend(testSystemNS, agentStatusHealthy, 8, 5), req, ms},
+		[]runtime.Object{fakePod("ms-inst-a-ns", utilsPodName, corev1.ConditionTrue)},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	if got := checkByName(t, out.Checks, "pod-readiness"); got.Status != CheckPassed {
+		t.Errorf("pod-readiness = %s, want PASS (%s)", got.Status, got.Message)
+	}
+}
+
+// TestValidateDeploymentPodReadinessFailsForCrashedMiniServiceUtilsPod is the
+// MiniService analogue of the crashed-container regression test: the CR
+// status looks clean, but the release's utils Pod has actually crashed.
+func TestValidateDeploymentPodReadinessFailsForCrashedMiniServiceUtilsPod(t *testing.T) {
+	req, ms := icmsWithMiniServiceInstance(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, "inst-a", "Active", "ms-inst-a-ns")
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{validatorBackend(testSystemNS, agentStatusHealthy, 8, 5), req, ms},
+		[]runtime.Object{fakeTerminatedPod("ms-inst-a-ns", utilsPodName, "utils", 1, "Error")},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	if got := checkByName(t, out.Checks, "pod-readiness"); got.Status != CheckFailed {
+		t.Errorf("pod-readiness = %s, want FAIL (%s)", got.Status, got.Message)
+	}
+}
+
+// TestValidateDeploymentPodReadinessFallsBackForUnrecognizedInstanceType
+// covers a genuinely unrecognized instance type, where the check can't know
+// which resource kind backs it and falls back to the CR-reported status
+// rather than guessing or silently skipping.
+func TestValidateDeploymentPodReadinessFallsBackForUnrecognizedInstanceType(t *testing.T) {
+	req := icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusCompleted, nil)
+	unstructured.SetNestedMap(req.Object, map[string]interface{}{
+		"inst-a": map[string]interface{}{"id": "inst-a", "type": "SomeFutureInstanceType", "status": "Active"},
+	}, "status", "instances")
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{validatorBackend(testSystemNS, agentStatusHealthy, 8, 5), req},
+		nil,
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	if got := checkByName(t, out.Checks, "pod-readiness"); got.Status != CheckPassed {
+		t.Errorf("pod-readiness = %s, want PASS (%s)", got.Status, got.Message)
+	}
+}
+
 func TestValidateDeploymentQueueHealthWarnsOnDeploying(t *testing.T) {
 	v := newFakeValidator(nil,
 		[]runtime.Object{
 			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
 			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "Running"}),
 		},
-		nil,
+		[]runtime.Object{fakePod(testRequestsNS, "inst-a", corev1.ConditionTrue)},
 	)
 
 	out, err := v.ValidateDeployment(context.Background(), "fn-1", "", ValidateOptions{BackendNS: testBackendNS})

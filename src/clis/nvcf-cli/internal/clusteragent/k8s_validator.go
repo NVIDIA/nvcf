@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -381,6 +382,7 @@ func (v *k8sValidator) ValidateDeployment(ctx context.Context, functionID, versi
 
 	var match map[string]interface{}
 	var matchVerID string
+	var matchNamespace string
 	for i := range items {
 		fid, vid := functionIdentity(items[i].Object)
 		if fid != functionID {
@@ -391,6 +393,7 @@ func (v *k8sValidator) ValidateDeployment(ctx context.Context, functionID, versi
 		}
 		match = items[i].Object
 		matchVerID = vid
+		matchNamespace = items[i].GetNamespace()
 		break
 	}
 	if match == nil {
@@ -406,16 +409,32 @@ func (v *k8sValidator) ValidateDeployment(ctx context.Context, functionID, versi
 	}
 	instances := extractInstances(match)
 	out.Checks = append(out.Checks,
-		checkPodReadiness(instances),
+		checkPodReadiness(ctx, v.cs, v.dc, matchNamespace, instances),
 		checkQueueHealth(match, instances),
 		checkGPUUtilization(cc.backend),
 	)
 	return out, nil
 }
 
-// checkPodReadiness fails when no instances are running or any instance reports
-// an error/failed status.
-func checkPodReadiness(instances []Instance) CheckResult {
+// podReadinessRestartThreshold matches NVCA's own RestartCountToFailInstance
+// (internal/util/k8sutil/pod.go): the restart count past which a container's
+// last crash, not just its current state, is the relevant signal.
+const podReadinessRestartThreshold = int32(3)
+
+// utilsPodName is the fixed name NVCA gives the sidecar Pod it uses as the
+// health signal for an entire MiniService (Helm) release: NVCA's own status
+// reconciler reduces "is this MiniService healthy" to this Pod's readiness
+// the same way checkPodReadiness does for a plain container function's Pod.
+const utilsPodName = "utils"
+
+// checkPodReadiness fails when no instances are running or any instance's
+// backing Pod isn't ready. It reads the actual Pod (PodReady condition,
+// container termination/restart state) instead of the ICMSRequest CR's
+// mirrored status string, which can lag or omit a crash NVCA hasn't
+// reconciled forward yet: for a plain container function that's the Pod
+// named after the instance ID directly; for a MiniService (Helm) instance
+// it's the "utils" Pod in the dedicated namespace the MiniService CR names.
+func checkPodReadiness(ctx context.Context, cs kubernetes.Interface, dc dynamic.Interface, namespace string, instances []Instance) CheckResult {
 	res := CheckResult{Name: "pod-readiness"}
 	if len(instances) == 0 {
 		res.Status = CheckFailed
@@ -423,15 +442,130 @@ func checkPodReadiness(instances []Instance) CheckResult {
 		return res
 	}
 	for _, in := range instances {
-		if instanceUnhealthy(in) {
+		var pod *corev1.Pod
+		var err error
+		switch {
+		case isPodBackedInstance(in):
+			pod, err = cs.CoreV1().Pods(namespace).Get(ctx, in.ID, metav1.GetOptions{})
+		case in.Type == "MiniService":
+			pod, err = getMiniServiceUtilsPod(ctx, dc, cs, in.ID)
+		default:
+			// Unrecognized instance type: don't guess which resource kind
+			// backs it. Fall back to the CR-reported status rather than
+			// silently skipping.
+			if instanceUnhealthy(in) {
+				res.Status = CheckFailed
+				res.Message = fmt.Sprintf("instance %s is unhealthy (status=%s lastReported=%s)", in.ID, orUnknown(in.Status), orUnknown(in.LastReportedStatus))
+				return res
+			}
+			continue
+		}
+		if err != nil {
 			res.Status = CheckFailed
-			res.Message = fmt.Sprintf("instance %s is unhealthy (status=%s lastReported=%s)", in.ID, orUnknown(in.Status), orUnknown(in.LastReportedStatus))
+			if apierrors.IsNotFound(err) {
+				res.Message = fmt.Sprintf("instance %s: pod not found", in.ID)
+			} else {
+				res.Message = fmt.Sprintf("instance %s: failed to read pod: %v", in.ID, err)
+			}
+			return res
+		}
+		if reason, unhealthy := podUnhealthyReason(pod); unhealthy {
+			res.Status = CheckFailed
+			res.Message = fmt.Sprintf("instance %s is unhealthy: %s", in.ID, reason)
 			return res
 		}
 	}
 	res.Status = CheckPassed
 	res.Message = fmt.Sprintf("%s healthy", pluralize(len(instances), "instance"))
 	return res
+}
+
+// isPodBackedInstance reports whether an instance is backed by a single Pod
+// (the empty type defaults to Pod, matching the legacy field the read-only
+// inspector already tolerates) as opposed to a MiniService (Helm) release.
+func isPodBackedInstance(in Instance) bool {
+	switch in.Type {
+	case "", "Pod":
+		return true
+	default:
+		return false
+	}
+}
+
+// getMiniServiceUtilsPod resolves a MiniService instance to its utils Pod.
+// The MiniService CR (cluster-scoped, keyed by instance ID -- the same
+// lookup killMatching's evictInstances already uses to delete it) carries
+// the dedicated namespace NVCA created for that release; the utils Pod lives
+// there under the fixed name NVCA itself relies on.
+func getMiniServiceUtilsPod(ctx context.Context, dc dynamic.Interface, cs kubernetes.Interface, instanceID string) (*corev1.Pod, error) {
+	ms, err := dc.Resource(miniServiceGVR).Get(ctx, instanceID, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("reading MiniService %s: %w", instanceID, err)
+	}
+	msNamespace, found, err := unstructured.NestedString(ms.Object, "spec", "namespace")
+	if err != nil {
+		return nil, fmt.Errorf("MiniService %s spec.namespace: %w", instanceID, err)
+	}
+	if !found || msNamespace == "" {
+		return nil, fmt.Errorf("MiniService %s has no spec.namespace", instanceID)
+	}
+	return cs.CoreV1().Pods(msNamespace).Get(ctx, utilsPodName, metav1.GetOptions{})
+}
+
+// podUnhealthyReason reports why a Pod isn't ready, checked in order of how
+// actionable the signal is: image pull problems, a container currently
+// terminated with a non-zero exit code, then a crash-looping container
+// (enough restarts that its last crash, not its current transient state, is
+// what matters). This mirrors the signals NVCA's own reconciler uses
+// (IsPodReady, IsPodStuckInitializing in internal/util/k8sutil/pod.go)
+// without NVCA's time-threshold gating: this is a point-in-time snapshot,
+// not a "how long do we wait before giving up" policy.
+func podUnhealthyReason(pod *corev1.Pod) (string, bool) {
+	if isPodReadyConditionTrue(pod.Status) {
+		return "", false
+	}
+
+	allContainers := make([]corev1.ContainerStatus, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
+	allContainers = append(allContainers, pod.Status.InitContainerStatuses...)
+	allContainers = append(allContainers, pod.Status.ContainerStatuses...)
+	for _, cs := range allContainers {
+		if w := cs.State.Waiting; w != nil && (w.Reason == "ErrImagePull" || w.Reason == "ImagePullBackOff") {
+			return fmt.Sprintf("container %s: %s (%s)", cs.Name, w.Reason, w.Message), true
+		}
+	}
+
+	for _, cs := range allContainers {
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			return fmt.Sprintf("container %s terminated: %s (exit code %d)", cs.Name, t.Reason, t.ExitCode), true
+		}
+	}
+
+	for _, cs := range allContainers {
+		if cs.RestartCount < podReadinessRestartThreshold {
+			continue
+		}
+		if t := cs.LastTerminationState.Terminated; t != nil {
+			return fmt.Sprintf("container %s restarted %d times, last exit: %s (exit code %d)", cs.Name, cs.RestartCount, t.Reason, t.ExitCode), true
+		}
+		if w := cs.LastTerminationState.Waiting; w != nil {
+			return fmt.Sprintf("container %s restarted %d times, last state: %s", cs.Name, cs.RestartCount, w.Reason), true
+		}
+	}
+
+	return fmt.Sprintf("pod condition Ready=%s", podReadyConditionStatus(pod.Status)), true
+}
+
+func isPodReadyConditionTrue(status corev1.PodStatus) bool {
+	return podReadyConditionStatus(status) == corev1.ConditionTrue
+}
+
+func podReadyConditionStatus(status corev1.PodStatus) corev1.ConditionStatus {
+	for _, c := range status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status
+		}
+	}
+	return corev1.ConditionUnknown
 }
 
 // checkQueueHealth maps the collapsed request phase to a verdict: ACTIVE passes,
