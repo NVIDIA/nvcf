@@ -139,6 +139,40 @@ func TestReadPKICertificatePEMRetriesEmptyResponse(t *testing.T) {
 	assert.Equal(t, len(responses), attempt)
 }
 
+func TestReadPKICertificatePEMRetriesMissingHTTPStatus(t *testing.T) {
+	c := NewClient(&Config{}, nil)
+	outputs := []string{
+		`pod "openbao-pki-root-ca" deleted`,
+		`{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}` + "\n" +
+			curlHTTPStatusMarker + "200\n" +
+			curlHTTPContentTypeMarker + "application/json\n",
+	}
+	attempt := 0
+
+	got, err := readPKICertificatePEM(context.Background(), len(outputs), 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+		output := outputs[attempt]
+		attempt++
+		return pkiCertificateHTTPResponseFromOutput(c.filterKubectlOutput(output))
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, openBaoTestCertPEM, got)
+	assert.Equal(t, len(outputs), attempt)
+}
+
+func TestReadPKICertificatePEMReportsMissingHTTPStatusAfterRetries(t *testing.T) {
+	attempt := 0
+
+	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+		attempt++
+		return pkiCertificateHTTPResponseFromOutput("")
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 3, attempt)
+	assert.ErrorContains(t, err, "OpenBao PKI response missing HTTP status")
+}
+
 func TestReadPKICertificatePEMDoesNotRetryOpenBaoError(t *testing.T) {
 	attempt := 0
 
