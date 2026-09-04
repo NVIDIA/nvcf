@@ -253,6 +253,12 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
+  migrations:
+    image:
+      # 0.17.1 and later drop tables used by the published function autoscaler.
+      # Keep this explicit because the pinned published Cassandra chart defaults
+      # to an incompatible migration image.
+      tag: 0.17.0
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
