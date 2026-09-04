@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -49,6 +50,13 @@ type credentials struct {
 // fast on a missing bucket, region, or credential so a wiring mistake reports
 // at startup rather than at the first upload.
 func New(cfg config.Config) (backend.Client, error) {
+	return newClient(cfg, nil)
+}
+
+// newClient builds the backend with an optional HTTP client override, so a
+// test can point it at an httptest.Server whose TLS certificate the default
+// client would not trust. A nil httpClient uses the SDK default.
+func newClient(cfg config.Config, httpClient *http.Client) (backend.Client, error) {
 	if strings.TrimSpace(cfg.ObjectStore.Bucket) == "" {
 		return nil, fmt.Errorf("%s is required for the objectstore backend", config.EnvObjectStoreBucket)
 	}
@@ -73,6 +81,9 @@ func New(cfg config.Config) (backend.Client, error) {
 	}
 	if cfg.ObjectStore.Endpoint != "" {
 		options.BaseEndpoint = aws.String(cfg.ObjectStore.Endpoint)
+	}
+	if httpClient != nil {
+		options.HTTPClient = httpClient
 	}
 
 	return &Client{

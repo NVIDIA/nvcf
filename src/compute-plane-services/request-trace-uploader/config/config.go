@@ -92,7 +92,10 @@ type ObjectStorePolicy struct {
 	Bucket string
 	Region string
 	// Endpoint overrides the AWS endpoint resolution for an S3-compatible
-	// store that is not AWS. Empty uses the SDK default for Region.
+	// store that is not AWS. Empty uses the SDK default for Region. When set,
+	// it must be an absolute https:// URL: Load rejects a plain http://
+	// endpoint because it would send credentials and segment data in
+	// cleartext.
 	Endpoint string
 	// KeyPrefix is joined with each segment's file name to form its object
 	// key. Empty uploads to the bucket root.
@@ -183,10 +186,14 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	}
 	multiplier := floatValue(lookup, EnvRetryMultiplier, DefaultRetryMultiplier, 1.1, 10.0, &warnings)
 
+	objectStoreEndpoint := strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreEndpoint, ""))
+	if objectStoreEndpoint != "" && !strings.HasPrefix(objectStoreEndpoint, "https://") {
+		return Config{}, nil, fmt.Errorf("%s must be an absolute https:// URL; a non-TLS endpoint would send credentials and segment data in cleartext", EnvObjectStoreEndpoint)
+	}
 	objectStore := ObjectStorePolicy{
 		Bucket:    strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreBucket, "")),
 		Region:    strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreRegion, "")),
-		Endpoint:  strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreEndpoint, "")),
+		Endpoint:  objectStoreEndpoint,
 		KeyPrefix: strings.Trim(strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreKeyPrefix, "")), "/"),
 		PathStyle: boolValue(lookup, EnvObjectStorePathStyle, false, &warnings),
 	}

@@ -49,7 +49,7 @@ func baseConfig(secretsFile, endpoint string) config.Config {
 }
 
 func TestNewRequiresBucket(t *testing.T) {
-	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "http://127.0.0.1:0")
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://127.0.0.1:0")
 	cfg.ObjectStore.Bucket = ""
 	if _, err := New(cfg); err == nil {
 		t.Fatal("New() error = nil, want a missing-bucket error")
@@ -57,7 +57,7 @@ func TestNewRequiresBucket(t *testing.T) {
 }
 
 func TestNewRequiresRegion(t *testing.T) {
-	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "http://127.0.0.1:0")
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://127.0.0.1:0")
 	cfg.ObjectStore.Region = ""
 	if _, err := New(cfg); err == nil {
 		t.Fatal("New() error = nil, want a missing-region error")
@@ -65,21 +65,21 @@ func TestNewRequiresRegion(t *testing.T) {
 }
 
 func TestNewRequiresCredentials(t *testing.T) {
-	cfg := baseConfig(writeSecrets(t, `{}`), "http://127.0.0.1:0")
+	cfg := baseConfig(writeSecrets(t, `{}`), "https://127.0.0.1:0")
 	if _, err := New(cfg); err == nil {
 		t.Fatal("New() error = nil, want a missing-credentials error")
 	}
 }
 
 func TestNewRejectsUnreadableSecretsFile(t *testing.T) {
-	cfg := baseConfig(filepath.Join(t.TempDir(), "missing.json"), "http://127.0.0.1:0")
+	cfg := baseConfig(filepath.Join(t.TempDir(), "missing.json"), "https://127.0.0.1:0")
 	if _, err := New(cfg); err == nil {
 		t.Fatal("New() error = nil, want a read error")
 	}
 }
 
 func TestRegisteredUnderObjectStoreBackend(t *testing.T) {
-	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "http://127.0.0.1:0")
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://127.0.0.1:0")
 	client, err := backend.New(cfg)
 	if err != nil {
 		t.Fatalf("backend.New() error = %v, want the objectstore backend to be registered", err)
@@ -92,7 +92,7 @@ func TestRegisteredUnderObjectStoreBackend(t *testing.T) {
 func TestSubmitUploadsAndReportsSuccess(t *testing.T) {
 	var gotMethod, gotPath, gotContentType string
 	var gotBody []byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		gotContentType = r.Header.Get("Content-Type")
@@ -103,9 +103,9 @@ func TestSubmitUploadsAndReportsSuccess(t *testing.T) {
 
 	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b","session_token":"c"}`), server.URL)
 	cfg.ObjectStore.KeyPrefix = "segments"
-	client, err := New(cfg)
+	client, err := newClient(cfg, server.Client())
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("newClient() error = %v", err)
 	}
 
 	path := writeSegment(t, "compressed-fixture")
@@ -139,15 +139,15 @@ func TestSubmitUploadsAndReportsSuccess(t *testing.T) {
 }
 
 func TestSubmitWithoutKeyPrefixUsesTheSegmentName(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), server.URL)
-	client, err := New(cfg)
+	client, err := newClient(cfg, server.Client())
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("newClient() error = %v", err)
 	}
 
 	path := writeSegment(t, "fixture")
@@ -161,7 +161,7 @@ func TestSubmitWithoutKeyPrefixUsesTheSegmentName(t *testing.T) {
 }
 
 func TestSubmitFailsOnAMissingSegment(t *testing.T) {
-	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "http://127.0.0.1:0")
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://127.0.0.1:0")
 	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -173,15 +173,15 @@ func TestSubmitFailsOnAMissingSegment(t *testing.T) {
 }
 
 func TestSubmitReturnsTheStoreError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer server.Close()
 
 	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), server.URL)
-	client, err := New(cfg)
+	client, err := newClient(cfg, server.Client())
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("newClient() error = %v", err)
 	}
 
 	path := writeSegment(t, "fixture")
@@ -192,15 +192,15 @@ func TestSubmitReturnsTheStoreError(t *testing.T) {
 }
 
 func TestSubmitStopsOnCancellation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
 	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), server.URL)
-	client, err := New(cfg)
+	client, err := newClient(cfg, server.Client())
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("newClient() error = %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -217,7 +217,7 @@ func TestSubmitStopsOnCancellation(t *testing.T) {
 }
 
 func TestCapabilitiesDeclareExportAndSyncOutcome(t *testing.T) {
-	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "http://127.0.0.1:0")
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://127.0.0.1:0")
 	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
