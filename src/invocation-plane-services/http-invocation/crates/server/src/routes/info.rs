@@ -15,12 +15,6 @@
 
 use axum::Json;
 
-/// GET /info: service/version/commit, via the shared nvcf-info crate (same
-/// schema as NVCF's Go and Java /info endpoints). version and commit come
-/// from CARGO_PKG_VERSION/NVCF_GIT_COMMIT, stamped at Bazel --stamp build
-/// time by crates/server/BUILD.bazel's version_env expand_template (see
-/// tools/workspace_status.sh for the underlying git values); unstamped/local
-/// builds fall back to "0.0.0-dev"/"unknown".
 pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
     Json(nvcf_info::info_response!("nvcf-invocation-service"))
 }
