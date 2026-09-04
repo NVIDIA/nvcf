@@ -3,7 +3,7 @@ nvctApi:
     registry: "" # must be supplied
     repository: "" # must be supplied
     pullPolicy: IfNotPresent
-    tag: "1.64.2"
+    tag: "1.65.0"
 
   # Namespace to deploy the resources. The default value is the release namespace.
   namespace: ""
