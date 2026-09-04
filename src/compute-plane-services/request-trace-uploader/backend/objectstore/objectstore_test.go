@@ -78,6 +78,17 @@ func TestNewRejectsUnreadableSecretsFile(t *testing.T) {
 	}
 }
 
+// TestNewRejectsAnHTTPEndpoint guards against a directly constructed
+// config.Config bypassing the https-only check in config.Load: New must
+// enforce the same policy so credentials and segment data are never sent in
+// cleartext, regardless of how the caller built its Config.
+func TestNewRejectsAnHTTPEndpoint(t *testing.T) {
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "http://127.0.0.1:0")
+	if _, err := New(cfg); err == nil {
+		t.Fatal("New() error = nil, want an http endpoint to be rejected")
+	}
+}
+
 func TestRegisteredUnderObjectStoreBackend(t *testing.T) {
 	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://127.0.0.1:0")
 	client, err := backend.New(cfg)
