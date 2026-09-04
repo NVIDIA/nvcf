@@ -27,9 +27,18 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Role values for VALIDATOR_ROLE.
+const (
+	RoleComputePlane = "compute-plane"
+	RoleControlPlane = "control-plane"
+)
+
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
-	Log                 *logrus.Entry
+	Log  *logrus.Entry
+	// Role is "control-plane" or "compute-plane" (empty = compute-plane default).
+	// printSummary uses it to include only the checks relevant to the role.
+	Role                string
 	ControlPlaneHealthy bool
 	// NodesAllReady tracks whether all worker nodes are Ready. False means at
 	// least one NotReady node. Warning only — does not flip cluster readiness.
@@ -67,6 +76,26 @@ type ValidationState struct {
 	// critical: true, meaning enforcement failure blocks readiness.
 	EnforcementCritical bool
 
+	// Control-plane-specific check outcomes. Nil means the check was not run
+	// (compute-plane role). Non-nil means the check ran and the bool holds
+	// the pass/fail result.
+	DefaultStorageClassOK *bool
+	GatewayAPICRDsOK      *bool
+	EnvoyGatewayOK        *bool
+	GatewayRoutesOK       *bool
+	ExternalLBOK          *bool
+	// NodeToNodeOK is nil when the check was skipped (single-node cluster or
+	// compute-plane role). true = overlay verified, false = failed.
+	NodeToNodeOK *bool
+	// Tier1DeploymentsOK is nil when the check did not run (compute-plane role)
+	// or when a Deployment list call fails. Pre-install (no Deployments found)
+	// sets this to true, not nil.
+	Tier1DeploymentsOK *bool
+	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role)
+	// or when a StatefulSet list call fails. No quorum StatefulSets found
+	// (pre-install or non-HA install) sets this to true, not nil.
+	Tier2StatefulSetsOK *bool
+
 	// EndpointResults captures per-endpoint reachability outcomes for the
 	// summary ConfigMap / metrics pipeline. Keyed by the user-supplied
 	// endpoint name (the same string Prometheus will use as the label
@@ -96,25 +125,15 @@ type NetpolPairResult struct {
 	Directions map[string]DirectionStatus
 }
 
-// Run executes all cluster validation checks and prints a summary.
-// It returns a non-nil error if the cluster is not ready, which the caller
-// should use to set the process exit code.
-//
-// configNamespace and configName identify an optional ConfigMap that holds
-// user-defined reachability and network-policy checks. When the ConfigMap
-// does not exist the configurable checks are silently skipped.
-//
-// summaryNamespace is where the summary ConfigMap is written for the agent to
-// read — kept separate from configNamespace so a config-namespace override
-// can't redirect the summary away from the namespace the agent watches.
-//
-// emitMetrics gates that write. In-cluster runs emit by default; callers pass
-// false for preflight (no agent to read it, no RBAC to write it).
+// Run executes all cluster validation checks and returns a non-nil error when
+// the cluster is not ready. role selects the check set; configNamespace/configName
+// identify the optional ConfigMap; emitMetrics gates the summary write.
 func Run(
 	ctx context.Context,
 	client kubernetes.Interface,
 	configNamespace, configName, summaryNamespace string,
 	emitMetrics bool,
+	role string,
 ) error {
 	startedAt := time.Now()
 	log := core.GetLogger(ctx)
@@ -127,6 +146,7 @@ func Run(
 
 	state := &ValidationState{
 		Log:                 log,
+		Role:                role,
 		ControlPlaneHealthy: true,
 		NodesAllReady:       true,
 	}
@@ -145,7 +165,6 @@ func Run(
 	checkControlPlaneHealth(ctx, client, state)
 	checkWebhookSupport(ctx, client, state)
 	checkNetworkPolicies(ctx, client, state)
-	checkSMBCSIDriver(ctx, client, state)
 
 	var netCfg *NetworkCheckConfig
 	if configNamespace != "" && configName != "" {
@@ -161,8 +180,26 @@ func Run(
 		checkConfigurableReachability(state, netCfg.Reachability)
 	}
 
-	checkGPUResources(ctx, client, state)
-	checkGPUOperator(ctx, client, state)
+	if role == RoleControlPlane {
+		// Control-plane cluster: check gateway infrastructure, storage, and
+		// inter-node overlay connectivity. GPU operator and SMB CSI are
+		// compute-plane concerns and are skipped.
+		checkStorageClass(ctx, client, state)
+		checkGatewayAPICRDs(ctx, client, state)
+		checkEnvoyGateway(ctx, client, state)
+		checkGatewayRoutes(ctx, client, state)
+		checkExternalLoadBalancer(ctx, client, state)
+		// CLI RBAC bootstrap (Req 3) grants DaemonSet create/delete and
+		// pod-create before Job submission; no emitMetrics gate needed.
+		checkNodeToNode(ctx, client, state)
+		checkTier1Deployments(ctx, client, state)
+		checkTier2StatefulSets(ctx, client, state)
+	} else {
+		// Compute-plane cluster (default): GPU operator, SMB CSI driver.
+		checkSMBCSIDriver(ctx, client, state)
+		checkGPUResources(ctx, client, state)
+		checkGPUOperator(ctx, client, state)
+	}
 
 	if netCfg != nil {
 		if netCfg.NetworkPolicies != nil && len(netCfg.NetworkPolicies.Pairs) > 0 {
@@ -226,13 +263,6 @@ func printSummary(state *ValidationState) error {
 			false},
 		{state.WebhooksSupported, "Admission Webhooks: Mutating & Validating Supported", "Admission Webhooks: Not Supported", true},
 		{state.NetworkPoliciesSupported, "Network Policies: Supported", "Network Policies: Not Confirmed", false},
-		// SMB CSI Driver missing is non-blocking: it is required only when
-		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
-		// pkg/storage/smbcsidriver.go's runtime health check itself flags
-		// this at StatusLevelWarn, not StatusLevelError — block install
-		// only when the customer has explicitly opted in to a feature that
-		// needs SMB CSI, not for every operator install.
-		{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", false},
 	}
 
 	if state.ReachabilityOK != nil {
@@ -246,15 +276,59 @@ func printSummary(state *ValidationState) error {
 		})
 	}
 
-	checks = append(checks,
-		check{state.GPUAvailable, "GPU Resources: Available", "GPU Resources: Not Available", true},
-		// GPU Operator missing is non-blocking: clusters registered with
-		// Manual Instance Configuration expose GPUs via an alternative
-		// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
-		// GPU Operator. GPU Resources above is the load-bearing signal —
-		// if GPUs aren't usable that fails Critical separately.
-		check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", false},
-	)
+	if state.Role == RoleControlPlane {
+		// Control-plane checks: gateway infrastructure and storage. GPU and
+		// SMB checks are compute-plane concerns and are excluded here.
+		if state.DefaultStorageClassOK != nil {
+			checks = append(checks, check{*state.DefaultStorageClassOK,
+				"Default StorageClass: Present", "Default StorageClass: Not Found", true})
+		}
+		if state.GatewayAPICRDsOK != nil {
+			checks = append(checks, check{*state.GatewayAPICRDsOK,
+				"Gateway API CRDs: Installed", "Gateway API CRDs: Not Installed", true})
+		}
+		if state.EnvoyGatewayOK != nil {
+			// Non-critical: Envoy Gateway is installed by nvcf-cli up, so it is
+			// expected to be absent on a fresh cluster before the first install.
+			// A missing Envoy is informative (tells the operator the stack is not
+			// yet deployed) but must not block a pre-install readiness check.
+			checks = append(checks, check{*state.EnvoyGatewayOK,
+				"Envoy Gateway: Installed and Running", "Envoy Gateway: Not Found or Not Running", false})
+		}
+		if state.GatewayRoutesOK != nil {
+			checks = append(checks, check{*state.GatewayRoutesOK,
+				"Gateway Routes: Present", "Gateway Routes: None Found", false})
+		}
+		if state.ExternalLBOK != nil {
+			checks = append(checks, check{*state.ExternalLBOK,
+				"External Load Balancer: IP Assigned", "External Load Balancer: No IP Assigned", false})
+		}
+		if state.NodeToNodeOK != nil {
+			checks = append(checks, check{*state.NodeToNodeOK,
+				"Node-to-Node Communication: Verified", "Node-to-Node Communication: Failed", true})
+		}
+		if state.Tier1DeploymentsOK != nil {
+			checks = append(checks, check{*state.Tier1DeploymentsOK,
+				"Tier-1 Deployments: All Ready", "Tier-1 Deployments: Under-replicated", true})
+		}
+		if state.Tier2StatefulSetsOK != nil {
+			checks = append(checks, check{*state.Tier2StatefulSetsOK,
+				"Tier-2 StatefulSets: Quorum and Placement OK", "Tier-2 StatefulSets: Quorum or Placement Failed", true})
+		}
+	} else {
+		// Compute-plane checks: GPU resources, GPU operator, SMB CSI driver.
+		// SMB CSI Driver missing is non-blocking: it is required only when
+		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
+		checks = append(checks,
+			check{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", false},
+			check{state.GPUAvailable, "GPU Resources: Available", "GPU Resources: Not Available", true},
+			// GPU Operator missing is non-blocking: clusters registered with
+			// Manual Instance Configuration expose GPUs via an alternative
+			// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
+			// GPU Operator. GPU Resources above is the load-bearing signal.
+			check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", false},
+		)
+	}
 
 	if state.ConfigurableNetPolOK != nil {
 		isCritical := state.ConfigurableNetPolCriticalOK != nil &&
