@@ -41,6 +41,7 @@ chart_map=(
     "api-keys-colocated       api-keys-colocated/api-keys"
     "cassandra                cassandra/helm"
     "cloud-functions          cloud-functions/nvcf-api"
+    "container-cache          container-cache/deploy"
     "ess                      encrypted-secret-store/ess-api"
     "gateway-routes-vanity    gateway-routes/chart"
     "grpc-proxy               grpc-proxy/grpc-proxy"
@@ -170,6 +171,51 @@ run_step() {  # run_step <label> <command...> -> 0 on success, prints output on 
     return 0
 }
 
+# helm template and helm lint accept a document whose apiVersion has been
+# swallowed into a preceding comment (a template action ending in "-}}" right
+# after the license header does this), because the line is valid YAML. The
+# API server and ArgoCD then reject the object ("groupVersion shouldn't be
+# empty"). Check every rendered document for a top-level apiVersion and kind.
+check_rendered_objects() {  # check_rendered_objects <stem> <rendered file>
+    local stem="$1" rendered="$2" glued
+    glued="$(grep -nE '^#.*(apiVersion|kind):' "${rendered}" || true)"
+    if [ -n "${glued}" ]; then
+        echo "${stem}: apiVersion/kind rendered onto a comment line (a template action ending in -}} trimmed the newline):" >&2
+        echo "${glued}" | sed 's/^/  /' >&2
+        return 1
+    fi
+    awk -v stem="${stem}" '
+        function flush() {
+            if (content && (!hasapi || !haskind)) {
+                bad++
+                printf "%s: rendered document %d (%s) has no top-level %s\n", stem, n, name, (!hasapi ? "apiVersion" : "kind") > "/dev/stderr"
+            }
+            content = 0; hasapi = 0; haskind = 0; name = "?"; n++
+        }
+        BEGIN { n = 1; name = "?" }
+        /^---/ { flush(); next }
+        /^[ \t]*#/ || /^[ \t]*$/ { next }
+        { content = 1 }
+        /^apiVersion:/ { hasapi = 1 }
+        /^kind:/ { haskind = 1 }
+        /^  name:/ && name == "?" { name = $2 }
+        END { flush(); exit (bad ? 1 : 0) }
+    ' "${rendered}"
+}
+
+render_and_check() {  # render_and_check <stem> <chart dir> <values file>
+    local stem="$1" chart_dir="$2" values_file="$3" rendered
+    rendered="$(mktemp)"
+    if ! helm template "${stem}" "${chart_dir}" -f "${values_file}" >"${rendered}"; then
+        rm -f "${rendered}"
+        return 1
+    fi
+    check_rendered_objects "${stem}" "${rendered}"
+    local rc=$?
+    rm -f "${rendered}"
+    return "${rc}"
+}
+
 failed=()
 
 for stem in "${stems[@]}"; do
@@ -198,7 +244,7 @@ for stem in "${stems[@]}"; do
         run_step "${stem}: helm lint" \
             helm lint "${chart_dir}" -f "${values_file}" || chart_failed=1
         run_step "${stem}: helm template" \
-            helm template "${stem}" "${chart_dir}" -f "${values_file}" || chart_failed=1
+            render_and_check "${stem}" "${chart_dir}" "${values_file}" || chart_failed=1
     fi
 
     if [ "${chart_failed}" -eq 0 ]; then
