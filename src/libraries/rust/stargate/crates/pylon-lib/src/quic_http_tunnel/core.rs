@@ -73,6 +73,7 @@ pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
 pub(super) const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
 pub(super) const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
 pub(super) const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
+pub(super) const RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED: &str = "chat_usage_rewrite_saturated";
 pub(super) const WEBTRANSPORT_STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -754,10 +755,28 @@ pub(super) async fn forward_tunnel_request(
                 app.chat_usage_rewrite_permits.clone().try_acquire_owned()
             else {
                 lifecycle.fail();
-                return send_problem_response(
+                let status = StatusCode::SERVICE_UNAVAILABLE;
+                record_failure_metric(
+                    app.metrics.as_deref(),
+                    &app.inference_server_id,
+                    status,
+                    true,
+                    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
+                );
+                let mut headers = problem_response_headers();
+                insert_retry_metadata(
+                    &mut headers,
+                    true,
+                    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
+                );
+                return send_complete_response(
                     transport,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "chat completions request rewrite capacity exhausted",
+                    status,
+                    headers,
+                    problem_details_body(
+                        status,
+                        "chat completions request rewrite capacity exhausted",
+                    ),
                 )
                 .await;
             };
@@ -1462,6 +1481,8 @@ mod tests {
     async fn saturated_chat_usage_rewrite_capacity_rejects_without_waiting() {
         let (mut app, _observations) = observed_app("http://127.0.0.1:0");
         app.force_chat_completions_include_usage = true;
+        let metrics = Arc::new(PylonMetrics::new().expect("metrics should initialize"));
+        app.metrics = Some(Arc::clone(&metrics));
         let capacity = app.chat_usage_rewrite_permits.available_permits();
         let _permits = (0..capacity)
             .map(|_| {
@@ -1489,6 +1510,27 @@ mod tests {
         .expect("rewrite saturation should return a problem response");
 
         assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+        let headers = &transport.response_headers[0];
+        assert_eq!(
+            headers
+                .get(HEADER_STARGATE_RETRYABLE)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        assert_eq!(
+            headers
+                .get(HEADER_STARGATE_RETRY_REASON)
+                .and_then(|value| value.to_str().ok()),
+            Some(RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED)
+        );
+        assert!(
+            metrics
+                .gather_text()
+                .expect("metrics should encode")
+                .contains(
+                    r#"pylon_retryable_responses_total{inference_server_id="test-pylon",reason="chat_usage_rewrite_saturated",status="503"} 1"#,
+                )
+        );
     }
 
     #[test]
@@ -1633,6 +1675,7 @@ mod tests {
     struct TestTransport {
         request_body: Vec<u8>,
         response_heads: Vec<StatusCode>,
+        response_headers: Vec<HeaderMap>,
         response_events: Vec<bytes::Bytes>,
         request_body_gate: Option<TestGate>,
         response_head_gate: Option<TestGate>,
@@ -1662,9 +1705,10 @@ mod tests {
         async fn send_response_head(
             &mut self,
             status: StatusCode,
-            _headers: HeaderMap,
+            headers: HeaderMap,
         ) -> Result<()> {
             self.response_heads.push(status);
+            self.response_headers.push(headers);
             if let Some(gate) = &self.response_head_gate {
                 gate.entered.notify_one();
                 gate.release.notified().await;
