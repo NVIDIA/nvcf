@@ -20,7 +20,7 @@ use std::time::Duration;
 use futures::{Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::auth::AuthResult;
 use crate::routing_state::{RegistrationIdentity, RunningRegistration, StargateState};
@@ -97,11 +97,6 @@ impl RegistrationEndReason {
             Self::Shutdown | Self::StreamClosed | Self::AckChannelClosed => String::new(),
         }
     }
-
-    /// Only a router shutdown is an expected way to lose a backend.
-    fn is_expected(&self) -> bool {
-        matches!(self, Self::Shutdown)
-    }
 }
 
 pub(super) async fn process_registration_stream(
@@ -115,13 +110,6 @@ pub(super) async fn process_registration_stream(
 ) {
     let first_update = match next_registration_update(&mut stream, idle_timeout, &stop).await {
         Ok(update) => update,
-        Err(reason) if reason.is_expected() => {
-            debug!(
-                reason = %reason.label(),
-                "register inference servers stream exited before admission"
-            );
-            return;
-        }
         Err(reason) => {
             warn!(
                 reason = %reason.label(),
@@ -191,26 +179,16 @@ fn log_deregistration(
     reason: &RegistrationEndReason,
     removed_model_ids: &BTreeSet<String>,
 ) {
-    // tracing macros need a constant level, so pick the macro rather than the level.
-    macro_rules! emit {
-        ($log:ident) => {
-            $log!(
-                inference_server_id = %identity.inference_server_id,
-                cluster_id = %identity.cluster_id,
-                routing_key = ?identity.routing_key,
-                reverse_tunnel = identity.reverse_tunnel,
-                reason = %reason.label(),
-                detail = %reason.detail(),
-                removed_model_ids = ?removed_model_ids,
-                "inference server deregistered; removed from routing"
-            )
-        };
-    }
-    if reason.is_expected() {
-        emit!(info);
-    } else {
-        emit!(warn);
-    }
+    warn!(
+        inference_server_id = %identity.inference_server_id,
+        cluster_id = %identity.cluster_id,
+        routing_key = ?identity.routing_key,
+        reverse_tunnel = identity.reverse_tunnel,
+        reason = %reason.label(),
+        detail = %reason.detail(),
+        removed_model_ids = ?removed_model_ids,
+        "inference server deregistered; removed from routing"
+    );
 }
 
 fn sorted_model_ids(update: &InferenceServerRegistration) -> Vec<&str> {
@@ -708,57 +686,51 @@ mod tests {
     }
 
     #[test]
-    fn deregistration_log_level_and_reason_follow_end_reason() {
+    fn deregistration_log_reports_each_end_reason() {
         let identity = direct_identity(TEST_SERVER_ID, TEST_SERVER_URL);
         let removed = BTreeSet::from(["model-a".to_string()]);
-        for (case, reason, expected_level, expected_reason, expected_detail) in [
+        for (case, reason, expected_reason, expected_detail) in [
             (
-                "shutdown is expected",
+                "shutdown",
                 RegistrationEndReason::Shutdown,
-                "INFO",
                 "reason=shutdown",
                 "",
             ),
             (
                 "idle timeout carries the timeout",
                 RegistrationEndReason::IdleTimeout(Duration::from_secs(60)),
-                "WARN",
                 "reason=idle_timeout",
                 "idle_timeout_ms=60000",
             ),
             (
                 "clean stream close",
                 RegistrationEndReason::StreamClosed,
-                "WARN",
                 "reason=stream_closed",
                 "",
             ),
             (
                 "stream error carries the status",
                 RegistrationEndReason::StreamError(Status::cancelled("broken pipe")),
-                "WARN",
                 "reason=stream_error",
                 "broken pipe",
             ),
             (
                 "ack channel closed",
                 RegistrationEndReason::AckChannelClosed,
-                "WARN",
                 "reason=ack_channel_closed",
                 "",
             ),
             (
                 "rejected update carries the status",
                 RegistrationEndReason::UpdateRejected(Status::invalid_argument("bad id")),
-                "WARN",
                 "reason=update_rejected",
                 "bad id",
             ),
         ] {
-            let ((), logs) = capture_logs(Level::INFO, || {
+            let ((), logs) = capture_logs(Level::WARN, || {
                 log_deregistration(&identity, &reason, &removed);
             });
-            for expected in [expected_level, expected_reason, expected_detail, "model-a"] {
+            for expected in ["WARN", expected_reason, expected_detail, "model-a"] {
                 assert!(
                     logs.contains(expected),
                     "{case}: expected {expected:?} in:\n{logs}"
