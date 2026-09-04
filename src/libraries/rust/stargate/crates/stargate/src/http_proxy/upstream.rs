@@ -63,6 +63,9 @@ pub(super) async fn proxy_via_quic_streaming(
     let mut body_stream = streaming_resp.body_stream;
     // Arc clone, not a String copy: this runs on every successful response.
     let registration = registration.clone();
+    // The body is polled after the request handler returns, so keep the attempt
+    // span to attach its request context to a mid-stream failure log.
+    let attempt_span = Span::current();
 
     let body = Body::from_stream(async_stream::stream! {
         while let Some(chunk) = body_stream.recv_body().await.transpose() {
@@ -70,13 +73,15 @@ pub(super) async fn proxy_via_quic_streaming(
             if let Err(error) = &chunk {
                 // A mid-stream failure is the only router-side signal that an
                 // in-flight request died with its backend.
-                warn!(
-                    inference_server_id = %registration.inference_server_id(),
-                    cluster_id = %registration.cluster_id(),
-                    status = status.as_u16(),
-                    error = %error,
-                    "upstream response body stream failed"
-                );
+                attempt_span.in_scope(|| {
+                    warn!(
+                        inference_server_id = %registration.inference_server_id(),
+                        cluster_id = %registration.cluster_id(),
+                        status = status.as_u16(),
+                        error = %error,
+                        "upstream response body stream failed"
+                    )
+                });
             }
             yield chunk.map_err(|error| std::io::Error::other(error.to_string()));
             if failed {

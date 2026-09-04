@@ -331,7 +331,7 @@ impl SelectedClusterRun {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
     use prometheus::Encoder;
     use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
@@ -359,7 +359,7 @@ pub(super) mod tests {
         RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a")
     }
 
-    pub(in super::super) fn request_inputs() -> ProxyRequestInputs {
+    fn request_inputs() -> ProxyRequestInputs {
         ProxyRequestInputs {
             target: target(),
             input_tokens: 128,
@@ -371,7 +371,7 @@ pub(super) mod tests {
         }
     }
 
-    pub(in super::super) fn routed_instance_snapshot(
+    fn routed_instance_snapshot(
         cluster_id: &str,
         inference_server_id: &str,
     ) -> RoutedInferenceServerSnapshot {
@@ -404,7 +404,7 @@ pub(super) mod tests {
         String::from_utf8(buffer).expect("Prometheus text should be UTF-8")
     }
 
-    pub(in super::super) fn prepared_request(
+    fn prepared_request(
         app: &ProxyAppState,
         request_inputs: ProxyRequestInputs,
     ) -> PreparedProxyRequest {
