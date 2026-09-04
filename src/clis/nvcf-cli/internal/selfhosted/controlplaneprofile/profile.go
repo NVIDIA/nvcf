@@ -80,9 +80,11 @@ type Addons struct {
 
 // LLMAddon advertises the LLM add-on coordinates. RequestRouterAddress is the
 // host:port the LLM request router (Stargate QUIC endpoint) is reachable at
-// from the compute plane; register renders it as the default
-// agent.llm.requestRouterAddress so LLM workloads that do not set
-// STARGATE_ADDRESS bootstrap against it.
+// from the compute plane; register renders it as
+// agent.llm.requestRouterAddress in the compute-plane values. That is operator
+// configuration only. LLM workloads read their address from the
+// LLM_REQUEST_ROUTER_ADDRESS launch environment variable (STARGATE_ADDRESS is
+// a legacy alias), and translation rejects a launch that supplies neither.
 type LLMAddon struct {
 	RequestRouterAddress string `yaml:"requestRouterAddress,omitempty"`
 }
@@ -287,9 +289,10 @@ func (v *validator) validateHosts() {
 
 func (v *validator) validateNoDNSHostHeaders() {
 	cp := v.doc.ControlPlane
-	requireHostForGatewayURL(v.add, "controlPlane.gateway.httpURL", cp.Gateway.HTTPURL, "controlPlane.hosts.api", cp.Hosts.API)
-	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.icmsURL", cp.Endpoints.ComputeReachable.ICMSURL, "controlPlane.hosts.sis", cp.Hosts.SIS)
-	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.revalURL", cp.Endpoints.ComputeReachable.ReValURL, "controlPlane.hosts.reval", cp.Hosts.ReVal)
+	requireHostForGatewayURL(v.add, "controlPlane.gateway.httpURL", cp.Gateway.HTTPURL, cp.Gateway.HTTPURL, "controlPlane.hosts.api", cp.Hosts.API)
+	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.icmsURL", cp.Endpoints.ComputeReachable.ICMSURL, cp.Gateway.HTTPURL, "controlPlane.hosts.sis", cp.Hosts.SIS)
+	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.revalURL", cp.Endpoints.ComputeReachable.ReValURL, cp.Gateway.HTTPURL, "controlPlane.hosts.reval", cp.Hosts.ReVal)
+	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.natsURL", cp.Endpoints.ComputeReachable.NATSURL, cp.Gateway.HTTPURL, "controlPlane.hosts.nats", cp.Hosts.NATS)
 }
 
 // validateManagementTLS validates managementTls only when it is provided. An
@@ -496,7 +499,7 @@ func validateHost(add func(string, string), field, value string, required bool) 
 	}
 }
 
-func requireHostForGatewayURL(add func(string, string), urlField, rawURL, hostField, hostValue string) {
+func requireHostForGatewayURL(add func(string, string), urlField, rawURL, gatewayHTTPURL, hostField, hostValue string) {
 	if rawURL == "" {
 		return
 	}
@@ -504,9 +507,17 @@ func requireHostForGatewayURL(add func(string, string), urlField, rawURL, hostFi
 	if err != nil || u.Host == "" {
 		return
 	}
-	if isNoDNSGatewayHost(u.Hostname()) && strings.TrimSpace(hostValue) == "" {
-		add(hostField, fmt.Sprintf("required as Host header when %s uses a gateway address", urlField))
+	if isGatewayURL(u, gatewayHTTPURL) && strings.TrimSpace(hostValue) == "" {
+		add(hostField, fmt.Sprintf("required when %s uses a shared gateway address; set %s to the service Host header", urlField, hostField))
 	}
+}
+
+func isGatewayURL(endpoint *url.URL, gatewayHTTPURL string) bool {
+	if isNoDNSGatewayHost(endpoint.Hostname()) {
+		return true
+	}
+	gateway, err := url.Parse(gatewayHTTPURL)
+	return err == nil && gateway.Hostname() != "" && strings.EqualFold(endpoint.Hostname(), gateway.Hostname())
 }
 
 func isNoDNSGatewayHost(host string) bool {

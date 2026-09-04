@@ -40,6 +40,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -49,6 +50,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -89,6 +91,8 @@ import (
 	queuesqs "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/sqs"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
 // Helper function to safely update mock transport
@@ -700,6 +704,28 @@ func TestAutoPurgeWorkerDeletion(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, o)
 	}
+}
+
+func TestBackendK8sCacheStartRemovesLegacyIntraNamespaceEgressPolicy(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	legacyNP := &netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      k8sutil.AllowEgressIntraNamespaceNetworkPolicyName,
+			Namespace: RequestsNamespace,
+		},
+	}
+
+	b := NewBackendk8sCacheBuilder().WithNamespaceLabels(labels.Set{"foo": "bar"})
+	clients := mockKubeClients(legacyNP)
+	bc, _, err := b.WithClients(clients).Start(ctx)
+	require.NoError(t, err)
+
+	_, err = bc.clients.K8s.NetworkingV1().NetworkPolicies(RequestsNamespace).Get(
+		ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{},
+	)
+	assert.True(t, apierrors.IsNotFound(err))
 }
 
 func TestCleanupFailedButNoInstances(t *testing.T) {
@@ -4375,6 +4401,116 @@ func Test_newGPUAllocationGetter(t *testing.T) {
 	}, gotGPUUsage)
 }
 
+// TestGetGPUUsageStats_FallbackToNonSuffixSingleType verifies that when infra overhead
+// eliminates the _1x subdivision (only 1.25 CPUs per instance, less than the 2-CPU
+// overhead), getGPUUsageStats still returns correct capacity by using the NodeType
+// field instead of the "_1x" name suffix.
+//
+// With the old code (strings.HasSuffix(it.Name, "_1x")) this test would fail because
+// no _1x instance type is generated and Capacity would be 0.
+func TestGetGPUUsageStats_FallbackToNonSuffixSingleType(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	// Node with 4 GPUs but only 5 CPUs.  With a 2-CPU infra overhead the _1x
+	// subdivision is excluded: 5000m/4 = 1250m < 2000m overhead.  The _2x and
+	// _4x subdivisions pass (2500m and 5000m > 2000m respectively), so
+	// NodeType-based selection finds _2x first and yields Capacity = 2 * 2 = 4.
+	const gpuName = "TestGPU"
+	const instanceLabel = "DGX-CLOUD.GPU." + gpuName
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "node-gpu",
+			Labels: map[string]string{
+				nvcatypes.InstanceTypeLabel: instanceLabel,
+				"nvidia.com/gpu.present":    "true",
+			},
+		},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+			Allocatable: corev1.ResourceList{
+				corev1.ResourceCPU:                               resource.MustParse("5"),
+				corev1.ResourceMemory:                            resource.MustParse("32Gi"),
+				corev1.ResourceEphemeralStorage:                  resource.MustParse("256Gi"),
+				corev1.ResourceName(nodefeatures.GPUResourceKey): resource.MustParse("4"),
+			},
+		},
+	}
+
+	k8sClients := mockKubeClients(node)
+
+	nodeInfFactory := informers.NewSharedInformerFactory(k8sClients.K8s, 0)
+	ni := nodeInfFactory.Core().V1().Nodes()
+
+	srInfFactory := nvcainformers.NewSharedInformerFactoryWithOptions(k8sClients.BART, 0)
+	icmsReqGenInf, err := srInfFactory.ForResource(nvcav2beta1.SchemeGroupVersion.WithResource("icmsrequests"))
+	require.NoError(t, err)
+
+	bc := &BackendK8sCache{
+		clients:    k8sClients,
+		nodeLister: ni.Lister(),
+		regITCache: icms.NewRegistrationInstanceTypeCache(),
+		featureFlagFetcher: &featureflagmock.Fetcher{
+			EnabledFFs: []*featureflag.FeatureFlag{},
+		},
+		infraOverheadGetter: enforce.InfraOverheadGetterFunc(func(context.Context) (corev1.ResourceList, error) {
+			return corev1.ResourceList{
+				corev1.ResourceCPU: resource.MustParse("2"),
+			}, nil
+		}),
+		icmsRequestLister: nvcav2beta1listers.NewICMSRequestLister(icmsReqGenInf.Informer().GetIndexer()),
+	}
+	srHelper, _ := NewK8sComputeBackend(k8sClients, bc)
+	bc.icmsRequestHelper = srHelper
+
+	// Bypass dynamic GPU discovery; return a BackendGPU directly.
+	bc.nfClient = &fakeNodeFeatures{backendGPUs: []nvcatypes.BackendGPU{{
+		Name: nvcatypes.GPUName(gpuName),
+		InstanceTypes: []nvcatypes.InstanceType{{
+			Name:         nvcatypes.InstanceName(instanceLabel),
+			FullName:     instanceLabel,
+			GPUCount:     4,
+			CPU:          resource.MustParse("5"),
+			SystemMemory: resource.MustParse("32Gi"),
+			Storage:      resource.MustParse("256Gi"),
+			NodeCount:    1,
+		}},
+	}}}
+
+	nodeInfFactory.Start(ctx.Done())
+	srInfFactory.Start(ctx.Done())
+	syncCtx, syncCancel := context.WithTimeout(ctx, 5*time.Second)
+	synced := cache.WaitForCacheSync(syncCtx.Done(), ni.Informer().HasSynced, icmsReqGenInf.Informer().HasSynced)
+	syncCancel()
+	if !synced {
+		t.Skip("Cache sync did not complete within 5s")
+	}
+
+	got, err := bc.getGPUUsageStats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[nvcatypes.GPUName]nvcatypes.GPUResource{
+		gpuName: {Capacity: 4},
+	}, got)
+}
+
+// fakeNodeFeatures is a minimal nodefeatures.Client for use in unit tests.
+type fakeNodeFeatures struct {
+	backendGPUs []nvcatypes.BackendGPU
+}
+
+func (f *fakeNodeFeatures) GetAllBackendGPUs(_ context.Context) ([]nvcatypes.BackendGPU, error) {
+	return f.backendGPUs, nil
+}
+
+func (f *fakeNodeFeatures) GetGPUResources(_ context.Context, name nvcatypes.GPUName) (nvcatypes.GPUResource, error) {
+	for _, g := range f.backendGPUs {
+		if g.Name == name {
+			return nvcatypes.GPUResource{Capacity: g.Capacity}, nil
+		}
+	}
+	return nvcatypes.GPUResource{}, fmt.Errorf("gpu %q not found", name)
+}
+
 func TestBackendK8sCache_Start_FNDS(t *testing.T) {
 	ctx := newTestContext()
 	clients := mockKubeClients(functionNode)
@@ -5326,4 +5462,128 @@ func TestUpdateSchedulerWorkloadMetrics(t *testing.T) {
 		vals = getGaugeValues(reg)
 		assert.Equal(t, float64(1), vals[gaugeKey{"kai-scheduler", "function"}])
 	})
+}
+
+func TestEnsureModelCacheNamespaceLabel_PatchesWithCorrectPayload(t *testing.T) {
+	namespace := "nvca-modelcache-init"
+	expectedPatch := []byte(fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`,
+		nvcatypes.WorkloadInstanceTypeLabel, nvcatypes.WorkloadInstanceTypeValueMiniService))
+
+	nsPatcher := &mockNamespacePatcher{}
+	nsPatcher.On("Patch", mock.Anything, namespace, apitypes.StrategicMergePatchType, expectedPatch, metav1.PatchOptions{}).
+		Return(&corev1.Namespace{}, nil)
+
+	err := ensureModelCacheNamespaceLabel(context.Background(), nsPatcher, namespace)
+	assert.NoError(t, err)
+	nsPatcher.AssertExpectations(t)
+}
+
+func TestEnsureModelCacheNamespaceLabel_PatchError(t *testing.T) {
+	nsPatcher := &mockNamespacePatcher{}
+	nsPatcher.On("Patch", mock.Anything, mock.Anything, apitypes.StrategicMergePatchType, mock.Anything, metav1.PatchOptions{}).
+		Return(nil, fmt.Errorf("patch error"))
+
+	err := ensureModelCacheNamespaceLabel(context.Background(), nsPatcher, "nvca-modelcache-init")
+	assert.Error(t, err)
+}
+
+// TestEnsureModelCacheNamespaceLabel_IdempotentWhenLabelPresent confirms that
+// ensureModelCacheNamespaceLabel always issues the patch even when the label is
+// already set. A strategic merge patch is safe and idempotent regardless of
+// whether the namespace was freshly created or already labelled.
+func TestEnsureModelCacheNamespaceLabel_IdempotentWhenLabelPresent(t *testing.T) {
+	namespace := "nvca-modelcache-init"
+	expectedPatch := []byte(fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`,
+		nvcatypes.WorkloadInstanceTypeLabel, nvcatypes.WorkloadInstanceTypeValueMiniService))
+
+	alreadyLabelled := &corev1.Namespace{}
+	alreadyLabelled.Labels = map[string]string{
+		nvcatypes.WorkloadInstanceTypeLabel: nvcatypes.WorkloadInstanceTypeValueMiniService,
+	}
+
+	nsPatcher := &mockNamespacePatcher{}
+	nsPatcher.On("Patch", mock.Anything, namespace, apitypes.StrategicMergePatchType, expectedPatch, metav1.PatchOptions{}).
+		Return(alreadyLabelled, nil)
+
+	err := ensureModelCacheNamespaceLabel(context.Background(), nsPatcher, namespace)
+	assert.NoError(t, err)
+	nsPatcher.AssertNumberOfCalls(t, "Patch", 1)
+}
+
+// TestEnsureModelCacheNamespaceLabel_Envtest exercises ensureModelCacheNamespaceLabel
+// against a real Kubernetes API server to confirm the strategic merge patch succeeds
+// in both the nil-labels case (JSON patch "add" would have failed here because
+// /metadata/labels has no parent) and the pre-existing-labels case.
+//
+// Uses a plain envtest.Environment without NVCA CRDs — only core Kubernetes
+// resources (Namespace) are needed, so loading the NVCA CRD directory is
+// unnecessary and avoids the CRD path resolution issues in Bazel sandboxes.
+func TestEnsureModelCacheNamespaceLabel_Envtest(t *testing.T) {
+	binAssetsDir := os.Getenv("KUBEBUILDER_ASSETS")
+	if binAssetsDir == "" {
+		t.Skip("KUBEBUILDER_ASSETS not set")
+	}
+	env := &envtest.Environment{
+		BinaryAssetsDirectory: binAssetsDir,
+	}
+	cfg, err := env.Start()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.Stop() })
+
+	k8sClient, err := kubernetes.NewForConfig(cfg)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name           string
+		initialLabels  map[string]string
+		wantLabelValue string
+	}{
+		{
+			name:           "nil labels — strategic merge patch must not fail on missing /metadata/labels",
+			initialLabels:  nil,
+			wantLabelValue: nvcatypes.WorkloadInstanceTypeValueMiniService,
+		},
+		{
+			name:           "pre-existing labels — target label added while other labels are preserved",
+			initialLabels:  map[string]string{"existing-key": "existing-value"},
+			wantLabelValue: nvcatypes.WorkloadInstanceTypeValueMiniService,
+		},
+		{
+			name: "label already correct — idempotent, no error",
+			initialLabels: map[string]string{
+				nvcatypes.WorkloadInstanceTypeLabel: nvcatypes.WorkloadInstanceTypeValueMiniService,
+			},
+			wantLabelValue: nvcatypes.WorkloadInstanceTypeValueMiniService,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			nsName := fmt.Sprintf("test-modelcache-label-%d", i)
+			ns := &corev1.Namespace{}
+			ns.Name = nsName
+			ns.Labels = tt.initialLabels
+			_, err := k8sClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_ = k8sClient.CoreV1().Namespaces().Delete(ctx, nsName, metav1.DeleteOptions{})
+			})
+
+			err = ensureModelCacheNamespaceLabel(ctx, k8sClient.CoreV1().Namespaces(), nsName)
+			require.NoError(t, err)
+
+			got, err := k8sClient.CoreV1().Namespaces().Get(ctx, nsName, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantLabelValue, got.Labels[nvcatypes.WorkloadInstanceTypeLabel])
+
+			if tt.initialLabels != nil {
+				for k, v := range tt.initialLabels {
+					if k != nvcatypes.WorkloadInstanceTypeLabel {
+						assert.Equal(t, v, got.Labels[k], "pre-existing label %s must be preserved", k)
+					}
+				}
+			}
+		})
+	}
 }

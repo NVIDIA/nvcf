@@ -51,6 +51,17 @@ nvcfGatewayRoutes:
       namespace: gateway
       # Listener (sectionName) on the Gateway to attach the route to
       listenerName: nats
+    # TCP Gateway for LLM worker registration and Stargate watches.
+    llmGrpc:
+      name: llm-grpc-gateway
+      namespace: gateway
+      listenerName: llm-grpc
+    # UDP Gateway for LLM reverse tunnels. This may be a separate load
+    # balancer from the TCP Gateway.
+    llmQuic:
+      name: llm-quic-gateway
+      namespace: gateway
+      listenerName: llm-quic
 
   # HTTPRoute configurations
   routes:
@@ -239,6 +250,21 @@ nvcfGatewayRoutes:
         namespace: nats-system
         port: 4222
       routeAnnotations: {}
+
+    # Backend-facing LLM registration/watch and reverse-tunnel routes.
+    # The backend router selects the correct Stargate pod by gRPC authority
+    # and QUIC SNI, so this route supports multi-replica request routers.
+    llmWorker:
+      enabled: false
+      name: llm-worker
+      backend:
+        name: llm-request-router-backend-router
+        # Required when llmWorker is enabled. Set this to the effective
+        # llm-request-router namespace.
+        namespace: ""
+        grpcPort: 50071
+        quicPort: 50072
+      routeAnnotations: {}
     
     # NVCF Worker Container needs to be able to fetch secrets for function pods
     # In split/multi cluster planes, ess resides in control-plane and requires
@@ -254,6 +280,38 @@ nvcfGatewayRoutes:
         port: 8080
       routeAnnotations: {}
 
+    eventLedger:
+      enabled: true
+      name: event-ledger
+      hostnames:
+        - "events.{{ .Values.nvcfGatewayRoutes.domain }}"
+      backend:
+        name: event-ledger
+        namespace: nvcf
+        port: 8080
+      routeAnnotations: {}
+
   # PodMonitors for Envoy Gateway proxy pods.
   podMonitors:
     enabled: false
+
+# Worker-facing gRPC TLS is configured with the request router because the
+# certificate and advertised dial URI form one transport contract. The
+# Gateway itself remains cluster-operator owned; its dedicated HTTPS listener
+# must reference this Secret without constraining the HTTP/2 authority.
+llmRequestRouter:
+  grpcTls:
+    enabled: false
+    # Plaintext is retained only for an explicitly selected development path.
+    allowInsecureHttp: false
+    # certManager renders a Certificate. existingSecret uses an operator-owned
+    # Secret and renders no issuance resource.
+    mode: certManager
+    secretName: ""
+    # Required only in certManager mode. In existingSecret mode, the operator
+    # owns and verifies the certificate SANs.
+    dnsNames: []
+    issuerRef:
+      kind: ClusterIssuer
+      name: ""
+      group: ""

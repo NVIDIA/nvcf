@@ -137,7 +137,7 @@ impl ForwardingResolver for HeadlessDnsResolver {
             None => PeerResolution::NotPeer,
             Some(pod_name) if pod_name == self.self_pod_name => PeerResolution::Local,
             Some(pod_name) => PeerResolution::Peer(PeerTarget {
-                // Headless Service DNS is backed by ready EndpointSlices. Keep the
+                // Headless Service DNS provides stable per-pod addresses. Keep the
                 // original advertised hostname as the QUIC server name so verified
                 // relays still validate the client-facing certificate identity.
                 dial_addr: format!("{pod_name}.{}:{port}", self.headless_dns_suffix),
@@ -153,19 +153,7 @@ pub async fn forward_quic_connection(
     endpoints: &RelayEndpoints,
     peer_connect_timeout: Duration,
 ) -> Result<()> {
-    let peer_connect_timeout_ms = peer_connect_timeout.as_millis();
-    let mut resolved_addrs = tokio::time::timeout(
-        peer_connect_timeout,
-        tokio::net::lookup_host(&peer.dial_addr),
-    )
-    .await
-    .with_context(|| format!("DNS resolve peer timed out after {peer_connect_timeout_ms}ms"))?
-    .context("DNS resolve peer")?;
-    let (resolved, endpoint) = endpoints.endpoint_for_resolved_addrs(&mut resolved_addrs)?;
-    let connecting = endpoint
-        .connect(resolved, &peer.server_name)
-        .context("initiate peer QUIC connect")?;
-    let peer_connection = await_peer_connect(connecting, peer_connect_timeout).await?;
+    let peer_connection = connect_quic_peer(peer, endpoints, peer_connect_timeout).await?;
 
     info!(
         peer = %peer.dial_addr,
@@ -181,6 +169,63 @@ pub async fn forward_quic_connection(
         "QUIC connection relay finished"
     );
     Ok(())
+}
+
+pub async fn forward_quic_connection_until_shutdown<S>(
+    client_connection: quinn::Connection,
+    peer: &PeerTarget,
+    endpoints: &RelayEndpoints,
+    peer_connect_timeout: Duration,
+    shutdown: S,
+) -> Result<()>
+where
+    S: Future<Output = ()> + Send,
+{
+    tokio::pin!(shutdown);
+    let peer_connection = tokio::select! {
+        biased;
+        _ = &mut shutdown => {
+            client_connection.close(0u32.into(), b"router shutdown before relay connected");
+            return Ok(());
+        }
+        result = connect_quic_peer(peer, endpoints, peer_connect_timeout) => result?,
+    };
+
+    info!(
+        peer = %peer.dial_addr,
+        server_name = %peer.server_name,
+        "QUIC connection relay started"
+    );
+
+    relay_connections_until_shutdown(client_connection, peer_connection, shutdown).await;
+
+    info!(
+        peer = %peer.dial_addr,
+        server_name = %peer.server_name,
+        "QUIC connection relay finished"
+    );
+    Ok(())
+}
+
+async fn connect_quic_peer(
+    peer: &PeerTarget,
+    endpoints: &RelayEndpoints,
+    peer_connect_timeout: Duration,
+) -> Result<quinn::Connection> {
+    let peer_connect_timeout_ms = peer_connect_timeout.as_millis();
+    let mut resolved_addrs = tokio::time::timeout(
+        peer_connect_timeout,
+        tokio::net::lookup_host(&peer.dial_addr),
+    )
+    .await
+    .with_context(|| format!("DNS resolve peer timed out after {peer_connect_timeout_ms}ms"))?
+    .context("DNS resolve peer")?;
+    let (resolved, endpoint) = endpoints.endpoint_for_resolved_addrs(&mut resolved_addrs)?;
+    let connecting = endpoint
+        .connect(resolved, &peer.server_name)
+        .context("initiate peer QUIC connect")?;
+    let peer_connection = await_peer_connect(connecting, peer_connect_timeout).await?;
+    Ok(peer_connection)
 }
 
 async fn await_peer_connect<F, T, E>(connect: F, peer_connect_timeout: Duration) -> Result<T>
@@ -202,6 +247,32 @@ async fn relay_connections(client: quinn::Connection, peer: quinn::Connection) {
     tokio::select! {
         _ = client_to_peer => {}
         _ = peer_to_client => {}
+        _ = client.closed() => {}
+        _ = peer.closed() => {}
+    }
+}
+
+async fn relay_connections_until_shutdown<S>(
+    client: quinn::Connection,
+    peer: quinn::Connection,
+    shutdown: S,
+) where
+    S: Future<Output = ()>,
+{
+    let (drain_tx, drain_rx) = tokio::sync::watch::channel(());
+    let client_to_peer =
+        relay_direction_until_shutdown(client.clone(), peer.clone(), drain_rx.clone());
+    let peer_to_client = relay_direction_until_shutdown(peer.clone(), client.clone(), drain_rx);
+    tokio::pin!(client_to_peer, peer_to_client, shutdown);
+
+    tokio::select! {
+        biased;
+        _ = &mut shutdown => {
+            let _ = drain_tx.send(());
+            tokio::join!(&mut client_to_peer, &mut peer_to_client);
+        }
+        _ = &mut client_to_peer => {}
+        _ = &mut peer_to_client => {}
         _ = client.closed() => {}
         _ = peer.closed() => {}
     }
@@ -242,6 +313,33 @@ async fn relay_direction(acceptor: quinn::Connection, initiator: quinn::Connecti
     tasks.shutdown().await;
 }
 
+async fn relay_direction_until_shutdown(
+    acceptor: quinn::Connection,
+    initiator: quinn::Connection,
+    mut drain: tokio::sync::watch::Receiver<()>,
+) {
+    let mut tasks = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            biased;
+            _ = drain.changed() => break,
+            bi = acceptor.accept_bi() => {
+                spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream_until_delivered,
+                    "accept_bi failed in draining relay", "draining bi-stream relay error");
+            }
+            uni = acceptor.accept_uni() => {
+                spawn_stream_relay!(tasks, uni, initiator, relay_uni_stream_until_delivered,
+                    "accept_uni failed in draining relay", "draining uni-stream relay error");
+            }
+        }
+    }
+    while let Some(result) = tasks.join_next().await {
+        if let Err(error) = result {
+            warn!(%error, "draining stream relay task failed");
+        }
+    }
+}
+
 async fn relay_bi_stream(
     (a_send, a_recv): (quinn::SendStream, quinn::RecvStream),
     initiator: &quinn::Connection,
@@ -251,7 +349,10 @@ async fn relay_bi_stream(
         .await
         .context("open bi-stream on peer")?;
 
-    let (r1, r2) = tokio::join!(relay_stream(a_recv, b_send), relay_stream(b_recv, a_send));
+    let (r1, r2) = tokio::join!(
+        relay_stream::<false>(a_recv, b_send),
+        relay_stream::<false>(b_recv, a_send)
+    );
     r1.and(r2)
 }
 
@@ -261,12 +362,46 @@ async fn relay_uni_stream(a_recv: quinn::RecvStream, initiator: &quinn::Connecti
         .await
         .context("open uni-stream on peer")?;
 
-    relay_stream(a_recv, b_send).await
+    relay_stream::<false>(a_recv, b_send).await
 }
 
-async fn relay_stream(mut recv: quinn::RecvStream, mut send: quinn::SendStream) -> Result<()> {
+async fn relay_bi_stream_until_delivered(
+    (a_send, a_recv): (quinn::SendStream, quinn::RecvStream),
+    initiator: &quinn::Connection,
+) -> Result<()> {
+    let (b_send, b_recv) = initiator
+        .open_bi()
+        .await
+        .context("open bi-stream on peer")?;
+
+    let (r1, r2) = tokio::join!(
+        relay_stream::<true>(a_recv, b_send),
+        relay_stream::<true>(b_recv, a_send)
+    );
+    r1.and(r2)
+}
+
+async fn relay_uni_stream_until_delivered(
+    a_recv: quinn::RecvStream,
+    initiator: &quinn::Connection,
+) -> Result<()> {
+    let b_send = initiator
+        .open_uni()
+        .await
+        .context("open uni-stream on peer")?;
+
+    relay_stream::<true>(a_recv, b_send).await
+}
+
+async fn relay_stream<const CONFIRM_DELIVERY: bool>(
+    mut recv: quinn::RecvStream,
+    mut send: quinn::SendStream,
+) -> Result<()> {
     tokio::io::copy(&mut recv, &mut send).await?;
     send.finish()?;
+    if CONFIRM_DELIVERY {
+        send.stopped().await?;
+    }
     Ok(())
 }
 
@@ -689,5 +824,112 @@ mod tests {
         client_connection.close(0u32.into(), b"test complete");
         peer_task.await.unwrap();
         relay_task.abort();
+    }
+
+    #[tokio::test]
+    async fn quic_relay_shutdown_drains_admitted_stream_and_stops_accepting_new_streams() {
+        let peer_server =
+            Endpoint::server(test_server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer_addr = peer_server.local_addr().unwrap();
+        let relay_server =
+            Endpoint::server(test_server_config(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let relay_addr = relay_server.local_addr().unwrap();
+        let relay_endpoints = build_relay_endpoints(
+            RelayEndpointConfig::default(),
+            stargate_tls::build_insecure_quic_client_config().unwrap(),
+        )
+        .expect("relay endpoints");
+
+        let (request_received_tx, request_received_rx) = tokio::sync::oneshot::channel();
+        let (send_response_tx, send_response_rx) = tokio::sync::oneshot::channel();
+        let peer_task = tokio::spawn(async move {
+            let incoming = peer_server.accept().await.expect("peer should accept");
+            let connection = incoming.await.expect("peer connection should complete");
+            let (mut send, mut recv) = connection
+                .accept_bi()
+                .await
+                .expect("peer should accept the admitted stream");
+            let body = recv.read_to_end(1024).await.expect("read request");
+            drop(recv);
+            request_received_tx
+                .send(body)
+                .expect("report admitted request");
+            send_response_rx.await.expect("release response");
+            send.write_all(b"drained response")
+                .await
+                .expect("write response");
+            send.finish().expect("finish response");
+
+            if connection.accept_bi().await.is_ok() {
+                panic!("a stream opened after shutdown must not reach the peer");
+            }
+        });
+
+        let peer = PeerTarget {
+            dial_addr: peer_addr.to_string(),
+            server_name: "stargate".to_string(),
+        };
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let mut relay_task = tokio::spawn(async move {
+            let incoming = relay_server.accept().await.expect("relay should accept");
+            let connection = incoming.await.expect("relay connection should complete");
+            forward_quic_connection_until_shutdown(
+                connection,
+                &peer,
+                &relay_endpoints,
+                Duration::from_secs(5),
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+            )
+            .await
+            .expect("relay should drain cleanly");
+        });
+
+        let mut client_endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        client_endpoint
+            .set_default_client_config(stargate_tls::build_insecure_quic_client_config().unwrap());
+        let client_connection = client_endpoint
+            .connect(relay_addr, "stargate")
+            .unwrap()
+            .await
+            .unwrap();
+        let (mut send, mut recv) = client_connection.open_bi().await.unwrap();
+        send.write_all(b"admitted request").await.unwrap();
+        send.finish().unwrap();
+        drop(send);
+
+        assert_eq!(
+            request_received_rx
+                .await
+                .expect("peer should receive request"),
+            b"admitted request"
+        );
+        shutdown_tx.send(()).expect("start relay shutdown");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut relay_task)
+                .await
+                .is_err(),
+            "shutdown must wait for the admitted stream"
+        );
+
+        let (mut rejected_send, _rejected_recv) = client_connection.open_bi().await.unwrap();
+        rejected_send.write_all(b"late request").await.unwrap();
+        rejected_send.finish().unwrap();
+        send_response_tx.send(()).expect("allow response");
+
+        assert_eq!(
+            recv.read_to_end(1024).await.expect("read drained response"),
+            b"drained response"
+        );
+        drop(recv);
+        tokio::time::timeout(Duration::from_secs(2), relay_task)
+            .await
+            .expect("relay should finish after its admitted stream")
+            .expect("relay task should not panic");
+        tokio::time::timeout(Duration::from_secs(2), peer_task)
+            .await
+            .expect("peer should observe the drained connection close")
+            .expect("peer task should not panic");
     }
 }

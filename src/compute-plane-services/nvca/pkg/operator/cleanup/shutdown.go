@@ -139,6 +139,12 @@ func NewShutdownHandler(ctx context.Context, opts ShutdownHandlerOptions) http.H
 	}
 }
 
+// icmsFinalizerStripTimeout bounds the detached-context finalizer strip that
+// runs immediately after drainWorkloads, independent of the parent ctx's
+// cancellation deadline. See the comment at its call site in
+// RunShutdownCleanup for why this needs its own context.
+const icmsFinalizerStripTimeout = 30 * time.Second
+
 // RunShutdownCleanup performs the operator-managed cleanup used by both the
 // preStop /shutdown handler and the Helm pre-delete cleanup job.
 func RunShutdownCleanup(ctx context.Context, opts ShutdownHandlerOptions) ShutdownResponse {
@@ -191,6 +197,19 @@ func RunShutdownCleanup(ctx context.Context, opts ShutdownHandlerOptions) Shutdo
 			log.WithError(err).Warnf("Failed to count ICMS requests in namespace %s, proceeding with cleanup", requestsNS)
 		} else if requestCount > 0 {
 			drainWorkloads(ctx, opts.K8sClient, opts.DynamicClient, systemNS, requestsNS, requestCount, rolloutTimeout, drainTimeout)
+
+			// Strip ICMSRequest finalizers right after the drain wait, on a context
+			// detached from ctx's cancellation. The pre-delete Job's activeDeadlineSeconds
+			// can expire around this point in the worst case (poll + rollout + full drain
+			// wait leaves little margin), and kubelet's SIGTERM cancels ctx when that
+			// happens. A cancelled ctx would otherwise skip this deep inside
+			// CleanupBackendResources below, leaving requestsNS finalizer-blocked and
+			// stuck Terminating, which then deadlocks reinstall.
+			finalizerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), icmsFinalizerStripTimeout)
+			if err := deleteICMSRequests(finalizerCtx, opts.DynamicClient, requestsNS); err != nil {
+				log.WithError(err).Warnf("failed to strip ICMS request finalizers in namespace %s", requestsNS)
+			}
+			cancel()
 		}
 
 		log.Infof("Cleaning up NVCFBackend %s/%s", nb.Namespace, nb.Name)

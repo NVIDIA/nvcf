@@ -64,6 +64,14 @@ helmDefaults:
   createNamespace: true
   devel: true
   timeout: 900
+  # deleteWait/deleteTimeout govern `helm uninstall` (helmfile destroy), which
+  # is a separate code path from timeout/wait above (those only apply to
+  # install/upgrade). Without them, `helm uninstall` gets no --timeout flag at
+  # all and falls back to Helm's 5m hook-wait default, well under the
+  # nvca-operator pre-delete hook's ~10m worst-case cordon-and-drain budget
+  # (see deployments/nvca-operator/values.yaml gracefulShutdown.cleanupTimeoutSeconds).
+  deleteWait: true
+  deleteTimeout: 900
   wait: true
   waitForJobs: true
   diffArgs:
@@ -90,7 +98,9 @@ helmDefaults:
 {{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
 {{- $selfManaged := dig "selfManaged" dict $nvcaOp }}
 {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
-{{- $otelCollectorEnabled := dig "enabled" $computeObservabilityEnabled $otelCollector }}
+{{- $otelCollectorEnabled := dig "enabled" false $otelCollector }}
+{{- $defaultOTelCollectorImageRepository := printf "%s/%s/nvcf-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
+{{- $otelCollectorImageRepository := dig "imageRepository" $defaultOTelCollectorImageRepository $otelCollector }}
 
 {{- $featureGateValues := dig "featureGateValues" list $selfManaged }}
 {{- $kaiSchedulerEnabled := dig "addons" "kaiScheduler" "enabled" false .Values }}
@@ -156,7 +166,7 @@ releases:
     # Released chart from nvca-operator-deploy. Compute-plane base values own
     # the operator and NVCA versions used by this stack.
     chart: nvcf/helm-nvca-operator
-    version: 1.19.0
+    version: 1.21.8
     namespace: nvca-operator
     values:
       - ../global.yaml.gotmpl
@@ -183,6 +193,12 @@ releases:
         imagePullSecrets:
         {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
         {{- end }}
+        otelCollector:
+          enabled: {{ $otelCollectorEnabled }}
+          imageRepository: {{ $otelCollectorImageRepository | quote }}
+          {{- with dig "imageTag" "" $otelCollector }}
+          imageTag: {{ . | quote }}
+          {{- end }}
         {{- /* Self-hosted clusters supply their own registry credentials through
                global.imagePullSecrets and have no NGC service key to derive one
                from, so the chart's generated pull secret is disabled here. The
@@ -224,9 +240,7 @@ releases:
                 "dynamoOperatorEnabled" $dynamoOperatorEnabled) | nindent 10 }}
           otelCollector:
             enabled: {{ $otelCollectorEnabled }}
-            {{- with dig "imageRepository" "" $otelCollector }}
-            imageRepository: {{ . | quote }}
-            {{- end }}
+            imageRepository: {{ $otelCollectorImageRepository | quote }}
             {{- with dig "imageTag" "" $otelCollector }}
             imageTag: {{ . | quote }}
             {{- end }}

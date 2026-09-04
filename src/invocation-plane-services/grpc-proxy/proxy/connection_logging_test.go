@@ -21,6 +21,7 @@ import (
 	"net"
 	"nvcf-grpc-proxy/proxy/consts"
 	"nvcf-grpc-proxy/proxy/invocation"
+	"nvcf-grpc-proxy/proxy/metrics"
 	"nvcf-grpc-proxy/proxy/worker"
 	"testing"
 	"time"
@@ -191,4 +192,67 @@ func (m *testMockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, 
 	result := invocation.Result(*m)
 	onWorkerAuthSet(result.WorkerAuthorizationToken, result.RequestId, testFunctionId, testFunctionVersionId)
 	return result, nil, nil
+}
+
+// localTimeoutFor must only name timers this service owns. Naming a timer that
+// belongs to another component would send whoever reads the log line looking
+// in the wrong codebase, which is worse than reporting nothing.
+func TestLocalTimeoutForNamesOnlyOurTimers(t *testing.T) {
+	tests := []struct {
+		name           string
+		evictionReason string
+		closeCode      string
+		want           string
+	}{
+		{
+			name:           "cache ttl expiry is ours",
+			evictionReason: metrics.CloseReasonTTLExpired,
+			closeCode:      metrics.CloseCodeNone,
+			want:           localTimeoutWorkerCacheTTL,
+		},
+		{
+			name:           "cache ttl wins over the transport code",
+			evictionReason: metrics.CloseReasonTTLExpired,
+			closeCode:      metrics.CloseCodeQUICIdleTimeout,
+			want:           localTimeoutWorkerCacheTTL,
+		},
+		{
+			name:           "quic idle timeout is named but not attributed",
+			evictionReason: metrics.CloseReasonWorkerClosed,
+			closeCode:      metrics.CloseCodeQUICIdleTimeout,
+			want:           localTimeoutQUICIdle,
+		},
+		{
+			name:           "bare net timeout on this path is a transport timer",
+			evictionReason: metrics.CloseReasonWorkerClosed,
+			closeCode:      metrics.CloseCodeTimeout,
+			want:           localTimeoutTransportIdle,
+		},
+		{
+			name:           "a deliberate peer close is not one of our timers",
+			evictionReason: metrics.CloseReasonWorkerClosed,
+			closeCode:      metrics.CloseCodeQUICApplication,
+			want:           localTimeoutNone,
+		},
+		{
+			name:           "a client hang-up is not one of our timers",
+			evictionReason: metrics.CloseReasonClientClosed,
+			closeCode:      metrics.CloseCodeEOF,
+			want:           localTimeoutNone,
+		},
+		{
+			name:           "an unclassified error names nothing",
+			evictionReason: metrics.CloseReasonWorkerClosed,
+			closeCode:      metrics.CloseCodeUnknown,
+			want:           localTimeoutNone,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := localTimeoutFor(tc.evictionReason, tc.closeCode); got != tc.want {
+				t.Errorf("localTimeoutFor(%q, %q) = %q, want %q",
+					tc.evictionReason, tc.closeCode, got, tc.want)
+			}
+		})
+	}
 }

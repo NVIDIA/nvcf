@@ -18,6 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "nvcf",
     srcs = [
+        "auth_cache.go",
         "client.go",
         "types.go",
     ],
@@ -26,6 +27,7 @@ go_library(
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/nvcf/pb",
         "//src/invocation-plane-services/llm-api-gateway/telemetry",
+        "@com_github_maypok86_otter_v2//:otter",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/auth",
         "@io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc//:otelgrpc",
         "@org_golang_google_grpc//:grpc",
@@ -44,7 +46,10 @@ alias(
 
 go_test(
     name = "nvcf_test",
-    srcs = ["client_test.go"],
+    srcs = [
+        "auth_cache_test.go",
+        "client_test.go",
+    ],
     embed = [":nvcf"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/nvcf/pb",
@@ -52,8 +57,10 @@ go_test(
         "@io_opentelemetry_go_otel//propagation",
         "@io_opentelemetry_go_otel_sdk//trace",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
     ],
 )

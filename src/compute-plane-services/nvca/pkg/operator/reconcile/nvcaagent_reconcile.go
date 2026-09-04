@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
@@ -542,9 +543,9 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
-	webhookCert, err := generateWebhookCerts(nb, bc.now())
+	webhookCert, err := bc.ensureWebhookCert(ctx, nb, bc.now())
 	if err != nil {
-		return fmt.Errorf("failed to create webhookCerts, err: %w", err)
+		return fmt.Errorf("failed to ensure webhookCerts, err: %w", err)
 	}
 
 	if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {
@@ -800,6 +801,19 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 				Resources:     []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"},
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
+			},
+			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
+			// writes NvSnapFunctionState — cluster-scoped CRD that tracks
+			// per-function-version checkpoint state. Read in Hook A to
+			// decide whether to stamp nvsnap.io/restore-from at pod
+			// apply; written by Hook B's reconciler after a successful
+			// checkpoint. The integration is gated behind
+			// featureflag.NvSnapCheckpointRestore (default off), so this
+			// rule is dormant until that flag is enabled on a cluster.
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     crudVerbs,
 			},
 		},
 	}
@@ -1428,16 +1442,30 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 	if err != nil {
 		return nvcaconfig.Config{}, false, err
 	}
-	if !foundOperatorCfg {
-		return mergeCfg, foundMergeCfg, nil
-	}
-	if mergeCfg.Workload.TransportTLS != nil {
+	if foundOperatorCfg && mergeCfg.Workload.TransportTLS != nil {
 		return nvcaconfig.Config{}, false,
-			fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName)
+			nvcaoperatorerrors.FatalError(
+				fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName))
 	}
 
-	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
-	return mergeCfg, true, nil
+	if foundOperatorCfg {
+		mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	}
+	if err := validateAgentConfigToMerge(mergeCfg); err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
+	}
+	return mergeCfg, foundMergeCfg || foundOperatorCfg, nil
+}
+
+func validateAgentConfigToMerge(cfg nvcaconfig.Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if cfg.Workload.TransportTLS == nil {
+		return nil
+	}
+	return transporttls.ValidateConfig(transporttls.NormalizeConfig(*cfg.Workload.TransportTLS))
 }
 
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
@@ -1456,7 +1484,11 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
-	return cfg, true, err
+	if err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+	}
+	return cfg, true, nil
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {
@@ -2149,6 +2181,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 				},
 			},
 		},
+	}
+	// GracefulNoGPU deliberately keeps the agent NotReady while the cluster has
+	// no GPUs. A rolling update would therefore surge a second singleton agent
+	// and retain the old replica indefinitely. Recreate keeps configuration
+	// rollouts single-active while preserving the default rollout behavior for
+	// clusters that do not opt in.
+	if slices.Contains(strings.Split(bc.getNVCAFeatureFlags(nb), ","), featureflag.GracefulNoGPU.Key) {
+		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
 	}
 
 	if nb.Spec.VaultConfig.Enabled {

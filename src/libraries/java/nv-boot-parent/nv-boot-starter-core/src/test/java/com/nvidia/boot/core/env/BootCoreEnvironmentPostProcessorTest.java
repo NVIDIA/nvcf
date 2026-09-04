@@ -54,11 +54,13 @@ class BootCoreEnvironmentPostProcessorTest {
                 git.closest.tag.name=v2.5.0
                 git.build.version=2.5.0-SNAPSHOT
                 git.commit.id.abbrev=abc1234
+                git.commit.id.full=abc1234def5678901234567890abcdef12345678
                 """);
 
         assertThat(env.getProperty("spring.application.version")).isEqualTo("v2.5.0");
         assertThat(env.getProperty("app.git.tag")).isEqualTo("v2.5.0");
         assertThat(env.getProperty("app.git.commit")).isEqualTo("abc1234");
+        assertThat(env.getProperty("app.git.commit.full")).isEqualTo("abc1234def5678901234567890abcdef12345678");
         assertThat(env.getProperty("app.git.branch")).isNull();
     }
 
@@ -96,6 +98,7 @@ class BootCoreEnvironmentPostProcessorTest {
         assertThat(env.getProperty("spring.application.version")).isEqualTo("unknown");
         assertThat(env.getProperty("app.git.tag")).isNull();
         assertThat(env.getProperty("app.git.commit")).isNull();
+        assertThat(env.getProperty("app.git.commit.full")).isNull();
         assertThat(env.getProperty("app.git.branch")).isEqualTo("main");
     }
 
@@ -105,10 +108,12 @@ class BootCoreEnvironmentPostProcessorTest {
                 git.closest.tag.name=v2.5.0
                 git.build.version=2.5.0-SNAPSHOT
                 git.commit.id.abbrev=abc1234
+                git.commit.id.full=abc1234def5678901234567890abcdef12345678
                 git.branch=main
                 """);
 
         assertThat(env.getProperty("app.git.commit")).isEqualTo("abc1234");
+        assertThat(env.getProperty("app.git.commit.full")).isEqualTo("abc1234def5678901234567890abcdef12345678");
         assertThat(env.getProperty("app.git.branch")).isEqualTo("main");
         assertThat(env.getProperty("app.git.tag")).isEqualTo("v2.5.0");
     }

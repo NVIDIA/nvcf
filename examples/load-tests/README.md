@@ -10,6 +10,9 @@ Many of the function tests target the [Load Tester Supreme](../function-samples/
 functions/                  NVCF function load tests
   definitions/              Protocol buffer definitions (gRPC)
   test-configs/             k6 configuration files
+llm-gateway/                LLM API gateway load tests
+  lib/                      Shared helpers and custom metrics
+  test-configs/             k6 configuration files
 tasks/                      NVCT task load tests
   test-configs/             k6 configuration files
   *.sh                      Cleanup and counting helpers
@@ -45,6 +48,13 @@ tasks/                      NVCT task load tests
 | `k6_regression_test_config.json` | Regression testing scenarios. |
 | `k6_sse_streaming_test_config.json` | Server-sent events streaming configuration. |
 | `k6_scratch_test_config.json` | Development/scratch config. |
+
+## LLM API Gateway Tests
+
+`llm-gateway/` holds tests that exercise the OpenAI-compatible gateway the way a customer
+does, so traffic flows through the request router and the router client sidecar on the
+worker. They target a configurable gateway URL and label every metric with the target, so
+runs against different deployments stay comparable. See `llm-gateway/README.md`.
 
 ## NVCT Task Tests
 

@@ -9,6 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/kaptinlin/jsonrepair v0.2.6
 	github.com/labstack/echo/v4 v4.14.0
+	github.com/maypok86/otter/v2 v2.3.0
 	github.com/nats-io/nats.go v1.49.0
 	github.com/olric-data/olric v0.7.3
 	github.com/prometheus/client_golang v1.23.2
@@ -157,6 +158,6 @@ require (
 // `cas`). The fork keeps upstream's module path so this is a drop-in
 // replace with no import-site changes. Once CAS is upstreamed into
 // olric-data/olric, drop the replace and bump the require. See AGENTS.md.
-replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260506001115-492943853c7b
+replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260904024039-0e35b781a2f3
 
 replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2

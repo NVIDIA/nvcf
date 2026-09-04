@@ -16,9 +16,9 @@
 use super::backend::{DEFAULT_PRIORITY_CEILING, UpstreamBackend, dynamo};
 use super::core::{
     MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES, TunnelServerApp, extend_body_from_buf,
-    is_health_request_path, otel_parent_from_headers, pylon_upstream_parent_context,
-    request_body_buffer, request_body_capacity, should_forward_header,
-    should_forward_response_header,
+    health_probe_path_and_query, is_health_request_path, otel_parent_from_headers,
+    pylon_upstream_parent_context, request_body_buffer, request_body_capacity,
+    should_forward_header, should_forward_response_header,
 };
 use super::endpoint::{
     build_trusted_client_config, derive_sni, make_server_config, target_authority,
@@ -28,8 +28,8 @@ use super::reverse::{
     reverse_quic_dial_candidates, reverse_quic_sni,
 };
 use super::*;
-use std::collections::BTreeMap;
 use std::error::Error as _;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -61,100 +61,11 @@ use crate::request_observer::{
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
 use crate::runtime_state::ModelGeneration;
 use crate::stats::PylonMetrics;
+use crate::test_support::{
+    RecordingTracingSubscriber, assert_tracing_event_field, tracing_event_by_message,
+};
+use crate::upstream_health::UpstreamHealthPaths;
 use crate::{PylonRuntimeState, StatsCollectorConfig, start_stats_collector};
-
-#[derive(Clone, Default)]
-struct RecordingDebugSubscriber {
-    events: Arc<std::sync::Mutex<Vec<BTreeMap<String, String>>>>,
-}
-
-impl RecordingDebugSubscriber {
-    fn take_events(&self) -> Vec<BTreeMap<String, String>> {
-        std::mem::take(
-            &mut *self
-                .events
-                .lock()
-                .expect("recorded tracing events should not be poisoned"),
-        )
-    }
-}
-
-fn event_by_message<'a>(
-    events: &'a [BTreeMap<String, String>],
-    message: &str,
-) -> &'a BTreeMap<String, String> {
-    events
-        .iter()
-        .find(|event| event.get("message").map(String::as_str) == Some(message))
-        .unwrap_or_else(|| panic!("missing tracing event {message:?}"))
-}
-
-fn assert_event_field(event: &BTreeMap<String, String>, field: &str, expected: &str) {
-    assert_eq!(
-        event.get(field).map(String::as_str),
-        Some(expected),
-        "unexpected {field} field in {event:?}"
-    );
-}
-
-impl tracing::Subscriber for RecordingDebugSubscriber {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.level() <= &tracing::Level::DEBUG
-    }
-
-    fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-
-    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut visitor = RecordingFieldVisitor::default();
-        event.record(&mut visitor);
-        self.events
-            .lock()
-            .expect("recorded tracing events should not be poisoned")
-            .push(visitor.fields);
-    }
-
-    fn enter(&self, _span: &tracing::span::Id) {}
-
-    fn exit(&self, _span: &tracing::span::Id) {}
-}
-
-#[derive(Default)]
-struct RecordingFieldVisitor {
-    fields: BTreeMap<String, String>,
-}
-
-impl tracing::field::Visit for RecordingFieldVisitor {
-    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.fields
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.fields
-            .insert(field.name().to_string(), format!("{value:?}"));
-    }
-}
 
 type TestWebTransportConnectStream = h3::client::RequestStream<
     <h3_quinn::OpenStreams as h3::quic::OpenStreams<Bytes>>::BidiStream,
@@ -921,6 +832,21 @@ fn assert_queue_mismatch_response(response: &TunnelResponse, raw_quic: bool) {
         std::str::from_utf8(&response.body)
             .unwrap()
             .contains("queue_estimate_mismatch")
+    );
+}
+
+#[test]
+fn health_probe_path_keeps_the_query_string() {
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health?probe=1"),
+        "/v1/health/ready?probe=1"
+    );
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health"),
+        "/v1/health/ready"
     );
 }
 
@@ -1790,6 +1716,27 @@ async fn quic_tunnel_health_requests_carry_no_derived_priority() {
 
     let response_headers = tunnel.response_head(StatusCode::OK).await;
     assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_health_probes_follow_the_resolved_upstream_path() {
+    let (mut config, _metrics) = metered_test_tunnel_config_for(
+        Router::new().route("/v1/health/ready", axum::routing::get(|| async { "ok" })),
+    )
+    .await;
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+    config.forwarding.upstream_health_paths = health_paths;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers = HeaderMap::new();
+    headers.insert("x-method", "GET".parse().unwrap());
+    headers.insert("x-path", "/health".parse().unwrap());
+    tunnel.send(headers, b"").await;
+
+    tunnel.response_head(StatusCode::OK).await;
 
     tunnel.shutdown().await;
 }
@@ -3232,7 +3179,7 @@ async fn reverse_quic_endpoint_connect_logs_attempt_resolution_and_connection_me
     );
     config.quic_insecure = true;
     config.tunnel_protocol = TunnelTransportProtocol::Http3;
-    let subscriber = RecordingDebugSubscriber::default();
+    let subscriber = RecordingTracingSubscriber::default();
     let reverse_connection = {
         let dispatch = tracing::Dispatch::new(subscriber.clone());
         let _default_guard = tracing::dispatcher::set_default(&dispatch);
@@ -3243,28 +3190,30 @@ async fn reverse_quic_endpoint_connect_logs_attempt_resolution_and_connection_me
 
     let events = subscriber.take_events();
     let server_addr = server_addr.to_string();
-    let attempt_event = event_by_message(&events, "attempting Stargate reverse QUIC connection");
-    assert_event_field(attempt_event, "target_addr", &server_addr);
-    assert_event_field(attempt_event, "tunnel_protocol", "http3");
-    assert_event_field(attempt_event, "alpn_protocols", "[\"h3\"]");
-    assert_event_field(attempt_event, "quic_insecure", "true");
-    let resolved_event = event_by_message(&events, "resolved Stargate reverse QUIC target");
+    let attempt_event =
+        tracing_event_by_message(&events, "attempting Stargate reverse QUIC connection");
+    assert_tracing_event_field(attempt_event, "target_addr", &server_addr);
+    assert_tracing_event_field(attempt_event, "tunnel_protocol", "http3");
+    assert_tracing_event_field(attempt_event, "alpn_protocols", "[\"h3\"]");
+    assert_tracing_event_field(attempt_event, "quic_insecure", "true");
+    let resolved_event = tracing_event_by_message(&events, "resolved Stargate reverse QUIC target");
     let expected_candidates = format!("[{server_addr}]");
-    assert_event_field(resolved_event, "dial_candidates", &expected_candidates);
-    assert_event_field(resolved_event, "tunnel_protocol", "http3");
-    assert_event_field(resolved_event, "alpn_protocols", "[\"h3\"]");
-    assert_event_field(resolved_event, "quic_insecure", "true");
-    let connected_event = event_by_message(&events, "Stargate reverse QUIC connection established");
-    assert_event_field(connected_event, "transport", "quic");
+    assert_tracing_event_field(resolved_event, "dial_candidates", &expected_candidates);
+    assert_tracing_event_field(resolved_event, "tunnel_protocol", "http3");
+    assert_tracing_event_field(resolved_event, "alpn_protocols", "[\"h3\"]");
+    assert_tracing_event_field(resolved_event, "quic_insecure", "true");
+    let connected_event =
+        tracing_event_by_message(&events, "Stargate reverse QUIC connection established");
+    assert_tracing_event_field(connected_event, "transport", "quic");
     for field in ["target_addr", "dial_target", "remote_addr"] {
-        assert_event_field(connected_event, field, &server_addr);
+        assert_tracing_event_field(connected_event, field, &server_addr);
     }
     assert!(
-        connected_event.contains_key("stable_id"),
+        connected_event.fields.contains_key("stable_id"),
         "connected event should include the Quinn stable connection id"
     );
     assert!(
-        connected_event.contains_key("stats"),
+        connected_event.fields.contains_key("stats"),
         "connected event should include Quinn connection stats"
     );
 
@@ -3318,4 +3267,59 @@ fn make_server_config_uses_provided_cert() {
         TunnelTransportProtocol::RawQuic,
     );
     assert!(result.is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_tunnel_reloads_server_identity_for_new_connections() -> Result<()> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let root = std::env::temp_dir().join(format!(
+        "pylon-tls-reload-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir(&root)?;
+    let cert_path = root.join("tls.crt");
+    let key_path = root.join("tls.key");
+    let (first_cert, first_key) = stargate_tls::generate_self_signed_cert()?;
+    let (second_cert, second_key) = stargate_tls::generate_self_signed_cert()?;
+    fs::write(&cert_path, &first_cert)?;
+    fs::write(&key_path, &first_key)?;
+
+    let mut config = test_tunnel_config("http://127.0.0.1:1");
+    config.tls_cert_pem = Some(first_cert.clone());
+    config.tls_key_pem = Some(first_key);
+    config.server_identity_reloader = Some(stargate_tls::ServerIdentityReloader::load(
+        cert_path.clone(),
+        key_path.clone(),
+    )?);
+    config.tls_reload_interval = Duration::from_millis(10);
+    let tunnel = start_quic_http_tunnel(config).await?;
+
+    async fn connect(addr: SocketAddr, cert_pem: &[u8]) -> Result<quinn::Connection> {
+        let mut endpoint = Endpoint::client("127.0.0.1:0".parse()?)?;
+        endpoint.set_default_client_config(
+            stargate_tls::build_trusted_quic_client_config_with_alpn(cert_pem, Vec::new())?,
+        );
+        Ok(endpoint.connect(addr, "localhost")?.await?)
+    }
+
+    connect(tunnel.listen_addr(), &first_cert).await?;
+    fs::write(&cert_path, &second_cert)?;
+    fs::write(&key_path, second_key)?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if connect(tunnel.listen_addr(), &second_cert).await.is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(connect(tunnel.listen_addr(), &first_cert).await.is_err());
+
+    tunnel.shutdown().await;
+    fs::remove_dir_all(root)?;
+    Ok(())
 }

@@ -54,6 +54,7 @@ const (
 	SystemCertDir        = "/etc/ssl/certs"
 	SystemCertFile       = "/etc/ssl/certs/" + InstalledBundleFile
 	CertPathEnv          = "STARGATE_TLS_CERT_PATH"
+	GrpcTLSCACertPathEnv = "STARGATE_GRPC_TLS_CA_CERT_PATH"
 )
 
 var fingerprintPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -156,8 +157,9 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 	if err := validateInstalledBundleMountConflict(&podSpec.Containers[llmWorkerIdx], cfg.InstalledBundleMountPath); err != nil {
 		return err
 	}
+	llmWorkerResources := *podSpec.Containers[llmWorkerIdx].Resources.DeepCopy()
 	upsertVolumes(podSpec, cfg)
-	upsertInstallContainer(podSpec, installImage, installImagePullPolicy, cfg)
+	upsertInstallContainer(podSpec, installImage, installImagePullPolicy, llmWorkerResources, cfg)
 
 	llmWorker := &podSpec.Containers[llmWorkerIdx]
 	upsertVolumeMount(&llmWorker.VolumeMounts, corev1.VolumeMount{
@@ -165,11 +167,27 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 		MountPath: cfg.InstalledBundleMountPath,
 		ReadOnly:  true,
 	})
-	k8sutil.AddEnvsToContainer(llmWorker, corev1.EnvVar{
-		Name:  CertPathEnv,
-		Value: cfg.InstalledBundleMountPath + "/" + InstalledBundleFile,
-	})
+	installedBundleFile := cfg.InstalledBundleMountPath + "/" + InstalledBundleFile
+	envs := []corev1.EnvVar{{Name: CertPathEnv, Value: installedBundleFile}}
+	if llmWorkerUsesHTTPSRegistration(llmWorker) {
+		envs = append(envs, corev1.EnvVar{Name: GrpcTLSCACertPathEnv, Value: installedBundleFile})
+	}
+	k8sutil.AddEnvsToContainer(llmWorker, envs...)
 	return nil
+}
+
+func llmWorkerUsesHTTPSRegistration(container *corev1.Container) bool {
+	for _, arg := range container.Args {
+		if address, found := strings.CutPrefix(strings.TrimSpace(arg), "--stargate-address="); found {
+			return strings.HasPrefix(strings.TrimSpace(address), "https://")
+		}
+	}
+	for _, env := range container.Env {
+		if env.Name == "LLM_REQUEST_ROUTER_ADDRESS" || env.Name == "STARGATE_ADDRESS" {
+			return strings.HasPrefix(strings.TrimSpace(env.Value), "https://")
+		}
+	}
+	return false
 }
 
 func validateInstalledBundleMountConflict(container *corev1.Container, mountPath string) error {
@@ -234,12 +252,14 @@ func upsertInstallContainer(
 	podSpec *corev1.PodSpec,
 	image string,
 	imagePullPolicy corev1.PullPolicy,
+	resources corev1.ResourceRequirements,
 	cfg nvcaconfig.TransportTLSConfig,
 ) {
 	upsertContainer(&podSpec.InitContainers, corev1.Container{
 		Name:            InstallContainerName,
 		Image:           image,
 		ImagePullPolicy: imagePullPolicy,
+		Resources:       resources,
 		Command:         []string{InstallCommandPath},
 		Args: []string{
 			"--system-bundle", SystemCertFile,

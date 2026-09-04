@@ -31,6 +31,10 @@ global:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
 
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled
+
 cassandra:
   replicaCount: 1
   resourcesPreset: "large"
@@ -50,6 +54,9 @@ openbao:
 # Pylon exits at startup when the API advertises its default HTTPS dummy OTLP
 # endpoint because the current binary has no OpenTelemetry TLS provider. Keep
 # worker telemetry on HTTP in this fixture until Pylon supports HTTPS OTLP.
+#
+# The stack derives the Pylon image from the effective sidecar registry and
+# repository when the LLM addon is enabled.
 api:
   env:
     MANAGEMENT_OTLP_TRACING_ENDPOINT: http://dummy:8282
@@ -78,10 +85,12 @@ addons:
             "request_algorithms": {
               "power-of-two": "power-of-two",
               "round-robin": "round-robin",
-              "random": "random",
-              "wait-and-widen": "wait-and-widen"
+              "random": "random"
             }
           }
+  vanityGateway:
+    enabled: true
+    replicaCount: 1
 
 # Gateway API Ingress (POC)
 # Application Developer role: Only HTTPRoutes

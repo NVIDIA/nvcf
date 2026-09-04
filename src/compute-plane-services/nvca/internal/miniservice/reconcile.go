@@ -663,7 +663,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	if err := r.prepareTransportTLSForWorkloads(ctx, ms, workloadObjs); err != nil {
+	transportTLSObjs := append([]client.Object{utilsPod}, workloadObjs...)
+	if err := r.prepareTransportTLSForWorkloads(ctx, ms, transportTLSObjs); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -743,14 +744,16 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	// transient error (timeout, rate-limit) must be retried.
 	cacheBackend := nvcastorage.HelmCacheBackendNone
 	if cacheLaunchRequested(icmsReq) {
-		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher)
+		// Same config value the storage controller provisions cache volumes
+		// with, so the class checked here is the class they land on.
+		cacheBackend, err = r.selectHelmCacheBackend(ctx, icmsReq, ms.Spec.Namespace)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
 		}
 	}
 
 	// Create storage requests if configured for the cluster.
-	stDone, err := r.doStorageRequests(ctx,
+	stDone, readyStorageRequests, err := r.doStorageRequests(ctx,
 		ms, icmsReq, infraObjectMutators,
 		workerPullSecrets, cacheInitJob, cacheInitPVC, cacheBackend,
 	)
@@ -758,11 +761,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	stList := &nvcav2beta1.StorageRequestList{}
-	if err := r.Client.List(ctx, stList, client.InNamespace(ms.Spec.Namespace)); err != nil {
-		return reconcile.Result{}, (err)
-	}
-	instanceStorageAnnos, utilsStorageAnnos := getAnnotationsForReadyStorageRequests(stList)
+	instanceStorageAnnos, utilsStorageAnnos := getAnnotationsForReadyStorageRequests(readyStorageRequests)
 	if len(instanceStorageAnnos) != 0 {
 		maps.Copy(metaInput.PodAnnotations, instanceStorageAnnos)
 	}

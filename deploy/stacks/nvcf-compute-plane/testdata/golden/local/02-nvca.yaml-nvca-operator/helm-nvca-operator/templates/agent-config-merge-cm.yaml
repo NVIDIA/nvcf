@@ -21,10 +21,10 @@ metadata:
   name: agent-config-merge
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.19.0
+    helm.sh/chart: helm-nvca-operator-1.21.8
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/version: "3.3.2"
     app.kubernetes.io/managed-by: Helm
 data:
   config.yaml:  |2

@@ -56,6 +56,7 @@ use crate::sse_message_stream::{
     upstream_sse_message_stream,
 };
 use crate::stats::PylonMetrics;
+use crate::upstream_health::UpstreamHealthPaths;
 
 pub(super) const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 // This bounds only one upstream SSE event waiting for its blank-line delimiter,
@@ -110,6 +111,9 @@ pub struct TunnelForwardingConfig {
     pub upstream_backend: UpstreamBackend,
     /// Priority band ceiling; see [`backend::dynamo::request_priority`].
     pub priority_ceiling: u32,
+    /// Shared with bringup so forwarded health probes reach the upstream path
+    /// that answered, not the literal path Stargate asked for.
+    pub upstream_health_paths: UpstreamHealthPaths,
     pub metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -128,6 +132,7 @@ impl Default for TunnelForwardingConfig {
             queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
             upstream_backend: UpstreamBackend::default(),
             priority_ceiling: DEFAULT_PRIORITY_CEILING,
+            upstream_health_paths: UpstreamHealthPaths::default(),
             metrics: None,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: None,
@@ -150,6 +155,7 @@ pub(super) struct TunnelServerApp {
     pub(super) queue_mismatch_retry: PylonQueueMismatchRetryConfig,
     pub(super) upstream_backend: UpstreamBackend,
     pub(super) priority_ceiling: u32,
+    pub(super) upstream_health_paths: UpstreamHealthPaths,
     pub(super) metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub(super) webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -175,6 +181,7 @@ impl TunnelServerApp {
             queue_mismatch_retry: forwarding.queue_mismatch_retry,
             upstream_backend: forwarding.upstream_backend,
             priority_ceiling: forwarding.priority_ceiling,
+            upstream_health_paths: forwarding.upstream_health_paths,
             metrics: forwarding.metrics,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: forwarding.webtransport_stream_header_wait_tx,
@@ -586,6 +593,11 @@ pub(super) async fn forward_tunnel_request(
     } = request;
     let health_request = is_health_request_path(&path_and_query);
     let observation_endpoint = request_observation_endpoint(&method, &path_and_query);
+    let path_and_query = if health_request {
+        health_probe_path_and_query(&app.upstream_health_paths, &path_and_query)
+    } else {
+        path_and_query
+    };
     let mut lifecycle = if health_request {
         None
     } else {
@@ -815,6 +827,17 @@ fn validate_request_body(
 
 pub(super) fn is_health_request_path(path_and_query: &str) -> bool {
     path_and_query.split('?').next() == Some("/health")
+}
+
+pub(super) fn health_probe_path_and_query(
+    health_paths: &UpstreamHealthPaths,
+    path_and_query: &str,
+) -> String {
+    let probe_path = health_paths.probe_path();
+    match path_and_query.split_once('?') {
+        Some((_, query)) => format!("{probe_path}?{query}"),
+        None => probe_path.to_string(),
+    }
 }
 
 fn request_observation_endpoint(

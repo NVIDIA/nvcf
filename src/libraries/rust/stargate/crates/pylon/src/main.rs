@@ -59,6 +59,9 @@ struct Args {
     /// Path to the QUIC server identity in direct mode or trust anchor in reverse mode
     #[arg(long, env = "STARGATE_TLS_CERT_PATH", value_name = "PATH")]
     tls_cert_path: Option<String>,
+    /// Optional PEM CA bundle override used to verify Stargate gRPC HTTPS endpoints
+    #[arg(long, env = "STARGATE_GRPC_TLS_CA_CERT_PATH", value_name = "PATH")]
+    grpc_tls_ca_cert_path: Option<String>,
     /// Path to the QUIC server private key in direct mode
     #[arg(long, env = "STARGATE_TLS_KEY_PATH", value_name = "PATH")]
     tls_key_path: Option<String>,
@@ -74,6 +77,12 @@ struct Args {
     /// Disable ongoing upstream health monitoring and active canaries
     #[arg(long, default_value_t = false)]
     disable_bringup: bool,
+    /// Upstream health path probed ahead of the built-in defaults; repeat to try several in order
+    #[arg(long = "upstream-health-path", value_name = "PATH")]
+    upstream_health_paths: Vec<String>,
+    /// How long startup retries the upstream health probe before exiting. `0` probes once
+    #[arg(long, default_value_t = 60000, value_name = "MS")]
+    upstream_health_wait_ms: u64,
     /// Run local input-TPS calibration before contacting Stargate. Use only when this is the cluster's sole Pylon
     #[arg(long, default_value_t = false)]
     do_calibration: bool,
@@ -309,6 +318,36 @@ mod tests {
     }
 
     #[test]
+    fn grpc_and_quic_tls_paths_are_independent_cli_inputs() {
+        let args = parse_argv(&[
+            "--tls-cert-path",
+            "/trust/quic.pem",
+            "--grpc-tls-ca-cert-path",
+            "/trust/grpc.pem",
+        ]);
+
+        assert_eq!(args.tls_cert_path.as_deref(), Some("/trust/quic.pem"));
+        assert_eq!(
+            args.grpc_tls_ca_cert_path.as_deref(),
+            Some("/trust/grpc.pem")
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_path_declares_environment_binding() {
+        let command = <Args as clap::CommandFactory>::command();
+        let argument = command
+            .get_arguments()
+            .find(|argument| argument.get_id() == "grpc_tls_ca_cert_path")
+            .expect("gRPC TLS CA argument should exist");
+
+        assert_eq!(
+            argument.get_env(),
+            Some(std::ffi::OsStr::new("STARGATE_GRPC_TLS_CA_CERT_PATH"))
+        );
+    }
+
+    #[test]
     fn model_names_default_to_discovery_mode() {
         let args = parse_args("");
 
@@ -499,11 +538,11 @@ mod tests {
     }
 
     #[test]
-    fn startup_requires_exactly_one_input_tps_bootstrap_source() {
+    fn startup_rejects_conflicting_input_tps_bootstrap_sources() {
         let neither = parse_args("");
         let both = parse_args("--do-calibration --initial-input-tps 2200");
 
-        assert!(startup::PylonStartupPlan::from_args(&neither).is_err());
+        assert!(startup::PylonStartupPlan::from_args(&neither).is_ok());
         assert!(startup::PylonStartupPlan::from_args(&both).is_err());
         assert!(startup::PylonStartupPlan::from_args(&parse_args("--do-calibration")).is_ok());
         assert!(
@@ -531,9 +570,11 @@ mod tests {
 
     #[test]
     fn benchmark_pin_requires_initial_input_tps() {
+        let uncalibrated = parse_args("--benchmark-pin-input-tps");
         let calibration = parse_args("--do-calibration --benchmark-pin-input-tps");
         let initial = parse_args("--initial-input-tps 2200 --benchmark-pin-input-tps");
 
+        assert!(startup::PylonStartupPlan::from_args(&uncalibrated).is_err());
         assert!(startup::PylonStartupPlan::from_args(&calibration).is_err());
         assert!(startup::PylonStartupPlan::from_args(&initial).is_ok());
     }

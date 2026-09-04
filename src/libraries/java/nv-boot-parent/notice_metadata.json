@@ -416,7 +416,21 @@
       "name": "Netty/Buffer",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-buffer:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Buffer",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-base:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Base",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-base:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -430,7 +444,21 @@
       "name": "Netty/Codec/Classes/Quic",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-classes-quic:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Classes/Quic",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-compression:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Compression",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-compression:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -444,7 +472,21 @@
       "name": "Netty/Codec/DNS",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-dns:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/DNS",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-http2:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/HTTP2",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-http2:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -458,7 +500,21 @@
       "name": "Netty/Codec/Http3",
       "url": "https://netty.io/netty-codec-http3/"
     },
+    "io.netty:netty-codec-http3:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Http3",
+      "url": "https://netty.io/netty-codec-http3/"
+    },
     "io.netty:netty-codec-http:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/HTTP",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-http:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -472,7 +528,21 @@
       "name": "Netty/Codec/Socks",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-socks:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Socks",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-common:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Common",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-common:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -486,7 +556,21 @@
       "name": "Netty/Handler/Proxy",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-handler-proxy:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Handler/Proxy",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-handler:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Handler",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-handler:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -500,7 +584,21 @@
       "name": "Netty/Resolver/DNS",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-resolver-dns:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-resolver:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -514,7 +612,21 @@
       "name": "Netty/Transport/Native/Unix/Common",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport-native-unix-common:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Native/Unix/Common",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-transport:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-transport:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],

@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	nvcav1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 )
 
@@ -127,8 +128,10 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	assert.Equal(t, corev1.PullAlways, installer.ImagePullPolicy)
 	llmWorker := findWorkloadContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
-		findWorkloadEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
+	expectedBundlePath := "/nvcf/transport-tls/ca-certificates.crt"
+	assert.Equal(t, expectedBundlePath,
+		findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
@@ -136,9 +139,40 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findWorkloadContainer(podSpec, name)
 		require.NotNil(t, container)
-		assert.Empty(t, findWorkloadEnvValue(container, "STARGATE_TLS_CERT_PATH"), name)
+		assert.Empty(t, findWorkloadEnvValue(container, transporttls.CertPathEnv), name)
+		assert.Empty(t, findWorkloadEnvValue(container, transporttls.GrpcTLSCACertPathEnv), name)
 		assert.Nil(t, findWorkloadVolumeMount(container, "nvcf-trust-merged-certs"), name)
 	}
+}
+
+func TestPrepareTransportTLSForWorkloadsSystemDoesNotInjectBundle(t *testing.T) {
+	ctx := newTestContext()
+	ms := &nvcav1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "llm-miniservice"},
+		Spec:       nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+	}
+	crClient, _ := newFakeClient(mgrScheme, ms)
+	r := newTransportTLSReconciler(crClient, nvcaconfig.TransportTLSConfig{
+		TrustMode: nvcaconfig.TrustModeSystem,
+	})
+	pod := newTransportTLSPod()
+
+	err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{pod})
+
+	require.NoError(t, err)
+	cm := &corev1.ConfigMap{}
+	err = crClient.Get(ctx, client.ObjectKey{
+		Namespace: "worker-ns",
+		Name:      transporttls.DefaultTrustBundleConfigMapName,
+	}, cm)
+	assert.True(t, apierrors.IsNotFound(err))
+	assert.Nil(t, findWorkloadVolume(pod.Spec, transporttls.TrustBundleVolumeName))
+	assert.Nil(t, findWorkloadVolume(pod.Spec, transporttls.MergedCertsVolumeName))
+	assert.Nil(t, findWorkloadInitContainer(pod.Spec, transporttls.InstallContainerName))
+	llmWorker := findWorkloadContainer(pod.Spec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 }
 
 func TestPrepareTransportTLSForWorkloadsKeepsOwnerRefForSameNamespaceConfigMap(t *testing.T) {
@@ -320,6 +354,172 @@ func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorForInvalidConfig(t *
 			assert.True(t, errors.Is(err, reconcile.TerminalError(nil)), "invalid static transport TLS config should fail terminally")
 		})
 	}
+}
+
+func TestPrepareTransportTLSForWorkloadsRejectsInvalidConfigWithoutPodSpecs(t *testing.T) {
+	tests := []struct {
+		name           string
+		mutateWorkload func(*nvcaconfig.WorkloadConfig)
+		wantErr        string
+	}{
+		{
+			name: "missing bundle",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundlePEM = ""
+			},
+			wantErr: "trustBundlePem is required",
+		},
+		{
+			name: "malformed PEM",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundlePEM = "not a PEM bundle"
+			},
+			wantErr: "trustBundlePem is invalid",
+		},
+		{
+			name: "private key PEM",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundlePEM = "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----"
+			},
+			wantErr: "PEM block type \"PRIVATE KEY\" is not supported",
+		},
+		{
+			name: "reserved fingerprint key",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundleKey = transporttls.TrustBundleFingerprintKey
+			},
+			wantErr: "must not use reserved key",
+		},
+		{
+			name: "malformed fingerprint",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundleFingerprint = "sha256:not-a-digest"
+			},
+			wantErr: "must match sha256:<64 lowercase hex characters>",
+		},
+		{
+			name: "mismatched fingerprint",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundleFingerprint =
+					"sha256:0000000000000000000000000000000000000000000000000000000000000000"
+			},
+			wantErr: "does not match transportTls.trustBundlePem",
+		},
+		{
+			name: "bundle with insecure QUIC",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.StargateQUICInsecure = true
+			},
+			wantErr: "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			ms := &nvcav1alpha1.MiniService{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "llm-miniservice",
+					Namespace: "worker-ns",
+					UID:       k8stypes.UID("llm-miniservice-uid"),
+				},
+				Spec: nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+			}
+			crClient, _ := newFakeClient(mgrScheme, ms)
+			workloadCfg := nvcaconfig.WorkloadConfig{
+				TransportTLS: &nvcaconfig.TransportTLSConfig{
+					TrustMode:                nvcaconfig.TrustModeBundle,
+					TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+					TrustBundleKey:           "nvcf-ca-bundle.pem",
+					TrustBundleFingerprint:   testTransportTLSRootFingerprint,
+					TrustBundlePEM:           testTransportTLSRootCertPEM,
+					InstalledBundleMountPath: "/nvcf/transport-tls",
+				},
+			}
+			tt.mutateWorkload(&workloadCfg)
+			r := &Reconciler{Client: crClient, cfg: nvcaconfig.Config{Workload: workloadCfg}}
+
+			err := r.prepareTransportTLSForWorkloads(ctx, ms, nil)
+
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, reconcile.TerminalError(nil)),
+				"invalid static transport TLS config should fail terminally without rendered pod specs")
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestPrepareTransportTLSForWorkloadsAllowsValidConfigWithoutPodSpecs(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *nvcaconfig.TransportTLSConfig
+	}{
+		{name: "transport TLS unset"},
+		{
+			name: "system trust",
+			cfg:  &nvcaconfig.TransportTLSConfig{TrustMode: nvcaconfig.TrustModeSystem},
+		},
+		{
+			name: "secure bundle",
+			cfg: &nvcaconfig.TransportTLSConfig{
+				TrustMode:              nvcaconfig.TrustModeBundle,
+				TrustBundleFingerprint: testTransportTLSRootFingerprint,
+				TrustBundlePEM:         testTransportTLSRootCertPEM,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			ms := &nvcav1alpha1.MiniService{
+				ObjectMeta: metav1.ObjectMeta{Name: "no-pod-miniservice"},
+				Spec:       nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+			}
+			crClient, _ := newFakeClient(mgrScheme, ms)
+			r := &Reconciler{
+				Client: crClient,
+				cfg:    nvcaconfig.Config{Workload: nvcaconfig.WorkloadConfig{TransportTLS: tt.cfg}},
+			}
+
+			err := r.prepareTransportTLSForWorkloads(ctx, ms, nil)
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestPrepareTransportTLSForWorkloadsRejectsQUICInsecureTerminal(t *testing.T) {
+	ctx := newTestContext()
+	ms := &nvcav1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "llm-miniservice",
+			Namespace: "worker-ns",
+			UID:       k8stypes.UID("llm-miniservice-uid"),
+		},
+		Spec: nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+	}
+	crClient, _ := newFakeClient(mgrScheme, ms)
+	r := newTransportTLSReconciler(crClient, nvcaconfig.TransportTLSConfig{
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+		TrustBundleKey:           "nvcf-ca-bundle.pem",
+		TrustBundleFingerprint:   testTransportTLSRootFingerprint,
+		TrustBundlePEM:           testTransportTLSRootCertPEM,
+	})
+	r.cfg.Workload.StargateQUICInsecure = true
+	pod := newTransportTLSPod()
+	pod.Spec.Containers[0].Args = []string{"--quic-insecure"}
+
+	err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{pod})
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, reconcile.TerminalError(nil)), "invalid static workload configuration must not be retried")
+	assert.Contains(t, err.Error(), "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+	assert.Contains(t, err.Error(), "set workload.stargateQUICInsecure=false or use trustMode=system")
+	cm := &corev1.ConfigMap{}
+	getErr := crClient.Get(ctx, client.ObjectKey{Namespace: "worker-ns", Name: "nvcf-transport-trust-bundle"}, cm)
+	assert.True(t, apierrors.IsNotFound(getErr))
 }
 
 func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorWithoutRegularInitImage(t *testing.T) {

@@ -175,7 +175,21 @@
       "name": "Netty/Codec/Marshalling",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-marshalling:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Marshalling",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec-native-quic:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Native/Quic",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-native-quic:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -189,7 +203,21 @@
       "name": "Netty/Codec/Protobuf",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-codec-protobuf:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Protobuf",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-codec:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -203,7 +231,21 @@
       "name": "Netty/Resolver/DNS/Classes/MacOS",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-resolver-dns-classes-macos:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Classes/MacOS",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-resolver-dns-native-macos:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Native/MacOS",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver-dns-native-macos:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -217,7 +259,21 @@
       "name": "Netty/Transport/Classes/Epoll",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport-classes-epoll:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Classes/Epoll",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-transport-native-epoll:4.2.15.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Native/Epoll",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-transport-native-epoll:4.2.16.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -354,6 +410,13 @@
       "name": "Apache HttpClient",
       "url": "https://hc.apache.org/httpcomponents-client-5.5.x/5.5.2/"
     },
+    "org.apache.httpcomponents.client5:httpclient5:5.6.4": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Apache HttpClient",
+      "url": "https://hc.apache.org/httpcomponents-client-5.6.x/5.6.4/"
+    },
     "org.apache.httpcomponents.core5:httpcore5-h2:5.3.6": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -361,12 +424,26 @@
       "name": "Apache HttpComponents Core HTTP/2",
       "url": "https://hc.apache.org/httpcomponents-core-5.3.x/5.3.6/"
     },
+    "org.apache.httpcomponents.core5:httpcore5-h2:5.4.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Apache HttpComponents Core HTTP/2",
+      "url": "https://hc.apache.org/httpcomponents-core-5.4.x/5.4.3/"
+    },
     "org.apache.httpcomponents.core5:httpcore5:5.3.6": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
       "name": "Apache HttpComponents Core HTTP/1.1",
       "url": "https://hc.apache.org/httpcomponents-core-5.3.x/5.3.6/"
+    },
+    "org.apache.httpcomponents.core5:httpcore5:5.4.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Apache HttpComponents Core HTTP/1.1",
+      "url": "https://hc.apache.org/httpcomponents-core-5.4.x/5.4.3/"
     },
     "org.apache.httpcomponents:httpclient:4.5.13": {
       "licenses": [

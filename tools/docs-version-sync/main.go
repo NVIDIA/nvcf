@@ -133,6 +133,7 @@ func updateCatalogFromGitLab(stackVersion string, base *Catalog) (*Catalog, erro
 	if err := syncComputeStackPackageVersion(client, catalog); err != nil {
 		return nil, err
 	}
+	catalog.reconcilePublicationPending()
 	if err := ValidateCatalog(catalog); err != nil {
 		return nil, err
 	}
@@ -140,7 +141,8 @@ func updateCatalogFromGitLab(stackVersion string, base *Catalog) (*Catalog, erro
 }
 
 func syncComputeStackPackageVersion(client *GitLabClient, catalog *Catalog) error {
-	if _, ok := catalog.findArtifact(computeStackResourceName); !ok {
+	compute, ok := catalog.findArtifact(computeStackResourceName)
+	if !ok {
 		return nil
 	}
 	projectID, err := computeStackProjectID()
@@ -153,6 +155,12 @@ func syncComputeStackPackageVersion(client *GitLabClient, catalog *Catalog) erro
 	}
 	if !setArtifactVersion(catalog, computeStackResourceName, version) {
 		return fmt.Errorf("artifact %s is required", computeStackResourceName)
+	}
+	if version != compute.Version {
+		updated, _ := catalog.findArtifact(computeStackResourceName)
+		if _, published := catalog.publicationFor(updated); !published {
+			catalog.PublicationPending = append(catalog.PublicationPending, updated.catalogKey())
+		}
 	}
 	return nil
 }

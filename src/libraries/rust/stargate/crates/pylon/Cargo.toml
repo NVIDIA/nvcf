@@ -35,6 +35,8 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 flume = { workspace = true }
 reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 pylon-lib = { workspace = true }
@@ -42,9 +44,13 @@ stargate-proto = { workspace = true }
 stargate-protocol = { workspace = true }
 stargate-runtime = { workspace = true }
 stargate-telemetry = { workspace = true }
+stargate-tls = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+quinn = { workspace = true }
+rcgen = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true }

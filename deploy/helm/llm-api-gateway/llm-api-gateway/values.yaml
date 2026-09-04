@@ -16,10 +16,17 @@
 llmApiGateway:
   replicaCount: 3
 
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
+
   image:
     registry: ""
     repository: ""
-    tag: "1.0.1"
+    tag: "0.13.0"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -56,7 +63,7 @@ llmApiGateway:
 
   config:
     region: global
-    requestRouterUrl: "http://llm-request-router-headless.nvcf.svc.cluster.local:8000"
+    requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
     nvcfGrpcAddr: "api.nvcf.svc.cluster.local:9090"

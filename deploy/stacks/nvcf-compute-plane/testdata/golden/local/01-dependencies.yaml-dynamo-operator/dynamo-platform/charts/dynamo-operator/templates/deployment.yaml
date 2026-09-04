@@ -9,10 +9,10 @@ metadata:
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
     control-plane: controller-manager
-    helm.sh/chart: dynamo-operator-1.2.1
+    helm.sh/chart: dynamo-operator-1.4.1
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.2.1"
+    app.kubernetes.io/version: "1.4.1"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
@@ -31,11 +31,11 @@ spec:
         app.kubernetes.io/instance: dynamo-operator
       annotations:
         kubectl.kubernetes.io/default-container: manager
-        checksum/config: 8263a5b1b34b068a346f747d194430ee788a19129881ffeaff70c5e927a55a37
+        checksum/config: 0c8ea1834ecd65a5dc13c7eb06542616828dfea7bbb5819416745500c0322362
     spec:
       initContainers:
       - name: crd-apply
-        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.2.1
+        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.1
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
@@ -45,11 +45,15 @@ spec:
         command: ["/crd-apply"]
         args:
           - "--crds-dir=/opt/dynamo-operator/crds/"
-          - "--version=1.2.1"
+          - "--version=1.4.1"
+          - "--conversion-webhook-service-name=dynamo-operator-webhook-service"
+          - "--conversion-webhook-service-namespace=dynamo-system"
       containers:
       - args:
         - --config=/etc/dynamo-operator/config.yaml
-        - --operator-version=1.2.1
+        - --operator-version=1.4.1
+        - "--operator-image=nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.1"
+        - "--operator-image-pull-policy=IfNotPresent"
         command:
         - /manager
         env:
@@ -64,7 +68,7 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         imagePullPolicy: "IfNotPresent"
-        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.2.1
+        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.1
         livenessProbe:
           httpGet:
             path: /healthz
@@ -85,6 +89,7 @@ spec:
             port: 8081
           initialDelaySeconds: 5
           periodSeconds: 10
+          timeoutSeconds: 5
         resources:
           limits:
             cpu: 1024m

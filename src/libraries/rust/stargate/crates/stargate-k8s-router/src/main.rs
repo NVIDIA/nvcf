@@ -29,6 +29,7 @@ use stargate_k8s_router::metrics::RouterMetrics;
 use stargate_k8s_router::quic::{QuicRouterConfig, serve_quic_router};
 use stargate_k8s_router::watcher::run_endpoint_slice_watcher;
 use stargate_k8s_router::webtransport::{WebTransportRouterConfig, serve_webtransport_router};
+use stargate_protocol::parse_explicit_http_uri;
 use stargate_runtime::{
     CriticalTaskFailureReceiver, CriticalTaskGroup, wait_for_termination_signal,
 };
@@ -38,8 +39,10 @@ use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_WATCH_HEARTBEAT_MS: u64 = 5_000;
 const DEFAULT_RELAY_MAX_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_RELAY_KEEP_ALIVE_MS: u64 = 10_000;
+const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Clone, Debug, PartialEq, ValueEnum)]
 enum RouterTunnelProtocol {
@@ -68,17 +71,48 @@ struct Args {
         value_name = "TEMPLATE"
     )]
     advertised_hostname_template: String,
+    /// Endpoint Pylon dials for every Stargate identity advertised by WatchStargates.
+    #[arg(long, value_name = "URI")]
+    grpc_pylon_dial_addr: String,
+    #[arg(long, default_value_t = 50071, value_name = "PORT")]
+    advertised_grpc_port: u16,
+    /// Additional recursive WatchStargates endpoints for remote regions. Repeatable.
+    #[arg(
+        long,
+        env = "STARGATE_REMOTE_WATCH_URLS",
+        value_delimiter = ',',
+        value_parser = parse_remote_watch_url,
+        value_name = "URI"
+    )]
+    remote_stargate_url: Vec<String>,
+    /// Permit explicit plaintext HTTP remote Watch endpoints for development only.
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "STARGATE_ALLOW_INSECURE_REMOTE_WATCH_HTTP"
+    )]
+    allow_insecure_remote_watch_http: bool,
     #[arg(long, default_value = "grpc", value_name = "NAME")]
     grpc_port_name: String,
     #[arg(long, default_value = "quic", value_name = "NAME")]
     quic_port_name: String,
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS, value_name = "MS")]
     connect_timeout_ms: u64,
+    /// Maximum interval between unchanged WatchStargates snapshots.
+    #[arg(long, default_value_t = DEFAULT_WATCH_HEARTBEAT_MS, value_name = "MS")]
+    watch_heartbeat_ms: u64,
     #[arg(long, default_value_t = DEFAULT_RELAY_MAX_IDLE_TIMEOUT_MS, value_name = "MS")]
     relay_idle_timeout_ms: u64,
     /// QUIC keepalive interval for relayed reverse tunnels; 0 disables keepalive
     #[arg(long, default_value_t = DEFAULT_RELAY_KEEP_ALIVE_MS, value_name = "MS")]
     relay_keep_alive_ms: u64,
+    /// Maximum time to drain active work after receiving a termination signal.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS,
+        value_name = "MS"
+    )]
+    shutdown_drain_timeout_ms: u64,
     #[arg(long, env = "STARGATE_TLS_CERT_PATH", value_name = "PATH")]
     tls_cert_path: Option<String>,
     #[arg(long, env = "STARGATE_TLS_KEY_PATH", value_name = "PATH")]
@@ -88,6 +122,7 @@ struct Args {
     /// Tunnel protocol served by this UDP listener. HTTP/3 without WebTransport is unsupported.
     #[arg(long, default_value = "raw-quic", value_name = "PROTOCOL")]
     tunnel_protocol: RouterTunnelProtocol,
+    /// CA bundle used to verify the selected upstream Stargate pod.
     #[arg(long, env = "STARGATE_UPSTREAM_TLS_CERT_PATH", value_name = "PATH")]
     upstream_tls_cert_path: Option<String>,
 }
@@ -95,9 +130,15 @@ struct Args {
 struct RouterStartupConfig {
     listen_addr: SocketAddr,
     health_listen_addr: SocketAddr,
+    shutdown_drain_timeout: Duration,
     grpc: GrpcRouterConfig,
     target_build_config: TargetBuildConfig,
     tunnel: RouterTunnelConfig,
+}
+
+fn parse_remote_watch_url(value: &str) -> std::result::Result<String, String> {
+    parse_explicit_http_uri(value)
+        .map_err(|_| "remote Watch URL must be an explicit http:// or https:// URI".to_string())
 }
 
 /// One wire protocol per UDP listener, preventing Raw QUIC and WebTransport settings from mixing.
@@ -108,32 +149,79 @@ enum RouterTunnelConfig {
 
 impl RouterStartupConfig {
     fn from_args(args: Args) -> Result<Self> {
+        let grpc_pylon_dial_addr =
+            parse_explicit_http_uri(&args.grpc_pylon_dial_addr).map_err(|_| {
+                anyhow::anyhow!(
+                    "--grpc-pylon-dial-addr must be an explicit http:// or https:// URI"
+                )
+            })?;
+        ensure!(
+            args.advertised_grpc_port > 0,
+            "--advertised-grpc-port must be greater than 0"
+        );
+        ensure!(
+            args.watch_heartbeat_ms > 0,
+            "--watch-heartbeat-ms must be greater than 0"
+        );
+        ensure!(
+            args.shutdown_drain_timeout_ms > 0,
+            "--shutdown-drain-timeout-ms must be greater than 0"
+        );
+        ensure!(
+            args.allow_insecure_remote_watch_http
+                || !args
+                    .remote_stargate_url
+                    .iter()
+                    .any(|url| url.starts_with("http://")),
+            "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
+        );
         let relay_endpoint_config = relay_endpoint_config_from_args(&args)?;
-        let tls_cert_pem = read_optional_file(args.tls_cert_path.as_deref())?;
-        let tls_key_pem = read_optional_file(args.tls_key_path.as_deref())?;
+        let server_identity_reloader = server_identity_reloader_from_args(&args)?;
+        // Read the mounted pair once. The reloader validated and owns these
+        // bytes, so the listener identity and the reload baseline cannot come
+        // from different projected generations. Raw QUIC retains the serving
+        // certificate as a compatibility fallback when no dedicated upstream
+        // trust bundle is configured.
+        let (tls_cert_pem, tls_key_pem) = match server_identity_reloader
+            .as_ref()
+            .map(stargate_tls::ServerIdentityReloader::current_identity)
+        {
+            Some(stargate_tls::ServerTlsIdentity::Provided { cert_pem, key_pem }) => {
+                (Some(cert_pem.clone()), Some(key_pem.clone()))
+            }
+            Some(stargate_tls::ServerTlsIdentity::SelfSigned) | None => (None, None),
+        };
+        let upstream_tls_cert_pem = read_optional_file(args.upstream_tls_cert_path.as_deref())?;
+        if !args.quic_insecure
+            && let Some(cert_pem) = upstream_tls_cert_pem.as_deref()
+        {
+            stargate_tls::build_trusted_quic_client_config_with_alpn(cert_pem, Vec::new())
+                .context("validate upstream TLS trust bundle")?;
+        }
         let grpc = GrpcRouterConfig {
             advertised_hostname_template: args.advertised_hostname_template.clone(),
+            advertised_grpc_port: args.advertised_grpc_port,
+            grpc_pylon_dial_addr,
+            remote_watch_urls: args.remote_stargate_url,
             target_namespace: args.target_namespace.clone(),
             connect_timeout: Duration::from_millis(args.connect_timeout_ms),
+            watch_heartbeat_interval: Duration::from_millis(args.watch_heartbeat_ms),
         };
         let tunnel = match args.tunnel_protocol {
-            RouterTunnelProtocol::RawQuic => {
-                ensure!(
-                    args.upstream_tls_cert_path.is_none(),
-                    "--upstream-tls-cert-path is only supported with --tunnel-protocol=webtransport"
-                );
-                RouterTunnelConfig::RawQuic(QuicRouterConfig {
-                    listen_addr: args.reverse_tunnel_listen_addr,
-                    advertised_hostname_template: grpc.advertised_hostname_template.clone(),
-                    target_namespace: grpc.target_namespace.clone(),
-                    connect_timeout: grpc.connect_timeout,
-                    relay_max_idle_timeout: relay_endpoint_config.max_idle_timeout,
-                    relay_keep_alive_interval: relay_endpoint_config.keep_alive_interval,
-                    tls_cert_pem,
-                    tls_key_pem,
-                    quic_insecure: args.quic_insecure,
-                })
-            }
+            RouterTunnelProtocol::RawQuic => RouterTunnelConfig::RawQuic(QuicRouterConfig {
+                listen_addr: args.reverse_tunnel_listen_addr,
+                advertised_hostname_template: grpc.advertised_hostname_template.clone(),
+                target_namespace: grpc.target_namespace.clone(),
+                connect_timeout: grpc.connect_timeout,
+                relay_max_idle_timeout: relay_endpoint_config.max_idle_timeout,
+                relay_keep_alive_interval: relay_endpoint_config.keep_alive_interval,
+                tls_cert_pem,
+                tls_key_pem,
+                upstream_tls_cert_pem,
+                server_identity_reloader,
+                tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
+                quic_insecure: args.quic_insecure,
+            }),
             RouterTunnelProtocol::WebTransport => {
                 RouterTunnelConfig::WebTransport(WebTransportRouterConfig {
                     listen_addr: args.reverse_tunnel_listen_addr,
@@ -144,9 +232,9 @@ impl RouterStartupConfig {
                     relay_keep_alive_interval: relay_endpoint_config.keep_alive_interval,
                     tls_cert_pem,
                     tls_key_pem,
-                    upstream_tls_cert_pem: read_optional_file(
-                        args.upstream_tls_cert_path.as_deref(),
-                    )?,
+                    server_identity_reloader,
+                    tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
+                    upstream_tls_cert_pem,
                     quic_insecure: args.quic_insecure,
                 })
             }
@@ -155,6 +243,7 @@ impl RouterStartupConfig {
         Ok(Self {
             listen_addr: args.listen_addr,
             health_listen_addr: args.health_listen_addr,
+            shutdown_drain_timeout: Duration::from_millis(args.shutdown_drain_timeout_ms),
             grpc,
             target_build_config: TargetBuildConfig {
                 service_name: args.target_service_name,
@@ -169,6 +258,7 @@ impl RouterStartupConfig {
 struct RouterRuntime {
     tasks: CriticalTaskGroup,
     critical_failure_rx: CriticalTaskFailureReceiver,
+    shutdown_drain_timeout: Duration,
 }
 
 impl RouterRuntime {
@@ -182,6 +272,7 @@ impl RouterRuntime {
         let (tasks, critical_failure_rx) = CriticalTaskGroup::new("router");
         let target_namespace = config.grpc.target_namespace.clone();
         let health_listen_addr = config.health_listen_addr;
+        let shutdown_drain_timeout = config.shutdown_drain_timeout;
 
         let build_config = config.target_build_config;
         tasks.spawn_critical("EndpointSlice watcher", move |shutdown| {
@@ -223,37 +314,68 @@ impl RouterRuntime {
         Ok(Self {
             tasks,
             critical_failure_rx,
+            shutdown_drain_timeout,
         })
     }
 
-    async fn run_until_shutdown<S>(self, signal: S) -> Result<()>
+    async fn run_until_shutdown<S, F>(self, signal: S, force_shutdown: F) -> Result<()>
     where
         S: Future<Output = std::io::Result<&'static str>>,
+        F: Future<Output = std::io::Result<&'static str>>,
     {
         tokio::pin!(signal);
-        let failure = tokio::select! {
+        let shutdown_error = tokio::select! {
             result = &mut signal => {
-                result
-                    .context("failed to receive router termination signal")
-                    .map(|signal| {
+                match result {
+                    Ok(signal) => {
                         info!(signal, "received shutdown signal");
                         None
-                    })
+                    }
+                    Err(error) => Some(anyhow::Error::new(error)
+                        .context("failed to receive router termination signal")),
+                }
             }
             failure = self.critical_failure_rx.recv_async() => {
-                failure
-                    .context("router critical failure channel closed")
-                    .map(|failure| {
+                Some(match failure {
+                    Ok(failure) => {
                         error!(error = %failure, "critical router task exited");
-                        Some(failure)
-                    })
+                        failure.into()
+                    }
+                    Err(error) => anyhow::Error::new(error)
+                        .context("router critical failure channel closed"),
+                })
             }
         };
 
         self.tasks.begin_shutdown();
-        self.tasks.wait().await;
-        if let Some(failure) = failure? {
-            return Err(failure.into());
+        tokio::pin!(force_shutdown);
+        let drain_result = tokio::select! {
+            () = self.tasks.wait() => Ok(()),
+            () = tokio::time::sleep(self.shutdown_drain_timeout) => {
+                Err(anyhow::anyhow!(
+                    "graceful shutdown timed out after {} ms",
+                    self.shutdown_drain_timeout.as_millis()
+                ))
+            }
+            result = &mut force_shutdown => {
+                match result {
+                    Ok(signal) => Err(anyhow::anyhow!(
+                        "received second {signal} during graceful shutdown"
+                    )),
+                    Err(error) => Err(anyhow::Error::new(error)
+                        .context("failed to receive second router termination signal")),
+                }
+            }
+        };
+
+        if let Err(error) = drain_result {
+            if let Some(shutdown_error) = shutdown_error {
+                return Err(shutdown_error.context(error));
+            }
+            return Err(error);
+        }
+        if let Some(error) = shutdown_error {
+            return Err(error);
         }
         info!("stargate Kubernetes router stopped cleanly");
         Ok(())
@@ -270,9 +392,18 @@ async fn main() -> Result<()> {
 
 async fn run_router(config: RouterStartupConfig) -> Result<()> {
     log_startup(&config);
-    start_router(config)
-        .await?
-        .run_until_shutdown(wait_for_termination_signal())
+    let signal = wait_for_termination_signal();
+    tokio::pin!(signal);
+    let runtime = tokio::select! {
+        runtime = start_router(config) => runtime?,
+        result = &mut signal => {
+            let signal = result.context("failed to receive router termination signal")?;
+            info!(signal, "received shutdown signal during startup");
+            return Ok(());
+        }
+    };
+    runtime
+        .run_until_shutdown(signal, wait_for_termination_signal())
         .await
 }
 
@@ -322,15 +453,38 @@ fn log_startup(config: &RouterStartupConfig) {
         target_namespace = %config.grpc.target_namespace,
         target_service_name = %config.target_build_config.service_name,
         advertised_hostname_template = %config.grpc.advertised_hostname_template,
+        advertised_grpc_port = config.grpc.advertised_grpc_port,
+        grpc_pylon_dial_addr = %config.grpc.grpc_pylon_dial_addr,
+        remote_watch_url_count = config.grpc.remote_watch_urls.len(),
         grpc_port_name = %config.target_build_config.grpc_port_name,
         quic_port_name = %config.target_build_config.quic_port_name,
         connect_timeout_ms = config.grpc.connect_timeout.as_millis(),
+        watch_heartbeat_ms = config.grpc.watch_heartbeat_interval.as_millis(),
+        shutdown_drain_timeout_ms = config.shutdown_drain_timeout.as_millis(),
         relay_idle_timeout_ms = relay_idle_timeout.as_millis(),
         relay_keep_alive_ms = relay_keep_alive.map_or(0, |duration| duration.as_millis()),
         quic_insecure,
         tunnel_protocol = %tunnel_protocol,
         "starting stargate Kubernetes router"
     );
+}
+
+/// Loads the mounted server identity so the router can reload it in place.
+///
+/// Requiring both paths together here reports the mistake at startup rather
+/// than from inside the endpoint builder.
+fn server_identity_reloader_from_args(
+    args: &Args,
+) -> Result<Option<stargate_tls::ServerIdentityReloader>> {
+    match (&args.tls_cert_path, &args.tls_key_path) {
+        (Some(cert_path), Some(key_path)) => Ok(Some(
+            stargate_tls::ServerIdentityReloader::load(cert_path.into(), key_path.into())
+                .context("load initial router TLS server identity")?,
+        )),
+        (None, None) => Ok(None),
+        (Some(_), None) => bail!("--tls-key-path is required with --tls-cert-path"),
+        (None, Some(_)) => bail!("--tls-cert-path is required with --tls-key-path"),
+    }
 }
 
 fn read_optional_file(path: Option<&str>) -> Result<Option<Vec<u8>>> {
@@ -367,9 +521,15 @@ mod tests {
     use super::*;
 
     fn router_argv<'a>(extra: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
-        ["stargate-k8s-router", "--target-namespace", "prod"]
-            .into_iter()
-            .chain(extra.iter().copied())
+        [
+            "stargate-k8s-router",
+            "--target-namespace",
+            "prod",
+            "--grpc-pylon-dial-addr",
+            "https://stargate-router.example:443",
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
     }
 
     fn router_args(extra: &[&str]) -> Args {
@@ -416,23 +576,195 @@ mod tests {
     }
 
     #[test]
-    fn raw_quic_rejects_the_webtransport_only_upstream_trust_option() {
-        let upstream_ca = test_file(b"upstream-ca-bytes");
-        let args = router_args(&["--upstream-tls-cert-path", test_file_path(&upstream_ca)]);
+    fn router_cli_requires_a_nonempty_pylon_grpc_dial_address() {
+        let missing = Args::try_parse_from(["stargate-k8s-router", "--target-namespace", "prod"]);
+        assert!(missing.is_err(), "Pylon dial address must be required");
 
-        let error = RouterStartupConfig::from_args(args)
+        let mut empty_args = router_args(&[]);
+        empty_args.grpc_pylon_dial_addr.clear();
+        let empty = RouterStartupConfig::from_args(empty_args)
             .err()
-            .expect("Raw QUIC must reject a WebTransport-only trust option");
+            .expect("empty Pylon dial address must be rejected");
+        assert_eq!(
+            empty.to_string(),
+            "--grpc-pylon-dial-addr must be an explicit http:// or https:// URI"
+        );
+
+        let mut scheme_less_args = router_args(&[]);
+        scheme_less_args.grpc_pylon_dial_addr = "stargate-router.example:443".to_string();
+        let scheme_less = RouterStartupConfig::from_args(scheme_less_args)
+            .err()
+            .expect("scheme-less Pylon dial address must be rejected");
+        assert_eq!(
+            scheme_less.to_string(),
+            "--grpc-pylon-dial-addr must be an explicit http:// or https:// URI"
+        );
+    }
+
+    #[test]
+    fn router_cli_rejects_a_zero_watch_heartbeat() {
+        let error = RouterStartupConfig::from_args(router_args(&["--watch-heartbeat-ms", "0"]))
+            .err()
+            .expect("zero Watch heartbeat must be rejected");
         assert_eq!(
             error.to_string(),
-            "--upstream-tls-cert-path is only supported with --tunnel-protocol=webtransport"
+            "--watch-heartbeat-ms must be greater than 0"
+        );
+    }
+
+    #[test]
+    fn router_cli_requires_explicit_permitted_remote_watch_uris() {
+        let secure = RouterStartupConfig::from_args(
+            Args::try_parse_from(router_argv(&[
+                "--remote-stargate-url",
+                "https://region-b.example.test:50071",
+            ]))
+            .expect("explicit HTTPS Watch URI should parse"),
+        )
+        .expect("explicit HTTPS Watch URI should be permitted");
+        assert_eq!(
+            secure.grpc.remote_watch_urls,
+            ["https://region-b.example.test:50071"]
+        );
+
+        let plaintext = RouterStartupConfig::from_args(router_args(&[
+            "--remote-stargate-url",
+            "http://127.0.0.1:50071",
+        ]))
+        .err()
+        .expect("plaintext Watch URI should require a development opt-in");
+        assert_eq!(
+            plaintext.to_string(),
+            "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
+        );
+
+        let development = startup_config(&[
+            "--allow-insecure-remote-watch-http",
+            "--remote-stargate-url",
+            "http://127.0.0.1:50071",
+        ]);
+        assert_eq!(
+            development.grpc.remote_watch_urls,
+            ["http://127.0.0.1:50071"]
+        );
+
+        for invalid in [
+            "region-b.example.test:50071",
+            "ftp://region-b.example.test:50071",
+            "https://",
+        ] {
+            let error = match Args::try_parse_from(router_argv(&["--remote-stargate-url", invalid]))
+            {
+                Ok(_) => panic!("non-HTTP(S) remote Watch endpoint should be rejected"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("remote Watch URL must be an explicit http:// or https:// URI"),
+                "unexpected parse error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_quic_keeps_upstream_trust_separate_from_the_serving_identity() {
+        install_default_crypto_provider();
+        let (cert_pem, key_pem) =
+            stargate_tls::generate_self_signed_cert().expect("test identity should generate");
+        let (upstream_ca_pem, _) =
+            stargate_tls::generate_self_signed_cert().expect("test CA should generate");
+        let cert = test_file(&cert_pem);
+        let key = test_file(&key_pem);
+        let upstream_ca = test_file(&upstream_ca_pem);
+        let config = startup_config(&[
+            "--tls-cert-path",
+            test_file_path(&cert),
+            "--tls-key-path",
+            test_file_path(&key),
+            "--upstream-tls-cert-path",
+            test_file_path(&upstream_ca),
+        ]);
+
+        let RouterTunnelConfig::RawQuic(tunnel) = config.tunnel else {
+            panic!("default startup configuration must use Raw QUIC");
+        };
+        assert_eq!(
+            tunnel.tls_cert_pem.as_deref(),
+            Some(cert_pem.as_slice()),
+            "the serving identity certificate must stay worker-facing"
+        );
+        assert_eq!(
+            tunnel.upstream_tls_cert_pem.as_deref(),
+            Some(upstream_ca_pem.as_slice()),
+            "the explicit CA bundle must configure the upstream Raw QUIC client"
+        );
+    }
+
+    #[test]
+    fn startup_config_rejects_malformed_upstream_trust_bundle() {
+        install_default_crypto_provider();
+        let upstream_ca =
+            test_file(b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n");
+
+        let error = RouterStartupConfig::from_args(router_args(&[
+            "--upstream-tls-cert-path",
+            test_file_path(&upstream_ca),
+        ]))
+        .err()
+        .expect("malformed upstream trust bundle must be rejected at startup");
+
+        let error = format!("{error:#}");
+        assert!(error.contains("validate upstream TLS trust bundle"));
+        assert!(error.contains("failed to parse cert PEM"));
+    }
+
+    #[test]
+    fn startup_config_rejects_empty_upstream_trust_bundle() {
+        install_default_crypto_provider();
+        let upstream_ca = test_file(b"");
+
+        let error = RouterStartupConfig::from_args(router_args(&[
+            "--upstream-tls-cert-path",
+            test_file_path(&upstream_ca),
+        ]))
+        .err()
+        .expect("empty upstream trust bundle must be rejected at startup");
+
+        let error = format!("{error:#}");
+        assert!(error.contains("validate upstream TLS trust bundle"));
+        assert!(error.contains("TLS trust bundle contains no certificates"));
+    }
+
+    #[test]
+    fn startup_config_reports_unreadable_upstream_trust_bundle_path() {
+        let upstream_ca = tempfile::NamedTempFile::new().expect("test file should be creatable");
+        let upstream_ca_path = upstream_ca.path().to_owned();
+        drop(upstream_ca);
+
+        let upstream_ca_path_string = upstream_ca_path
+            .to_str()
+            .expect("test file path should be valid UTF-8");
+        let error = RouterStartupConfig::from_args(router_args(&[
+            "--upstream-tls-cert-path",
+            upstream_ca_path_string,
+        ]))
+        .err()
+        .expect("unreadable upstream trust bundle must be rejected at startup");
+
+        assert!(
+            format!("{error:#}").contains(&format!("failed to read {upstream_ca_path_string}"))
         );
     }
 
     #[test]
     fn startup_config_derives_runtime_configs_from_args() {
-        let cert = test_file(b"cert-bytes");
-        let key = test_file(b"key-bytes");
+        // The server identity is validated at startup, so the fixture has to be a
+        // real certificate and matching key rather than placeholder bytes.
+        let (cert_pem, key_pem) =
+            stargate_tls::generate_self_signed_cert().expect("test identity should generate");
+        let cert = test_file(&cert_pem);
+        let key = test_file(&key_pem);
         let upstream_ca = test_file(b"upstream-ca-bytes");
         let config = startup_config(&[
             "--listen-addr",
@@ -445,16 +777,22 @@ mod tests {
             "stargate-ready",
             "--advertised-hostname-template",
             "{pod_name}.{namespace}.example",
+            "--advertised-grpc-port",
+            "41071",
             "--grpc-port-name",
             "grpc-control",
             "--quic-port-name",
             "quic-tunnel",
             "--connect-timeout-ms",
             "2500",
+            "--watch-heartbeat-ms",
+            "1750",
             "--relay-idle-timeout-ms",
             "20000",
             "--relay-keep-alive-ms",
             "5000",
+            "--shutdown-drain-timeout-ms",
+            "15000",
             "--tls-cert-path",
             test_file_path(&cert),
             "--tls-key-path",
@@ -472,7 +810,17 @@ mod tests {
             config.grpc.advertised_hostname_template,
             "{pod_name}.{namespace}.example"
         );
+        assert_eq!(config.grpc.advertised_grpc_port, 41071);
+        assert_eq!(
+            config.grpc.grpc_pylon_dial_addr,
+            "https://stargate-router.example:443"
+        );
         assert_eq!(config.grpc.connect_timeout, Duration::from_millis(2500));
+        assert_eq!(config.shutdown_drain_timeout, Duration::from_millis(15000));
+        assert_eq!(
+            config.grpc.watch_heartbeat_interval,
+            Duration::from_millis(1750)
+        );
         assert_eq!(
             config.target_build_config,
             TargetBuildConfig {
@@ -502,9 +850,13 @@ mod tests {
         );
         assert_eq!(
             quic_config.tls_cert_pem.as_deref(),
-            Some(&b"cert-bytes"[..])
+            Some(cert_pem.as_slice())
         );
-        assert_eq!(quic_config.tls_key_pem.as_deref(), Some(&b"key-bytes"[..]));
+        assert_eq!(quic_config.tls_key_pem.as_deref(), Some(key_pem.as_slice()));
+        assert!(
+            quic_config.server_identity_reloader.is_some(),
+            "a mounted identity must be reloadable"
+        );
         assert!(quic_config.quic_insecure);
 
         let webtransport_config = startup_config(&[
@@ -561,10 +913,11 @@ mod tests {
         let runtime = RouterRuntime {
             tasks,
             critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_secs(1),
         };
 
         let error = runtime
-            .run_until_shutdown(std::future::pending())
+            .run_until_shutdown(std::future::pending(), std::future::pending())
             .await
             .expect_err("critical task exits should fail the process");
 
@@ -584,12 +937,14 @@ mod tests {
         let runtime = RouterRuntime {
             tasks,
             critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_secs(1),
         };
 
         let error = runtime
-            .run_until_shutdown(std::future::ready(Err(std::io::Error::other(
-                "signal setup failed",
-            ))))
+            .run_until_shutdown(
+                std::future::ready(Err(std::io::Error::other("signal setup failed"))),
+                std::future::pending(),
+            )
             .await
             .expect_err("signal failure should fail the process after shutdown");
 
@@ -612,8 +967,62 @@ mod tests {
 
         RouterRuntime::start(config, client)
             .await?
-            .run_until_shutdown(std::future::ready(Ok("test")))
+            .run_until_shutdown(std::future::ready(Ok("test")), std::future::pending())
             .await
+    }
+
+    #[tokio::test]
+    async fn router_runtime_bounds_graceful_shutdown() {
+        let (tasks, critical_failure_rx) = CriticalTaskGroup::new("router");
+        tasks.spawn_critical("stuck root", |_shutdown| std::future::pending());
+        let runtime = RouterRuntime {
+            tasks,
+            critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_millis(10),
+        };
+
+        let error = runtime
+            .run_until_shutdown(std::future::ready(Ok("SIGTERM")), std::future::pending())
+            .await
+            .expect_err("a stuck task must not make shutdown unbounded");
+
+        assert_eq!(error.to_string(), "graceful shutdown timed out after 10 ms");
+    }
+
+    #[tokio::test]
+    async fn router_runtime_second_signal_ends_graceful_shutdown() {
+        let (tasks, critical_failure_rx) = CriticalTaskGroup::new("router");
+        tasks.spawn_critical("stuck root", |_shutdown| std::future::pending());
+        let runtime = RouterRuntime {
+            tasks,
+            critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_secs(60),
+        };
+
+        let error = runtime
+            .run_until_shutdown(
+                std::future::ready(Ok("SIGTERM")),
+                std::future::ready(Ok("SIGINT")),
+            )
+            .await
+            .expect_err("a second signal must end the graceful shutdown wait");
+
+        assert_eq!(
+            error.to_string(),
+            "received second SIGINT during graceful shutdown"
+        );
+    }
+
+    #[test]
+    fn router_cli_rejects_a_zero_shutdown_drain_timeout() {
+        let error =
+            RouterStartupConfig::from_args(router_args(&["--shutdown-drain-timeout-ms", "0"]))
+                .err()
+                .expect("zero shutdown drain timeout must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "--shutdown-drain-timeout-ms must be greater than 0"
+        );
     }
 
     #[test]

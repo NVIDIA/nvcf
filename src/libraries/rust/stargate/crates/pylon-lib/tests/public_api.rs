@@ -39,6 +39,7 @@ fn crate_root_exports_registration_public_api() {
         min_update_interval: Duration::from_secs(1),
         reverse_tunnel: false,
         tls_cert_pem: None,
+        grpc_tls_ca_cert_pem: None,
         quic_insecure: true,
         tunnel_protocol: TunnelTransportProtocol::RawQuic,
         forwarding: pylon_lib::TunnelForwardingConfig::default(),
@@ -77,6 +78,8 @@ fn crate_root_exports_tunnel_config_public_api() {
         },
         tls_cert_pem: None,
         tls_key_pem: None,
+        server_identity_reloader: None,
+        tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
         tunnel_protocol: TunnelTransportProtocol::RawQuic,
     };
     assert_eq!(

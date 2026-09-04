@@ -26,6 +26,7 @@ import (
 const (
 	deploymentPathSegment     = "/deployments/"
 	functionVersionPathPrefix = "/v2/nvcf/functions/"
+	accountsPathPrefix        = "/v2/nvcf/accounts"
 )
 
 // multiTokenTransport is an HTTP transport that uses different tokens for different operations
@@ -58,14 +59,19 @@ func (m *multiTokenTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	var token string
 	var expectedScope string
 	clusterManagementOperation := m.isClusterManagementOperation(req)
+	accountManagementOperation := isAccountManagementOperation(req.Method, req.URL.Path)
 	isAdminOperation := m.isAdminOperation(req)
 
 	if isAdminOperation && m.functionToken != "" {
 		token = m.functionToken
-		if clusterManagementOperation {
+		switch {
+		case clusterManagementOperation:
 			expectedScope = "cluster-management"
 			log.Printf("DEBUG: Using ADMIN JWT (cluster-management operation) for %s %s - expects scope: %s", req.Method, req.URL.Path, expectedScope)
-		} else {
+		case accountManagementOperation:
+			expectedScope = "account_setup"
+			log.Printf("DEBUG: Using ADMIN JWT (account management operation) for %s %s - expects scope: %s", req.Method, req.URL.Path, expectedScope)
+		default:
 			expectedScope = "register_function, deploy_function, delete_function, update_function, etc."
 			log.Printf("DEBUG: Using FUNCTION TOKEN (function operation) for %s %s - expects scope: %s", req.Method, req.URL.Path, expectedScope)
 		}
@@ -101,6 +107,7 @@ func (m *multiTokenTransport) isAdminOperation(req *http.Request) bool {
 		isRegistryCredentialManagement(path) ||
 		isSecretUpdate(method, path) ||
 		isTelemetryManagement(path) ||
+		isAccountManagementOperation(method, path) ||
 		m.isClusterManagementOperation(req)
 }
 
@@ -156,6 +163,23 @@ func (m *multiTokenTransport) isClusterManagementOperation(req *http.Request) bo
 		return true
 	}
 	return strings.Contains(path, "/v1/nvca/clusters")
+}
+
+// isAccountManagementOperation checks if this request is an Admin Accounts
+// operation (list or update NVIDIA Cloud Accounts). These are scoped
+// `account_setup`, which currently lives only in the JWT (NVCF_TOKEN);
+// NVCF_API_KEY support is temporary and must not be selected ahead of it.
+// Sub-resources such as .../secrets/... and .../queues/... have their own
+// scopes and are matched separately, so they are excluded here.
+func isAccountManagementOperation(method, path string) bool {
+	if method == "GET" && path == accountsPathPrefix {
+		return true
+	}
+	if method != "PATCH" || !strings.HasPrefix(path, accountsPathPrefix+"/") {
+		return false
+	}
+	rest := strings.TrimPrefix(path, accountsPathPrefix+"/")
+	return rest != "" && !strings.Contains(rest, "/")
 }
 
 // getExpectedUserScope returns the expected scope for user operations (for debugging)

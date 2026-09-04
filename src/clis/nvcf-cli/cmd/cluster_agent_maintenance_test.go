@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"nvcf-cli/internal/clusteragent"
 
@@ -391,6 +392,41 @@ func TestKillFunctionPartialFailureReturnsError(t *testing.T) {
 	}
 }
 
+func TestKillFunctionTimeoutFlagForwarded(t *testing.T) {
+	f := &fakeMaintainer{killResult: &clusteragent.KillResult{RequestsNamespace: "nvcf-backend", Affected: []clusteragent.KilledRequest{{Name: "r1", FunctionID: "fn"}}}}
+	withFakeMaintainer(t, f)
+
+	if _, err := executeMaintenance(t, "", "cluster", "agent", "kill-function", "fn", "--yes", "--timeout", "45s"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.lastKillOpts.Timeout != 45*time.Second {
+		t.Fatalf("Timeout = %s, want 45s", f.lastKillOpts.Timeout)
+	}
+}
+
+func TestKillFunctionTerminatingOutput(t *testing.T) {
+	f := &fakeMaintainer{
+		killResult: &clusteragent.KillResult{
+			RequestsNamespace: "nvcf-backend",
+			Affected:          []clusteragent.KilledRequest{{Name: "r1", FunctionID: "fn", Terminating: true}},
+			TerminatingCount:  1,
+		},
+		killErr: errFakeKill,
+	}
+	withFakeMaintainer(t, f)
+
+	out, err := executeMaintenance(t, "", "cluster", "agent", "kill-function", "fn", "--yes")
+	if err == nil {
+		t.Fatal("expected the aggregate error to propagate")
+	}
+	if !strings.Contains(out, "terminating") {
+		t.Errorf("expected the still-terminating request to be printed, got:\n%s", out)
+	}
+	if strings.Contains(out, "[deleted]") {
+		t.Errorf("a still-terminating request must not be reported as deleted, got:\n%s", out)
+	}
+}
+
 // --- kill-all ---
 
 func TestKillAllTypeInInteractive(t *testing.T) {
@@ -526,6 +562,21 @@ func TestKillAllDryRun(t *testing.T) {
 	}
 }
 
+func TestKillAllTimeoutFlagForwarded(t *testing.T) {
+	f := &fakeMaintainer{
+		target:     &clusteragent.ClusterTarget{ClusterID: "c1", ClusterName: "edge-1", RequestsNamespace: "nvcf-backend"},
+		killResult: &clusteragent.KillResult{RequestsNamespace: "nvcf-backend", Affected: []clusteragent.KilledRequest{{Name: "r1", FunctionID: "fn"}}},
+	}
+	withFakeMaintainer(t, f)
+
+	if _, err := executeMaintenance(t, "", "cluster", "agent", "kill-all", "--yes", "--confirm", "edge-1", "--timeout", "45s"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.lastKillOpts.Timeout != 45*time.Second {
+		t.Fatalf("Timeout = %s, want 45s", f.lastKillOpts.Timeout)
+	}
+}
+
 // --- JSON output ---
 
 func TestDrainJSONOutput(t *testing.T) {
@@ -540,6 +591,29 @@ func TestDrainJSONOutput(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(out, `"mode": "CordonAndDrain"`) || !strings.Contains(out, `"clusterId": "c1"`) {
+		t.Errorf("unexpected JSON output:\n%s", out)
+	}
+}
+
+func TestKillFunctionJSONOutput(t *testing.T) {
+	f := &fakeMaintainer{
+		killResult: &clusteragent.KillResult{
+			RequestsNamespace: "nvcf-backend",
+			Affected:          []clusteragent.KilledRequest{{Name: "r1", FunctionID: "fn", Terminating: true}},
+			TerminatingCount:  1,
+		},
+		killErr: errFakeKill,
+	}
+	withFakeMaintainer(t, f)
+
+	var err error
+	out := captureMaintStdout(t, func() {
+		_, err = executeMaintenance(t, "", "cluster", "agent", "kill-function", "fn", "--yes", "--json")
+	})
+	if err == nil {
+		t.Fatal("expected the aggregate error to propagate")
+	}
+	if !strings.Contains(out, `"terminatingCount": 1`) || !strings.Contains(out, `"terminating": true`) {
 		t.Errorf("unexpected JSON output:\n%s", out)
 	}
 }

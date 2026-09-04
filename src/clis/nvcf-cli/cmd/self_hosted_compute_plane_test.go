@@ -21,8 +21,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -116,6 +119,9 @@ func TestComputePlaneInstallTemplatesUserValuesFile(t *testing.T) {
 	assert.Contains(t, out, "arg=--kube-context=gpu-context")
 	assert.Contains(t, out, "env:CLUSTER_NAME=gpu-from-values")
 	assert.Contains(t, out, "env:NCA_ID=nca-from-values")
+	// The worker helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml,
+	// so install must point OUTPUT_DIR at the directory of --values.
+	assert.Contains(t, out, "env:OUTPUT_DIR="+filepath.Dir(valuesFile))
 	assert.Contains(t, out, "arg="+stackDir)
 	assert.FileExists(t, fakeBin)
 }
@@ -332,6 +338,9 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 	resetComputePlaneFlags(t)
 
 	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+	})
 
 	prevFetcher := fetchClusterIdentity
 	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
@@ -357,11 +366,13 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 
 	require.NoError(t, rootCmd.Execute())
 	assert.Equal(t, "gpu-a", got.TargetClusterName)
+	assert.Equal(t, "https://api.example.test", got.GatewayHTTPURL)
 	assert.Equal(t, "https://sis.example.test", got.ICMSURL)
 	assert.Equal(t, "https://reval.example.test", got.ReValURL)
-	assert.Equal(t, "tls://nats.example.test:4222", got.NATSURL)
+	assert.Equal(t, "tls://api.example.test:4222", got.NATSURL)
 	assert.Equal(t, "sis.example.test", got.SISHost)
 	assert.Equal(t, "reval.example.test", got.ReValHost)
+	assert.Equal(t, "nats.example.test", got.NATSHost)
 	assert.False(t, got.ProbeHTTP)
 }
 
@@ -426,6 +437,141 @@ func TestComputePlaneRegisterDryRunStopsOnReachabilityFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after reachability failure")
+}
+
+func TestComputePlaneRegisterDryRunRejectsMissingSharedGatewayHostsBeforeIdentity(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = profile.ControlPlane.Gateway.HTTPURL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = profile.ControlPlane.Gateway.HTTPURL
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+		profile.ControlPlane.Hosts.API = ""
+		profile.ControlPlane.Hosts.SIS = ""
+		profile.ControlPlane.Hosts.ReVal = ""
+		profile.ControlPlane.Hosts.NATS = ""
+	})
+
+	fetchCalls := 0
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		fetchCalls++
+		return "", "", "", nil
+	}
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.gateway.httpURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.api")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.nats")
+	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after profile validation failure")
+}
+
+func TestComputePlaneRegisterDryRunRejectsNotFoundBeforeIdentity(t *testing.T) {
+	resetComputePlaneFlags(t)
+	selfHostedEnv = "prd"
+	computePlaneRegisterReachabilityCheck = reachability.Check
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	selfHostedICMSURL = server.URL
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Gateway.HTTPURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = server.URL
+	})
+
+	fetchCalls := 0
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		fetchCalls++
+		return "", "", "", nil
+	}
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "/health")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "/info")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "status 404")
+	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after HTTP reachability failure")
+}
+
+func TestComputePlaneRegisterDryRunAcceptsValidServiceRoutes(t *testing.T) {
+	resetComputePlaneFlags(t)
+	selfHostedEnv = "prd"
+	computePlaneRegisterReachabilityCheck = reachability.Check
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/info":
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	selfHostedICMSURL = server.URL
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Gateway.HTTPURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = server.URL
+	})
+
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		return "https://k8s.example/issuer", `{"keys":[]}`, "psat", nil
+	}
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Contains(t, stdout.String(), "dryRun: true")
+	assert.Contains(t, stdout.String(), "sisMutation: skipped")
 }
 
 func TestComputePlaneRegisterCallsSISAfterValidation(t *testing.T) {
@@ -839,6 +985,62 @@ func TestReadNVCAValuesMetadata(t *testing.T) {
 		assert.NotContains(t, transportTLS, "installerImage")
 	})
 
+	t.Run("bundle transport trust with QUIC insecure is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "insecure-nvca-values.yaml")
+		body := `clusterName: gpu-insecure
+agentConfig:
+  mergeConfig: |
+    workload:
+      stargateQUICInsecure: true
+      transportTLS:
+        trustMode: bundle
+`
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+
+		_, err := readNVCAValuesMetadata(path)
+		require.ErrorContains(t, err, "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+		require.ErrorContains(t, err, "set workload.stargateQUICInsecure=false or use trustMode=system")
+	})
+
+	for _, tc := range []struct {
+		name        string
+		mergeConfig string
+	}{
+		{
+			name: "system transport trust with QUIC insecure is accepted",
+			mergeConfig: `workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: system
+`,
+		},
+		{
+			name: "bundle transport trust with QUIC insecure false is accepted",
+			mergeConfig: `workload:
+  stargateQUICInsecure: false
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+		{
+			name: "bundle transport trust with QUIC insecure unset is accepted",
+			mergeConfig: `workload:
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compatible-nvca-values.yaml")
+			body := "clusterName: gpu-compatible\nagentConfig:\n  mergeConfig: |\n    " +
+				strings.ReplaceAll(tc.mergeConfig, "\n", "\n    ")
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+
+			_, err := readNVCAValuesMetadata(path)
+			require.NoError(t, err)
+		})
+	}
+
 	t.Run("typo in known field surfaces a decode error", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "typo-nvca-values.yaml")
@@ -863,14 +1065,17 @@ func installFakeComputePlaneHelmfile(t *testing.T) string {
 	t.Helper()
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	body := `#!/bin/sh
-last=
+verb=
 for arg in "$@"; do
   printf 'arg=%s\n' "$arg"
-  last="$arg"
+  case "$arg" in
+    apply|template) verb="$arg" ;;
+  esac
 done
-printf 'verb=%s\n' "$last"
+printf 'verb=%s\n' "$verb"
 printf 'env:CLUSTER_NAME=%s\n' "$CLUSTER_NAME"
 printf 'env:NCA_ID=%s\n' "$NCA_ID"
+printf 'env:OUTPUT_DIR=%s\n' "$OUTPUT_DIR"
 `
 	require.NoError(t, os.WriteFile(fakeBin, []byte(body), 0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
@@ -914,6 +1119,16 @@ func writeTestControlPlaneProfile(t *testing.T, controlPlaneCluster string) stri
 		},
 	}))
 	return path
+}
+
+func updateTestControlPlaneProfile(t *testing.T, path string, update func(*controlplaneprofile.ControlPlaneProfile)) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var profile controlplaneprofile.ControlPlaneProfile
+	require.NoError(t, yaml.Unmarshal(body, &profile))
+	update(&profile)
+	require.NoError(t, controlplaneprofile.WriteFile(path, profile))
 }
 
 func writeComputePlaneStack(t *testing.T) string {

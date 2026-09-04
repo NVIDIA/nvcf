@@ -103,6 +103,7 @@ go_test(
         "replication_test.go",
         "restore_prep_http_test.go",
         "restore_prep_test.go",
+        "restoreoverlay_http_test.go",
         "restoreoverlay_integration_test.go",
         "restoreoverlay_test.go",
         "rootfs_diff_test.go",

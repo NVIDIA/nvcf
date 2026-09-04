@@ -7,7 +7,7 @@ Container image that runs Apache Cassandra for NVCF, built on the official
 
 ## Image facts
 
-- Base: `cassandra:5.0.8` (official Apache Cassandra, Docker Hub). Bump the
+- Base: `cassandra:5.0.9` (official Apache Cassandra, Docker Hub). Bump the
   Cassandra version by editing the `FROM cassandra:<version>` line; that tag is
   the single source of truth, there is no version build-arg.
 - yq: fetched in a pinned `alpine:3.21` build stage and checksum-verified. The

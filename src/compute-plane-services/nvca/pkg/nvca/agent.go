@@ -364,8 +364,9 @@ type ICMSClientInterface interface {
 type Agent struct {
 	*AgentOptions
 
-	metricsName    string
-	newKubeClients func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+	metricsName               string
+	newKubeClients            func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+	newBackendK8sCacheBuilder func() *BackendK8sCacheBuilder
 
 	// clientMetricsShutdown releases the OTel MeterProvider that backs outbound
 	// client metrics. It is a no-op when client metrics are disabled.
@@ -381,9 +382,10 @@ type Agent struct {
 	backendk8scache    *BackendK8sCache
 	backendHealthCache health.StatusCache
 
-	// gpuMonitor monitors GPU availability and controls queue processing
-	// when GracefulNoGPU feature flag is enabled.
-	gpuMonitor *GPUMonitor
+	// gpuRegistration coordinates GPU availability, ICMS registration, and
+	// queue readiness when GracefulNoGPU is enabled. It also serializes all
+	// registration and credential-refresh operations.
+	gpuRegistration gpuRegistrationManager
 
 	startControllerManager func(context.Context, *kubeclients.KubeClients) error
 
@@ -598,6 +600,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	}
 
 	a.newKubeClients = defaultNewKubeClients
+	a.newBackendK8sCacheBuilder = NewBackendk8sCacheBuilder
 	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer, icmsHTTPOpts...)
 	a.instStatusThreadPool = pool.New().WithMaxGoroutines(ICMSInstanceRequestStatusUpdatesMaxGoroutines)
 	a.ackThreadPool = pool.New().WithMaxGoroutines(ICMSRequestAckMaxGoroutines)
@@ -787,7 +790,17 @@ func (a *Agent) startEventProcessDispatchers(ctx context.Context, events <-chan 
 		for {
 			select {
 			// Pull from the ticker queue and push to the event-specific queue.
-			case ev := <-events:
+			case ev, open := <-events:
+				// A closed channel yields a nil event immediately and forever.
+				// Without this the dispatcher dereferences that nil, panicking
+				// the agent, and spins on the closed channel until it does.
+				if !open {
+					log.Info("Event channel closed, stopping event dispatcher")
+					return
+				}
+				if ev == nil {
+					continue
+				}
 				if queue, ok := a.resourceEventWorkerQueues[ev.Kind]; ok {
 					if ev.ObjectMetaKey != "" {
 						queue.Add(ev.ObjectMetaKey)
@@ -1127,7 +1140,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	infraOverheadGetter := enforce.NewInfraOverheadGetter(a.FeatureFlagFetcher, a.Config, enforce.GetRuntimeClassK8sClient(k8sclients.K8s))
 
 	log.Info("Configuring backendk8scache")
-	backendk8scache, _, err := NewBackendk8sCacheBuilder().
+	backendk8scache, _, err := a.newBackendK8sCacheBuilder().
 		WithConfig(a.Config).
 		WithClusterProvider(a.CloudProvider).
 		WithClusterRegion(a.ClusterRegion).
@@ -1189,11 +1202,20 @@ func (a *Agent) Start(ctx context.Context) error {
 			if nodeInformer := a.backendk8scache.GetNodeInformer(); nodeInformer != nil {
 				gpuMonitorOpts = append(gpuMonitorOpts, WithNodeInformer(nodeInformer))
 			}
-			a.gpuMonitor = NewGPUMonitor(nfClient, gpuMonitorOpts...)
+			gpuMonitor := NewGPUMonitor(nfClient, gpuMonitorOpts...)
 			// Check initial GPU availability
 			gpus, gpuErr := nfClient.GetAllBackendGPUs(ctx)
 			hasGPUs := gpuErr == nil && len(gpus) > 0
-			a.gpuMonitor.SetHasGPUs(hasGPUs)
+			gpuMonitor.SetHasGPUs(hasGPUs)
+			a.gpuRegistration.configureGracefulNoGPU(
+				gpuMonitor,
+				hasGPUs,
+				a.GPUPollInterval,
+				func(registrationCtx context.Context) error {
+					_, registrationErr := a.RegisterWithICMS(registrationCtx)
+					return registrationErr
+				},
+			)
 			if hasGPUs {
 				log.Info("GPUs found during startup, proceeding normally")
 			} else {
@@ -1206,8 +1228,10 @@ func (a *Agent) Start(ctx context.Context) error {
 	statusUpdaters := []health.ComponentStatusGetter{a.backendk8scache}
 
 	// Add GPU monitor to status updaters for readiness checks when GracefulNoGPU is enabled
-	if a.gpuMonitor != nil {
-		statusUpdaters = append(statusUpdaters, a.gpuMonitor)
+	if a.gpuRegistration.enabled() {
+		statusUpdaters = append(statusUpdaters, a.gpuRegistration.monitor)
+		statusUpdaters = append(statusUpdaters,
+			health.GetComponentStatusFunc(a.gpuRegistration.getRegistrationStatus))
 	}
 	if a.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrHostIsolation) {
 		statusUpdaters = append(statusUpdaters, hostisolation.NewStatusGetter(
@@ -1235,10 +1259,13 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// Skip waiting for healthy status when GracefulNoGPU is enabled with no GPUs.
 	// In this case, readiness will report not-ready until GPUs appear, but liveness will pass.
-	skipHealthWait := a.gpuMonitor != nil && !a.gpuMonitor.HasGPUs()
+	skipHealthWait := a.gpuRegistration.enabled() && !a.gpuRegistration.hasGPUs()
 
 	if skipHealthWait {
 		log.Warn("GracefulNoGPU enabled with no GPUs - skipping health wait, readiness will report not-ready")
+		if _, refreshErr := a.backendHealthCache.RefreshStatus(ctx); refreshErr != nil {
+			log.WithError(refreshErr).Warn("Failed to prime health status while waiting for GPUs; continuing startup")
+		}
 	} else {
 		log.WithFields(logrus.Fields{
 			"interval": healthInterval,
@@ -1251,7 +1278,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	}
 
 	// Check if we should defer ICMS registration (no GPUs with GracefulNoGPU enabled).
-	skipInitialRegistration := a.gpuMonitor != nil && !a.gpuMonitor.HasGPUs()
+	skipInitialRegistration := a.gpuRegistration.enabled() && !a.gpuRegistration.hasGPUs()
 	var res *types.ICMSRegistrationResponse
 	if skipInitialRegistration {
 		log.Warn("No GPUs available - deferring ICMS registration until GPUs are detected")
@@ -1397,35 +1424,15 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// If GracefulNoGPU is enabled and we started without GPUs, pause the queue manager
 	// and set up callbacks to handle GPU availability changes
-	if a.gpuMonitor != nil {
-		if !a.gpuMonitor.HasGPUs() {
+	if a.gpuRegistration.enabled() {
+		a.gpuRegistration.setQueueManager(a.queueManager)
+		if !a.gpuRegistration.hasGPUs() {
 			log.Warn("Starting with queue manager paused due to no GPUs")
 			a.queueManager.Pause()
 		}
 
-		// Set up GPU state change callback
-		a.gpuMonitor.SetOnGPUStateChange(func(callbackCtx context.Context, hasGPUs bool) {
-			callbackLog := core.GetLogger(callbackCtx)
-			if hasGPUs {
-				callbackLog.Info("GPUs detected - resuming queue manager and registering with ICMS")
-				// Resume queue processing
-				a.queueManager.Resume()
-				// Register/re-register with ICMS to update GPU inventory.
-				if _, regErr := a.RegisterWithICMS(callbackCtx); regErr != nil {
-					callbackLog.WithError(regErr).Error("Failed to register with ICMS after GPUs became available")
-				} else {
-					callbackLog.Info("Successfully registered with ICMS after GPUs became available")
-				}
-			} else {
-				callbackLog.Warn("GPUs no longer available - pausing queue manager")
-				// Pause queue processing (allows termination messages, blocks creation)
-				a.queueManager.Pause()
-			}
-		})
-
-		// Start the GPU monitor polling loop
 		log.Info("Starting GPU monitor")
-		a.gpuMonitor.Start(ctx)
+		a.gpuRegistration.start(ctx)
 	}
 
 	// Evict all workloads once during startup if in CordonAndDrainMaintenance mode
@@ -1459,6 +1466,14 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Start ticker event dispatchers
 	log.Info("Starting event dispatchers")
 	a.startEventProcessDispatchers(ctx, a.getTickerEvents(ctx))
+
+	// Start the NvSnap Hook B controller (post-Ready checkpoint
+	// reconciler). No-op when NvSnapCheckpointRestore feature flag is
+	// off — see pkg/nvca/nvsnap_controller_start.go. Fire-and-forget;
+	// failure logs but doesn't block agent startup.
+	if err := a.startNvSnapController(ctx, k8sclients, log); err != nil {
+		log.WithError(err).Warn("nvsnap controller start failed (non-fatal)")
+	}
 
 	// Set readiness check only after all critical initialization (including ICMS registration)
 	// has succeeded. This ensures the readiness probe stays not-ready on error returns,
@@ -1662,8 +1677,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 			req.Spec.CreationMsgInfo.InstanceCount,
 			req.Spec.GetTraceContext())
 		if err != nil {
-			a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", err)
+			a.backendk8scache.EmitICMSEventf(req, v1.EventTypeWarning,
+				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", nil, err)
 			log.WithError(err).Error("Failed to acknowledge request")
 
 			// If it has only been five minutes since the request was created, and a 404 is return, retry
@@ -1727,8 +1742,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 				if !ackSR(ctx, req) {
 					return
 				}
-				a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-					"Request accepted for processing")
+				a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+					"Request accepted for processing", nil)
 
 				// If ACK is successful, purge the message now
 				err = a.queueManager.DeleteCreationMessageV2(ctx, req.Spec.MessageReceipt, req.Spec.CreationMsgInfo.QueueURL)
@@ -1788,8 +1803,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 			if !ackSR(ctx, req) {
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-				"Request accepted for processing")
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+				"Request accepted for processing", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastACKTimestamp = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -1837,8 +1852,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 				}
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
-				"Message visibility extended")
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
+				"Message visibility extended", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -2094,8 +2109,8 @@ func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error 
 					}
 					continue
 				}
-				a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeNormal,
-					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", ru.InstanceID, ruPayload.InstanceState)
+				a.backendk8scache.EmitICMSEventf(req, v1.EventTypeNormal,
+					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", &ru, ru.InstanceID, ruPayload.InstanceState)
 				// successfully posted this update so this has to be updated to Status
 				postedInstanceStatus[ru.InstanceID] = getPostedInstanceStatus(ctx, ru)
 			}
@@ -2148,24 +2163,26 @@ func (a *Agent) RenewICMSQueueCreds(ctx context.Context) error {
 		return nil
 	}
 
-	credRes, err := a.icmsClient.GetCreds(ctx)
-	nvcametrics.FromContext(ctx).RecordUpstreamRequest(nvcametrics.UpstreamOperationCredentials, err)
-	if err != nil {
-		return fmt.Errorf("failed to GetCreds from ICMS, err: %v", err)
-	}
+	return a.gpuRegistration.withRegistrationOperation(ctx, func() error {
+		credRes, err := a.icmsClient.GetCreds(ctx)
+		nvcametrics.FromContext(ctx).RecordUpstreamRequest(nvcametrics.UpstreamOperationCredentials, err)
+		if err != nil {
+			return fmt.Errorf("failed to GetCreds from ICMS, err: %v", err)
+		}
 
-	// TODO: this is a hack remove this once ICMS properly sends back the queue credentials
-	queueCreds := a.postProcessQueueCredentials(ctx, credRes.QueueCredentials)
+		// TODO: this is a hack remove this once ICMS properly sends back the queue credentials
+		queueCreds := a.postProcessQueueCredentials(ctx, credRes.QueueCredentials)
 
-	err = a.backendk8scache.StoreUpdatedCredentials(ctx, queueCreds)
-	if err != nil {
-		return fmt.Errorf("failed to store renewed Queue Credentials, err: %v", err)
-	}
+		err = a.backendk8scache.StoreUpdatedCredentials(ctx, queueCreds)
+		if err != nil {
+			return fmt.Errorf("failed to store renewed Queue Credentials, err: %v", err)
+		}
 
-	a.queueManager.updateQueues(queueCreds)
+		a.queueManager.updateQueues(queueCreds)
 
-	log.Debugf("refreshed queueManager with new Creds")
-	return nil
+		log.Debugf("refreshed queueManager with new Creds")
+		return nil
+	})
 }
 
 // evictAllWorkloads directly purges all workload instances and sends termination status updates to ICMS.

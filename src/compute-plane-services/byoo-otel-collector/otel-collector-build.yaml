@@ -10,6 +10,9 @@ dist:
   # Pinning the module name keeps the generated go.mod stable across
   # regenerations so version bumps produce reviewable diffs.
   module: github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol
+  # Authoritative upstream Collector release. The image tag derives its
+  # upstream segment from this field, not from individual component modules.
+  otelcol_version: 0.157.0
   output_path: ./output # the output path which contains otelcol-contrib binary
 
 exporters:
@@ -26,6 +29,7 @@ receivers:
   - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.157.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.157.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8seventsreceiver v0.157.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sobjectsreceiver v0.157.0
 
 processors:
   - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.157.0
@@ -60,3 +64,5 @@ providers:
 replaces:
   - github.com/DataDog/datadog-agent/comp/core/delegatedauth => github.com/DataDog/datadog-agent/comp/core/delegatedauth v0.79.0-devel.0.20260402163801-bfa4eff6c991
   - github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws => github.com/DataDog/datadog-agent/comp/core/delegatedauth/api/cloudauth/aws v0.79.0-devel.0.20260402163801-bfa4eff6c991
+  - golang.org/x/crypto => golang.org/x/crypto v0.55.0
+  - google.golang.org/grpc => google.golang.org/grpc v1.83.1
