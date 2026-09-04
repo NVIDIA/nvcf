@@ -121,13 +121,19 @@ func rwxArtifacts() (*corev1.PersistentVolumeClaim, *batchv1.Job) {
 			Volumes: []corev1.Volume{{Name: ModelVolumeName, VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc.Name},
 			}}},
+			Containers: []corev1.Container{{Name: "writer", VolumeMounts: []corev1.VolumeMount{{Name: ModelVolumeName, MountPath: "/model"}}}},
 		}}},
 	}
 	return pvc, job
 }
 
+const rwxClaimUID = "claim-uid-1"
+
 func boundSharedClaim(populated bool) *corev1.PersistentVolumeClaim {
 	pvc, _ := rwxArtifacts()
+	pvc.UID = rwxClaimUID
+	class := rwxTestClass
+	pvc.Spec.StorageClassName = &class
 	pvc.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
 	pvc.Status.Phase = corev1.ClaimBound
 	if populated {
@@ -143,7 +149,7 @@ func TestRWXReadOnly_FirstRequestCreatesSharedClaimAndWriter(t *testing.T) {
 
 	state, claim := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
 	assert.Equal(t, ModelCachingInProgress, state)
-	assert.Empty(t, claim)
+	assert.Equal(t, pvc.Name, claim, "an in-progress result names the claim so the request records its reference")
 
 	created, err := k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
 	require.NoError(t, err)
@@ -165,7 +171,7 @@ func TestRWXReadOnly_CompletedWriterMarksClaimPopulated(t *testing.T) {
 	done.Status.Succeeded = 1
 	now := metav1.Now()
 	done.Status.CompletionTime = &now
-	done.Spec.Template.Annotations = map[string]string{nvcastorage.ModelCacheWriterPVCUIDAnnotationKey: ""}
+	done.Spec.Template.Annotations = map[string]string{nvcastorage.ModelCacheWriterPVCUIDAnnotationKey: rwxClaimUID}
 	c, k8s := rwxTestBackend(nil, boundSharedClaim(false), done)
 
 	state, claim := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
@@ -252,6 +258,10 @@ func TestSetupContainerModelCaching_FollowsPersistedSelection(t *testing.T) {
 		created, gerr := k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
 		require.NoError(t, gerr)
 		assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}, created.Spec.AccessModes)
+		updated, gerr := c.clients.BART.NvcaV2beta1().ICMSRequests(rwxTestNamespace).Get(ctx, req.Name, metav1.GetOptions{})
+		require.NoError(t, gerr)
+		assert.Equal(t, pvc.Name, updated.Status.CacheReferenceName,
+			"the request records the shared claim while the writer runs, so the reference sweep sees it in use")
 	})
 
 	t.Run("completed shared claim mounts read-only at source and mount", func(t *testing.T) {
@@ -298,4 +308,84 @@ func TestRegularModelCacheKeepsSharedClaim(t *testing.T) {
 	rox.RequiredMountOptions = []string{"ro", "norecovery", "nouuid"}
 	assert.False(t, regularModelCacheKeepsSharedClaim(rwxRequest(t, rox)),
 		"the NVMesh shape keeps its per-request claim cleanup")
+}
+
+func TestRWXReadOnly_StaleWriterWitnessDoesNotMarkANewClaim(t *testing.T) {
+	ctx := rwxTestContext(t)
+	pvc, job := rwxArtifacts()
+	done := job.DeepCopy()
+	done.Status.Succeeded = 1
+	now := metav1.Now()
+	done.Status.CompletionTime = &now
+	done.Spec.Template.Annotations = map[string]string{nvcastorage.ModelCacheWriterPVCUIDAnnotationKey: "an-earlier-claim"}
+	c, k8s := rwxTestBackend(nil, boundSharedClaim(false), done)
+
+	state, claim := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
+	assert.Equal(t, ModelCachingInProgress, state, "a Job that populated an earlier claim proves nothing about this one")
+	assert.Equal(t, pvc.Name, claim)
+
+	got, err := k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, got.Labels, nvcastorage.ModelCachePopulatedLabelKey, "the claim must not be marked populated")
+	_, err = k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
+	assert.True(t, errors.IsNotFound(err), "the stale writer is removed so a fresh one runs")
+}
+
+func TestRWXReadOnly_RefusesAClaimOnAnotherStorageClass(t *testing.T) {
+	ctx := rwxTestContext(t)
+	pvc, job := rwxArtifacts()
+	elsewhere := boundSharedClaim(true)
+	other := "previous-backend"
+	elsewhere.Spec.StorageClassName = &other
+	c, k8s := rwxTestBackend(nil, elsewhere)
+
+	state, _ := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
+	assert.Equal(t, ModelCachingFailed, state, "same handle on a different backend must not be mounted")
+
+	still, err := k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+	require.NoError(t, err, "and must not be deleted either")
+	assert.Equal(t, other, *still.Spec.StorageClassName)
+	_, err = k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
+	assert.True(t, errors.IsNotFound(err))
+}
+
+func TestRWXReadOnly_WriterJobMustMountTheClaimInAContainer(t *testing.T) {
+	ctx := rwxTestContext(t)
+	pvc, job := rwxArtifacts()
+	job.Spec.Template.Spec.Containers[0].VolumeMounts = nil
+	c, k8s := rwxTestBackend(nil)
+
+	state, _ := c.setupRWXReadOnlyModelCachingForRequest(ctx, rwxRequest(t, rwxSelection(t)), pvc, job, rwxSelection(t))
+	assert.Equal(t, ModelCachingFailed, state, "a writer that never mounts the claim would mark an empty claim populated")
+	_, err := k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+	assert.True(t, errors.IsNotFound(err))
+}
+
+func TestCleanupSharedClaimRequestArtifacts(t *testing.T) {
+	ctx := rwxTestContext(t)
+	pvc, job := rwxArtifacts()
+
+	t.Run("a running shared writer and the claim both survive one request's cleanup", func(t *testing.T) {
+		active := job.DeepCopy()
+		active.Status.Active = 1
+		c, k8s := rwxTestBackend(nil, boundSharedClaim(false), active)
+		require.NoError(t, c.cleanupSharedClaimRequestArtifacts(ctx, job, pvc.Name))
+		_, err := k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
+		require.NoError(t, err, "other requests are waiting on this writer")
+		_, err = k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+		require.NoError(t, err, "the shared claim is reclaimed by the reference sweep, not by request cleanup")
+	})
+
+	t.Run("a finished writer is removed, the claim stays", func(t *testing.T) {
+		done := job.DeepCopy()
+		done.Status.Succeeded = 1
+		now := metav1.Now()
+		done.Status.CompletionTime = &now
+		c, k8s := rwxTestBackend(nil, boundSharedClaim(true), done)
+		require.NoError(t, c.cleanupSharedClaimRequestArtifacts(ctx, job, pvc.Name))
+		_, err := k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
+		assert.True(t, errors.IsNotFound(err))
+		_, err = k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+		require.NoError(t, err)
+	})
 }

@@ -114,6 +114,19 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 			fmt.Errorf("claim %s/%s exists with access modes %v, not ReadWriteMany; refusing to share it",
 				current.Namespace, current.Name, current.Spec.AccessModes))
 	}
+	if selection.StorageClassName != "" &&
+		(current.Spec.StorageClassName == nil || *current.Spec.StorageClassName != selection.StorageClassName) {
+		// Same handle, different backend: the selection recorded one class and
+		// the claim lives on another. Mounting it would silently serve the old
+		// backend; deleting it would destroy a cache other requests may use.
+		got := "<none>"
+		if current.Spec.StorageClassName != nil {
+			got = *current.Spec.StorageClassName
+		}
+		return fail(modelcachetypes.ReasonCacheSpecInvalid,
+			fmt.Errorf("claim %s/%s is on StorageClass %q, selection recorded %q; refusing to share it",
+				current.Namespace, current.Name, got, selection.StorageClassName))
+	}
 	if current.Labels[nvcastorage.ModelCachePopulatedLabelKey] == nvcastorage.ModelCachePopulatedLabelValue {
 		record(modelcachetypes.ResultSuccess, "")
 		return ModelCachingCompleted, current.Name
@@ -132,9 +145,12 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 		}
 		log.Infof("shared cache claim %s created on %s, writer job %s started", current.Name,
 			selection.StorageClassName, initJob.Name)
-		return ModelCachingInProgress, ""
+		// The claim exists from here on, so every in-progress result names it:
+		// the request records it as its cache reference and the reference
+		// sweep can see the claim is in use while the writer runs.
+		return ModelCachingInProgress, current.Name
 	case InitCacheJobInProgress:
-		return ModelCachingInProgress, ""
+		return ModelCachingInProgress, current.Name
 	case InitCacheJobFailed:
 		background := metav1.DeletePropagationBackground
 		if err := jobs.Delete(ctx, initJob.Name, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil && !errors.IsNotFound(err) {
@@ -158,7 +174,7 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 			if err := jobs.Delete(ctx, initJob.Name, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil && !errors.IsNotFound(err) {
 				return fail(modelcachetypes.ReasonPVCSetupFailed, fmt.Errorf("delete stale writer job %s: %w", initJob.Name, err))
 			}
-			return ModelCachingInProgress, ""
+			return ModelCachingInProgress, current.Name
 		}
 		if err := c.markSharedClaimPopulated(ctx, current.Name); err != nil {
 			return fail(modelcachetypes.ReasonPVCSetupFailed, err)
@@ -168,7 +184,7 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 			"shared cache claim %v populated", nil, current.Name)
 		return ModelCachingCompleted, current.Name
 	}
-	return ModelCachingInProgress, ""
+	return ModelCachingInProgress, current.Name
 }
 
 // sharedClaimFromArtifact turns the artifact's ReadWriteOnce writer claim into
@@ -210,6 +226,45 @@ func validateSharedClaimWriterJob(job *batchv1.Job, claimName string) error {
 	if found != 1 {
 		return fmt.Errorf("shared claim writer Job has %d %q volumes, want exactly one", found, ModelVolumeName)
 	}
+	// A volume that no container mounts writes nothing. A completed Job would
+	// then mark an empty claim populated.
+	spec := job.Spec.Template.Spec
+	for _, containers := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
+		for _, ctr := range containers {
+			for _, m := range ctr.VolumeMounts {
+				if m.Name == ModelVolumeName && !m.ReadOnly {
+					return nil
+				}
+			}
+		}
+	}
+	return fmt.Errorf("shared claim writer Job has no container mounting %q read-write", ModelVolumeName)
+}
+
+// cleanupSharedClaimRequestArtifacts is request cleanup for the shared-claim
+// flow. The claim is shared and always kept for the reference sweep. The
+// writer Job is shared too while it runs: deleting it would cancel population
+// for every other request waiting on the same claim, so only a finished Job is
+// removed.
+func (c K8sComputeBackend) cleanupSharedClaimRequestArtifacts(ctx context.Context, initJob *batchv1.Job, claimName string) error {
+	log := core.GetLogger(ctx)
+	jobs := c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace)
+	job, err := jobs.Get(ctx, initJob.Name, metav1.GetOptions{})
+	switch {
+	case errors.IsNotFound(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("get shared claim writer job %s: %w", initJob.Name, err)
+	}
+	if job.Status.CompletionTime == nil && job.Status.Failed == 0 {
+		log.Debugf("shared claim writer %v still running for claim %v, leaving it for the other readers", job.Name, claimName)
+		return nil
+	}
+	background := metav1.DeletePropagationBackground
+	if err := jobs.Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete finished shared claim writer job %s: %w", job.Name, err)
+	}
+	log.Debugf("leaving shared cache claim %v for the reference sweep", claimName)
 	return nil
 }
 

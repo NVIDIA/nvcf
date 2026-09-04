@@ -113,6 +113,12 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 		return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 	}
 
+	// A shared claim (ReadWriteMany selection) and a running shared writer are
+	// used by every request for the handle; the claim is reclaimed by the
+	// reference sweep and the writer only once it has finished.
+	if regularModelCacheKeepsSharedClaim(req) {
+		return c.cleanupSharedClaimRequestArtifacts(ctx, initJob, rwPVC.Name)
+	}
 	// cleanup InitJob & its pods, this will clear the rw-pvc also
 	backgroundDeletion := metav1.DeletePropagationBackground
 	err = c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Delete(ctx, initJob.Name, metav1.DeleteOptions{
@@ -124,13 +130,6 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 		return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 	}
 
-	// A shared claim (ReadWriteMany selection) is mounted by every request for
-	// the handle and is reclaimed by the reference sweep once no request names
-	// it. Deleting it here would pull the cache out from under other readers.
-	if regularModelCacheKeepsSharedClaim(req) {
-		log.Debugf("leaving shared cache claim %v for the reference sweep", rwPVC.Name)
-		return nil
-	}
 	// now purge the RWPVC
 	err = c.clients.K8s.CoreV1().PersistentVolumeClaims(c.bk8s.podInstanceNamespace).Delete(ctx, rwPVC.Name, metav1.DeleteOptions{})
 	if err != nil && !errors.IsNotFound(err) {
