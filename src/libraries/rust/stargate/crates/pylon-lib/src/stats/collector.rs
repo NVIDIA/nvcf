@@ -1237,6 +1237,26 @@ mod tests {
     }
 
     #[test]
+    fn chat_observation_without_backend_interval_does_not_record_throughput() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let event = aggregator
+            .runtime_state
+            .transition_request_observation(completed_observation(
+                100,
+                1,
+                10,
+                seconds(1),
+                seconds(2),
+            ));
+
+        aggregator.apply_fallback_observation(&event);
+
+        let stats = aggregator.snapshot("model-a");
+        assert_eq!(stats.last_mean_input_tps, 0.0);
+        assert_eq!(stats.output_tps, 0.0);
+    }
+
+    #[test]
     fn latest_model_update_retention_keeps_last_snapshot_per_model() {
         let mut updates = [
             ("model-a", 1.0),
@@ -1804,10 +1824,13 @@ mod tests {
         collector
             .send_stream("req-helper-stream", 0, 0, false, Duration::ZERO)
             .await;
-        collector.runtime_state.observe_request(identified(
-            completed_observation(32, 0, 0, milliseconds(50), seconds(1)),
-            "req-helper-stream",
-        ));
+        observe_request_with_test_metadata(
+            &collector.runtime_state,
+            identified(
+                completed_observation(32, 0, 0, milliseconds(50), seconds(1)),
+                "req-helper-stream",
+            ),
+        );
         collector
             .send_stream("req-helper-stream", 0, 10, true, seconds(1))
             .await;
@@ -1902,10 +1925,13 @@ mod tests {
         let collector = RunningCollector::spawn(config, None, true);
         collector.seed_stream_output("req-stream").await;
         for index in 0..5 {
-            collector.runtime_state.observe_request(identified(
-                completed_embeddings_observation(20, 2, seconds(1), seconds(2)),
-                format!("req-embedding-{index}"),
-            ));
+            observe_request_with_test_metadata(
+                &collector.runtime_state,
+                identified(
+                    completed_embeddings_observation(20, 2, seconds(1), seconds(2)),
+                    format!("req-embedding-{index}"),
+                ),
+            );
         }
         let stats = collector
             .wait_for_stats(

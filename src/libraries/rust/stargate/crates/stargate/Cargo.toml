@@ -73,7 +73,7 @@ opentelemetry_sdk = { workspace = true }
 prost = { workspace = true }
 reqwest = { workspace = true }
 serde_yaml_ng = { workspace = true }
-pylon-lib = { workspace = true }
+pylon-lib = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 
 [build-dependencies]

@@ -692,10 +692,7 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     }
 
     Ok(match args.initial_input_tps {
-        Some(input_tps) => ModelInitialization::ConfiguredInputTps {
-            input_tps,
-            pin: false,
-        },
+        Some(input_tps) => ModelInitialization::ConfiguredInputTps { input_tps },
         None => ModelInitialization::Uncalibrated,
     })
 }
@@ -1102,10 +1099,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::new()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1662,10 +1656,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: plan.upstream.clone(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1_000.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1_000.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1682,7 +1673,7 @@ mod tests {
         let mut observation = test_observation();
         observation.input_tokens = 1000;
 
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
         let stats = receive_queued_model_stats(&runtime_state, "model-a").await;
 
         assert_eq!(stats.queue_size, 1);

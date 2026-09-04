@@ -99,7 +99,6 @@ pub struct RequestObservationEvent {
     pub(crate) input_tokens_explicit: bool,
     pub(crate) raw_output_units: u64,
     pub(crate) upstream_duration: Option<Duration>,
-    pub(crate) duration_only_throughput: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,7 +114,6 @@ pub(crate) struct RequestObservationMetadata {
     pub(crate) input_tokens_explicit: bool,
     pub(crate) raw_output_units: u64,
     pub(crate) upstream_duration: Option<Duration>,
-    pub(crate) duration_only_throughput: bool,
 }
 
 impl RequestInputInterval {
@@ -435,7 +433,8 @@ impl PylonRuntimeState {
         model_ids
     }
 
-    pub fn observe_request(&self, observation: RequestObservation) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observe_request_for_test(&self, observation: RequestObservation) {
         let generation = self.current_generation(&observation.model_id);
         let request_input_tokens = observation.input_tokens;
         self.observe_request_for_generation(
@@ -443,7 +442,6 @@ impl PylonRuntimeState {
             generation,
             RequestObservationMetadata {
                 request_input_tokens,
-                duration_only_throughput: true,
                 ..Default::default()
             },
         );
@@ -518,7 +516,6 @@ impl PylonRuntimeState {
             input_tokens_explicit,
             raw_output_units,
             upstream_duration,
-            duration_only_throughput,
         } = metadata;
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
@@ -545,7 +542,6 @@ impl PylonRuntimeState {
                     input_tokens_explicit,
                     raw_output_units,
                     upstream_duration,
-                    duration_only_throughput,
                 };
             }
         }
@@ -568,7 +564,6 @@ impl PylonRuntimeState {
             input_tokens_explicit,
             raw_output_units,
             upstream_duration,
-            duration_only_throughput,
         }
     }
 
@@ -665,10 +660,6 @@ impl RequestObservationEvent {
         self.raw_output_units
     }
 
-    pub(crate) fn uses_duration_only_throughput(&self) -> bool {
-        self.duration_only_throughput
-    }
-
     pub(crate) fn output_duration(&self) -> Duration {
         self.upstream_duration
             .unwrap_or(self.observation.total_duration)
@@ -754,7 +745,7 @@ mod tests {
         );
         let mut observation = observation("req-runtime-owner", "model-runtime-owner", None);
 
-        runtime_state.observe_request(observation.clone());
+        runtime_state.observe_request_for_test(observation.clone());
 
         let emitted = observation_rx.try_recv().expect("observation should emit");
         assert_eq!(emitted.observation().request_id, observation.request_id);
@@ -765,7 +756,7 @@ mod tests {
         assert_eq!(live.queued_input_size, 42);
 
         observation.state = RequestObservationState::Complete;
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
         assert_eq!(
             runtime_state
                 .snapshot_live_model("model-runtime-owner")
@@ -785,10 +776,10 @@ mod tests {
         );
         let mut observation = observation("req-local-rejection", "model-a", Some("rk-a"));
 
-        runtime_state.observe_request(observation.clone());
+        runtime_state.observe_request_for_test(observation.clone());
         runtime_state.finish_queue_request(&observation.request_id);
         observation.state = RequestObservationState::Failed;
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
@@ -814,9 +805,9 @@ mod tests {
         );
         let mut observation = observation("req-full-stats-channel", "model-a", Some("rk-a"));
 
-        runtime_state.observe_request(observation.clone());
+        runtime_state.observe_request_for_test(observation.clone());
         observation.state = RequestObservationState::Failed;
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
@@ -839,10 +830,14 @@ mod tests {
             1,
             None,
         );
-        runtime_state.observe_request(observation("req-retained", "model-a", None));
+        runtime_state.observe_request_for_test(observation("req-retained", "model-a", None));
         let subscriber = RecordingTracingSubscriber::default();
         tracing::subscriber::with_default(subscriber.clone(), || {
-            runtime_state.observe_request(observation("req-dropped-full", "model-a", None));
+            runtime_state.observe_request_for_test(observation(
+                "req-dropped-full",
+                "model-a",
+                None,
+            ));
         });
 
         assert_drop_warning(&subscriber, "req-dropped-full", "full");
@@ -859,7 +854,11 @@ mod tests {
         drop(observation_rx);
         let subscriber = RecordingTracingSubscriber::default();
         tracing::subscriber::with_default(subscriber.clone(), || {
-            runtime_state.observe_request(observation("req-dropped-disconnected", "model-a", None));
+            runtime_state.observe_request_for_test(observation(
+                "req-dropped-disconnected",
+                "model-a",
+                None,
+            ));
         });
 
         assert_drop_warning(&subscriber, "req-dropped-disconnected", "disconnected");
@@ -989,7 +988,7 @@ mod tests {
     fn observing_an_unknown_model_never_creates_a_generation() {
         let runtime_state = PylonRuntimeState::new(InferenceServerStatus::Active, &[]);
 
-        runtime_state.observe_request(observation("req-unknown", "model-a", None));
+        runtime_state.observe_request_for_test(observation("req-unknown", "model-a", None));
 
         assert_eq!(runtime_state.current_generation("model-a"), None);
         assert!(runtime_state.advertised_models().is_empty());
