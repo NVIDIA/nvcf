@@ -99,7 +99,7 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.llmRequestRouter.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: {{ div (.Values.llmRequestRouter.shutdown.drainTimeoutMs | int) 1000 }}
+      terminationGracePeriodSeconds: {{ add (div (add (.Values.llmRequestRouter.shutdown.drainTimeoutMs | int) 999) 1000) 5 }}
       containers:
         - name: {{ .Chart.Name }}
           image: {{ include "llm-request-router.image" . }}

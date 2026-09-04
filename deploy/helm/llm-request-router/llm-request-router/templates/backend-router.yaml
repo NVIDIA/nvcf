@@ -69,6 +69,7 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.llmRequestRouter.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ add (div (add (.Values.llmRequestRouter.shutdown.drainTimeoutMs | int) 999) 1000) 5 }}
       containers:
         - name: backend-router
           image: {{ include "llm-request-router.backendRouterImage" . }}
@@ -85,6 +86,7 @@ spec:
             - --advertised-grpc-port={{ .Values.llmRequestRouter.service.grpcPort }}
             - --grpc-pylon-dial-addr={{ include "llm-request-router.backendRouterGrpcDialAddress" . }}
             - --watch-heartbeat-ms={{ .Values.llmRequestRouter.discovery.watchHeartbeatMs }}
+            - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
             {{- range .Values.llmRequestRouter.discovery.remoteWatchUrls }}
             - --remote-stargate-url={{ . }}
             {{- end }}

@@ -42,6 +42,7 @@ const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_WATCH_HEARTBEAT_MS: u64 = 5_000;
 const DEFAULT_RELAY_MAX_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_RELAY_KEEP_ALIVE_MS: u64 = 10_000;
+const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Clone, Debug, PartialEq, ValueEnum)]
 enum RouterTunnelProtocol {
@@ -105,6 +106,13 @@ struct Args {
     /// QUIC keepalive interval for relayed reverse tunnels; 0 disables keepalive
     #[arg(long, default_value_t = DEFAULT_RELAY_KEEP_ALIVE_MS, value_name = "MS")]
     relay_keep_alive_ms: u64,
+    /// Maximum time to drain active work after receiving a termination signal.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS,
+        value_name = "MS"
+    )]
+    shutdown_drain_timeout_ms: u64,
     #[arg(long, env = "STARGATE_TLS_CERT_PATH", value_name = "PATH")]
     tls_cert_path: Option<String>,
     #[arg(long, env = "STARGATE_TLS_KEY_PATH", value_name = "PATH")]
@@ -122,6 +130,7 @@ struct Args {
 struct RouterStartupConfig {
     listen_addr: SocketAddr,
     health_listen_addr: SocketAddr,
+    shutdown_drain_timeout: Duration,
     grpc: GrpcRouterConfig,
     target_build_config: TargetBuildConfig,
     tunnel: RouterTunnelConfig,
@@ -153,6 +162,10 @@ impl RouterStartupConfig {
         ensure!(
             args.watch_heartbeat_ms > 0,
             "--watch-heartbeat-ms must be greater than 0"
+        );
+        ensure!(
+            args.shutdown_drain_timeout_ms > 0,
+            "--shutdown-drain-timeout-ms must be greater than 0"
         );
         ensure!(
             args.allow_insecure_remote_watch_http
@@ -230,6 +243,7 @@ impl RouterStartupConfig {
         Ok(Self {
             listen_addr: args.listen_addr,
             health_listen_addr: args.health_listen_addr,
+            shutdown_drain_timeout: Duration::from_millis(args.shutdown_drain_timeout_ms),
             grpc,
             target_build_config: TargetBuildConfig {
                 service_name: args.target_service_name,
@@ -244,6 +258,7 @@ impl RouterStartupConfig {
 struct RouterRuntime {
     tasks: CriticalTaskGroup,
     critical_failure_rx: CriticalTaskFailureReceiver,
+    shutdown_drain_timeout: Duration,
 }
 
 impl RouterRuntime {
@@ -257,6 +272,7 @@ impl RouterRuntime {
         let (tasks, critical_failure_rx) = CriticalTaskGroup::new("router");
         let target_namespace = config.grpc.target_namespace.clone();
         let health_listen_addr = config.health_listen_addr;
+        let shutdown_drain_timeout = config.shutdown_drain_timeout;
 
         let build_config = config.target_build_config;
         tasks.spawn_critical("EndpointSlice watcher", move |shutdown| {
@@ -298,37 +314,68 @@ impl RouterRuntime {
         Ok(Self {
             tasks,
             critical_failure_rx,
+            shutdown_drain_timeout,
         })
     }
 
-    async fn run_until_shutdown<S>(self, signal: S) -> Result<()>
+    async fn run_until_shutdown<S, F>(self, signal: S, force_shutdown: F) -> Result<()>
     where
         S: Future<Output = std::io::Result<&'static str>>,
+        F: Future<Output = std::io::Result<&'static str>>,
     {
         tokio::pin!(signal);
-        let failure = tokio::select! {
+        let shutdown_error = tokio::select! {
             result = &mut signal => {
-                result
-                    .context("failed to receive router termination signal")
-                    .map(|signal| {
+                match result {
+                    Ok(signal) => {
                         info!(signal, "received shutdown signal");
                         None
-                    })
+                    }
+                    Err(error) => Some(anyhow::Error::new(error)
+                        .context("failed to receive router termination signal")),
+                }
             }
             failure = self.critical_failure_rx.recv_async() => {
-                failure
-                    .context("router critical failure channel closed")
-                    .map(|failure| {
+                Some(match failure {
+                    Ok(failure) => {
                         error!(error = %failure, "critical router task exited");
-                        Some(failure)
-                    })
+                        failure.into()
+                    }
+                    Err(error) => anyhow::Error::new(error)
+                        .context("router critical failure channel closed"),
+                })
             }
         };
 
         self.tasks.begin_shutdown();
-        self.tasks.wait().await;
-        if let Some(failure) = failure? {
-            return Err(failure.into());
+        tokio::pin!(force_shutdown);
+        let drain_result = tokio::select! {
+            () = self.tasks.wait() => Ok(()),
+            () = tokio::time::sleep(self.shutdown_drain_timeout) => {
+                Err(anyhow::anyhow!(
+                    "graceful shutdown timed out after {} ms",
+                    self.shutdown_drain_timeout.as_millis()
+                ))
+            }
+            result = &mut force_shutdown => {
+                match result {
+                    Ok(signal) => Err(anyhow::anyhow!(
+                        "received second {signal} during graceful shutdown"
+                    )),
+                    Err(error) => Err(anyhow::Error::new(error)
+                        .context("failed to receive second router termination signal")),
+                }
+            }
+        };
+
+        if let Err(error) = drain_result {
+            if let Some(shutdown_error) = shutdown_error {
+                return Err(shutdown_error.context(error));
+            }
+            return Err(error);
+        }
+        if let Some(error) = shutdown_error {
+            return Err(error);
         }
         info!("stargate Kubernetes router stopped cleanly");
         Ok(())
@@ -345,9 +392,18 @@ async fn main() -> Result<()> {
 
 async fn run_router(config: RouterStartupConfig) -> Result<()> {
     log_startup(&config);
-    start_router(config)
-        .await?
-        .run_until_shutdown(wait_for_termination_signal())
+    let signal = wait_for_termination_signal();
+    tokio::pin!(signal);
+    let runtime = tokio::select! {
+        runtime = start_router(config) => runtime?,
+        result = &mut signal => {
+            let signal = result.context("failed to receive router termination signal")?;
+            info!(signal, "received shutdown signal during startup");
+            return Ok(());
+        }
+    };
+    runtime
+        .run_until_shutdown(signal, wait_for_termination_signal())
         .await
 }
 
@@ -404,6 +460,7 @@ fn log_startup(config: &RouterStartupConfig) {
         quic_port_name = %config.target_build_config.quic_port_name,
         connect_timeout_ms = config.grpc.connect_timeout.as_millis(),
         watch_heartbeat_ms = config.grpc.watch_heartbeat_interval.as_millis(),
+        shutdown_drain_timeout_ms = config.shutdown_drain_timeout.as_millis(),
         relay_idle_timeout_ms = relay_idle_timeout.as_millis(),
         relay_keep_alive_ms = relay_keep_alive.map_or(0, |duration| duration.as_millis()),
         quic_insecure,
@@ -734,6 +791,8 @@ mod tests {
             "20000",
             "--relay-keep-alive-ms",
             "5000",
+            "--shutdown-drain-timeout-ms",
+            "15000",
             "--tls-cert-path",
             test_file_path(&cert),
             "--tls-key-path",
@@ -757,6 +816,7 @@ mod tests {
             "https://stargate-router.example:443"
         );
         assert_eq!(config.grpc.connect_timeout, Duration::from_millis(2500));
+        assert_eq!(config.shutdown_drain_timeout, Duration::from_millis(15000));
         assert_eq!(
             config.grpc.watch_heartbeat_interval,
             Duration::from_millis(1750)
@@ -853,10 +913,11 @@ mod tests {
         let runtime = RouterRuntime {
             tasks,
             critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_secs(1),
         };
 
         let error = runtime
-            .run_until_shutdown(std::future::pending())
+            .run_until_shutdown(std::future::pending(), std::future::pending())
             .await
             .expect_err("critical task exits should fail the process");
 
@@ -876,12 +937,14 @@ mod tests {
         let runtime = RouterRuntime {
             tasks,
             critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_secs(1),
         };
 
         let error = runtime
-            .run_until_shutdown(std::future::ready(Err(std::io::Error::other(
-                "signal setup failed",
-            ))))
+            .run_until_shutdown(
+                std::future::ready(Err(std::io::Error::other("signal setup failed"))),
+                std::future::pending(),
+            )
             .await
             .expect_err("signal failure should fail the process after shutdown");
 
@@ -904,8 +967,62 @@ mod tests {
 
         RouterRuntime::start(config, client)
             .await?
-            .run_until_shutdown(std::future::ready(Ok("test")))
+            .run_until_shutdown(std::future::ready(Ok("test")), std::future::pending())
             .await
+    }
+
+    #[tokio::test]
+    async fn router_runtime_bounds_graceful_shutdown() {
+        let (tasks, critical_failure_rx) = CriticalTaskGroup::new("router");
+        tasks.spawn_critical("stuck root", |_shutdown| std::future::pending());
+        let runtime = RouterRuntime {
+            tasks,
+            critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_millis(10),
+        };
+
+        let error = runtime
+            .run_until_shutdown(std::future::ready(Ok("SIGTERM")), std::future::pending())
+            .await
+            .expect_err("a stuck task must not make shutdown unbounded");
+
+        assert_eq!(error.to_string(), "graceful shutdown timed out after 10 ms");
+    }
+
+    #[tokio::test]
+    async fn router_runtime_second_signal_ends_graceful_shutdown() {
+        let (tasks, critical_failure_rx) = CriticalTaskGroup::new("router");
+        tasks.spawn_critical("stuck root", |_shutdown| std::future::pending());
+        let runtime = RouterRuntime {
+            tasks,
+            critical_failure_rx,
+            shutdown_drain_timeout: Duration::from_secs(60),
+        };
+
+        let error = runtime
+            .run_until_shutdown(
+                std::future::ready(Ok("SIGTERM")),
+                std::future::ready(Ok("SIGINT")),
+            )
+            .await
+            .expect_err("a second signal must end the graceful shutdown wait");
+
+        assert_eq!(
+            error.to_string(),
+            "received second SIGINT during graceful shutdown"
+        );
+    }
+
+    #[test]
+    fn router_cli_rejects_a_zero_shutdown_drain_timeout() {
+        let error =
+            RouterStartupConfig::from_args(router_args(&["--shutdown-drain-timeout-ms", "0"]))
+                .err()
+                .expect("zero shutdown drain timeout must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "--shutdown-drain-timeout-ms must be greater than 0"
+        );
     }
 
     #[test]
