@@ -22,11 +22,13 @@ See the
 and [Dynamo topology guide](https://docs.nvidia.com/dynamo/v1.4.1/kubernetes-deployment/scale/topology-aware-scheduling)
 for component-level details.
 
-Helm functions can also use the legacy
-[`dra.nvcf.nvidia.io` partition annotation](../helm-functions.md#legacy-nvca-nvlink-partition-annotation).
+Helm functions can also use the
+[`dra.nvcf.nvidia.io` partition annotation](../helm-functions.md#required-nvlink-domain-index-annotation).
 That path uses Kubernetes Pod affinity and is best-effort without KAI Scheduler
 or Grove topology-aware scheduling. Use the KAI or Grove mechanisms on this
-page when clique placement must be coordinated for the complete workload.
+page when clique placement must be coordinated for the complete workload. The
+annotation is still required for NVCA to allocate a `ComputeDomain` for a
+function's Pods, even when using KAI or Grove for placement.
 
 ## Prerequisites
 

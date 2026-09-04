@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -70,6 +71,13 @@ type MiniserviceMetadata struct {
 	// injected into the ephemeral model-cache-init container by the webhook.
 	// Set only when the ephemeral model-cache backend is selected.
 	ModelCacheInitEnv map[string]string `json:"modelCacheInitEnv,omitempty"`
+
+	// NVLinkComputeDomains maps each raw required-nvlink-domain-index annotation value present
+	// in the MiniService's workload objects to the ComputeDomain provisioned for it. Populated
+	// only when NVLinkOptimized is active and at least one workload object carries the
+	// annotation; the webhook looks up a pod's raw annotation value here rather than computing
+	// or naming a ComputeDomain itself.
+	NVLinkComputeDomains map[string]nvcfdra.ComputeDomainRef `json:"nvlinkComputeDomains,omitempty"`
 }
 
 // ToConfigMapData serializes m into ConfigMap-compatible flat string data.

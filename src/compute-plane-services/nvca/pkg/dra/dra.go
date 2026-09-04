@@ -60,28 +60,38 @@ func TransformNVLinkOptimizedDRAObjects(
 	prefNVDObjs := []client.Object{}
 	objsByReqNVDIndex := map[int][]client.Object{}
 	for _, sourceObj := range sourceObjs {
-		annos := sourceObj.GetAnnotations()
-		if annos == nil {
+		idxStr, ok := podTemplateAnnotation(sourceObj, RequiredNVLinkDomainIndexAnnotation)
+		if !ok {
 			prefNVDObjs = append(prefNVDObjs, sourceObj)
 			continue
 		}
-		if idxStr, ok := annos[RequiredNVLinkDomainIndexAnnotation]; ok {
-			idx := reqNVDIndexMap[idxStr]
-			objsByReqNVDIndex[idx] = append(objsByReqNVDIndex[idx], sourceObj)
-		} else {
-			prefNVDObjs = append(prefNVDObjs, sourceObj)
-		}
+		idx := reqNVDIndexMap[idxStr]
+		objsByReqNVDIndex[idx] = append(objsByReqNVDIndex[idx], sourceObj)
 	}
-
-	cd := NewSingleChannelComputeDomain()
-	SetComputeDomainToGPUPodResourceClaims(cd, sourceObjs...)
 
 	SetPreferredNVLinkDomainSchedulingParameters(keyToHash, prefNVDObjs...)
-	for idx, objs := range objsByReqNVDIndex {
+
+	// Objects with no required-domain-index annotation never join a ComputeDomain: they were
+	// never depending on ComputeDomain-backed placement guarantees, so no claim is attached for
+	// them. Each distinct required index gets its own ComputeDomain, since a ComputeDomain
+	// represents one IMEX domain and objects in different index groups are meant to join
+	// different, independent NVLink domains.
+	indices := make([]int, 0, len(objsByReqNVDIndex))
+	for idx := range objsByReqNVDIndex {
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+
+	cds := make([]client.Object, 0, len(indices))
+	for _, idx := range indices {
+		objs := objsByReqNVDIndex[idx]
+		cd := computeDomainForIndex(idx)
+		SetComputeDomainToGPUPodResourceClaims(cd, objs...)
 		SetRequiredNVLinkDomainSchedulingParameters(keyToHash, fmt.Sprint(idx), objs...)
+		cds = append(cds, cd)
 	}
 
-	return sourceObjs, []client.Object{cd}, nil
+	return sourceObjs, cds, nil
 }
 
 func sanitizeIndices(objs []client.Object) (map[string]int, error) {
@@ -94,24 +104,22 @@ func sanitizeIndices(objs []client.Object) (map[string]int, error) {
 	var indexTuples []strIndexTuple
 	indexSet := sets.New[string]()
 	for _, sourceObj := range objs {
-		annos := sourceObj.GetAnnotations()
-		if annos == nil {
+		idx, ok := podTemplateAnnotation(sourceObj, RequiredNVLinkDomainIndexAnnotation)
+		if !ok {
 			continue
 		}
-		if idx, ok := annos[RequiredNVLinkDomainIndexAnnotation]; ok {
-			if indexSet.Has(idx) {
-				continue
-			}
-			indexSet.Insert(idx)
-			i, err := strconv.ParseInt(idx, 10, 32)
-			if err != nil {
-				return nil, err
-			}
-			indexTuples = append(indexTuples, strIndexTuple{
-				i: int(i),
-				s: idx,
-			})
+		if indexSet.Has(idx) {
+			continue
 		}
+		indexSet.Insert(idx)
+		i, err := strconv.ParseInt(idx, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		indexTuples = append(indexTuples, strIndexTuple{
+			i: int(i),
+			s: idx,
+		})
 	}
 	if len(indexTuples) == 0 {
 		indexTuples = append(indexTuples, strIndexTuple{
@@ -134,24 +142,113 @@ func sanitizeIndices(objs []client.Object) (map[string]int, error) {
 }
 
 const (
-	defaultComputeDomainName        = "nvcf-cd-index-0"
-	defaultComputeDomainChannelName = "nvcf-cd-channel-0"
+	computeDomainNamePrefix        = "nvcf-cd-index"
+	computeDomainChannelNamePrefix = "nvcf-cd-channel"
 )
 
-func NewSingleChannelComputeDomain() *nvresourcev1beta1.ComputeDomain {
-	cd := &nvresourcev1beta1.ComputeDomain{
+// ComputeDomainRef identifies a ComputeDomain and the name of the ResourceClaimTemplate that
+// backs its channel, without requiring callers to hold the full ComputeDomain object. It is the
+// shape persisted into the MiniserviceMetadata ConfigMap so the admission webhook can attach
+// claims to a pod without recomputing or renaming the ComputeDomain itself.
+type ComputeDomainRef struct {
+	ComputeDomainName string `json:"computeDomainName"`
+	ChannelName       string `json:"channelName"`
+}
+
+// ComputeDomainFromRef builds the ComputeDomain object identified by ref. Used by callers (the
+// admission webhook) that only have a ComputeDomainRef, not the originating object set.
+func ComputeDomainFromRef(ref ComputeDomainRef) *nvresourcev1beta1.ComputeDomain {
+	return &nvresourcev1beta1.ComputeDomain{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: defaultComputeDomainName,
+			Name: ref.ComputeDomainName,
 		},
 		Spec: nvresourcev1beta1.ComputeDomainSpec{
 			Channel: &nvresourcev1beta1.ComputeDomainChannelSpec{
 				ResourceClaimTemplate: nvresourcev1beta1.ComputeDomainResourceClaimTemplate{
-					Name: defaultComputeDomainChannelName,
+					Name: ref.ChannelName,
 				},
 			},
 		},
 	}
-	return cd
+}
+
+// computeDomainForIndex builds the ComputeDomain for a single normalized NVLink domain index.
+// Naming is index-suffixed so that objects declaring different required-nvlink-domain-index
+// values are backed by distinct ComputeDomains, matching the one-IMEX-domain-per-ComputeDomain
+// invariant: a ComputeDomain represents one IMEX domain, so objects meant to join different,
+// independent NVLink domains must not share one.
+func computeDomainForIndex(idx int) *nvresourcev1beta1.ComputeDomain {
+	return ComputeDomainFromRef(ComputeDomainRef{
+		ComputeDomainName: fmt.Sprintf("%s-%d", computeDomainNamePrefix, idx),
+		ChannelName:       fmt.Sprintf("%s-%d", computeDomainChannelNamePrefix, idx),
+	})
+}
+
+// podTemplateAnnotation returns the value of annotation key on obj's pod template (or on obj
+// itself when obj is a bare Pod, since a Pod is its own template), and whether it was present.
+// This is the same location Kubernetes copies onto the Pods a Deployment/StatefulSet/Job/CronJob
+// creates, so it is the only place an annotation set here is guaranteed to reach the admission
+// webhook, which only ever sees realized Pods. A top-level annotation on the controller object
+// itself (e.g. a Deployment's own ObjectMeta) is never copied down and would never reach a Pod.
+func podTemplateAnnotation(obj client.Object, key string) (string, bool) {
+	var val string
+	var ok bool
+	itrf := func(pts *corev1.PodTemplateSpec) {
+		if v, found := pts.Annotations[key]; found {
+			val, ok = v, true
+		}
+	}
+	iterPodSpecs(itrf, obj)
+	return val, ok
+}
+
+// anyPodHasRequiredNVLinkDomainIndex reports whether any pod template among objs carries the
+// RequiredNVLinkDomainIndexAnnotation.
+func anyPodHasRequiredNVLinkDomainIndex(objs ...client.Object) bool {
+	for _, obj := range objs {
+		if _, ok := podTemplateAnnotation(obj, RequiredNVLinkDomainIndexAnnotation); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// ComputeDomainsForWorkload scans objs' pod templates for the required-nvlink-domain-index
+// annotation and returns one ComputeDomain per distinct raw index value present, plus a mapping
+// from each raw annotation value to a ComputeDomainRef identifying the ComputeDomain that backs
+// it. If no pod template carries the annotation, it returns (nil, nil, nil): no ComputeDomain is
+// needed if nothing declares an NVLink domain requirement.
+func ComputeDomainsForWorkload(objs ...client.Object) ([]*nvresourcev1beta1.ComputeDomain, map[string]ComputeDomainRef, error) {
+	if !anyPodHasRequiredNVLinkDomainIndex(objs...) {
+		return nil, nil, nil
+	}
+
+	idxMap, err := sanitizeIndices(objs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cdByIdx := make(map[int]*nvresourcev1beta1.ComputeDomain, len(idxMap))
+	refByRaw := make(map[string]ComputeDomainRef, len(idxMap))
+	for raw, idx := range idxMap {
+		cd, ok := cdByIdx[idx]
+		if !ok {
+			cd = computeDomainForIndex(idx)
+			cdByIdx[idx] = cd
+		}
+		refByRaw[raw] = ComputeDomainRef{
+			ComputeDomainName: cd.Name,
+			ChannelName:       cd.Spec.Channel.ResourceClaimTemplate.Name,
+		}
+	}
+
+	cds := make([]*nvresourcev1beta1.ComputeDomain, 0, len(cdByIdx))
+	for _, cd := range cdByIdx {
+		cds = append(cds, cd)
+	}
+	sort.Slice(cds, func(i, j int) bool { return cds[i].Name < cds[j].Name })
+
+	return cds, refByRaw, nil
 }
 
 func SetComputeDomainToGPUPodResourceClaims(
@@ -327,6 +424,12 @@ func iterPodSpecs(itrf iterPodTemplateSpecFunc, objs ...client.Object) {
 		case *batchv1.CronJob:
 			itrf(&ot.Spec.JobTemplate.Spec.Template)
 		default:
+			// TODO: third-party operator types (e.g. DynamoGraphDeployment) are invisible to
+			// the NVLink domain-index scan below since their pod templates aren't one of the
+			// well-known kinds above. When Karta's generic Pod metadata accessor is vendored
+			// (https://github.com/run-ai/karta/blob/main/pkg/resource/accessor.go#L88), use it
+			// here to generically extract pod-template annotations from arbitrary object kinds
+			// so those types can also carry the required-nvlink-domain-index annotation.
 			continue
 		}
 	}

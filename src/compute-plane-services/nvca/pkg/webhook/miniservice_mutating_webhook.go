@@ -329,7 +329,7 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 		if isCreate {
 			// NVLink DRA mutations for claims/scheduling.
 			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-				w.mutateNVLinkDRA(obj.GetNamespace(), t)
+				w.mutateNVLinkDRA(obj.GetNamespace(), meta, t)
 			}
 
 			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {
@@ -396,16 +396,23 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 	}
 }
 
-func (w *miniserviceMutatingWebhook) mutateNVLinkDRA(key string, pod *corev1.Pod) {
-	// The ComputeDomain's fields are static for the workload so recreating it here is fine.
-	cd := nvcfdra.NewSingleChannelComputeDomain()
-	nvcfdra.SetComputeDomainToGPUPodResourceClaims(cd, pod)
-	annos := pod.GetAnnotations()
-	if idxStr := annos[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; idxStr != "" {
-		nvcfdra.SetRequiredNVLinkDomainSchedulingParameters(key, idxStr, pod)
-	} else {
+// mutateNVLinkDRA attaches ComputeDomain-backed NVLink scheduling to pod. A pod only needs a
+// ComputeDomain/channel claim if it explicitly declared a required NVLink domain via
+// RequiredNVLinkDomainIndexAnnotation: that is the only signal that the pod is doing cross-node
+// NVLink memory sharing. The reconciler computes one ComputeDomain per distinct raw annotation
+// value present in the MiniService (meta.NVLinkComputeDomains) since a ComputeDomain represents
+// a single IMEX domain; the webhook only looks up the ComputeDomain for this pod's value, it
+// does not decide naming itself.
+func (w *miniserviceMutatingWebhook) mutateNVLinkDRA(key string, meta nvcatypes.MiniserviceMetadata, pod *corev1.Pod) {
+	idxStr := pod.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]
+	if idxStr == "" {
 		nvcfdra.SetPreferredNVLinkDomainSchedulingParameters(key, pod)
+		return
 	}
+	if ref, ok := meta.NVLinkComputeDomains[idxStr]; ok {
+		nvcfdra.SetComputeDomainToGPUPodResourceClaims(nvcfdra.ComputeDomainFromRef(ref), pod)
+	}
+	nvcfdra.SetRequiredNVLinkDomainSchedulingParameters(key, idxStr, pod)
 }
 
 func (w *miniserviceMutatingWebhook) mutateGXCache(lbls map[string]string) {
