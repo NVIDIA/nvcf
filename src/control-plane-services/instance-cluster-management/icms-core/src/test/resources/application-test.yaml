@@ -623,6 +623,8 @@ icms:
   queue-creation-per-instance-type-enabled: true
   fail-instance-creation-for-closed-requests: false
   state-request-deletion-task-enabled: true
+  # The SAI-based single-table read flow;
+  cluster-by-id-reads-enabled: true
 
   nats:
     # Should be disabled to verify success of backward compatible integration test
