@@ -241,6 +241,19 @@ func validateSharedClaimWriterJob(job *batchv1.Job, claimName string) error {
 	return fmt.Errorf("shared claim writer Job has no container mounting %q read-write", ModelVolumeName)
 }
 
+// writerJobFinished reports whether a Job reached a terminal state. A failed
+// Pod is not terminal while retries remain; only the JobComplete or JobFailed
+// condition is, with CompletionTime kept as a fallback for a completed Job
+// whose conditions have not been populated.
+func writerJobFinished(job *batchv1.Job) bool {
+	for _, cond := range job.Status.Conditions {
+		if (cond.Type == batchv1.JobComplete || cond.Type == batchv1.JobFailed) && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return job.Status.CompletionTime != nil
+}
+
 // cleanupSharedClaimRequestArtifacts is request cleanup for the shared-claim
 // flow. The claim is shared and always kept for the reference sweep. The
 // writer Job is shared too while it runs: deleting it would cancel population
@@ -256,7 +269,7 @@ func (c K8sComputeBackend) cleanupSharedClaimRequestArtifacts(ctx context.Contex
 	case err != nil:
 		return fmt.Errorf("get shared claim writer job %s: %w", initJob.Name, err)
 	}
-	if job.Status.CompletionTime == nil && job.Status.Failed == 0 {
+	if !writerJobFinished(job) {
 		log.Debugf("shared claim writer %v still running for claim %v, leaving it for the other readers", job.Name, claimName)
 		return nil
 	}

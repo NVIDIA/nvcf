@@ -376,11 +376,35 @@ func TestCleanupSharedClaimRequestArtifacts(t *testing.T) {
 		require.NoError(t, err, "the shared claim is reclaimed by the reference sweep, not by request cleanup")
 	})
 
+	t.Run("a writer with a failed pod and retries remaining is kept", func(t *testing.T) {
+		retrying := job.DeepCopy()
+		var limit int32 = 6
+		retrying.Spec.BackoffLimit = &limit
+		retrying.Status.Failed = 1
+		c, k8s := rwxTestBackend(nil, boundSharedClaim(false), retrying)
+		require.NoError(t, c.cleanupSharedClaimRequestArtifacts(ctx, job, pvc.Name))
+		_, err := k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
+		require.NoError(t, err, "one failed pod is not terminal while the Job still has retries")
+	})
+
+	t.Run("a terminally failed writer is removed, the claim stays", func(t *testing.T) {
+		failed := job.DeepCopy()
+		failed.Status.Failed = 7
+		failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+		c, k8s := rwxTestBackend(nil, boundSharedClaim(false), failed)
+		require.NoError(t, c.cleanupSharedClaimRequestArtifacts(ctx, job, pvc.Name))
+		_, err := k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
+		assert.True(t, errors.IsNotFound(err))
+		_, err = k8s.CoreV1().PersistentVolumeClaims(rwxTestNamespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+		require.NoError(t, err)
+	})
+
 	t.Run("a finished writer is removed, the claim stays", func(t *testing.T) {
 		done := job.DeepCopy()
 		done.Status.Succeeded = 1
 		now := metav1.Now()
 		done.Status.CompletionTime = &now
+		done.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
 		c, k8s := rwxTestBackend(nil, boundSharedClaim(true), done)
 		require.NoError(t, c.cleanupSharedClaimRequestArtifacts(ctx, job, pvc.Name))
 		_, err := k8s.BatchV1().Jobs(rwxTestNamespace).Get(ctx, job.Name, metav1.GetOptions{})
