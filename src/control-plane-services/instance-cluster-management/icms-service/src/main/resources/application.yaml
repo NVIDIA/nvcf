@@ -418,6 +418,9 @@ icms:
   reservation-backup-enabled: false
   spot-post-reserved-exhaustion-for-function-enabled: false # Feature flag to enable spot usage after reservation is exhausted for functions
 
+  # The SAI-based single-table read flow;
+  cluster-by-id-reads-enabled: true
+
   nats:
     nats-enabled: false
     nats-url: nats://localhost:4222
