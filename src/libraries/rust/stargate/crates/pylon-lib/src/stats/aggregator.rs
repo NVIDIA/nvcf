@@ -40,6 +40,7 @@ pub(super) struct ModelMetricsState {
     pub(super) embedding_item_tps_sum: f64,
     pub(super) max_chat_output_tps: f64,
     pub(super) max_embedding_item_tps: f64,
+    pub(super) max_engine_concurrency: Option<u64>,
     pub(super) kv_cache: KvCacheStatsSnapshot,
     pub(super) input_tps_distribution: TpsDistribution,
     aggregate_state_counted: bool,
@@ -325,6 +326,21 @@ impl StatsAggregator {
             }
             StatsAggregatorUpdate::FinalizeRequest(update) => {
                 updated_models.extend(self.finalize_request(update))
+            }
+            StatsAggregatorUpdate::EngineConcurrency {
+                model_id,
+                max_engine_concurrency,
+            } => {
+                let Some(state) = self.per_model.get_mut(&model_id) else {
+                    return;
+                };
+                if state.metrics.max_engine_concurrency == max_engine_concurrency {
+                    return;
+                }
+                state.metrics.max_engine_concurrency = max_engine_concurrency;
+                state.metrics.stats_observed_at_unix_ms = current_unix_millis();
+                let generation = state.generation.clone();
+                updated_models.push((generation, self.snapshot(&model_id)));
             }
             StatsAggregatorUpdate::EnableOpenAiFallback => self.enable_openai_fallback(),
         }
@@ -893,7 +909,7 @@ impl ModelMetricsState {
             kv_cache_used_tokens: self.kv_cache.kv_cache_used_tokens,
             kv_cache_free_tokens: self.kv_cache.kv_cache_free_tokens,
             num_running_queries: inputs.num_running_queries,
-            max_engine_concurrency: None,
+            max_engine_concurrency: self.max_engine_concurrency,
             total_query_input_size: inputs.total_query_input_size,
             queue_time_estimate_ms_by_priority: None,
             input_processing_queries: inputs.input_processing_queries,

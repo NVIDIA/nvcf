@@ -455,7 +455,13 @@ impl AppState {
     }
 
     async fn acquire_request_slot(&self) -> Option<OwnedSemaphorePermit> {
-        self.request_slots.clone()?.acquire_owned().await.ok()
+        self.request_capacity
+            .as_ref()?
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .ok()
     }
 
     async fn record_request(&self, headers: &HeaderMap, endpoint: TestEndpoint, model: &str) {

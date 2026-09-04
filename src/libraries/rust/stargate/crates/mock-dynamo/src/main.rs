@@ -398,11 +398,17 @@ struct AppState {
     ttft: Duration,
     ttft_jitter_ms: u64,
     prefill_tokens_per_s: f64,
-    request_slots: Option<Arc<Semaphore>>,
+    request_capacity: Option<RequestCapacity>,
     health_delay: Duration,
     kv_cache: Arc<Mutex<kv_cache::KvCacheState>>,
     stats_events: broadcast::Sender<stats_stream::StatsStreamEvent>,
     test_control: test_control::TestControlState,
+}
+
+#[derive(Clone)]
+struct RequestCapacity {
+    limit: usize,
+    slots: Arc<Semaphore>,
 }
 
 #[tokio::main]
@@ -433,8 +439,10 @@ async fn main() -> Result<()> {
         ttft: Duration::from_millis(behavior.ttft_ms),
         ttft_jitter_ms: behavior.ttft_jitter_ms,
         prefill_tokens_per_s: behavior.prefill_tokens_per_s,
-        request_slots: (behavior.max_concurrent_requests > 0)
-            .then(|| Arc::new(Semaphore::new(behavior.max_concurrent_requests))),
+        request_capacity: (behavior.max_concurrent_requests > 0).then(|| RequestCapacity {
+            limit: behavior.max_concurrent_requests,
+            slots: Arc::new(Semaphore::new(behavior.max_concurrent_requests)),
+        }),
         health_delay: Duration::from_millis(args.health_delay_ms),
         kv_cache: Arc::new(Mutex::new(kv_cache::KvCacheState::new(
             behavior.kv_cache_capacity_tokens,

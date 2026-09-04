@@ -196,6 +196,10 @@ pub enum StatsUpdateSource {
 pub enum StatsAggregatorUpdate {
     RequestCounters(RequestCounterUpdate),
     FinalizeRequest(FinalizeRequestUpdate),
+    EngineConcurrency {
+        model_id: String,
+        max_engine_concurrency: Option<u64>,
+    },
     EnableOpenAiFallback,
 }
 
@@ -703,6 +707,26 @@ mod tests {
             })
             .await;
         }
+    }
+
+    #[tokio::test]
+    async fn engine_concurrency_is_published_with_model_stats() {
+        let collector = RunningCollector::spawn(StatsCollectorConfig::default(), None, true);
+
+        collector
+            .send_update(StatsAggregatorUpdate::EngineConcurrency {
+                model_id: "model-a".to_string(),
+                max_engine_concurrency: Some(25),
+            })
+            .await;
+
+        let stats = collector
+            .wait_for_stats("engine concurrency should be published", |stats| {
+                stats.max_engine_concurrency == Some(25)
+            })
+            .await;
+        assert_eq!(stats.max_engine_concurrency, Some(25));
+        collector.handle.shutdown().await;
     }
 
     macro_rules! config {

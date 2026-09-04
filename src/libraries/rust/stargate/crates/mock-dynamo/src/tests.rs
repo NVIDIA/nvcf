@@ -52,7 +52,7 @@ fn test_state() -> AppState {
         ttft: Duration::ZERO,
         ttft_jitter_ms: 0,
         prefill_tokens_per_s: 0.0,
-        request_slots: None,
+        request_capacity: None,
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
         stats_events: test_stats_events(),
@@ -946,6 +946,16 @@ fn stats_stream_events_are_ndjson() {
                 .to_string()
                 + "\n"
         );
+
+    let ping = StatsStreamEvent::Ping {
+        v: 1,
+        model: "dummy-model".to_string(),
+        max_engine_concurrency: 25,
+    };
+    assert_eq!(
+        String::from_utf8(ndjson_event(&ping).to_vec()).unwrap(),
+        "{\"type\":\"ping\",\"v\":1,\"model\":\"dummy-model\",\"max_engine_concurrency\":25}\n"
+    );
 }
 
 #[tokio::test]

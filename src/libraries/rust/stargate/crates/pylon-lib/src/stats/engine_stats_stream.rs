@@ -122,7 +122,13 @@ pub fn start_engine_stats_stream(
 #[derive(Debug)]
 pub(crate) enum ParsedEngineStatsEvent {
     Stats(RequestCounterUpdate),
-    Ping,
+    Ping(Option<EngineConcurrency>),
+}
+
+#[derive(Debug)]
+pub(crate) struct EngineConcurrency {
+    model_id: String,
+    max_engine_concurrency: Option<u64>,
 }
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EngineStatsParseError {
@@ -154,9 +160,23 @@ pub(crate) fn parse_engine_stats_line(
     let event_type = engine_stats_event_type(&mut raw)?;
     match event_type {
         "stats" => parse_stats_event(raw, observed_at),
-        "ping" => Ok(ParsedEngineStatsEvent::Ping),
+        "ping" => parse_ping_event(raw),
         other => Err(EngineStatsParseError::UnknownType(other.to_string())),
     }
+}
+fn parse_ping_event(
+    raw: RawEngineStatsEvent<'_>,
+) -> Result<ParsedEngineStatsEvent, EngineStatsParseError> {
+    let Some(max_engine_concurrency) =
+        optional_u64(raw.max_engine_concurrency, "max_engine_concurrency")?
+    else {
+        return Ok(ParsedEngineStatsEvent::Ping(None));
+    };
+    let model_id = required_nonempty_string(raw.model, "model")?;
+    Ok(ParsedEngineStatsEvent::Ping(Some(EngineConcurrency {
+        model_id,
+        max_engine_concurrency: (max_engine_concurrency > 0).then_some(max_engine_concurrency),
+    })))
 }
 fn engine_stats_event_type<'a>(
     raw: &'a mut RawEngineStatsEvent<'_>,
@@ -213,6 +233,7 @@ struct RawEngineStatsEvent<'a> {
     tokens_processed: Option<JsonScalar<'a>>,
     tokens_generated: Option<JsonScalar<'a>>,
     finished: Option<JsonScalar<'a>>,
+    max_engine_concurrency: Option<JsonScalar<'a>>,
 }
 
 impl<'de> Deserialize<'de> for RawEngineStatsEvent<'de> {
@@ -247,6 +268,7 @@ impl<'de> Visitor<'de> for RawEngineStatsEventVisitor {
                 "tokens_processed" => event.tokens_processed = Some(map.next_value()?),
                 "tokens_generated" => event.tokens_generated = Some(map.next_value()?),
                 "finished" => event.finished = Some(map.next_value()?),
+                "max_engine_concurrency" => event.max_engine_concurrency = Some(map.next_value()?),
                 _ => {
                     map.next_value::<IgnoredAny>()?;
                 }
@@ -589,15 +611,15 @@ async fn emit_engine_stats_event(
         }
     };
     *valid_event_seen = true;
-    let (event_type, update) = match event {
-        ParsedEngineStatsEvent::Stats(update) => ("stats", Some(update)),
-        ParsedEngineStatsEvent::Ping => ("ping", None),
+    let event_type = match &event {
+        ParsedEngineStatsEvent::Stats(_) => "stats",
+        ParsedEngineStatsEvent::Ping(_) => "ping",
     };
     if let Some(metrics) = &config.metrics {
         metrics.observe_engine_stats_stream_event(event_type);
     }
-    match update {
-        Some(mut update) => {
+    match event {
+        ParsedEngineStatsEvent::Stats(mut update) => {
             update.generation = generated_request_generation(&update.request_id, &update.model_id)
                 .or_else(|| {
                     config.runtime_state.as_ref().and_then(|runtime_state| {
@@ -611,7 +633,21 @@ async fn emit_engine_stats_event(
             )
             .await
         }
-        None => true,
+        ParsedEngineStatsEvent::Ping(Some(EngineConcurrency {
+            model_id,
+            max_engine_concurrency,
+        })) => {
+            send_stats_update(
+                stats_update_tx,
+                StatsAggregatorUpdate::EngineConcurrency {
+                    model_id,
+                    max_engine_concurrency,
+                },
+                stop,
+            )
+            .await
+        }
+        ParsedEngineStatsEvent::Ping(None) => true,
     }
 }
 
@@ -792,8 +828,17 @@ mod tests {
 
         assert!(matches!(
             parse(br#"{"v":1,"type":"ping"}"#).expect("ping should parse"),
-            ParsedEngineStatsEvent::Ping
+            ParsedEngineStatsEvent::Ping(None)
         ));
+
+        let ParsedEngineStatsEvent::Ping(Some(concurrency)) =
+            parse(br#"{"v":1,"type":"ping","model":"llama","max_engine_concurrency":25}"#)
+                .expect("model concurrency should parse")
+        else {
+            panic!("expected engine concurrency");
+        };
+        assert_eq!(concurrency.model_id, "llama");
+        assert_eq!(concurrency.max_engine_concurrency, Some(25));
     }
 
     #[tokio::test]
@@ -891,12 +936,12 @@ mod tests {
         assert!(matches!(
             parse(br#"{"v":1,"type":"ping","ignored":{"nested":true}}"#)
                 .expect("unknown fields should remain forward-compatible"),
-            ParsedEngineStatsEvent::Ping
+            ParsedEngineStatsEvent::Ping(None)
         ));
         assert!(matches!(
             parse(br#"{"v":2,"v":1,"type":"unknown","type":"ping"}"#)
                 .expect("recognized duplicate fields should retain last-value-wins behavior"),
-            ParsedEngineStatsEvent::Ping
+            ParsedEngineStatsEvent::Ping(None)
         ));
 
         let event = parse(
