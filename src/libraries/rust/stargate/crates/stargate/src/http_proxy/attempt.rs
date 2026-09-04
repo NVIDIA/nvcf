@@ -433,7 +433,7 @@ impl RequestFailureContext {
         status: StatusCode,
     ) {
         warn!(
-            routing_key = ?run.request.request_inputs.target.routing_key,
+            routing_key = ?run.routing_key(),
             model_id = %run.model_id(),
             inference_server_id = %chosen.inference_server_id,
             cluster_id = %chosen.cluster_id,

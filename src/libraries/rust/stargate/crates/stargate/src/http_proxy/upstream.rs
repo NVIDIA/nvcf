@@ -77,6 +77,7 @@ pub(super) async fn proxy_via_quic_streaming(
                     // in-flight request died with its backend.
                     warn!(
                         inference_server_id = %registration.inference_server_id(),
+                        cluster_id = %registration.cluster_id(),
                         status = status.as_u16(),
                         streamed_bytes,
                         error = %error,
