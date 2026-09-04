@@ -75,8 +75,8 @@ the writer's volume rather than provisioned separately. A provisioner that creat
 isolated directory, access point, or subvolume for every claim does not provide
 cross-namespace reuse through this backend.
 
-The Samba backend creates a separate Samba server and `nvcf-sc` backing volume
-for each cache handle. Readers mount the same SMB share with read-only
+The Samba backend creates a separate Samba server and a backing volume on the
+model cache StorageClass (`nvcf-sc` unless overridden) for each cache handle. Readers mount the same SMB share with read-only
 credentials.
 
 ## Workload Mounts
@@ -194,7 +194,7 @@ The PV identifies the attachment type:
   primary volume.
 - A Samba reader uses the `smb.csi.k8s.io` driver and points to the cache
   handle's SMB share.
-- A shared-filesystem reader is a static PV on the writer's volume, on the model cache StorageClass.
+- A shared-filesystem reader is a static PV bound to the writer's volume by name, with no StorageClass; only the writer claim uses the model cache StorageClass.
 
 Repeat these checks for every workload namespace. Later workloads with the same
 cache handle should receive their own read-only attachment without creating
