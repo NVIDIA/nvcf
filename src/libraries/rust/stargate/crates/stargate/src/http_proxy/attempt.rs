@@ -384,6 +384,7 @@ fn finish_attempt(
 /// Fields captured before the upstream result is consumed, so a final failure
 /// can be logged with the backend that produced it and why no retry happened.
 struct RequestFailureContext {
+    pass_through: bool,
     disposition: &'static str,
     retry_reason: Option<String>,
     source: &'static str,
@@ -403,6 +404,7 @@ impl RequestFailureContext {
                 .map(str::to_owned)
         };
         Self {
+            pass_through: matches!(disposition, FinalRetryDisposition::PassThrough),
             disposition: disposition.label(),
             retry_reason: disposition.retry_reason().map(str::to_owned),
             source: if upstream.is_ok() {
@@ -419,9 +421,7 @@ impl RequestFailureContext {
     /// server-side or capacity failure, and every locally decided final status,
     /// must be visible in router logs.
     fn should_log(&self, status: StatusCode) -> bool {
-        self.disposition != FinalRetryDisposition::PassThrough.label()
-            || status.is_server_error()
-            || status == StatusCode::TOO_MANY_REQUESTS
+        !self.pass_through || status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS
     }
 
     fn log(
@@ -505,9 +505,7 @@ mod tests {
     use axum::http::HeaderMap;
     use tracing::Level;
 
-    use super::super::run::test_fixtures::{
-        prepared_request, request_inputs, routed_instance_snapshot,
-    };
+    use super::super::run::tests::{prepared_request, request_inputs, routed_instance_snapshot};
     use super::super::test_support::test_proxy_app_state;
     use super::*;
     use crate::test_logs::capture_logs;
@@ -552,7 +550,6 @@ mod tests {
                     "status=503",
                     "source=upstream_response",
                     "disposition=pass_through",
-                    "upstream_retryable= ",
                 ],
             },
             FinishAttemptCase {

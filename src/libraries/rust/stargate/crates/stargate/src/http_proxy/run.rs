@@ -330,17 +330,32 @@ impl SelectedClusterRun {
     }
 }
 
-/// Request and backend fixtures shared by the `http_proxy` submodule tests.
 #[cfg(test)]
-pub(super) mod test_fixtures {
+pub(super) mod tests {
+    use prometheus::Encoder;
     use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
     use super::*;
+    use crate::load_balancer::{
+        LoadBalancerAlgorithm, LoadBalancerCandidateChoice, LoadBalancerCandidateSelection,
+    };
     use crate::routing_state::{
-        RegistrationIdentity, RoutedInferenceServerSnapshot, test_registration_generation,
+        RegistrationIdentity, RoutedClusterSnapshot, RoutedInferenceServerSnapshot,
+        test_registration_generation,
     };
 
-    pub(in super::super) fn target() -> RoutingTargetKey {
+    fn cluster_candidate(cluster_id: &str) -> RoutedClusterSnapshot {
+        RoutedClusterSnapshot {
+            cluster_id: cluster_id.to_string(),
+            stats: ModelStats::default(),
+            rtt: Duration::from_millis(1),
+            snapshot_updated_at: Instant::now(),
+            status: InferenceServerStatus::Active,
+            active_backend_count: 1,
+        }
+    }
+
+    fn target() -> RoutingTargetKey {
         RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a")
     }
 
@@ -380,6 +395,15 @@ pub(super) mod test_fixtures {
         }
     }
 
+    fn metrics_text(metrics: &crate::metrics::StargateMetrics) -> String {
+        let metric_families = metrics.registry().gather();
+        let mut buffer = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&metric_families, &mut buffer)
+            .expect("metrics should encode");
+        String::from_utf8(buffer).expect("Prometheus text should be UTF-8")
+    }
+
     pub(in super::super) fn prepared_request(
         app: &ProxyAppState,
         request_inputs: ProxyRequestInputs,
@@ -405,41 +429,6 @@ pub(super) mod test_fixtures {
             )
             .expect("empty request body should be replayable"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use prometheus::Encoder;
-    use stargate_proto::pb::{InferenceServerStatus, ModelStats};
-
-    use super::test_fixtures::{
-        prepared_request, request_inputs, routed_instance_snapshot, target,
-    };
-    use super::*;
-    use crate::load_balancer::{
-        LoadBalancerAlgorithm, LoadBalancerCandidateChoice, LoadBalancerCandidateSelection,
-    };
-    use crate::routing_state::RoutedClusterSnapshot;
-
-    fn cluster_candidate(cluster_id: &str) -> RoutedClusterSnapshot {
-        RoutedClusterSnapshot {
-            cluster_id: cluster_id.to_string(),
-            stats: ModelStats::default(),
-            rtt: Duration::from_millis(1),
-            snapshot_updated_at: Instant::now(),
-            status: InferenceServerStatus::Active,
-            active_backend_count: 1,
-        }
-    }
-
-    fn metrics_text(metrics: &crate::metrics::StargateMetrics) -> String {
-        let metric_families = metrics.registry().gather();
-        let mut buffer = Vec::new();
-        prometheus::TextEncoder::new()
-            .encode(&metric_families, &mut buffer)
-            .expect("metrics should encode");
-        String::from_utf8(buffer).expect("Prometheus text should be UTF-8")
     }
 
     #[tokio::test]
