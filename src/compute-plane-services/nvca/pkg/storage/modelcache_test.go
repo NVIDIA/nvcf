@@ -1297,7 +1297,12 @@ func newModelCacheICMSSpec(cacheHandle string) nvcav2beta1.ICMSRequestSpec {
 // primary/secondary PV), then a per-namespace read-only PVC on the shared class
 // is created and the request becomes Ready. The CSI probe is pre-seeded as ROX
 // so the path does not attempt a live probe under envtest.
-func TestReconcile_ModelCacheSharedFS(t *testing.T) {
+// startModelCacheController boots envtest and the model cache controller with
+// the given agent config, returning a context, the manager client, and the
+// manager error channel. Several model-cache envtests run in one process, so
+// controller name validation is skipped.
+func startModelCacheController(t *testing.T, agentCfg nvcaconfig.Config) (context.Context, client.Client, <-chan error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -1311,14 +1316,12 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		BaseContext:             func() context.Context { return ctx },
 		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
 		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
-		// Two model-cache envtests run in one process; the controller name
-		// "modelcache" is otherwise globally unique per controller-runtime.
-		Controller: ctrlconfig.Controller{SkipNameValidation: newBool(true)},
+		Controller:              ctrlconfig.Controller{SkipNameValidation: newBool(true)},
 	})
 	require.NoError(t, err)
 
 	defaultTimeConfig := (&k8sutil.TimeConfig{}).Complete()
-	err = BuildController(nvcaconfig.Config{}, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
+	err = BuildController(agentCfg, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
 	require.NoError(t, err)
 
 	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
@@ -1328,22 +1331,21 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 	mgr.GetCache().WaitForCacheSync(cctx)
 	ccancel()
 
-	c := mgr.GetClient()
+	return ctx, mgr.GetClient(), mgrErrCh
+}
 
+// createSharedFSModelCacheRequest creates the namespaces, ICMSRequest, and a
+// StorageRequest already routed to the shared filesystem backend for
+// cacheHandle, and returns the workload namespace.
+func createSharedFSModelCacheRequest(t *testing.T, ctx context.Context, c client.Client, cacheHandle, workloadNSName string) *corev1.Namespace {
+	t.Helper()
 	srNamespace := &corev1.Namespace{}
 	srNamespace.Name = types.DefaultICMSRequestNamespace
 	require.NoError(t, c.Create(ctx, srNamespace))
 	require.NoError(t, c.Create(ctx, NewModelCacheInitNamespace()))
 
-	// The shared class exists (operator- or Samba-provided).
-	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
-		ObjectMeta:  metav1.ObjectMeta{Name: HelmCacheSharedStorageClassName},
-		Provisioner: SMBCSIDriverName,
-	}))
-
-	cacheHandle := "sharedfshandle"
 	workloadNS := &corev1.Namespace{}
-	workloadNS.Name = "sr-sharedfs"
+	workloadNS.Name = workloadNSName
 	require.NoError(t, c.Create(ctx, workloadNS))
 
 	sr := &nvcav2beta1.ICMSRequest{}
@@ -1361,6 +1363,46 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		Backend:     string(HelmCacheBackendSharedFS),
 	}
 	require.NoError(t, c.Create(ctx, st))
+	return workloadNS
+}
+
+// TestReconcile_ModelCacheSharedFSWriterHonorsClassOverride pins that the shared
+// filesystem writer claim takes the configured model cache class. The old code
+// hard-coded nvcf-miniservice-sc, so no configuration could reach the writer
+// and this assertion cannot pass against it.
+func TestReconcile_ModelCacheSharedFSWriterHonorsClassOverride(t *testing.T) {
+	const override = "custom-block-sc"
+	ctx, c, _ := startModelCacheController(t, nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{ModelCache: nvcaconfig.ModelCacheConfig{StorageClassName: override}},
+	})
+	cacheHandle := "sharedfsoverride"
+	createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs-override")
+
+	rwPVC := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NotNil(t, rwPVC.Spec.StorageClassName)
+	assert.Equal(t, override, *rwPVC.Spec.StorageClassName,
+		"the shared-FS writer must follow the configured model cache class")
+	assert.NotEqual(t, HelmCacheSharedStorageClassName, *rwPVC.Spec.StorageClassName,
+		"the detection class must never hold cache data")
+}
+
+func TestReconcile_ModelCacheSharedFS(t *testing.T) {
+	ctx, c, mgrErrCh := startModelCacheController(t, nvcaconfig.Config{})
+
+	// The shared class exists (operator- or Samba-provided).
+	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: HelmCacheSharedStorageClassName},
+		Provisioner: SMBCSIDriverName,
+	}))
+
+	cacheHandle := "sharedfshandle"
+	workloadNS := createSharedFSModelCacheRequest(t, ctx, c, cacheHandle, "sr-sharedfs")
+	srNamespace := &corev1.Namespace{}
+	srNamespace.Name = types.DefaultICMSRequestNamespace
 
 	// The writer job is created on the shared backend.
 	initJob := &batchv1.Job{}
