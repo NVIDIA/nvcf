@@ -228,7 +228,7 @@ class RenderedStackTests(unittest.TestCase):
                     "cache_affinity_backend_selection_count": 1,
                     "cache_affinity_virtual_nodes": 150,
                     "max_queue_time_floor_ms": 100,
-                    "max_queue_time_ceil_ms": 4000,
+                    "max_queue_time_ceil_ms": 5000,
                 }
             },
         }
