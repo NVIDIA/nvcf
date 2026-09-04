@@ -33,6 +33,7 @@ import (
 	policyclient "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/gorilla/mux"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,11 +125,16 @@ func newSigningKeyAndJWKS(t *testing.T) (*ecdsa.PrivateKey, string, func()) {
 
 func signToken(t *testing.T, key *ecdsa.PrivateKey, scopes []string) string {
 	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+	return signTokenWithClaims(t, key, jwt.MapClaims{
 		"sub":    "sis-api",
 		"scopes": scopes,
-		"exp":    time.Now().Add(time.Hour).Unix(),
 	})
+}
+
+func signTokenWithClaims(t *testing.T, key *ecdsa.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	claims["exp"] = time.Now().Add(time.Hour).Unix()
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	token.Header[jwk.KeyIDKey] = "test-key"
 	signed, err := token.SignedString(key)
 	require.NoError(t, err)
@@ -633,6 +639,55 @@ func TestSelfManagedJWTScopesEnforcedByRoute(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
 			assert.False(t, client.called)
+		})
+	}
+}
+
+// TestSelfManagedJWTTenantClaimEnforced is a regression test for a JWT whose
+// tenant claim does not match the requested path: without opts.TenantClaim
+// wired through, MaybeRequirePathTenant has no tenant context to check
+// against and fails open, letting the request through regardless of tenant.
+func TestSelfManagedJWTTenantClaimEnforced(t *testing.T) {
+	key, jwksURL, closeServer := newSigningKeyAndJWKS(t)
+	defer closeServer()
+
+	jwtOpts := NewJWTParserOptions(jwksURL, nil, time.Minute, &config.HTTPClientConfig{})
+	jwtOpts.TenantClaim = "ncaId"
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	tests := []struct {
+		name            string
+		requestedTenant string
+		wantStatus      int
+	}{
+		{"matching tenant is authorized", "tenant-a", http.StatusOK},
+		{"different tenant is forbidden", "tenant-b", http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: allowResult(nil)}
+			logger := testLogger(t)
+			authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, logger)
+			pathTenant := MaybeRequirePathTenant(true)
+			scoped := MaybeRequireScopes(logger, true, ReadScopes, RequireAnyScopes)
+			handler := authMiddleware(pathTenant(scoped(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))))
+
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/"+tc.requestedTenant+"/events", nil)
+			req = mux.SetURLVars(req, map[string]string{"namespace": tc.requestedTenant})
+			req.Header.Set("Authorization", "Bearer "+signTokenWithClaims(t, key, jwt.MapClaims{
+				"sub":    "sis-api",
+				"scopes": []string{"fnds:getEvents"},
+				"ncaId":  "tenant-a",
+			}))
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.False(t, client.called, "self-managed JWT must not reach the policy decision point")
 		})
 	}
 }
