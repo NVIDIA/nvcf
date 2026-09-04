@@ -223,15 +223,22 @@ const (
 	// Reasons the shutdown purge did no work. Without these a reading of
 	// zero purged and zero failed is ambiguous: it cannot distinguish a
 	// purge that ran and found nothing from one that never ran at all.
-	PurgeSkipUnsupported = "invoker_unsupported"
-	PurgeSkipNothing     = "nothing_pending"
+	PurgeSkipUnsupported     = "invoker_unsupported"
+	PurgeSkipNothing         = "nothing_pending"
+	PurgeSkipShuttingDown    = "shutting_down"
+	PurgeSkipBudgetExhausted = "budget_exhausted"
 )
 
 var PurgeResults = []string{PurgeSucceeded, PurgeFailed}
 
 var PurgeTriggers = []string{PurgeTriggerShutdown, PurgeTriggerClientDeparted}
 
-var PurgeSkipReasons = []string{PurgeSkipUnsupported, PurgeSkipNothing}
+var PurgeSkipReasons = []string{
+	PurgeSkipUnsupported,
+	PurgeSkipNothing,
+	PurgeSkipShuttingDown,
+	PurgeSkipBudgetExhausted,
+}
 
 // Close reasons reported when a worker tunnel goes away. The three "deleted"
 // variants matter: a bare `deleted` cannot distinguish the client hanging up

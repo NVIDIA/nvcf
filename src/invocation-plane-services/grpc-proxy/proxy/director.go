@@ -84,8 +84,26 @@ type pendingWorkPurger interface {
 	PurgePendingWork(ctx context.Context, requestId uuid.UUID, functionVersionId string) error
 }
 
+// departurePurgeConcurrency bounds how many client-departure purges may be in
+// flight at once.
+//
+// One goroutine per abandoned request is unbounded by construction, and the
+// saturation this change exists to fix is exactly when abandonment is highest,
+// so the remedy could itself flood the work queue. Purging is an optimisation:
+// when the budget is exhausted the work is left for the shutdown purge rather
+// than queued behind a semaphore, so a burst sheds load instead of amplifying
+// it.
+const departurePurgeConcurrency = 32
+
+// departurePurgeTimeout is deliberately shorter than consts.Timeout. Nothing is
+// waiting on this call, and holding a slot for thirty seconds against a work
+// queue that is already struggling is the opposite of what it is for.
+const departurePurgeTimeout = 5 * time.Second
+
 type StreamDirector struct {
-	shuttingDown    *atomic.Bool
+	shuttingDown *atomic.Bool
+	// Bounds in-flight departure purges. See departurePurgeConcurrency.
+	departurePurges chan struct{}
 	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
 	issuedTokens    *ttlcache.Cache[string, issuedTokenInfo] // diagnostic only, see issuedTokenInfo
 	pendingWork     *ttlcache.Cache[uuid.UUID, pendingWorkInfo]
@@ -270,6 +288,7 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	return &StreamDirector{
 		workers:         cache,
 		shuttingDown:    shuttingDown,
+		departurePurges: make(chan struct{}, departurePurgeConcurrency),
 		issuedTokens:    issuedTokenCache,
 		pendingWork:     pendingWorkCache,
 		workerAuth:      workerAuthCache,
@@ -391,22 +410,41 @@ func (s *StreamDirector) purgeDepartedClientWork(requestId uuid.UUID, functionVe
 		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipUnsupported).Inc()
 		return
 	}
-	s.pendingWork.Delete(requestId)
+	// Shutdown runs its own purge over everything still pending, so starting
+	// more work here would duplicate that and race it to the same subjects.
+	if s.shuttingDown.Load() {
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipShuttingDown).Inc()
+		return
+	}
+	select {
+	case s.departurePurges <- struct{}{}:
+		defer func() { <-s.departurePurges }()
+	default:
+		// Budget exhausted. Leave the entry pending so the shutdown purge
+		// still knows about it, and shed rather than pile more calls onto a
+		// queue that is evidently already under strain.
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipBudgetExhausted).Inc()
+		return
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), consts.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), departurePurgeTimeout)
 	defer cancel()
 
 	if err := purger.PurgePendingWork(ctx, requestId, functionVersionId); err != nil {
 		metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeFailed, metrics.PurgeTriggerClientDeparted).Inc()
-		// Warning rather than error: the request is already lost to its
-		// client either way, and the purge is what stops a worker spending a
-		// slot on it later.
+		// The entry is deliberately left in place. Deleting it here would make
+		// a failed purge permanently untracked, so the shutdown purge could
+		// never retry it, and the stale queued work this change exists to
+		// remove would survive.
 		zap.L().Warn("failed to purge work for a client that stopped waiting",
 			zap.Stringer("request_id", requestId),
 			zap.String("function_version_id", functionVersionId),
 			zap.Error(err))
 		return
 	}
+	// Only now that the work is gone. Dropping the entry earlier would lose
+	// the record on any failure path above.
+	s.pendingWork.Delete(requestId)
 	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeSucceeded, metrics.PurgeTriggerClientDeparted).Inc()
 	zap.L().Debug("purged queued work for a client that stopped waiting",
 		zap.Stringer("request_id", requestId))

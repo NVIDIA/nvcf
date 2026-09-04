@@ -53,7 +53,7 @@ func requestWorkSubject(region, functionVersionId string, requestId uuid.UUID) s
 // pod.
 func (f *FunctionInvoker) PurgePendingWork(ctx context.Context, requestId uuid.UUID, functionVersionId string) error {
 	streamName := requestWorkStream(f.region, functionVersionId)
-	stream, err := f.js.Stream(ctx, streamName)
+	stream, err := f.workStream(ctx, streamName)
 	if err != nil {
 		return fmt.Errorf("failed to look up work stream %s: %w", streamName, err)
 	}
@@ -62,4 +62,25 @@ func (f *FunctionInvoker) PurgePendingWork(ctx context.Context, requestId uuid.U
 		return fmt.Errorf("failed to purge work subject %s: %w", subject, err)
 	}
 	return nil
+}
+
+// workStream returns a handle for a work stream, resolving it once per stream.
+//
+// A purge is two JetStream calls, a lookup and the purge itself, and the
+// lookup answer does not change: one stream per region and function version.
+// Under saturation this path runs once per abandoned request, so caching the
+// handle halves the calls the remedy makes against a queue that is already
+// under strain.
+func (f *FunctionInvoker) workStream(ctx context.Context, streamName string) (jetstream.Stream, error) {
+	if cached, ok := f.workStreams.Load(streamName); ok {
+		return cached.(jetstream.Stream), nil
+	}
+	stream, err := f.js.Stream(ctx, streamName)
+	if err != nil {
+		return nil, err
+	}
+	// LoadOrStore rather than Store: a concurrent caller may have resolved the
+	// same stream first, and handing back one handle keeps them interchangeable.
+	actual, _ := f.workStreams.LoadOrStore(streamName, stream)
+	return actual.(jetstream.Stream), nil
 }

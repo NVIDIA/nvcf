@@ -24,6 +24,7 @@ import (
 	"net"
 	"nvcf-grpc-proxy/proxy/metrics"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -143,6 +144,8 @@ func TestClientDepartureTriggerPurgesAndIsAttributed(t *testing.T) {
 	s := &StreamDirector{
 		functionInvoker: purger,
 		pendingWork:     ttlcache.New[uuid.UUID, pendingWorkInfo](),
+		shuttingDown:    &atomic.Bool{},
+		departurePurges: make(chan struct{}, departurePurgeConcurrency),
 	}
 	s.pendingWork.Set(reqID, pendingWorkInfo{functionVersionId: "ver"}, ttlcache.NoTTL)
 
@@ -165,4 +168,88 @@ func TestClientDepartureTriggerPurgesAndIsAttributed(t *testing.T) {
 	if s.pendingWork.Get(reqID) != nil {
 		t.Error("pending work entry survived the departure purge")
 	}
+}
+
+// A failed purge must leave the pending entry in place. Deleting it would make
+// the failure permanently untracked, so the shutdown purge could never retry
+// it and the stale queued work this change removes would survive.
+func TestFailedDeparturePurgeKeepsTheEntryForShutdown(t *testing.T) {
+	reqID := uuid.New()
+	purger := newRecordingPurger()
+	purger.err = errors.New("jetstream unavailable")
+	s := &StreamDirector{
+		functionInvoker: purger,
+		pendingWork:     ttlcache.New[uuid.UUID, pendingWorkInfo](),
+		shuttingDown:    &atomic.Bool{},
+		departurePurges: make(chan struct{}, departurePurgeConcurrency),
+	}
+	s.pendingWork.Set(reqID, pendingWorkInfo{functionVersionId: "ver"}, ttlcache.NoTTL)
+
+	s.purgeDepartedClientWork(reqID, "ver")
+
+	if s.pendingWork.Get(reqID) == nil {
+		t.Fatal("a failed purge dropped the entry, so shutdown can never retry it")
+	}
+}
+
+// The remedy must not amplify the event it exists to fix. Abandonment peaks
+// exactly when the work queue is most strained, so departure purges are
+// bounded and shed rather than queue.
+func TestDeparturePurgeIsBounded(t *testing.T) {
+	purger := newRecordingPurger()
+	s := &StreamDirector{
+		functionInvoker: purger,
+		pendingWork:     ttlcache.New[uuid.UUID, pendingWorkInfo](),
+		shuttingDown:    &atomic.Bool{},
+		departurePurges: make(chan struct{}, 1),
+	}
+	// Occupy the only slot, as an in-flight purge would.
+	s.departurePurges <- struct{}{}
+
+	reqID := uuid.New()
+	s.pendingWork.Set(reqID, pendingWorkInfo{functionVersionId: "ver"}, ttlcache.NoTTL)
+	before := skipCount(t, metrics.PurgeSkipBudgetExhausted)
+
+	s.purgeDepartedClientWork(reqID, "ver")
+
+	if len(purger.purgedRequests()) != 0 {
+		t.Error("purged despite an exhausted budget")
+	}
+	if got := skipCount(t, metrics.PurgeSkipBudgetExhausted) - before; got != 1 {
+		t.Errorf("budget_exhausted skips moved by %v, want 1", got)
+	}
+	if s.pendingWork.Get(reqID) == nil {
+		t.Error("a shed purge dropped the entry, so shutdown can never retry it")
+	}
+}
+
+// Shutdown purges everything still pending. Starting more work here would
+// duplicate that and race it to the same subjects.
+func TestDeparturePurgeStopsOnceShuttingDown(t *testing.T) {
+	purger := newRecordingPurger()
+	sd := &atomic.Bool{}
+	sd.Store(true)
+	s := &StreamDirector{
+		functionInvoker: purger,
+		pendingWork:     ttlcache.New[uuid.UUID, pendingWorkInfo](),
+		shuttingDown:    sd,
+		departurePurges: make(chan struct{}, departurePurgeConcurrency),
+	}
+	reqID := uuid.New()
+	s.pendingWork.Set(reqID, pendingWorkInfo{functionVersionId: "ver"}, ttlcache.NoTTL)
+	before := skipCount(t, metrics.PurgeSkipShuttingDown)
+
+	s.purgeDepartedClientWork(reqID, "ver")
+
+	if len(purger.purgedRequests()) != 0 {
+		t.Error("purged while shutting down, racing the shutdown purge")
+	}
+	if got := skipCount(t, metrics.PurgeSkipShuttingDown) - before; got != 1 {
+		t.Errorf("shutting_down skips moved by %v, want 1", got)
+	}
+}
+
+func skipCount(t *testing.T, reason string) float64 {
+	t.Helper()
+	return testutil.ToFloat64(metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(reason))
 }
