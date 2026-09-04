@@ -1114,18 +1114,28 @@ func (c K8sComputeBackend) CreatePodArtifact(ctx context.Context, podArt functio
 
 // podInstanceExists reports whether the Pod backing instance id is still present, using the
 // same lister-backed check AllInstancesTerminatedAndReported relies on so both agree on what
-// "gone" means.
-func (c K8sComputeBackend) podInstanceExists(id string) bool {
+// "gone" means. A lookup error other than NotFound is treated as "still present" (fail-safe)
+// and logged, since it otherwise looks identical to the pod genuinely being there.
+func (c K8sComputeBackend) podInstanceExists(ctx context.Context, id string) bool {
 	_, err := c.bk8s.podSpecLister.Get(id)
+	if err != nil && !apierrors.IsNotFound(err) {
+		core.GetLogger(ctx).WithError(err).WithField("instance_id", id).
+			Warn("Failed to look up Pod, treating instance as still present")
+	}
 	return err == nil || !apierrors.IsNotFound(err)
 }
 
 // miniServiceInstanceExists reports whether the MiniService backing instance id is still
-// present.
+// present. A lookup error other than NotFound is treated as "still present" (fail-safe) and
+// logged, since it otherwise looks identical to the MiniService genuinely being there.
 func (c K8sComputeBackend) miniServiceInstanceExists(ctx context.Context, id string) bool {
 	ms := &v1alpha1.MiniService{}
 	ms.Name = id
 	err := c.clients.HelmV2.Get(ctx, client.ObjectKeyFromObject(ms), ms)
+	if err != nil && !apierrors.IsNotFound(err) {
+		core.GetLogger(ctx).WithError(err).WithField("instance_id", id).
+			Warn("Failed to look up MiniService, treating instance as still present")
+	}
 	return err == nil || !apierrors.IsNotFound(err)
 }
 
@@ -1135,7 +1145,7 @@ func (c K8sComputeBackend) miniServiceInstanceExists(ctx context.Context, id str
 func (c K8sComputeBackend) instanceObjectExists(ctx context.Context, inst nvcav2beta1.InstanceStatus) bool {
 	switch inst.Type {
 	case nvcav2beta1.InstanceTypePod:
-		return c.podInstanceExists(inst.ID)
+		return c.podInstanceExists(ctx, inst.ID)
 	case nvcav2beta1.InstanceTypeMiniService:
 		return c.miniServiceInstanceExists(ctx, inst.ID)
 	default:
@@ -1209,7 +1219,7 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 			// A successful Delete only initiates removal (sets DeletionTimestamp); the pod
 			// can remain present indefinitely if a finalizer is blocking it. Do not report
 			// the instance as terminated until it is actually gone.
-			if c.podInstanceExists(id) {
+			if c.podInstanceExists(ctx, id) {
 				log.Debug("Pod delete requested but pod still present, will retry")
 				return false
 			}
