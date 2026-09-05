@@ -688,6 +688,12 @@ func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, boo
 // keeping the key, so a log line stays useful for debugging without echoing
 // operator supplied values. Mount options are free form and can carry
 // credentials, a CIFS password being the obvious case.
+// RedactMountOptionValues masks the value part of key=value mount options so
+// they can be logged without leaking credentials a driver may carry there.
+func RedactMountOptionValues(opts []string) []string {
+	return redactMountOptionValues(opts)
+}
+
 func redactMountOptionValues(opts []string) []string {
 	redacted := make([]string, 0, len(opts))
 	for _, opt := range opts {

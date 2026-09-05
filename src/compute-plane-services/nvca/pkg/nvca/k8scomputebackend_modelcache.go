@@ -27,6 +27,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -606,8 +607,11 @@ func (c K8sComputeBackend) readerMountOptionsForRequest(ctx context.Context, req
 	}
 	merged, dropped := nvcastorage.MergeReaderMountOptions(selection.RequiredMountOptions, configured)
 	if len(dropped) != 0 {
-		log.Infof("ignoring configured cache mount options %v that conflict with required %v for %v/%v",
-			dropped, selection.RequiredMountOptions, req.Namespace, req.Name)
+		log.WithFields(logrus.Fields{
+			"request":  req.Namespace + "/" + req.Name,
+			"ignored":  nvcastorage.RedactMountOptionValues(dropped),
+			"required": nvcastorage.RedactMountOptionValues(selection.RequiredMountOptions),
+		}).Info("ignoring configured cache mount options that conflict with the required ones")
 	}
 	return merged
 }
