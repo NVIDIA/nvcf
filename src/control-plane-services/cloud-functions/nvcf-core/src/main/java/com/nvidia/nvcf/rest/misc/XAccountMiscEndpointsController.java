@@ -25,7 +25,6 @@ import com.nvidia.nvcf.icms.allocator.IcmsAllocatorService;
 import com.nvidia.nvcf.icms.client.IcmsClient;
 import com.nvidia.nvcf.icms.client.IcmsStubService.ClusterResponse;
 import com.nvidia.nvcf.persistence.function.entity.Backend;
-import com.nvidia.nvcf.persistence.function.entity.FunctionDeploymentEntity;
 import com.nvidia.nvcf.persistence.function.entity.FunctionEntity;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.persistence.function.entity.Gpu;
@@ -37,7 +36,6 @@ import com.nvidia.nvcf.rest.misc.dto.GoldenImagesResponse;
 import com.nvidia.nvcf.rest.misc.dto.GpuPlacementDto;
 import com.nvidia.nvcf.rest.misc.dto.GpuUsageDto;
 import com.nvidia.nvcf.rest.misc.dto.ListGpuUsageResponse;
-import com.nvidia.nvcf.rest.misc.dto.RolloverRequest;
 import com.nvidia.nvcf.rest.misc.dto.RolloverSpecificationDto;
 import com.nvidia.nvcf.rest.misc.dto.RolloverWorkersResponse;
 import com.nvidia.nvcf.rest.misc.dto.SidecarProperties;
@@ -62,7 +60,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -88,12 +85,10 @@ import org.springframework.web.bind.annotation.RestController;
 public class XAccountMiscEndpointsController {
 
     private static final String MESG_INVALID_ROLLOVER_SPEC =
-            "Function '%s', version '%s': Rollover spec with gpu '%s' and instance type '%s' "
-                    + "does not match any of the currently deployed specs";
+            "Function '%s', version '%s': GPU specification '%s' does not belong to deployment '%s'";
     private static final String MESG_INVALID_NUM_INSTANCES =
-            "Function '%s', version '%s': Number of instances '%s' in the rollover spec for " +
-                    "gpu '%s' and instance type '%s' cannot be higher than max instances '%s' " +
-                    "specified in the corresponding deployed spec";
+            "Function '%s', version '%s': Number of instances '%s' cannot be higher than max " +
+                    "instances '%s' for GPU specification '%s' in deployment '%s'";
 
     private static final String NCA_ID_DESCRIPTION = "NVIDIA Cloud Account Id";
     private static final EnumSet<FunctionStatus> ACTIVE_OR_DEPLOYING =
@@ -108,14 +103,6 @@ public class XAccountMiscEndpointsController {
     private final RateLimiterService rateLimiterService;
     private final FunctionDeploymentLookupService functionDeploymentLookupService;
     private final Tracer tracer;
-
-    private record RolloverContext(
-            FunctionEntity function,
-            FunctionDeploymentEntity deployment,
-            GpuSpecificationEntity gpuDeploymentSpec,
-            RolloverSpecificationDto rolloverSpec) {
-
-    }
 
     @GetMapping("/v2/nvcf/supportedGpus")
     @Operation(
@@ -187,13 +174,14 @@ public class XAccountMiscEndpointsController {
     }
 
     @PutMapping(
-            value = "/v2/nvcf/accounts/{ncaId}/rolloverWorkers/functions/{functionId}"
-                    + "/versions/{functionVersionId}",
+            value = "/v2/nvcf/accounts/{ncaId}/rolloverWorkers/deployments/{deploymentId}"
+                    + "/gpu-specifications/{gpuSpecificationId}",
             consumes = APPLICATION_JSON_VALUE)
     @Operation(
             summary = "Rollover Workers",
             description = """
-                    Rolls over existing workers by spawning new workers for the specified function.
+                    Rolls over existing workers by spawning new workers for the specified GPU
+                     specification.
                      Requires bearer token with 'admin:deploy_function' scope in the HTTP
                      Authorization header.
                     """
@@ -202,46 +190,41 @@ public class XAccountMiscEndpointsController {
     public RolloverWorkersResponse rolloverWorkers(
             @Parameter(description = NCA_ID_DESCRIPTION, required = true)
             @PathVariable String ncaId,
-            @Parameter(description = "Function id", required = true)
-            @PathVariable UUID functionId,
-            @Parameter(description = "Function version id", required = true)
-            @PathVariable UUID functionVersionId,
-            @Valid @RequestBody(required = false) RolloverRequest rolloverRequest) {
+            @Parameter(description = "Deployment id", required = true)
+            @PathVariable UUID deploymentId,
+            @Parameter(description = "GPU specification id", required = true)
+            @PathVariable UUID gpuSpecificationId,
+            @Valid @RequestBody RolloverSpecificationDto rolloverSpec) {
         NvcfUtils.addTagsToCurrentSpan(tracer, Map.of(SPAN_TAG_NCA_ID, ncaId));
-        var function = functionLookupService
-                .lookupUsingFunctionIdAndVersionIdOrThrow(functionId, functionVersionId);
         var deploymentContext = functionDeploymentLookupService
-                .getDeploymentContextByVersionIdOrThrow(functionVersionId);
+                .getDeploymentContextByDeploymentIdOrThrow(deploymentId);
         var deployment = deploymentContext.deployment();
-        var gpuSpecs = deploymentContext.gpuSpecs();
-        var gpuSpecsMap = gpuSpecs.stream()
-                .collect(Collectors.toMap(entity -> entity.getKey().getGpuSpecificationId(),
-                                          e -> e));
+        var function = functionLookupService.lookupUsingNcaIdAndFunctionIdAndVersionIdOrThrow(
+                ncaId, deployment.getFunctionId(), deployment.getKey().getFunctionVersionId());
+        var gpuSpec = deploymentContext.gpuSpecs().stream()
+                .filter(spec -> gpuSpecificationId.equals(
+                        spec.getKey().getGpuSpecificationId()))
+                .findFirst()
+                .orElseThrow(() -> {
+                    var mesg = MESG_INVALID_ROLLOVER_SPEC.formatted(
+                            function.getFunctionId(), function.getFunctionVersionId(),
+                            gpuSpecificationId, deploymentId);
+                    log.error(mesg);
+                    return new BadRequestException(mesg);
+                });
 
-        var rolloverSpecsMap = validateRolloverRequest(rolloverRequest, deployment, gpuSpecsMap);
-        var rolloverContexts = gpuSpecs
-                .stream()
-                .map(spec -> getRolloverContext(function,
-                                                deployment,
-                                                spec,
-                                                rolloverSpecsMap))
-                .toList();
+        if (rolloverSpec.numInstances() > gpuSpec.getMaxInstances()) {
+            var mesg = MESG_INVALID_NUM_INSTANCES.formatted(
+                    function.getFunctionId(), function.getFunctionVersionId(),
+                    rolloverSpec.numInstances(), gpuSpec.getMaxInstances(), gpuSpecificationId,
+                    deploymentId);
+            log.error(mesg);
+            throw new BadRequestException(mesg);
+        }
 
-        var icmsRequestIds = rolloverContexts.stream()
-                .map(rolloverContext -> {
-                    // If the request includes rollover spec for the GPU/instance-type combo,
-                    // then use the num instances from it. Otherwise, use max instances from the
-                    // deployment spec like before.
-                    var numInstances = Optional.ofNullable(rolloverContext.rolloverSpec())
-                            .map(RolloverSpecificationDto::numInstances)
-                            .orElse(rolloverContext.gpuDeploymentSpec().getMaxInstances());
-                    return icmsAllocatorService.scheduleNewInstance(
-                                            rolloverContext.function(),
-                                            deployment.getDeploymentId(),
-                                            rolloverContext.gpuDeploymentSpec(),
-                                            numInstances);
-                }).toList();
-        return new RolloverWorkersResponse(icmsRequestIds);
+        var icmsRequestId = icmsAllocatorService.scheduleNewInstance(
+                function, deploymentId, gpuSpec, rolloverSpec.numInstances());
+        return new RolloverWorkersResponse(icmsRequestId);
     }
 
     @GetMapping("/v2/nvcf/accounts/{ncaId}/usage/gpus")
@@ -358,65 +341,6 @@ public class XAccountMiscEndpointsController {
         }).toList();
 
         return new ListGpuUsageResponse(gpus);
-    }
-
-    private static Map<String, RolloverSpecificationDto> validateRolloverRequest(
-            RolloverRequest rolloverRequest,
-            FunctionDeploymentEntity deployment,
-            Map<UUID, GpuSpecificationEntity> gpuSpecs) {
-        var rolloverSpecsMap = getRolloverSpecsMap(rolloverRequest);
-        if (!CollectionUtils.isEmpty(rolloverSpecsMap)) {
-            var deploymentSpecsMap = gpuSpecs.values().stream()
-                    .collect(Collectors.toMap(spec -> "%s:%s".formatted(spec.getGpu(),
-                                                                        spec.getInstanceType()),
-                                              Function.identity()));
-            rolloverSpecsMap.forEach((key, dto) -> {
-                var functionId = deployment.getFunctionId();
-                var versionId = deployment.getKey().getFunctionVersionId();
-                var gpu = dto.gpu();
-                var instanceType = dto.instanceType();
-
-                if (!deploymentSpecsMap.containsKey(key)) {
-                    var mesg = MESG_INVALID_ROLLOVER_SPEC
-                            .formatted(functionId, versionId, gpu, instanceType);
-                    log.error(mesg);
-                    throw new BadRequestException(mesg);
-                }
-
-                var gpuDeploymentSpec = deploymentSpecsMap.get(key);
-                var maxInstances = gpuDeploymentSpec.getMaxInstances();
-                if (dto.numInstances() > maxInstances) {
-                    var mesg = MESG_INVALID_NUM_INSTANCES
-                            .formatted(functionId, versionId, dto.numInstances(),
-                                       gpu, instanceType, maxInstances);
-                    log.error(mesg);
-                    throw new BadRequestException(mesg);
-                }
-            });
-        }
-        return rolloverSpecsMap;
-    }
-
-    private static Map<String, RolloverSpecificationDto> getRolloverSpecsMap(
-            RolloverRequest rolloverRequest) {
-        return Optional.ofNullable(rolloverRequest)
-                .map(request -> request.rollOverSpecifications().stream()
-                        .collect(Collectors.toMap(dto -> "%s:%s".formatted(dto.gpu(),
-                                                                           dto.instanceType()),
-                                                  Function.identity())))
-                .orElseGet(Map::of);
-    }
-
-    private static RolloverContext getRolloverContext(
-            FunctionEntity function,
-            FunctionDeploymentEntity deployment,
-            GpuSpecificationEntity gpuDeploymentSpec,
-            Map<String, RolloverSpecificationDto> rolloverSpecsMap) {
-        var gpu = gpuDeploymentSpec.getGpu();
-        var instanceType = gpuDeploymentSpec.getInstanceType();
-        var key = "%s:%s".formatted(gpu, instanceType);
-        var rolloverSpec = rolloverSpecsMap.get(key);
-        return new RolloverContext(function, deployment, gpuDeploymentSpec, rolloverSpec);
     }
 
     /**
