@@ -101,4 +101,17 @@ if ! grep -F -q 'ALTER TABLE nvct_api.tasks_v2 ADD IF NOT EXISTS health TEXT;' \
   fail "NVCT upgrade migration does not add tasks_v2.health idempotently"
 fi
 
+autoscaler_compatibility_migration="${keyspaces}/nvcf_autoscaler/05_restore_published_autoscaler_tables.up.sql"
+for table_name in \
+  recently_invoked_functions_history \
+  running_functions_without_invocations \
+  running_functions_without_invocations_history
+do
+  if ! grep -F -q \
+    "CREATE TABLE IF NOT EXISTS nvcf_autoscaler.${table_name}" \
+    "${autoscaler_compatibility_migration}"; then
+    fail "autoscaler compatibility migration does not restore ${table_name} idempotently"
+  fi
+done
+
 exit "${status}"
