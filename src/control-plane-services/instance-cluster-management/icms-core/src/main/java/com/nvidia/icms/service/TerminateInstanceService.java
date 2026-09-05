@@ -17,6 +17,7 @@
 package com.nvidia.icms.service;
 
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
+import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.errors.IcmsInternalServerException;
 import com.nvidia.icms.errors.IcmsNotFoundException;
 import com.nvidia.icms.inbound.rest.model.ClientRequestDataModel;
@@ -35,6 +36,7 @@ import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
+import com.nvidia.icms.util.TimeUtils;
 import com.nvidia.icms.util.audit.AuditUtils;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.annotation.Nullable;
@@ -45,6 +47,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -55,6 +58,7 @@ import java.util.stream.Collectors;
 
 import static com.nvidia.icms.inbound.rest.model.SpotRequestStatusCode.PENDING_FULFILLMENT;
 import static com.nvidia.icms.util.audit.AuditUtils.populateAuditValuesForTerminateInstanceRequest;
+import static java.util.stream.Collectors.toSet;
 
 @Service
 @Slf4j
@@ -98,6 +102,57 @@ public class TerminateInstanceService {
 
         validatedInstances = validateInstancesOwnership(validatedInstances, ncaId, deploymentId, gpuSpecificationId);
         return terminateInstancesForAllProviders(validatedInstances, auditProps);
+    }
+
+    @Observed
+    public TerminateInstancesResponse terminateInstances(
+            @NotNull String ncaId,
+            @NotNull UUID deploymentId,
+            @Nullable UUID gpuSpecificationId,
+            int instanceCount,
+            @NotNull Map<String, Object> auditProps) {
+        if (instanceCount <= 0) {
+            throw new IcmsBadRequestException("InstanceCount should be greater than zero");
+        }
+
+        List<InstanceV2Entity> deploymentInstances = gpuSpecificationId == null
+                ? instanceV2Repository.findInstancesByDeploymentId(deploymentId)
+                : instanceV2Repository.findInstancesByGpuSpecificationId(
+                        deploymentId, gpuSpecificationId);
+        Set<InstanceV2Entity> instances = selectInstancesToTerminate(
+                deploymentInstances
+                .stream()
+                .filter(instance -> ncaId.equals(instance.getNcaId()))
+                .filter(this::isInstanceRunning)
+                .collect(toSet()),
+                instanceCount);
+
+        if (instances.isEmpty()) {
+            return emptyResponse();
+        }
+
+        Set<String> instanceIds = instances.stream()
+                .map(InstanceV2Entity::getInstanceId)
+                .collect(toSet());
+        Set<InstanceV2Entity> validatedInstances = validateInstanceTermination(null, instanceIds);
+        validatedInstances = validateInstancesOwnership(
+                validatedInstances, ncaId, deploymentId, gpuSpecificationId);
+        return terminateInstancesForAllProviders(validatedInstances, auditProps);
+    }
+
+    // Keep this selection order in sync with NVCF's IcmsAllocatorService.
+    private static Set<InstanceV2Entity> selectInstancesToTerminate(
+            Set<InstanceV2Entity> instances,
+            int count) {
+        return instances.stream()
+                .filter(instance -> instance.getInstanceId() != null)
+                .sorted(Comparator
+                        .comparing((InstanceV2Entity instance) ->
+                                instance.getInstanceStateName() == SpotInstanceInternalState.RUNNING)
+                        .thenComparing(instance ->
+                                TimeUtils.getInstantFromUuid(instance.getCreateTimeuuid())))
+                .limit(count)
+                .collect(toSet());
     }
 
 
