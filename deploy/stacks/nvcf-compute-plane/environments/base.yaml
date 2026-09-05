@@ -31,9 +31,9 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
-    imageTag: "3.3.2"
+    imageTag: "3.5.2"
     selfManaged:
-      nvcaVersion: "3.3.2"
+      nvcaVersion: "3.5.2"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.

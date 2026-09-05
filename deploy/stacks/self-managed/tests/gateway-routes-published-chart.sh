@@ -11,7 +11,7 @@ stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
 published_manifest="$work_dir/gateway-routes.yaml"
 published_release="$work_dir/gateway-routes-release.json"
-published_version=1.17.0
+published_version=1.18.0
 gateway_namespace=gateway
 trap 'rm -rf "$work_dir"' EXIT
 

@@ -212,7 +212,7 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
-      tag: 2.11.17-alpine3.22
+      tag: 2.14.6-alpine3.22
   # The config reloader is not republished under the public nvidia/nvcf
   # catalog, so it defaults to its upstream Docker Hub source and a
   # public-catalog install needs no override. If you mirror the image into
@@ -222,7 +222,7 @@ nats:
     image:
       registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default "docker.io" }}
       repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default "natsio/nats-server-config-reloader" }}
-      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.23.0" | quote }}
+      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.24.0" | quote }}
   natsBox:
     container:
       image:
@@ -451,7 +451,7 @@ natsAuthCalloutService:
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $effectivePylonImage = printf "%s/%s/pylon:0.15.1" $sidecarsHost $sidecarsRepo }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.16.2" $sidecarsHost $sidecarsRepo }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}
 {{- $stackNvcfRemoteConfig := dict }}
@@ -499,7 +499,7 @@ api:
     image:
       registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default "docker.io" }}
       repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
-      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.36.1" | quote }}
+      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.37.0" | quote }}
       pullPolicy: IfNotPresent
 
     registryCredentials: []
@@ -632,6 +632,9 @@ nvctApi:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvct-service-oss
+    {{- with dig "nvctApi" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
 
   env:
     NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
@@ -825,6 +828,9 @@ adminIssuerProxy:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/admin-token-issuer-proxy
+    {{- with dig "adminIssuerProxy" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -852,6 +858,10 @@ stateMetrics:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-state-metrics-service
+  {{- with dig "stateMetrics" "resources" dict .Values }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1030,6 +1040,7 @@ llmRequestRouter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/stargate
+    tag: {{ dig "addons" "llm" "requestRouter" "image" "tag" "0.16.2" .Values | quote }}
   {{- /*
   Backend routing follows the LLM addon rather than being separately opted into.
   A worker holds one registration stream and one reverse tunnel per replica, and
@@ -1215,7 +1226,7 @@ llmRequestRouter:
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
        PKI tag, then the OpenBao migrations tag, and finally the compatible
        stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.16.2" }}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.1" }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -1333,12 +1344,12 @@ vanityGateway:
 {{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" "nvcf" "port" 8080) }}
 {{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" "ess" "port" 8080) }}
 {{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
-{{/* openbao-migrations image tag: 0.16.2 is the floor. An operator may pin a
+{{/* openbao-migrations image tag: 0.19.1 is the floor. An operator may pin a
      newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
-     than the floor is ignored (the migrations job needs >= 0.16.2). */}}
-{{- $nvcfUiOpenbaoMigrationsTag := "0.16.2" }}
+     than the floor is ignored (the migrations job needs >= 0.19.1). */}}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.19.1" }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
-{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.16.2" $nvcfUiMigrationsTagOverride) }}
+{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.19.1" $nvcfUiMigrationsTagOverride) }}
 {{- $nvcfUiOpenbaoMigrationsTag = $nvcfUiMigrationsTagOverride }}
 {{- end }}
 nvcfUi:

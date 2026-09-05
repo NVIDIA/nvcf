@@ -21,7 +21,7 @@ metadata:
   name: nvca-operator
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.21.8
+    helm.sh/chart: helm-nvca-operator-1.22.1
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.3.2"
@@ -130,7 +130,7 @@ spec:
           - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4yLjEifQ=="
           - --task-env-overrides-b64
           - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4yLjEifQ=="
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.3.2
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.5.2
         imagePullPolicy: IfNotPresent
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -176,7 +176,7 @@ spec:
             cpu: "1000m"
             memory: "4Gi"
       - name: nvca-mirror
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.3.2
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.5.2
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000
