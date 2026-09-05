@@ -329,6 +329,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main app on 8080
     let app = Router::new()
+        .route("/info", get(routes::get_info))
         .route("/health", get(routes::get_health))
         .route("/admin/health/liveness", get(routes::get_liveness))
         .route("/admin/health/readiness", get(routes::get_readiness))

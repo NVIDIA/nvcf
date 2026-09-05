@@ -53,6 +53,12 @@ impl From<ComponentHealth> for ComponentHealthResponse {
     }
 }
 
+/// Build metadata. Version and commit are stamped by the version_env template
+/// in crates/server/BUILD.bazel on --stamp builds.
+pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
+    Json(nvcf_info::info_response!("nvcf-function-autoscaler"))
+}
+
 /// Liveness: process is alive. No dependency checks.
 /// Used by Kubernetes liveness probe. Failure causes pod restart.
 /// We intentionally do not check TimeseriesDb/Cassandra here — restarting when they're
@@ -122,6 +128,17 @@ mod tests {
         let result = get_readiness(State(health)).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn info_reports_service_version_and_commit() {
+        let Json(info) = get_info().await;
+        assert_eq!(info.service, "nvcf-function-autoscaler");
+        // Stamped only on Bazel --stamp builds; under cargo these are the
+        // unstamped fallbacks. Assert they are populated, not their literals,
+        // so the test does not break on every release bump.
+        assert!(!info.version.is_empty());
+        assert!(!info.commit.is_empty());
     }
 
     #[tokio::test]

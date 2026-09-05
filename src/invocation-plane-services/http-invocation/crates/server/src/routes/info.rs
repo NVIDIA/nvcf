@@ -13,27 +13,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod app_error;
-mod attach;
-mod body_stream;
-mod get_exec;
-mod get_pexec;
-mod health;
-mod http_headers;
-mod info;
-mod input_asset_header;
-mod nvcf_status_header;
-mod post_exec;
-mod post_pexec;
-mod tlb;
+use axum::Json;
 
-pub use attach::get_attach::request_attach;
-pub use attach::post_attach::response_attach;
-pub use get_exec::exec_status;
-pub use get_pexec::pexec_status_route;
-pub use health::get_health;
-pub use info::get_info;
-pub use post_exec::exec;
-pub use post_exec::{InvokeFunctionResponse, InvokeStatus};
-pub use post_pexec::pexec;
-pub use tlb::{function_id_headers, split_hostname, tlb_handler};
+pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
+    Json(nvcf_info::info_response!("nvcf-invocation-service"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn info_reports_service_version_and_commit() {
+        let Json(info) = get_info().await;
+        assert_eq!(info.service, "nvcf-invocation-service");
+        // Stamped only on Bazel --stamp builds; under cargo these are the
+        // unstamped fallbacks. Assert they are populated, not their literals,
+        // so the test does not break on every release bump.
+        assert!(!info.version.is_empty());
+        assert!(!info.commit.is_empty());
+    }
+}

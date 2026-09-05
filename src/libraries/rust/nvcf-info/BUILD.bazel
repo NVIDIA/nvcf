@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# One target per consuming crate universe. Each Rust service resolves serde
+# from its own crate_universe repo, and two serde copies are two distinct
+# Serialize traits, so a single shared target fails at the axum::Json bound in
+# whichever service it was not built against. Add an entry here for any new
+# consumer. See src/libraries/rust/nvcf-info/AGENTS.md.
+[
+    rust_library(
+        name = "nvcf-info-%s" % universe,
+        srcs = ["src/lib.rs"],
+        crate_name = "nvcf_info",
+        edition = "2021",
+        visibility = ["//visibility:public"],
+        deps = ["@%s//:serde" % repo],
+    )
+    for universe, repo in [
+        ("autoscaler", "rs_autoscaler_crates"),
+        ("invocation", "nvcf_invocation_crates"),
+    ]
+]
+
+rust_test(
+    name = "nvcf_info_test",
+    crate = ":nvcf-info-autoscaler",
+    deps = [
+        "@rs_autoscaler_crates//:serde",
+        "@rs_autoscaler_crates//:serde_json",
+    ],
+)
