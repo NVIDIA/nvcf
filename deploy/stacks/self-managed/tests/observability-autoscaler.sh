@@ -115,6 +115,29 @@ grep -q 'TIMESERIES_DB__TIMESERIES_DB_URL: "http://vmsingle.monitoring.svc.clust
 grep -q '"helm.sh/hook": test' "$autoscaler_manifests" ||
   fail "autoscaler chart lost its runtime helm test hook"
 
+write_autoscaler_values "$work_dir/custom-namespace-autoscaler-values.yaml" \
+  --state-values-set victoriaMetrics.namespace=metrics-store
+
+custom_namespace_autoscaler_values="$work_dir/custom-namespace-autoscaler-values.yaml"
+grep -q \
+  'TIMESERIES_DB__TIMESERIES_DB_URL: http://vmsingle.metrics-store.svc.cluster.local:8428' \
+  "$custom_namespace_autoscaler_values" ||
+  fail "custom VictoriaMetrics namespace did not update the bundled PromQL endpoint"
+
+write_autoscaler_values "$work_dir/external-none-autoscaler-values.yaml" \
+  --state-values-set metricsBackend.mode=existing \
+  --state-values-set metricsBackend.type=external \
+  --state-values-set-string metricsBackend.promqlEndpoint=https://metrics.example.com \
+  --state-values-set metricsBackend.authentication.mode=none
+
+external_none_autoscaler_values="$work_dir/external-none-autoscaler-values.yaml"
+for expected in \
+  'TIMESERIES_DB__TIMESERIES_DB_URL: https://metrics.example.com' \
+  'TIMESERIES_DB__AUTH_MODE: none'; do
+  grep -q "$expected" "$external_none_autoscaler_values" ||
+    fail "external backend without authentication did not render autoscaler value: $expected"
+done
+
 write_autoscaler_values "$work_dir/external-autoscaler-values.yaml" \
   --state-values-set metricsBackend.mode=existing \
   --state-values-set metricsBackend.type=external \
