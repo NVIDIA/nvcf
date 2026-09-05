@@ -177,29 +177,42 @@ run_step() {  # run_step <label> <command...> -> 0 on success, prints output on 
 # API server and ArgoCD then reject the object ("groupVersion shouldn't be
 # empty"). Check every rendered document for a top-level apiVersion and kind.
 check_rendered_objects() {  # check_rendered_objects <stem> <rendered file>
-    local stem="$1" rendered="$2" glued
-    glued="$(grep -nE '^#.*(apiVersion|kind):' "${rendered}" || true)"
-    if [ -n "${glued}" ]; then
-        echo "${stem}: apiVersion/kind rendered onto a comment line (a template action ending in -}} trimmed the newline):" >&2
-        echo "${glued}" | sed 's/^/  /' >&2
-        return 1
-    fi
+    local stem="$1" rendered="$2"
+    # Document-aware: a comment that merely mentions "kind:" is fine. Only when
+    # the same document lacks the top-level field is the comment line reported,
+    # as the likely place the field was trimmed onto.
     awk -v stem="${stem}" '
         function flush() {
-            if (content && (!hasapi || !haskind)) {
-                bad++
-                printf "%s: rendered document %d (%s) has no top-level %s\n", stem, n, name, (!hasapi ? "apiVersion" : "kind") > "/dev/stderr"
+            if (content) {
+                if (!hasapi) report("apiVersion", gluedapi)
+                if (!haskind) report("kind", gluedkind)
             }
-            content = 0; hasapi = 0; haskind = 0; name = "?"; n++
+            content = 0; hasapi = 0; haskind = 0; gluedapi = 0; gluedkind = 0; name = "?"; n++
+        }
+        function report(field, glued) {
+            bad++
+            if (glued) {
+                printf "%s: rendered document %d (%s) has no top-level %s; line %d has %s rendered onto a comment line (a template action ending in -}} trimmed the newline)\n", stem, n, name, field, glued, field > "/dev/stderr"
+            } else {
+                printf "%s: rendered document %d (%s) has no top-level %s\n", stem, n, name, field > "/dev/stderr"
+            }
         }
         BEGIN { n = 1; name = "?" }
         /^---/ { flush(); next }
-        /^[ \t]*#/ || /^[ \t]*$/ { next }
+        /^[ \t]*#/ {
+            if ($0 ~ /apiVersion:/ && !gluedapi) gluedapi = NR
+            if ($0 ~ /kind:/ && !gluedkind) gluedkind = NR
+            next
+        }
+        /^[ \t]*$/ { next }
         { content = 1 }
         /^apiVersion:/ { hasapi = 1 }
         /^kind:/ { haskind = 1 }
         /^  name:/ && name == "?" { name = $2 }
-        END { flush(); exit (bad ? 1 : 0) }
+        END {
+            flush()
+            exit (bad ? 1 : 0)
+        }
     ' "${rendered}"
 }
 

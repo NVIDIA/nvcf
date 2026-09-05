@@ -17,21 +17,33 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 check() { # $1 label, remaining args: helm --set flags
   local label="$1"; shift
   helm template t "$CHART_DIR" "$@" > "$TMP/$label.yaml" 2>/dev/null || fail "$label: helm template failed"
-  # A comment line that ends in "apiVersion:" is the exact symptom.
-  if grep -nE '^#.*apiVersion:' "$TMP/$label.yaml"; then fail "$label: apiVersion glued onto a comment line"; fi
   python3 - "$TMP/$label.yaml" "$label" <<'PY'
-import sys, yaml
+import re, sys, yaml
 path, label = sys.argv[1], sys.argv[2]
+text = open(path).read()
+# Raw documents, so a failure can point at the comment line the field was
+# trimmed onto. A comment that merely mentions "kind:" in a valid document is
+# not an error.
+raw_docs = [d for d in re.split(r"^---[ \t]*$", text, flags=re.M)]
 bad = []
 n = 0
-for d in yaml.safe_load_all(open(path)):
-    if not d:
+for raw in raw_docs:
+    body = [l for l in raw.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    if not body:
+        continue  # separator gap, or a template that rendered only its "# Source:" header under these values
+    d = yaml.safe_load(raw)
+    if not isinstance(d, dict):
+        bad.append(("non-mapping document", body[0][:80]))
         continue
     n += 1
-    if not d.get("apiVersion") or not d.get("kind"):
-        bad.append((d.get("kind"), (d.get("metadata") or {}).get("name"), d.get("apiVersion")))
+    for field in ("apiVersion", "kind"):
+        if not d.get(field):
+            glued = next((l.strip() for l in raw.splitlines() if l.lstrip().startswith("#") and f"{field}:" in l), None)
+            bad.append((d.get("kind"), (d.get("metadata") or {}).get("name"), f"missing {field}", f"glued onto comment: {glued}" if glued else ""))
+if n == 0:
+    bad.append(("no documents rendered", ""))
 if bad:
-    print(f"FAIL: {label}: documents without apiVersion/kind: {bad}", file=sys.stderr)
+    print(f"FAIL: {label}: {bad}", file=sys.stderr)
     sys.exit(1)
 print(f"{label}: {n} documents, all carry apiVersion and kind")
 PY
