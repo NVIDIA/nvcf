@@ -96,6 +96,16 @@ const (
 	// lease. It is the PVC analogue of the primaryPVLabelKey marker.
 	cachePopulatedLabelKey   = fqdnPrefix + "/modelcache-populated"
 	cachePopulatedLabelValue = "true"
+	// ModelCachePopulatedLabelKey and ModelCachePopulatedLabelValue expose the
+	// populated marker to the agent, whose regular-workflow shared claim uses
+	// the same label so one definition of "populated" serves both workflows.
+	ModelCachePopulatedLabelKey   = cachePopulatedLabelKey
+	ModelCachePopulatedLabelValue = cachePopulatedLabelValue
+	// ModelCacheWriterPVCUIDAnnotationKey, on a writer Job's pod template,
+	// records the UID of the claim the Job populated. A completed Job only
+	// proves the claim it wrote to is populated, not a later claim of the same
+	// name.
+	ModelCacheWriterPVCUIDAnnotationKey = fqdnPrefix + "/model-cache-writer-pvc-uid"
 
 	// The annotation applied to primary PV's that denotes the last time
 	// a function or task referenced it.
