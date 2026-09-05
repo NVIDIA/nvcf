@@ -1,6 +1,7 @@
 ARG ALPINE_VERSION=3.23
 ARG GO_IMAGE=golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395
 ARG BAO_VERSION=2.6.2
+ARG BAO_RUNTIME_SHA256=sha256:11fd73a2102cda9c55d5d881a8c3210303146a7ec1e8ac76f526e175c6d24641
 ARG BAO_SOURCE_COMMIT=dd9c19c37a878cf4a81b18efb8d6f0599c7da923
 ARG BAO_SOURCE_SHA256=a7784550a9db16f24e99d65a18c9b12a433707c79ef4c1f34262d3f48171c7a9
 ARG KUBECTL_VERSION=v1.37.0
@@ -79,7 +80,7 @@ RUN go version -m /out/kubectl >/tmp/kubectl.buildinfo && \
     grep -Fq ": ${KUBECTL_GO_VERSION}" /tmp/kubectl.buildinfo && \
     grep -Eq "^[[:space:]]*mod[[:space:]]+k8s.io/kubernetes[[:space:]]+${KUBECTL_VERSION}([[:space:]]|$)" /tmp/kubectl.buildinfo
 
-FROM openbao/openbao:${BAO_VERSION}
+FROM openbao/openbao:${BAO_VERSION}@${BAO_RUNTIME_SHA256}
 ARG TARGETARCH
 
 # Upgrade inherited packages before installing runtime dependencies so the

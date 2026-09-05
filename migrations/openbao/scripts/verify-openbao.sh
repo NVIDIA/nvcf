@@ -4,8 +4,8 @@
 
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 
 go_bin=${GO:-go}
 bao_dir=${BAO_DIR:-"$repo_root/files/openbao"}
@@ -25,19 +25,71 @@ version_ge() {
   current=${1#v}
   required=${2#v}
   awk -v current="$current" -v required="$required" '
+    function is_numeric(value) {
+      return value ~ /^[0-9]+$/
+    }
+
+    function compare_identifier(left, right) {
+      if (is_numeric(left) && is_numeric(right)) {
+        if ((left + 0) > (right + 0)) return 1
+        if ((left + 0) < (right + 0)) return -1
+        return 0
+      }
+      if (is_numeric(left)) return -1
+      if (is_numeric(right)) return 1
+      if (left > right) return 1
+      if (left < right) return -1
+      return 0
+    }
+
     BEGIN {
-      split(current, a, ".")
-      split(required, b, ".")
+      sub(/\+.*/, "", current)
+      sub(/\+.*/, "", required)
+
+      current_dash = index(current, "-")
+      required_dash = index(required, "-")
+      current_core = current_dash ? substr(current, 1, current_dash - 1) : current
+      required_core = required_dash ? substr(required, 1, required_dash - 1) : required
+      current_pre = current_dash ? substr(current, current_dash + 1) : ""
+      required_pre = required_dash ? substr(required, required_dash + 1) : ""
+
+      if (split(current_core, a, ".") != 3 || split(required_core, b, ".") != 3) exit 2
       for (i = 1; i <= 3; i++) {
+        if (!is_numeric(a[i]) || !is_numeric(b[i])) exit 2
         av = a[i] + 0
         bv = b[i] + 0
         if (av > bv) exit 0
         if (av < bv) exit 1
       }
+
+      # A stable release sorts after every prerelease with the same core.
+      if (current_pre == "" && required_pre == "") exit 0
+      if (current_pre == "") exit 0
+      if (required_pre == "") exit 1
+
+      current_count = split(current_pre, current_ids, ".")
+      required_count = split(required_pre, required_ids, ".")
+      count = current_count > required_count ? current_count : required_count
+      for (i = 1; i <= count; i++) {
+        if (i > current_count) exit 1
+        if (i > required_count) exit 0
+        comparison = compare_identifier(current_ids[i], required_ids[i])
+        if (comparison > 0) exit 0
+        if (comparison < 0) exit 1
+      }
       exit 0
     }
   '
 }
+
+if [ "${1:-}" = "--version-ge" ]; then
+  if [ "$#" -ne 3 ]; then
+    echo "usage: $0 --version-ge CURRENT REQUIRED" >&2
+    exit 2
+  fi
+  version_ge "$2" "$3"
+  exit
+fi
 
 dep_version() {
   module=$1
