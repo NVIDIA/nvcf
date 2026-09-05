@@ -14,9 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.nvidia.icms.outbound.cassandra.workers.entity;
 
-import jakarta.annotation.Nullable;
 import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -28,8 +28,8 @@ import org.springframework.data.cassandra.core.mapping.PrimaryKey;
 import org.springframework.data.cassandra.core.mapping.Table;
 
 /**
- * Per-instance worker-identity set stored in Cassandra.
- * Keyed by (cluster_id, instance_id); upsert replaces the whole identifier set.
+ * Authoritative worker-identity set for one instance, partitioned by the cluster that
+ * registered it. Rows carry a TTL refreshed on every accepted status update.
  */
 @Builder(toBuilder = true)
 @Data
@@ -42,6 +42,7 @@ public class WorkerIdentifierRecord {
     public static final String COLUMN_CLUSTER_ID = "cluster_id";
     public static final String COLUMN_INSTANCE_ID = "instance_id";
     public static final String COLUMN_SUB = "sub";
+    public static final String COLUMN_NAMESPACE = "namespace";
     public static final String COLUMN_SA_UID = "sa_uid";
     public static final String COLUMN_IDENTIFIERS = "identifiers";
 
@@ -51,11 +52,12 @@ public class WorkerIdentifierRecord {
     @Column(COLUMN_SUB)
     private String sub;
 
-    @Nullable
+    @Column(COLUMN_NAMESPACE)
+    private String namespace;
+
     @Column(COLUMN_SA_UID)
     private String saUid;
 
-    /** Frozen list of worker_identifier UDTs. */
     @Column(COLUMN_IDENTIFIERS)
     private List<WorkerIdentifierUdt> identifiers;
 }

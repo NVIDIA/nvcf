@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.nvidia.icms.inbound.rest.model.workers;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -22,11 +23,13 @@ import lombok.Builder;
 import lombok.Data;
 
 /**
- * Response body for the worker token introspection endpoint (RFC 7662).
+ * RFC 7662-style introspection result for a worker token.
  *
- * <p>When {@code active} is true, all resolved identity fields are populated.
- * When {@code active} is false, only {@code active} and {@code error} are set
- * (RFC 7662 section 2.2).</p>
+ * <p>When {@code active} is true every field except {@code error} is populated. The
+ * workload binding ({@code request_id}, {@code function_id}/{@code function_version_id} or
+ * {@code task_id}/{@code nca_id}) is resolved from ICMS state for the instance the token
+ * was registered against; relying parties MUST compare it with the workload named in the
+ * worker's request.</p>
  */
 @Data
 @Builder
@@ -36,10 +39,15 @@ public class WorkerTokenIntrospectResponse {
     private boolean active;
 
     private String sub;
+
     private String aud;
+
     private String iss;
 
-    /** Resolved cluster ID (canonical name from the audience claim). */
+    /** Token expiry, seconds since the epoch. */
+    private Long exp;
+
+    /** Resolved cluster ID (from the audience claim). */
     @JsonProperty("client_id")
     private String clientId;
 
@@ -48,6 +56,21 @@ public class WorkerTokenIntrospectResponse {
 
     @JsonProperty("worker_id")
     private String workerId;
+
+    @JsonProperty("request_id")
+    private String requestId;
+
+    @JsonProperty("function_id")
+    private String functionId;
+
+    @JsonProperty("function_version_id")
+    private String functionVersionId;
+
+    @JsonProperty("task_id")
+    private String taskId;
+
+    @JsonProperty("nca_id")
+    private String ncaId;
 
     /** Token type: "psat" or "spiffe". */
     @JsonProperty("token_type")

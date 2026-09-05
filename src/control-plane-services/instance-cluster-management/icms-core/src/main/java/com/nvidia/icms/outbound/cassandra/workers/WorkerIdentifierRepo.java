@@ -14,16 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.nvidia.icms.outbound.cassandra.workers;
 
 import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierKey;
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierRecord;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.cassandra.repository.CassandraRepository;
 import org.springframework.stereotype.Repository;
 
-/** Spring Data Cassandra interface for the {@code worker_identifiers} table. */
 @Repository
 public interface WorkerIdentifierRepo extends
         CassandraRepository<WorkerIdentifierRecord, WorkerIdentifierKey>,
@@ -32,5 +33,11 @@ public interface WorkerIdentifierRepo extends
     Optional<WorkerIdentifierRecord> findByKeyClusterIdAndKeyInstanceId(
             String clusterId, String instanceId);
 
+    /** Partition-restricted lookup through the SAI index on {@code sa_uid}. */
+    List<WorkerIdentifierRecord> findByKeyClusterIdAndSaUid(String clusterId, String saUid);
+
     void deleteByKeyClusterIdAndKeyInstanceId(String clusterId, String instanceId);
+
+    /** Drops the whole cluster partition (cluster deregistration). */
+    void deleteByKeyClusterId(String clusterId);
 }

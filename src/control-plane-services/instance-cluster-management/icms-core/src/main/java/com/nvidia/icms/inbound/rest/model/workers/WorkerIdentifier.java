@@ -14,19 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.nvidia.icms.inbound.rest.model.workers;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * A single worker-to-pod identity binding.
- * For PSAT (SAT) tokens: name = pod name, uid = pod UID.
- * For SPIFFE tokens: name = full SPIFFE ID, uid = worker UUID.
- */
+/** A single worker identity: pod name + pod UID (SAT) or SPIFFE ID + worker UUID (SPIFFE). */
 @Data
 @Builder
 @AllArgsConstructor
@@ -34,8 +33,10 @@ import lombok.NoArgsConstructor;
 public class WorkerIdentifier {
 
     @NotBlank
+    @Size(max = 2048)
     private String name;
 
     @NotBlank
+    @Pattern(regexp = WorkerAuth.UUID_PATTERN)
     private String uid;
 }

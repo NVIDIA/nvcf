@@ -14,17 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.nvidia.icms.outbound.cassandra.workers;
 
 import com.nvidia.icms.errors.IcmsInternalServerException;
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierRecord;
 import io.micrometer.observation.annotation.Observed;
+import java.time.Duration;
 import java.util.Optional;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Repository;
 
-/** Service-layer Cassandra wrapper for worker-identifier operations. */
 @Slf4j
 @Repository
 @AllArgsConstructor
@@ -32,10 +33,11 @@ public class WorkerIdentifierRepository {
 
     private final WorkerIdentifierRepo workerIdentifierRepo;
 
+    /** Full-replace upsert with a row TTL; every accepted status update refreshes it. */
     @Observed
-    public void save(WorkerIdentifierRecord record) {
+    public void saveWithTtl(WorkerIdentifierRecord record, Duration ttl) {
         try {
-            workerIdentifierRepo.save(record);
+            workerIdentifierRepo.insertWithTtl(record, ttl, false);
         } catch (Exception e) {
             log.error("Failed to save worker identifiers for cluster={} instance={}",
                     record.getKey().getClusterId(), record.getKey().getInstanceId(), e);
@@ -57,6 +59,28 @@ public class WorkerIdentifierRepository {
         }
     }
 
+    /**
+     * Resolve the instance a ServiceAccount UID was registered for. The SA is unique per
+     * instance namespace, so at most one row is expected; more than one means the cluster
+     * registered the same SA UID twice and the lookup is refused.
+     */
+    @Observed
+    public Optional<WorkerIdentifierRecord> findByClusterIdAndSaUid(String clusterId, String saUid) {
+        try {
+            var records = workerIdentifierRepo.findByKeyClusterIdAndSaUid(clusterId, saUid);
+            if (records.size() > 1) {
+                log.warn("Ambiguous worker identity: cluster={} saUid registered for {} instances",
+                        clusterId, records.size());
+                return Optional.empty();
+            }
+            return records.stream().findFirst();
+        } catch (Exception e) {
+            log.error("Failed to fetch worker identifiers for cluster={} by saUid", clusterId, e);
+            throw new IcmsInternalServerException(
+                    "Failed to fetch worker identifiers: " + e.getMessage(), e);
+        }
+    }
+
     @Observed
     public void deleteByClusterIdAndInstanceId(String clusterId, String instanceId) {
         try {
@@ -64,6 +88,17 @@ public class WorkerIdentifierRepository {
         } catch (Exception e) {
             log.error("Failed to delete worker identifiers for cluster={} instance={}",
                     clusterId, instanceId, e);
+            throw new IcmsInternalServerException(
+                    "Failed to delete worker identifiers: " + e.getMessage(), e);
+        }
+    }
+
+    @Observed
+    public void deleteByClusterId(String clusterId) {
+        try {
+            workerIdentifierRepo.deleteByKeyClusterId(clusterId);
+        } catch (Exception e) {
+            log.error("Failed to delete worker identifiers for cluster={}", clusterId, e);
             throw new IcmsInternalServerException(
                     "Failed to delete worker identifiers: " + e.getMessage(), e);
         }
