@@ -140,6 +140,7 @@ go_test(
         "tokenfetcher_test.go",
         "translate_workload_test.go",
         "transport_tls_test.go",
+        "worker_identity_test.go",
     ],
     data = ["//src/compute-plane-services/nvca/internal/envtest:crds"],
     embed = [":miniservice"],

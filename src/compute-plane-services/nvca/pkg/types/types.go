@@ -260,10 +260,13 @@ type WorkerIdentifier struct {
 }
 
 // WorkerAuth carries the worker identity set that ICMS stores for a given instance.
-// Populated by NVCA when oidcClusterIdentity is enabled.
+// Populated by NVCA for MiniService instances when delegated worker tokens are enabled.
+// ICMS matches a worker token's subject, namespace, ServiceAccount UID, and pod name+UID
+// against these values.
 type WorkerAuth struct {
 	Sub               string             `json:"sub"`
-	SAuid             string             `json:"saUid,omitempty"`
+	Namespace         string             `json:"namespace"`
+	SAuid             string             `json:"saUid"`
 	WorkerIdentifiers []WorkerIdentifier `json:"workerIdentifiers"`
 }
 

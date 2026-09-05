@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -60,6 +61,7 @@ import (
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
 	fakenodefeatures "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/fake"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -193,6 +195,9 @@ func TestController(t *testing.T) {
 		ClusterRegion:        "us-west-1",
 		Metrics:              metrics.NewDefaultMetrics("nca-cluster", "cluster-foo", "cluster-group-foo", "1.2.3"),
 		cacheDir:             t.TempDir(),
+		// Exercise delegated worker identity provisioning on the utils pod.
+		WorkerIdentityEnabled: true,
+		ClusterID:             "cl-test",
 	}
 
 	cfg := nvcaconfig.Config{
@@ -396,6 +401,30 @@ rules:
 		err = crclient.Get(ctx, client.ObjectKey{Name: "utils", Namespace: ms.Spec.Namespace}, utilsPod)
 		assert.NoError(collect, err)
 	}, 2*time.Second, 100*time.Millisecond)
+
+	// Delegated worker identity: the utils pod runs as the fixed worker SA with only the
+	// audience-bound projected token mounted, and the identity objects exist in the namespace.
+	assert.Equal(t, miniservice.WorkerServiceAccountName, utilsPod.Spec.ServiceAccountName)
+	if assert.NotNil(t, utilsPod.Spec.AutomountServiceAccountToken) {
+		assert.False(t, *utilsPod.Spec.AutomountServiceAccountToken)
+	}
+	var workerTokenVolume *corev1.Volume
+	for i := range utilsPod.Spec.Volumes {
+		if utilsPod.Spec.Volumes[i].Name == miniserviceWorkerTokenVolumeName {
+			workerTokenVolume = &utilsPod.Spec.Volumes[i]
+		}
+	}
+	if assert.NotNil(t, workerTokenVolume, "utils pod must mount the projected worker token") &&
+		assert.NotNil(t, workerTokenVolume.Projected) && assert.Len(t, workerTokenVolume.Projected.Sources, 1) {
+		assert.Equal(t, "nvcf-icms:cl-test", workerTokenVolume.Projected.Sources[0].ServiceAccountToken.Audience)
+	}
+	workerIdentityKey := client.ObjectKey{Name: miniservice.WorkerServiceAccountName, Namespace: ms.Spec.Namespace}
+	assert.NoError(t, crclient.Get(ctx, workerIdentityKey, &corev1.ServiceAccount{}))
+	workerRole := &rbacv1.Role{}
+	if assert.NoError(t, crclient.Get(ctx, workerIdentityKey, workerRole)) {
+		assert.Empty(t, workerRole.Rules)
+	}
+	assert.NoError(t, crclient.Get(ctx, workerIdentityKey, &rbacv1.RoleBinding{}))
 
 	utilsPod.Status.Phase = corev1.PodRunning
 	utilsPod.Status.Conditions = []corev1.PodCondition{

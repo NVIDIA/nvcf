@@ -73,6 +73,7 @@ import (
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
@@ -845,7 +846,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	}
 
 	if r.WorkerIdentityEnabled {
-		if err := ensureWorkerIdentity(ctx, r.Client, ms.Spec.Namespace); err != nil {
+		if err := ensureWorkerIdentity(ctx, r.Client, ms.Spec.Namespace, ms.Name); err != nil {
 			return reconcile.Result{}, fmt.Errorf("ensure worker identity for MiniService %s: %w", ms.Name, err)
 		}
 		injectWorkerTokenVolume(utilsPod, r.ClusterID)
@@ -893,6 +894,12 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	} else {
 		log.Error(err, "Non-transient error getting utils pod")
 		return reconcile.Result{}, err
+	}
+
+	// Workload charts must never assume or alter the worker identity. This check runs regardless
+	// of HelmRBACEnforcement; the admission webhook applies the same rule as defense in depth.
+	if err := miniservice.ValidateWorkloadObjects(workloadObjs); err != nil {
+		return reconcile.Result{}, reconcile.TerminalError(fmt.Errorf("workload objects violate worker identity restrictions: %w", err))
 	}
 
 	err = r.applyWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...)
@@ -1048,6 +1055,10 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 	default:
 		log.Error(err, "Non-transient error getting utils pod during workload update")
 		return reconcile.Result{}, err
+	}
+
+	if err := miniservice.ValidateWorkloadObjects(workloadObjs); err != nil {
+		return reconcile.Result{}, reconcile.TerminalError(fmt.Errorf("workload objects violate worker identity restrictions: %w", err))
 	}
 
 	if err := r.applySSAWorkload(ctx, ms, genericWorkloadMutator, workloadObjs...); err != nil {

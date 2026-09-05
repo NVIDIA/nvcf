@@ -349,6 +349,13 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 		}
 	}
 
+	// Register the worker identity while the instance is alive so ICMS can authorize the worker
+	// as soon as it starts authenticating; the terminal update below drops it.
+	if updateInfo.Payload.InstanceState == nvcatypes.ICMSInstanceStarted ||
+		updateInfo.Payload.InstanceState == nvcatypes.ICMSInstanceRunning {
+		updateInfo.Payload.WorkerAuth = c.miniServiceWorkerAuth(ctx, ms.Spec.Namespace)
+	}
+
 	if c.bk8s.shouldReportInstanceStatusHeartbeat(ctx, req, st.ID,
 		string(updateInfo.Payload.InstanceState), st.LastReportedStatus, st.LastReportedTimestamp) {
 		// Only increment metric once for each image registry with issues.
@@ -414,6 +421,33 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 	}
 
 	return updateInfo, nil
+}
+
+// miniServiceWorkerAuth returns the worker identity ICMS should authorize for a MiniService
+// instance, or nil when the utils pod does not run as the worker ServiceAccount (delegated worker
+// tokens disabled) or the identity objects are not yet observable. Only the NVCA-authored utils
+// pod is registered; see miniservice.BuildWorkerAuth.
+func (c K8sComputeBackend) miniServiceWorkerAuth(ctx context.Context, namespace string) *nvcatypes.WorkerAuth {
+	log := core.GetLogger(ctx).WithField("namespace", namespace)
+
+	pod, err := c.bk8s.podLister.Pods(namespace).Get(common.UtilsPodName)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.WithError(err).Warn("Failed to get utils pod for worker identity registration")
+		}
+		return nil
+	}
+	if pod.Spec.ServiceAccountName != miniservice.WorkerServiceAccountName {
+		return nil
+	}
+
+	sa, err := c.clients.K8s.CoreV1().ServiceAccounts(namespace).Get(ctx, miniservice.WorkerServiceAccountName, metav1.GetOptions{})
+	if err != nil {
+		log.WithError(err).Warn("Failed to get worker ServiceAccount for worker identity registration")
+		return nil
+	}
+
+	return miniservice.BuildWorkerAuth(namespace, sa, pod)
 }
 
 func getStorageRequestsInstanceState(

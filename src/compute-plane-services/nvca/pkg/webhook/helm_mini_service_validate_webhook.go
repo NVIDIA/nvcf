@@ -156,28 +156,13 @@ func (v *helmMiniServiceValWebhookHandler) validate(ctx context.Context, obj cli
 	return warnings, errors.Join(errs...)
 }
 
-// validateWorkerSARestriction rejects any pod-bearing resource that specifies a worker
-// ServiceAccount (name prefix "nvcf-worker-") as its service account.
+// validateWorkerSARestriction rejects workload objects that could assume or alter the worker
+// identity (pod templates running as the worker ServiceAccount, identity objects reusing its
+// name, RoleBindings granting it permissions, objects claiming to be NVCA infra). The same rule
+// is enforced by the MiniService reconciler before workload objects are applied.
 func validateWorkerSARestriction(obj client.Object) []error {
-	var ps *corev1.PodSpec
-	switch t := obj.(type) {
-	case *corev1.Pod:
-		ps = &t.Spec
-	case *appsv1.Deployment:
-		ps = &t.Spec.Template.Spec
-	case *appsv1.ReplicaSet:
-		ps = &t.Spec.Template.Spec
-	case *appsv1.StatefulSet:
-		ps = &t.Spec.Template.Spec
-	case *batchv1.Job:
-		ps = &t.Spec.Template.Spec
-	case *batchv1.CronJob:
-		ps = &t.Spec.JobTemplate.Spec.Template.Spec
-	default:
-		return nil
-	}
-	if strings.HasPrefix(ps.ServiceAccountName, "nvcf-worker-") {
-		return []error{fmt.Errorf("workload pods may not use worker ServiceAccounts (prefix \"nvcf-worker-\")")}
+	if err := miniservice.ValidateWorkloadObject(obj); err != nil {
+		return []error{err}
 	}
 	return nil
 }

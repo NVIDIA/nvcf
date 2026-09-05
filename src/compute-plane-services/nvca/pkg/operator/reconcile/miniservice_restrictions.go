@@ -123,7 +123,7 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 					{
 						Rule: admissionregistrationv1.Rule{APIGroups: []string{"apps"},
 							APIVersions: []string{"v1"},
-							Resources:   []string{"deployments", "statefulsets"},
+							Resources:   []string{"deployments", "replicasets", "statefulsets", "daemonsets"},
 							Scope:       &st,
 						},
 						Operations: []admissionregistrationv1.OperationType{

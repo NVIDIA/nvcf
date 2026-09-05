@@ -1,13 +1,42 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "miniservice",
-    srcs = ["miniservice.go"],
+    srcs = [
+        "miniservice.go",
+        "workerguard.go",
+    ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice",
     visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/apps/v1:apps",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/batch/v1:batch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/rbac/v1:rbac",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+    ],
+)
+
+go_test(
+    name = "miniservice_test",
+    srcs = ["workerguard_test.go"],
+    embed = [":miniservice"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/apps/v1:apps",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/batch/v1:batch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/rbac/v1:rbac",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+    ],
 )
 
 alias(

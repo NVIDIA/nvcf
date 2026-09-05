@@ -32,6 +32,7 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,6 +43,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func TestHelmMiniServiceValWebhookHandler_Handle(t *testing.T) {
@@ -663,7 +665,8 @@ func TestValidateResourceLimitsVariousObjects(t *testing.T) {
 }
 
 func TestValidateWorkerSARestriction(t *testing.T) {
-	workerSA := "nvcf-worker-inst-001"
+	workerSA := "nvcf-worker"
+	legacyWorkerSA := "nvcf-worker-inst-001"
 	regularSA := "helm-instance-permissions"
 
 	tests := []struct {
@@ -675,6 +678,52 @@ func TestValidateWorkerSARestriction(t *testing.T) {
 			name: "pod with worker SA is rejected",
 			obj: &corev1.Pod{
 				Spec: corev1.PodSpec{ServiceAccountName: workerSA},
+			},
+			wantErr: true,
+		},
+		{
+			name: "pod with legacy prefixed worker SA is rejected",
+			obj: &corev1.Pod{
+				Spec: corev1.PodSpec{ServiceAccountName: legacyWorkerSA},
+			},
+			wantErr: true,
+		},
+		{
+			name: "daemonset with worker SA is rejected",
+			obj: &appsv1.DaemonSet{
+				Spec: appsv1.DaemonSetSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{ServiceAccountName: workerSA},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name:    "serviceaccount named nvcf-worker is rejected",
+			obj:     &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: workerSA}},
+			wantErr: true,
+		},
+		{
+			name:    "role named nvcf-worker is rejected",
+			obj:     &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: workerSA}},
+			wantErr: true,
+		},
+		{
+			name: "rolebinding granting the worker SA is rejected",
+			obj: &rbacv1.RoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "chart-binding"},
+				Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: workerSA}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "workload object claiming the NVCA infra annotation is rejected",
+			obj: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{nvcatypes.InfraObjectAnnotationKey: "true"},
+				},
+				Spec: corev1.PodSpec{ServiceAccountName: regularSA},
 			},
 			wantErr: true,
 		},
@@ -721,7 +770,7 @@ func TestValidateWorkerSARestriction(t *testing.T) {
 			errs := validateWorkerSARestriction(tt.obj)
 			if tt.wantErr {
 				require.NotEmpty(t, errs, "expected validation error")
-				assert.Contains(t, errs[0].Error(), "nvcf-worker-")
+				assert.Regexp(t, "nvcf-worker|nvca-infra-object", errs[0].Error())
 			} else {
 				assert.Empty(t, errs)
 			}

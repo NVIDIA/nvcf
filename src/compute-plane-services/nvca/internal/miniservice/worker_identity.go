@@ -26,12 +26,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
-	// miniserviceWorkerSAName is the ServiceAccount name for MiniService worker identity.
-	// Each MiniService gets its own namespace, so a fixed name is sufficient.
-	miniserviceWorkerSAName = "nvcf-worker"
 	// miniserviceWorkerTokenVolumeName is the projected SAT volume name injected into the utils pod.
 	miniserviceWorkerTokenVolumeName = "nvcf-worker-token"
 	// miniserviceWorkerTokenMountPath is where the projected SAT is mounted inside the container.
@@ -49,48 +50,72 @@ const (
 // miniserviceWorkerTokenExpirationSeconds is the requested SAT lifetime.
 var miniserviceWorkerTokenExpirationSeconds int64 = 900
 
-// ensureWorkerIdentity creates the worker ServiceAccount, Role, and RoleBinding in namespace.
-// It is idempotent: existing objects are not modified.
-func ensureWorkerIdentity(ctx context.Context, c client.Client, namespace string) error {
+// setWorkerIdentityMeta marks an identity object as NVCA infrastructure belonging to the MiniService.
+func setWorkerIdentityMeta(meta *metav1.ObjectMeta, msName string) {
+	if meta.Labels == nil {
+		meta.Labels = map[string]string{}
+	}
+	if meta.Annotations == nil {
+		meta.Annotations = map[string]string{}
+	}
+	meta.Labels[nvcatypes.MiniserviceNameLabel] = msName
+	meta.Annotations[nvcatypes.InfraObjectAnnotationKey] = "true"
+}
+
+// ensureWorkerIdentity creates the worker ServiceAccount and reconciles the worker Role and
+// RoleBinding in namespace. The Role is always reset to grant nothing and the RoleBinding to its
+// single worker subject, so a pre-existing object of the same name cannot grant the worker SA
+// permissions.
+func ensureWorkerIdentity(ctx context.Context, c client.Client, namespace, msName string) error {
+	name := miniservice.WorkerServiceAccountName
+
+	automount := false
 	sa := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{Name: miniserviceWorkerSAName, Namespace: namespace},
+		ObjectMeta:                   metav1.ObjectMeta{Name: name, Namespace: namespace},
+		AutomountServiceAccountToken: &automount,
 	}
+	setWorkerIdentityMeta(&sa.ObjectMeta, msName)
 	if err := c.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create worker ServiceAccount %s/%s: %w", namespace, miniserviceWorkerSAName, err)
+		return fmt.Errorf("create worker ServiceAccount %s/%s: %w", namespace, name, err)
 	}
 
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: miniserviceWorkerSAName, Namespace: namespace},
-		Rules:      nil,
-	}
-	if err := c.Create(ctx, role); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create worker Role %s/%s: %w", namespace, miniserviceWorkerSAName, err)
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, role, func() error {
+		setWorkerIdentityMeta(&role.ObjectMeta, msName)
+		role.Rules = nil
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconcile worker Role %s/%s: %w", namespace, name, err)
 	}
 
-	rb := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: miniserviceWorkerSAName, Namespace: namespace},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, rb, func() error {
+		setWorkerIdentityMeta(&rb.ObjectMeta, msName)
+		rb.RoleRef = rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
 			Kind:     "Role",
-			Name:     miniserviceWorkerSAName,
-		},
-		Subjects: []rbacv1.Subject{
-			{Kind: "ServiceAccount", Name: miniserviceWorkerSAName, Namespace: namespace},
-		},
-	}
-	if err := c.Create(ctx, rb); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create worker RoleBinding %s/%s: %w", namespace, miniserviceWorkerSAName, err)
+			Name:     name,
+		}
+		rb.Subjects = []rbacv1.Subject{
+			{Kind: rbacv1.ServiceAccountKind, Name: name, Namespace: namespace},
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconcile worker RoleBinding %s/%s: %w", namespace, name, err)
 	}
 
 	return nil
 }
 
-// injectWorkerTokenVolume assigns the worker ServiceAccount to pod, adds the projected SAT
-// volume, and injects worker identity env vars into all non-init containers.
+// injectWorkerTokenVolume assigns the worker ServiceAccount to pod, disables the default token
+// automount so only the audience-bound token is present, adds the projected SAT volume, and
+// injects worker identity env vars into all non-init containers.
 // The token audience is "nvcf-icms:<clusterID>" with a 900-second expiry.
 // The volume is mounted read-only at /var/run/secrets/tokens in all non-init containers.
 func injectWorkerTokenVolume(pod *corev1.Pod, clusterID string) {
-	pod.Spec.ServiceAccountName = miniserviceWorkerSAName
+	pod.Spec.ServiceAccountName = miniservice.WorkerServiceAccountName
+	automount := false
+	pod.Spec.AutomountServiceAccountToken = &automount
 	audience := "nvcf-icms:" + clusterID
 
 	volume := corev1.Volume{
