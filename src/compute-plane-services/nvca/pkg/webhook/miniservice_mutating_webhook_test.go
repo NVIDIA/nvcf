@@ -1458,3 +1458,65 @@ func volumeMountKeys(vms []corev1.VolumeMount) []string {
 	}
 	return keys
 }
+
+func TestMiniserviceMutatingWebhook_MutateNVLinkDRA(t *testing.T) {
+	newGPUPod := func(annos map[string]string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Annotations: annos},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "app",
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1")},
+					},
+				}},
+			},
+		}
+	}
+	wh := &miniserviceMutatingWebhook{}
+
+	t.Run("no annotation gets preferred affinity, no claim", func(t *testing.T) {
+		pod := newGPUPod(nil)
+		wh.mutateNVLinkDRA("ns-key", nvcatypes.MiniserviceMetadata{}, pod)
+
+		assert.Empty(t, pod.Spec.ResourceClaims)
+		assert.Empty(t, pod.Spec.Containers[0].Resources.Claims)
+		require.NotNil(t, pod.Spec.Affinity)
+		require.NotNil(t, pod.Spec.Affinity.PodAffinity)
+		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
+		assert.Empty(t, pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
+	})
+
+	t.Run("annotation with matching ref gets claim and required affinity", func(t *testing.T) {
+		pod := newGPUPod(map[string]string{nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0"})
+		meta := nvcatypes.MiniserviceMetadata{
+			NVLinkComputeDomains: map[string]nvcfdra.ComputeDomainRef{
+				"0": {ComputeDomainName: "nvcf-cd-index-1", ChannelName: "nvcf-cd-channel-1"},
+			},
+		}
+		wh.mutateNVLinkDRA("ns-key", meta, pod)
+
+		require.Len(t, pod.Spec.ResourceClaims, 1)
+		assert.Equal(t, "nvcf-cd-index-1", pod.Spec.ResourceClaims[0].Name)
+		require.NotNil(t, pod.Spec.ResourceClaims[0].ResourceClaimTemplateName)
+		assert.Equal(t, "nvcf-cd-channel-1", *pod.Spec.ResourceClaims[0].ResourceClaimTemplateName)
+		require.Len(t, pod.Spec.Containers[0].Resources.Claims, 1)
+		assert.Equal(t, "nvcf-cd-index-1", pod.Spec.Containers[0].Resources.Claims[0].Name)
+
+		require.NotNil(t, pod.Spec.Affinity)
+		require.NotNil(t, pod.Spec.Affinity.PodAffinity)
+		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
+		assert.Empty(t, pod.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
+	})
+
+	t.Run("annotation without matching ref gets required affinity but no claim", func(t *testing.T) {
+		pod := newGPUPod(map[string]string{nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0"})
+		wh.mutateNVLinkDRA("ns-key", nvcatypes.MiniserviceMetadata{}, pod)
+
+		assert.Empty(t, pod.Spec.ResourceClaims)
+		assert.Empty(t, pod.Spec.Containers[0].Resources.Claims)
+		require.NotNil(t, pod.Spec.Affinity)
+		require.NotNil(t, pod.Spec.Affinity.PodAffinity)
+		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
+	})
+}

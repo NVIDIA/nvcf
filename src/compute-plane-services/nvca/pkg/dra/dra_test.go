@@ -185,6 +185,10 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 
 	nvlinkDomainPartitionKeyFoo := "x2c26b46b68ffc68ff9x"
 	nvlinkDomainPartitionKeyFooIdx0 := "xbb4eca334f61af3b67x"
+	// nvlinkDomainPartitionKeyFooIdx1 is the partition key for the second normalized NVLink
+	// domain index (2) when two distinct required-nvlink-domain-index values are present;
+	// computed directly rather than hardcoded since it only arises in the multi-index test case.
+	nvlinkDomainPartitionKeyFooIdx1 := newPartitionKey([]byte("foo2"))
 	newDefaultPrefAffinity := func() *corev1.Affinity {
 		return &corev1.Affinity{
 			PodAffinity: &corev1.PodAffinity{
@@ -220,19 +224,6 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 			},
 		}
 	}
-	defaultComputeDomain := &nvresourcev1beta1.ComputeDomain{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: defaultComputeDomainName,
-		},
-		Spec: nvresourcev1beta1.ComputeDomainSpec{
-			Channel: &nvresourcev1beta1.ComputeDomainChannelSpec{
-				ResourceClaimTemplate: nvresourcev1beta1.ComputeDomainResourceClaimTemplate{
-					Name: defaultComputeDomainChannelName,
-				},
-			},
-		},
-	}
-	computeDomainChannelName := defaultComputeDomainChannelName
 	staticGPUResourceKey := gpuResourceKeys[0]
 	defaultGPULimit := resource.MustParse("2")
 
@@ -252,14 +243,43 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 			}},
 		}
 	}
+	// newDefaultExpPodSpec is the expected spec for a GPU pod with no required-domain-index
+	// annotation: it only gets preferred NVLink domain affinity, never a ComputeDomain claim,
+	// since it never declared a cross-node NVLink requirement.
 	newDefaultExpPodSpec := func() corev1.PodSpec {
 		return corev1.PodSpec{
 			Containers: []corev1.Container{{
 				Name: "foo",
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
+				},
+			}},
+			InitContainers: []corev1.Container{{
+				Name: "foo-init",
+				Resources: corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
+				},
+			}},
+			Affinity: newDefaultPrefAffinity(),
+		}
+	}
+	newDefaultExpBinpackObjectMetadata := func() metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Labels: map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFoo},
+		}
+	}
+	// newExpReqPodSpec is the expected spec for a GPU pod with a required-domain-index
+	// annotation: it gets a claim on the ComputeDomain provisioned for its normalized index,
+	// plus required (not preferred) NVLink domain affinity keyed off partitionKey.
+	newExpReqPodSpec := func(cd *nvresourcev1beta1.ComputeDomain, partitionKey string) corev1.PodSpec {
+		channelName := cd.Spec.Channel.ResourceClaimTemplate.Name
+		return corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "foo",
+				Resources: corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
 					Claims: []corev1.ResourceClaim{{
-						Name: defaultComputeDomainName,
+						Name: cd.Name,
 					}},
 				},
 			}},
@@ -268,20 +288,44 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 				Resources: corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
 					Claims: []corev1.ResourceClaim{{
-						Name: defaultComputeDomainName,
+						Name: cd.Name,
 					}},
 				},
 			}},
 			ResourceClaims: []corev1.PodResourceClaim{{
-				Name:                      defaultComputeDomainName,
-				ResourceClaimTemplateName: &computeDomainChannelName,
+				Name:                      cd.Name,
+				ResourceClaimTemplateName: &channelName,
 			}},
-			Affinity: newDefaultPrefAffinity(),
-		}
-	}
-	newDefaultExpBinpackObjectMetadata := func() metav1.ObjectMeta {
-		return metav1.ObjectMeta{
-			Labels: map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFoo},
+			Affinity: &corev1.Affinity{
+				PodAffinity: &corev1.PodAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+						LabelSelector: &metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{
+									Key:      NVLinkDomainPartitionLabel,
+									Operator: metav1.LabelSelectorOpExists,
+								},
+								{
+									Key:      NVLinkDomainPartitionLabel,
+									Operator: metav1.LabelSelectorOpIn,
+									Values:   []string{partitionKey},
+								},
+							},
+						},
+						TopologyKey: GPUCliqueNodeLabel,
+					}},
+				},
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+							MatchExpressions: []corev1.NodeSelectorRequirement{{
+								Key:      GPUCliqueNodeLabel,
+								Operator: corev1.NodeSelectorOpExists,
+							}},
+						}},
+					},
+				},
+			},
 		}
 	}
 
@@ -303,9 +347,6 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 					ObjectMeta: newDefaultExpBinpackObjectMetadata(),
 					Spec:       newDefaultExpPodSpec(),
 				},
-			},
-			expDRAObjs: []client.Object{
-				defaultComputeDomain,
 			},
 		},
 		{
@@ -337,9 +378,6 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 					},
 				},
 			},
-			expDRAObjs: []client.Object{
-				defaultComputeDomain,
-			},
 		},
 		{
 			name: "zero gpu pod",
@@ -369,9 +407,6 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 						Affinity: newDefaultPrefAffinity(),
 					},
 				},
-			},
-			expDRAObjs: []client.Object{
-				defaultComputeDomain,
 			},
 		},
 		{
@@ -471,9 +506,6 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 					},
 				},
 			},
-			expDRAObjs: []client.Object{
-				defaultComputeDomain,
-			},
 		},
 		{
 			name: "single pod with req",
@@ -492,64 +524,49 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 						Labels:      map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFooIdx0},
 						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"},
 					},
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{{
-							Name: "foo",
-							Resources: corev1.ResourceRequirements{
-								Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-								Claims: []corev1.ResourceClaim{{
-									Name: defaultComputeDomainName,
-								}},
-							},
-						}},
-						InitContainers: []corev1.Container{{
-							Name: "foo-init",
-							Resources: corev1.ResourceRequirements{
-								Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-								Claims: []corev1.ResourceClaim{{
-									Name: defaultComputeDomainName,
-								}},
-							},
-						}},
-						ResourceClaims: []corev1.PodResourceClaim{{
-							Name:                      defaultComputeDomainName,
-							ResourceClaimTemplateName: &computeDomainChannelName,
-						}},
-						Affinity: &corev1.Affinity{
-							PodAffinity: &corev1.PodAffinity{
-								RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-									LabelSelector: &metav1.LabelSelector{
-										MatchExpressions: []metav1.LabelSelectorRequirement{
-											{
-												Key:      NVLinkDomainPartitionLabel,
-												Operator: metav1.LabelSelectorOpExists,
-											},
-											{
-												Key:      NVLinkDomainPartitionLabel,
-												Operator: metav1.LabelSelectorOpIn,
-												Values:   []string{nvlinkDomainPartitionKeyFooIdx0},
-											},
-										},
-									},
-									TopologyKey: GPUCliqueNodeLabel,
-								}},
-							},
-							NodeAffinity: &corev1.NodeAffinity{
-								RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-									NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-										MatchExpressions: []corev1.NodeSelectorRequirement{{
-											Key:      GPUCliqueNodeLabel,
-											Operator: corev1.NodeSelectorOpExists,
-										}},
-									}},
-								},
-							},
-						},
-					},
+					Spec: newExpReqPodSpec(computeDomainForIndex(1), nvlinkDomainPartitionKeyFooIdx0),
 				},
 			},
 			expDRAObjs: []client.Object{
-				defaultComputeDomain,
+				computeDomainForIndex(1),
+			},
+		},
+		{
+			name: "two required indices get distinct ComputeDomains",
+			objs: []client.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"},
+					},
+					Spec: newDefaultPodSpec(),
+				},
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "1"},
+					},
+					Spec: newDefaultPodSpec(),
+				},
+			},
+			keyToHash: "foo",
+			expObjs: []client.Object{
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels:      map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFooIdx0},
+						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"},
+					},
+					Spec: newExpReqPodSpec(computeDomainForIndex(1), nvlinkDomainPartitionKeyFooIdx0),
+				},
+				&corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels:      map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFooIdx1},
+						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "1"},
+					},
+					Spec: newExpReqPodSpec(computeDomainForIndex(2), nvlinkDomainPartitionKeyFooIdx1),
+				},
+			},
+			expDRAObjs: []client.Object{
+				computeDomainForIndex(1),
+				computeDomainForIndex(2),
 			},
 		},
 	} {
@@ -567,4 +584,69 @@ func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestComputeDomainsForWorkload(t *testing.T) {
+	staticGPUResourceKey := gpuResourceKeys[0]
+	defaultGPULimit := resource.MustParse("2")
+	newGPUPod := func(annos map[string]string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Annotations: annos},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "foo",
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
+					},
+				}},
+			},
+		}
+	}
+
+	t.Run("no annotated objects yields no ComputeDomains", func(t *testing.T) {
+		cds, refs, err := ComputeDomainsForWorkload(newGPUPod(nil), newGPUPod(map[string]string{"other": "annotation"}))
+		assert.NoError(t, err)
+		assert.Nil(t, cds)
+		assert.Nil(t, refs)
+	})
+
+	t.Run("single index yields one ComputeDomain", func(t *testing.T) {
+		cds, refs, err := ComputeDomainsForWorkload(
+			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
+		)
+		assert.NoError(t, err)
+		if assert.Len(t, cds, 1) {
+			assert.Equal(t, computeDomainForIndex(1), cds[0])
+		}
+		assert.Equal(t, map[string]ComputeDomainRef{
+			"0": {ComputeDomainName: computeDomainForIndex(1).Name, ChannelName: computeDomainForIndex(1).Spec.Channel.ResourceClaimTemplate.Name},
+		}, refs)
+	})
+
+	t.Run("distinct indices yield distinct ComputeDomains", func(t *testing.T) {
+		cds, refs, err := ComputeDomainsForWorkload(
+			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
+			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "1"}),
+			newGPUPod(nil), // unannotated pod contributes nothing.
+		)
+		assert.NoError(t, err)
+		if assert.Len(t, cds, 2) {
+			assert.Equal(t, computeDomainForIndex(1), cds[0])
+			assert.Equal(t, computeDomainForIndex(2), cds[1])
+		}
+		assert.Equal(t, map[string]ComputeDomainRef{
+			"0": {ComputeDomainName: computeDomainForIndex(1).Name, ChannelName: computeDomainForIndex(1).Spec.Channel.ResourceClaimTemplate.Name},
+			"1": {ComputeDomainName: computeDomainForIndex(2).Name, ChannelName: computeDomainForIndex(2).Spec.Channel.ResourceClaimTemplate.Name},
+		}, refs)
+	})
+
+	t.Run("repeated raw index reuses the same ComputeDomain", func(t *testing.T) {
+		cds, refs, err := ComputeDomainsForWorkload(
+			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
+			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
+		)
+		assert.NoError(t, err)
+		assert.Len(t, cds, 1)
+		assert.Len(t, refs, 1)
+	})
 }
