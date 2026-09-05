@@ -19,7 +19,6 @@ package nvct
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,10 +32,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/auth"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/proto/nvct"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/test/testutils"
-	"github.com/NVIDIA/nvcf/src/libraries/go/worker/token"
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/types"
 
 	"golang.org/x/oauth2"
@@ -179,6 +176,7 @@ func TestSendResultMetadata(t *testing.T) {
 		ctx,
 		mockClient.Client,
 		mockClient.NvctTokenProvider,
+		false,
 	)
 	defer func() {
 		if err := mockStreamingClient.Close(); err != nil {
@@ -377,93 +375,4 @@ func validateArtifacts(artifacts *types.ArtifactsList) error {
 
 	return nil
 
-}
-
-// TestNvctCredentialSelection_FallsBackToBootstrap verifies that when no mounted JWT is
-// available, the bootstrap token provided at construction remains active.
-func TestNvctCredentialSelection_FallsBackToBootstrap(t *testing.T) {
-	t.Setenv("NVCF_TOKEN_FILE_PATH", "")
-
-	bootstrapToken := "bootstrap-nvct-token"
-	nvctToken := &oauth2.Token{AccessToken: bootstrapToken}
-	tokenProvider := auth.NewSettableTokenSource(oauth2.StaticTokenSource(nvctToken))
-
-	// Replicate the selection logic from CreateClient.
-	if mountedSrc, err := token.NewMountedJWTSource(); err == nil {
-		tokenProvider.SetTokenSource(mountedSrc)
-	}
-
-	tok, err := tokenProvider.Token()
-	if err != nil {
-		t.Fatalf("Token() error: %v", err)
-	}
-	if tok.AccessToken != bootstrapToken {
-		t.Errorf("expected bootstrap token %q, got %q", bootstrapToken, tok.AccessToken)
-	}
-}
-
-// TestNvctCredentialSelection_PrefersMountedJWT verifies that a mounted PSAT replaces
-// the bootstrap token when NVCF_TOKEN_FILE_PATH points to a valid regular file.
-func TestNvctCredentialSelection_PrefersMountedJWT(t *testing.T) {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	claims := base64.RawURLEncoding.EncodeToString(
-		[]byte(`{"sub":"system:serviceaccount:nvcf-backend:nvcf-worker-inst","exp":9999999999}`),
-	)
-	jwtStr := header + "." + claims + ".fakesig"
-
-	f, err := os.CreateTemp("", "psat-*.jwt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.WriteString(jwtStr); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	t.Setenv("NVCF_TOKEN_FILE_PATH", f.Name())
-
-	bootstrapToken := "bootstrap-nvct-token"
-	nvctToken := &oauth2.Token{AccessToken: bootstrapToken}
-	tokenProvider := auth.NewSettableTokenSource(oauth2.StaticTokenSource(nvctToken))
-
-	// Replicate the selection logic from CreateClient.
-	if mountedSrc, err := token.NewMountedJWTSource(); err == nil {
-		tokenProvider.SetTokenSource(mountedSrc)
-	}
-
-	tok, err := tokenProvider.Token()
-	if err != nil {
-		t.Fatalf("Token() error: %v", err)
-	}
-	if tok.AccessToken != jwtStr {
-		t.Errorf("expected mounted JWT %q, got %q", jwtStr, tok.AccessToken)
-	}
-}
-
-// TestNvctCredentialSelection_SetTokenSourceReplacesProvider verifies that
-// SetTokenSource replaces the active credential after initial construction.
-func TestNvctCredentialSelection_SetTokenSourceReplacesProvider(t *testing.T) {
-	original := &oauth2.Token{AccessToken: "original"}
-	replacement := &oauth2.Token{AccessToken: "replacement"}
-
-	tokenProvider := auth.NewSettableTokenSource(oauth2.StaticTokenSource(original))
-
-	tok, err := tokenProvider.Token()
-	if err != nil {
-		t.Fatalf("Token() error: %v", err)
-	}
-	if tok.AccessToken != "original" {
-		t.Errorf("expected original token, got %q", tok.AccessToken)
-	}
-
-	tokenProvider.SetTokenSource(oauth2.StaticTokenSource(replacement))
-
-	tok, err = tokenProvider.Token()
-	if err != nil {
-		t.Fatalf("Token() error after replacement: %v", err)
-	}
-	if tok.AccessToken != "replacement" {
-		t.Errorf("expected replacement token, got %q", tok.AccessToken)
-	}
 }

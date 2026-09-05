@@ -20,8 +20,10 @@ package token
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,44 +33,147 @@ import (
 func buildFakeJWT(exp int64) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
 	payload := base64.RawURLEncoding.EncodeToString(
-		[]byte(fmt.Sprintf(`{"sub":"system:serviceaccount:ns:sa","exp":%d}`, exp)),
+		[]byte(fmt.Sprintf(`{"sub":"system:serviceaccount:ns:nvcf-worker","exp":%d}`, exp)),
 	)
 	return header + "." + payload + ".fakesig"
 }
 
-func TestNewMountedJWTSource_NoEnvVar(t *testing.T) {
-	t.Setenv("NVCF_TOKEN_FILE_PATH", "")
-	_, err := NewMountedJWTSource()
-	if err != ErrNoMountedToken {
-		t.Errorf("expected ErrNoMountedToken, got %v", err)
+// useTempMountRoot points MountedTokenRoot at a fresh temp directory for the test and
+// returns its symlink-resolved path.
+func useTempMountRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := MountedTokenRoot
+	MountedTokenRoot = dir + "/"
+	t.Cleanup(func() { MountedTokenRoot = old })
+	return dir
+}
+
+// writeMountedJWT writes a valid fake JWT under root and points the env var at it.
+func writeMountedJWT(t *testing.T, root string, exp int64) string {
+	t.Helper()
+	path := filepath.Join(root, "token")
+	if err := os.WriteFile(path, []byte(buildFakeJWT(exp)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(MountedTokenPathEnvKey, path)
+	return path
+}
+
+func TestNewMountedJWTSource_NoEnvVar_UsesDefaultPath(t *testing.T) {
+	t.Setenv(MountedTokenPathEnvKey, "")
+	path, err := resolveMountedTokenPath("")
+	if err != nil {
+		t.Fatalf("resolveMountedTokenPath: %v", err)
+	}
+	if path != DefaultMountedTokenPath {
+		t.Errorf("default path = %q, want %q", path, DefaultMountedTokenPath)
+	}
+	if _, statErr := os.Stat(DefaultMountedTokenPath); statErr == nil {
+		t.Skip("default mount path exists on this host")
+	}
+	_, err = NewMountedJWTSource()
+	if !errors.Is(err, ErrNoMountedToken) {
+		t.Errorf("expected ErrNoMountedToken when the default path is absent, got %v", err)
 	}
 }
 
 func TestNewMountedJWTSource_FileMissing(t *testing.T) {
-	t.Setenv("NVCF_TOKEN_FILE_PATH", "/nonexistent/path/token")
+	root := useTempMountRoot(t)
+	t.Setenv(MountedTokenPathEnvKey, filepath.Join(root, "missing"))
 	_, err := NewMountedJWTSource()
-	if err != ErrNoMountedToken {
+	if !errors.Is(err, ErrNoMountedToken) {
 		t.Errorf("expected ErrNoMountedToken, got %v", err)
 	}
 }
 
 func TestNewMountedJWTSource_NonRegularFile(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("NVCF_TOKEN_FILE_PATH", dir)
+	root := useTempMountRoot(t)
+	t.Setenv(MountedTokenPathEnvKey, root)
 	_, err := NewMountedJWTSource()
-	if err != ErrNoMountedToken {
+	if !errors.Is(err, ErrNoMountedToken) {
 		t.Errorf("expected ErrNoMountedToken for directory path, got %v", err)
 	}
 }
 
-func TestNewMountedJWTSource_FileExists(t *testing.T) {
-	f, err := os.CreateTemp("", "psat-*.jwt")
-	if err != nil {
+func TestNewMountedJWTSource_PathOutsideAllowedRoot(t *testing.T) {
+	useTempMountRoot(t)
+	outside := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(outside, []byte(buildFakeJWT(time.Now().Add(time.Hour).Unix())), 0600); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
-	t.Setenv("NVCF_TOKEN_FILE_PATH", f.Name())
+	t.Setenv(MountedTokenPathEnvKey, outside)
+	_, err := NewMountedJWTSource()
+	if !errors.Is(err, ErrNoMountedToken) {
+		t.Errorf("expected ErrNoMountedToken for a path outside %s, got %v", MountedTokenRoot, err)
+	}
+}
 
+func TestNewMountedJWTSource_SymlinkEscapeRejected(t *testing.T) {
+	root := useTempMountRoot(t)
+	outside := filepath.Join(t.TempDir(), "real-token")
+	if err := os.WriteFile(outside, []byte(buildFakeJWT(time.Now().Add(time.Hour).Unix())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "token")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(MountedTokenPathEnvKey, link)
+	_, err := NewMountedJWTSource()
+	if !errors.Is(err, ErrNoMountedToken) {
+		t.Errorf("expected ErrNoMountedToken for a symlink escaping the root, got %v", err)
+	}
+}
+
+func TestNewMountedJWTSource_TraversalRejected(t *testing.T) {
+	root := useTempMountRoot(t)
+	outside := filepath.Join(filepath.Dir(root), "escaped-token")
+	if err := os.WriteFile(outside, []byte(buildFakeJWT(time.Now().Add(time.Hour).Unix())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(outside)
+	t.Setenv(MountedTokenPathEnvKey, filepath.Join(root, "..", "escaped-token"))
+	_, err := NewMountedJWTSource()
+	if !errors.Is(err, ErrNoMountedToken) {
+		t.Errorf("expected ErrNoMountedToken for a traversal path, got %v", err)
+	}
+}
+
+func TestNewMountedJWTSource_NonJWTContent(t *testing.T) {
+	root := useTempMountRoot(t)
+	path := filepath.Join(root, "token")
+	if err := os.WriteFile(path, []byte("not a jwt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(MountedTokenPathEnvKey, path)
+	_, err := NewMountedJWTSource()
+	if !errors.Is(err, ErrNoMountedToken) {
+		t.Errorf("expected ErrNoMountedToken for non-JWT content, got %v", err)
+	}
+}
+
+func TestNewMountedJWTSource_UnreadableFileIsNotNoToken(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode 0000 files")
+	}
+	root := useTempMountRoot(t)
+	path := writeMountedJWT(t, root, time.Now().Add(time.Hour).Unix())
+	if err := os.Chmod(path, 0000); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewMountedJWTSource()
+	if err == nil || errors.Is(err, ErrNoMountedToken) {
+		t.Errorf("expected a read error distinct from ErrNoMountedToken, got %v", err)
+	}
+}
+
+func TestNewMountedJWTSource_FileExists(t *testing.T) {
+	root := useTempMountRoot(t)
+	writeMountedJWT(t, root, time.Now().Add(time.Hour).Unix())
 	src, err := NewMountedJWTSource()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -79,19 +184,9 @@ func TestNewMountedJWTSource_FileExists(t *testing.T) {
 }
 
 func TestMountedJWTTokenSource_Token_ReadsFile(t *testing.T) {
+	root := useTempMountRoot(t)
 	exp := time.Now().Add(15 * time.Minute).Unix()
-	jwtStr := buildFakeJWT(exp)
-
-	f, err := os.CreateTemp("", "psat-*.jwt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.WriteString(jwtStr); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	t.Setenv("NVCF_TOKEN_FILE_PATH", f.Name())
+	writeMountedJWT(t, root, exp)
 
 	src, err := NewMountedJWTSource()
 	if err != nil {
@@ -101,8 +196,8 @@ func TestMountedJWTTokenSource_Token_ReadsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Token() error: %v", err)
 	}
-	if tok.AccessToken != jwtStr {
-		t.Errorf("AccessToken = %q, want %q", tok.AccessToken, jwtStr)
+	if tok.AccessToken != buildFakeJWT(exp) {
+		t.Errorf("AccessToken = %q, want %q", tok.AccessToken, buildFakeJWT(exp))
 	}
 	if tok.Expiry.Unix() != exp {
 		t.Errorf("Expiry = %v, want %v", tok.Expiry, time.Unix(exp, 0))
@@ -110,29 +205,46 @@ func TestMountedJWTTokenSource_Token_ReadsFile(t *testing.T) {
 }
 
 func TestMountedJWTTokenSource_Token_ReReadsOnRotation(t *testing.T) {
-	f, err := os.CreateTemp("", "psat-*.jwt")
+	root := useTempMountRoot(t)
+	path := writeMountedJWT(t, root, time.Now().Add(10*time.Minute).Unix())
+
+	src, err := NewMountedJWTSource()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
-	t.Setenv("NVCF_TOKEN_FILE_PATH", f.Name())
-
-	src, _ := NewMountedJWTSource()
-
-	// Write first token
-	tok1 := buildFakeJWT(time.Now().Add(10 * time.Minute).Unix())
-	os.WriteFile(f.Name(), []byte(tok1), 0600)
-	r1, _ := src.Token()
-	if r1.AccessToken != tok1 {
-		t.Errorf("first read: got %q, want %q", r1.AccessToken, tok1)
+	r1, err := src.Token()
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// Rotate: write second token
 	tok2 := buildFakeJWT(time.Now().Add(15 * time.Minute).Unix())
-	os.WriteFile(f.Name(), []byte(tok2), 0600)
-	r2, _ := src.Token()
-	if r2.AccessToken != tok2 {
+	if err := os.WriteFile(path, []byte(tok2), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := src.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.AccessToken != tok2 || r2.AccessToken == r1.AccessToken {
 		t.Errorf("second read after rotation: got %q, want %q", r2.AccessToken, tok2)
+	}
+}
+
+func TestMountedJWTTokenSource_Token_ErrorsOnRotatedGarbage(t *testing.T) {
+	root := useTempMountRoot(t)
+	path := writeMountedJWT(t, root, time.Now().Add(10*time.Minute).Unix())
+
+	src, err := NewMountedJWTSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("garbage"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := src.Token()
+	if err == nil {
+		t.Fatalf("expected error for non-JWT content, got token %q", tok.AccessToken)
 	}
 }
 

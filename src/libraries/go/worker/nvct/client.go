@@ -56,6 +56,9 @@ type Client struct {
 	instanceType            string
 	clientTimeout           time.Duration
 	sharedConfigDir         string
+	// delegatedToken is true when the credential is a mounted projected ServiceAccount
+	// token. NVCT then issues no replacement token and the client persists none.
+	delegatedToken bool
 }
 
 func CreateClient(nvctFqdn string, nvctWorkerToken string, instanceId string, taskId string, instanceType string, nvctClientTimeout time.Duration, sharedConfigDir string) (*Client, error) {
@@ -104,13 +107,14 @@ func CreateClient(nvctFqdn string, nvctWorkerToken string, instanceId string, ta
 
 	// Prefer a mounted projected ServiceAccount Token (PSAT) over the bootstrap token
 	// when running on a self-hosted cluster with worker identity enabled.
-	if mountedSrc, err := token.NewMountedJWTSource(); err == nil {
-		zap.L().Info("mounted JWT found; using projected ServiceAccount token as NVCT credential")
-		nvctTokenProvider.SetTokenSource(mountedSrc)
+	delegatedToken, err := token.SelectMountedToken(nvctTokenProvider, nvctFqdn, "NVCT")
+	if err != nil {
+		return nil, err
 	}
 
 	return &Client{
-		Client: workerClient,
+		delegatedToken: delegatedToken,
+		Client:         workerClient,
 		regionalNvctClients: map[string]pb.WorkerClient{
 			nvctFqdn: workerClient,
 		},
