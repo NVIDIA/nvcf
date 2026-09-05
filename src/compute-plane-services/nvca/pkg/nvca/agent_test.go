@@ -47,6 +47,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
@@ -1484,11 +1486,18 @@ func TestAgentMaintenanceModeInitialization(t *testing.T) {
 }
 
 // Mock implementation for testing
+type postedInstanceStatusUpdate struct {
+	requestID  string
+	instanceID string
+	payload    types.ICMSInstanceStatusUpdateRequest
+}
+
 type mockICMSClient struct {
 	healthStatusRequests []types.HealthStatusRequest
 	registrationRequests []types.ICMSRegistrationRequest
 	registrationResponse *types.ICMSRegistrationResponse
 	registerErr          error
+	postedStatusUpdates  []postedInstanceStatusUpdate
 }
 
 func (m *mockICMSClient) PutHealthStatus(ctx context.Context, req *types.HealthStatusRequest) (*types.HealthStatusResponse, error) {
@@ -1512,6 +1521,11 @@ func (m *mockICMSClient) Register(ctx context.Context, req *types.ICMSRegistrati
 }
 
 func (m *mockICMSClient) PostInstanceStatusUpdate(ctx context.Context, requestID, instanceID string, payload *types.ICMSInstanceStatusUpdateRequest) error {
+	m.postedStatusUpdates = append(m.postedStatusUpdates, postedInstanceStatusUpdate{
+		requestID:  requestID,
+		instanceID: instanceID,
+		payload:    *payload,
+	})
 	return nil
 }
 
@@ -1701,6 +1715,148 @@ func TestEvictAllWorkloads(t *testing.T) {
 	// Verify that miniservice was deleted
 	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-3-miniservice"}, ms)
 	assert.True(t, errors.IsNotFound(err), "Miniservice should be deleted")
+}
+
+// TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance verifies that
+// evictAllWorkloads only reports instances to ICMS as terminated when PurgeInstanceID
+// actually confirmed the backing Pod/MiniService is gone. It simulates a MiniService whose
+// delete is accepted but that remains present (e.g. blocked by its own finalizer), and
+// checks that instance is excluded from the termination updates sent to ICMS while an
+// unrelated, successfully purged Pod instance is still reported.
+func TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance(t *testing.T) {
+	ctx := newTestContext()
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MaintenanceMode:                types.MaintenanceModeCordonAndDrain,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	testReq := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-request-1",
+			Namespace: "default",
+		},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID: "req-1",
+		},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: nvcav2beta1.ICMSRequestStatusInProgress,
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-ok": {
+					ID:     "instance-ok",
+					Type:   nvcav2beta1.InstanceTypePod,
+					Status: string(types.ICMSInstanceRunning),
+				},
+				"instance-blocked-miniservice": {
+					ID:     "instance-blocked-miniservice",
+					Type:   nvcav2beta1.InstanceTypeMiniService,
+					Status: string(types.ICMSInstanceRunning),
+				},
+			},
+		},
+	}
+
+	mockICMS := &mockICMSClient{}
+	ag := newMockAgentSingleGPU(t, ctx, agentOpts)
+	ag.icmsClient = mockICMS
+
+	require.NoError(t, ag.Start(ctx))
+
+	_, err := ag.backendk8scache.clients.BART.NvcaV2beta1().ICMSRequests(testReq.Namespace).Create(ctx, testReq, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		items, _ := ag.backendk8scache.icmsRequestLister.List(labels.Everything())
+		return len(items) >= 1
+	}, time.Second, time.Millisecond*50)
+
+	podNamespace := ag.backendk8scache.podInstanceNamespace
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "instance-ok",
+			Namespace: podNamespace,
+		},
+	}
+	_, err = ag.backendk8scache.clients.K8s.CoreV1().Pods(podNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	// Wait for the informer backing podSpecLister to observe the newly created pod before
+	// evicting, so the subsequent delete's existence check converges quickly instead of
+	// racing an informer that hasn't synced the pod's existence yet.
+	require.Eventually(t, func() bool {
+		_, err := ag.backendk8scache.podSpecLister.Get("instance-ok")
+		return err == nil
+	}, 5*time.Second, 50*time.Millisecond, "informer should observe the created pod")
+
+	// Replace HelmV2 with a client whose Delete is accepted but does not remove the
+	// object, simulating a MiniService still blocked by its own finalizer/cleanup.
+	sch := newMiniServiceScheme()
+	fakeHelmClient := ctrlfake.NewClientBuilder().
+		WithScheme(sch).
+		WithStatusSubresource(&v1alpha1.MiniService{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				return nil
+			},
+		}).
+		Build()
+	ag.backendk8scache.clients.HelmV2 = fakeHelmClient
+
+	ms := &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "instance-blocked-miniservice"},
+	}
+	require.NoError(t, ag.backendk8scache.clients.HelmV2.Create(ctx, ms))
+
+	// evictAllWorkloads issues Delete() and checks the informer-backed lister for actual
+	// absence in the same pass; the lister may not have converged yet by the time the
+	// check runs, so retry a few times (mirroring the retry-on-next-reconcile behavior
+	// this PR's fix relies on) until the successfully purged pod is reported.
+	require.Eventually(t, func() bool {
+		require.NoError(t, ag.evictAllWorkloads(ctx))
+		for _, u := range mockICMS.postedStatusUpdates {
+			if u.instanceID == "instance-ok" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 100*time.Millisecond, "instance-ok should eventually be reported terminated")
+
+	// The Pod instance was successfully purged; the MiniService instance was not.
+	_, err = ag.backendk8scache.clients.K8s.CoreV1().Pods(podNamespace).Get(ctx, "instance-ok", metav1.GetOptions{})
+	assert.True(t, errors.IsNotFound(err), "Pod instance-ok should be deleted")
+
+	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-blocked-miniservice"}, &v1alpha1.MiniService{})
+	assert.NoError(t, err, "MiniService instance should still exist since its delete was blocked")
+
+	var reportedIDs []string
+	for _, u := range mockICMS.postedStatusUpdates {
+		reportedIDs = append(reportedIDs, u.instanceID)
+		assert.Equal(t, types.ICMSInstanceTerminated, u.payload.InstanceState)
+	}
+	assert.Contains(t, reportedIDs, "instance-ok", "successfully purged instance should be reported terminated")
+	assert.NotContains(t, reportedIDs, "instance-blocked-miniservice", "still-present instance must not be reported terminated")
 }
 
 func TestEvictAllWorkloads_EmptyList(t *testing.T) {
