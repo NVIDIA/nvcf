@@ -93,7 +93,8 @@ if ! grep -q '^until cqlsh ' "${script}"; then
   fail "execute_sqls.sh must retain the Cassandra authentication readiness check"
 fi
 
-if ! grep -Eq '(^|[[:space:]])kubectl([[:space:]]|$)' "${init_script}"; then
+if ! sed '/^[[:space:]]*#/d' "${init_script}" |
+  grep -Eq '(^|[[:space:]])kubectl[[:space:]]+exec([[:space:]]|$)'; then
   fail "Cassandra cluster initialization no longer requires kubectl; reconsider bundling it"
 fi
 
@@ -105,6 +106,11 @@ fi
 
 if ! grep -F -q 'ARG KUBECTL_VERSION=v1.37.0' "${dockerfile}"; then
   fail "the migrations image must retain the kubectl security baseline"
+fi
+
+if ! grep -F -q 'ARG KUBECTL_MIN_GO_VERSION=1.26.6' "${dockerfile}" ||
+  ! grep -F -q '/out/kubectl version --client -o json' "${dockerfile}"; then
+  fail "the migrations image must validate the distributed kubectl build metadata"
 fi
 
 nvct_schema="${keyspaces}/nvct_api/03_init_tables.up.sql"

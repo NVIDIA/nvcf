@@ -21,10 +21,11 @@ RUN apk add --no-cache curl unzip && \
       -ldflags="-s -w -buildid= -X main.Version=${MIGRATE_BUILD_VERSION}" \
       -o /out/migrate ./cmd/migrate
 
-FROM --platform=$BUILDPLATFORM alpine:3.23 AS kubectl-downloader
+FROM ${GO_IMAGE} AS kubectl-downloader
 
 ARG TARGETARCH
 ARG KUBECTL_VERSION=v1.37.0
+ARG KUBECTL_MIN_GO_VERSION=1.26.6
 ARG KUBECTL_LINUX_AMD64_SHA256=6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
 ARG KUBECTL_LINUX_ARM64_SHA256=922df28df248cc00a9e025f947704f1d1482de64ece54cfe57e61f19eaf1eef3
 
@@ -42,7 +43,20 @@ RUN apk add --no-cache curl && \
     curl -fsSLo /tmp/kubectl.sha256 "${KUBECTL_BASE_URL}/kubectl.sha256" && \
     test "$(cat /tmp/kubectl.sha256)" = "${KUBECTL_SHA256}" && \
     printf '%s  %s\n' "${KUBECTL_SHA256}" /out/kubectl | sha256sum -c - && \
-    chmod 0555 /out/kubectl
+    chmod 0555 /out/kubectl && \
+    KUBECTL_METADATA="$(/out/kubectl version --client -o json)" && \
+    KUBECTL_GIT_VERSION="$(printf '%s\n' "${KUBECTL_METADATA}" | awk -F '"' '/"gitVersion":/ { print $4; exit }')" && \
+    KUBECTL_GO_VERSION="$(printf '%s\n' "${KUBECTL_METADATA}" | awk -F '"' '/"goVersion":/ { sub(/^go/, "", $4); print $4; exit }')" && \
+    test "${KUBECTL_GIT_VERSION}" = "${KUBECTL_VERSION}" && \
+    awk -v actual="${KUBECTL_GO_VERSION}" -v minimum="${KUBECTL_MIN_GO_VERSION}" \
+      'BEGIN { \
+        split(actual, a, "."); split(minimum, m, "."); \
+        for (i = 1; i <= 3; i++) { \
+          if (a[i] + 0 > m[i] + 0) exit 0; \
+          if (a[i] + 0 < m[i] + 0) exit 1; \
+        } \
+        exit 0 \
+      }'
 
 FROM cassandra:5.0.9
 

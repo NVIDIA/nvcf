@@ -12,7 +12,8 @@ This repository ships:
 
 The Cassandra chart also uses this image for its cluster-initialization hook.
 That hook calls `kubectl`, so the image includes the checksum-verified official
-Kubernetes v1.37.0 client for both supported architectures.
+Kubernetes v1.37.0 client for both supported architectures. The build also
+validates that each distributed binary reports v1.37.0 and Go 1.26.6 or newer.
 
 ## Migration driver
 
