@@ -49,7 +49,7 @@ releases:
     # defaults below match the managed SBOM template.
     condition: addons.kaiScheduler.enabled
     chart: kai-scheduler/kai-scheduler
-    version: v0.16.7
+    version: v0.17.1
     namespace: kai-scheduler
     values:
       - ../global.yaml.gotmpl
@@ -389,7 +389,7 @@ releases:
     # (NVIDIA/nvcf#1269).
     condition: addons.dynamoOperator.enabled
     chart: nvidia-ai-dynamo/dynamo-platform
-    version: 1.4.1
+    version: 1.4.2
     namespace: dynamo-system
     needs:
       - grove-system/grove-operator

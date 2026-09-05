@@ -44,20 +44,21 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
+    # 1.7.0 currently references an unpublished api-keys service image.
     version: 1.6.0
     namespace: api-keys
     inherit:
       - template: service
 
   - name: sis
-    version: 2.0.0
+    version: 2.1.0
     namespace: sis
     inherit:
       - template: service
     condition: icms.enabled
 
   - name: api
-    version: 1.25.1
+    version: 1.25.6
     namespace: nvcf
     inherit:
       - template: service
@@ -66,7 +67,7 @@ releases:
       - ess/ess-api
 
   - name: nvct-api
-    version: 1.5.2
+    version: 1.5.3
     namespace: nvcf
     inherit:
       - template: service
@@ -80,7 +81,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.7.1
+    version: 1.7.2
     namespace: nvcf
     inherit:
       - template: service
@@ -89,7 +90,7 @@ releases:
 
   - name: ratelimiter
     chart: nvcf/helm-nvcf-rate-limiter
-    version: 1.1.0
+    version: 1.2.0
     namespace: nvcf
     condition: rateLimiter.enabled
     values:
@@ -100,20 +101,20 @@ releases:
       - nvcf/api
 
   - name: ess-api
-    version: 1.7.2
+    version: 1.8.1
     namespace: ess
     inherit:
       - template: service
 
   - name: notary-service
-    version: 1.4.2
+    version: 1.5.1
     namespace: nvcf
     inherit:
       - template: service
 
   - name: admin-issuer-proxy
     chart: nvcf/helm-admin-token-issuer-proxy
-    version: 1.5.1
+    version: 1.5.2
     namespace: api-keys
     values:
       - ../global.yaml.gotmpl
@@ -169,7 +170,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.12.2
+    version: 1.13.3
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -182,7 +183,7 @@ releases:
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
-    version: 1.4.2
+    version: 1.4.3
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -193,7 +194,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.4.0
+    version: 0.4.1
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
@@ -218,7 +219,7 @@ releases:
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.17.0
+    version: 1.18.0
     {{- end }}
     needs:
       - nvcf/notary-service

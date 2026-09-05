@@ -11,6 +11,8 @@ metadata:
   annotations:
     "helm.sh/hook": post-delete
     "helm.sh/hook-delete-policy": hook-succeeded
+    argocd.argoproj.io/hook: PostDelete
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 rules:
 - apiGroups:
   - apps

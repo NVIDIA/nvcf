@@ -55,6 +55,11 @@ test -z "$main_tag" || {
   echo "llm-router-local-chart: expected main router tag to inherit the chart default, got $main_tag" >&2
   exit 1
 }
+expected_main_tag="$(yq -r '.llmRequestRouter.image.tag' "$stack_dir/../../helm/llm-request-router/llm-request-router/values.yaml")"
+test -n "$expected_main_tag" && test "$expected_main_tag" != "null" || {
+  echo "llm-router-local-chart: local chart has no default main router tag" >&2
+  exit 1
+}
 
 backend_tag="$(yq -r '.llmRequestRouter.backendRouter.image.tag // ""' "$values_file")"
 test -z "$backend_tag" || {
@@ -67,8 +72,7 @@ helm template llm-request-router "$stack_dir/../../helm/llm-request-router/llm-r
   --values "$values_file" >"$local_manifest"
 
 main_registry="$(yq -r '.llmRequestRouter.image.registry' "$values_file")"
-chart_app_version="$(yq -r '.appVersion' "$stack_dir/../../helm/llm-request-router/llm-request-router/Chart.yaml")"
-expected_stargate_image="${main_registry:+${main_registry}/}${main_repository}:${chart_app_version}"
+expected_stargate_image="${main_registry:+${main_registry}/}${main_repository}:${expected_main_tag}"
 main_image="$(yq ea -r \
   'select(.kind == "Deployment" and .metadata.name == "llm-request-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[0].image' \
   "$local_manifest")"
