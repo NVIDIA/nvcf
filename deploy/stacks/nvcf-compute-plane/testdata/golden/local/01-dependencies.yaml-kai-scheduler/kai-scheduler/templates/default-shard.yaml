@@ -8,8 +8,10 @@ metadata:
   name: default
   annotations:
     helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   partitionLabelValue: ""
+  goMemLimitRatio: 0.9
   placementStrategy:
     gpu: binpack
     cpu: binpack

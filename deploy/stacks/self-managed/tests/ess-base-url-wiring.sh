@@ -65,6 +65,9 @@ assert_value() {
 
 public_url="https://ess.example.test"
 incluster_url="http://ess-api.ess.svc.cluster.local:8080"
+expected_nvct_image_tag="$(yq -r '.nvctApi.image.tag' "$stack_dir/environments/base.yaml")"
+[[ -n "$expected_nvct_image_tag" && "$expected_nvct_image_tag" != "null" ]] ||
+  fail "could not read the default NVCT image tag"
 
 # ---------------------------------------------------------------------------
 # 1. Default: essServiceURL set, no essBaseURL override. Both the self base URL
@@ -89,6 +92,8 @@ assert_value "$default_values" '.nvctApi.env.NVCT_ESS_BASE_URL' "$public_url" \
   "default: NVCT_ESS_BASE_URL tracks essServiceURL"
 assert_value "$default_values" '.nvctApi.env.NVCT_ESS_WORKER_BASE_URL' "$public_url" \
   "default: NVCT_ESS_WORKER_BASE_URL tracks essServiceURL"
+assert_value "$default_values" '.nvctApi.image.tag' "$expected_nvct_image_tag" \
+  "default: NVCT image tag tracks the base environment"
 
 # ---------------------------------------------------------------------------
 # 2. Override: essServiceURL is the public URL for workers; essBaseURL points

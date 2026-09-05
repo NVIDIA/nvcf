@@ -20,7 +20,7 @@ metadata:
   name: nvca-operator-config
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.21.8
+    helm.sh/chart: helm-nvca-operator-1.22.1
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.3.2"

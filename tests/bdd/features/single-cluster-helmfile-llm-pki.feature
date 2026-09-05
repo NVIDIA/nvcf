@@ -34,7 +34,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | addons.llm.pki.enabled                         | true                                                                      |
         | addons.llm.pki.dnsNames[0]                     | llm-request-router.nvcf.svc.cluster.local                                |
         | addons.llm.pki.allowedDomains                  | nvcf.svc.cluster.local                                                    |
-        | addons.llm.pki.image.tag                       | 0.16.2                                                                    |
+        | addons.llm.pki.image.tag                       | 0.19.1                                                                    |
         | observability.profile                          | disabled                                                                  |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml" with keys:
@@ -75,7 +75,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | llm-request-router.nvcf.svc.cluster.local          |
         | name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS              |
         | value: "nvcf.svc.cluster.local"                   |
-        | nvcf-openbao-migrations:0.16.2                     |
+        | nvcf-openbao-migrations:0.19.1                     |
       # A colocated worker uses the in-cluster h2c Service directly. The
       # dedicated HTTPS identity and route belong only to an explicitly
       # enabled remote-worker ingress.

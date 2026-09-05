@@ -35,6 +35,17 @@ global:
 observability:
   profile: disabled
 
+# The published chart defaults target production-sized nodes. Keep the local
+# single-cluster fixture schedulable after the core services are placed.
+stateMetrics:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 cassandra:
   replicaCount: 1
   resourcesPreset: "large"
