@@ -19,7 +19,36 @@ RUN apk add --no-cache curl && \
     printf '%s  /tmp/yq\n' "${YQ_SHA256}" | sha256sum -c - && \
     chmod +x /tmp/yq
 
-FROM cassandra:5.0.9
+# Cassandra 5.0.9 is still the latest supported 5.0 release, but its bundled
+# Jackson and Netty versions can lag security-only patch releases. Download a
+# checksum-pinned replacement set without adding build tools to the final image.
+COPY java-libraries.lock /tmp/java-libraries.lock
+RUN mkdir /tmp/java-libraries && \
+    while read -r checksum url; do \
+      case "${checksum}" in \#*|'') continue ;; esac; \
+      destination="/tmp/java-libraries/${url##*/}"; \
+      curl -fsSLo "${destination}" "${url}"; \
+      printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c -; \
+    done < /tmp/java-libraries.lock
+
+FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
+
+# Refresh the OpenSSL runtime packages independently of the upstream image
+# rebuild cadence. Fail the build if the Debian repository cannot provide the
+# first release containing the required fixes.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --only-upgrade \
+      libssl3t64 \
+      openssl-provider-legacy && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3t64)" ge 3.5.7-1~deb13u2 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' openssl-provider-legacy)" ge 3.5.7-1~deb13u2 && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f \
+      /opt/cassandra/lib/jackson-annotations-*.jar \
+      /opt/cassandra/lib/jackson-core-*.jar \
+      /opt/cassandra/lib/jackson-databind-*.jar \
+      /opt/cassandra/lib/jackson-datatype-jsr310-*.jar && \
+    find /opt/cassandra/lib -maxdepth 1 -type f -name 'netty-*-4.1.130.Final*.jar' -delete
 
 # Metrics exporter agent. The OSS snapshot does not redistribute the jar;
 # only files/.gitkeep ships, so the default here points at that placeholder
@@ -40,6 +69,7 @@ ARG EXPORTER_JAVAAGENT=""
 COPY ${EXPORTER_JAR} /opt/cassandra/lib/cassandra-exporter-agent.jar
 COPY scripts/cassandra-env.sh /etc/cassandra/cassandra-env.sh
 COPY --from=yq-downloader /tmp/yq /usr/local/bin/yq
+COPY --from=yq-downloader /tmp/java-libraries/*.jar /opt/cassandra/lib/
 
 # load cassandra exporter prom metrics library
 # The exporter agent reflects into JDK-internal com.sun.jmx classes to
