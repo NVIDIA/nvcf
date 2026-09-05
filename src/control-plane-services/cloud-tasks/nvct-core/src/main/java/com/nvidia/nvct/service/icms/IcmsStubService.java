@@ -404,8 +404,20 @@ public interface IcmsStubService {
         @Nullable String workerId;
         @JsonProperty("token_type")
         @Nullable String tokenType;
-        /** RFC 7662 §2.2: epoch-seconds at which the token expires. Null when unknown. */
+        /** RFC 7662 Section 2.2: epoch-seconds at which the token expires. Null when unknown. */
         @Nullable Long exp;
+        @JsonProperty("client_id")
+        @Nullable String clientId;
+        @JsonProperty("request_id")
+        @Nullable String requestId;
+        @JsonProperty("function_id")
+        @Nullable String functionId;
+        @JsonProperty("function_version_id")
+        @Nullable String functionVersionId;
+        @JsonProperty("task_id")
+        @Nullable String taskId;
+        @JsonProperty("nca_id")
+        @Nullable String ncaId;
         @Nullable String error;
     }
 

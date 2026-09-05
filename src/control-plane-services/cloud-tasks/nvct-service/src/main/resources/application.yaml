@@ -223,7 +223,8 @@ nvct:
     ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.0.5
     otel-collector-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/byoo-otel-collector:0.126.16
   worker:
-    delegated-token-enabled: false
+    delegated-token:
+      enabled: false
   scheduled-routines:
     enabled: true
     lock-consistency: LOCAL_QUORUM

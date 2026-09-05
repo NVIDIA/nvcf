@@ -24,6 +24,9 @@ import static org.mockito.Mockito.when;
 
 import com.nvidia.nvct.service.icms.IcmsClient;
 import com.nvidia.nvct.service.icms.IcmsStubService;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Base64;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +35,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class WorkerTokenIntrospectionServiceTest {
+
+    private static final String TASK_ID = "11111111-2222-3333-4444-555555555555";
+    private static final String NCA_ID = "nca-test";
 
     @Mock
     private IcmsClient icmsClient;
@@ -62,6 +68,9 @@ class WorkerTokenIntrospectionServiceTest {
                 .instanceId("inst-1")
                 .workerId("pod-1")
                 .tokenType("psat")
+                .exp(Instant.now().plusSeconds(600).getEpochSecond())
+                .taskId(TASK_ID)
+                .ncaId(NCA_ID)
                 .build();
         when(icmsClient.introspectWorkerToken(any())).thenReturn(activeResult);
 
@@ -94,6 +103,9 @@ class WorkerTokenIntrospectionServiceTest {
         var result = IcmsStubService.WorkerTokenIntrospectResult.builder()
                 .active(true)
                 .instanceId("inst-2")
+                .exp(Instant.now().plusSeconds(600).getEpochSecond())
+                .taskId(TASK_ID)
+                .ncaId(NCA_ID)
                 .build();
         when(icmsClient.introspectWorkerToken(any())).thenReturn(result);
 
@@ -114,5 +126,85 @@ class WorkerTokenIntrospectionServiceTest {
 
         verify(icmsClient).introspectWorkerToken(
                 IcmsStubService.WorkerTokenIntrospectRequest.builder().token("my.raw.token").build());
+    }
+
+    @Test
+    void introspect_treatsActiveWithoutExpAsInactive_andDoesNotCache() {
+        var result = IcmsStubService.WorkerTokenIntrospectResult.builder()
+                .active(true)
+                .instanceId("inst-3")
+                .taskId(TASK_ID)
+                .ncaId(NCA_ID)
+                .build();
+        when(icmsClient.introspectWorkerToken(any())).thenReturn(result);
+
+        var first = service.introspect("no.exp.token");
+        var second = service.introspect("no.exp.token");
+
+        assertThat(first.isActive()).isFalse();
+        assertThat(first.getError()).isEqualTo(WorkerTokenIntrospectionService.ERROR_MISSING_BINDING);
+        assertThat(second.isActive()).isFalse();
+        verify(icmsClient, times(2)).introspectWorkerToken(any());
+    }
+
+    @Test
+    void introspect_treatsActiveWithoutTaskBindingAsInactive() {
+        var result = IcmsStubService.WorkerTokenIntrospectResult.builder()
+                .active(true)
+                .instanceId("inst-4")
+                .exp(Instant.now().plusSeconds(600).getEpochSecond())
+                .functionId("f-1")
+                .build();
+        when(icmsClient.introspectWorkerToken(any())).thenReturn(result);
+
+        assertThat(service.introspect("fn.bound.token").isActive()).isFalse();
+    }
+
+    @Test
+    void introspect_doesNotServeExpiredTokenFromCache() {
+        var result = IcmsStubService.WorkerTokenIntrospectResult.builder()
+                .active(true)
+                .instanceId("inst-5")
+                .exp(Instant.now().minusSeconds(5).getEpochSecond())
+                .taskId(TASK_ID)
+                .ncaId(NCA_ID)
+                .build();
+        when(icmsClient.introspectWorkerToken(any())).thenReturn(result);
+
+        service.introspect("expired.tok.en");
+        service.introspect("expired.tok.en");
+
+        verify(icmsClient, times(2)).introspectWorkerToken(any());
+    }
+
+    @Test
+    void isDelegatedToken_recognizesIcmsAudience() {
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken(
+                fakeJws("{\"aud\":[\"nvcf-icms:cl-1\"],\"sub\":\"x\"}"))).isTrue();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken(
+                fakeJws("{\"aud\":\"nvcf-icms:cl-1\"}"))).isTrue();
+    }
+
+    @Test
+    void isDelegatedToken_rejectsOtherShapes() {
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken(null)).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken("")).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken("opaque-token")).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken("a.b")).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken("a.b.c.d.e")).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken(
+                fakeJws("{\"aud\":[\"nvcf-icms\"]}"))).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken(
+                fakeJws("{\"aud\":[\"notary\"],\"assertion\":{}}"))).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken(
+                fakeJws("{\"sub\":\"x\"}"))).isFalse();
+        assertThat(WorkerTokenIntrospectionService.isDelegatedToken("hdr.!!notbase64!!.sig")).isFalse();
+    }
+
+    private static String fakeJws(String payloadJson) {
+        var enc = Base64.getUrlEncoder().withoutPadding();
+        return enc.encodeToString("{\"alg\":\"RS256\"}".getBytes(StandardCharsets.UTF_8))
+                + "." + enc.encodeToString(payloadJson.getBytes(StandardCharsets.UTF_8))
+                + ".c2ln";
     }
 }
