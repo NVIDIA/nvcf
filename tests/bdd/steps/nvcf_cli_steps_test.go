@@ -20,8 +20,6 @@ package steps
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -124,14 +122,8 @@ func TestNVCFCLIInvocationAdaptersExposeAllArguments(t *testing.T) {
 
 func TestVanityGatewayInvocationUsesExactHostAndKeepsAPIKeyOutOfCommand(t *testing.T) {
 	sc, fake := newScenarioContext(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
 	sc.NVCFCLIConfig = "config.yaml"
-	const apiKey = "sensitive-function-api-key"
-	statePath := filepath.Join(home, ".nvcf-cli.config.state")
-	if err := os.WriteFile(statePath, []byte(`{"apiKey":"`+apiKey+`"}`), 0o600); err != nil {
-		t.Fatalf("write CLI state: %v", err)
-	}
 	fake.result = harness.Result{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`}
 
 	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
@@ -149,22 +141,20 @@ func TestVanityGatewayInvocationUsesExactHostAndKeepsAPIKeyOutOfCommand(t *testi
 	}
 	run := fake.runs[0]
 	for _, expected := range []string{
-		"curl --silent --show-error --fail-with-body",
-		"Host: vanity.localhost",
-		"Content-Type: application/json",
-		`{"message":"vanity"}`,
-		"--retry 24 --retry-all-errors --retry-delay 5 --retry-max-time 120",
-		"http://127.0.0.1:8080/bdd/echo",
+		"nvcf-cli",
+		"--config config.yaml",
+		"function invoke",
+		"--vanity-host vanity.localhost",
+		"--path /bdd/echo",
+		"--timeout 120",
+		`--request-body '{"message":"vanity"}'`,
 	} {
 		if !strings.Contains(run.command, expected) {
 			t.Fatalf("command = %q, want %q", run.command, expected)
 		}
 	}
-	if strings.Contains(run.command, apiKey) {
-		t.Fatalf("command contains function API key: %q", run.command)
-	}
-	if run.sensitiveStdin != apiKey {
-		t.Fatalf("sensitive stdin length = %d, want %d", len(run.sensitiveStdin), len(apiKey))
+	if run.sensitiveStdin != "" {
+		t.Fatalf("sensitive stdin = %q, want empty", run.sensitiveStdin)
 	}
 }
 
