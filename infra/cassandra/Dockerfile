@@ -27,8 +27,8 @@ RUN mkdir /tmp/java-libraries && \
     while read -r checksum url; do \
       case "${checksum}" in \#*|'') continue ;; esac; \
       destination="/tmp/java-libraries/${url##*/}"; \
-      curl -fsSLo "${destination}" "${url}"; \
-      printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c -; \
+      curl -fsSLo "${destination}" "${url}" && \
+      printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c - || exit 1; \
     done < /tmp/java-libraries.lock
 
 FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
