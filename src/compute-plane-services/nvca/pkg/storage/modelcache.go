@@ -260,8 +260,11 @@ func (r *Reconciler) doModelCacheSharedFS(ctx context.Context,
 	if err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
 	}
-	sharedSC := HelmCacheSharedStorageClassName
-	rwPVC.Spec.StorageClassName = &sharedSC
+	// The writer lands on the model cache class like every other backend. The
+	// class that selected this path, nvcf-miniservice-sc, is only how legacy
+	// selection detects an operator-provided shared filesystem; provisioning on
+	// it would strand the cache when a cluster has only the model cache class.
+	r.applyModelCacheStorageClass(ctx, rwPVC)
 
 	// Gate on the durable populated marker, mirroring the NVMesh/Samba
 	// getPrimaryPV gate. Shared storage shares data across namespaces natively
