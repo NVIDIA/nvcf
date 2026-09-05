@@ -21,10 +21,10 @@ metadata:
   name: nvca-operator-shutdown-sentinel
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.22.1
+    helm.sh/chart: helm-nvca-operator-1.22.2
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.3.2"
+    app.kubernetes.io/version: "3.5.2"
     app.kubernetes.io/managed-by: Helm
   finalizers:
     - nvca.nvcf.nvidia.io/operator-cleanup

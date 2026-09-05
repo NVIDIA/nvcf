@@ -91,14 +91,11 @@ for profile in default disabled control compute all; do
   esac
 done
 
-expected_operator_version="$(yq -r '.global.nvcaOperator.imageTag' "$stack_dir/environments/base.yaml")"
 expected_nvca_version="$(yq -r '.global.nvcaOperator.selfManaged.nvcaVersion' "$stack_dir/environments/base.yaml")"
-[[ -n "$expected_operator_version" && "$expected_operator_version" != "null" ]] ||
-  fail "could not read the default NVCA operator version"
 [[ -n "$expected_nvca_version" && "$expected_nvca_version" != "null" ]] ||
   fail "could not read the default NVCA version"
-test "$(operator_image_tag "$work_dir/default.yaml")" = "$expected_operator_version" ||
-  fail "default operator image tag is not $expected_operator_version"
+test -z "$(operator_image_tag "$work_dir/default.yaml")" ||
+  fail "default operator image tag should be supplied by the chart appVersion"
 test "$(nvca_version "$work_dir/default.yaml")" = "$expected_nvca_version" ||
   fail "default NVCA version is not $expected_nvca_version"
 
