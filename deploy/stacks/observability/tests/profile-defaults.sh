@@ -139,7 +139,7 @@ grep -q '^    - key: icms-request-id$' "$worker_monitor_manifest" ||
 grep -q '^      operator: Exists$' "$worker_monitor_manifest" ||
   fail "worker PodMonitor label expression must use Exists"
 
-for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
+for monitor in state-metrics function-autoscaler invocation-service grpc-proxy llm-api-gateway; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_control_manifests" ||
     fail "monitor chart control defaults are missing $monitor monitor"
   grep -q "nvcf-default-monitors-$monitor" $control_manifests ||
@@ -155,6 +155,27 @@ for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
     fail "compute profile rendered $monitor control-plane monitor"
   fi
 done
+
+autoscaler_monitor_manifest="$work_dir/chart-function-autoscaler-servicemonitor.yaml"
+sed -n '/name: nvcf-default-monitors-function-autoscaler/,/^---$/p' \
+  "$chart_control_manifests" >"$autoscaler_monitor_manifest"
+grep -q '^    nvcf.nvidia.com/observability-target: "true"$' \
+  "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must carry the Target Allocator discovery label"
+grep -q '^      app.kubernetes.io/instance: function-autoscaler$' \
+  "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must select the function-autoscaler release"
+grep -q '^      app.kubernetes.io/name: helm-nvcf-function-autoscaler$' \
+  "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must select the function-autoscaler service"
+grep -q '^      - nvcf$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must discover the nvcf namespace"
+grep -q '^    - port: "metrics"$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must scrape the named metrics port"
+grep -q '^      path: "/metrics"$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must scrape the metrics path"
+grep -q '^      interval: "30s"$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must use the default scrape interval"
 
 for monitor in nvca dcgm worker; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_compute_manifests" ||
