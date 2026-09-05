@@ -19,7 +19,10 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
-use stargate_protocol::tunnel_contract::HEADER_INFERENCE_SERVER_ID as HEADER_CHOSEN_INFERENCE_SERVER_ID;
+use stargate_protocol::tunnel_contract::{
+    HEADER_INFERENCE_SERVER_ID as HEADER_CHOSEN_INFERENCE_SERVER_ID, HEADER_STARGATE_RETRY_REASON,
+    HEADER_STARGATE_RETRYABLE,
+};
 use tracing::{Instrument, Span, field, info, warn};
 
 use crate::routing_state::{RoutedInferenceServerSnapshot, RoutingReservation};
@@ -27,7 +30,7 @@ use crate::routing_state::{RoutedInferenceServerSnapshot, RoutingReservation};
 use super::ProxyAppState;
 use super::retry::{
     FinalRetryDisposition, RetryDecision, UpstreamRetry, decide_proxy_error_retry,
-    decide_upstream_response_retry, retry_budget_has_remaining,
+    decide_upstream_response_retry, header_str, retry_budget_has_remaining,
     should_release_queue_mismatch_reservation,
 };
 use super::run::{ProxyRequestRun, SelectedClusterRun};
@@ -346,33 +349,21 @@ fn finish_attempt(
     upstream: Result<UpstreamStreamingResponse, StatusCode>,
 ) -> ProxyAttemptOutcome {
     let metrics = &run.app.metrics;
+    // Decide before consuming `upstream` so the success path does no capture work.
+    let failure = should_log_failure(&disposition, upstream_status(&upstream))
+        .then(|| RequestFailureContext::new(&disposition, &upstream));
+    if let Some(retry_reason) = disposition.retry_reason() {
+        Span::current().record("proxy.retry_reason", retry_reason);
+    }
     let upstream = match disposition {
-        FinalRetryDisposition::PassThrough => upstream,
+        FinalRetryDisposition::PassThrough | FinalRetryDisposition::ReplayIncomplete(_) => upstream,
         FinalRetryDisposition::Exhausted(retry_reason) => {
             metrics
                 .proxy_retry_exhausted_total(run.routing_key(), run.model_id(), &retry_reason)
                 .inc();
-            Span::current().record("proxy.retry_reason", retry_reason.as_str());
             upstream
         }
-        FinalRetryDisposition::ReplayIncomplete(retry_reason) => {
-            Span::current().record("proxy.retry_reason", retry_reason.as_str());
-            let status = upstream_status(&upstream);
-            warn!(
-                inference_server_id = %chosen.inference_server_id,
-                status = %status,
-                retry_reason = %retry_reason,
-                source = if upstream.is_ok() { "response" } else { "proxy error" },
-                "not retrying because request body replay buffer is incomplete"
-            );
-            upstream
-        }
-        FinalRetryDisposition::PayloadTooLarge(retry_reason) => {
-            if let Some(retry_reason) = retry_reason {
-                Span::current().record("proxy.retry_reason", retry_reason.as_str());
-            }
-            Err(StatusCode::PAYLOAD_TOO_LARGE)
-        }
+        FinalRetryDisposition::PayloadTooLarge(_) => Err(StatusCode::PAYLOAD_TOO_LARGE),
     };
     let status = upstream_status(&upstream);
     metrics
@@ -383,9 +374,82 @@ fn finish_attempt(
             &status.as_u16().to_string(),
         )
         .inc();
+    if let Some(failure) = failure {
+        failure.log(run, chosen, status);
+    }
     match upstream.and_then(|upstream| build_proxy_response(upstream, chosen)) {
         Ok(response) => ProxyAttemptOutcome::ReturnFinal(response),
         Err(status) => ProxyAttemptOutcome::ProxyError(status),
+    }
+}
+
+/// Client errors passed through unchanged are the caller's problem; every
+/// server-side or capacity failure, and every locally decided final status,
+/// must be visible in router logs.
+fn should_log_failure(disposition: &FinalRetryDisposition, upstream_status: StatusCode) -> bool {
+    !matches!(disposition, FinalRetryDisposition::PassThrough)
+        || upstream_status.is_server_error()
+        || upstream_status == StatusCode::TOO_MANY_REQUESTS
+}
+
+/// Fields captured before the upstream result is consumed, so a final failure
+/// can be logged with the backend that produced it and why no retry happened.
+struct RequestFailureContext {
+    disposition: &'static str,
+    retry_reason: Option<String>,
+    source: &'static str,
+    upstream_retryable: Option<String>,
+    upstream_retry_reason: Option<String>,
+}
+
+impl RequestFailureContext {
+    fn new(
+        disposition: &FinalRetryDisposition,
+        upstream: &Result<UpstreamStreamingResponse, StatusCode>,
+    ) -> Self {
+        let upstream_headers = upstream.as_ref().ok().map(|upstream| &upstream.headers);
+        let upstream_header = |name| {
+            upstream_headers
+                .and_then(|headers| header_str(headers, name))
+                .map(str::to_owned)
+        };
+        Self {
+            disposition: disposition.label(),
+            retry_reason: disposition.retry_reason().map(str::to_owned),
+            source: if upstream.is_ok() {
+                "upstream_response"
+            } else {
+                "proxy_error"
+            },
+            upstream_retryable: upstream_header(HEADER_STARGATE_RETRYABLE),
+            upstream_retry_reason: upstream_header(HEADER_STARGATE_RETRY_REASON),
+        }
+    }
+
+    fn log(
+        &self,
+        run: &ProxyRequestRun<'_>,
+        chosen: &RoutedInferenceServerSnapshot,
+        status: StatusCode,
+    ) {
+        warn!(
+            routing_key = ?run.routing_key(),
+            model_id = %run.model_id(),
+            inference_server_id = %chosen.inference_server_id,
+            cluster_id = %chosen.cluster_id,
+            status = status.as_u16(),
+            source = %self.source,
+            disposition = %self.disposition,
+            retry_reason = %self.retry_reason.as_deref().unwrap_or(""),
+            upstream_retryable = %self.upstream_retryable.as_deref().unwrap_or(""),
+            upstream_retry_reason = %self.upstream_retry_reason.as_deref().unwrap_or(""),
+            attempt = run.attempt_counters.attempt,
+            connect_retries = run.attempt_counters.connect_retries,
+            request_retries = run.attempt_counters.request_retries,
+            failed_backends = run.failed_backend_ids.len(),
+            elapsed_ms = run.request.request_start.elapsed().as_millis() as u64,
+            "proxied request failed"
+        );
     }
 }
 

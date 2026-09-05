@@ -21,10 +21,10 @@ metadata:
   name: nvca-operator
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.21.3
+    helm.sh/chart: helm-nvca-operator-1.21.8
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/version: "3.3.2"
     app.kubernetes.io/managed-by: Helm
 spec:
   
@@ -93,9 +93,9 @@ spec:
         - name: OTEL_COLLECTOR_ENABLED
           value: "false"
         - name: OTEL_COLLECTOR_IMAGE_REPO
-          value: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
+          value: "nvcr.io/0651155215864979/ncp-dev/nvcf-otel-collector"
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: "0.157.9"
+          value: "0.157.0-nv-0.2.1"
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiIxR2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjI1Nk1pIn19"
         - name: OPERATOR_NAMESPACE
@@ -127,10 +127,10 @@ spec:
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
           - --function-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4xLjEifQ=="
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4yLjEifQ=="
           - --task-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4xLjEifQ=="
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.19
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4yLjEifQ=="
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.3.2
         imagePullPolicy: IfNotPresent
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -176,7 +176,7 @@ spec:
             cpu: "1000m"
             memory: "4Gi"
       - name: nvca-mirror
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.19
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.3.2
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000

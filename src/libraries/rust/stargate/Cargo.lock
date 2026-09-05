@@ -1854,7 +1854,7 @@ dependencies = [
 
 [[package]]
 name = "mock-dynamo"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2428,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "pylon"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -2455,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "pylon-lib"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3316,7 +3316,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stargate"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3355,6 +3355,7 @@ dependencies = [
  "stargate-telemetry",
  "stargate-tls",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -3369,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-auth"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -3382,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-bench"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3408,7 +3409,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-forwarding"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "futures",
@@ -3423,7 +3424,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-k8s-router"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3458,7 +3459,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-proto"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "prost",
  "serde",
@@ -3470,7 +3471,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-protocol"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "bytes",
  "capnp",
@@ -3491,7 +3492,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-runtime"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "flume",
@@ -3503,7 +3504,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-telemetry"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "http",
@@ -3520,7 +3521,7 @@ dependencies = [
 
 [[package]]
 name = "stargate-tls"
-version = "0.4.0"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "quinn",

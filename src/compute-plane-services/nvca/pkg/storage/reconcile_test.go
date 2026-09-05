@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
@@ -241,6 +242,57 @@ func TestRequeueDeletingStorageRequestWithFinalizer(t *testing.T) {
 			assert.Equal(t, test.expected, got)
 		})
 	}
+}
+
+func TestRequiresStrictModelCacheCleanupPreservesLegacyEscape(t *testing.T) {
+	legacy := &nvcav1new.StorageRequest{
+		Spec: nvcav1new.StorageRequestSpec{Type: nvcav1new.ModelCacheRequest},
+	}
+	assert.False(t, requiresStrictModelCacheCleanup(legacy))
+
+	durableSelection := &PersistedModelCacheStorageSelection{
+		Version:              ModelCacheStorageSelectionVersion,
+		Workflow:             ModelCacheWorkflowHelm,
+		Mode:                 ModelCacheSelectionDurable,
+		StorageClassName:     DefaultModelCacheStorageClassName,
+		StorageClassUID:      "uid-1",
+		StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+		ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+		Provider:             ModelCacheProviderNVMesh,
+		Provisioner:          NVMeshStorageClassProvisioner,
+		Transition:           ModelCacheTransitionROXReadOnly,
+		RequiredAccessModes:  []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
+		RequiredMountOptions: []string{"ro", "norecovery", "nouuid"},
+	}
+	durableRaw, err := durableSelection.Marshal()
+	require.NoError(t, err)
+	durable := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{ModelCacheStorageSelectionAnnotationKey: durableRaw},
+		},
+		Spec: nvcav1new.StorageRequestSpec{Type: nvcav1new.ModelCacheRequest},
+	}
+	assert.True(t, requiresStrictModelCacheCleanup(durable))
+
+	nonDurable := durable.DeepCopy()
+	selection, err := ParsePersistedModelCacheStorageSelection(
+		nonDurable.Annotations[ModelCacheStorageSelectionAnnotationKey])
+	require.NoError(t, err)
+	selection.Mode = ModelCacheSelectionEphemeral
+	selection.BindingName = ""
+	selection.BindingUID = ""
+	selection.EncryptionRequired = false
+	selection.Transition = ModelCacheTransitionDisabled
+	selection.RequiredAccessModes = nil
+	selection.RequiredMountOptions = nil
+	raw, err := selection.Marshal()
+	require.NoError(t, err)
+	nonDurable.Annotations[ModelCacheStorageSelectionAnnotationKey] = raw
+	assert.False(t, requiresStrictModelCacheCleanup(nonDurable))
+
+	invalid := durable.DeepCopy()
+	invalid.Annotations[ModelCacheStorageSelectionAnnotationKey] = "{"
+	assert.True(t, requiresStrictModelCacheCleanup(invalid))
 }
 
 func TestDoCleanupSharedStorage(t *testing.T) {

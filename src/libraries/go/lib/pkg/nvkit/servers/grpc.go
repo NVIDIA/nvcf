@@ -28,7 +28,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	// By default, it sets `GOMEMLIMIT` to 90% of cgroup's memory limit.
@@ -58,6 +57,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/servers/utils"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/shutdown"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 )
 
@@ -536,17 +536,12 @@ func (g *grpcServer) Run() error {
 		})
 	}
 	{
-		// This function just sits and waits for ctrl-C.
+		// This function just sits and waits for a shutdown signal.
 		cancelInterrupt := make(chan struct{})
 		svrGroup.Add(func() error {
 			c := make(chan os.Signal, 1)
-			signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-			select {
-			case sig := <-c:
-				return fmt.Errorf("received signal %s", sig)
-			case <-cancelInterrupt:
-				return nil
-			}
+			signal.Notify(c, shutdown.Signals()...)
+			return awaitShutdownSignal(c, cancelInterrupt)
 		}, func(error) {
 			close(cancelInterrupt)
 		})

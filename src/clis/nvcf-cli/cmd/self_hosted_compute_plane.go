@@ -263,6 +263,7 @@ func runSelfHostedComputePlaneRegister(c *cobra.Command, _ []string) error {
 		NATSURL:           selected.Endpoints.NATSURL,
 		SISHost:           validation.Profile.ControlPlane.Hosts.SIS,
 		ReValHost:         validation.Profile.ControlPlane.Hosts.ReVal,
+		NATSHost:          validation.Profile.ControlPlane.Hosts.NATS,
 		ProbeHTTP:         shouldProbeComputeRegisterHTTP(selected.Name),
 	}); err != nil {
 		return err

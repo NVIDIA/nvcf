@@ -578,6 +578,14 @@ mod tests {
 
     const MODEL_STATS_TEST_TIMEOUT: Duration = milliseconds(500);
 
+    #[test]
+    fn default_observation_channel_capacity_remains_bounded() {
+        assert_eq!(
+            StatsCollectorConfig::default().observation_channel_capacity,
+            1024
+        );
+    }
+
     struct RunningCollector {
         runtime_state: PylonRuntimeState,
         stats_update_tx: Option<flume::Sender<StatsAggregatorUpdate>>,

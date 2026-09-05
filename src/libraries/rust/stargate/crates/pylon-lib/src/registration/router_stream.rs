@@ -28,7 +28,9 @@ use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClien
 use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, InferenceServerStatus};
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
-use super::grpc_endpoint::{StargateGrpcEndpoint, connect_stargate_grpc_channel};
+use super::grpc_endpoint::{
+    StargateGrpcEndpoint, connect_stargate_grpc_channel, log_stargate_grpc_certificate_failure,
+};
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
 };
@@ -43,6 +45,7 @@ pub(super) async fn run_router_registration_stream(
     stop: CancellationToken,
 ) {
     let router_addr = router_endpoint.authority_addr().to_string();
+    let mut last_certificate_failure = None;
 
     loop {
         let connection = tokio::select! {
@@ -54,15 +57,27 @@ pub(super) async fn run_router_registration_stream(
                 config.min_update_interval,
             ) => connection,
         };
-        let Ok((mut ack_stream, update_tx)) = connection else {
-            if stop
-                .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
-                .await
-                .is_none()
-            {
-                return;
+        let (mut ack_stream, update_tx) = match connection {
+            Ok(connection) => {
+                last_certificate_failure = None;
+                connection
             }
-            continue;
+            Err(error) => {
+                last_certificate_failure = log_stargate_grpc_certificate_failure(
+                    &router_endpoint,
+                    "register_inference_server",
+                    error.as_ref(),
+                    last_certificate_failure,
+                );
+                if stop
+                    .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+                    .await
+                    .is_none()
+                {
+                    return;
+                }
+                continue;
+            }
         };
 
         let (reverse_state_tx, mut reverse_state_rx) =

@@ -6,9 +6,9 @@
 # emulation) and verify it against a pinned checksum.
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS yq-downloader
 ARG TARGETARCH
-ARG YQ_VERSION=v4.44.3
-ARG YQ_LINUX_AMD64_SHA256=a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
-ARG YQ_LINUX_ARM64_SHA256=0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156
+ARG YQ_VERSION=v4.53.6
+ARG YQ_LINUX_AMD64_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
+ARG YQ_LINUX_ARM64_SHA256=88a1016bc1d657375a35864e4f44b6f333df8ff97b559f51bba0adcb2169df09
 RUN apk add --no-cache curl && \
     case "${TARGETARCH}" in \
       amd64) YQ_SHA256="${YQ_LINUX_AMD64_SHA256}" ;; \
@@ -19,7 +19,7 @@ RUN apk add --no-cache curl && \
     printf '%s  /tmp/yq\n' "${YQ_SHA256}" | sha256sum -c - && \
     chmod +x /tmp/yq
 
-FROM cassandra:5.0.8
+FROM cassandra:5.0.9
 
 # Metrics exporter agent. The OSS snapshot does not redistribute the jar;
 # only files/.gitkeep ships, so the default here points at that placeholder

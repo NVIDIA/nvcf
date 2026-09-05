@@ -206,8 +206,8 @@ the suite immediately.
 | Mode | What it destroys | Command equivalent |
 |------|------------------|--------------------|
 | unset (default) | Nothing | (no cleanup) |
-| `stack-single` | Stack-owned helm releases + namespaces on `k3d-ncp-local`; `out/*.yaml` artifacts | `tests/bdd/scripts/destroy-stack.sh single` |
-| `stack-multi` | Stack-owned releases on every `ncp-local-compute-*` then `ncp-local-cp`; `out/*.yaml` artifacts | `tests/bdd/scripts/destroy-stack.sh multi` |
+| `stack-single` | Stack-owned helm releases + namespaces on `k3d-ncp-local`; stack `out/` handoff yaml, Helmfile render trees, and compute registration values | `tests/bdd/scripts/destroy-stack.sh single` |
+| `stack-multi` | Stack-owned releases and namespaces on every `ncp-local-compute-*` then `ncp-local-cp` (including worker namespaces such as `nvca-operator` created on the control-plane cluster); same generated artifacts | `tests/bdd/scripts/destroy-stack.sh multi` |
 | `topology-single` | The `ncp-local` k3d cluster (and everything in it) | `make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local` |
 | `topology-multi` | Every `ncp-local*` k3d cluster on the host | `make -C tools/ncp-local-cluster destroy-all-ncp-local` |
 
@@ -246,9 +246,13 @@ Governing rule:
   `envoy-gateway-system` installed by
   `tools/ncp-local-cluster/scripts/setup-gateway-api.sh`,
   `cert-manager`, the local fake GPU operator) are intentionally
-  off-limits and survive every stack cleanup. `out/*.yaml` handoff
-  files are removed so later `file ... should exist` assertions
-  cannot pass against stale artifacts.
+  off-limits and survive every stack cleanup. Generated stack
+  artifacts are removed so later `file ... should exist` assertions
+  cannot pass against stale files: root-level `out/*.yaml` handoff
+  files, Helmfile `--output-dir` render trees under each stack
+  `out/` directory, and compute registration values under
+  `deploy/stacks/nvcf-compute-plane/registration/`. Ad-hoc non-yaml
+  notes at the `out/` root are left in place.
 - For the nonlocal (EKS) cleanup script
   `tests/bdd/scripts/destroy-nonlocal-stack.sh`, the gateway
   ownership boundary is different: the EKS Helmfile feature

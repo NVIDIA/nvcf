@@ -71,7 +71,7 @@ type ModelCacheSpec struct {
 	CacheHandle string                `json:"cacheHandle"`
 	Encryption  *ModelCacheEncryption `json:"encryption,omitempty"`
 	// Backend selects the storage backend used to populate and expose the
-	// cache: "nvmesh" (NVMesh 3.x, nvcf-sc-30), "sharedfs" (a shared
+	// cache: "nvmesh" (the model cache class is provisioned by NVMesh), "sharedfs" (a shared
 	// filesystem class, nvcf-miniservice-sc), or "samba" (NVCA-managed Samba
 	// server). Empty is treated as "nvmesh" for backward compatibility; any
 	// other value fails the request with a terminal validation error.

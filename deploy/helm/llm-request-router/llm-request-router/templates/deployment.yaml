@@ -41,10 +41,6 @@ router instance that issued the tunnel target.
 {{- if le $watchHeartbeatMs 0 }}
 {{- fail "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" }}
 {{- end }}
-{{- $readinessWarmupMs := .Values.llmRequestRouter.readiness.warmupMs | toString }}
-{{- if not (regexMatch "^[0-9]+$" $readinessWarmupMs) }}
-{{- fail "llmRequestRouter.readiness.warmupMs must be a non-negative integer" }}
-{{- end }}
 {{- if and (eq $workloadKind "Deployment") (gt $replicaCount 1) (not $backendRouterEnabled) }}
 {{- fail "llmRequestRouter.backendRouter.enabled must be true when llmRequestRouter.workload.kind is Deployment and replicaCount is greater than 1" }}
 {{- end }}
@@ -103,7 +99,7 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml .Values.llmRequestRouter.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: {{ div (.Values.llmRequestRouter.shutdown.drainTimeoutMs | int) 1000 }}
+      terminationGracePeriodSeconds: {{ add (div (add (.Values.llmRequestRouter.shutdown.drainTimeoutMs | int) 999) 1000) 5 }}
       containers:
         - name: {{ .Chart.Name }}
           image: {{ include "llm-request-router.image" . }}
@@ -136,7 +132,15 @@ spec:
             - --allow-insecure-remote-watch-http
             {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
-            - --readiness-warmup-ms={{ $readinessWarmupMs }}
+            {{- with dig "readiness" "warmupMs" "" .Values.llmRequestRouter }}
+            - --readiness-warmup-ms={{ . }}
+            {{- end }}
+            {{- if hasKey (dig "readiness" dict .Values.llmRequestRouter) "stabilizationSampleIntervalMs" }}
+            - --readiness-stabilization-sample-interval-ms={{ dig "readiness" "stabilizationSampleIntervalMs" 0 .Values.llmRequestRouter }}
+            {{- end }}
+            {{- if hasKey (dig "readiness" dict .Values.llmRequestRouter) "stabilizationWindow" }}
+            - --readiness-stabilization-window={{ dig "readiness" "stabilizationWindow" 0 .Values.llmRequestRouter }}
+            {{- end }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
             - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}

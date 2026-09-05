@@ -40,6 +40,7 @@ use stargate::discovery::Discovery;
 use stargate::proxy::{ProxyTransportConfig, QuicTunnelConfig};
 use stargate::runtime::{
     BoundStargateListeners, ReverseTunnelConfig, StargateRuntime, StargateRuntimeConfig,
+    WarmupConfig,
 };
 use stargate_forwarding::{ForwardingResolver, PeerResolution, PeerTarget};
 use stargate_proto::pb::{InferenceServerStatus, StargateInfo};
@@ -381,8 +382,16 @@ pub struct Delta {
 }
 
 pub async fn dummy_chat(State(state): State<DummyState>, Json(req): Json<ChatRequest>) -> Response {
+    dummy_chat_with_tokens(state.model, req, 3).await
+}
+
+async fn dummy_chat_with_tokens(
+    model: String,
+    req: ChatRequest,
+    completion_tokens: u32,
+) -> Response {
+    let prompt_tokens = req.messages.len().max(1);
     if req.stream == Some(true) {
-        let model = state.model.clone();
         let stream = async_stream::stream! {
             yield Ok::<_, std::convert::Infallible>(Event::default().data(
                 serde_json::to_string(&ChunkCompletion {
@@ -422,6 +431,17 @@ pub async fn dummy_chat(State(state): State<DummyState>, Json(req): Json<ChatReq
                     }],
                 }).unwrap(),
             ));
+            yield Ok(Event::default().data(serde_json::json!({
+                "id": "chunk-1",
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens as usize,
+                },
+            }).to_string()));
             yield Ok(Event::default().data("[DONE]"));
         };
         return Sse::new(stream)
@@ -432,16 +452,16 @@ pub async fn dummy_chat(State(state): State<DummyState>, Json(req): Json<ChatReq
     Json(serde_json::json!({
         "id": "test-1",
         "object": "chat.completion",
-        "model": state.model,
+        "model": model,
         "choices": [{
             "index": 0,
             "message": { "role": "assistant", "content": "Hello world!" },
             "finish_reason": "stop",
         }],
         "usage": {
-            "prompt_tokens": req.messages.len().max(1),
-            "completion_tokens": 3,
-            "total_tokens": req.messages.len().max(1) + 3,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens as usize,
         },
     }))
     .into_response()
@@ -484,11 +504,11 @@ pub async fn lifecycle_dummy_chat(
             .into_response();
     }
 
+    let completion_tokens = state.completion_tokens.load(Ordering::SeqCst);
     if req.stream == Some(true) {
-        return dummy_chat(State(DummyState { model: state.model }), Json(req)).await;
+        return dummy_chat_with_tokens(state.model, req, completion_tokens).await;
     }
 
-    let completion_tokens = state.completion_tokens.load(Ordering::SeqCst);
     Json(serde_json::json!({
         "id": "test-1",
         "object": "chat.completion",
@@ -517,7 +537,6 @@ pub fn base_config(
         grpc_listen_addr: grpc_addr,
         model_discovery_listen_addr: "127.0.0.1:0".parse().unwrap(),
         http_listen_addr: http_addr,
-        readiness_warmup: stargate::runtime::DEFAULT_READINESS_WARMUP,
         metrics_listen_addr: None,
         advertise_addr: grpc_addr,
         stargate_discovery_dns_name: "localhost".to_string(),
@@ -547,6 +566,7 @@ pub fn base_config(
         metrics_prefix: stargate::metrics::DEFAULT_PREFIX.to_string(),
         forwarding: None,
         authenticator: Arc::new(stargate::auth::OpenAuthenticator),
+        warmup: WarmupConfig::default(),
     }
 }
 
@@ -702,15 +722,14 @@ fn reverse_tunnel_config(
 }
 
 pub fn make_stargate_runtime(id: &str) -> (SocketAddr, SocketAddr, StargateRuntime) {
-    make_stargate_runtime_with_readiness_warmup(id, stargate::runtime::DEFAULT_READINESS_WARMUP)
-}
-
-pub fn make_stargate_runtime_with_readiness_warmup(
-    id: &str,
-    readiness_warmup: Duration,
-) -> (SocketAddr, SocketAddr, StargateRuntime) {
+    // Use a long warmup duration so tests that rely on 503 during warmup
+    // (e.g. readyz_returns_503_during_warmup) behave correctly without
+    // needing a specific WarmupConfig at the call site.
     let mut config = base_ephemeral_config(id);
-    config.readiness_warmup = readiness_warmup;
+    config.warmup = WarmupConfig {
+        warmup_duration: Duration::from_secs(60),
+        ..WarmupConfig::default()
+    };
     build_test_runtime(id, config, TestDiscovery::SelfOnly, None).standard()
 }
 

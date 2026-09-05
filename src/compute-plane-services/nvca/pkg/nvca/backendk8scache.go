@@ -2268,6 +2268,9 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			TaskID:         mt.Details.TaskID,
 		})
 	}
+	if err := c.persistModelCacheStorageSelection(ctx, &o); err != nil {
+		return nil, err
+	}
 	obj, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).Create(ctx, &o, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to persist the ICMS request on the backend, err: %v", err)

@@ -43,7 +43,7 @@ llmRequestRouter:
   image:
     registry: ""
     repository: ""
-    tag: "0.14.2"
+    tag: "0.15.1"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -253,8 +253,12 @@ llmRequestRouter:
     drainTimeoutMs: 30000
 
   readiness:
-    # Set to 0 to disable the startup warm-up.
+    # Maximum warmup window in milliseconds; 0 disables warmup. Upper bound for stabilization.
     warmupMs: 60000
+    # How often the stabilization sampler polls the active backend count, in milliseconds.
+    stabilizationSampleIntervalMs: 1000
+    # Consecutive stable nonzero backend-count samples required to promote readiness early.
+    stabilizationWindow: 5
 
   loadBalancer:
     configPath: ""

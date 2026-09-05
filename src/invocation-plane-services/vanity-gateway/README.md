@@ -271,7 +271,12 @@ v2config:
 Callers send the public `modelName`, exactly as they do for any other model on
 this host. The gateway looks the model up, rewrites the request `model` to
 `functionID/modelName`, and forwards it to `LLM_GATEWAY_ENDPOINT`, which routes
-on that prefix. Callers never see the function ID.
+on that prefix, so a caller never has to supply a function ID.
+
+Only the request is rewritten. On `/v1/chat/completions` the LLM Gateway echoes
+the model it was given, so the `model` field of the response, and of every
+streamed chunk, carries `functionID/modelName` back to the caller.
+`/v1/responses` and `/v1/embeddings` return the public model name instead.
 
 `function-id`, `function-version-id`, and `nvcf-function-id` are stripped from
 these requests. The LLM Gateway resolves the function from the model, so the
@@ -427,6 +432,14 @@ curl -v localhost:10083/metrics
 `/health` on `NVCF_API_ENDPOINT`. When a model sets `functionType: LLM`, an
 `llm api gateway` check probes `/healthz` on `LLM_GATEWAY_ENDPOINT`, since the
 LLM Gateway does not serve `/health`.
+
+The two checks differ in what a failure does. A failing `nvcf api` check returns
+`503`, because that upstream serves every route. A failing `llm api gateway`
+check is reported in the response body but still returns `200`: deployments wire
+`/health` to both the readiness and liveness probes, so failing it would restart
+every pod and drop invocation-service routing when only the LLM Gateway is down.
+Requests for an LLM-routed model return `502` for as long as that upstream is
+unreachable, and everything else keeps serving.
 
 `nvcf_ai_api_gateway_shadow_requests_dropped_total` counts shadow dispatches
 dropped before replay. The `openai_model_name` label identifies the shadow

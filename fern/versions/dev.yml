@@ -264,6 +264,8 @@ navigation:
     contents:
       - page: Architecture Overview
         path: ../../docs/dev/architecture.md
+      - page: Storage-Agnostic Cache Architecture
+        path: ../../docs/dev/sdd-storage-agnostic-cache-architecture.md
       - section: Local Development
         skip-slug: true
         contents:

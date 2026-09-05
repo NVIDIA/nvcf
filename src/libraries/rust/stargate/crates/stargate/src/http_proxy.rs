@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use axum::Router;
 use axum::body::Body;
@@ -86,22 +86,29 @@ pub struct ProxyTransportConfig {
 #[derive(Clone)]
 pub struct ProxyTrafficState {
     pub shutdown: CancellationToken,
-    started_at: Instant,
-    readiness_warmup: Duration,
 }
 
-impl ProxyTrafficState {
-    pub(crate) fn new(shutdown: CancellationToken, readiness_warmup: Duration) -> Self {
-        Self {
-            shutdown,
-            started_at: Instant::now(),
-            readiness_warmup,
-        }
+/// Startup readiness signal; cancelled once the warmup condition is satisfied.
+#[derive(Clone)]
+pub struct ReadinessState {
+    pub ready: CancellationToken,
+}
+
+impl ReadinessState {
+    /// Returns a `ReadinessState` that is already ready. Used when warmup is disabled.
+    pub fn already_ready() -> Self {
+        let token = CancellationToken::new();
+        token.cancel();
+        Self { ready: token }
     }
 
-    fn is_ready_at(&self, now: Instant) -> bool {
-        !self.shutdown.is_cancelled()
-            && now.saturating_duration_since(self.started_at) >= self.readiness_warmup
+    /// Returns a `ReadinessState` where the replica is not yet ready.
+    pub fn warming_up(ready: CancellationToken) -> Self {
+        Self { ready }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready.is_cancelled()
     }
 }
 
@@ -110,6 +117,7 @@ pub struct ProxyAppState {
     pub state: Arc<StargateState>,
     pub quic_proxy: Arc<QuicHttpProxy>,
     pub traffic: ProxyTrafficState,
+    pub readiness: ReadinessState,
     pub lb_router: Arc<LoadBalancerRouter>,
     pub metrics: Arc<StargateMetrics>,
     pub retry: ProxyRetryConfig,
@@ -214,7 +222,11 @@ async fn healthz() -> StatusCode {
 }
 
 async fn readyz(State(app): State<ProxyAppState>) -> StatusCode {
-    if !app.traffic.is_ready_at(Instant::now()) || !app.metrics.tls_identity_is_ready() {
+    if app.traffic.shutdown.is_cancelled() || !app.metrics.tls_identity_is_ready() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+
+    if !app.readiness.is_ready() {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
@@ -226,7 +238,7 @@ mod test_support {
     use axum::extract::State;
     use axum::http::StatusCode;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tokio_util::sync::CancellationToken;
 
     use crate::auth::OpenAuthenticator;
@@ -235,7 +247,7 @@ mod test_support {
     use crate::routing_state::StargateState;
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, readyz};
+    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz};
 
     pub(super) fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -265,7 +277,10 @@ mod test_support {
                 )
                 .expect("quic proxy should initialize"),
             ),
-            traffic: ProxyTrafficState::new(CancellationToken::new(), Duration::ZERO),
+            traffic: ProxyTrafficState {
+                shutdown: CancellationToken::new(),
+            },
+            readiness: ReadinessState::already_ready(),
             lb_router: Arc::new(
                 LoadBalancerRouter::from_config(&lb_config)
                     .expect("load balancer should initialize"),
@@ -287,17 +302,23 @@ mod test_support {
         assert_eq!(readyz(State(app)).await, StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    #[test]
-    fn readiness_waits_for_the_complete_warmup_interval() {
-        let started_at = Instant::now();
-        let readiness_warmup = Duration::from_secs(60);
-        let traffic = ProxyTrafficState {
-            shutdown: CancellationToken::new(),
-            started_at,
-            readiness_warmup,
-        };
+    #[tokio::test]
+    async fn readyz_returns_503_during_warmup_window() {
+        let mut app = test_proxy_app_state();
+        let ready_token = CancellationToken::new();
+        app.readiness = ReadinessState::warming_up(ready_token.clone());
 
-        assert!(!traffic.is_ready_at(started_at + Duration::from_secs(59)));
-        assert!(traffic.is_ready_at(started_at + readiness_warmup));
+        assert_eq!(readyz(State(app.clone())).await, StatusCode::SERVICE_UNAVAILABLE);
+
+        ready_token.cancel();
+
+        assert_eq!(readyz(State(app)).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn readyz_already_ready_bypasses_warmup_check() {
+        let app = test_proxy_app_state();
+        // Default test state has ReadinessState::already_ready(); no warmup token is pending.
+        assert_eq!(readyz(State(app)).await, StatusCode::OK);
     }
 }

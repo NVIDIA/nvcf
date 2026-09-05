@@ -69,15 +69,17 @@ impl StargateState {
         self.registrations.begin_registration(identity)
     }
 
-    pub(crate) async fn end_registration(&self, running: RunningRegistration) {
+    /// Ends `running` and removes its routes. Returns the model ids that were
+    /// routable through this registration so callers can report routing impact.
+    pub(crate) async fn end_registration(&self, running: RunningRegistration) -> BTreeSet<String> {
         let Some(ended) = self.registrations.end_registration(running) else {
-            return;
+            return BTreeSet::new();
         };
 
         let registration = ended.registration;
         let model_ids = ended.cleanup_model_ids;
         let targets: HashSet<RoutingTargetKey> = model_ids
-            .into_iter()
+            .iter()
             .map(|model_id| {
                 RoutingTargetKey::new(registration.identity.routing_key.clone(), model_id)
             })
@@ -85,6 +87,7 @@ impl StargateState {
         self.routing
             .remove_inference_server_targets(&registration, &targets)
             .await;
+        model_ids
     }
 
     pub(crate) async fn apply_registration_update(
@@ -204,6 +207,12 @@ impl StargateState {
 
     pub(crate) async fn list_active_models_for_debug(&self) -> Vec<String> {
         self.routing.list_active_models_for_debug().await
+    }
+
+    /// Returns the total number of active backends across all routing targets.
+    /// Called by the startup warmup stabilization sampler once per sample interval.
+    pub async fn total_active_backend_count(&self) -> usize {
+        self.routing.total_active_backend_count().await
     }
 
     /// Looks up a registered reverse-tunnel server during QUIC handshake validation, returning its auth-derived routing key for comparison with handshake auth; returns `None` for missing or direct registrations.

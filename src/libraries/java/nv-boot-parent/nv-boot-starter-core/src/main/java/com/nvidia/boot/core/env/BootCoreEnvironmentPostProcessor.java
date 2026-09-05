@@ -107,6 +107,11 @@ public class BootCoreEnvironmentPostProcessor implements EnvironmentPostProcesso
                     versionProps.put("app.git.commit", commitId);
                 }
 
+                var commitIdFull = gitProperties.getProperty("git.commit.id.full");
+                if (StringUtils.isNotBlank(commitIdFull)) {
+                    versionProps.put("app.git.commit.full", commitIdFull);
+                }
+
                 var branch = gitProperties.getProperty("git.branch");
                 if (StringUtils.isNotBlank(branch)) {
                     versionProps.put("app.git.branch", branch);

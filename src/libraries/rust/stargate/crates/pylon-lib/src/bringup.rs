@@ -140,6 +140,40 @@ mod tests {
         crate::runtime_state::ModelGeneration::new("test-model", 0)
     }
 
+    async fn send_observed_completion(
+        upstream_http_base_url: &str,
+    ) -> (
+        Result<ChatCompletionResponse, BringupError>,
+        Vec<crate::RequestObservationState>,
+    ) {
+        let (runtime_state, observations) = PylonRuntimeState::observed(
+            InferenceServerStatus::Active,
+            &["test-model".to_string()],
+            8,
+            None,
+        );
+        let result = send_completion_request(
+            &reqwest::Client::new(),
+            upstream_http_base_url,
+            Some(Duration::from_secs(1)),
+            &serde_json::json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 1,
+                "stream": false,
+            }),
+            crate::generated_request_id::GeneratedRequestKind::Calibration,
+            &test_generation(),
+            Some(&runtime_state),
+        )
+        .await;
+        let states = observations
+            .try_iter()
+            .map(|event| event.into_observation().state)
+            .collect();
+        (result, states)
+    }
+
     fn test_stats_collector() -> (PylonRuntimeState, StatsCollectorHandle) {
         let config = StatsCollectorConfig {
             duration_floor: Duration::ZERO,
@@ -185,6 +219,72 @@ mod tests {
         );
         assert_eq!(paths.resolved_path().as_deref(), Some("/v1/health/ready"));
 
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn calibration_execute_failure_is_recorded_as_failed_after_submission() {
+        let (result, states) = send_observed_completion("http://127.0.0.1:0").await;
+
+        assert!(matches!(result, Err(BringupError::Http(_))));
+        assert_eq!(
+            states,
+            [
+                crate::RequestObservationState::UpstreamConnecting,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::Failed,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn calibration_non_success_response_is_recorded_as_failed() {
+        let server = TestHttpServer::spawn(Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": {"message": "backend failed"}})),
+                )
+            }),
+        ))
+        .await;
+
+        let (result, states) = send_observed_completion(server.as_str()).await;
+
+        assert!(matches!(result, Err(BringupError::Api { .. })));
+        assert_eq!(
+            states,
+            [
+                crate::RequestObservationState::UpstreamConnecting,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::Failed,
+            ]
+        );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn calibration_invalid_response_is_recorded_as_failed() {
+        let server = TestHttpServer::spawn(Router::new().route(
+            "/v1/chat/completions",
+            post(|| async { (StatusCode::OK, "not-json") }),
+        ))
+        .await;
+
+        let (result, states) = send_observed_completion(server.as_str()).await;
+
+        assert!(matches!(result, Err(BringupError::InvalidResponse(_))));
+        assert_eq!(
+            states,
+            [
+                crate::RequestObservationState::UpstreamConnecting,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::InputProcessing,
+                crate::RequestObservationState::Failed,
+            ]
+        );
         server.shutdown().await;
     }
 
@@ -325,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn canary_request_detects_runaway_generation() {
         let base_url = spawn_test_server(TestServerState {
-            completion_tokens: 7,
+            completion_tokens: 8,
             ..TestServerState::default()
         })
         .await;
@@ -341,8 +441,95 @@ mod tests {
         .expect_err("expected runaway generation");
         assert!(matches!(
             error,
-            BringupError::RunawayGeneration { tokens: 7 }
+            BringupError::RunawayGeneration { tokens: 8 }
         ));
+    }
+
+    #[tokio::test]
+    async fn canary_request_accepts_generation_at_threshold() {
+        let base_url = spawn_test_server(TestServerState {
+            completion_tokens: 7,
+            ..TestServerState::default()
+        })
+        .await;
+
+        send_canary_request(
+            &reqwest::Client::new(),
+            &base_url,
+            &test_generation(),
+            Duration::from_secs(1),
+            7,
+        )
+        .await
+        .expect("generation at the configured threshold should be accepted");
+    }
+
+    #[tokio::test]
+    async fn canary_request_accepts_case_insensitive_event_stream_content_type() {
+        let base_url = spawn_test_server(TestServerState {
+            event_stream_content_type: Some("Text/Event-Stream; charset=utf-8".to_string()),
+            ..TestServerState::default()
+        })
+        .await;
+
+        send_canary_request(
+            &reqwest::Client::new(),
+            &base_url,
+            &test_generation(),
+            Duration::from_secs(1),
+            7,
+        )
+        .await
+        .expect("a parameterized SSE content type should be accepted");
+    }
+
+    #[tokio::test]
+    async fn canary_error_without_json_message_does_not_echo_body() {
+        let base_url = spawn_test_server(TestServerState {
+            error_body: Some("sensitive upstream response".to_string()),
+            ..TestServerState::default()
+        })
+        .await;
+
+        let error = send_canary_request(
+            &reqwest::Client::new(),
+            &base_url,
+            &test_generation(),
+            Duration::from_secs(1),
+            7,
+        )
+        .await
+        .expect_err("unsuccessful canary response should fail");
+        let BringupError::Api { message, .. } = error else {
+            panic!("expected an API error");
+        };
+        assert!(!message.contains("sensitive upstream response"));
+        assert!(message.contains("without a JSON error message"));
+    }
+
+    #[tokio::test]
+    async fn canary_error_body_is_bounded() {
+        let error_body = "sensitive upstream response ".repeat(8_000);
+        let base_url = spawn_test_server(TestServerState {
+            error_body: Some(error_body),
+            ..TestServerState::default()
+        })
+        .await;
+
+        let error = send_canary_request(
+            &reqwest::Client::new(),
+            &base_url,
+            &test_generation(),
+            Duration::from_secs(1),
+            7,
+        )
+        .await
+        .expect_err("oversized canary error response should fail");
+        let BringupError::Api { message, .. } = error else {
+            panic!("expected an API error");
+        };
+        assert!(!message.contains("sensitive upstream response"));
+        assert!(message.contains("exceeding 65536 bytes"));
     }
 
     #[tokio::test]
@@ -827,6 +1014,8 @@ mod tests {
     #[derive(Clone)]
     struct TestServerState {
         completion_tokens: u32,
+        error_body: Option<String>,
+        event_stream_content_type: Option<String>,
         prompt_too_long_above: Option<usize>,
         calibration_barrier: Option<Arc<Barrier>>,
         completions_before_block: Option<Arc<AtomicUsize>>,
@@ -845,6 +1034,8 @@ mod tests {
         fn default() -> Self {
             Self {
                 completion_tokens: 1,
+                error_body: None,
+                event_stream_content_type: None,
                 prompt_too_long_above: None,
                 calibration_barrier: None,
                 completions_before_block: None,
@@ -1005,6 +1196,10 @@ mod tests {
                 .into_response();
         }
 
+        if let Some(error_body) = state.error_body {
+            return (StatusCode::SERVICE_UNAVAILABLE, error_body).into_response();
+        }
+
         let mut completion_tokens = state.completion_tokens;
         if prompt == "1+1=" {
             if let Some(canaries) = &state.canaries {
@@ -1015,7 +1210,7 @@ mod tests {
                     started.notify_one();
                     release.notified().await;
                 }
-                completion_tokens = if request == 0 { 7 } else { 1 };
+                completion_tokens = if request == 0 { 8 } else { 1 };
             } else if state
                 .canary_failures_remaining
                 .as_ref()
@@ -1033,6 +1228,23 @@ mod tests {
                     .and_then(|value| u32::try_from(value).ok())
                     .unwrap_or(completion_tokens);
             }
+        }
+
+        if prompt == "1+1=" {
+            if request.get("stream").and_then(Value::as_bool) != Some(true) {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+            let content_type = state
+                .event_stream_content_type
+                .as_deref()
+                .unwrap_or("text/event-stream");
+            return (
+                [("content-type", content_type)],
+                format!(
+                    "data: {{\"object\":\"chat.completion.chunk\",\"choices\":[{{\"delta\":{{\"content\":\"2\"}}}}],\"usage\":{{\"completion_tokens\":{completion_tokens}}}}}\n\ndata: [DONE]\n\n"
+                ),
+            )
+                .into_response();
         }
 
         Json(serde_json::json!({

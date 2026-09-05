@@ -312,6 +312,12 @@ natsAuthCalloutService:
 {{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default "nats://nats.nats-system.svc.cluster.local:4222" }}
 {{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
+{{- /* In-cluster ESS base URL for the API's/NVCT's own ESS calls. Defaults to
+       the worker-advertised ESS URL so existing installs are unchanged; set it
+       to the in-cluster ess-api Service in split-plane deployments so control-
+       plane ESS calls do not hairpin out to the public edge. */}}
+{{- $essApiBaseURL := dig "api" "essBaseURL" "" .Values | default $essWorkerBaseURL }}
+{{- $essNvctApiBaseURL := dig "nvctApi" "essBaseURL" "" .Values | default $essWorkerBaseURL }}
 {{- $nvctWorkerServiceURL := dig "nvctServiceURL" "" $workerEndpoints }}
 {{- $nvctWorkerGrpcServiceURL := dig "nvctGrpcServiceURL" "" $workerEndpoints }}
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
@@ -445,7 +451,7 @@ natsAuthCalloutService:
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $effectivePylonImage = printf "%s/%s/pylon:0.14.3" $sidecarsHost $sidecarsRepo }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.15.1" $sidecarsHost $sidecarsRepo }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}
 {{- $stackNvcfRemoteConfig := dict }}
@@ -544,6 +550,8 @@ api:
   {{- with $essWorkerBaseURL }}
   {{- /* Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly. */}}
   {{- $_ := set $apiEnv "NVCF_ESS_WORKER_BASE_URL" . }}
+  {{- end }}
+  {{- with $essApiBaseURL }}
   {{- $_ := set $apiEnv "NVCF_ESS_BASE_URL" . }}
   {{- end }}
   {{- with dig "api" "icmsBaseUrl" nil .Values }}
@@ -634,8 +642,11 @@ nvctApi:
     {{- with $nvctWorkerGrpcServiceURL }}
     NVCT_GLOBAL_FQDN_GRPC: {{ . | quote }}
     {{- end }}
-    {{- with $essWorkerBaseURL }}
+    {{- with $essNvctApiBaseURL }}
     NVCT_ESS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with $essWorkerBaseURL }}
+    {{- /* Keep the legacy worker alias until all NVCT builds consume the base URL directly. */}}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
     {{- end }}
     {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}

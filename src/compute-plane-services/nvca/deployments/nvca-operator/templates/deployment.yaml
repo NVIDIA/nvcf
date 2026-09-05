@@ -165,7 +165,7 @@ spec:
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) | quote }}
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: {{ .Values.otelCollector.imageTag | default "0.157.9" | quote }}
+          value: {{ .Values.otelCollector.imageTag | default "0.157.0-nv-0.2.1" | quote }}
         {{- if .Values.otelCollector.resources }}
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: {{ .Values.otelCollector.resources | toJson | b64enc | quote }}
