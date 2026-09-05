@@ -390,6 +390,11 @@ delete_stack_namespaces() {
           --timeout=60s; then
         echo "  force-clear finalizers on $ns (stuck Terminating)"
         force_clear_namespace_finalizers "$ctx" "$ns"
+        if ! kubectl --context "$ctx" wait --for=delete "namespace/$ns" \
+            --timeout=60s; then
+          echo "namespace $ns still exists after clearing finalizers on $ctx" >&2
+          return 1
+        fi
       fi
     fi
   done

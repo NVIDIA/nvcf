@@ -347,6 +347,11 @@ delete_stack_namespaces() {
       | jq '.spec.finalizers=[]' \
       | kubectl --context "$ctx" replace \
           --raw "/api/v1/namespaces/$ns/finalize" -f - >/dev/null
+    if ! kubectl --context "$ctx" wait --for=delete "namespace/$ns" \
+        --timeout=60s; then
+      echo "namespace $ns still exists after clearing finalizers on $ctx" >&2
+      return 1
+    fi
   done
 }
 
