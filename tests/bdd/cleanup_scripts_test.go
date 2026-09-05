@@ -148,6 +148,13 @@ func TestDestroyStackMultiCleansWorkerNamespacesOnControlPlane(t *testing.T) {
 		"kubectl --context k3d-ncp-local-compute-1 -n nvca-operator delete nvcfbackend --all",
 		"helm --kube-context k3d-ncp-local-compute-1 uninstall nvca-operator -n nvca-operator",
 		"helm --kube-context k3d-ncp-local-cp uninstall nats -n nats-system",
+		"helm --kube-context k3d-ncp-local-cp uninstall default-monitors -n monitoring",
+		"helm --kube-context k3d-ncp-local-cp uninstall otel-collector -n monitoring",
+		"helm --kube-context k3d-ncp-local-cp uninstall opentelemetry-operator -n monitoring",
+		"helm --kube-context k3d-ncp-local-cp uninstall victoria-metrics -n monitoring",
+		"helm --kube-context k3d-ncp-local-cp uninstall prometheus-operator-crds -n monitoring",
+		"kubectl --context k3d-ncp-local-cp delete namespace monitoring",
+		"kubectl --context k3d-ncp-local-cp -n envoy-gateway-system delete secret llm-request-router-grpc-tls --ignore-not-found --wait --timeout=60s",
 	} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("cleanup command log missing %q:\n%s", want, log)
@@ -163,6 +170,68 @@ func TestDestroyStackMultiCleansWorkerNamespacesOnControlPlane(t *testing.T) {
 		if strings.Contains(log, forbidden) {
 			t.Fatalf("cleanup touched topology infrastructure %q:\n%s", forbidden, log)
 		}
+	}
+}
+
+func TestDestroyStackForceDeletesLingeringNamespacePods(t *testing.T) {
+	binDir := t.TempDir()
+	logPath := filepath.Join(binDir, "commands.log")
+
+	writeFakeBin(t, binDir, "kubectl", `#!/usr/bin/env bash
+set -euo pipefail
+printf 'kubectl %s\n' "$*" >>"$FAKE_COMMAND_LOG"
+case "$*" in
+  *"cluster-info"*) exit 0 ;;
+  *"-n nvca-operator get nvcfbackend"*)
+    echo 'error: the server does not have a resource type "nvcfbackend"' >&2
+    exit 1
+    ;;
+  *"delete namespace nvcf "*) exit 1 ;;
+  *"-n nvcf get pods -o name"*) printf 'pod/vanity-gateway-test\n' ;;
+  *"wait --for=delete namespace/nvcf"*) exit 0 ;;
+  *"get namespace"*)
+    echo 'Error from server (NotFound): namespaces not found' >&2
+    exit 1
+    ;;
+esac
+`)
+	writeFakeBin(t, binDir, "helm", `#!/usr/bin/env bash
+set -euo pipefail
+printf 'helm %s\n' "$*" >>"$FAKE_COMMAND_LOG"
+exit 0
+`)
+
+	cmd := exec.Command("bash", "scripts/destroy-stack.sh", "single")
+	cmd.Env = append(os.Environ(),
+		"BDD_REPO_ROOT="+t.TempDir(),
+		"FAKE_COMMAND_LOG="+logPath,
+		"PATH="+binDir+":"+os.Getenv("PATH"),
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run destroy-stack.sh single: %v\n%s", err, output)
+	}
+
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read cleanup command log: %v", err)
+	}
+	got := string(log)
+	for _, want := range []string{
+		"-n nvcf delete pod/vanity-gateway-test --force --grace-period=0 --wait=false --ignore-not-found",
+		"wait --for=delete namespace/nvcf --timeout=60s",
+		"helm --kube-context k3d-ncp-local uninstall default-monitors -n monitoring",
+		"helm --kube-context k3d-ncp-local uninstall otel-collector -n monitoring",
+		"helm --kube-context k3d-ncp-local uninstall opentelemetry-operator -n monitoring",
+		"helm --kube-context k3d-ncp-local uninstall victoria-metrics -n monitoring",
+		"helm --kube-context k3d-ncp-local uninstall prometheus-operator-crds -n monitoring",
+		"kubectl --context k3d-ncp-local delete namespace monitoring",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cleanup command log missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "/api/v1/namespaces/nvcf/finalize") {
+		t.Fatalf("cleanup finalized a namespace that terminated after pod deletion:\n%s", got)
 	}
 }
 

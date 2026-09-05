@@ -116,6 +116,11 @@ STACK_RELEASES_CP=(
   "ingress:envoy-gateway-system"
   "llm-request-router:nvcf"
   "llm-api-gateway:nvcf"
+  "default-monitors:monitoring"
+  "otel-collector:monitoring"
+  "opentelemetry-operator:monitoring"
+  "victoria-metrics:monitoring"
+  "prometheus-operator-crds:monitoring"
 )
 
 STACK_RELEASES_WORKER=(
@@ -132,6 +137,7 @@ STACK_NAMESPACES_CP=(
   sis
   ess
   nvcf
+  monitoring
 )
 
 STACK_NAMESPACES_WORKER=(
@@ -146,6 +152,14 @@ STACK_NAMESPACES_WORKER=(
 # CR.
 STACK_CRS_WORKER=(
   nvcfbackend
+)
+
+# Stack-owned resources that live in topology-owned namespaces. Helm removes
+# the Certificate, but cert-manager intentionally leaves its generated Secret
+# without an owner reference. Delete it explicitly so a reinstalled OpenBao
+# hierarchy cannot inherit a certificate signed by the previous root CA.
+STACK_RESOURCES_CP=(
+  "secret:llm-request-router-grpc-tls:envoy-gateway-system"
 )
 
 # --- Helpers ---
@@ -307,7 +321,28 @@ force_clear_namespace_finalizers() {
     return 1
   fi
   printf '%s' "$json" | jq '.spec.finalizers = []' | \
-    kubectl --context "$ctx" replace --raw "/api/v1/namespaces/$ns/finalize" -f -
+    kubectl --context "$ctx" replace --raw "/api/v1/namespaces/$ns/finalize" -f - \
+      >/dev/null
+}
+
+force_delete_namespace_pods() {
+  local ctx="$1"
+  local ns="$2"
+  local pods pod
+  if ! pods=$(kubectl --context "$ctx" -n "$ns" get pods -o name 2>&1); then
+    if kubectl_is_not_found "$pods"; then
+      return 0
+    fi
+    printf '%s\n' "$pods" >&2
+    echo "get pods in namespace $ns failed on $ctx" >&2
+    return 1
+  fi
+  while IFS= read -r pod; do
+    [[ -z "$pod" ]] && continue
+    echo "  force-delete $pod in $ns"
+    kubectl --context "$ctx" -n "$ns" delete "$pod" \
+      --force --grace-period=0 --wait=false --ignore-not-found
+  done <<< "$pods"
 }
 
 uninstall_stack_releases() {
@@ -323,20 +358,39 @@ uninstall_stack_releases() {
   done
 }
 
+delete_stack_resources() {
+  local ctx="$1"
+  shift
+  local resources=("$@")
+  for entry in "${resources[@]}"; do
+    local kind="${entry%%:*}"
+    local rest="${entry#*:}"
+    local name="${rest%%:*}"
+    local ns="${rest#*:}"
+    echo "  delete $kind $name in $ns"
+    kubectl --context "$ctx" -n "$ns" delete "$kind" "$name" \
+      --ignore-not-found --wait --timeout=60s
+  done
+}
+
 delete_stack_namespaces() {
   local ctx="$1"
   shift
   local namespaces=("$@")
   for ns in "${namespaces[@]}"; do
     echo "  delete namespace $ns"
-    # Polite delete with a bounded wait. If the namespace is stuck
-    # Terminating (orphan finalizers on nvca-operator / nvcf-backend
-    # after the controller is gone), drop into the force-clear path
-    # rather than hang the BDD cleanup.
+    # Polite delete with a bounded wait. Disposable worker and gateway
+    # pods can inherit a longer termination grace period than this local
+    # cleanup budget, so force-delete only the pods that remain. If the
+    # namespace is still stuck, clear its finalizers as a last resort.
     if ! kubectl --context "$ctx" delete namespace "$ns" \
         --ignore-not-found --wait --timeout=60s; then
-      echo "  force-clear finalizers on $ns (stuck Terminating)"
-      force_clear_namespace_finalizers "$ctx" "$ns"
+      force_delete_namespace_pods "$ctx" "$ns"
+      if ! kubectl --context "$ctx" wait --for=delete "namespace/$ns" \
+          --timeout=60s; then
+        echo "  force-clear finalizers on $ns (stuck Terminating)"
+        force_clear_namespace_finalizers "$ctx" "$ns"
+      fi
     fi
   done
 }
@@ -383,6 +437,7 @@ if [[ "$mode" == "single" ]]; then
     uninstall_stack_releases "$ctx" \
       "${STACK_RELEASES_WORKER[@]}" \
       "${STACK_RELEASES_CP[@]}"
+    delete_stack_resources "$ctx" "${STACK_RESOURCES_CP[@]}"
     delete_stack_namespaces "$ctx" \
       "${STACK_NAMESPACES_WORKER[@]}" \
       "${STACK_NAMESPACES_CP[@]}"
@@ -433,6 +488,7 @@ if k3d cluster get ncp-local-cp >/dev/null 2>&1; then
     uninstall_stack_releases "$ctx" \
       "${STACK_RELEASES_WORKER[@]}" \
       "${STACK_RELEASES_CP[@]}"
+    delete_stack_resources "$ctx" "${STACK_RESOURCES_CP[@]}"
     delete_stack_namespaces "$ctx" \
       "${STACK_NAMESPACES_WORKER[@]}" \
       "${STACK_NAMESPACES_CP[@]}"
