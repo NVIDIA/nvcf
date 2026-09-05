@@ -20,10 +20,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/hashicorp/vault/sdk/helper/errutil"
 	"github.com/hashicorp/vault/sdk/helper/keysutil"
 	"github.com/hashicorp/vault/sdk/logical"
-	"gopkg.in/square/go-jose.v2"
 	"time"
 )
 
@@ -48,7 +48,22 @@ var DefaultAllowedClaims = []string{"sub", "aud"}
 var ReservedClaims = []string{"iss", "exp", "nbf", "iat", "jti"}
 var ReservedHeaders = []string{"kid", "alg", "enc", "zip", "crit"}
 
-var AllowedSignatureAlgorithmNames = []string{string(jose.ES256), string(jose.ES384), string(jose.ES512), string(jose.RS256), string(jose.RS384), string(jose.RS512)}
+var allowedSignatureAlgorithms = []jose.SignatureAlgorithm{
+	jose.ES256,
+	jose.ES384,
+	jose.ES512,
+	jose.RS256,
+	jose.RS384,
+	jose.RS512,
+}
+
+var AllowedSignatureAlgorithmNames = func() []string {
+	names := make([]string, len(allowedSignatureAlgorithms))
+	for i, algorithm := range allowedSignatureAlgorithms {
+		names[i] = string(algorithm)
+	}
+	return names
+}()
 var AllowedRSAKeyBits = []int{2048, 3072, 4096}
 
 // Config holds all configuration for the backend.

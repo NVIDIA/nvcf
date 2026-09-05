@@ -10,8 +10,8 @@
 # context, so the stage below compiles it from the same commit that produces
 # the image. Nothing is vendored and nothing is injected, so `docker build .`
 # here produces the same image as the release pipeline.
-ARG BAO_VERSION=2.5.5
-ARG GO_VERSION=1.25
+ARG BAO_VERSION=2.6.2
+ARG GO_VERSION=1.27.0
 
 FROM golang:${GO_VERSION}-alpine AS plugin-build
 ARG TARGETARCH
@@ -28,8 +28,15 @@ RUN GOOS=linux GOARCH="${TARGETARCH}" CGO_ENABLED=0 \
 
 FROM openbao/openbao:${BAO_VERSION}
 
+# Upgrade packages inherited from the upstream image before installing the
+# runtime tools. This ensures security fixes from the pinned Alpine branch are
+# applied even when the upstream image predates them.
+USER root
 # hadolint ignore=DL3018
-RUN apk add --no-cache curl jq bash && \
+RUN apk upgrade --no-cache && \
+    apk add --no-cache curl jq bash && \
     mkdir -p /openbao/plugins
 
 COPY --from=plugin-build --chmod=0555 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
+
+USER openbao

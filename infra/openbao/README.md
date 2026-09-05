@@ -45,12 +45,12 @@ scripts/verify-jwt-plugin.sh    # asserts module path, target, toolchain, deps
 
 ## Building the container
 
-The `Dockerfile` defaults to the `openbao/openbao:2.5.5` base image. Override the `BAO_VERSION` build-arg to track a different upstream tag.
+The `Dockerfile` defaults to the `openbao/openbao:2.6.2` base image. Override the `BAO_VERSION` build-arg to track a different upstream tag.
 
 ```bash
 docker build \
   --build-arg TARGETARCH=amd64 \
-  --build-arg BAO_VERSION=2.5.5 \
+  --build-arg BAO_VERSION=2.6.2 \
   -t <your-registry>/<your-org>/nvcf-openbao:<version> .
 ```
 
@@ -59,7 +59,7 @@ For multi-arch builds:
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --build-arg BAO_VERSION=2.5.5 \
+  --build-arg BAO_VERSION=2.6.2 \
   -t <your-registry>/<your-org>/nvcf-openbao:<version> \
   --push .
 ```

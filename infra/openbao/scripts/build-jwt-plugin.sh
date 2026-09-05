@@ -25,7 +25,11 @@ repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 plugin_src=${PLUGIN_SRC:-"$repo_root/plugins/vault-plugin-secrets-jwt"}
 vault_api_version=${VAULT_API_VERSION:-v1.15.0}
 vault_sdk_version=${VAULT_SDK_VERSION:-v0.15.2}
-x_net_version=${X_NET_VERSION:-v0.55.0}
+x_net_version=${X_NET_VERSION:-v0.57.0}
+x_crypto_version=${X_CRYPTO_VERSION:-v0.55.0}
+x_text_version=${X_TEXT_VERSION:-v0.41.0}
+grpc_version=${GRPC_VERSION:-v1.83.1}
+go_jose_version=${GO_JOSE_VERSION:-v4.1.4}
 output_dir=${OUTPUT_DIR:-"$repo_root/files/plugins"}
 
 # Only a work dir this script created is ours to remove. Deleting a
@@ -62,7 +66,11 @@ cp -R "$plugin_src/." "$src_dir/"
   go get \
     "github.com/hashicorp/vault/api@${vault_api_version}" \
     "github.com/hashicorp/vault/sdk@${vault_sdk_version}" \
-    "golang.org/x/net@${x_net_version}"
+    "github.com/go-jose/go-jose/v4@${go_jose_version}" \
+    "golang.org/x/crypto@${x_crypto_version}" \
+    "golang.org/x/net@${x_net_version}" \
+    "golang.org/x/text@${x_text_version}" \
+    "google.golang.org/grpc@${grpc_version}"
   go mod tidy
   go test ./...
 

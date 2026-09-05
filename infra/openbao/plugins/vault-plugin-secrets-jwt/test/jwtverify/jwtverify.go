@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"os"
 
-	"gopkg.in/square/go-jose.v2"
-	"gopkg.in/square/go-jose.v2/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 )
 
 func main() {
@@ -45,8 +45,17 @@ type customToken struct {
 	Foo string `json:"foo"`
 }
 
+var allowedSignatureAlgorithms = []jose.SignatureAlgorithm{
+	jose.ES256,
+	jose.ES384,
+	jose.ES512,
+	jose.RS256,
+	jose.RS384,
+	jose.RS512,
+}
+
 func validateToken(rawToken, jwksEndpoint string) error {
-	tok, err := jwt.ParseSigned(rawToken)
+	tok, err := jwt.ParseSigned(rawToken, allowedSignatureAlgorithms)
 	if err != nil {
 		return err
 	}

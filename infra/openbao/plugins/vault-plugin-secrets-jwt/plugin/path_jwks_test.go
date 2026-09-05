@@ -22,9 +22,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/go-test/deep"
 	"github.com/hashicorp/vault/sdk/logical"
-	"gopkg.in/square/go-jose.v2"
 )
 
 func FetchJWKS(b *backend, storage *logical.Storage) (*jose.JSONWebKeySet, error) {

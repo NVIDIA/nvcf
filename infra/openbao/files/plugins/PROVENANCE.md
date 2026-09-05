@@ -10,21 +10,25 @@ modified copy of the Apache-2.0 project `outfoxx/vault-plugin-secrets-jwt`;
 that directory's `NOTICE` enumerates every NVIDIA change.
 
 The image build compiles the plugin from that source in a Dockerfile build
-stage, so the binary and the image come from the same commit. Nothing is
-fetched from outside this repository at build time.
+stage, so the binary and the image come from the same commit. Go module inputs
+are verified through the committed `go.sum` checksums.
 
 ## Dependency floors
 
 Held deliberately, not incidental to a `go mod tidy`:
 
-- `golang.org/x/net v0.55.0` - security floor
+- Go 1.27.0 - security floor for the standard library
+- `golang.org/x/crypto v0.55.0` - security floor
+- `golang.org/x/net v0.57.0` - selected by `golang.org/x/crypto v0.55.0`
+- `golang.org/x/text v0.41.0` - selected by `golang.org/x/crypto v0.55.0`
+- `google.golang.org/grpc v1.83.1` - security floor
+- `github.com/go-jose/go-jose/v4 v4.1.4` - direct JWT/JWS implementation and security floor
 - `github.com/hashicorp/vault/api v1.15.0`
 - `github.com/hashicorp/vault/sdk v0.15.2`
-- `google.golang.org/grpc v1.69.4`
-- `github.com/go-jose/go-jose/v4 v4.0.4`
 
-The vault and grpc pins keep compatibility with the previously shipped plugin
-binary. `scripts/verify-jwt-plugin.sh` asserts them against the built artifact.
+The Vault pins preserve the previously shipped plugin compatibility contract;
+the remaining pins are security floors. `scripts/verify-jwt-plugin.sh` asserts
+them against the built artifact.
 
 ## Local build
 
