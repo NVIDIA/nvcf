@@ -42,7 +42,7 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 ## Building the container
 
 The `Dockerfile` uses the public upstream OpenBao image (`openbao/openbao:2.5.5`) as the base. To use a different base, edit the `FROM` line directly.
-It builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0 and downloads the official Kubernetes v1.36.4 `kubectl` binary for the target architecture. The build verifies both the published Kubernetes checksum and the pinned per-architecture checksum.
+It builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0 and downloads the official Kubernetes v1.37.0 `kubectl` binary for the target architecture. The build verifies both the published Kubernetes checksum and the pinned per-architecture checksum.
 
 ```bash
 docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
