@@ -121,6 +121,49 @@ public class AuthUtils {
         return EXPECTED_PSAT_SA_NAME.equals(sa);
     }
 
+    /** ServiceAccount name of every delegated worker; unique per instance namespace. */
+    public static final String WORKER_SA_NAME = "nvcf-worker";
+
+    /**
+     * True for {@code system:serviceaccount:<namespace>:nvcf-worker} with a non-empty
+     * namespace and nothing else.
+     */
+    public static boolean isValidWorkerPsatSubject(String sub) {
+        String namespace = workerSubjectNamespace(sub);
+        return namespace != null;
+    }
+
+    /** Namespace segment of a worker PSAT subject, or null when the subject is not one. */
+    public static String workerSubjectNamespace(String sub) {
+        if (sub == null || !sub.startsWith(PSAT_SUBJECT_PREFIX)) {
+            return null;
+        }
+        String rest = sub.substring(PSAT_SUBJECT_PREFIX.length());
+        int sep = rest.indexOf(':');
+        if (sep <= 0 || sep != rest.lastIndexOf(':')) {
+            return null;
+        }
+        return WORKER_SA_NAME.equals(rest.substring(sep + 1)) ? rest.substring(0, sep) : null;
+    }
+
+    /**
+     * True when the current principal is a compute cluster (NVCA over cluster OIDC/PSAT or a
+     * cluster-scoped API key) rather than a control-plane service identity.
+     */
+    public static boolean isClusterPrincipal() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return false;
+        }
+        for (GrantedAuthority authority : authentication.getAuthorities()) {
+            String a = authority.getAuthority();
+            if ("nvca-cluster".equals(a) || "apikey:nvca-cluster".equals(a)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static boolean isValidNvcaWorkloadSubject(String sub) {
         return isValidPsatNvcaSubject(sub)
                 || (sub != null && sub.startsWith("spiffe://")

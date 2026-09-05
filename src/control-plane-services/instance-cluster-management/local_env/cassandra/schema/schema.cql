@@ -562,3 +562,21 @@ custom_attributes set<text>,
 request text,
 PRIMARY KEY ((truncated_ts, zone), instance_id)
 );
+
+CREATE TYPE IF NOT EXISTS test.worker_identifier (
+    name text,
+    uid  text
+);
+
+CREATE TABLE IF NOT EXISTS test.worker_identifiers (
+    cluster_id  text,
+    instance_id text,
+    sub         text,
+    namespace   text,
+    sa_uid      text,
+    identifiers list<frozen<test.worker_identifier>>,
+    PRIMARY KEY (cluster_id, instance_id)
+);
+
+CREATE CUSTOM INDEX IF NOT EXISTS idx_worker_identifiers_by_sa_uid
+    ON test.worker_identifiers (sa_uid) USING 'StorageAttachedIndex';
