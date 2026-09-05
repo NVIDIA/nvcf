@@ -41,6 +41,10 @@ router instance that issued the tunnel target.
 {{- if le $watchHeartbeatMs 0 }}
 {{- fail "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" }}
 {{- end }}
+{{- $readinessWarmupMs := dig "readiness" "warmupMs" "" .Values.llmRequestRouter | toString }}
+{{- if and $readinessWarmupMs (not (regexMatch "^[0-9]+$" $readinessWarmupMs)) }}
+{{- fail "llmRequestRouter.readiness.warmupMs must be a non-negative integer" }}
+{{- end }}
 {{- if and (eq $workloadKind "Deployment") (gt $replicaCount 1) (not $backendRouterEnabled) }}
 {{- fail "llmRequestRouter.backendRouter.enabled must be true when llmRequestRouter.workload.kind is Deployment and replicaCount is greater than 1" }}
 {{- end }}
@@ -132,7 +136,7 @@ spec:
             - --allow-insecure-remote-watch-http
             {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
-            {{- with dig "readiness" "warmupMs" "" .Values.llmRequestRouter }}
+            {{- with $readinessWarmupMs }}
             - --readiness-warmup-ms={{ . }}
             {{- end }}
             {{- if hasKey (dig "readiness" dict .Values.llmRequestRouter) "stabilizationSampleIntervalMs" }}

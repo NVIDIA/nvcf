@@ -203,7 +203,10 @@
       "id": "admin-token-issuer-proxy",
       "path": "deploy/helm/admin-token-issuer-proxy",
       "service_name": "helm-admin-token-issuer-proxy",
-      "legacy_tag_prefix": "helm-admin-token-issuer-proxy-v"
+      "legacy_tag_prefix": "helm-admin-token-issuer-proxy-v",
+      "deploys": [
+        "admin-token-issuer-proxy-app"
+      ]
     },
     {
       "id": "cassandra",

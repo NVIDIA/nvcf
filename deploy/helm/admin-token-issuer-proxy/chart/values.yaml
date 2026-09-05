@@ -39,7 +39,7 @@ adminIssuerProxy:
     pullPolicy: IfNotPresent
 
     # Image tag to use. Defaults to the appVersion from Chart.yaml if not specified.
-    tag: "1.1.0"
+    tag: "1.1.1"
 
   # List of image pull secrets for accessing private container registries.
   # Example:
