@@ -44,7 +44,7 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.6.0
+    version: 1.7.0
     namespace: api-keys
     inherit:
       - template: service
@@ -213,12 +213,22 @@ releases:
     labels:
       release-group: services
 
+  - name: event-ledger
+    chart: nvcf/helm-event-ledger
+    version: 0.2.0
+    namespace: nvcf
+    condition: addons.eventLedger.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.17.0
+    version: 1.18.0
     {{- end }}
     needs:
       - nvcf/notary-service
