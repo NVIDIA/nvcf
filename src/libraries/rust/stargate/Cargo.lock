@@ -3442,10 +3442,12 @@ dependencies = [
  "quinn",
  "rustls",
  "rustls-pemfile",
+ "serde_json",
  "stargate-forwarding",
  "stargate-proto",
  "stargate-protocol",
  "stargate-runtime",
+ "stargate-telemetry",
  "stargate-tls",
  "tempfile",
  "tokio",
@@ -3454,7 +3456,6 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

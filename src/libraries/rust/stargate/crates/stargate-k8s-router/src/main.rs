@@ -35,14 +35,22 @@ use stargate_runtime::{
 };
 use tokio::net::TcpListener;
 use tokio::sync::watch;
-use tracing::{debug, error, info};
-use tracing_subscriber::EnvFilter;
+use tracing::{debug, error, info, warn};
 
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_WATCH_HEARTBEAT_MS: u64 = 5_000;
 const DEFAULT_RELAY_MAX_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_RELAY_KEEP_ALIVE_MS: u64 = 10_000;
 const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 30_000;
+/// OpenTelemetry `service.name` resource and tracer name default.
+const DEFAULT_SERVICE_NAME: &str = "stargate-k8s-router";
+/// Root span name used to gate OTLP export; see `stargate_telemetry::init_telemetry`.
+///
+/// NOTE: neither the endpoint-watch loop (`watcher::run_endpoint_slice_watcher`) nor
+/// the relay paths (`grpc`, `quic`, `webtransport`) currently open a span with this
+/// name -- this wiring alone establishes the exporter but will not emit spans until
+/// that instrumentation is added.
+const TRACED_ROOT_SPAN: &str = "relay_request";
 
 #[derive(Clone, Debug, PartialEq, ValueEnum)]
 enum RouterTunnelProtocol {
@@ -125,6 +133,15 @@ struct Args {
     /// CA bundle used to verify the selected upstream Stargate pod.
     #[arg(long, env = "STARGATE_UPSTREAM_TLS_CERT_PATH", value_name = "PATH")]
     upstream_tls_cert_path: Option<String>,
+    /// OTLP/gRPC trace export endpoint. Tracing export is disabled if omitted.
+    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT", value_name = "ENDPOINT")]
+    otel_endpoint: Option<String>,
+    /// OpenTelemetry service.name resource and tracer name.
+    #[arg(long, default_value = DEFAULT_SERVICE_NAME, value_name = "NAME")]
+    otel_service_name: String,
+    /// JSON secrets file path containing the OTLP `tracingAccessToken`.
+    #[arg(long, env = "SECRETS_PATH", value_name = "PATH")]
+    secrets_path: Option<String>,
 }
 
 struct RouterStartupConfig {
@@ -382,11 +399,58 @@ impl RouterRuntime {
     }
 }
 
+/// Resolves the OTLP tracing access token, read only when tracing is enabled.
+/// Missing/empty key yields `None` (caller warns after the subscriber exists);
+/// an unreadable or malformed secrets file is a hard error.
+async fn resolve_otel_access_token(
+    tracing_enabled: bool,
+    secrets_path: Option<&str>,
+) -> Result<Option<String>> {
+    if !tracing_enabled {
+        return Ok(None);
+    }
+    let Some(path) = secrets_path else {
+        return Ok(None);
+    };
+    let bytes = tokio::fs::read(path)
+        .await
+        .with_context(|| format!("failed to read secrets file '{path}' for tracingAccessToken"))?;
+    let secrets: serde_json::Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("secrets file '{path}' is not valid JSON"))?;
+    match secrets.get("tracingAccessToken") {
+        None => Ok(None),
+        Some(value) => {
+            let token = value
+                .as_str()
+                .context("tracingAccessToken in secrets file is not a string")?
+                .trim();
+            if token.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(token.to_owned()))
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_logging();
+    let args = Args::parse();
+    let tracing_enabled = args.otel_endpoint.is_some();
+    let otel_access_token =
+        resolve_otel_access_token(tracing_enabled, args.secrets_path.as_deref()).await?;
+    let _telemetry_guard = stargate_telemetry::init_telemetry(
+        args.otel_endpoint.as_deref(),
+        &args.otel_service_name,
+        TRACED_ROOT_SPAN,
+        otel_access_token.as_deref(),
+    )?;
+    // Warn after init_telemetry so the subscriber captures it.
+    if tracing_enabled && otel_access_token.is_none() {
+        warn!("no tracingAccessToken; OTLP trace export is unauthenticated");
+    }
     install_default_crypto_provider();
-    let config = RouterStartupConfig::from_args(Args::parse())?;
+    let config = RouterStartupConfig::from_args(args)?;
     run_router(config).await
 }
 
@@ -504,16 +568,6 @@ fn relay_endpoint_config_from_args(args: &Args) -> Result<RelayEndpointConfig> {
         keep_alive_interval: (args.relay_keep_alive_ms > 0)
             .then_some(Duration::from_millis(args.relay_keep_alive_ms)),
     })
-}
-
-fn init_logging() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .compact()
-        .init();
 }
 
 #[cfg(test)]
@@ -1023,6 +1077,87 @@ mod tests {
             error.to_string(),
             "--shutdown-drain-timeout-ms must be greater than 0"
         );
+    }
+
+    #[test]
+    fn otel_service_name_defaults_and_can_be_overridden() {
+        let defaults = router_args(&[]);
+        assert_eq!(defaults.otel_service_name, DEFAULT_SERVICE_NAME);
+        assert_eq!(defaults.otel_endpoint, None);
+        assert_eq!(defaults.secrets_path, None);
+
+        let overridden = router_args(&["--otel-service-name", "stargate-k8s-router-canary"]);
+        assert_eq!(overridden.otel_service_name, "stargate-k8s-router-canary");
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_none_when_tracing_disabled() {
+        let file = test_file(br#"{"tracingAccessToken":"tok"}"#);
+        let token = resolve_otel_access_token(false, Some(test_file_path(&file)))
+            .await
+            .expect("resolve should succeed");
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_none_when_no_secrets_path() {
+        let token = resolve_otel_access_token(true, None)
+            .await
+            .expect("resolve should succeed");
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_reads_and_trims_value() {
+        let file = test_file(br#"{"nvcfApiToken":"x","tracingAccessToken":"  tok-123  "}"#);
+        let token = resolve_otel_access_token(true, Some(test_file_path(&file)))
+            .await
+            .expect("resolve should succeed");
+        assert_eq!(token.as_deref(), Some("tok-123"));
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_absent_key_is_allowed() {
+        let file = test_file(br#"{"nvcfApiToken":"x"}"#);
+        let token = resolve_otel_access_token(true, Some(test_file_path(&file)))
+            .await
+            .expect("missing tracingAccessToken must not error");
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_empty_value_is_allowed() {
+        let file = test_file(br#"{"tracingAccessToken":"   "}"#);
+        let token = resolve_otel_access_token(true, Some(test_file_path(&file)))
+            .await
+            .expect("empty tracingAccessToken must not error");
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_non_string_value_fails() {
+        let file = test_file(br#"{"tracingAccessToken":42}"#);
+        let error = resolve_otel_access_token(true, Some(test_file_path(&file)))
+            .await
+            .expect_err("non-string tracingAccessToken must fail");
+        assert!(error.to_string().contains("not a string"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_invalid_json_fails() {
+        let file = test_file(b"not json");
+        let error = resolve_otel_access_token(true, Some(test_file_path(&file)))
+            .await
+            .expect_err("invalid JSON secrets file must fail");
+        assert!(error.to_string().contains("not valid JSON"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn otel_access_token_unreadable_file_fails() {
+        let error = resolve_otel_access_token(true, Some("/nonexistent/secrets.json"))
+            .await
+            .expect_err("unreadable secrets file must fail");
+        assert!(error.to_string().contains("failed to read"), "{error:#}");
     }
 
     #[test]
