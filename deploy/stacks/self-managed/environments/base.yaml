@@ -193,8 +193,6 @@ api:
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
 nvctApi:
   essBaseURL: ""
-  image:
-    tag: "1.65.0"
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
@@ -346,10 +344,6 @@ addons:
       replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
-      # Chart 1.13.2 otherwise defaults to Stargate 0.15.1, which predates the
-      # shutdown-drain arguments rendered by that chart.
-      image:
-        tag: "0.16.2"
       readiness:
         warmupMs: 60000
       workload:
@@ -564,8 +558,6 @@ invocation:
     maxUnavailable: 1
 
 adminIssuerProxy:
-  image:
-    tag: "1.1.1"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
