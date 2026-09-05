@@ -263,6 +263,7 @@ natsAuthCalloutService:
 {{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- $delegatedWorkerTokensEnabled := dig "security" "delegatedWorkerTokens" "enabled" false .Values }}
 {{- if $llmEnabled }}
 {{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
@@ -344,7 +345,8 @@ api:
     configData:
       nvcf:
         worker:
-          delegated-token-enabled: true
+          delegated-token:
+            enabled: {{ $delegatedWorkerTokensEnabled }}
         {{- if $llmEnabled }}
         llm-request-router:
           worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
@@ -485,7 +487,7 @@ nvctApi:
     NVCT_ESS_BASE_URL: {{ . | quote }}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
     {{- end }}
-    NVCT_WORKER_DELEGATED_TOKEN_ENABLED: "true"
+    NVCT_WORKER_DELEGATEDTOKEN_ENABLED: {{ $delegatedWorkerTokensEnabled | toString | quote }}
     {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}
     NVCT_ICMS_BASE_URL: {{ . | quote }}
     {{- end }}

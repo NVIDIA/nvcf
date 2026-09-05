@@ -306,6 +306,15 @@ addons:
   nvcfUi:
     enabled: false
 
+# Control-plane security toggles.
+security:
+  # Delegated worker tokens: NVCF API and NVCT API accept Helm-worker projected
+  # ServiceAccount tokens verified through ICMS introspection. Enable together
+  # with NVCA cluster OIDC identity. The NVCF and NVCT service credentials must
+  # carry the worker-token-introspect scope for ICMS to serve introspection.
+  delegatedWorkerTokens:
+    enabled: false
+
 stateMetrics:
   enabled: true
   # Disable ServiceMonitor for environments without Prometheus Operator

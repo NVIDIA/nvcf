@@ -4,3 +4,4 @@ include Makefile.dist
 .PHONY: test
 test:
 	@tests/llm-router-worker-address.sh
+	@tests/delegated-worker-tokens.sh
