@@ -404,6 +404,10 @@ jwks_fingerprint text,
 PRIMARY KEY (cluster_id)
 );
 
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_authorized_nca_ids ON test.cluster_by_cluster_id (authorized_nca_ids) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_nca_id ON test.cluster_by_cluster_id (nca_id) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_cluster_group_id ON test.cluster_by_cluster_id (cluster_group_id) USING 'StorageAttachedIndex';
+
 CREATE TABLE IF NOT exists test.cluster_configuration_by_cluster_id (
 cluster_id text,
 cluster_configurations map<text, text>,

@@ -24,8 +24,6 @@ import static com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter.toClusterGro
 import static com.nvidia.icms.outbound.cassandra.byoc.NvcaConverter.toClustersByAccountEntity;
 import static com.nvidia.icms.service.byoc.nvca.clustermanagement.ClusterCreationService.getClusterIdFromAuthClientId;
 
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.IcmsConflictException;
 import com.nvidia.icms.errors.IcmsInternalServerException;
@@ -46,7 +44,9 @@ import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -59,6 +59,9 @@ import org.springframework.stereotype.Repository;
 public class ClusterRepository {
 
     public static final String WILDCARD = "WILDCARD";
+
+    // Wildcard marker stored in the authorized_nca_ids column of cluster_by_cluster_id.
+    public static final String AUTHORIZED_NCA_IDS_WILDCARD = "*";
 
     private final ClusterByIdRepo clusterByIdRepo;
     private final ClusterByGroupIdAndIdRepo clusterByGroupIdAndIdRepo;
@@ -113,7 +116,9 @@ public class ClusterRepository {
 
         // insert in group only if group is not already present
         Optional<ClusterGroupByGroupIdEntity> optionalClusterGroupByGroupIdEntity =
-                getClusterGroupInfoByClusterGroupId(
+                // using legacy table read for now to allow inserts in legacy writes
+                // this will be removed on clean up.
+                getLegacyClusterGroupInfoByClusterGroupId(
                         entity.getClusterGroupId());
 
         if (optionalClusterGroupByGroupIdEntity.isPresent()) {
@@ -127,6 +132,17 @@ public class ClusterRepository {
             log.error(errMsg);
             throw new IcmsConflictException(errMsg);
         }
+    }
+
+    /**
+     * Write-path group lookup. Always reads the legacy group table, ignoring
+     * {@code icms.cluster-by-id-reads-enabled}: the cluster row is already in
+     * cluster_by_cluster_id when the save flow checks group existence, so an
+     * SAI-backed read would always find it and skip the legacy group writes.
+     */
+    public Optional<ClusterGroupByGroupIdEntity> getLegacyClusterGroupInfoByClusterGroupId(
+            String clusterGroupId) {
+        return clusterGroupByGroupIdRepo.findById(clusterGroupId);
     }
 
     private boolean insertForAuthorizedAccounts(ClusterEntity entity) {
@@ -173,6 +189,11 @@ public class ClusterRepository {
     }
 
     public Set<ClusterEntity> getAllClustersInAGroup(String clusterGroupId) {
+        if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
+            return clusterByIdRepo.findAllByClusterGroupId(clusterGroupId).stream()
+                    .collect(Collectors.toSet());
+        }
+
         List<ClusterByGroupIdAndIdEntity> clusterByGroupIdAndIdEntities =
                 clusterByGroupIdAndIdRepo.findByKeyClusterGroupId(clusterGroupId);
         Set<ClusterEntity> clusterEntities = new HashSet<>();
@@ -183,6 +204,14 @@ public class ClusterRepository {
 
     public Optional<ClusterGroupsByAccountEntity> getClusterGroupInfoByAccountAndNameInMainAccount(
             String ncaId, String clusterGroupName) {
+
+        if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
+            // No index on cluster_group_name: query by nca_id SAI and filter in memory.
+            return clusterByIdRepo.findAllByNcaId(ncaId).stream()
+                    .filter(entity -> clusterGroupName.equals(entity.getClusterGroupName()))
+                    .findFirst()
+                    .map(NvcaConverter::toClusterGroupsByAccountsEntity);
+        }
 
         return clusterGroupsByAccountRepo.findByKeyNcaIdAndKeyClusterGroupName(ncaId, clusterGroupName);
     }
@@ -197,10 +226,22 @@ public class ClusterRepository {
     public Optional<ClusterGroupByGroupIdEntity> getClusterGroupInfoByClusterGroupId(
             String clusterGroupId) {
 
+        if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
+            return clusterByIdRepo.findAllByClusterGroupId(clusterGroupId).stream()
+                    .findFirst()
+                    .map(NvcaConverter::toClusterGroupByGroupIdEntity);
+        }
+
         return clusterGroupByGroupIdRepo.findById(clusterGroupId);
     }
 
     public Optional<ClusterEntity> getClusterByAccountAndName(String ncaId, String name) {
+        if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
+            // No index on cluster_name: query by nca_id SAI and filter in memory.
+            return clusterByIdRepo.findAllByNcaId(ncaId).stream()
+                    .filter(entity -> name.equals(entity.getClusterName()))
+                    .findFirst();
+        }
         Optional<ClustersByAccountEntity> optionalClustersByAccountEntity =
                 clustersByAccountRepo.findByKeyNcaIdAndKeyClusterName(ncaId, name);
         if (optionalClustersByAccountEntity.isEmpty()) {
@@ -211,11 +252,32 @@ public class ClusterRepository {
 
     public List<ClusterEntity> getAllClustersInAnAccount(String ncaId) {
 
+        if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
+            return clusterByIdRepo.findAllByNcaId(ncaId).stream()
+                    .collect(Collectors.toList());
+        }
+
         List<ClustersByAccountEntity> clustersByAccountEntities;
         clustersByAccountEntities = clustersByAccountRepo.findAllByKeyNcaId(ncaId);
         return clustersByAccountEntities.stream()
                 .map(NvcaConverter::toClusterEntity).collect(
                         Collectors.toList());
+    }
+
+    /**
+     * All clusters visible to an account in cluster_by_cluster_id: {@code nca_id = :x} UNION
+     * {@code authorized_nca_ids CONTAINS :x} UNION {@code authorized_nca_ids CONTAINS '*'}.
+     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
+     */
+    public List<ClusterEntity> getAllClustersVisibleToAccount(String ncaId) {
+        Map<String, ClusterEntity> clustersById = new LinkedHashMap<>();
+        clusterByIdRepo.findAllByNcaId(ncaId)
+                .forEach(entity -> clustersById.put(entity.getClusterId(), entity));
+        clusterByIdRepo.findAllByAuthorizedNcaIdsContains(ncaId)
+                .forEach(entity -> clustersById.put(entity.getClusterId(), entity));
+        clusterByIdRepo.findAllByAuthorizedNcaIdsContains(AUTHORIZED_NCA_IDS_WILDCARD)
+                .forEach(entity -> clustersById.put(entity.getClusterId(), entity));
+        return List.copyOf(clustersById.values());
     }
 
     public void updateClusterInfo(
@@ -315,6 +377,12 @@ public class ClusterRepository {
     }
 
     public List<ClusterByGroupIdAndIdEntity> getClustersFromClusterGroup(String clusterGroupId) {
+
+        if (icmsConfigurationProperties.isClusterByIdReadsEnabled()) {
+            return clusterByIdRepo.findAllByClusterGroupId(clusterGroupId).stream()
+                    .map(NvcaConverter::toClusterByGroupIdAndIdEntity)
+                    .collect(Collectors.toList());
+        }
 
         return clusterByGroupIdAndIdRepo.findByKeyClusterGroupId(clusterGroupId);
 
