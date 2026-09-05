@@ -10,13 +10,20 @@ load("//rules/oci:defs.bzl", "rust_oci_image")
 # workspace-local crate references (those declared via `workspace = true`
 # against members of this Cargo workspace) have to be added explicitly as
 # Bazel labels.
-_WORKSPACE_DEPS = [
+_WORKSPACE_DEPS_WITHOUT_PYLON_LIB = [
     "//src/libraries/rust/stargate/crates/proto:stargate-proto",
     "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
-    "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib",
     "//src/libraries/rust/stargate/crates/stargate-runtime:stargate-runtime",
     "//src/libraries/rust/stargate/crates/stargate-telemetry:stargate-telemetry",
     "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
+]
+
+_WORKSPACE_DEPS = _WORKSPACE_DEPS_WITHOUT_PYLON_LIB + [
+    "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib",
+]
+
+_TEST_WORKSPACE_DEPS = _WORKSPACE_DEPS_WITHOUT_PYLON_LIB + [
+    "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib-test-support",
 ]
 
 rust_binary(
@@ -29,10 +36,23 @@ rust_binary(
     deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
 )
 
+# rust_test inherits the wrapped crate's dependency graph, so wrap an otherwise
+# identical crate that links only the feature-enabled test library.
+rust_binary(
+    name = "pylon_test_crate",
+    testonly = True,
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "pylon",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = _TEST_WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
 rust_test(
     name = "pylon_test",
-    crate = ":pylon",
-    deps = _WORKSPACE_DEPS + all_crate_deps(normal_dev = True),
+    crate = ":pylon_test_crate",
+    deps = _TEST_WORKSPACE_DEPS + all_crate_deps(normal_dev = True),
 )
 
 # Multi-arch OCI image. distroless/cc base, binary at /usr/local/bin/pylon.

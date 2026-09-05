@@ -296,7 +296,6 @@ fn build_compose_spec(
             "--disable-bringup",
             "--active-canary-interval-ms=0",
             "--initial-input-tps" => pylon.last_mean_input_tps.to_string(),
-            "--benchmark-pin-input-tps",
         ]);
         if let Some(pylon_queue_admission) = &algorithm.pylon_queue_admission {
             client_command.extend(pylon_queue_admission.pylon_args());
@@ -564,12 +563,6 @@ algorithms:
         assert_eq!(
             command_value(&client.command, "--initial-input-tps"),
             Some("100")
-        );
-        assert!(
-            client
-                .command
-                .iter()
-                .any(|candidate| candidate == "--benchmark-pin-input-tps")
         );
     }
 }

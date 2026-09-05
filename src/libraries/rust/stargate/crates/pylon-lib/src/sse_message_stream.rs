@@ -21,14 +21,14 @@ use futures::{Stream, StreamExt};
 use sonic_rs::{JsonContainerTrait, JsonValueTrait, Value};
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::output_token_parser::estimate_token_like_units;
+use crate::output_token_parser::OutputCharacters;
 
 const SSE_DONE_SENTINEL: &str = "[DONE]";
 const SSE_DELIVERY_BUFFER_EVENTS: usize = 1;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct GeneratedOutput {
-    pub(crate) estimated_token_units: u64,
+    pub(crate) characters: OutputCharacters,
     pub(crate) token_bearing: bool,
 }
 
@@ -495,9 +495,9 @@ fn generated_output(value: &Value, event_type: Option<&str>) -> Option<Generated
         match spec.kind {
             GeneratedValueKind::Text => {
                 output.token_bearing = true;
-                output.estimated_token_units = output
-                    .estimated_token_units
-                    .saturating_add(estimate_token_like_units(fragment));
+                output.characters = output
+                    .characters
+                    .saturating_add(OutputCharacters::from_text(fragment));
             }
             GeneratedValueKind::Modal => {}
         }
@@ -521,9 +521,9 @@ fn add_generated_text(
     if let Some(value) = value.filter(|value| !value.is_empty()) {
         *saw_generated_output = true;
         output.token_bearing = true;
-        output.estimated_token_units = output
-            .estimated_token_units
-            .saturating_add(estimate_token_like_units(value));
+        output.characters = output
+            .characters
+            .saturating_add(OutputCharacters::from_text(value));
     }
 }
 
@@ -665,8 +665,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{json_path} should count as generated output"));
             assert!(output.token_bearing, "{json_path} should be token-bearing");
             assert_eq!(
-                output.estimated_token_units, 1,
-                "unexpected estimate for {json_path}"
+                output.characters,
+                OutputCharacters::from_text("x"),
+                "unexpected character count for {json_path}"
             );
         }
 
@@ -682,8 +683,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{json_path} should count as generated output"));
             assert!(output.token_bearing, "{json_path} should be token-bearing");
             assert_eq!(
-                output.estimated_token_units, 1,
-                "unexpected estimate for {json_path}"
+                output.characters,
+                OutputCharacters::from_text("x"),
+                "unexpected character count for {json_path}"
             );
         }
     }
@@ -698,8 +700,11 @@ mod tests {
                 .facts
                 .generated_output
                 .expect("mixed Chat event should count")
-                .estimated_token_units,
-            9
+                .characters,
+            OutputCharacters {
+                ascii: 47,
+                non_ascii: 0,
+            }
         );
     }
 
@@ -714,7 +719,7 @@ mod tests {
             .expect("audio data should count as generated output");
 
         assert!(!output.token_bearing);
-        assert_eq!(output.estimated_token_units, 0);
+        assert_eq!(output.characters, OutputCharacters::default());
     }
 
     #[test]
@@ -728,7 +733,7 @@ mod tests {
             .expect("mixed audio output should count as generated output");
 
         assert!(output.token_bearing);
-        assert_eq!(output.estimated_token_units, 1);
+        assert_eq!(output.characters, OutputCharacters::from_text("spoken"));
     }
 
     #[test]
@@ -746,18 +751,18 @@ mod tests {
             match spec.kind {
                 GeneratedValueKind::Text => {
                     assert!(output.token_bearing);
-                    assert_eq!(output.estimated_token_units, 1);
+                    assert_eq!(output.characters, OutputCharacters::from_text("x"));
                 }
                 GeneratedValueKind::Modal => {
                     assert!(!output.token_bearing);
-                    assert_eq!(output.estimated_token_units, 0);
+                    assert_eq!(output.characters, OutputCharacters::default());
                 }
             }
         }
     }
 
     #[test]
-    fn non_empty_whitespace_text_is_token_bearing_even_when_its_estimate_is_zero() {
+    fn non_empty_whitespace_text_is_token_bearing_and_counted() {
         let parsed = parse_data(
             r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":" "}}]}"#,
         );
@@ -767,7 +772,7 @@ mod tests {
             .expect("non-empty text delta should count as generated output");
 
         assert!(output.token_bearing);
-        assert_eq!(output.estimated_token_units, 0);
+        assert_eq!(output.characters, OutputCharacters::from_text(" "));
     }
 
     #[test]

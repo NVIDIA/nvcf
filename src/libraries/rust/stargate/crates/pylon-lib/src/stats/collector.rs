@@ -110,7 +110,7 @@ impl StatsCollectorHandle {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ModelStatsInitialization {
     Empty,
-    ConfiguredInputTps { input_tps: f64, pin: bool },
+    ConfiguredInputTps { input_tps: f64 },
 }
 
 enum StatsCollectorCommand {
@@ -567,7 +567,6 @@ mod tests {
 
     use super::super::aggregator::{KvCacheStatsSnapshot, StatsAggregator};
     use super::super::metrics::PylonMetrics;
-    use super::super::projection::fallback_update_from_observation;
     use super::*;
     use crate::RequestObservation;
     use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
@@ -645,7 +644,7 @@ mod tests {
             }
         }
 
-        async fn begin_configured_model(&self, model_id: &str, input_tps: f64, pin: bool) {
+        async fn begin_configured_model(&self, model_id: &str, input_tps: f64) {
             let generation = ModelGeneration::new(model_id, 0);
             assert!(self.runtime_state.begin_generation(generation.clone()));
             assert!(
@@ -653,7 +652,7 @@ mod tests {
                     .control()
                     .begin_generation(
                         generation,
-                        ModelStatsInitialization::ConfiguredInputTps { input_tps, pin }
+                        ModelStatsInitialization::ConfiguredInputTps { input_tps }
                     )
                     .await
                     .expect("collector should acknowledge configured generation")
@@ -699,7 +698,7 @@ mod tests {
             context: &str,
             predicate: impl Fn(&CurrentModelStats) -> bool,
         ) -> CurrentModelStats {
-            self.runtime_state.observe_request(observation);
+            observe_request_with_test_metadata(&self.runtime_state, observation);
             self.wait_for_stats(context, predicate).await
         }
         async fn seed_stream_output(&self, request_id: &str) {
@@ -743,6 +742,93 @@ mod tests {
         let event = aggregator
             .runtime_state
             .transition_request_observation(observation.clone());
+        let event = event_with_test_metadata(event);
+        aggregator.apply_fallback_observation(&event)
+    }
+
+    fn event_with_test_metadata(mut event: RequestObservationEvent) -> RequestObservationEvent {
+        if matches!(
+            event.observation.endpoint,
+            RequestObservationEndpoint::ChatCompletions | RequestObservationEndpoint::Responses
+        ) && let Some(duration) = event.observation.time_to_first_output
+        {
+            let submitted_at = std::time::Instant::now();
+            event.input_interval = Some(crate::runtime_state::RequestInputInterval {
+                submitted_at,
+                first_generated_output_at: submitted_at + duration,
+            });
+            event.raw_output_units = if event.observation.output_tokens_explicit {
+                0
+            } else {
+                event.observation.output_tokens
+            };
+        }
+        event
+    }
+
+    fn observe_request_with_test_metadata(
+        runtime_state: &PylonRuntimeState,
+        observation: RequestObservation,
+    ) {
+        let generation = runtime_state.current_generation(&observation.model_id);
+        let input_interval = observation.time_to_first_output.map(|duration| {
+            let submitted_at = std::time::Instant::now();
+            crate::runtime_state::RequestInputInterval {
+                submitted_at,
+                first_generated_output_at: submitted_at + duration,
+            }
+        });
+        let raw_output_units = if observation.output_tokens_explicit {
+            0
+        } else {
+            observation.output_tokens
+        };
+        let request_input_tokens = observation.input_tokens;
+        runtime_state.observe_request_for_generation(
+            observation,
+            generation,
+            crate::runtime_state::RequestObservationMetadata {
+                input_interval,
+                request_input_tokens,
+                raw_output_units,
+                ..Default::default()
+            },
+        );
+    }
+
+    fn apply_fallback_observation_with_input_processing_duration(
+        aggregator: &mut StatsAggregator,
+        observation: &RequestObservation,
+        duration: Duration,
+    ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
+        let submitted_at = std::time::Instant::now();
+        apply_fallback_observation_with_interval(
+            aggregator,
+            observation,
+            crate::runtime_state::RequestInputInterval {
+                submitted_at,
+                first_generated_output_at: submitted_at + duration,
+            },
+            false,
+        )
+    }
+
+    fn apply_fallback_observation_with_interval(
+        aggregator: &mut StatsAggregator,
+        observation: &RequestObservation,
+        input_interval: crate::runtime_state::RequestInputInterval,
+        input_tokens_explicit: bool,
+    ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation.clone());
+        event.input_interval = Some(input_interval);
+        event.input_tokens_explicit = input_tokens_explicit;
+        event.raw_output_units = if observation.output_tokens_explicit {
+            0
+        } else {
+            observation.output_tokens
+        };
         aggregator.apply_fallback_observation(&event)
     }
 
@@ -753,6 +839,7 @@ mod tests {
         let event = aggregator
             .runtime_state
             .transition_request_observation(observation.clone());
+        let event = event_with_test_metadata(event);
         aggregator.apply_stream_observation(&event)
     }
 
@@ -1128,6 +1215,48 @@ mod tests {
     }
 
     #[test]
+    fn fallback_input_tps_merges_overlapping_backend_intervals() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        for index in 0..2 {
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &identified(
+                    completed_observation(1_000, 1, 10, seconds(1), seconds(2)),
+                    format!("req-overlap-{index}"),
+                ),
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at,
+                    first_generated_output_at: submitted_at + seconds(1),
+                },
+                false,
+            );
+        }
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 2_000.0);
+    }
+
+    #[test]
+    fn chat_observation_without_backend_interval_does_not_record_throughput() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let event = aggregator
+            .runtime_state
+            .transition_request_observation(completed_observation(
+                100,
+                1,
+                10,
+                seconds(1),
+                seconds(2),
+            ));
+
+        aggregator.apply_fallback_observation(&event);
+
+        let stats = aggregator.snapshot("model-a");
+        assert_eq!(stats.last_mean_input_tps, 0.0);
+        assert_eq!(stats.output_tps, 0.0);
+    }
+
+    #[test]
     fn latest_model_update_retention_keeps_last_snapshot_per_model() {
         let mut updates = [
             ("model-a", 1.0),
@@ -1260,30 +1389,10 @@ mod tests {
     }
 
     #[test]
-    fn pinned_configured_input_tps_is_preserved_across_engine_stats_updates() {
+    fn configured_input_tps_moves_with_engine_samples() {
         let mut aggregator = test_aggregator_with_initialization(
             StatsCollectorConfig::default(),
-            ModelStatsInitialization::ConfiguredInputTps {
-                input_tps: 2_200.0,
-                pin: true,
-            },
-        );
-        let stats = aggregator.stream_stats("req-a", (0, 0), false, Duration::ZERO);
-        assert_eq!(stats.last_mean_input_tps, 2_200.0);
-        for tick in 1..=5 {
-            aggregator.stream("req-a", (tick * 10, 0), false, milliseconds(tick * 100));
-        }
-        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 2_200.0);
-    }
-
-    #[test]
-    fn unpinned_configured_input_tps_moves_with_the_first_real_sample() {
-        let mut aggregator = test_aggregator_with_initialization(
-            StatsCollectorConfig::default(),
-            ModelStatsInitialization::ConfiguredInputTps {
-                input_tps: 100.0,
-                pin: false,
-            },
+            ModelStatsInitialization::ConfiguredInputTps { input_tps: 100.0 },
         );
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
         aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
@@ -1715,10 +1824,13 @@ mod tests {
         collector
             .send_stream("req-helper-stream", 0, 0, false, Duration::ZERO)
             .await;
-        collector.runtime_state.observe_request(identified(
-            completed_observation(32, 0, 0, milliseconds(50), seconds(1)),
-            "req-helper-stream",
-        ));
+        observe_request_with_test_metadata(
+            &collector.runtime_state,
+            identified(
+                completed_observation(32, 0, 0, milliseconds(50), seconds(1)),
+                "req-helper-stream",
+            ),
+        );
         collector
             .send_stream("req-helper-stream", 0, 10, true, seconds(1))
             .await;
@@ -1813,10 +1925,13 @@ mod tests {
         let collector = RunningCollector::spawn(config, None, true);
         collector.seed_stream_output("req-stream").await;
         for index in 0..5 {
-            collector.runtime_state.observe_request(identified(
-                completed_embeddings_observation(20, 2, seconds(1), seconds(2)),
-                format!("req-embedding-{index}"),
-            ));
+            observe_request_with_test_metadata(
+                &collector.runtime_state,
+                identified(
+                    completed_embeddings_observation(20, 2, seconds(1), seconds(2)),
+                    format!("req-embedding-{index}"),
+                ),
+            );
         }
         let stats = collector
             .wait_for_stats(
@@ -1857,30 +1972,6 @@ mod tests {
         assert_eq!(
             aggregator.snapshot("model-b").stats_sources,
             Vec::<String>::new()
-        );
-    }
-
-    #[test]
-    fn fallback_terminal_observation_without_trusted_counters_finalizes_stream_request() {
-        let mut observation =
-            completed_observation(11, 12, 10, milliseconds(100), milliseconds(1_000));
-        observation.request_id = "req-stream-race".to_string();
-        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
-        aggregator.stream("req-stream-race", (5, 3), false, Duration::ZERO);
-        assert_eq!(aggregator.live_request_count(), 1);
-        let fallback_update = fallback_update_from_observation(&observation, None)
-            .expect("terminal update should exist");
-        let stats = aggregator
-            .apply_update(fallback_update)
-            .pop()
-            .expect("terminal request observation should publish the finalized stream snapshot")
-            .1;
-        assert_eq!(stats.stats_sources, ["engine_stats_stream"]);
-        assert_eq!(aggregator.live_request_count(), 0);
-        let updates = aggregator.stream("req-stream-race", (11, 10), true, milliseconds(100));
-        assert!(
-            updates.is_empty(),
-            "post-finalization stream stats must not double-count"
         );
     }
 
@@ -2014,12 +2105,10 @@ mod tests {
     #[test]
     fn last_mean_input_tps_stays_sticky_without_new_samples() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
-        sample_observations(
+        apply_fallback_observation_with_input_processing_duration(
             &mut aggregator,
             &completed_observation(20, 1, 1, seconds(2), seconds(2)),
-            "req-sticky",
-            5,
-            apply_fallback_observation,
+            seconds(2),
         );
         let stats = aggregator.snapshot("model-a");
         assert_eq!(stats.last_mean_input_tps, 10.0);
@@ -2030,27 +2119,21 @@ mod tests {
         let config = StatsCollectorConfig::default();
         let mut aggregator = test_aggregator(config);
         let runtime_state = aggregator.runtime_state.clone();
-        for request_index in 0..5 {
-            let updates = apply_fallback_observation(
-                &mut aggregator,
-                &identified(
-                    completed_observation(50, 1, 8, milliseconds(500), seconds(1)),
-                    format!("req-openai-stream-{request_index}"),
-                ),
-            );
-            assert_eq!(updates.len(), 1, "each observation should publish once");
-            publish_model_stats_updates(&runtime_state, updates.clone());
-            let stats = published_stats(updates);
-            assert_eq!(
-                stats.last_mean_input_tps,
-                if request_index < 4 { 0.0 } else { 100.0 }
-            );
-        }
-        let distribution = &aggregator.per_model["model-a"]
-            .metrics
-            .input_tps_distribution;
-        assert_eq!(distribution.count, 5);
-        assert_eq!(distribution.mean, 100.0);
+        let updates = apply_fallback_observation_with_input_processing_duration(
+            &mut aggregator,
+            &completed_observation(50, 1, 8, milliseconds(500), seconds(1)),
+            milliseconds(500),
+        );
+        assert_eq!(updates.len(), 1);
+        publish_model_stats_updates(&runtime_state, updates.clone());
+        assert_eq!(published_stats(updates).last_mean_input_tps, 100.0);
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            1
+        );
         let _queued =
             runtime_state.track_request(&crate::request_observer::RequiredTunnelHeaders {
                 request_id: "req-queued-after-fallback-samples".to_string(),
@@ -2073,59 +2156,664 @@ mod tests {
     }
 
     #[test]
-    fn fallback_input_throughput_ignores_non_terminal_observations() {
+    fn fallback_input_throughput_starts_at_output_and_survives_failure() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
-        for state in [
-            RequestObservationState::InputProcessing,
-            RequestObservationState::OutputGeneration,
-        ] {
-            let updates = apply_fallback_observation(
-                &mut aggregator,
-                &identified(
-                    RequestObservation {
-                        state,
-                        ..completed_observation(50, 1, 8, milliseconds(500), seconds(1))
-                    },
-                    format!("req-live-{state:?}"),
-                ),
-            );
-            assert_eq!(updates[0].1.last_mean_input_tps, 0.0);
-        }
+        let failed_before_output = RequestObservation {
+            state: RequestObservationState::Failed,
+            time_to_first_output: None,
+            time_to_first_token: None,
+            ..completed_observation(50, 0, 0, milliseconds(500), seconds(1))
+        };
+        let stats = single_fallback_stats(&mut aggregator, &failed_before_output);
+        assert_eq!(stats.last_mean_input_tps, 0.0);
+
+        let failed_after_output = RequestObservation {
+            request_id: "req-failed-after-output".to_string(),
+            state: RequestObservationState::Failed,
+            ..completed_observation(50, 1, 8, milliseconds(500), seconds(1))
+        };
+        let stats = single_fallback_stats(&mut aggregator, &failed_after_output);
+        assert_eq!(stats.last_mean_input_tps, 100.0);
+        assert_eq!(stats.output_tps, 0.0);
+        assert!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .completed_fallback_output_keys
+                .is_empty(),
+            "failed requests must not add completed output history"
+        );
+        assert!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .chat_output_tps_samples
+                .is_empty()
+        );
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
-                .input_tps_distribution
-                .count,
-            0
+                .request_input_intervals
+                .len(),
+            1
         );
     }
 
-    fallback_distribution_test!(
-        terminal_only_samples_use_request_duration_instead_of_tick_window,
-        completed_observation(100, 1, 1, seconds(2), seconds(2)),
-        "req-final-only",
-        50.0
-    );
+    #[test]
+    fn fallback_input_tps_sums_sequential_active_time_and_excludes_idle_gaps() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let start = std::time::Instant::now();
+        for (index, submitted_at) in [start, start + seconds(10)].into_iter().enumerate() {
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &identified(
+                    completed_observation(1_000, 1, 1, seconds(1), seconds(2)),
+                    format!("req-sequential-{index}"),
+                ),
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at,
+                    first_generated_output_at: submitted_at + seconds(1),
+                },
+                false,
+            );
+        }
 
-    fallback_distribution_test!(
-        terminal_only_samples_do_not_sum_same_tick_request_rates,
-        completed_observation(100, 1, 1, milliseconds(10), milliseconds(10)),
-        "req-final-only-sequential",
-        10_000.0
-    );
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 1_000.0);
+    }
+
+    #[test]
+    fn reused_request_id_retains_distinct_submission_intervals() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let start = std::time::Instant::now();
+        for (submitted_at, input_tokens) in [(start, 100), (start + seconds(2), 300)] {
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &RequestObservation {
+                    input_tokens,
+                    time_to_first_output: Some(seconds(1)),
+                    time_to_first_token: Some(seconds(1)),
+                    total_duration: seconds(1),
+                    ..observation(
+                        RequestObservationEndpoint::ChatCompletions,
+                        "req-reused",
+                        RequestObservationState::OutputGeneration,
+                    )
+                },
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at,
+                    first_generated_output_at: submitted_at + seconds(1),
+                },
+                false,
+            );
+        }
+
+        let intervals = &aggregator.per_model["model-a"]
+            .metrics
+            .request_input_intervals;
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 200.0);
+    }
+
+    #[test]
+    fn later_cumulative_observation_repairs_dropped_first_output_once() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(2),
+        };
+        let later_cumulative = RequestObservation {
+            input_tokens: 120,
+            output_messages: 2,
+            output_tokens: 4,
+            time_to_first_output: Some(seconds(2)),
+            time_to_first_token: Some(seconds(2)),
+            total_duration: seconds(3),
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-repaired",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+
+        for _ in 0..2 {
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &later_cumulative,
+                interval,
+                false,
+            );
+        }
+
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            1
+        );
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 60.0);
+    }
+
+    #[test]
+    fn invalid_input_intervals_leave_the_last_valid_rate_sticky() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let start = std::time::Instant::now();
+        apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &RequestObservation {
+                input_tokens: 100,
+                ..observation(
+                    RequestObservationEndpoint::ChatCompletions,
+                    "req-valid",
+                    RequestObservationState::OutputGeneration,
+                )
+            },
+            crate::runtime_state::RequestInputInterval {
+                submitted_at: start,
+                first_generated_output_at: start + seconds(1),
+            },
+            false,
+        );
+        for (request_id, input_tokens, first_generated_output_at) in [
+            ("req-zero-tokens", 0, start + seconds(2)),
+            ("req-empty", 100, start + seconds(3)),
+        ] {
+            let submitted_at = if request_id == "req-empty" {
+                first_generated_output_at
+            } else {
+                start + seconds(1)
+            };
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &RequestObservation {
+                    input_tokens,
+                    ..observation(
+                        RequestObservationEndpoint::ChatCompletions,
+                        request_id,
+                        RequestObservationState::OutputGeneration,
+                    )
+                },
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at,
+                    first_generated_output_at,
+                },
+                false,
+            );
+        }
+
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            1
+        );
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
+        assert!(
+            aggregator
+                .snapshot("model-a")
+                .last_mean_input_tps
+                .is_finite()
+        );
+    }
+
+    #[test]
+    fn exact_input_usage_corrects_or_removes_one_retained_interval() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        };
+        let estimated = RequestObservation {
+            input_tokens: 100,
+            state: RequestObservationState::OutputGeneration,
+            time_to_first_output: Some(seconds(1)),
+            time_to_first_token: Some(seconds(1)),
+            total_duration: seconds(1),
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-corrected",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &estimated, interval, false);
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
+
+        let exact = RequestObservation {
+            input_tokens: 250,
+            state: RequestObservationState::Complete,
+            ..estimated.clone()
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &exact, interval, true);
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 250.0);
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            1,
+            "an exact correction must replace the numerator in place"
+        );
+
+        let ineligible = RequestObservation {
+            input_tokens: 0,
+            ..exact
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &ineligible, interval, true);
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            0
+        );
+        assert_eq!(
+            aggregator.snapshot("model-a").last_mean_input_tps,
+            250.0,
+            "the last valid rate stays sticky when correction empties the window"
+        );
+    }
+
+    #[test]
+    fn input_interval_window_is_bounded_and_ignores_evicted_corrections() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        let start = std::time::Instant::now();
+        for (index, input_tokens) in [100, 200, 300].into_iter().enumerate() {
+            let submitted_at = start + seconds(index as u64 * 2);
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &RequestObservation {
+                    input_tokens,
+                    time_to_first_output: Some(seconds(1)),
+                    time_to_first_token: Some(seconds(1)),
+                    total_duration: seconds(1),
+                    ..observation(
+                        RequestObservationEndpoint::ChatCompletions,
+                        &format!("req-bounded-{index}"),
+                        RequestObservationState::OutputGeneration,
+                    )
+                },
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at,
+                    first_generated_output_at: submitted_at + seconds(1),
+                },
+                false,
+            );
+        }
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 250.0);
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            2
+        );
+
+        let first_interval = crate::runtime_state::RequestInputInterval {
+            submitted_at: start,
+            first_generated_output_at: start + seconds(1),
+        };
+        apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &RequestObservation {
+                input_tokens: 1_000,
+                ..observation(
+                    RequestObservationEndpoint::ChatCompletions,
+                    "req-bounded-0",
+                    RequestObservationState::Complete,
+                )
+            },
+            first_interval,
+            true,
+        );
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 250.0);
+    }
+
+    #[test]
+    fn default_input_interval_window_retains_eight_recent_requests() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let start = std::time::Instant::now();
+        for index in 0..=DEFAULT_SMOOTHING_WINDOW_SIZE {
+            let submitted_at = start + seconds(index as u64 * 2);
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &RequestObservation {
+                    input_tokens: if index == 0 { 900 } else { 100 },
+                    ..observation(
+                        RequestObservationEndpoint::ChatCompletions,
+                        &format!("req-default-window-{index}"),
+                        RequestObservationState::OutputGeneration,
+                    )
+                },
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at,
+                    first_generated_output_at: submitted_at + seconds(1),
+                },
+                false,
+            );
+        }
+
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            DEFAULT_SMOOTHING_WINDOW_SIZE
+        );
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
+    }
+
+    #[test]
+    fn generation_replacement_clears_intervals_and_rejects_late_correction() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let start = std::time::Instant::now();
+        let old_interval = crate::runtime_state::RequestInputInterval {
+            submitted_at: start,
+            first_generated_output_at: start + seconds(1),
+        };
+        let estimated = RequestObservation {
+            input_tokens: 100,
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-generation-reuse",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &estimated, old_interval, false);
+        let mut late_exact =
+            aggregator
+                .runtime_state
+                .transition_request_observation(RequestObservation {
+                    input_tokens: 500,
+                    state: RequestObservationState::Complete,
+                    ..estimated
+                });
+        late_exact.input_interval = Some(old_interval);
+        late_exact.input_tokens_explicit = true;
+
+        let retired = aggregator
+            .current_generation("model-a")
+            .expect("initial generation should exist")
+            .clone();
+        assert!(aggregator.retire_generation(&retired));
+        assert!(
+            aggregator
+                .runtime_state
+                .retire_generation(&retired)
+                .is_some()
+        );
+        let replacement = ModelGeneration::new("model-a", retired.sequence() + 1);
+        assert!(
+            aggregator
+                .runtime_state
+                .begin_generation(replacement.clone())
+        );
+        assert!(
+            aggregator
+                .begin_generation(replacement, ModelStatsInitialization::Empty)
+                .is_some()
+        );
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            0
+        );
+
+        let new_interval = crate::runtime_state::RequestInputInterval {
+            submitted_at: start + seconds(2),
+            first_generated_output_at: start + seconds(3),
+        };
+        apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &RequestObservation {
+                input_tokens: 50,
+                ..observation(
+                    RequestObservationEndpoint::ChatCompletions,
+                    "req-generation-reuse",
+                    RequestObservationState::OutputGeneration,
+                )
+            },
+            new_interval,
+            false,
+        );
+        assert!(
+            aggregator
+                .apply_fallback_observation(&late_exact)
+                .is_empty()
+        );
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn first_request_interval_replaces_configured_input_tps_bootstrap() {
+        let mut aggregator = test_aggregator_with_initialization(
+            StatsCollectorConfig::default(),
+            ModelStatsInitialization::ConfiguredInputTps { input_tps: 2_200.0 },
+        );
+        apply_fallback_observation_with_input_processing_duration(
+            &mut aggregator,
+            &RequestObservation {
+                input_tokens: 100,
+                time_to_first_output: Some(seconds(2)),
+                time_to_first_token: Some(seconds(2)),
+                total_duration: seconds(2),
+                ..observation(
+                    RequestObservationEndpoint::ChatCompletions,
+                    "req-bootstrap-yields",
+                    RequestObservationState::OutputGeneration,
+                )
+            },
+            seconds(2),
+        );
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+    }
+
+    #[test]
+    fn request_interval_rate_remains_authoritative_after_exact_removal() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(2),
+        };
+        let estimated = RequestObservation {
+            input_tokens: 100,
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-authoritative-input",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &estimated, interval, false);
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+
+        apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &RequestObservation {
+                input_tokens: 0,
+                state: RequestObservationState::Complete,
+                ..estimated
+            },
+            interval,
+            true,
+        );
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            0
+        );
+
+        let embedding = completed_embeddings_observation(1_000, 4, seconds(1), seconds(1));
+        for request_index in 0..5 {
+            single_fallback_stats(
+                &mut aggregator,
+                &identified(
+                    embedding.clone(),
+                    format!("req-authoritative-embedding-{request_index}"),
+                ),
+            );
+        }
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+    }
+
+    #[test]
+    fn fallback_output_history_records_one_successful_terminal_sample() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        };
+        let live_exact = RequestObservation {
+            output_tokens: 4,
+            output_tokens_explicit: true,
+            output_tokens_from_chunk_usage: true,
+            time_to_first_output: Some(seconds(1)),
+            time_to_first_token: Some(seconds(1)),
+            total_duration: seconds(2),
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-one-terminal-sample",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &live_exact, interval, false);
+        let later_live = RequestObservation {
+            output_tokens: 7,
+            total_duration: seconds(3),
+            ..live_exact.clone()
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &later_live, interval, false);
+        assert!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .chat_output_tps_samples
+                .is_empty(),
+            "continuous usage must update live state without weighting history"
+        );
+
+        let complete = RequestObservation {
+            output_tokens: 10,
+            state: RequestObservationState::Complete,
+            total_duration: seconds(3),
+            ..later_live
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &complete, interval, false);
+        apply_fallback_observation_with_interval(&mut aggregator, &complete, interval, false);
+        let model = &aggregator.per_model["model-a"].metrics;
+        assert_eq!(model.chat_output_tps_samples.len(), 1);
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(aggregator.snapshot("model-a").output_tps, 5.0);
+    }
+
+    #[test]
+    fn final_exact_usage_replaces_estimate_in_one_completed_sample() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        };
+        let estimated = RequestObservation {
+            output_tokens: 12,
+            time_to_first_output: Some(seconds(1)),
+            time_to_first_token: Some(seconds(1)),
+            total_duration: seconds(2),
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-final-exact",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &estimated, interval, false);
+        let exact = RequestObservation {
+            output_tokens: 8,
+            output_tokens_explicit: true,
+            output_tokens_from_chunk_usage: true,
+            state: RequestObservationState::Complete,
+            total_duration: seconds(3),
+            ..estimated
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &exact, interval, false);
+
+        let model = &aggregator.per_model["model-a"].metrics;
+        assert_eq!(model.chat_output_tps_samples.len(), 1);
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(aggregator.snapshot("model-a").output_tps, 4.0);
+    }
+
+    #[test]
+    fn final_only_exact_usage_records_one_completed_sample() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let mut completed = trusted_completed_observation("req-final-only-exact");
+        completed.output_tokens = 6;
+        single_fallback_stats(&mut aggregator, &completed);
+
+        let model = &aggregator.per_model["model-a"].metrics;
+        assert_eq!(model.chat_output_tps_samples.len(), 1);
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(aggregator.snapshot("model-a").output_tps, 3.0);
+    }
+
+    #[test]
+    fn estimated_terminal_output_records_one_sample_and_dedup_key() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        single_fallback_stats(
+            &mut aggregator,
+            &completed_observation(20, 1, 8, seconds(1), seconds(3)),
+        );
+
+        let model = &aggregator.per_model["model-a"].metrics;
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(
+            model
+                .chat_output_tps_samples
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![4.0]
+        );
+    }
 
     fallback_snapshot_test!(
         completed_request_stats_keep_exact_output_rate_formula,
         StatsCollectorConfig::default(),
         completed_observation(120, 6, 30, seconds(3), seconds(9));
-        last_mean_input_tps: 0.0, output_tps: 5.0, max_output_tps: 5.0
+        last_mean_input_tps: 40.0, output_tps: 5.0, max_output_tps: 5.0
     );
+
+    #[test]
+    fn fallback_output_tps_excludes_downstream_delivery_delay() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let observation = completed_observation(120, 6, 100, seconds(1), seconds(11));
+        let event = aggregator
+            .runtime_state
+            .transition_request_observation(observation);
+        let mut event = event_with_test_metadata(event);
+        event.upstream_duration = Some(seconds(2));
+
+        let stats = published_stats(aggregator.apply_fallback_observation(&event));
+
+        assert_stats!(stats; output_tps: 100.0, max_output_tps: 100.0);
+    }
 
     fallback_snapshot_test!(
         ignores_observations_below_duration_floor,
         config!(duration_floor: milliseconds(50)),
         completed_observation(20, 4, 8, milliseconds(10), milliseconds(20));
-        last_mean_input_tps: 0.0, output_tps: 0.0
+        last_mean_input_tps: 400.0, output_tps: 0.0
     );
 
     fallback_snapshot_test!(
@@ -2226,13 +2914,13 @@ mod tests {
     }
 
     fallback_snapshot_test!(
-        ignores_non_complete_observations,
+        failed_request_after_output_retains_input_work,
         StatsCollectorConfig::default(),
         RequestObservation {
             state: RequestObservationState::Failed,
             ..completed_observation(20, 4, 8, seconds(2), seconds(6))
         };
-        last_mean_input_tps: 0.0, output_tps: 0.0
+        last_mean_input_tps: 10.0, output_tps: 0.0
     );
 
     #[test]
@@ -2268,7 +2956,7 @@ mod tests {
             ..queued
         };
         let active_stats = single_fallback_stats(&mut aggregator, &generating);
-        assert_stats!(active_stats; queue_size: 0, queued_input_size: 0, num_running_queries: 1, total_query_input_size: 24, input_processing_queries: 0, output_generation_queries: 1, last_mean_input_tps: 0.0, output_tps: 8.0);
+        assert_stats!(active_stats; queue_size: 0, queued_input_size: 0, num_running_queries: 1, total_query_input_size: 24, input_processing_queries: 0, output_generation_queries: 1, last_mean_input_tps: 12.0, output_tps: 8.0);
     }
 
     #[test]
@@ -2300,7 +2988,7 @@ mod tests {
         };
         apply_fallback_observation(&mut aggregator, &queued);
         let stats = published_stats(apply_fallback_observation(&mut aggregator, &generating));
-        assert_stats!(stats; queue_size: 1, queued_input_size: 30, num_running_queries: 2, total_query_input_size: 50, last_mean_input_tps: 0.0, output_tps: 2.0);
+        assert_stats!(stats; queue_size: 1, queued_input_size: 30, num_running_queries: 2, total_query_input_size: 50, last_mean_input_tps: 10.0, output_tps: 2.0);
     }
 
     #[test]
@@ -2448,19 +3136,17 @@ mod tests {
     async fn stats_collector_publishes_mean_input_tps_from_completed_observations() {
         let config = config!(observation_channel_capacity: 16);
         let collector = RunningCollector::spawn(config, None, false);
-        for request_index in 0..5 {
-            collector.runtime_state.observe_request(identified(
-                RequestObservation {
-                    output_messages: 1,
-                    output_tokens: 2,
-                    time_to_first_output: Some(milliseconds(500)),
-                    time_to_first_token: Some(milliseconds(600)),
-                    total_duration: seconds(1),
-                    ..completed_observation(50, 1, 2, milliseconds(500), seconds(1))
-                },
-                format!("req-stats-openai-{request_index}"),
-            ));
-        }
+        observe_request_with_test_metadata(
+            &collector.runtime_state,
+            RequestObservation {
+                output_messages: 1,
+                output_tokens: 2,
+                time_to_first_output: Some(milliseconds(500)),
+                time_to_first_token: Some(milliseconds(600)),
+                total_duration: seconds(1),
+                ..completed_observation(50, 1, 2, milliseconds(500), seconds(1))
+            },
+        );
         tokio::task::yield_now().await;
         let stats = collector
             .wait_for_stats("mean input TPS should be published", |stats| {
@@ -2473,9 +3159,7 @@ mod tests {
     #[tokio::test]
     async fn stats_collector_bootstraps_input_tps_for_queue_admission() {
         let collector = RunningCollector::spawn_empty(StatsCollectorConfig::default(), None, false);
-        collector
-            .begin_configured_model("model-a", 2_200.0, false)
-            .await;
+        collector.begin_configured_model("model-a", 2_200.0).await;
         let stats = collector
             .wait_for_stats("bootstrap TPS stats should be published", |stats| {
                 stats.last_mean_input_tps == 2_200.0
@@ -2528,15 +3212,13 @@ mod tests {
             )
             .expect("test model stats should initialize");
         let observation = completed_observation(20, 2, 10, seconds(2), seconds(4));
-        for _ in 0..5 {
-            let updated_stats = apply_fallback_observation(&mut aggregator, &observation);
-            for (model_id, stats) in updated_stats {
-                publish_model_stats_update(&runtime_state, model_id, stats);
-            }
+        let updated_stats = apply_fallback_observation(&mut aggregator, &observation);
+        for (model_id, stats) in updated_stats {
+            publish_model_stats_update(&runtime_state, model_id, stats);
         }
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(body.contains(
-            r#"pylon_requests_total{model="model-a",routing_key="rk-1",status="complete"} 5"#
+            r#"pylon_requests_total{model="model-a",routing_key="rk-1",status="complete"} 1"#
         ));
         assert!(body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 10"#));
         assert!(body.contains(r#"pylon_model_output_tps{model="model-a"} 5"#));
@@ -2574,10 +3256,7 @@ mod tests {
             control
                 .begin_generation(
                     first.clone(),
-                    ModelStatsInitialization::ConfiguredInputTps {
-                        input_tps: 100.0,
-                        pin: false,
-                    },
+                    ModelStatsInitialization::ConfiguredInputTps { input_tps: 100.0 },
                 )
                 .await
                 .expect("stats collector should acknowledge initialization")
@@ -2640,10 +3319,13 @@ mod tests {
             .current_generation("model-a")
             .expect("test generation should exist");
         for index in 0..5 {
-            runtime_state.observe_request(identified(
-                completed_observation(100, 1, 1, seconds(1), seconds(2)),
-                format!("calibration-{index}"),
-            ));
+            observe_request_with_test_metadata(
+                &runtime_state,
+                identified(
+                    completed_observation(100, 1, 1, seconds(1), seconds(2)),
+                    format!("calibration-{index}"),
+                ),
+            );
         }
         let collector = start_stats_collector(config, observation_rx, runtime_state);
 
@@ -2678,8 +3360,8 @@ mod tests {
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
-                .input_tps_distribution
-                .count,
+                .request_input_intervals
+                .len(),
             1,
             "the calibration observer must record the request before duplicate engine events arrive"
         );
@@ -2691,15 +3373,15 @@ mod tests {
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
-                .input_tps_distribution
-                .count,
+                .request_input_intervals
+                .len(),
             1,
             "repeated cumulative engine events must not double-count calibration traffic"
         );
 
         aggregator.stream("finished-calibration", (0, 0), false, Duration::ZERO);
         aggregator.stream("finished-calibration", (100, 0), true, seconds(1));
-        assert_eq!(aggregator.inner.request_counter_identity_count(), 2);
+        assert_eq!(aggregator.inner.request_counter_identity_count(), 1);
         assert_eq!(aggregator.inner.live_request_count(), 0);
 
         assert!(

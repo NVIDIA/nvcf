@@ -839,7 +839,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn calibration_keeps_increasing_load_until_a_step_times_out() {
+    async fn calibration_keeps_the_observed_frontier_when_a_later_step_times_out() {
         let request_ids = Arc::new(Mutex::new(Vec::new()));
         let calibration_blocked = Arc::new(Notify::new());
         let base_url = spawn_test_server(TestServerState {
@@ -883,11 +883,10 @@ mod tests {
 
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(30)).await;
-        let error = calibration
+        calibration
             .await
             .expect("calibration task should not panic")
-            .expect_err("a timeout before sufficient throughput samples must fail");
-        assert!(matches!(error, BringupError::InsufficientCalibrationData));
+            .expect("a completed observed interval should retain the calibration frontier");
         tokio::time::resume();
         stats.shutdown().await;
     }

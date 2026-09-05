@@ -33,12 +33,16 @@ use stargate_protocol::tunnel_contract::{
 use stargate_telemetry::{
     inject_trace_context, parent_context_from_headers, traceparent_from_headers,
 };
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio::sync::Semaphore;
+use tokio_util::{
+    sync::CancellationToken,
+    task::{AbortOnDropHandle, TaskTracker},
+};
 use tracing::{Instrument, Span, field};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use super::backend::{self, DEFAULT_PRIORITY_CEILING, UpstreamBackend};
-use crate::output_token_parser::OutputTokenParser;
+use crate::output_token_parser::{ExactOutputUpdate, OutputTokenParser};
 use crate::queue_admission::{
     PylonQueueMismatchRetryConfig, QueueAdmissionDecision, QueueTrackedRequestGuard,
     RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
@@ -69,6 +73,7 @@ pub(super) const MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES: usize = 64 * 1024;
 pub(super) const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
 pub(super) const RETRY_REASON_LOCAL_CONNECT_FAILURE: &str = "local_connect_failure";
 pub(super) const RETRY_REASON_MODEL_GENERATION_UNAVAILABLE: &str = "model_generation_unavailable";
+pub(super) const RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED: &str = "chat_usage_rewrite_saturated";
 pub(super) const WEBTRANSPORT_STREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
@@ -100,6 +105,7 @@ pub struct TunnelForwardingConfig {
     pub max_request_body_bytes: usize,
     /// Maximum bytes in one upstream SSE event; completed events are forwarded and released independently of the request-body limit.
     pub max_sse_buffer_bytes: usize,
+    pub force_chat_completions_include_usage: bool,
     pub first_output_timeout: Duration,
     pub output_chunk_timeout: Duration,
     pub runtime_state: PylonRuntimeState,
@@ -123,6 +129,7 @@ impl Default for TunnelForwardingConfig {
         Self {
             max_request_body_bytes: DEFAULT_MAX_BODY_BYTES,
             max_sse_buffer_bytes: DEFAULT_MAX_SSE_BUFFER_BYTES,
+            force_chat_completions_include_usage: false,
             first_output_timeout: DEFAULT_FIRST_OUTPUT_TIMEOUT,
             output_chunk_timeout: DEFAULT_OUTPUT_CHUNK_TIMEOUT,
             runtime_state: PylonRuntimeState::default(),
@@ -146,6 +153,8 @@ pub(super) struct TunnelServerApp {
     pub(super) upstream_http_base_url: String,
     pub(super) max_request_body_bytes: usize,
     pub(super) max_sse_buffer_bytes: usize,
+    pub(super) force_chat_completions_include_usage: bool,
+    pub(super) chat_usage_rewrite_permits: Arc<Semaphore>,
     pub(super) first_output_timeout: Duration,
     pub(super) output_chunk_timeout: Duration,
     pub(super) runtime_state: PylonRuntimeState,
@@ -172,6 +181,12 @@ impl TunnelServerApp {
             upstream_http_base_url,
             max_request_body_bytes: forwarding.max_request_body_bytes,
             max_sse_buffer_bytes: forwarding.max_sse_buffer_bytes,
+            force_chat_completions_include_usage: forwarding.force_chat_completions_include_usage,
+            chat_usage_rewrite_permits: Arc::new(Semaphore::new(
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(1),
+            )),
             first_output_timeout: forwarding.first_output_timeout,
             output_chunk_timeout: forwarding.output_chunk_timeout,
             runtime_state: forwarding.runtime_state,
@@ -447,22 +462,33 @@ impl TunnelRequestLifecycle {
                 queue.observe_output();
             }
             *saw_output = true;
-            obs.observe_generated_output(message.received_at, generated_output.token_bearing);
-            quality_progress = parser
-                .observe_estimated_output_tokens(generated_output.estimated_token_units)
-                .map(|delta| {
-                    obs.observe_output_tokens(delta);
-                    RequestOutputTokenProgress::Delta(delta)
-                });
+            let estimate = parser.observe_generated_characters(generated_output.characters);
+            obs.observe_generated_output(
+                message.received_at,
+                generated_output.token_bearing,
+                estimate.raw_bootstrap_units,
+            );
+            if let Some(delta) = estimate.delta {
+                obs.observe_estimated_output_tokens_total(estimate.displayed_tokens);
+                quality_progress = Some(RequestOutputTokenProgress::Delta(delta));
+            }
         }
         if let Some(exact_usage) = message.facts.exact_usage {
             if let Some(input_tokens) = exact_usage.input_tokens {
                 obs.observe_input_tokens_total(input_tokens);
             }
             if let Some(output_tokens) = exact_usage.output_tokens {
-                let tokens = parser.observe_exact_output_tokens(output_tokens);
-                obs.observe_output_tokens_generated_so_far(tokens);
-                quality_progress = Some(RequestOutputTokenProgress::Cumulative { tokens });
+                match parser.observe_exact_output_tokens(output_tokens) {
+                    ExactOutputUpdate::Applied => {
+                        obs.observe_output_tokens_generated_so_far(output_tokens);
+                        quality_progress = Some(RequestOutputTokenProgress::Cumulative {
+                            tokens: output_tokens,
+                        });
+                    }
+                    ExactOutputUpdate::Regressed => {
+                        obs.observe_output_tokens_generated_so_far(output_tokens);
+                    }
+                }
             }
         }
         if (message.facts.generated_output.is_some() || message.facts.exact_usage.is_some())
@@ -626,7 +652,7 @@ async fn relay_upstream_response(
             .as_mut()
             .and_then(TunnelRequestObserver::generation_mut)
         {
-            observer.observe_generated_output(Instant::now(), false);
+            observer.observe_generated_output(Instant::now(), false, 0);
         }
     }
     let mut body_stream = response.bytes_stream();
@@ -664,7 +690,7 @@ pub(super) async fn forward_tunnel_request(
     let TunnelRequestParts {
         method,
         path_and_query,
-        headers: request_headers,
+        headers: mut request_headers,
     } = request;
     let health_request = is_health_request_path(&path_and_query);
     let observation_endpoint = request_observation_endpoint(&method, &path_and_query);
@@ -711,7 +737,7 @@ pub(super) async fn forward_tunnel_request(
             }
         }
     };
-    let body_bytes = transport
+    let mut body_bytes = transport
         .read_request_body(&request_headers, app.max_request_body_bytes)
         .await?;
     if let Some(lifecycle) = lifecycle.as_mut() {
@@ -721,6 +747,65 @@ pub(super) async fn forward_tunnel_request(
         if let Err(error) = validate_request_body(observation_endpoint, &body_bytes) {
             lifecycle.fail();
             return send_problem_response(transport, StatusCode::BAD_REQUEST, error).await;
+        }
+        let rewrite_result = if app.force_chat_completions_include_usage
+            && observation_endpoint == Some(RequestObservationEndpoint::ChatCompletions)
+        {
+            let Ok(chat_usage_rewrite_permit) =
+                app.chat_usage_rewrite_permits.clone().try_acquire_owned()
+            else {
+                lifecycle.fail();
+                let status = StatusCode::SERVICE_UNAVAILABLE;
+                record_failure_metric(
+                    app.metrics.as_deref(),
+                    &app.inference_server_id,
+                    status,
+                    true,
+                    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
+                );
+                let mut headers = problem_response_headers();
+                insert_retry_metadata(
+                    &mut headers,
+                    true,
+                    RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED,
+                );
+                return send_complete_response(
+                    transport,
+                    status,
+                    headers,
+                    problem_details_body(
+                        status,
+                        "chat completions request rewrite capacity exhausted",
+                    ),
+                )
+                .await;
+            };
+            let rewrite_task = AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
+                let _chat_usage_rewrite_permit = chat_usage_rewrite_permit;
+                force_chat_completions_include_usage(body_bytes)
+            }));
+            match rewrite_task.await {
+                Ok(result) => result,
+                Err(error) => {
+                    lifecycle.fail();
+                    return Err(anyhow!(
+                        "chat completions request rewrite task failed: {error}"
+                    ));
+                }
+            }
+        } else {
+            Ok((body_bytes, false))
+        };
+        let (prepared_body, body_mutated) = match rewrite_result {
+            Ok(body_bytes) => body_bytes,
+            Err(error) => {
+                lifecycle.fail();
+                return send_problem_response(transport, StatusCode::BAD_REQUEST, error).await;
+            }
+        };
+        body_bytes = prepared_body;
+        if body_mutated {
+            request_headers.remove(CONTENT_LENGTH);
         }
         if let Some(decision) = lifecycle.admit_queue(app, &request_headers) {
             let QueueAdmissionDecision::Rejected {
@@ -946,6 +1031,32 @@ fn validate_request_body(
     (body.get("stream").and_then(|value| value.as_bool()) == Some(true))
         .then_some(())
         .ok_or(stream_error)
+}
+
+fn force_chat_completions_include_usage(
+    body_bytes: Vec<u8>,
+) -> Result<(Vec<u8>, bool), &'static str> {
+    let mut body = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+        .map_err(|_| "request body must be valid JSON")?;
+    let object = body
+        .as_object_mut()
+        .ok_or("request body must be a JSON object")?;
+    let stream_options = object
+        .entry("stream_options")
+        .or_insert_with(|| serde_json::json!({}));
+    let stream_options = stream_options
+        .as_object_mut()
+        .ok_or("stream_options must be a JSON object")?;
+    match stream_options.get("include_usage") {
+        Some(serde_json::Value::Bool(true)) => return Ok((body_bytes, false)),
+        Some(serde_json::Value::Bool(false)) | None => {}
+        Some(_) => return Err("stream_options.include_usage must be a boolean"),
+    }
+    stream_options.insert("include_usage".to_string(), serde_json::Value::Bool(true));
+    Ok((
+        serde_json::to_vec(&body).expect("parsed request JSON should serialize"),
+        true,
+    ))
 }
 
 pub(super) fn is_health_request_path(path_and_query: &str) -> bool {
@@ -1286,8 +1397,276 @@ mod tests {
         ));
     }
 
+    fn force_chat_usage(body: &[u8]) -> Result<(Vec<u8>, bool), &'static str> {
+        force_chat_completions_include_usage(body.to_vec())
+    }
+
+    #[test]
+    fn chat_usage_rewrite_capacity_is_shared_across_app_clones() {
+        let app = TunnelServerApp::new(
+            "instance-a".to_string(),
+            "http://127.0.0.1:1".to_string(),
+            TunnelForwardingConfig::default(),
+        );
+        let capacity = app.chat_usage_rewrite_permits.available_permits();
+        assert!(capacity > 0);
+
+        let mut permits = (0..capacity)
+            .map(|_| {
+                app.chat_usage_rewrite_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("configured rewrite capacity should be available")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            app.clone()
+                .chat_usage_rewrite_permits
+                .try_acquire_owned()
+                .is_err(),
+            "cloned tunnel apps must share one bounded rewrite capacity"
+        );
+
+        permits.pop();
+        assert!(
+            app.chat_usage_rewrite_permits
+                .clone()
+                .try_acquire_owned()
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn blocked_request_body_does_not_consume_chat_usage_rewrite_capacity() {
+        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
+        app.force_chat_completions_include_usage = true;
+        let capacity = app.chat_usage_rewrite_permits.available_permits();
+        let gate = TestGate {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        let read_entered = gate.entered.clone();
+        let request_app = app.clone();
+        let request_task = tokio::spawn(async move {
+            let mut transport = TestTransport {
+                request_body: br#"{"messages":[],"stream":true}"#.to_vec(),
+                request_body_gate: Some(gate),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(
+                &request_app,
+                observed_request("/v1/chat/completions"),
+                &mut transport,
+            )
+            .await
+        });
+
+        read_entered.notified().await;
+        assert_eq!(
+            app.chat_usage_rewrite_permits.available_permits(),
+            capacity,
+            "request-body I/O must not occupy bounded rewrite workers"
+        );
+
+        request_task.abort();
+        assert!(
+            request_task
+                .await
+                .expect_err("blocked request task should be cancelled")
+                .is_cancelled()
+        );
+    }
+
+    #[tokio::test]
+    async fn saturated_chat_usage_rewrite_capacity_rejects_without_waiting() {
+        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
+        app.force_chat_completions_include_usage = true;
+        let metrics = Arc::new(PylonMetrics::new().expect("metrics should initialize"));
+        app.metrics = Some(Arc::clone(&metrics));
+        let capacity = app.chat_usage_rewrite_permits.available_permits();
+        let _permits = (0..capacity)
+            .map(|_| {
+                app.chat_usage_rewrite_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("configured rewrite capacity should be available")
+            })
+            .collect::<Vec<_>>();
+        let mut transport = TestTransport {
+            request_body: br#"{"messages":[],"stream":true}"#.to_vec(),
+            ..TestTransport::default()
+        };
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            forward_tunnel_request(
+                &app,
+                observed_request("/v1/chat/completions"),
+                &mut transport,
+            ),
+        )
+        .await
+        .expect("rewrite saturation should not queue the buffered request")
+        .expect("rewrite saturation should return a problem response");
+
+        assert_eq!(transport.response_heads, [StatusCode::SERVICE_UNAVAILABLE]);
+        let headers = &transport.response_headers[0];
+        assert_eq!(
+            headers
+                .get(HEADER_STARGATE_RETRYABLE)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
+        assert_eq!(
+            headers
+                .get(HEADER_STARGATE_RETRY_REASON)
+                .and_then(|value| value.to_str().ok()),
+            Some(RETRY_REASON_CHAT_USAGE_REWRITE_SATURATED)
+        );
+        assert!(
+            metrics
+                .gather_text()
+                .expect("metrics should encode")
+                .contains(
+                    r#"pylon_retryable_responses_total{inference_server_id="test-pylon",reason="chat_usage_rewrite_saturated",status="503"} 1"#,
+                )
+        );
+    }
+
+    #[test]
+    fn forced_chat_usage_inserts_stream_options_and_preserves_siblings() {
+        let (body, mutated) = force_chat_usage(
+            br#"{"stream":true,"model":"m","stream_options":{"include_usage":false,"x":7}}"#,
+        )
+        .expect("object stream options should be mutable");
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).expect("mutated body should remain JSON");
+
+        assert!(mutated);
+        assert_eq!(body["model"], "m");
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body["stream_options"]["x"], 7);
+
+        let (inserted, mutated) =
+            force_chat_usage(br#"{"stream":true,"model":"m"}"#).expect("options should insert");
+        let inserted: serde_json::Value =
+            serde_json::from_slice(&inserted).expect("mutated body should remain JSON");
+        assert!(mutated);
+        assert_eq!(inserted["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn forced_chat_usage_rejects_invalid_stream_options() {
+        assert_eq!(
+            force_chat_usage(br#"{"stream":true,"stream_options":false}"#),
+            Err("stream_options must be a JSON object")
+        );
+        assert_eq!(
+            force_chat_usage(br#"{"stream":true,"stream_options":{"include_usage":"yes"}}"#),
+            Err("stream_options.include_usage must be a boolean")
+        );
+        assert_eq!(
+            force_chat_usage(br#"{"stream":true,"stream_options":{"include_usage":1}}"#),
+            Err("stream_options.include_usage must be a boolean")
+        );
+    }
+
+    #[test]
+    fn already_enabled_chat_usage_preserves_original_bytes() {
+        let body = br#"{ "stream": true, "stream_options": { "include_usage": true } }"#.to_vec();
+        assert_eq!(force_chat_usage(&body), Ok((body, false)));
+    }
+
+    #[tokio::test]
+    async fn forced_chat_usage_rewrites_body_without_forwarding_stale_content_length() {
+        let (captured_tx, captured_rx) = flume::bounded(1);
+        let upstream = TestHttpServer::spawn(Router::new().route(
+            "/v1/chat/completions",
+            post(move |request: axum::extract::Request| {
+                let captured_tx = captured_tx.clone();
+                async move {
+                    let content_length = request
+                        .headers()
+                        .get(CONTENT_LENGTH)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<usize>().ok());
+                    let body = axum::body::to_bytes(request.into_body(), 1024 * 1024)
+                        .await
+                        .expect("forwarded request body should be bounded");
+                    captured_tx
+                        .send_async((content_length, body))
+                        .await
+                        .expect("test capture receiver should remain open");
+                    AxumResponse::builder()
+                        .header(CONTENT_TYPE, "text/event-stream")
+                        .body(Body::from("data: [DONE]\n\n"))
+                        .expect("test response should build")
+                }
+            }),
+        ))
+        .await;
+        let (mut app, _observations) = observed_app(upstream.as_str());
+        app.force_chat_completions_include_usage = true;
+        let original_body = br#"{"messages":[],"stream":true}"#;
+        let mut request = observed_request("/v1/chat/completions");
+        request.headers.insert(
+            CONTENT_LENGTH,
+            original_body
+                .len()
+                .to_string()
+                .parse()
+                .expect("content length should parse"),
+        );
+        let mut transport = TestTransport {
+            request_body: original_body.to_vec(),
+            ..TestTransport::default()
+        };
+
+        forward_tunnel_request(&app, request, &mut transport)
+            .await
+            .expect("mutated request should forward");
+        let (forwarded_length, forwarded_body) = captured_rx
+            .recv_async()
+            .await
+            .expect("upstream should capture the request");
+        let forwarded_json: serde_json::Value =
+            serde_json::from_slice(&forwarded_body).expect("forwarded request should remain JSON");
+
+        assert_eq!(forwarded_json["stream_options"]["include_usage"], true);
+        assert_ne!(forwarded_length, Some(original_body.len()));
+        if let Some(forwarded_length) = forwarded_length {
+            assert_eq!(forwarded_length, forwarded_body.len());
+        }
+        assert_eq!(transport.response_heads, [StatusCode::OK]);
+    }
+
+    #[tokio::test]
+    async fn forced_chat_usage_invalid_stream_options_returns_bad_request() {
+        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
+        app.force_chat_completions_include_usage = true;
+        for request_body in [
+            br#"{"messages":[],"stream":true,"stream_options":false}"#.as_slice(),
+            br#"{"messages":[],"stream":true,"stream_options":{"include_usage":"yes"}}"#.as_slice(),
+        ] {
+            let mut transport = TestTransport {
+                request_body: request_body.to_vec(),
+                ..TestTransport::default()
+            };
+
+            forward_tunnel_request(
+                &app,
+                observed_request("/v1/chat/completions"),
+                &mut transport,
+            )
+            .await
+            .expect("invalid stream options should return a problem response");
+
+            assert_eq!(transport.response_heads, [StatusCode::BAD_REQUEST]);
+        }
+    }
+
     #[derive(Clone)]
-    struct ResponseHeadGate {
+    struct TestGate {
         entered: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
     }
@@ -1296,8 +1675,10 @@ mod tests {
     struct TestTransport {
         request_body: Vec<u8>,
         response_heads: Vec<StatusCode>,
+        response_headers: Vec<HeaderMap>,
         response_events: Vec<bytes::Bytes>,
-        response_head_gate: Option<ResponseHeadGate>,
+        request_body_gate: Option<TestGate>,
+        response_head_gate: Option<TestGate>,
         fail_finish: bool,
     }
 
@@ -1314,15 +1695,20 @@ mod tests {
             _request_headers: &HeaderMap,
             _max_request_body_bytes: usize,
         ) -> Result<Vec<u8>> {
+            if let Some(gate) = &self.request_body_gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
             Ok(self.request_body.clone())
         }
 
         async fn send_response_head(
             &mut self,
             status: StatusCode,
-            _headers: HeaderMap,
+            headers: HeaderMap,
         ) -> Result<()> {
             self.response_heads.push(status);
+            self.response_headers.push(headers);
             if let Some(gate) = &self.response_head_gate {
                 gate.entered.notify_one();
                 gate.release.notified().await;
@@ -1565,7 +1951,7 @@ mod tests {
         app.first_output_timeout = Duration::from_secs(1);
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
-        let gate = ResponseHeadGate {
+        let gate = TestGate {
             entered: Arc::clone(&entered),
             release: Arc::clone(&release),
         };
@@ -1704,7 +2090,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn whitespace_text_records_first_token_without_inventing_an_estimate() {
+    async fn whitespace_text_records_first_token_and_bootstrap_estimate() {
         let raw = "data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\" \"}}]}\n\ndata: [DONE]\n\n";
         let (result, _, observations) = run_observed_sse(
             "/v1/chat/completions",
@@ -1722,7 +2108,7 @@ mod tests {
         assert_eq!(terminal.state, crate::RequestObservationState::Complete);
         assert!(terminal.time_to_first_output.is_some());
         assert!(terminal.time_to_first_token.is_some());
-        assert_eq!(terminal.output_tokens, 0);
+        assert_eq!(terminal.output_tokens, 1);
     }
 
     #[tokio::test]
