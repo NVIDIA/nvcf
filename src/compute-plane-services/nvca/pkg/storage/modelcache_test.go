@@ -1000,7 +1000,7 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 			}
 			rvBefore := stored.ResourceVersion
 
-			if err := r.reconcileSecondaryPVMountOptions(context.Background(), pv); err != nil {
+			if err := r.reconcileSecondaryPVMountOptions(context.Background(), nil, pv); err != nil {
 				t.Fatalf("reconcileSecondaryPVMountOptions() error = %v", err)
 			}
 
@@ -2119,4 +2119,223 @@ func TestNewSharedFSReaderPVResolvesMountOptions(t *testing.T) {
 		"the NVMesh handle must be rewritten for the reader namespace")
 	assert.True(t, roPV.Spec.CSI.ReadOnly,
 		"the CSI source must be read-only: access modes are not enforced by the kubelet")
+}
+
+// readerSelectionAnnotation marshals a durable selection whose reader mount
+// options come from the catalog, the shape a StorageRequest carries once the
+// agent has resolved its class against the catalog.
+func readerSelectionAnnotation(t *testing.T, provisioner string, transition string, mountOptions []string) string {
+	t.Helper()
+	selection := &PersistedModelCacheStorageSelection{
+		Version:              ModelCacheStorageSelectionVersion,
+		Workflow:             ModelCacheWorkflowRegular,
+		Mode:                 ModelCacheSelectionDurable,
+		StorageClassName:     DefaultModelCacheStorageClassName,
+		StorageClassUID:      "uid-1",
+		StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+		ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+		Provider:             "test-provider",
+		Provisioner:          provisioner,
+		Transition:           transition,
+		RequiredAccessModes:  requiredAccessModesForTransition(transition),
+		RequiredMountOptions: mountOptions,
+	}
+	raw, err := selection.Marshal()
+	require.NoError(t, err)
+	return raw
+}
+
+func storageRequestWithSelection(raw string) *nvcav1new.StorageRequest {
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req", Type: nvcav1new.ModelCacheRequest},
+	}
+	if raw != "" {
+		st.Annotations = map[string]string{ModelCacheStorageSelectionAnnotationKey: raw}
+	}
+	return st
+}
+
+func TestMergeReaderMountOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		required    []string
+		configured  []string
+		want        []string
+		wantDropped []string
+	}{
+		{
+			name:     "required only",
+			required: []string{"ro", "norecovery"},
+			want:     []string{"ro", "norecovery"},
+		},
+		{
+			name:       "configured only when nothing is required",
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+		{
+			name:       "configured extras follow the required set without duplicates",
+			required:   []string{"ro", "nouuid"},
+			configured: []string{"nouuid", "noatime"},
+			want:       []string{"ro", "nouuid", "noatime"},
+		},
+		{
+			name:        "configured options negating a required one are dropped",
+			required:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"rw", "recovery", "uuid", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+			wantDropped: []string{"rw", "recovery", "uuid"},
+		},
+		{
+			name: "empty in, empty out",
+			want: []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, dropped := MergeReaderMountOptions(tt.required, tt.configured)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantDropped, dropped)
+		})
+	}
+}
+
+func TestResolveReaderMountOptions(t *testing.T) {
+	wekaProvisioner := "csi.weka.io"
+	tests := []struct {
+		name       string
+		selection  string
+		cmData     map[string]string
+		configured []string
+		want       []string
+	}{
+		{
+			name:      "durable selection supplies the required options",
+			selection: readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionROXReadOnly, []string{"ro"}),
+			cmData:    nvmeshMountOptionDefaults,
+			want:      []string{"ro"},
+		},
+		{
+			name: "durable selection wins over a ConfigMap entry for the same provisioner",
+			selection: readerSelectionAnnotation(t, NVMeshStorageClassProvisioner, ModelCacheTransitionROXReadOnly,
+				[]string{"ro", "nouuid"}),
+			cmData: nvmeshMountOptionDefaults,
+			want:   []string{"ro", "nouuid"},
+		},
+		{
+			name:       "configured extras are appended after the selection's options",
+			selection:  readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionROXReadOnly, []string{"ro"}),
+			configured: []string{"noatime"},
+			want:       []string{"ro", "noatime"},
+		},
+		{
+			name:       "configured rw cannot negate the selection's ro",
+			selection:  readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionROXReadOnly, []string{"ro"}),
+			configured: []string{"rw", "noatime"},
+			want:       []string{"ro", "noatime"},
+		},
+		{
+			name:       "durable selection without reader options keeps only the configured ones",
+			selection:  readerSelectionAnnotation(t, wekaProvisioner, ModelCacheTransitionRWXReadOnly, nil),
+			cmData:     nvmeshMountOptionDefaults,
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+		{
+			name:   "request without a selection uses the ConfigMap defaults",
+			cmData: nvmeshMountOptionDefaults,
+			want:   []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name: "ephemeral selection uses the ConfigMap defaults",
+			selection: func() string {
+				raw, err := (&PersistedModelCacheStorageSelection{
+					Version:  ModelCacheStorageSelectionVersion,
+					Workflow: ModelCacheWorkflowHelm,
+					Mode:     ModelCacheSelectionEphemeral,
+				}).Marshal()
+				require.NoError(t, err)
+				return raw
+			}(),
+			cmData: nvmeshMountOptionDefaults,
+			want:   []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name:      "invalid selection falls back to the ConfigMap defaults",
+			selection: "{",
+			cmData:    nvmeshMountOptionDefaults,
+			want:      []string{"ro", "norecovery", "nouuid"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The model cache class is NVMesh so the ConfigMap path has defaults to
+			// offer; the selection must be what stops them from applying.
+			objs := newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, tt.cmData)
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
+			r := newMountOptionsReconciler(t, c, tt.configured)
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+
+			got := r.resolveReaderMountOptions(context.Background(), storageRequestWithSelection(tt.selection), pv)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestReconcileSecondaryPVMountOptions_SelectionDriven(t *testing.T) {
+	// The PV was created from the ConfigMap defaults; the request's selection
+	// now records a smaller catalog set, so the PV must follow the selection.
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"},
+		Spec: corev1.PersistentVolumeSpec{
+			MountOptions: []string{"ro", "norecovery", "nouuid"},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: NVMeshStorageClassProvisioner, VolumeHandle: "handle"},
+			},
+		},
+	}
+	objs := append(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults), pv)
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
+	r := newMountOptionsReconciler(t, c, []string{"noatime"})
+	st := storageRequestWithSelection(readerSelectionAnnotation(t, NVMeshStorageClassProvisioner,
+		ModelCacheTransitionROXReadOnly, []string{"ro", "nouuid"}))
+
+	require.NoError(t, r.reconcileSecondaryPVMountOptions(context.Background(), st, pv))
+
+	got := &corev1.PersistentVolume{}
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, got))
+	assert.Equal(t, []string{"ro", "nouuid", "noatime"}, got.Spec.MountOptions)
+}
+
+func TestNewSharedFSReaderPVTakesMountOptionsFromSelection(t *testing.T) {
+	wekaProvisioner := "csi.weka.io"
+	// No ConfigMap entry exists for this provisioner, so without the selection
+	// the reader would get only the configured options.
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(wekaProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, []string{"rw", "noatime"})
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:     corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			MountOptions: []string{"rw"},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: wekaProvisioner, VolumeHandle: "weka/v2/csivol-pvc-8e38c07d"},
+			},
+		},
+	}
+	st := storageRequestWithSelection(readerSelectionAnnotation(t, wekaProvisioner,
+		ModelCacheTransitionROXReadOnly, []string{"ro"}))
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ro", "noatime"}, roPV.Spec.MountOptions,
+		"the catalog's reader options are required and the configured rw must not negate them")
+	assert.True(t, roPV.Spec.CSI.ReadOnly)
 }

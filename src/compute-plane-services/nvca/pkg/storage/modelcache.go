@@ -688,6 +688,12 @@ func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, boo
 // keeping the key, so a log line stays useful for debugging without echoing
 // operator supplied values. Mount options are free form and can carry
 // credentials, a CIFS password being the obvious case.
+// RedactMountOptionValues masks the value part of key=value mount options so
+// they can be logged without leaking credentials a driver may carry there.
+func RedactMountOptionValues(opts []string) []string {
+	return redactMountOptionValues(opts)
+}
+
 func redactMountOptionValues(opts []string) []string {
 	redacted := make([]string, 0, len(opts))
 	for _, opt := range opts {
@@ -729,21 +735,82 @@ func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.Pe
 	if !found {
 		return r.csiVolumeMountOptions
 	}
+	return r.mergeRequiredMountOptions(ctx, pv, defaults)
+}
 
-	log := logf.FromContext(ctx)
-	configured := make([]string, 0, len(r.csiVolumeMountOptions))
-	for _, opt := range r.csiVolumeMountOptions {
-		if i := slices.IndexFunc(defaults, func(d string) bool { return negatesMountOption(d, opt) }); i >= 0 {
-			log.Info("Ignoring configured cache mount option that conflicts with a provisioner default",
-				"pv", pv.Name,
-				"ignored", redactMountOptionValues([]string{opt}),
-				"required", redactMountOptionValues([]string{defaults[i]}))
+// resolveReaderMountOptions returns the mount options for the read-only PV that
+// serves the given StorageRequest. A durable request carries the catalog's
+// readerMountOptions in its persisted selection, so those are the required set
+// and the configured options are appended except where they would negate one.
+// Requests without a durable selection, including in-flight legacy requests,
+// keep the per-provisioner ConfigMap path.
+func (r *Reconciler) resolveReaderMountOptions(ctx context.Context,
+	st *nvcav1new.StorageRequest, pv *corev1.PersistentVolume,
+) []string {
+	required, ok := selectionReaderMountOptions(ctx, st)
+	if !ok {
+		return r.resolveCacheMountOptions(ctx, pv)
+	}
+	return r.mergeRequiredMountOptions(ctx, pv, required)
+}
+
+// selectionReaderMountOptions returns the reader mount options recorded in the
+// StorageRequest's persisted selection. ok is false when the request has no
+// selection, the selection is not durable, or it cannot be parsed; the caller
+// then falls back to the ConfigMap path so a bad annotation never strips the
+// options a driver needs.
+func selectionReaderMountOptions(ctx context.Context, st *nvcav1new.StorageRequest) ([]string, bool) {
+	if st == nil {
+		return nil, false
+	}
+	raw := st.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return nil, false
+	}
+	selection, err := ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "Ignoring invalid model cache selection for reader mount options",
+			"storageRequest", client.ObjectKeyFromObject(st))
+		return nil, false
+	}
+	if selection.Mode != ModelCacheSelectionDurable {
+		return nil, false
+	}
+	return selection.RequiredMountOptions, true
+}
+
+// mergeRequiredMountOptions appends the configured options to the required
+// set, logging and dropping any configured option that would negate a required
+// one.
+func (r *Reconciler) mergeRequiredMountOptions(ctx context.Context,
+	pv *corev1.PersistentVolume, required []string,
+) []string {
+	merged, dropped := MergeReaderMountOptions(required, r.csiVolumeMountOptions)
+	if len(dropped) != 0 {
+		logf.FromContext(ctx).Info("Ignoring configured cache mount options that conflict with required ones",
+			"pv", pv.Name,
+			"ignored", redactMountOptionValues(dropped),
+			"required", redactMountOptionValues(required))
+	}
+	return merged
+}
+
+// MergeReaderMountOptions combines the options a read-only cache volume must
+// have with the operator-configured extras. Required options come first and are
+// never removed; a configured option that would negate a required one (rw
+// against ro, uuid against nouuid) is returned in dropped instead of merged.
+// The agent and the storage controller both use it so a reader PV gets the
+// same options whichever component creates it.
+func MergeReaderMountOptions(required, configured []string) (merged, dropped []string) {
+	kept := make([]string, 0, len(configured))
+	for _, opt := range configured {
+		if slices.ContainsFunc(required, func(req string) bool { return negatesMountOption(req, opt) }) {
+			dropped = append(dropped, opt)
 			continue
 		}
-		configured = append(configured, opt)
+		kept = append(kept, opt)
 	}
-
-	return mergeMountOptions(defaults, configured)
+	return mergeMountOptions(required, kept), dropped
 }
 
 // mergeMountOptions concatenates the given option lists, preserving order and
@@ -768,11 +835,11 @@ func mergeMountOptions(lists ...[]string) []string {
 // options when the volume is mounted, so a patch applies to the next mount and
 // leaves volumes that are already mounted untouched.
 func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
-	secondaryPV *corev1.PersistentVolume,
+	st *nvcav1new.StorageRequest, secondaryPV *corev1.PersistentVolume,
 ) error {
 	log := logf.FromContext(ctx)
 
-	want := r.resolveCacheMountOptions(ctx, secondaryPV)
+	want := r.resolveReaderMountOptions(ctx, st, secondaryPV)
 	if slices.Equal(secondaryPV.Spec.MountOptions, want) {
 		return nil
 	}
@@ -917,7 +984,7 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		}
 		maps.Copy(secondaryPV.Labels, getClusterWideResourceLabels(stCopy))
 		secondaryPV.Spec.AccessModes = accessModesRO
-		secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, secondaryPV)
+		secondaryPV.Spec.MountOptions = r.resolveReaderMountOptions(ctx, stCopy, secondaryPV)
 		secondaryPV.Spec.ClaimRef = &corev1.ObjectReference{
 			APIVersion: "v1",
 			Kind:       "PersistentVolumeClaim",
@@ -943,7 +1010,7 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		log.V(1).Info("Secondary PV already exists, checking status", "pv", secondaryPV.Name)
 		// Mount options are mutable via NGC/NVCFBackend, so an existing PV can be
 		// left behind when the configuration changes.
-		if err := r.reconcileSecondaryPVMountOptions(ctx, secondaryPV); err != nil {
+		if err := r.reconcileSecondaryPVMountOptions(ctx, stCopy, secondaryPV); err != nil {
 			if k8sutil.IsTransientK8sError(err) {
 				log.V(1).Info("Transient error reconciling secondary PV mount options, will retry",
 					"pv", secondaryPV.Name)
@@ -1845,7 +1912,7 @@ func (r *Reconciler) newSharedFSReaderPV(
 	// reader attaches the same XFS filesystem as the writer and needs nouuid
 	// and norecovery or the mount fails outright. deriveReaderVolumeHandle
 	// above already handles the NVMesh driver reaching this path.
-	roPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, roPV)
+	roPV.Spec.MountOptions = r.resolveReaderMountOptions(ctx, stCopy, roPV)
 	roPV.Status = corev1.PersistentVolumeStatus{}
 	if err := r.setControlledObjectMeta(ctx, stCopy, roPV); err != nil {
 		return nil, err
