@@ -289,7 +289,7 @@ Key behaviors:
 | `persistentVolumeClaim.storageClassName` | `emptydir` | Storage class (`emptydir` for ephemeral) |
 | `persistentVolumeClaim.sizeGB` | `100` | Container cache volume (Gi) |
 | `persistentVolumeClaim.sizeProxyGB` | `200` | Proxy cache volume (Gi) |
-| `persistentVolumeClaim.freeProxyPct` | `10` | Min free space percentage |
+| `persistentVolumeClaim.freeProxyPct` | `15` | Evict at (100 - pct) percent usage: `min_free` on a PersistentVolume, plus per-zone `max_size` on `emptydir` |
 
 ### Service
 
