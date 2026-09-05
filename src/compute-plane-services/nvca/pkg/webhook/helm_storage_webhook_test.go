@@ -74,8 +74,16 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo-init",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -83,8 +91,16 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -138,10 +154,18 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo-init",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-models"},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-resources"},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-models", ReadOnly: true},
+							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-resources", ReadOnly: true},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -149,10 +173,18 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-models"},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-resources"},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-models", ReadOnly: true},
+							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: "/my-resources", ReadOnly: true},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -186,8 +218,16 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo-init",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -195,8 +235,16 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -235,8 +283,16 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo-init",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -244,8 +300,16 @@ func TestGetModelCachePVCAppend(t *testing.T) {
 					{
 						Name: "foo",
 						VolumeMounts: []corev1.VolumeMount{
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodModelMountPath},
-							{Name: cmnnvcastorage.ModelCachePodVolumeName, MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodModelMountPath,
+								ReadOnly:  true,
+							},
+							{
+								Name:      cmnnvcastorage.ModelCachePodVolumeName,
+								MountPath: cmnnvcastorage.ModelCachePodResourcesMountPath,
+								ReadOnly:  true,
+							},
 						},
 					},
 				},
@@ -303,6 +367,9 @@ func TestGetEphemeralModelCacheInitAppendFunc(t *testing.T) {
 			{Name: "MODEL_URL", Value: "https://models.example/m1"},
 		}, ic.Env)
 		assert.Len(t, ic.VolumeMounts, 3)
+		for _, mount := range ic.VolumeMounts {
+			assert.False(t, mount.ReadOnly, "ephemeral model-cache init mounts must remain writable")
+		}
 	}
 
 	assert.True(t, hasVolumeNamed(ps.Volumes, cmnnvcastorage.ModelCachePodVolumeName))
@@ -311,6 +378,9 @@ func TestGetEphemeralModelCacheInitAppendFunc(t *testing.T) {
 		assert.NotNilf(t, v.VolumeSource.EmptyDir, "volume %s should be emptyDir", v.Name)
 	}
 	assert.Len(t, ps.Containers[0].VolumeMounts, 2)
+	for _, mount := range ps.Containers[0].VolumeMounts {
+		assert.False(t, mount.ReadOnly, "ephemeral model-cache workload mounts must remain writable")
+	}
 
 	// Idempotent: a second pass does not duplicate the container, volumes, or mounts.
 	getEphemeralModelCacheInitAppendFunc("init-image:1", envSet)(t.Context(), &ps)
@@ -385,9 +455,12 @@ func TestMutate_StableVolumeOrderAcrossReadmission(t *testing.T) {
 	// First admission (CREATE).
 	_, _, err := v.mutate(ctx, pod, nvcatypes.MiniserviceMetadata{})
 	require.NoError(t, err)
+	assertModelCacheMountsReadOnly(t, pod.Spec.InitContainers)
+	assertModelCacheMountsReadOnly(t, pod.Spec.Containers)
 	wantVols := volNames(pod.Spec.Volumes)
 	wantMounts := mountSig(pod.Spec.Containers[0].VolumeMounts)
 	wantInitMounts := mountSig(pod.Spec.InitContainers[0].VolumeMounts)
+	wantPodSpec := pod.Spec.DeepCopy()
 	// Sanity: all three injected volumes are present.
 	assert.Contains(t, wantVols, cmnnvcastorage.ModelCachePodVolumeName)
 
@@ -395,7 +468,26 @@ func TestMutate_StableVolumeOrderAcrossReadmission(t *testing.T) {
 	// order must be byte-for-byte identical, or the UPDATE is rejected.
 	_, _, err = v.mutate(ctx, pod, nvcatypes.MiniserviceMetadata{})
 	require.NoError(t, err)
+	assertModelCacheMountsReadOnly(t, pod.Spec.InitContainers)
+	assertModelCacheMountsReadOnly(t, pod.Spec.Containers)
+	assert.Equal(t, *wantPodSpec, pod.Spec, "pod spec must be stable across re-admission")
 	assert.Equal(t, wantVols, volNames(pod.Spec.Volumes), "volume order must be stable across re-admission")
 	assert.Equal(t, wantMounts, mountSig(pod.Spec.Containers[0].VolumeMounts), "container mount order must be stable")
 	assert.Equal(t, wantInitMounts, mountSig(pod.Spec.InitContainers[0].VolumeMounts), "init mount order must be stable")
+}
+
+func assertModelCacheMountsReadOnly(t *testing.T, containers []corev1.Container) {
+	t.Helper()
+	for _, container := range containers {
+		count := 0
+		for _, mount := range container.VolumeMounts {
+			if mount.Name != cmnnvcastorage.ModelCachePodVolumeName {
+				continue
+			}
+			count++
+			assert.Truef(t, mount.ReadOnly, "model-cache mount %s in container %s must be read-only",
+				mount.MountPath, container.Name)
+		}
+		assert.Equalf(t, 2, count, "container %s must have both model-cache mounts", container.Name)
+	}
 }
