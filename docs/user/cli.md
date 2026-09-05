@@ -622,11 +622,11 @@ API key, which `api-key generate` mints automatically alongside the function key
 | --- | --- |
 | `task create` | Submit a new task (saves task ID to state) |
 | `task list` | List tasks, optionally filtered by status |
-| `task get` | Get details for a task by ID |
+| `task get` | Get details for a task by ID (optional `--timeout` in seconds) |
 | `task cancel` | Cancel a running task |
 | `task delete` | Delete a task |
-| `task events` | List events for a task |
-| `task results` | Retrieve results for a completed task |
+| `task events` | List events for a task (optional `--timeout` in seconds) |
+| `task results` | Retrieve results for a completed task (optional `--timeout` in seconds) |
 | `task update-secrets` | Update secrets for a task |
 | `task bulk` | Retrieve details for multiple tasks by ID |
 
@@ -641,11 +641,14 @@ API key, which `api-key generate` mints automatically alongside the function key
   --instance-type GPU.H100_1x \
   --image my-registry/training:latest
 
-# Check task details
-./nvcf-cli task get
+# Check task details with a bounded request duration
+./nvcf-cli task get --timeout 30
+
+# Retrieve task results with a bounded request duration
+./nvcf-cli task results --timeout 30
 
 # Stream lifecycle events
-./nvcf-cli task events
+./nvcf-cli task events --timeout 30
 
 # Cancel a running task
 ./nvcf-cli task cancel
@@ -662,6 +665,9 @@ API key, which `api-key generate` mints automatically alongside the function key
 # Create from JSON file
 ./nvcf-cli function create --input-file examples/create-function.json
 
+# Return the create response as structured JSON
+./nvcf-cli --json function create --input-file examples/create-function.json
+
 # Create with CLI flags
 ./nvcf-cli function create \
   --name "my-function" \
@@ -669,7 +675,9 @@ API key, which `api-key generate` mints automatically alongside the function key
   --inference-url "/predict" \
   --inference-port 8000 \
   --health-uri "/health" \
-  --health-port 8000
+  --health-protocol HTTP \
+  --health-port 8000 \
+  --health-timeout PT30S
 
 # Create with additional options
 ./nvcf-cli function create \

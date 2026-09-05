@@ -730,6 +730,9 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 # Create function (requires admin token)
 ./nvcf-cli create --file examples/create-function.json
 
+# Return the create response as structured JSON
+./nvcf-cli --json function create --input-file examples/create-function.json
+
 # Create function with secrets using command-line flags
 ./nvcf-cli function create \
   --name my-function \
@@ -1331,6 +1334,19 @@ nvcf-cli task create \
 `get`/`events`/`results`/`cancel`/`delete`/`update-secrets` commands can omit
 the positional task ID and reuse the saved context.
 
+Bound an individual task status request when it is part of a larger workflow:
+
+```bash
+nvcf-cli task get --timeout 30
+```
+
+The same optional timeout bounds an individual event or result request:
+
+```bash
+nvcf-cli task events --timeout 30
+nvcf-cli task results --timeout 30
+```
+
 ### Required vs Optional Fields
 
 `name`, `gpuSpecification.gpu`, and `gpuSpecification.instanceType` are
@@ -1366,8 +1382,8 @@ nvcf-cli task bulk --input-file examples/bulk-tasks.json
 ### Watching Events and Results
 
 ```bash
-nvcf-cli task events --limit 100       # latest events for current task
-nvcf-cli task results                  # results emitted (UPLOAD strategy)
+nvcf-cli task events --limit 100 --timeout 30  # bounded latest events request
+nvcf-cli task results --timeout 30     # bounded results request (UPLOAD strategy)
 nvcf-cli --json task events > events.json   # automation-friendly output
 ```
 

@@ -611,6 +611,9 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 # Or create with JSON configuration
 ./nvcf-cli create --input-file examples/create-function.json
 
+# Emit the created Function and version IDs as structured JSON
+./nvcf-cli --json function create --input-file examples/create-function.json
+
 # Create an LLM function model with a routing method override
 ./nvcf-cli function create \
   --name "my-llm-function" \
@@ -1525,11 +1528,11 @@ The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
 | `task create` | `POST /v1/nvct/tasks` | Launches a task. Saves Task ID to state. |
 | `task list` | `GET /v1/nvct/tasks` | Optional `--status`, `--limit`, `--cursor`. |
 | `task bulk` | `POST /v1/nvct/tasks/bulk` | Basic details for an explicit ID set. |
-| `task get [id]` | `GET /v1/nvct/tasks/{id}` | Falls back to saved task. `--include-secrets`. |
+| `task get [id]` | `GET /v1/nvct/tasks/{id}` | Saved task fallback. Optional `--include-secrets`, `--timeout`. |
 | `task delete [id]` | `DELETE /v1/nvct/tasks/{id}` | Falls back to saved task. |
 | `task cancel [id]` | `POST /v1/nvct/tasks/{id}/cancel` | Falls back to saved task. |
-| `task events [id]` | `GET /v1/nvct/tasks/{id}/events` | Paginated. |
-| `task results [id]` | `GET /v1/nvct/tasks/{id}/results` | Paginated. |
+| `task events [id]` | `GET /v1/nvct/tasks/{id}/events` | Paginated. Optional `--timeout`. |
+| `task results [id]` | `GET /v1/nvct/tasks/{id}/results` | Paginated. Optional `--timeout`. |
 | `task update-secrets [id]` | `PUT /v1/nvct/secrets/tasks/{id}` | Replace user secrets. |
 
 ### **Quickstart**
@@ -1549,9 +1552,9 @@ nvcf-cli task create \
 
 # List, watch, and inspect using saved task context
 nvcf-cli task list --status RUNNING
-nvcf-cli task get
-nvcf-cli task events
-nvcf-cli task results
+nvcf-cli task get --timeout 30
+nvcf-cli task events --timeout 30
+nvcf-cli task results --timeout 30
 
 # Rotate task secrets
 nvcf-cli task update-secrets --secrets NGC_API_KEY=nvapi-... HF_TOKEN=hf_...
