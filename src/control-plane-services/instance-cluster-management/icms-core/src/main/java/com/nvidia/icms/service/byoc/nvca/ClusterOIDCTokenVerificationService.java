@@ -8,6 +8,7 @@ import com.nvidia.icms.configuration.security.AuthManagerResolver;
 import com.nvidia.icms.configuration.security.JwtSizeLimitFilter;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,7 +48,7 @@ public class ClusterOIDCTokenVerificationService {
      * @return verification outcome (see {@link Outcome})
      */
     public Outcome verify(String token) {
-        return verify(token, AuthManagerResolver.nvcaSubjectValidator());
+        return verifyWithDecoder(token, authManagerResolver::buildJwtDecoderFromJwks);
     }
 
     /**
@@ -56,6 +57,16 @@ public class ClusterOIDCTokenVerificationService {
      * audience checks are identical to {@link #verify(String)}.
      */
     public Outcome verify(String token, OAuth2TokenValidator<Jwt> subjectValidator) {
+        return verifyWithDecoder(token,
+                jwks -> authManagerResolver.buildJwtDecoderFromJwks(jwks, subjectValidator));
+    }
+
+    @FunctionalInterface
+    private interface DecoderFactory {
+        JwtDecoder build(String jwks) throws ParseException;
+    }
+
+    private Outcome verifyWithDecoder(String token, DecoderFactory decoderFactory) {
         if (token == null || token.isBlank()) {
             return Outcome.reject(RejectReason.MISSING_TOKEN, "token is required");
         }
@@ -84,8 +95,7 @@ public class ClusterOIDCTokenVerificationService {
         }
 
         try {
-            JwtDecoder decoder = authManagerResolver.buildJwtDecoderFromJwks(
-                    cluster.get().getJwks(), subjectValidator);
+            JwtDecoder decoder = decoderFactory.build(cluster.get().getJwks());
             Jwt jwt = decoder.decode(token);
             return Outcome.active(jwt, clusterIdFromAud);
         } catch (Exception e) {

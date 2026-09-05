@@ -169,7 +169,8 @@ public class InstanceUpdateService {
         }
         Set<String> targets = request.getClusters();
         if (targets != null && !targets.isEmpty()
-                && !targets.contains(clientId) && !targets.contains(clusterName)) {
+                && !targets.contains(clientId)
+                && (clusterName == null || !targets.contains(clusterName))) {
             log.warn("Cluster {} attempted to register instance {} for request {} targeted at {}",
                     clientId, instanceId, request.getRequestId(), targets);
             throw new IcmsForbiddenException("request is not targeted at the calling cluster");

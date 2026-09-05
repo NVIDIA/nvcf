@@ -2277,6 +2277,7 @@ class InstanceUpdateServiceTest {
     void ownership_clusterPrincipalUpdatingOwnInstance_isAccepted() {
         authenticateAsCluster();
         var request = getInstanceUpdateRequestForTerminatedState();
+        request.getPlacement().setAvailabilityZone(DUMMY_CLUSTER_ID);
         var instance = getInstanceEntityForRunningInstance();
         instance.setZone(DUMMY_CLUSTER_ID);
 
