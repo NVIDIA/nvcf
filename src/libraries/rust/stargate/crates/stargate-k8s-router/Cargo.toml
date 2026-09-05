@@ -41,10 +41,12 @@ kube = { workspace = true }
 prometheus = { workspace = true }
 quinn = { workspace = true }
 rustls = { workspace = true }
+serde_json = { workspace = true }
 stargate-forwarding = { workspace = true }
 stargate-protocol = { workspace = true }
 stargate-proto = { workspace = true }
 stargate-runtime = { workspace = true }
+stargate-telemetry = { workspace = true }
 stargate-tls = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }
@@ -52,7 +54,6 @@ tokio-util = { workspace = true }
 tonic = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 rustls-pemfile = { workspace = true }
