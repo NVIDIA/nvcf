@@ -44,7 +44,8 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.7.0
+    # 1.7.0 currently references an unpublished api-keys service image.
+    version: 1.6.0
     namespace: api-keys
     inherit:
       - template: service
