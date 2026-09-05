@@ -293,8 +293,6 @@ certManager:
 openbao:
   enabled: true
   migrations:
-    image:
-      tag: "0.19.1"
     issuerDiscovery:
       enabled: false
   injector:

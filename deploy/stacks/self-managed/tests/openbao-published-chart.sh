@@ -53,6 +53,12 @@ HELMFILE_ENV="$environment_name" \
     --output-file-template "$openbao_values" >/dev/null
 
 test -s "$openbao_values" || fail "helmfile wrote no OpenBao values"
+test "$(yq -r '.openbao.migrations.image.tag // ""' "$openbao_values")" = "" ||
+  fail "stack values should let the OpenBao chart supply the migrations image tag"
+expected_migrations_image="$(yq -r '
+  .openbao.migrations.image |
+  "\(.registry)/\(.repository):0.19.1"
+' "$openbao_values")"
 
 HELMFILE_ENV="$environment_name" \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
@@ -106,5 +112,13 @@ password="$(yq -r '
 ' "$published_manifest")"
 test "$password" = "$expected_password" ||
   fail "published OpenBao chart did not preserve DEFAULT_CASSANDRA_PASSWORD"
+
+migrations_image="$(yq -r '
+  .spec.template.spec.containers[] |
+  select(.name == "bao-migrations") |
+  .image
+' "$published_manifest")"
+test "$migrations_image" = "$expected_migrations_image" ||
+  fail "published OpenBao chart rendered migrations image $migrations_image, expected $expected_migrations_image"
 
 echo "openbao-published-chart: all checks passed"
