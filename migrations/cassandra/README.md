@@ -10,6 +10,10 @@ This repository ships:
 - The migration entrypoint (`execute_sqls.sh`)
 - Cassandra DDL migrations under `keyspaces/<service>/*.up.sql`, one keyspace per service
 
+The Cassandra chart also uses this image for its cluster-initialization hook.
+That hook calls `kubectl`, so the image includes the checksum-verified official
+Kubernetes v1.37.0 client for both supported architectures.
+
 ## Migration driver
 
 The container builds [`golang-migrate`](https://github.com/golang-migrate/migrate) v4.19.1 from its checksum-verified release source. The build enables only the Cassandra database driver. This keeps unrelated database and cloud-provider clients out of the runtime binary.

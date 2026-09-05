@@ -6,8 +6,11 @@ set -u
 
 test_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 subtree_dir=$(CDPATH='' cd -- "${test_dir}/.." && pwd)
+repo_dir=$(CDPATH='' cd -- "${subtree_dir}/../.." && pwd)
 script="${subtree_dir}/execute_sqls.sh"
 keyspaces="${subtree_dir}/keyspaces"
+dockerfile="${subtree_dir}/Dockerfile"
+init_script="${repo_dir}/deploy/helm/cassandra/helm/scripts/initdb.sh"
 status=0
 
 fail()
@@ -88,6 +91,20 @@ fi
 
 if ! grep -q '^until cqlsh ' "${script}"; then
   fail "execute_sqls.sh must retain the Cassandra authentication readiness check"
+fi
+
+if ! grep -Eq '(^|[[:space:]])kubectl([[:space:]]|$)' "${init_script}"; then
+  fail "Cassandra cluster initialization no longer requires kubectl; reconsider bundling it"
+fi
+
+if ! grep -F -q \
+  'COPY --from=kubectl-downloader --chmod=0555 /out/kubectl /usr/local/bin/kubectl' \
+  "${dockerfile}"; then
+  fail "the migrations image must include kubectl for Cassandra cluster initialization"
+fi
+
+if ! grep -F -q 'ARG KUBECTL_VERSION=v1.37.0' "${dockerfile}"; then
+  fail "the migrations image must retain the kubectl security baseline"
 fi
 
 nvct_schema="${keyspaces}/nvct_api/03_init_tables.up.sql"
