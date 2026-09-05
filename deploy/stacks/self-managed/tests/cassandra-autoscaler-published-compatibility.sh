@@ -21,9 +21,8 @@ autoscaler_release="$work_dir/function-autoscaler-release.json"
 # These literals are the compatibility contract under test. Review and advance
 # them together only after the autoscaler no longer uses the removed tables.
 cassandra_chart_version=0.20.3
-autoscaler_chart_version=0.3.0
+autoscaler_chart_version=0.3.1
 migrations_image_version=0.17.3
-autoscaler_image_version=1.21.0
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
@@ -124,6 +123,12 @@ test "$(yq -r '.[0].chart' "$autoscaler_release")" = \
 test "$(yq -r '.[0].version' "$autoscaler_release")" = \
   "$autoscaler_chart_version" ||
   fail "observability Helmfile did not select function autoscaler $autoscaler_chart_version"
+
+autoscaler_chart="oci://${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/helm-nvcf-function-autoscaler"
+autoscaler_image_version="$(helm show chart "$autoscaler_chart" \
+  --version "$autoscaler_chart_version" | yq -r '.appVersion // ""')"
+test -n "$autoscaler_image_version" ||
+  fail "published function autoscaler chart has no appVersion"
 
 autoscaler_image="$(yq ea -r '
   select(.kind == "Deployment" and .metadata.name == "function-autoscaler") |

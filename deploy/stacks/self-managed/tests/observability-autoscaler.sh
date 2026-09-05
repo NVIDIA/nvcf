@@ -98,11 +98,11 @@ write_autoscaler_values "$work_dir/autoscaler-values.yaml"
 
 autoscaler_values="$work_dir/autoscaler-values.yaml"
 autoscaler_tag="$(yq -r '.functionautoscaler.image.tag // ""' "$autoscaler_values")"
-expected_autoscaler_tag="$(yq -r '.functionAutoscaler.image.tag // ""' "$stack_dir/environments/base.yaml")"
+test -z "$autoscaler_tag" ||
+  fail "stack values should let the function autoscaler chart supply the image tag"
+expected_autoscaler_tag="$(yq -r '.appVersion // ""' "$repo_dir/deploy/helm/function-autoscaler/Chart.yaml")"
 [[ -n "$expected_autoscaler_tag" ]] ||
-  fail "base environment does not pin the function autoscaler image"
-test "$autoscaler_tag" = "$expected_autoscaler_tag" ||
-  fail "rendered autoscaler image tag is $autoscaler_tag, expected $expected_autoscaler_tag"
+  fail "function autoscaler chart does not define an appVersion"
 for expected in \
   'CASSANDRA__CONTACT_POINTS: cassandra.cassandra-system.svc.cluster.local' \
   'CASSANDRA__IS_DEVELOPMENT: "false"' \
@@ -123,7 +123,7 @@ helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
 
 autoscaler_manifests="$work_dir/autoscaler-manifests.yaml"
 grep -q "image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:${expected_autoscaler_tag}" "$autoscaler_manifests" ||
-  fail "self-managed stack did not pin the autoscaler image to $expected_autoscaler_tag"
+  fail "function autoscaler chart did not default the image to $expected_autoscaler_tag"
 test "$(grep -c '^kind: ConfigMap$' "$autoscaler_manifests")" = "2" ||
   fail "autoscaler chart did not render only its env and Vault template ConfigMaps"
 grep -q 'name: function-autoscaler-env' "$autoscaler_manifests" ||
