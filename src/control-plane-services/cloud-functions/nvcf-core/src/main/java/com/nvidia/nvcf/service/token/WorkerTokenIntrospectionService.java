@@ -19,29 +19,36 @@ package com.nvidia.nvcf.service.token;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
+import com.nimbusds.jwt.JWTParser;
+import com.nimbusds.jwt.SignedJWT;
 import com.nvidia.nvcf.icms.client.IcmsClient;
 import com.nvidia.nvcf.icms.client.IcmsStubService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.text.ParseException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
  * Calls the ICMS worker token introspection endpoint (RFC 7662) and caches
- * active results keyed on a SHA-256 digest of the raw token.  Results are
- * evicted after at most the PSAT TTL (15 minutes).  Inactive results are never
- * cached so clock-skew and nbf windows are handled on the next retry.
+ * active results keyed on a SHA-256 digest of the raw token. Active results are
+ * evicted after min(token exp, 15 minutes). Inactive results, and active results
+ * that lack the token expiry or the workload binding, are never cached.
  */
 @Slf4j
 @Service
 public class WorkerTokenIntrospectionService {
 
-    private static final Duration CACHE_TTL = Duration.ofMinutes(14);
+    static final Duration CACHE_TTL = Duration.ofMinutes(15);
+    static final String ERROR_MISSING_BINDING = "introspection response missing binding";
+    private static final String DELEGATED_AUDIENCE_PREFIX = "nvcf-icms:";
 
     private final IcmsClient icmsClient;
     private final boolean enabled;
@@ -59,13 +66,12 @@ public class WorkerTokenIntrospectionService {
                     public long expireAfterCreate(
                             String key, IcmsStubService.WorkerTokenIntrospectResult value,
                             long currentTime) {
-                        if (value.getExp() != null) {
-                            long remainingMs =
-                                    value.getExp() * 1000L - Instant.now().toEpochMilli();
-                            long cappedMs = Math.max(0, Math.min(CACHE_TTL.toMillis(), remainingMs));
-                            return TimeUnit.MILLISECONDS.toNanos(cappedMs);
+                        if (value.getExp() == null) {
+                            return 0;
                         }
-                        return CACHE_TTL.toNanos();
+                        long remainingMs = value.getExp() * 1000L - Instant.now().toEpochMilli();
+                        long cappedMs = Math.max(0, Math.min(CACHE_TTL.toMillis(), remainingMs));
+                        return TimeUnit.MILLISECONDS.toNanos(cappedMs);
                     }
 
                     @Override
@@ -90,9 +96,33 @@ public class WorkerTokenIntrospectionService {
     }
 
     /**
-     * Introspects a worker token against ICMS.  Returns the result with
-     * {@code active=true} when the token is valid; {@code active=false} otherwise.
-     * Active results are cached; inactive results are not.
+     * Returns true when the bearer token has the shape of a delegated worker token: a
+     * compact JWS whose audience carries the cluster-scoped ICMS prefix. Legacy NVCF
+     * worker tokens are JWE blobs and never match. The signature is not verified here;
+     * ICMS verifies it during introspection.
+     */
+    public static boolean isDelegatedToken(String token) {
+        if (StringUtils.isBlank(token)) {
+            return false;
+        }
+        try {
+            var jwt = JWTParser.parse(token);
+            if (!(jwt instanceof SignedJWT)) {
+                return false;
+            }
+            List<String> audience = jwt.getJWTClaimsSet().getAudience();
+            return audience != null
+                    && audience.stream().anyMatch(a -> a.startsWith(DELEGATED_AUDIENCE_PREFIX));
+        } catch (ParseException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Introspects a worker token against ICMS. Returns the result with
+     * {@code active=true} only when ICMS accepted the token and returned its expiry
+     * and function binding; otherwise {@code active=false}. Only active results are
+     * cached.
      */
     public IcmsStubService.WorkerTokenIntrospectResult introspect(String rawToken) {
         var cacheKey = sha256Hex(rawToken);
@@ -106,9 +136,20 @@ public class WorkerTokenIntrospectionService {
         var result = icmsClient.introspectWorkerToken(
                 IcmsStubService.WorkerTokenIntrospectRequest.builder().token(rawToken).build());
 
-        if (result.isActive()) {
-            cache.put(cacheKey, result);
+        if (!result.isActive()) {
+            return result;
         }
+        if (result.getExp() == null
+                || StringUtils.isBlank(result.getFunctionId())
+                || StringUtils.isBlank(result.getFunctionVersionId())) {
+            log.warn("worker token introspection active but missing exp or function binding, "
+                             + "instance_id={}", result.getInstanceId());
+            return IcmsStubService.WorkerTokenIntrospectResult.builder()
+                    .active(false)
+                    .error(ERROR_MISSING_BINDING)
+                    .build();
+        }
+        cache.put(cacheKey, result);
         return result;
     }
 

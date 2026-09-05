@@ -116,7 +116,8 @@ public class GrpcWorkerService extends WorkerImplBase {
                 SPAN_TAG_INSTANCE_ID, request.getInstanceId()));
         var functionId = UUID.fromString(request.getFunctionId());
         var functionVersionId = UUID.fromString(request.getFunctionVersionId());
-        var workerToken = validateWorkerToken(functionId, functionVersionId);
+        var validated = validateWorkerToken(functionId, functionVersionId);
+        var workerToken = validated.token();
         NvcfUtils.addTagsToCurrentSpan(tracer, Map.of(
                 SPAN_TAG_ISSUED_AT, workerToken.issuedAt().toString()));
         var otherRegions =
@@ -138,15 +139,18 @@ public class GrpcWorkerService extends WorkerImplBase {
                             region, functionVersionId));
         }
 
-        // return response
-        responseObserver.onNext(WorkerConnectOnceResponse.newBuilder()
-                                        .setConnectedRegion(natsProperties.getRegion())
-                                        .addAllOtherRegions(otherRegions)
-                                        .setNvcfWorkerToken(grpcTokenService.issueToken(
-                                                functionId, functionVersionId,
-                                                TokenType.WORKER))
-                                        .setExpiration(toTimestamp(Instant.now().plus(VALIDITY)))
-                                        .build());
+        var response = WorkerConnectOnceResponse.newBuilder()
+                .setConnectedRegion(natsProperties.getRegion())
+                .addAllOtherRegions(otherRegions);
+        if (validated.delegated()) {
+            // The mounted PSAT stays the worker's credential; no NVCF-issued token replaces it.
+            response.setExpiration(toTimestamp(validated.expiresAt()));
+        } else {
+            response.setNvcfWorkerToken(grpcTokenService.issueToken(
+                            functionId, functionVersionId, TokenType.WORKER))
+                    .setExpiration(toTimestamp(Instant.now().plus(VALIDITY)));
+        }
+        responseObserver.onNext(response.build());
         responseObserver.onCompleted();
     }
 
@@ -238,32 +242,71 @@ public class GrpcWorkerService extends WorkerImplBase {
                 functionId, functionVersionId);
     }
 
-    private NvcfIssuedToken validateWorkerToken(UUID functionId, UUID functionVersionId) {
-        var token = getToken();
-        try {
+    /**
+     * A worker identity accepted for the requested function version.
+     *
+     * @param token     the function-bound identity; for delegated tokens it is built from the
+     *                  ICMS-resolved binding, never from the request
+     * @param delegated true when the worker authenticated with a mounted PSAT
+     * @param expiresAt expiry of the presented credential
+     */
+    record ValidatedWorker(NvcfIssuedToken token, boolean delegated, Instant expiresAt) {
+    }
+
+    private ValidatedWorker validateWorkerToken(UUID functionId, UUID functionVersionId) {
+        return validateWorkerToken(getToken(), functionId, functionVersionId);
+    }
+
+    /**
+     * Selects the legacy or delegated path by token shape. A legacy JWE that does not match the
+     * requested function is rejected outright and is never retried through introspection; a
+     * delegated PSAT is accepted only when ICMS reports it active and bound to exactly the
+     * requested function version.
+     */
+    ValidatedWorker validateWorkerToken(String token, UUID functionId, UUID functionVersionId) {
+        if (!WorkerTokenIntrospectionService.isDelegatedToken(token)) {
             var nvcfIssuedToken = grpcTokenService.validateToken(token, TokenType.WORKER);
             if (nvcfIssuedToken.functionId().equals(functionId)
                     && nvcfIssuedToken.functionVersionId().equals(functionVersionId)) {
-                return nvcfIssuedToken;
+                return new ValidatedWorker(nvcfIssuedToken, false,
+                                           nvcfIssuedToken.issuedAt().plus(VALIDITY));
             }
             throw new ForbiddenException("invalid worker token");
-        } catch (ForbiddenException e) {
-            if (!workerTokenIntrospectionService.isEnabled()) {
-                throw e;
-            }
-            // Delegated token path: the bearer token is a projected ServiceAccount Token (PSAT).
-            // ICMS verifies cluster OIDC and worker identity; active=true means authorized.
-            var result = workerTokenIntrospectionService.introspect(token);
-            if (!result.isActive()) {
-                log.warn("worker token introspection returned active=false: {}", result.getError());
-                throw new ForbiddenException("worker token not active");
-            }
-            log.debug("worker authorized via delegated token, instance_id={}", result.getInstanceId());
-            // Construct a synthetic token representing this worker's claimed function identity.
-            // The function lookup below independently verifies the function is active.
-            return new NvcfIssuedToken(functionId, functionVersionId, Instant.now(),
-                                       TokenType.WORKER);
         }
+
+        if (!workerTokenIntrospectionService.isEnabled()) {
+            throw new ForbiddenException("delegated worker tokens are not enabled");
+        }
+        var result = workerTokenIntrospectionService.introspect(token);
+        if (!result.isActive()) {
+            log.warn("worker token introspection returned active=false: {}", result.getError());
+            throw new ForbiddenException("worker token not active");
+        }
+        UUID boundFunctionId;
+        UUID boundFunctionVersionId;
+        try {
+            boundFunctionId = UUID.fromString(result.getFunctionId());
+            boundFunctionVersionId = UUID.fromString(result.getFunctionVersionId());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            log.warn("worker token introspection returned malformed binding, instance_id={}",
+                     result.getInstanceId());
+            throw new ForbiddenException("worker token not active");
+        }
+        if (!boundFunctionId.equals(functionId)
+                || !boundFunctionVersionId.equals(functionVersionId)) {
+            log.warn("delegated worker token bound to function {} version {} used for function {} "
+                             + "version {}, instance_id={}", boundFunctionId,
+                     boundFunctionVersionId, functionId, functionVersionId,
+                     result.getInstanceId());
+            throw new ForbiddenException("worker token not bound to requested workload");
+        }
+        log.debug("worker authorized via delegated token, instance_id={} cluster_id={}",
+                  result.getInstanceId(), result.getClientId());
+        var expiresAt = Instant.ofEpochSecond(result.getExp());
+        return new ValidatedWorker(
+                new NvcfIssuedToken(boundFunctionId, boundFunctionVersionId, Instant.now(),
+                                    TokenType.WORKER),
+                true, expiresAt);
     }
 
     private static String getToken() {
@@ -301,11 +344,21 @@ public class GrpcWorkerService extends WorkerImplBase {
     @Override
     public StreamObserver<RefreshAssetDownloadCredentialsRequest> refreshAssetDownloadCredentials(
             StreamObserver<RefreshAssetDownloadCredentialsResponse> responseObserver) {
-        var nvcfIssuedToken = grpcTokenService.validateToken(getToken(), TokenType.WORKER);
-        return new RefreshAssetDownloadCredentialsRequestStreamObserver(nvcfIssuedToken,
-                                                                        responseObserver,
-                                                                        workerNatsService,
-                                                                        workerUrlGeneratorService);
+        // The function binding arrives with the first streamed message, so capture the bearer
+        // token now (the security context is not available on the stream thread) and validate
+        // it against that binding on first use. Both legacy and delegated tokens take this path.
+        var token = getToken();
+        return new RefreshAssetDownloadCredentialsRequestStreamObserver(
+                (functionId, functionVersionId) ->
+                        validateWorkerToken(token, functionId, functionVersionId).token(),
+                responseObserver,
+                workerNatsService,
+                workerUrlGeneratorService);
+    }
+
+    @FunctionalInterface
+    interface WorkerTokenValidator {
+        NvcfIssuedToken validate(UUID functionId, UUID functionVersionId);
     }
 
     @RequiredArgsConstructor
@@ -313,7 +366,7 @@ public class GrpcWorkerService extends WorkerImplBase {
             StreamObserver<RefreshAssetDownloadCredentialsRequest> {
 
         private String ncaId;
-        private final NvcfIssuedToken nvcfIssuedToken;
+        private final WorkerTokenValidator tokenValidator;
         private final StreamObserver<RefreshAssetDownloadCredentialsResponse> responseObserver;
         private final WorkerNatsService workerNatsService;
         private final WorkerUrlGeneratorService workerUrlGeneratorService;
@@ -324,12 +377,7 @@ public class GrpcWorkerService extends WorkerImplBase {
                 var firstRequestId = UUID.fromString(request.getRequestId());
                 var functionId = UUID.fromString(request.getFunctionId());
                 var functionVersionId = UUID.fromString(request.getFunctionVersionId());
-                var requestId = UUID.fromString(request.getRequestId());
-                if (!nvcfIssuedToken.functionId().equals(functionId)
-                        || !nvcfIssuedToken.functionVersionId().equals(functionVersionId)
-                        || !firstRequestId.equals(requestId)) {
-                    throw new ForbiddenException("invalid worker token");
-                }
+                tokenValidator.validate(functionId, functionVersionId);
                 var invocationRequest = workerNatsService.lookupFunctionInvocationRequest(
                         UUID.fromString(request.getFunctionVersionId()), firstRequestId);
 

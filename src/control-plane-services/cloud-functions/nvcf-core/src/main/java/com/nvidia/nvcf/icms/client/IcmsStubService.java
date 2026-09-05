@@ -415,14 +415,28 @@ public interface IcmsStubService {
         @Nullable String sub;
         @Nullable String aud;
         @Nullable String iss;
+        /** RFC 7662 section 2.2: epoch-seconds at which the token expires. */
+        @Nullable Long exp;
+        /** Cluster id resolved by ICMS from the signed audience. */
+        @JsonProperty("client_id")
+        @Nullable String clientId;
         @JsonProperty("instance_id")
         @Nullable String instanceId;
         @JsonProperty("worker_id")
         @Nullable String workerId;
+        /** Workload binding resolved by ICMS from the instance's request record. */
+        @JsonProperty("request_id")
+        @Nullable String requestId;
+        @JsonProperty("function_id")
+        @Nullable String functionId;
+        @JsonProperty("function_version_id")
+        @Nullable String functionVersionId;
+        @JsonProperty("task_id")
+        @Nullable String taskId;
+        @JsonProperty("nca_id")
+        @Nullable String ncaId;
         @JsonProperty("token_type")
         @Nullable String tokenType;
-        /** RFC 7662 §2.2: epoch-seconds at which the token expires. Null when unknown. */
-        @Nullable Long exp;
         @Nullable String error;
     }
 

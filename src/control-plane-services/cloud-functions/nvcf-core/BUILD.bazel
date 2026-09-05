@@ -73,6 +73,7 @@ nvct_library(
         "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
         "@nv_third_party_deps//:com_google_guava_guava",
         "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
+        "@nv_third_party_deps//:com_nimbusds_nimbus_jose_jwt",
         "@nv_third_party_deps//:com_nimbusds_oauth2_oidc_sdk",
         "//src/libraries/java/nv-boot-parent/nv-boot-starter-audit:nv_boot_starter_audit",
         "//src/libraries/java/nv-boot-parent/nv-boot-starter-cassandra:nv_boot_starter_cassandra",
