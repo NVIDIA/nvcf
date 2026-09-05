@@ -208,14 +208,29 @@ nats:
       server_tags:
         - "dc:ncp"
         - "aws-region:ncp"
-      # Split-plane server TLS: workers reach NATS over an L4-passthrough LB, so
-      # TLS terminates at the server; allow_non_tls keeps in-cluster plaintext
-      # clients on :4222. Both default off.
+      # --- Split-plane server TLS (optional; both settings default off) ---
+      # Use case: when GPU workers run outside the cluster they reach NATS over
+      # an L4 (TCP) passthrough load balancer, so TLS must terminate at the NATS
+      # server itself -- an LB can't terminate it because the NATS client is
+      # INFO-first (the server speaks first) and a terminated handshake deadlocks.
+      # Set the two knobs below to serve TLS from NATS to those workers.
+      #
+      # Gotchas:
+      #   1. allow_non_tls is mixed-mode: the server then accepts BOTH TLS and
+      #      plaintext on :4222. Enable it only intentionally -- it lets in-cluster
+      #      plaintext clients keep connecting while remote workers use TLS. Leave
+      #      it off if every client can speak TLS.
+      #   2. Changing allow_non_tls (or the tls block) requires a NATS
+      #      restart/rollout to take effect.
+      #   3. The cert in secretName must have a SAN covering the exact hostname the
+      #      external workers connect to (the LB / public NATS hostname), and those
+      #      workers must trust the issuing CA and use a TLS-capable NATS client
+      #      config.
       # allow_non_tls: true
     # nats:
     #   tls:
     #     enabled: true
-    #     secretName: nats-server-tls   # cert-manager-issued
+    #     secretName: nats-server-tls   # cert-manager-issued; SAN = external NATS hostname
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
