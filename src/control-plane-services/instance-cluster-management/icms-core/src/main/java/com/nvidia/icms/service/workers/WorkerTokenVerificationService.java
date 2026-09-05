@@ -14,31 +14,49 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.nvidia.icms.service.workers;
 
+import com.nvidia.icms.configuration.security.AuthManagerResolver;
+import com.nvidia.icms.outbound.cassandra.instance.InstanceV2Repository;
+import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
+import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
+import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierRecord;
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierUdt;
 import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
+import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService.RejectReason;
+import com.nvidia.icms.util.AuthUtils;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import lombok.Builder;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 
 /**
- * Verification pipeline for worker-presented PSAT / SPIFFE tokens.
+ * Worker-token introspection core.
  *
- * <p>Delegates cluster JWKS resolution and signature verification to
- * {@link ClusterOIDCTokenVerificationService}, then applies worker-specific checks:
- * subject format validation, instance/worker-ID derivation, and identity-set
- * matching against the registration stored during instance status updates.</p>
+ * <ol>
+ *   <li>Cluster resolution from the signed audience and signature verification against that
+ *       cluster's JWKS, with the worker subject validator.</li>
+ *   <li>Identity match: PSAT tokens are resolved to an instance through the registered
+ *       ServiceAccount UID and must match the registered subject, namespace, SA UID, and one
+ *       registered pod (name and UID). SPIFFE tokens must equal a registered identifier and
+ *       carry the resolved cluster in their path.</li>
+ *   <li>Workload binding: the instance's request record, which must belong to the token's
+ *       cluster, supplies the request, function/version or task/NCA identifiers the relying
+ *       party binds the request to.</li>
+ * </ol>
  *
- * <p>Returns a discriminated {@link Outcome} rather than throwing so the
- * controller can map each failure mode to the correct HTTP status code.</p>
+ * <p>The raw JWT is the only worker-supplied identity assertion; nothing else from the caller
+ * influences the outcome.</p>
  */
 @Slf4j
 @Service
@@ -48,22 +66,17 @@ public class WorkerTokenVerificationService {
     public static final String TOKEN_TYPE_PSAT = "psat";
     public static final String TOKEN_TYPE_SPIFFE = "spiffe";
 
-    private static final String WORKER_SA_PREFIX = "nvcf-worker-";
     private static final Pattern SPIFFE_INSTANCE_WORKER =
-            Pattern.compile(".*/instance/([^/]+)/worker/([^/]+).*");
+            Pattern.compile("/instance/([^/]+)/worker/([^/]+)");
 
     private final ClusterOIDCTokenVerificationService nvcaTokenVerificationService;
     private final WorkerIdentifierService workerIdentifierService;
+    private final InstanceV2Repository instanceV2Repository;
+    private final InstanceRequestV2Repository instanceRequestV2Repository;
 
-    /**
-     * Verify a raw worker JWT (no {@code Bearer } prefix).
-     *
-     * @param token compact-serialized JWT
-     * @return verification outcome
-     */
     public Outcome verify(String token) {
-        // Step 1: cluster JWKS resolution + signature verify (also covers size + audience checks)
-        ClusterOIDCTokenVerificationService.Outcome base = nvcaTokenVerificationService.verify(token);
+        ClusterOIDCTokenVerificationService.Outcome base = nvcaTokenVerificationService.verify(
+                token, AuthManagerResolver.workerSubjectValidator());
         if (!base.isActive()) {
             return Outcome.reject(base.getReason(), base.getErrorMessage());
         }
@@ -72,112 +85,141 @@ public class WorkerTokenVerificationService {
         String clusterId = base.getClusterId();
         String sub = jwt.getSubject();
 
-        // Step 2: discriminate token type and derive instance/worker IDs
-        if (sub != null && sub.startsWith("system:serviceaccount:")) {
+        if (sub != null && sub.startsWith(AuthUtils.PSAT_SUBJECT_PREFIX)) {
             return verifyPsat(jwt, clusterId, sub);
         } else if (sub != null && sub.startsWith("spiffe://")) {
             return verifySpiffe(jwt, clusterId, sub);
-        } else {
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "unrecognized subject format");
         }
+        return Outcome.reject(RejectReason.SIGNATURE_INVALID, "unrecognized subject format");
     }
 
     @SuppressWarnings("unchecked")
     private Outcome verifyPsat(Jwt jwt, String clusterId, String sub) {
-        // Derive instance ID from ServiceAccount name embedded in sub
-        // sub format: system:serviceaccount:<namespace>:<saName>
-        int lastColon = sub.lastIndexOf(':');
-        if (lastColon < 0) {
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "malformed SAT subject");
-        }
-        String saName = sub.substring(lastColon + 1);
-        if (!saName.startsWith(WORKER_SA_PREFIX)) {
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "sub does not match worker SA pattern");
-        }
-        String instanceId = saName.substring(WORKER_SA_PREFIX.length());
-
-        // Extract pod name and UID from the kubernetes.io claim
-        Map<String, Object> k8sClaim = (Map<String, Object>) jwt.getClaims().get("kubernetes.io");
-        Map<String, Object> podClaim = k8sClaim != null
-                ? (Map<String, Object>) k8sClaim.get("pod") : null;
-        String podName = podClaim != null ? (String) podClaim.get("name") : null;
-        String podUid = podClaim != null ? (String) podClaim.get("uid") : null;
-        if (podName == null || podUid == null) {
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "kubernetes.io pod claims missing");
+        String namespace = AuthUtils.workerSubjectNamespace(sub);
+        if (namespace == null) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "sub is not a worker ServiceAccount");
         }
 
-        // Step 3: look up registered worker-identity set
+        Map<String, Object> k8sClaim = asMap(jwt.getClaims().get("kubernetes.io"));
+        Map<String, Object> podClaim = k8sClaim != null ? asMap(k8sClaim.get("pod")) : null;
+        Map<String, Object> saClaim = k8sClaim != null ? asMap(k8sClaim.get("serviceaccount")) : null;
+        String claimNamespace = k8sClaim != null ? asString(k8sClaim.get("namespace")) : null;
+        String podName = podClaim != null ? asString(podClaim.get("name")) : null;
+        String podUid = podClaim != null ? asString(podClaim.get("uid")) : null;
+        String saName = saClaim != null ? asString(saClaim.get("name")) : null;
+        String saUid = saClaim != null ? asString(saClaim.get("uid")) : null;
+        if (claimNamespace == null || podName == null || podUid == null || saName == null || saUid == null) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "kubernetes.io claims missing");
+        }
+        if (!AuthUtils.WORKER_SA_NAME.equals(saName) || !namespace.equals(claimNamespace)) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "kubernetes.io claims do not match sub");
+        }
+
         Optional<WorkerIdentifierRecord> record =
-                workerIdentifierService.findWorkerIdentifiers(clusterId, instanceId);
+                workerIdentifierService.findWorkerIdentifiersBySaUid(clusterId, saUid);
         if (record.isEmpty()) {
-            log.debug("No worker identifiers registered for cluster={} instance={}",
-                    clusterId, instanceId);
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "no worker identifiers registered for instance");
+            log.debug("No worker identifiers registered for cluster={} saUid", clusterId);
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "no worker identifiers registered");
         }
-
         WorkerIdentifierRecord reg = record.get();
+        String instanceId = reg.getKey().getInstanceId();
 
-        // Subject must match the registered sub
-        if (!sub.equals(reg.getSub())) {
-            log.debug("SAT sub mismatch for cluster={} instance={}", clusterId, instanceId);
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "worker identity not in registered set");
-        }
-
-        // Pod name + UID must match at least one registered identifier
+        boolean identityMatches = sub.equals(reg.getSub())
+                && namespace.equals(reg.getNamespace())
+                && saUid.equals(reg.getSaUid());
         List<WorkerIdentifierUdt> identifiers = reg.getIdentifiers();
-        boolean matched = identifiers != null && identifiers.stream()
+        boolean podMatches = identifiers != null && identifiers.stream()
                 .anyMatch(wi -> podName.equals(wi.getName()) && podUid.equals(wi.getUid()));
-        if (!matched) {
-            log.debug("SAT pod identity mismatch for cluster={} instance={}", clusterId, instanceId);
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "worker identity not in registered set");
+        if (!identityMatches || !podMatches) {
+            log.debug("Worker identity mismatch for cluster={} instance={}", clusterId, instanceId);
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "worker identity not in registered set");
         }
 
-        String aud = firstAudience(jwt);
-        return Outcome.active(jwt, clusterId, instanceId, podName, TOKEN_TYPE_PSAT, aud);
+        return resolveBinding(jwt, clusterId, instanceId, podName, TOKEN_TYPE_PSAT);
     }
 
     private Outcome verifySpiffe(Jwt jwt, String clusterId, String sub) {
-        // Derive instance ID and worker ID from SPIFFE ID path
         Matcher m = SPIFFE_INSTANCE_WORKER.matcher(sub);
-        if (!m.matches()) {
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+        if (!m.find()) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID,
                     "SPIFFE ID does not contain /instance/{id}/worker/{wid}");
         }
         String instanceId = m.group(1);
         String workerId = m.group(2);
+        if (!sub.contains("/cluster/" + clusterId + "/")) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "SPIFFE ID cluster does not match audience");
+        }
 
-        // Look up registered worker-identity set
         Optional<WorkerIdentifierRecord> record =
                 workerIdentifierService.findWorkerIdentifiers(clusterId, instanceId);
         if (record.isEmpty()) {
-            log.debug("No worker identifiers registered for cluster={} instance={}",
-                    clusterId, instanceId);
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "no worker identifiers registered for instance");
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "no worker identifiers registered");
         }
-
-        WorkerIdentifierRecord reg = record.get();
-
-        // SPIFFE sub must appear as the name of at least one registered identifier
-        List<WorkerIdentifierUdt> identifiers = reg.getIdentifiers();
+        List<WorkerIdentifierUdt> identifiers = record.get().getIdentifiers();
         boolean matched = identifiers != null && identifiers.stream()
                 .anyMatch(wi -> sub.equals(wi.getName()));
         if (!matched) {
-            log.debug("SPIFFE identity not in registered set for cluster={} instance={}",
-                    clusterId, instanceId);
-            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                    "worker identity not in registered set");
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "worker identity not in registered set");
         }
 
-        String aud = firstAudience(jwt);
-        return Outcome.active(jwt, clusterId, instanceId, workerId, TOKEN_TYPE_SPIFFE, aud);
+        return resolveBinding(jwt, clusterId, instanceId, workerId, TOKEN_TYPE_SPIFFE);
+    }
+
+    /**
+     * The instance must exist, be placed on the token's cluster, and belong to a request; the
+     * request supplies the workload binding. Any gap rejects the token.
+     */
+    private Outcome resolveBinding(Jwt jwt, String clusterId, String instanceId,
+            String workerId, String tokenType) {
+        Optional<InstanceV2Entity> instance = instanceV2Repository.findInstanceById(instanceId);
+        if (instance.isEmpty() || instance.get().getRequestId() == null) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "registered instance not found");
+        }
+        if (!clusterId.equals(instance.get().getZone())) {
+            log.warn("Worker identity for instance={} registered by cluster={} but instance is on zone={}",
+                    instanceId, clusterId, instance.get().getZone());
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "instance not placed on token cluster");
+        }
+        Optional<InstanceRequestV2Entity> request =
+                instanceRequestV2Repository.findRequestById(instance.get().getRequestId());
+        if (request.isEmpty()) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "request for instance not found");
+        }
+        InstanceRequestV2Entity req = request.get();
+        if (req.getFunctionId() == null && req.getTaskId() == null) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "request carries no workload binding");
+        }
+        if (jwt.getExpiresAt() == null) {
+            return Outcome.reject(RejectReason.SIGNATURE_INVALID, "token has no expiry");
+        }
+
+        return Outcome.builder()
+                .jwt(jwt)
+                .clusterId(clusterId)
+                .instanceId(instanceId)
+                .workerId(workerId)
+                .tokenType(tokenType)
+                .audience(firstAudience(jwt))
+                .exp(jwt.getExpiresAt().getEpochSecond())
+                .requestId(req.getRequestId())
+                .functionId(uuidToString(req.getFunctionId()))
+                .functionVersionId(uuidToString(req.getFunctionVersionId()))
+                .taskId(uuidToString(req.getTaskId()))
+                .ncaId(req.getNcaId())
+                .build();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object o) {
+        return o instanceof Map<?, ?> m ? (Map<String, Object>) m : null;
+    }
+
+    private static String asString(Object o) {
+        return o instanceof String s && !s.isBlank() ? s : null;
+    }
+
+    private static String uuidToString(UUID id) {
+        return id != null ? id.toString() : null;
     }
 
     private static String firstAudience(Jwt jwt) {
@@ -185,7 +227,9 @@ public class WorkerTokenVerificationService {
         return (audiences != null && !audiences.isEmpty()) ? audiences.get(0) : null;
     }
 
-    /** Result of {@link #verify(String)}. */
+    /** Exactly one of {@code jwt} (active) or {@code reason} (rejected) is set. */
+    @Getter
+    @Builder
     public static final class Outcome {
         private final Jwt jwt;
         private final String clusterId;
@@ -193,40 +237,21 @@ public class WorkerTokenVerificationService {
         private final String workerId;
         private final String tokenType;
         private final String audience;
-        private final ClusterOIDCTokenVerificationService.RejectReason reason;
+        private final Long exp;
+        private final String requestId;
+        private final String functionId;
+        private final String functionVersionId;
+        private final String taskId;
+        private final String ncaId;
+        private final RejectReason reason;
         private final String errorMessage;
 
-        private Outcome(Jwt jwt, String clusterId, String instanceId, String workerId,
-                String tokenType, String audience,
-                ClusterOIDCTokenVerificationService.RejectReason reason, String errorMessage) {
-            this.jwt = jwt;
-            this.clusterId = clusterId;
-            this.instanceId = instanceId;
-            this.workerId = workerId;
-            this.tokenType = tokenType;
-            this.audience = audience;
-            this.reason = reason;
-            this.errorMessage = errorMessage;
+        public static Outcome reject(RejectReason reason, String message) {
+            return Outcome.builder().reason(reason).errorMessage(message).build();
         }
 
-        public static Outcome active(Jwt jwt, String clusterId, String instanceId, String workerId,
-                String tokenType, String audience) {
-            return new Outcome(jwt, clusterId, instanceId, workerId, tokenType, audience,
-                    null, null);
+        public boolean isActive() {
+            return jwt != null;
         }
-
-        public static Outcome reject(ClusterOIDCTokenVerificationService.RejectReason reason, String message) {
-            return new Outcome(null, null, null, null, null, null, reason, message);
-        }
-
-        public boolean isActive() { return jwt != null; }
-        public Jwt getJwt() { return jwt; }
-        public String getClusterId() { return clusterId; }
-        public String getInstanceId() { return instanceId; }
-        public String getWorkerId() { return workerId; }
-        public String getTokenType() { return tokenType; }
-        public String getAudience() { return audience; }
-        public ClusterOIDCTokenVerificationService.RejectReason getReason() { return reason; }
-        public String getErrorMessage() { return errorMessage; }
     }
 }

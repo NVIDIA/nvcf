@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.stereotype.Service;
@@ -46,6 +47,15 @@ public class ClusterOIDCTokenVerificationService {
      * @return verification outcome (see {@link Outcome})
      */
     public Outcome verify(String token) {
+        return verify(token, AuthManagerResolver.nvcaSubjectValidator());
+    }
+
+    /**
+     * Verify a raw JWT with a caller-chosen subject validator (worker tokens use
+     * {@link AuthManagerResolver#workerSubjectValidator()}); signature, timestamp and
+     * audience checks are identical to {@link #verify(String)}.
+     */
+    public Outcome verify(String token, OAuth2TokenValidator<Jwt> subjectValidator) {
         if (token == null || token.isBlank()) {
             return Outcome.reject(RejectReason.MISSING_TOKEN, "token is required");
         }
@@ -74,7 +84,8 @@ public class ClusterOIDCTokenVerificationService {
         }
 
         try {
-            JwtDecoder decoder = authManagerResolver.buildJwtDecoderFromJwks(cluster.get().getJwks());
+            JwtDecoder decoder = authManagerResolver.buildJwtDecoderFromJwks(
+                    cluster.get().getJwks(), subjectValidator);
             Jwt jwt = decoder.decode(token);
             return Outcome.active(jwt, clusterIdFromAud);
         } catch (Exception e) {

@@ -65,6 +65,7 @@ import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.PreConditionFailedException;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.errors.IcmsConflictException;
+import com.nvidia.icms.errors.IcmsForbiddenException;
 import com.nvidia.icms.errors.IcmsNotFoundException;
 import com.nvidia.icms.inbound.rest.model.ClientRequestDataModel;
 import com.nvidia.icms.inbound.rest.model.CloudProvider;
@@ -97,6 +98,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.junit.jupiter.api.AfterEach;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Assertions;
@@ -2179,6 +2183,140 @@ class InstanceUpdateServiceTest {
         instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
                 DUMMY_CLUSTER_ID, auditProps);
 
+        verifyNoInteractions(workerIdentifierService);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private static void authenticateAsCluster() {
+        var auth = new TestingAuthenticationToken("cluster", "n/a", "nvca-cluster");
+        auth.setAuthenticated(true);
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private static WorkerAuth validWorkerAuth() {
+        return WorkerAuth.builder()
+                .sub("system:serviceaccount:inst-ns:nvcf-worker")
+                .namespace("inst-ns")
+                .saUid("7c1f0b2a-9d4e-4a8c-bb21-0f3e5d6a1c22")
+                .workerIdentifiers(List.of(WorkerIdentifier.builder()
+                        .name("utils").uid("f1e2d3c4-5b6a-7980-1234-aabbccddeeff").build()))
+                .build();
+    }
+
+    @Test
+    void handleWorkerAuth_rejectedUpdate_doesNotStoreIdentifiers() {
+        var request = getInstanceUpdateRequestForActiveInstance(RUNNING);
+        request.setWorkerAuth(validWorkerAuth());
+
+        // OPEN request that is no longer PENDING_FULFILLMENT -> PreConditionFailed
+        doReturn(Optional.of(getInstanceRequestV2Entity(SpotInstanceRequestState.OPEN,
+                SpotRequestStatusCode.FULFILLED)))
+                .when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+
+        assertThrows(PreConditionFailedException.class, () ->
+                instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                        DUMMY_CLUSTER_ID, auditProps));
+
+        verifyNoInteractions(workerIdentifierService);
+    }
+
+    @Test
+    void ownership_clusterPrincipalUpdatingInstanceOnOtherCluster_isForbidden() {
+        authenticateAsCluster();
+        var request = getInstanceUpdateRequestForTerminatedState();
+
+        doReturn(Optional.of(getInstanceRequestV2Entity(SpotInstanceRequestState.ACTIVE,
+                SpotRequestStatusCode.FULFILLED)))
+                .when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+        // Existing instance is placed on DUMMY_ZONE, the caller is DUMMY_CLUSTER_ID.
+        when(instanceV2Repository.findInstanceByCustomerAndId(DUMMY_CUSTOMER_1, DUMMY_INSTANCE_ID))
+                .thenReturn(Optional.of(getInstanceEntityForRunningInstance()));
+
+        assertThrows(IcmsForbiddenException.class, () ->
+                instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                        DUMMY_CLUSTER_ID, auditProps));
+
+        verify(instanceV2Repository, times(0)).update(any());
+        verifyNoInteractions(workerIdentifierService);
+    }
+
+    @Test
+    void ownership_clusterPrincipalUpdatingInstanceOfOtherRequest_isForbidden() {
+        authenticateAsCluster();
+        var request = getInstanceUpdateRequestForTerminatedState();
+        var instance = getInstanceEntityForRunningInstance();
+        instance.setZone(DUMMY_CLUSTER_ID);
+        instance.setRequestId("some-other-request");
+
+        doReturn(Optional.of(getInstanceRequestV2Entity(SpotInstanceRequestState.ACTIVE,
+                SpotRequestStatusCode.FULFILLED)))
+                .when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+        when(instanceV2Repository.findInstanceByCustomerAndId(DUMMY_CUSTOMER_1, DUMMY_INSTANCE_ID))
+                .thenReturn(Optional.of(instance));
+
+        assertThrows(IcmsForbiddenException.class, () ->
+                instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                        DUMMY_CLUSTER_ID, auditProps));
+        verifyNoInteractions(workerIdentifierService);
+    }
+
+    @Test
+    void ownership_clusterPrincipalUpdatingOwnInstance_isAccepted() {
+        authenticateAsCluster();
+        var request = getInstanceUpdateRequestForTerminatedState();
+        var instance = getInstanceEntityForRunningInstance();
+        instance.setZone(DUMMY_CLUSTER_ID);
+
+        doReturn(Optional.of(getInstanceRequestV2Entity(SpotInstanceRequestState.OPEN,
+                SpotRequestStatusCode.PENDING_FULFILLMENT)))
+                .when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+        when(instanceV2Repository.findInstanceByCustomerAndId(DUMMY_CUSTOMER_1, DUMMY_INSTANCE_ID))
+                .thenReturn(Optional.of(instance));
+        doNothing().when(instanceV2Repository).update(any());
+        when(instanceServiceHelper.getLaunchSpecificationForTelemetry(any()))
+                .thenReturn(getDummyClientRequestModel().getLaunchSpecification());
+
+        instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                DUMMY_CLUSTER_ID, auditProps);
+
+        verify(workerIdentifierService).deleteWorkerIdentifiers(DUMMY_CLUSTER_ID, DUMMY_INSTANCE_ID);
+    }
+
+    @Test
+    void ownership_clusterPrincipalRegisteringInstanceForRequestTargetedElsewhere_isForbidden() {
+        authenticateAsCluster();
+        var request = getInstanceUpdateRequestForActiveInstance(RUNNING);
+        request.setWorkerAuth(validWorkerAuth());
+        var entity = getInstanceRequestV2Entity(SpotInstanceRequestState.OPEN,
+                SpotRequestStatusCode.PENDING_FULFILLMENT);
+        entity.setClusters(Set.of("some-other-cluster"));
+
+        doReturn(Optional.of(entity)).when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+        when(instanceV2Repository.findInstanceByCustomerAndId(DUMMY_CUSTOMER_1, DUMMY_INSTANCE_ID))
+                .thenReturn(Optional.empty());
+
+        assertThrows(IcmsForbiddenException.class, () ->
+                instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                        DUMMY_CLUSTER_ID, auditProps));
         verifyNoInteractions(workerIdentifierService);
     }
 }

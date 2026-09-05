@@ -39,6 +39,7 @@ import com.nvidia.icms.util.audit.AuditUtils;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -74,6 +75,8 @@ public class TerminateInstanceService {
     private final InstanceServiceHelper instanceServiceHelper;
 
     private final ComputePlatformService computePlatformService;
+
+    private final WorkerIdentifierService workerIdentifierService;
 
     @Observed
     public TerminateInstancesResponse terminateInstances(
@@ -480,6 +483,7 @@ public class TerminateInstanceService {
         sendAuditEvents(auditProps, entitiesBefore, entitiesAfter);
         // Sending event for terminating an instance request.
         sendRequestStateChangeEvent(instanceRequestEntitySet, customer, resourceProvider);
+        requestIdsForTermination.forEach(workerIdentifierService::deleteForRequestQuietly);
     }
 
     public void updateRequestStateToClosedFromAsyncTerminateTask(
@@ -506,6 +510,7 @@ public class TerminateInstanceService {
 
         // Sending event for terminating an instance request.
         sendRequestStateChangeEventForAsyncTerminateTask(instanceRequestEntity);
+        workerIdentifierService.deleteForRequestQuietly(instanceRequestEntity.getRequestId());
     }
 
     private void sendAuditEvents(

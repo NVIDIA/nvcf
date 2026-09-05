@@ -40,7 +40,9 @@ import static com.nvidia.icms.util.audit.AuditUtils.populateAuditValuesForTermin
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.PreConditionFailedException;
 import com.nvidia.icms.errors.IcmsBadRequestException;
+import com.nvidia.icms.errors.IcmsForbiddenException;
 import com.nvidia.icms.errors.IcmsNotFoundException;
+import com.nvidia.icms.util.AuthUtils;
 import com.nvidia.icms.inbound.rest.model.ClientRequestDataModel;
 import com.nvidia.icms.inbound.rest.model.CloudProvider;
 import com.nvidia.icms.inbound.rest.model.ResourceProvider;
@@ -124,7 +126,8 @@ public class InstanceUpdateService {
      We will not log the healthInfo which contains error logs from container
      */
     /**
-     * Store or remove the worker-identifier set for an instance.
+     * Store or remove the worker-identifier set for an instance. Called only after the status
+     * update itself has been accepted, so a rejected update never changes worker identity state.
      * On terminal status: always clean up (even if workerAuth is absent).
      * On non-terminal status: store only if workerAuth is present; no-op otherwise.
      */
@@ -135,6 +138,41 @@ public class InstanceUpdateService {
         } else if (request.getWorkerAuth() != null) {
             workerIdentifierService.storeWorkerIdentifiers(clientId, instanceId,
                     request.getWorkerAuth());
+        }
+    }
+
+    /**
+     * A compute cluster may only report on instances it owns. {@code instanceId} and
+     * {@code instanceRequestId} are caller-supplied path variables, so for cluster principals
+     * (NVCA over cluster OIDC/PSAT or a cluster API key) the instance, when it already exists,
+     * must belong to the addressed request and be placed on the caller's cluster; a not yet
+     * registered instance is accepted only when the request targets the caller's cluster.
+     * Control-plane service identities (managed NVCF) are not subject to this check.
+     */
+    void assertCallerOwnsInstance(String clientId, String clusterName,
+            InstanceRequestV2Entity request, String instanceId) {
+        if (!AuthUtils.isClusterPrincipal()) {
+            return;
+        }
+        Optional<InstanceV2Entity> instance =
+                instanceV2Repository.findInstanceByCustomerAndId(request.getCustomer(), instanceId);
+        if (instance.isPresent()) {
+            InstanceV2Entity existing = instance.get();
+            if (!request.getRequestId().equals(existing.getRequestId())
+                    || !clientId.equals(existing.getZone())) {
+                log.warn("Cluster {} attempted to update instance {} of request {} (zone={}, request={})",
+                        clientId, instanceId, request.getRequestId(), existing.getZone(),
+                        existing.getRequestId());
+                throw new IcmsForbiddenException("instance is not owned by the calling cluster");
+            }
+            return;
+        }
+        Set<String> targets = request.getClusters();
+        if (targets != null && !targets.isEmpty()
+                && !targets.contains(clientId) && !targets.contains(clusterName)) {
+            log.warn("Cluster {} attempted to register instance {} for request {} targeted at {}",
+                    clientId, instanceId, request.getRequestId(), targets);
+            throw new IcmsForbiddenException("request is not targeted at the calling cluster");
         }
     }
 
@@ -210,24 +248,28 @@ public class InstanceUpdateService {
                 instanceRequestId).orElseThrow(() -> new IcmsNotFoundException(
                 "Cannot find request with id " + instanceRequestId));
 
-        // Register or clean up worker identifiers for self-hosted clusters.
-        // Must run before the early return on terminal status so cleanup is not skipped.
-        handleWorkerAuth(instanceStatusUpdateRequest, instanceId, clientId);
+        // Cluster principals may only address instances of requests placed on their cluster.
+        assertCallerOwnsInstance(clientId, clusterName, instanceRequestEntity, instanceId);
 
         // Handling terminated state update irrespective of request state
         if (isInstanceTerminated(instanceStatusUpdateRequest.getStatus())) {
             handleInstanceTerminationUpdate(instanceStatusUpdateRequest, instanceId, auditProps,
                     instanceRequestEntity, cloudProvider, resourceProvider,
                     clusterName);
+            // Only an accepted terminal update drops the worker identity set.
+            handleWorkerAuth(instanceStatusUpdateRequest, instanceId, clientId);
             return;
         }
 
         switch (instanceRequestEntity.getState()) {
-            case OPEN, ACTIVE ->
-                    handelInstanceUpdateForOpenOrActiveRequest(instanceRequestEntity, instanceId,
-                            instanceStatusUpdateRequest,
-                            auditProps, cloudProvider,
-                            resourceProvider, clusterName);
+            case OPEN, ACTIVE -> {
+                handelInstanceUpdateForOpenOrActiveRequest(instanceRequestEntity, instanceId,
+                        instanceStatusUpdateRequest,
+                        auditProps, cloudProvider,
+                        resourceProvider, clusterName);
+                // Only an accepted update registers worker identities.
+                handleWorkerAuth(instanceStatusUpdateRequest, instanceId, clientId);
+            }
             case CLOSED -> handelInstanceUpdateForClosedRequest(instanceRequestEntity, instanceId,
                                                                 instanceStatusUpdateRequest, cloudProvider);
             default -> {

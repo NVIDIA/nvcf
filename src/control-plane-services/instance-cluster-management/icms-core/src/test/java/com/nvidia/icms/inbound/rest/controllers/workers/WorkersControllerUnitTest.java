@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.nvidia.icms.inbound.rest.controllers.workers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -21,6 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
@@ -28,173 +32,196 @@ import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectRequest;
 import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectResponse;
 import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
 import com.nvidia.icms.service.workers.WorkerTokenVerificationService;
+import java.lang.reflect.Method;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 
 @ExtendWith(MockitoExtension.class)
 class WorkersControllerUnitTest {
 
+    private static final String CLUSTER_ID = "cl-abc123";
+    private static final String INSTANCE_ID = "inst-789";
+    private static final String AUD = "nvcf-icms:" + CLUSTER_ID;
+    private static final String SUB = "system:serviceaccount:inst-789:nvcf-worker";
+
     @Mock
     private WorkerTokenVerificationService workerTokenVerificationService;
 
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    @Test
+    void introspectEndpoint_requiresIntrospectAuthority() throws Exception {
+        Method m = WorkersController.class.getMethod("introspectWorkerToken",
+                WorkerTokenIntrospectRequest.class);
+        PreAuthorize pre = m.getAnnotation(PreAuthorize.class);
+
+        assertNotNull(pre, "introspect endpoint must be guarded by @PreAuthorize");
+        assertTrue(pre.value().contains(WorkersController.INTROSPECT_AUTHORITY));
+    }
+
     @Test
     void introspectWorkerToken_featureFlagDisabled_returns200WithActiveFalse() {
-        WorkersController controller = controllerWithOidcEnabled(false);
+        WorkersController controller = controller(false, 600);
 
-        var request = tokenRequest("any.token.value");
         ResponseEntity<WorkerTokenIntrospectResponse> response =
-                controller.introspectWorkerToken(request);
+                controller.introspectWorkerToken(tokenRequest("any.token.value"));
 
         assertEquals(200, response.getStatusCode().value());
         assertNotNull(response.getBody());
         assertFalse(response.getBody().isActive());
         assertEquals("JWT verification failed", response.getBody().getError());
+        verify(workerTokenVerificationService, never()).verify(any());
     }
 
     @Test
-    void introspectWorkerToken_tokenTooLarge_returns200WithActiveFalse() {
-        WorkersController controller = controllerWithOidcEnabled(true);
-        var request = tokenRequest("tok");
+    void introspectWorkerToken_rejected_returns200WithGenericError() {
+        WorkersController controller = controller(true, 600);
+        when(workerTokenVerificationService.verify("bad.token.value"))
+                .thenReturn(WorkerTokenVerificationService.Outcome.reject(
+                        ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+                        "worker identity not in registered set"));
 
-        when(workerTokenVerificationService.verify("tok"))
-                .thenReturn(rejectedOutcome(
-                        ClusterOIDCTokenVerificationService.RejectReason.TOKEN_TOO_LARGE,
-                        "JWT exceeds 2048 byte limit"));
-
-        var response = controller.introspectWorkerToken(request);
+        var response = controller.introspectWorkerToken(tokenRequest("bad.token.value"));
 
         assertEquals(200, response.getStatusCode().value());
         var body = response.getBody();
         assertNotNull(body);
         assertFalse(body.isActive());
         assertEquals("JWT verification failed", body.getError());
+        assertNull(body.getFunctionId());
     }
 
     @Test
-    void introspectWorkerToken_unknownCluster_returns200WithActiveFalse() {
-        WorkersController controller = controllerWithOidcEnabled(true);
-        var request = tokenRequest("tok");
-
-        when(workerTokenVerificationService.verify("tok"))
-                .thenReturn(rejectedOutcome(
-                        ClusterOIDCTokenVerificationService.RejectReason.UNKNOWN_CLUSTER,
-                        "No cluster found for the provided audience"));
-
-        var response = controller.introspectWorkerToken(request);
-
-        assertEquals(200, response.getStatusCode().value());
-        var body = response.getBody();
-        assertFalse(body.isActive());
-        assertEquals("JWT verification failed", body.getError());
-    }
-
-    @Test
-    void introspectWorkerToken_signatureInvalid_returns200WithActiveFalse() {
-        WorkersController controller = controllerWithOidcEnabled(true);
-        var request = tokenRequest("bad.token.value");
-
-        // Service may return a detailed message; controller must coarsen it.
-        when(workerTokenVerificationService.verify("bad.token.value"))
-                .thenReturn(rejectedOutcome(
-                        ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                        "worker identity not in registered set"));
-
-        var response = controller.introspectWorkerToken(request);
-
-        assertEquals(200, response.getStatusCode().value());
-        var body = response.getBody();
-        assertFalse(body.isActive());
-        assertEquals("JWT verification failed", body.getError());
-    }
-
-    @Test
-    void introspectWorkerToken_validPsatToken_returns200WithActiveTrue() {
-        WorkersController controller = controllerWithOidcEnabled(true);
-        var request = tokenRequest("valid.psat.token");
-        String clusterId = "cl-abc123";
-        String instanceId = "inst-789";
-        String workerId = "nvcf-worker-inst-789-0";
-        String aud = "nvcf-icms:" + clusterId;
-
-        Jwt jwt = buildJwt("system:serviceaccount:nvcf-backend:nvcf-worker-inst-789",
-                "https://kubernetes.default.svc", aud);
-
-        WorkerTokenVerificationService.Outcome activeOutcome =
-                WorkerTokenVerificationService.Outcome.active(
-                        jwt, clusterId, instanceId, workerId,
-                        WorkerTokenVerificationService.TOKEN_TYPE_PSAT, aud);
-
+    void introspectWorkerToken_activePsat_returnsIdentityAndBinding() {
+        WorkersController controller = controller(true, 600);
+        Jwt jwt = buildJwt(SUB, "https://kubernetes.default.svc", AUD);
         when(workerTokenVerificationService.verify("valid.psat.token"))
-                .thenReturn(activeOutcome);
+                .thenReturn(WorkerTokenVerificationService.Outcome.builder()
+                        .jwt(jwt)
+                        .clusterId(CLUSTER_ID)
+                        .instanceId(INSTANCE_ID)
+                        .workerId("utils")
+                        .tokenType(WorkerTokenVerificationService.TOKEN_TYPE_PSAT)
+                        .audience(AUD)
+                        .exp(jwt.getExpiresAt().getEpochSecond())
+                        .requestId("sr-1")
+                        .functionId("f-1")
+                        .functionVersionId("v-1")
+                        .ncaId("nca-1")
+                        .build());
 
-        var response = controller.introspectWorkerToken(request);
+        var response = controller.introspectWorkerToken(tokenRequest("valid.psat.token"));
 
         assertEquals(200, response.getStatusCode().value());
         var body = response.getBody();
         assertNotNull(body);
         assertTrue(body.isActive());
-        assertEquals("system:serviceaccount:nvcf-backend:nvcf-worker-inst-789", body.getSub());
-        assertEquals(aud, body.getAud());
+        assertEquals(SUB, body.getSub());
+        assertEquals(AUD, body.getAud());
         assertEquals("https://kubernetes.default.svc", body.getIss());
-        assertEquals(clusterId, body.getClientId());
-        assertEquals(instanceId, body.getInstanceId());
-        assertEquals(workerId, body.getWorkerId());
+        assertEquals(jwt.getExpiresAt().getEpochSecond(), body.getExp());
+        assertEquals(CLUSTER_ID, body.getClientId());
+        assertEquals(INSTANCE_ID, body.getInstanceId());
+        assertEquals("utils", body.getWorkerId());
+        assertEquals("sr-1", body.getRequestId());
+        assertEquals("f-1", body.getFunctionId());
+        assertEquals("v-1", body.getFunctionVersionId());
+        assertNull(body.getTaskId());
+        assertEquals("nca-1", body.getNcaId());
         assertEquals("psat", body.getTokenType());
         assertNull(body.getError());
     }
 
     @Test
-    void introspectWorkerToken_validSpiffeToken_returns200WithActiveTrue() {
-        WorkersController controller = controllerWithOidcEnabled(true);
-        var request = tokenRequest("valid.spiffe.token");
-        String clusterId = "cl-abc123";
-        String instanceId = "inst-789";
-        String workerId = "baa15c75-0000-0000-0000-000000000001";
-        String aud = "nvcf-icms:" + clusterId;
-        String sub = "spiffe://domain/cluster/c1/instance/" + instanceId + "/worker/" + workerId;
-
-        Jwt jwt = buildJwt(sub, null, aud);
-
-        WorkerTokenVerificationService.Outcome activeOutcome =
-                WorkerTokenVerificationService.Outcome.active(
-                        jwt, clusterId, instanceId, workerId,
-                        WorkerTokenVerificationService.TOKEN_TYPE_SPIFFE, aud);
-
+    void introspectWorkerToken_activeSpiffeTask_returnsTaskBinding() {
+        WorkersController controller = controller(true, 600);
+        String sub = "spiffe://domain/cluster/" + CLUSTER_ID + "/instance/" + INSTANCE_ID + "/worker/w1";
+        Jwt jwt = buildJwt(sub, null, AUD);
         when(workerTokenVerificationService.verify("valid.spiffe.token"))
-                .thenReturn(activeOutcome);
+                .thenReturn(WorkerTokenVerificationService.Outcome.builder()
+                        .jwt(jwt).clusterId(CLUSTER_ID).instanceId(INSTANCE_ID).workerId("w1")
+                        .tokenType(WorkerTokenVerificationService.TOKEN_TYPE_SPIFFE).audience(AUD)
+                        .exp(jwt.getExpiresAt().getEpochSecond())
+                        .requestId("sr-2").taskId("t-1").ncaId("nca-1")
+                        .build());
 
-        var response = controller.introspectWorkerToken(request);
+        var body = controller.introspectWorkerToken(tokenRequest("valid.spiffe.token")).getBody();
 
-        assertEquals(200, response.getStatusCode().value());
-        var body = response.getBody();
+        assertNotNull(body);
         assertTrue(body.isActive());
         assertEquals("spiffe", body.getTokenType());
-        assertEquals(workerId, body.getWorkerId());
+        assertEquals("t-1", body.getTaskId());
+        assertNull(body.getFunctionId());
+    }
+
+    @Test
+    void introspectWorkerToken_overRateLimit_returns429ForThatCallerOnly() {
+        WorkersController controller = controller(true, 2);
+        when(workerTokenVerificationService.verify(any()))
+                .thenReturn(WorkerTokenVerificationService.Outcome.reject(
+                        ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID, "x"));
+
+        authenticateAs("nvcf-api");
+        assertEquals(200, controller.introspectWorkerToken(tokenRequest("t1")).getStatusCode().value());
+        assertEquals(200, controller.introspectWorkerToken(tokenRequest("t2")).getStatusCode().value());
+        assertEquals(429, controller.introspectWorkerToken(tokenRequest("t3")).getStatusCode().value());
+
+        authenticateAs("nvct-api");
+        assertEquals(200, controller.introspectWorkerToken(tokenRequest("t4")).getStatusCode().value());
+    }
+
+    @Test
+    void introspectWorkerToken_rateLimitWindowResets() {
+        MutableClock clock = new MutableClock(Instant.parse("2026-09-04T00:00:00Z"));
+        WorkersController controller = controller(true, 1, clock);
+        when(workerTokenVerificationService.verify(any()))
+                .thenReturn(WorkerTokenVerificationService.Outcome.reject(
+                        ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID, "x"));
+        authenticateAs("nvcf-api");
+
+        assertEquals(200, controller.introspectWorkerToken(tokenRequest("t1")).getStatusCode().value());
+        assertEquals(429, controller.introspectWorkerToken(tokenRequest("t2")).getStatusCode().value());
+        clock.advanceSeconds(61);
+        assertEquals(200, controller.introspectWorkerToken(tokenRequest("t3")).getStatusCode().value());
     }
 
     // --- helpers ---
 
-    private WorkersController controllerWithOidcEnabled(boolean enabled) {
-        NvcaConfigurationProperties config = new NvcaConfigurationProperties();
-        config.setOidcClusterIdentityEnabled(enabled);
-        return new WorkersController(config, workerTokenVerificationService);
+    private WorkersController controller(boolean oidcEnabled, int rateLimitPerMinute) {
+        return controller(oidcEnabled, rateLimitPerMinute, Clock.systemUTC());
     }
 
-    private WorkerTokenIntrospectRequest tokenRequest(String token) {
+    private WorkersController controller(boolean oidcEnabled, int rateLimitPerMinute, Clock clock) {
+        NvcaConfigurationProperties config = new NvcaConfigurationProperties();
+        config.setOidcClusterIdentityEnabled(oidcEnabled);
+        return new WorkersController(config, workerTokenVerificationService, rateLimitPerMinute, clock);
+    }
+
+    private static void authenticateAs(String name) {
+        var auth = new TestingAuthenticationToken(name, "n/a", WorkersController.INTROSPECT_AUTHORITY);
+        auth.setAuthenticated(true);
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private static WorkerTokenIntrospectRequest tokenRequest(String token) {
         var req = new WorkerTokenIntrospectRequest();
         req.setToken(token);
         return req;
-    }
-
-    private static WorkerTokenVerificationService.Outcome rejectedOutcome(
-            ClusterOIDCTokenVerificationService.RejectReason reason, String message) {
-        return WorkerTokenVerificationService.Outcome.reject(reason, message);
     }
 
     private static Jwt buildJwt(String sub, String iss, String aud) {
@@ -206,5 +233,32 @@ class WorkersControllerUnitTest {
                 .issuedAt(Instant.now())
                 .expiresAt(Instant.now().plusSeconds(900))
                 .build();
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        private MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        void advanceSeconds(long seconds) {
+            now = now.plusSeconds(seconds);
+        }
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 }

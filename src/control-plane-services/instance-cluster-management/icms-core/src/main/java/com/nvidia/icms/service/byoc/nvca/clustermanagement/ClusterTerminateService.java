@@ -53,6 +53,7 @@ import static com.nvidia.icms.util.audit.AuditUtils.populateAuditValuesForDeleti
 
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.NotNull;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -76,6 +77,8 @@ public class ClusterTerminateService {
     private final NvcaClusterRegistrationService clusterRegistrationService;
 
     private final NvcaClusterConfigurationRepository nvcaClusterConfigurationRepository;
+
+    private final WorkerIdentifierService workerIdentifierService;
 
     @Observed
     public void deleteCluster(String ncaId, String clusterId, Map<String, Object> auditProps) {
@@ -131,6 +134,9 @@ public class ClusterTerminateService {
         // Delete entry from cluster
         nvcaClusterRepository.deleteClusterInfo(clusterEntity);
 
+        // A deregistered cluster can no longer authorize any worker.
+        workerIdentifierService.deleteForClusterQuietly(clusterId);
+
         // Audit log changes in DB
         populateAuditValuesForDeletingCluster(auditProps, clusterId);
         auditService.sendAuditEventForClusterEntity(auditProps, clusterEntity,
@@ -184,6 +190,9 @@ public class ClusterTerminateService {
 
         // Delete entry from cluster
         nvcaClusterRepository.deleteClusterInfo(clusterEntity);
+
+        // A deregistered cluster can no longer authorize any worker.
+        workerIdentifierService.deleteForClusterQuietly(clusterId);
 
         // Audit log changes in DB
         populateAuditValuesForDeletingCluster(auditProps, clusterId);

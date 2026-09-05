@@ -186,6 +186,17 @@ public class GlobalErrorHandler {
         return new ResponseEntity<>(error, HttpStatus.PRECONDITION_FAILED);
     }
 
+    @ExceptionHandler(IcmsForbiddenException.class)
+    public ResponseEntity<Object> icmsForbiddenException(
+            IcmsForbiddenException exception) {
+
+        sendTelemetryEvent(exception, Events.ERROR_EVENT.toString());
+        CustomErrorResponse error = new CustomErrorResponse();
+        error.setError(exception.getMessage());
+
+        return new ResponseEntity<>(error, HttpStatus.FORBIDDEN);
+    }
+
     @ExceptionHandler(IcmsNotFoundException.class)
     public ResponseEntity<Object> icmsNotFoundException(
             IcmsNotFoundException exception) {

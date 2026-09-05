@@ -33,6 +33,7 @@ import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import org.junit.jupiter.api.Assertions;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -96,6 +97,9 @@ class TerminateInstanceServiceTest {
     @Mock
     private InstanceServiceHelper instanceServiceHelper;
 
+    @Mock
+    private WorkerIdentifierService workerIdentifierService;
+
     private TerminateInstanceService terminateInstanceService;
 
     private Instant dummyInstant;
@@ -109,7 +113,8 @@ class TerminateInstanceServiceTest {
                 icmsConfigurationProperties,
                                                         auditService, telemetryEventClient,
                                                         instanceServiceHelper,
-                                                        ComputePlatformTestFixtures.nonByocComputePlatformService());
+                                                        ComputePlatformTestFixtures.nonByocComputePlatformService(),
+                                                        workerIdentifierService);
     }
 
 
