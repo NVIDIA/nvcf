@@ -29,6 +29,27 @@ version_ge() {
       return value ~ /^[0-9]+$/
     }
 
+    function valid_core(value, parts, count, i) {
+      count = split(value, parts, ".")
+      if (count != 3) return 0
+      for (i = 1; i <= count; i++) {
+        if (!is_numeric(parts[i])) return 0
+        if (length(parts[i]) > 1 && substr(parts[i], 1, 1) == "0") return 0
+      }
+      return 1
+    }
+
+    function valid_identifiers(value, reject_numeric_leading_zero, parts, count, i) {
+      if (value == "") return 0
+      count = split(value, parts, ".")
+      for (i = 1; i <= count; i++) {
+        if (parts[i] == "" || parts[i] !~ /^[0-9A-Za-z-]+$/) return 0
+        if (reject_numeric_leading_zero && is_numeric(parts[i]) && \
+            length(parts[i]) > 1 && substr(parts[i], 1, 1) == "0") return 0
+      }
+      return 1
+    }
+
     function compare_identifier(left, right) {
       if (is_numeric(left) && is_numeric(right)) {
         if ((left + 0) > (right + 0)) return 1
@@ -43,8 +64,18 @@ version_ge() {
     }
 
     BEGIN {
-      sub(/\+.*/, "", current)
-      sub(/\+.*/, "", required)
+      current_plus = index(current, "+")
+      required_plus = index(required, "+")
+      if (current_plus) {
+        current_build = substr(current, current_plus + 1)
+        current = substr(current, 1, current_plus - 1)
+        if (!valid_identifiers(current_build, 0)) exit 2
+      }
+      if (required_plus) {
+        required_build = substr(required, required_plus + 1)
+        required = substr(required, 1, required_plus - 1)
+        if (!valid_identifiers(required_build, 0)) exit 2
+      }
 
       current_dash = index(current, "-")
       required_dash = index(required, "-")
@@ -53,9 +84,10 @@ version_ge() {
       current_pre = current_dash ? substr(current, current_dash + 1) : ""
       required_pre = required_dash ? substr(required, required_dash + 1) : ""
 
-      if (split(current_core, a, ".") != 3 || split(required_core, b, ".") != 3) exit 2
+      if (!valid_core(current_core, a) || !valid_core(required_core, b)) exit 2
+      if (current_dash && !valid_identifiers(current_pre, 1)) exit 2
+      if (required_dash && !valid_identifiers(required_pre, 1)) exit 2
       for (i = 1; i <= 3; i++) {
-        if (!is_numeric(a[i]) || !is_numeric(b[i])) exit 2
         av = a[i] + 0
         bv = b[i] + 0
         if (av > bv) exit 0
