@@ -84,6 +84,9 @@ type Client struct {
 	assertionTokenPath      string
 	sharedConfigDir         string
 	clientTimeout           time.Duration
+	// delegatedToken is true when the credential is a mounted projected ServiceAccount
+	// token. NVCF then issues no replacement token and the client persists none.
+	delegatedToken bool
 
 	// for keeping nvcf region state
 	ConnectedRegions       atomic.Pointer[ConnectionRegions]
@@ -128,8 +131,16 @@ func CreateClient(nvcfFqdn string, nvcfFqdnNats *string, nvcfWorkerToken string,
 
 	tokenProvider := auth.NewSettableTokenSource(oauth2.StaticTokenSource(nvcfToken))
 
+	// Prefer a mounted projected ServiceAccount Token (PSAT) over the bootstrap token
+	// when running on a self-hosted cluster with worker identity enabled.
+	delegatedToken, err := token.SelectMountedToken(tokenProvider, nvcfFqdn, "NVCF")
+	if err != nil {
+		return nil, err
+	}
+
 	client := &Client{
-		Client: workerClient,
+		delegatedToken: delegatedToken,
+		Client:         workerClient,
 		regionalNvcfClients: map[string]pb.WorkerClient{
 			nvcfFqdn: workerClient,
 		},
@@ -504,7 +515,7 @@ func (c *Client) GetArtifacts(ctx context.Context) (*types.ArtifactsList, error)
 		var internalResources []types.Artifact
 		var internalInvalidArtifacts int
 
-		stream, err := c.Client.StreamArtifacts(ctx, &pb.ArtifactsRequest{}, auth.GrpcTokenFromSource(c.NvcfTokenProvider))
+		stream, err := c.Client.StreamArtifacts(ctx, &pb.ArtifactsRequest{}, auth.GrpcTokenFromSource(c.NvcfTokenProvider, c.delegatedToken))
 		if err != nil {
 			span.AddEvent(fmt.Sprintf("Failed to start streaming artifacts from NVCF: %s", err.Error()))
 			zap.L().Warn("failed to start streaming artifacts from NVCF", zap.Error(err))

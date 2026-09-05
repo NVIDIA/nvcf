@@ -64,13 +64,13 @@ func (c *Client) ConnectIndefinitely(ctx context.Context) (context.Context, erro
 				}
 				utils.SleepWithContext(ctx, sleepDuration)
 			}
-		maxElapsed := time.Until(token.Expiry)
-		if maxElapsed <= 0 {
-			maxElapsed = 5 * time.Minute
-		}
-		err = backoff.Retry(func() error {
-			return c.connect(ctx)
-		}, backoff.WithContext(backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(maxElapsed)), ctx))
+			maxElapsed := time.Until(token.Expiry)
+			if maxElapsed <= 0 {
+				maxElapsed = 5 * time.Minute
+			}
+			err = backoff.Retry(func() error {
+				return c.connect(ctx)
+			}, backoff.WithContext(backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(maxElapsed)), ctx))
 			if err != nil {
 				zap.L().Error("failed to reconnect to NVCF", zap.Error(err))
 				return
@@ -91,7 +91,7 @@ func (c *Client) connect(ctx context.Context) error {
 		InstanceId:        c.instanceId,
 		FunctionId:        c.functionId,
 		FunctionVersionId: c.functionVersionId,
-	}, auth.GrpcTokenFromSource(c.NvcfTokenProvider))
+	}, auth.GrpcTokenFromSource(c.NvcfTokenProvider, c.delegatedToken))
 	if err != nil {
 		return fmt.Errorf("failed to send connect request to NVCF: %w", err)
 	}
@@ -99,6 +99,12 @@ func (c *Client) connect(ctx context.Context) error {
 		return fmt.Errorf("nvcf did not respond with a connected region")
 	}
 	c.updateConnectedRegions(connected.ConnectedRegion, connected.OtherRegions)
+	if c.delegatedToken {
+		// The mounted JWT stays the credential for the life of the process; NVCF issues no
+		// replacement token on this path and nothing is persisted.
+		zap.L().Info("connected to NVCF", zap.String("region", connected.ConnectedRegion), zap.Strings("secondaryRegions", connected.OtherRegions))
+		return nil
+	}
 	oauthToken := &oauth2.Token{
 		AccessToken: connected.NvcfWorkerToken,
 		Expiry:      connected.Expiration.AsTime(),

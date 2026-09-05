@@ -47,7 +47,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		connectRespnse, connectErr := c.Client.Connect(ctx, &pb.ConnectRequest{
 			InstanceId: c.instanceId,
 			TaskId:     c.taskId,
-		}, auth.GrpcTokenFromSource(c.NvctTokenProvider))
+		}, auth.GrpcTokenFromSource(c.NvctTokenProvider, c.delegatedToken))
 		if connectErr != nil {
 			zap.L().Error("failed to connect to NVCT", zap.Error(connectErr))
 			return connectErr
