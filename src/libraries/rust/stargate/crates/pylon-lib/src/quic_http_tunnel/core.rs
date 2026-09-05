@@ -456,7 +456,19 @@ impl TunnelRequestLifecycle {
             .and_then(TunnelRequestObserver::generation_mut)
             .expect("streaming relay requires a generation observer");
         obs.observe_upstream_event(message.received_at);
+        let output_token_calibration_enabled = obs.output_token_calibration_enabled();
         let mut quality_progress = None;
+        if output_token_calibration_enabled {
+            if let Some(protocol) = message.facts.protocol {
+                obs.observe_sse_protocol(protocol);
+            }
+            for choice in message.chat_choice_calibration() {
+                obs.observe_chat_choice_calibration(choice);
+            }
+            if message.facts.calibration_ineligible {
+                obs.observe_output_calibration_details(None, true);
+            }
+        }
         if let Some(generated_output) = message.facts.generated_output.as_ref() {
             if let (false, Some(queue)) = (*saw_output, self.queue_request.as_mut()) {
                 queue.observe_output();
@@ -467,6 +479,7 @@ impl TunnelRequestLifecycle {
                 message.received_at,
                 generated_output.token_bearing,
                 estimate.raw_bootstrap_units,
+                output_token_calibration_enabled && generated_output.reasoning_text,
             );
             if let Some(delta) = estimate.delta {
                 obs.observe_estimated_output_tokens_total(estimate.displayed_tokens);
@@ -474,6 +487,9 @@ impl TunnelRequestLifecycle {
             }
         }
         if let Some(exact_usage) = message.facts.exact_usage {
+            if output_token_calibration_enabled {
+                obs.observe_output_calibration_details(exact_usage.reasoning_tokens, false);
+            }
             if let Some(input_tokens) = exact_usage.input_tokens {
                 obs.observe_input_tokens_total(input_tokens);
             }
@@ -652,7 +668,7 @@ async fn relay_upstream_response(
             .as_mut()
             .and_then(TunnelRequestObserver::generation_mut)
         {
-            observer.observe_generated_output(Instant::now(), false, 0);
+            observer.observe_generated_output(Instant::now(), false, 0, false);
         }
     }
     let mut body_stream = response.bytes_stream();

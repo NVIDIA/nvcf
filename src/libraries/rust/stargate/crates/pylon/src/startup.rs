@@ -39,7 +39,7 @@ use stargate_runtime::wait_for_termination_signal;
 use tokio::task::JoinError;
 use tracing::{error, info, warn};
 
-use super::Args;
+use super::{Args, OutputTokenCalibrationMode};
 
 type TaskExit = std::result::Result<(), JoinError>;
 
@@ -111,6 +111,7 @@ pub(crate) struct PylonStartupPlan {
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
     force_chat_completions_include_usage: bool,
+    output_token_calibration: OutputTokenCalibrationMode,
     health_paths: UpstreamHealthPaths,
     startup_health_wait: Duration,
     metrics_addr: SocketAddr,
@@ -167,6 +168,7 @@ impl PylonStartupPlan {
             },
             request_quality_monitor: request_quality_monitor_config_from_args(args),
             force_chat_completions_include_usage: args.force_chat_completions_include_usage,
+            output_token_calibration: args.output_token_calibration,
             health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
             startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
@@ -351,6 +353,16 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         stats_config.observation_channel_capacity,
         Some(metrics.clone()),
     );
+    let runtime_state = if plan.output_token_calibration == OutputTokenCalibrationMode::SinglePylon
+    {
+        info!(
+            cluster_id = %plan.cluster_id,
+            "enabling output-token calibration under the single-Pylon deployment assertion"
+        );
+        runtime_state.with_single_pylon_output_token_calibration()
+    } else {
+        runtime_state
+    };
     let (engine_stats_stream, stats_update_rx) = start_engine_stats_runtime(
         args,
         plan,
@@ -1049,6 +1061,32 @@ mod tests {
         let (_, enabled_plan) = startup(&["--force-chat-completions-include-usage"]);
         assert!(enabled_plan.force_chat_completions_include_usage);
         assert!(test_forwarding(&enabled_plan).force_chat_completions_include_usage);
+    }
+
+    #[test]
+    fn output_token_calibration_defaults_off_and_accepts_single_pylon() {
+        let (_, default_plan) = startup(&[]);
+        assert_eq!(
+            default_plan.output_token_calibration,
+            OutputTokenCalibrationMode::Off
+        );
+
+        let (_, enabled_plan) = startup(&["--output-token-calibration", "single-pylon"]);
+        assert_eq!(
+            enabled_plan.output_token_calibration,
+            OutputTokenCalibrationMode::SinglePylon
+        );
+
+        let (_, reverse_plan) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--output-token-calibration",
+            "single-pylon",
+        ]);
+        assert_eq!(
+            reverse_plan.output_token_calibration,
+            OutputTokenCalibrationMode::SinglePylon
+        );
     }
 
     fn test_observation() -> RequestObservation {
