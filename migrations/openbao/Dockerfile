@@ -1,7 +1,26 @@
 ARG ALPINE_VERSION=3.23
 ARG GO_IMAGE=golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395
+ARG BAO_VERSION=2.6.2
+ARG BAO_SOURCE_COMMIT=dd9c19c37a878cf4a81b18efb8d6f0599c7da923
+ARG BAO_SOURCE_SHA256=a7784550a9db16f24e99d65a18c9b12a433707c79ef4c1f34262d3f48171c7a9
 ARG KUBECTL_VERSION=v1.37.0
 ARG KUBECTL_GO_VERSION=go1.26.6
+
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS bao-builder
+
+ARG BAO_VERSION
+ARG BAO_SOURCE_COMMIT
+ARG BAO_SOURCE_SHA256
+ARG TARGETARCH
+
+RUN apk add --no-cache curl xz
+COPY scripts/build-openbao.sh scripts/verify-openbao.sh /usr/local/bin/
+RUN BAO_VERSION="${BAO_VERSION}" \
+    BAO_SOURCE_COMMIT="${BAO_SOURCE_COMMIT}" \
+    BAO_SOURCE_SHA256="${BAO_SOURCE_SHA256}" \
+    TARGETARCH="${TARGETARCH}" \
+    OUTPUT_DIR=/out \
+    /usr/local/bin/build-openbao.sh
 
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS jwker-builder
 
@@ -60,11 +79,16 @@ RUN go version -m /out/kubectl >/tmp/kubectl.buildinfo && \
     grep -Fq ": ${KUBECTL_GO_VERSION}" /tmp/kubectl.buildinfo && \
     grep -Eq "^[[:space:]]*mod[[:space:]]+k8s.io/kubernetes[[:space:]]+${KUBECTL_VERSION}([[:space:]]|$)" /tmp/kubectl.buildinfo
 
-FROM openbao/openbao:2.5.5
+FROM openbao/openbao:${BAO_VERSION}
+ARG TARGETARCH
 
-# Install runtime dependencies and copy verified tools from downloader stages.
-RUN apk add --no-cache openssl uuidgen helm curl bash jq
+# Upgrade inherited packages before installing runtime dependencies so the
+# image receives fixes published after the upstream OpenBao release.
+USER root
+RUN apk upgrade --no-cache && \
+    apk add --no-cache openssl uuidgen helm curl bash jq
 
+COPY --from=bao-builder --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=jwker-builder /out/jwker /usr/local/bin/jwker
 COPY --from=kubectl-verifier /out/kubectl /usr/local/bin/kubectl
 
@@ -73,5 +97,7 @@ WORKDIR /app
 COPY --chmod=775 migrations/ /app/migrations/
 COPY --chmod=775 addons/ /app/addons/
 COPY --chmod=775 entrypoint.sh /app/
+
+USER openbao
 
 CMD ["/app/entrypoint.sh"]

@@ -41,8 +41,9 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 ## Building the container
 
-The `Dockerfile` uses the public upstream OpenBao image (`openbao/openbao:2.5.5`) as the base. To use a different base, edit the `FROM` line directly.
-It builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0 and downloads the official Kubernetes v1.37.0 `kubectl` binary for the target architecture. The build verifies both the published Kubernetes checksum and the pinned per-architecture checksum.
+The `Dockerfile` uses the public upstream OpenBao 2.6.2 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.1, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
+
+The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0 and downloads the official Kubernetes v1.37.0 `kubectl` binary for the target architecture. The build verifies both the published Kubernetes checksum and the pinned per-architecture checksum, plus the embedded Kubernetes module and Go 1.26.6 toolchain.
 
 ```bash
 docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
