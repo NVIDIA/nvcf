@@ -85,6 +85,7 @@ go_test(
     srcs = [
         "info_test.go",
         "main_test.go",
+        "metrics_test.go",
     ],
     embed = [":cmd_lib"],
     deps = [
@@ -100,5 +101,6 @@ go_test(
         "@org_golang_google_grpc//status",
         "@org_golang_x_exp//rand",
         "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zaptest/observer",
     ],
 )
