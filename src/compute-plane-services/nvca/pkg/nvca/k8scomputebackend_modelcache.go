@@ -42,6 +42,7 @@ import (
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -579,6 +580,38 @@ func (c K8sComputeBackend) waitForVolumeDetach(ctx context.Context, volumeName s
    1. Name -> $LaunchSpecification.CacheHandle-ro-pvc
    2. /spec/accessModes -> ReadOnlyMany
 */
+// readerMountOptionsForRequest returns the mount options for the read-only PV
+// that serves req. A durable request carries the catalog's readerMountOptions in
+// its persisted selection; those are required and the configured options are
+// appended except where they would negate one. Requests without a durable
+// selection keep the configured options unchanged, as before.
+func (c K8sComputeBackend) readerMountOptionsForRequest(ctx context.Context, req *nvcav2beta1.ICMSRequest) []string {
+	configured := c.bk8s.csiVolumeMountOptions
+	if req == nil {
+		return configured
+	}
+	raw := req.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return configured
+	}
+	log := core.GetLogger(ctx)
+	selection, err := nvcastorage.ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		log.WithError(err).Warnf("ignoring invalid model cache selection on %v/%v for reader mount options",
+			req.Namespace, req.Name)
+		return configured
+	}
+	if selection.Mode != nvcastorage.ModelCacheSelectionDurable {
+		return configured
+	}
+	merged, dropped := nvcastorage.MergeReaderMountOptions(selection.RequiredMountOptions, configured)
+	if len(dropped) != 0 {
+		log.Infof("ignoring configured cache mount options %v that conflict with required %v for %v/%v",
+			dropped, selection.RequiredMountOptions, req.Namespace, req.Name)
+	}
+	return merged
+}
+
 func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 	rwPVC *v1.PersistentVolumeClaim, initJobName string, req *nvcav2beta1.ICMSRequest, mf mutateFunc) (ROPVCSetupPhase, error) {
 	log := core.GetLogger(ctx)
@@ -695,7 +728,7 @@ func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 			// set the new PVCRef
 			pvObj.Spec.ClaimRef = &newPVCRef
 			pvObj.Spec.AccessModes = ROAccessMode
-			pvObj.Spec.MountOptions = c.bk8s.csiVolumeMountOptions
+			pvObj.Spec.MountOptions = c.readerMountOptionsForRequest(ctx, req)
 
 			_, updateErr := c.clients.K8s.CoreV1().PersistentVolumes().Update(ctx, pvObj, metav1.UpdateOptions{})
 			return updateErr
