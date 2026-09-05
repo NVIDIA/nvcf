@@ -1001,6 +1001,75 @@ func TestDeploymentShouldCompleteRolloutRunsExplicitWait(t *testing.T) {
 	}
 }
 
+func TestDNSNameShouldResolveRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	t.Setenv("BDD_DNS_NAME", "api.192-0-2-10.nip.io")
+	t.Setenv("BDD_DNS_TIMEOUT", "180")
+
+	if err := sc.dnsNameShouldResolve(context.Background(), "${BDD_DNS_NAME}", "${BDD_DNS_TIMEOUT}"); err != nil {
+		t.Fatalf("wait for DNS resolution: %v", err)
+	}
+	want := "tests/bdd/scripts/wait-for-dns.sh api.192-0-2-10.nip.io 180"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestDNSNameShouldResolveRejectsInvalidInputsBeforeRunning(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostname string
+		timeout  string
+		want     string
+	}{
+		{
+			name:     "empty hostname",
+			hostname: " ",
+			timeout:  "180",
+			want:     "DNS name is empty",
+		},
+		{
+			name:     "invalid timeout",
+			hostname: "gateway.example.com",
+			timeout:  "-1",
+			want:     "not a non-negative integer",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			err := sc.dnsNameShouldResolve(context.Background(), tc.hostname, tc.timeout)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want error containing %q", err, tc.want)
+			}
+			if len(fake.runs) != 0 {
+				t.Fatalf("runs = %d, want 0", len(fake.runs))
+			}
+		})
+	}
+}
+
+func TestDNSNameShouldResolveFailureNamesTargetWithoutResolverOutput(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	secretOutput := "unrelated-resolver-output"
+	fake.result = harness.Result{ExitCode: 2, Stdout: secretOutput, Stderr: secretOutput}
+
+	err := sc.dnsNameShouldResolve(context.Background(), "gateway.example.com", "180")
+	if err == nil {
+		t.Fatal("expected DNS resolution failure")
+	}
+	for _, want := range []string{`DNS name "gateway.example.com"`, "within 180 seconds"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), secretOutput) {
+		t.Fatalf("error leaked resolver output: %v", err)
+	}
+}
+
 func TestKubernetesResourceShouldContainFailureDoesNotExposeResourceValues(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0, Stdout: `data:

@@ -384,7 +384,6 @@ printf '%s has address 192.0.2.10\n' "$1"
 
 func TestWaitForDNSRequiresStableSystemResolution(t *testing.T) {
 	binDir := t.TempDir()
-	countPath := filepath.Join(binDir, "resolver-count")
 	resolverScript := `#!/usr/bin/env bash
 set -euo pipefail
 count=0
@@ -410,21 +409,33 @@ fi
 		t.Fatalf("write fake sleep: %v", err)
 	}
 
-	cmd := exec.Command("bash", "scripts/wait-for-dns.sh", "gateway.example.invalid", "30")
-	cmd.Env = append(os.Environ(), "FAKE_RESOLVER_COUNT="+countPath, "PATH="+binDir+":"+os.Getenv("PATH"))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("wait for stable DNS: %v\n%s", err, out)
+	tests := []struct {
+		name    string
+		timeout string
+	}{
+		{name: "normal timeout", timeout: "30"},
+		{name: "maximum int64 timeout", timeout: "9223372036854775807"},
 	}
-	if got := string(out); !strings.Contains(got, "3 consecutive system-resolver checks after 5 attempts") {
-		t.Fatalf("wait output did not report stable resolution: %q", got)
-	}
-	count, err := os.ReadFile(countPath)
-	if err != nil {
-		t.Fatalf("read resolver attempt count: %v", err)
-	}
-	if got, want := strings.TrimSpace(string(count)), "5"; got != want {
-		t.Fatalf("resolver attempts = %s, want %s", got, want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			countPath := filepath.Join(t.TempDir(), "resolver-count")
+			cmd := exec.Command("bash", "scripts/wait-for-dns.sh", "gateway.example.invalid", tc.timeout)
+			cmd.Env = append(os.Environ(), "FAKE_RESOLVER_COUNT="+countPath, "PATH="+binDir+":"+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("wait for stable DNS: %v\n%s", err, out)
+			}
+			if got := string(out); !strings.Contains(got, "3 consecutive system-resolver checks after 5 attempts") {
+				t.Fatalf("wait output did not report stable resolution: %q", got)
+			}
+			count, err := os.ReadFile(countPath)
+			if err != nil {
+				t.Fatalf("read resolver attempt count: %v", err)
+			}
+			if got, want := strings.TrimSpace(string(count)), "5"; got != want {
+				t.Fatalf("resolver attempts = %s, want %s", got, want)
+			}
+		})
 	}
 }
 
