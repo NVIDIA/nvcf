@@ -398,4 +398,51 @@ public interface IcmsStubService {
     void deleteInstancesByDeploymentId(
             @PathVariable("ncaId") String ncaId,
             @PathVariable("workloadId") UUID deploymentId);
+
+    @Value
+    @Jacksonized
+    @Builder
+    class WorkerTokenIntrospectRequest {
+        @JsonProperty("token")
+        String token;
+    }
+
+    @Value
+    @Jacksonized
+    @Builder
+    class WorkerTokenIntrospectResult {
+        boolean active;
+        @Nullable String sub;
+        @Nullable String aud;
+        @Nullable String iss;
+        /** RFC 7662 section 2.2: epoch-seconds at which the token expires. */
+        @Nullable Long exp;
+        /** Cluster id resolved by ICMS from the signed audience. */
+        @JsonProperty("client_id")
+        @Nullable String clientId;
+        @JsonProperty("instance_id")
+        @Nullable String instanceId;
+        @JsonProperty("worker_id")
+        @Nullable String workerId;
+        /** Workload binding resolved by ICMS from the instance's request record. */
+        @JsonProperty("request_id")
+        @Nullable String requestId;
+        @JsonProperty("function_id")
+        @Nullable String functionId;
+        @JsonProperty("function_version_id")
+        @Nullable String functionVersionId;
+        @JsonProperty("task_id")
+        @Nullable String taskId;
+        @JsonProperty("nca_id")
+        @Nullable String ncaId;
+        @JsonProperty("token_type")
+        @Nullable String tokenType;
+        @Nullable String error;
+    }
+
+    @PostExchange(url = "/v1/icms/workers/tokens/introspect",
+                  accept = APPLICATION_JSON_VALUE,
+                  contentType = APPLICATION_JSON_VALUE)
+    WorkerTokenIntrospectResult introspectWorkerToken(
+            @org.springframework.web.bind.annotation.RequestBody WorkerTokenIntrospectRequest request);
 }
