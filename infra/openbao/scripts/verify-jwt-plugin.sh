@@ -16,13 +16,15 @@
 
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
+# shellcheck source=infra/openbao/scripts/semver.sh
+. "$script_dir/semver.sh"
 
 go_bin=${GO:-go}
 plugin_dir=${PLUGIN_DIR:-"$repo_root/files/plugins"}
 required_go_version=${REQUIRED_GO_VERSION:-v1.27.0}
-required_x_crypto_version=${REQUIRED_X_CRYPTO_VERSION:-v0.55.0}
+required_x_crypto_version=${REQUIRED_X_CRYPTO_VERSION:-v0.56.0}
 required_x_net_version=${REQUIRED_X_NET_VERSION:-v0.57.0}
 required_x_text_version=${REQUIRED_X_TEXT_VERSION:-v0.41.0}
 required_grpc_version=${REQUIRED_GRPC_VERSION:-v1.83.1}
@@ -36,24 +38,6 @@ cleanup_metadata_files() {
   rm -f $metadata_files
 }
 trap cleanup_metadata_files EXIT
-
-version_ge() {
-  current=${1#v}
-  required=${2#v}
-  awk -v current="$current" -v required="$required" '
-    BEGIN {
-      split(current, a, ".")
-      split(required, b, ".")
-      for (i = 1; i <= 3; i++) {
-        av = a[i] + 0
-        bv = b[i] + 0
-        if (av > bv) exit 0
-        if (av < bv) exit 1
-      }
-      exit 0
-    }
-  '
-}
 
 dep_version() {
   module=$1
@@ -97,7 +81,7 @@ verify_binary() {
 
   toolchain=$(sed -n '1p' "$metadata" | awk -F': ' '{ print $2 }')
   toolchain_version="v${toolchain#go}"
-  if ! version_ge "$toolchain_version" "$required_go_version"; then
+  if ! semver_ge "$toolchain_version" "$required_go_version"; then
     echo "$binary was built with $toolchain; need Go ${required_go_version#v} or newer" >&2
     exit 1
   fi
@@ -142,23 +126,23 @@ verify_binary() {
   vault_api_version=$(dep_version github.com/hashicorp/vault/api "$metadata")
   vault_sdk_version=$(dep_version github.com/hashicorp/vault/sdk "$metadata")
 
-  if ! version_ge "$x_crypto_version" "$required_x_crypto_version"; then
+  if ! semver_ge "$x_crypto_version" "$required_x_crypto_version"; then
     echo "$binary embeds golang.org/x/crypto $x_crypto_version; need $required_x_crypto_version or newer" >&2
     exit 1
   fi
-  if ! version_ge "$x_net_version" "$required_x_net_version"; then
+  if ! semver_ge "$x_net_version" "$required_x_net_version"; then
     echo "$binary embeds golang.org/x/net $x_net_version; need $required_x_net_version or newer" >&2
     exit 1
   fi
-  if ! version_ge "$x_text_version" "$required_x_text_version"; then
+  if ! semver_ge "$x_text_version" "$required_x_text_version"; then
     echo "$binary embeds golang.org/x/text $x_text_version; need $required_x_text_version or newer" >&2
     exit 1
   fi
-  if ! version_ge "$grpc_version" "$required_grpc_version"; then
+  if ! semver_ge "$grpc_version" "$required_grpc_version"; then
     echo "$binary embeds google.golang.org/grpc $grpc_version; need $required_grpc_version or newer" >&2
     exit 1
   fi
-  if ! version_ge "$go_jose_version" "$required_go_jose_version"; then
+  if ! semver_ge "$go_jose_version" "$required_go_jose_version"; then
     echo "$binary embeds github.com/go-jose/go-jose/v4 $go_jose_version; need $required_go_jose_version or newer" >&2
     exit 1
   fi
