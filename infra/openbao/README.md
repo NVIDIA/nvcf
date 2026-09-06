@@ -95,4 +95,4 @@ At runtime the image provides:
 
 - The OpenBao server at `/usr/bin/bao`, built from the upstream 2.6.2 source
 - Alpine packages `curl`, `jq`, and `bash` (used by entrypoint scripts in consumers such as the migrations Job)
-- `/openbao/plugins/vault-plugin-secrets-jwt` - the JWT secrets plugin built from `outfoxx/vault-plugin-secrets-jwt`
+- `/openbao/plugins/vault-plugin-secrets-jwt` - the JWT secrets plugin built from `github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt`
