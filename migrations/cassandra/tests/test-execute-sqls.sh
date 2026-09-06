@@ -99,18 +99,22 @@ if ! sed '/^[[:space:]]*#/d' "${init_script}" |
 fi
 
 if ! grep -F -q \
-  'COPY --from=kubectl-downloader --chmod=0555 /out/kubectl /usr/local/bin/kubectl' \
+  'COPY --from=kubectl-builder --chmod=0555 /out/kubectl /usr/local/bin/kubectl' \
   "${dockerfile}"; then
   fail "the migrations image must include kubectl for Cassandra cluster initialization"
 fi
 
-if ! grep -F -q 'ARG KUBECTL_VERSION=v1.37.0' "${dockerfile}"; then
-  fail "the migrations image must retain the kubectl security baseline"
+kubectl_version=$(sed -n 's/^ARG KUBECTL_VERSION=//p' "${dockerfile}")
+if ! printf '%s\n' "${kubectl_version}" | grep -Eq '^v1\.36\.[0-9]+$'; then
+  fail "the migrations image must use kubectl v1.36 for v1.35-v1.37 compatibility"
 fi
 
-if ! grep -F -q 'ARG KUBECTL_MIN_GO_VERSION=1.26.6' "${dockerfile}" ||
-  ! grep -F -q '/out/kubectl version --client -o json' "${dockerfile}"; then
-  fail "the migrations image must validate the distributed kubectl build metadata"
+if ! grep -Eq '^ARG KUBECTL_GO_IMAGE=golang:1\.26\.6-[^@]+@sha256:[0-9a-f]{64}$' \
+  "${dockerfile}" ||
+  ! grep -F -q 'GOPROXY=off' "${dockerfile}" ||
+  ! grep -F -q 'go build -mod=vendor' "${dockerfile}" ||
+  ! grep -F -q '/tmp/kubectl-host version --client -o json' "${dockerfile}"; then
+  fail "the migrations image must reproducibly rebuild and validate kubectl with Go 1.26.6"
 fi
 
 nvct_schema="${keyspaces}/nvct_api/03_init_tables.up.sql"
