@@ -521,6 +521,32 @@ func TestValidateDeploymentPodReadinessFailsWhenPodMissing(t *testing.T) {
 	}
 }
 
+// TestValidateDeploymentPodReadinessWarnsOnOrdinaryStartup confirms a Pod
+// that's merely Pending/ContainerCreating (Ready=False, no failure signal)
+// warns instead of failing, so validate-deployment doesn't race a normal
+// deploy's startup window.
+func TestValidateDeploymentPodReadinessWarnsOnOrdinaryStartup(t *testing.T) {
+	v := newFakeValidator(nil,
+		[]runtime.Object{
+			validatorBackend(testSystemNS, agentStatusHealthy, 8, 5),
+			icmsWithInstances(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, map[string]string{"inst-a": "starting"}),
+		},
+		[]runtime.Object{fakePod(testRequestsNS, "inst-a", corev1.ConditionFalse)},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	got := checkByName(t, out.Checks, "pod-readiness")
+	if got.Status != CheckWarning {
+		t.Errorf("pod-readiness = %s, want WARN (%s)", got.Status, got.Message)
+	}
+	if out.HasFailure() {
+		t.Errorf("DeploymentValidation.HasFailure() = true, want false for a warning-only result")
+	}
+}
+
 // icmsWithMiniServiceInstance builds an ICMSRequest with one MiniService-typed
 // instance, plus the MiniService CR it resolves to.
 func icmsWithMiniServiceInstance(ns, name, fid, vid, requestStatus, instanceID, crStatus, msNamespace string) (*unstructured.Unstructured, *unstructured.Unstructured) {
