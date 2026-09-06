@@ -605,6 +605,31 @@ func TestValidateDeploymentPodReadinessFailsForCrashedMiniServiceUtilsPod(t *tes
 	}
 }
 
+// TestValidateDeploymentPodReadinessWarnsOnOrdinaryMiniServiceStartup is the
+// MiniService analogue of TestValidateDeploymentPodReadinessWarnsOnOrdinaryStartup:
+// the severity classification is shared code, applied uniformly regardless
+// of which Pod (worker vs utils) it resolves to.
+func TestValidateDeploymentPodReadinessWarnsOnOrdinaryMiniServiceStartup(t *testing.T) {
+	req, ms := icmsWithMiniServiceInstance(testRequestsNS, "r1", "fn-1", "v1", statusInProgress, "inst-a", "Active", "ms-inst-a-ns")
+
+	v := newFakeValidator(nil,
+		[]runtime.Object{validatorBackend(testSystemNS, agentStatusHealthy, 8, 5), req, ms},
+		[]runtime.Object{fakePod("ms-inst-a-ns", utilsPodName, corev1.ConditionFalse)},
+	)
+
+	out, err := v.ValidateDeployment(context.Background(), "fn-1", "v1", ValidateOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("ValidateDeployment returned error: %v", err)
+	}
+	got := checkByName(t, out.Checks, "pod-readiness")
+	if got.Status != CheckWarning {
+		t.Errorf("pod-readiness = %s, want WARN (%s)", got.Status, got.Message)
+	}
+	if out.HasFailure() {
+		t.Errorf("DeploymentValidation.HasFailure() = true, want false for a warning-only result")
+	}
+}
+
 // TestValidateDeploymentPodReadinessFallsBackForUnrecognizedInstanceType
 // covers a genuinely unrecognized instance type, where the check can't know
 // which resource kind backs it and falls back to the CR-reported status
