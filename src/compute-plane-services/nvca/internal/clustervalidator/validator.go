@@ -27,10 +27,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Role is the check set selected by VALIDATOR_ROLE.
+type Role string
+
 // Role values for VALIDATOR_ROLE.
 const (
-	RoleComputePlane = "compute-plane"
-	RoleControlPlane = "control-plane"
+	RoleComputePlane Role = "compute-plane"
+	RoleControlPlane Role = "control-plane"
 )
 
 // ValidationState captures the results of every validation check.
@@ -38,7 +41,7 @@ type ValidationState struct {
 	Log  *logrus.Entry
 	// Role is "control-plane" or "compute-plane" (empty = compute-plane default).
 	// printSummary uses it to include only the checks relevant to the role.
-	Role                string
+	Role                Role
 	ControlPlaneHealthy bool
 	// NodesAllReady tracks whether all worker nodes are Ready. False means at
 	// least one NotReady node. Warning only — does not flip cluster readiness.
@@ -133,7 +136,7 @@ func Run(
 	client kubernetes.Interface,
 	configNamespace, configName, summaryNamespace string,
 	emitMetrics bool,
-	role string,
+	role Role,
 ) error {
 	startedAt := time.Now()
 	log := core.GetLogger(ctx)

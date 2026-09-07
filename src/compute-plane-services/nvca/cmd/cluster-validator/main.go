@@ -76,8 +76,8 @@ func main() {
 	// gateway and StorageClass checks and skips GPU/SMB; anything else (including
 	// unset) runs the compute-plane check set (backward-compatible default).
 	roleEnv := os.Getenv("VALIDATOR_ROLE")
-	role := parseRole(roleEnv)
-	if roleEnv != "" && role == "" {
+	role, roleKnown := parseRole(roleEnv)
+	if roleEnv != "" && !roleKnown {
 		log.Warnf("VALIDATOR_ROLE=%q is not recognized; defaulting to compute-plane", roleEnv)
 	}
 
@@ -87,16 +87,17 @@ func main() {
 }
 
 // parseRole normalizes the VALIDATOR_ROLE env value. Returns the matching
-// clustervalidator constant for "control-plane" or "compute-plane"; returns ""
-// (compute-plane default) for any other value so unknown inputs are safe.
-func parseRole(v string) string {
+// clustervalidator.Role constant and true for "control-plane" or
+// "compute-plane"; returns the compute-plane default and false for any other
+// value so unknown inputs are safe.
+func parseRole(v string) (clustervalidator.Role, bool) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case clustervalidator.RoleControlPlane:
-		return clustervalidator.RoleControlPlane
-	case clustervalidator.RoleComputePlane:
-		return clustervalidator.RoleComputePlane
+	case string(clustervalidator.RoleControlPlane):
+		return clustervalidator.RoleControlPlane, true
+	case string(clustervalidator.RoleComputePlane):
+		return clustervalidator.RoleComputePlane, true
 	default:
-		return ""
+		return clustervalidator.RoleComputePlane, false
 	}
 }
 
