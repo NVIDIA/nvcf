@@ -215,6 +215,7 @@ class MonitorLaunchedTasksRoutineTest {
                 .orElseThrow();
         assertThat(healthInfo.error()).contains("capacity exhaustion");
         assertThat(healthInfo.error()).doesNotContain("ICMS request-id");
+        assertThat(healthInfo.error()).doesNotContain(TEST_ICMS_REQ_ID_1.toString());
 
         var events = eventService.fetchEvents(TEST_NCA_ID, TEST_TASK_ID_1);
         assertThat(events).isNotNull();
