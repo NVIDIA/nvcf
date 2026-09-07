@@ -366,7 +366,7 @@ func TestIUpdateYAMLFileWritesKeys(t *testing.T) {
 }
 
 // TestIWriteYAMLFileCreatesAndRestores verifies that the write-yaml
-// step creates the file and that the Ledger removes it on restore.
+// step creates the file and that Suite.Teardown removes it.
 func TestIWriteYAMLFileCreatesAndRestores(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	rel := "out/region-b-values.yaml"
@@ -387,8 +387,8 @@ func TestIWriteYAMLFileCreatesAndRestores(t *testing.T) {
 		t.Fatalf("missing key:\n%s", got)
 	}
 
-	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
-		t.Fatalf("restore: %v", err)
+	if err := sc.Suite.Teardown(); err != nil {
+		t.Fatalf("teardown: %v", err)
 	}
 	if _, err := os.Stat(abs); err == nil {
 		t.Fatal("file should be removed after restore")
