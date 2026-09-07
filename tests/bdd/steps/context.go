@@ -75,6 +75,22 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	// operator can see which command is currently executing.
 	ctx.StepContext().Before(func(c context.Context, st *godog.Step) (context.Context, error) {
 		fmt.Fprintf(os.Stderr, ">>> %s\n", st.Text)
+		if arg := st.Argument; arg != nil {
+			if dt := arg.DataTable; dt != nil {
+				for _, row := range dt.Rows {
+					cells := make([]string, len(row.Cells))
+					for i, c := range row.Cells {
+						cells[i] = c.Value
+					}
+					fmt.Fprintf(os.Stderr, ">>>   | %s |\n", strings.Join(cells, " | "))
+				}
+			}
+			if ds := arg.DocString; ds != nil {
+				for _, line := range strings.Split(ds.Content, "\n") {
+					fmt.Fprintf(os.Stderr, ">>>   %s\n", line)
+				}
+			}
+		}
 		return c, nil
 	})
 	registerFileSteps(ctx, sc)

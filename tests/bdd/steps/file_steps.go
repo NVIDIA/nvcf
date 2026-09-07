@@ -33,6 +33,7 @@ import (
 // to the Ledger before its first write so suite teardown can restore.
 func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
+	ctx.Step(`^I write yaml file "([^"]*)" with values:$`, sc.iWriteYAMLFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
 	ctx.Step(`^I prepare Helmfile environment "([^"]*)" for stack "([^"]*)" from fixture "([^"]*)" with values:$`, sc.iPrepareHelmfileEnvironment)
 	ctx.Step(`^I prepare self-managed secrets file "([^"]*)" from template "([^"]*)" using the current NGC registry credential$`, sc.iPrepareSelfManagedSecretsFile)
@@ -79,6 +80,21 @@ func (sc *ScenarioContext) iCopyFile(src, dest string) error {
 		return err
 	}
 	return copyFile(resolvedSrc, resolvedDest)
+}
+
+// iWriteYAMLFile creates a new YAML file from the supplied table of
+// dotted-path/value rows. The file must not already exist. The
+// destination is recorded with the Ledger so suite teardown removes it.
+func (sc *ScenarioContext) iWriteYAMLFile(path string, table *godog.Table) error {
+	resolved := sc.resolvePath(dsl.Interpolate(path))
+	if err := sc.Suite.Ledger.Snapshot(resolved); err != nil {
+		return err
+	}
+	keys, err := tableToKeyValuePairs(table)
+	if err != nil {
+		return err
+	}
+	return dsl.WriteYAMLFromKeys(resolved, keys)
 }
 
 // iUpdateYAMLFile applies the supplied table of dotted-path/value rows

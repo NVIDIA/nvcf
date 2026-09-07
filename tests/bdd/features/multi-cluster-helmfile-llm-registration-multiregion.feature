@@ -70,11 +70,179 @@ Feature: Register an LLM worker securely with routers in two local regions
       When I run command "kubectl --context k3d-ncp-local-cp rollout status deployment/llm-request-router -n nvcf --timeout=10m"
       Then the command exit code should be 0
 
-      # This script still hides the Region B release values, routes, alias
-      # endpoints, and rollout waits. Replacing it with visible DSL steps is
-      # tracked in https://github.com/NVIDIA/nvcf/issues/1391.
-      When I run command "tests/bdd/scripts/install-llm-region-b.sh"
+      # Region B: write visible override values for a second LLM request
+      # router with a distinct StatefulSet identity.
+      Given I write yaml file "tests/bdd/out/region-b-values.yaml" with values:
+        | llmRequestRouter.fullnameOverride                            | llm-request-router-region-b                                                          |
+        | llmRequestRouter.replicaCount                                | 2                                                                                    |
+        | llmRequestRouter.workload.kind                               | StatefulSet                                                                          |
+        | llmRequestRouter.service.headlessName                        | llm-request-router-region-b-headless                                                 |
+        | llmRequestRouter.kubernetes.advertisedHostnameTemplate       | {pod_name}.llm-request-router-region-b-headless.nvcf.svc.cluster.local               |
+        | llmRequestRouter.discovery.remoteWatchUrls                   | []                                                                                   |
+        | llmRequestRouter.backendRouter.enabled                       | true                                                                                 |
+        | llmRequestRouter.backendRouter.pylonGrpcDialAddress          | https://region-b-watch.nvcf.svc.cluster.local:50071                                  |
+        | llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress | region-b-watch.nvcf.svc.cluster.local:50072                                       |
+        | llmRequestRouter.backendRouter.image.pullPolicy              | IfNotPresent                                                                        |
+        | llmRequestRouter.serviceAccount.create                       | false                                                                                |
+        | llmRequestRouter.serviceAccount.name                         | llm-request-router                                                                   |
+        | llmRequestRouter.pki.enabled                                 | false                                                                                |
+        | llmRequestRouter.certificate.enabled                         | false                                                                                |
+        | llmRequestRouter.tls.mode                                    | existingSecret                                                                       |
+        | llmRequestRouter.tls.secretName                              | stargate-quic-tls                                                                    |
+        | llmRequestRouter.image.pullPolicy                            | IfNotPresent                                                                         |
+
+      # Export Region A base values so Region B inherits image tags and
+      # shared config; then install Region B with the visible overrides.
+      When I successfully run command:
+        """
+        /bin/bash -c 'helm --kube-context k3d-ncp-local-cp get values llm-request-router --namespace nvcf --output json | jq "{llmRequestRouter: .llmRequestRouter}" > ${REPO_ROOT}/tests/bdd/out/region-a-base-values.json'
+        """
+      When I run command:
+        """
+        helm --kube-context k3d-ncp-local-cp upgrade --install llm-request-router-region-b ${REPO_ROOT}/deploy/helm/llm-request-router/llm-request-router --namespace nvcf --values ${REPO_ROOT}/tests/bdd/out/region-a-base-values.json --values ${REPO_ROOT}/tests/bdd/out/region-b-values.yaml --wait --timeout 10m
+        """
       Then the command exit code should be 0
+
+      # Region B gateway resources: GRPCRoute, BackendTrafficPolicy,
+      # and cross-namespace ReferenceGrant.
+      When I successfully run command:
+        """
+        kubectl --context k3d-ncp-local-cp apply -f - <<'YAML'
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: GRPCRoute
+        metadata:
+          name: llm-worker-region-b-grpc
+          namespace: envoy-gateway-system
+        spec:
+          parentRefs:
+            - name: grpc-gw
+              namespace: envoy-gateway-system
+              sectionName: llm-grpc
+          hostnames:
+            - "region-b-watch.nvcf.svc.cluster.local"
+            - "*.llm-request-router-region-b-headless.nvcf.svc.cluster.local"
+          rules:
+            - backendRefs:
+                - name: llm-request-router-region-b-backend-router
+                  namespace: nvcf
+                  port: 50071
+        ---
+        apiVersion: gateway.envoyproxy.io/v1alpha1
+        kind: BackendTrafficPolicy
+        metadata:
+          name: llm-worker-region-b-grpc-streams
+          namespace: envoy-gateway-system
+        spec:
+          targetRefs:
+            - group: gateway.networking.k8s.io
+              kind: GRPCRoute
+              name: llm-worker-region-b-grpc
+          timeout:
+            http:
+              requestTimeout: 0s
+        ---
+        apiVersion: gateway.networking.k8s.io/v1beta1
+        kind: ReferenceGrant
+        metadata:
+          name: allow-llm-worker-region-b-route
+          namespace: nvcf
+        spec:
+          from:
+            - group: gateway.networking.k8s.io
+              kind: GRPCRoute
+              namespace: envoy-gateway-system
+          to:
+            - group: ""
+              kind: Service
+              name: llm-request-router-region-b-backend-router
+        YAML
+        """
+
+      # Discover the control-plane endpoint IP for the region-b-watch alias.
+      When I run command "kubectl --context k3d-ncp-local-compute-1 get endpoints llm-request-router --namespace nvcf --output jsonpath={.subsets[0].addresses[0].ip}"
+      Then the command exit code should be 0
+      And I export command output to environment variable "CONTROL_PLANE_IP"
+
+      # Apply the region-b-watch Service and Endpoints alias in both
+      # clusters so each cluster can reach the Region B backend-router
+      # by name. The discovered control-plane IP is interpolated by the
+      # DSL so no external templating tool is needed.
+      When I successfully run command:
+        """
+        kubectl --context k3d-ncp-local-cp apply -f - <<'YAML'
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: region-b-watch
+          namespace: nvcf
+        spec:
+          ports:
+            - name: llm-grpc
+              port: 50071
+              targetPort: llm-grpc
+              protocol: TCP
+            - name: llm-quic
+              port: 50072
+              targetPort: llm-quic
+              protocol: UDP
+        ---
+        apiVersion: v1
+        kind: Endpoints
+        metadata:
+          name: region-b-watch
+          namespace: nvcf
+        subsets:
+          - addresses:
+              - ip: ${CONTROL_PLANE_IP}
+            ports:
+              - name: llm-grpc
+                port: 50071
+                protocol: TCP
+              - name: llm-quic
+                port: 50072
+                protocol: UDP
+        YAML
+        """
+      When I successfully run command:
+        """
+        kubectl --context k3d-ncp-local-compute-1 apply -f - <<'YAML'
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: region-b-watch
+          namespace: nvcf
+        spec:
+          ports:
+            - name: llm-grpc
+              port: 50071
+              targetPort: llm-grpc
+              protocol: TCP
+            - name: llm-quic
+              port: 50072
+              targetPort: llm-quic
+              protocol: UDP
+        ---
+        apiVersion: v1
+        kind: Endpoints
+        metadata:
+          name: region-b-watch
+          namespace: nvcf
+        subsets:
+          - addresses:
+              - ip: ${CONTROL_PLANE_IP}
+            ports:
+              - name: llm-grpc
+                port: 50071
+                protocol: TCP
+              - name: llm-quic
+                port: 50072
+                protocol: UDP
+        YAML
+        """
+
+      # Wait for Region B workloads to be ready.
+      When I successfully run command "kubectl --context k3d-ncp-local-cp rollout status statefulset/llm-request-router-region-b --namespace nvcf --timeout=10m"
+      And deployment "llm-request-router-region-b-backend-router" in namespace "nvcf" using context "k3d-ncp-local-cp" should complete rollout within "10m"
 
       # The initial region advertises an explicit HTTPS recursive seed while
       # retaining every concrete Deployment pod identity. Three distinct

@@ -20,6 +20,7 @@ package dsl
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -44,6 +45,31 @@ const (
 	// with the same value; extra keys in actual are tolerated.
 	MatchSubset
 )
+
+// WriteYAMLFromKeys creates a new YAML file at path from the supplied
+// dotted-path/value pairs. The file must not already exist; use
+// UpdateYAMLKeys to modify an existing file. Parent directories are
+// created as needed. Value cells run through Interpolate before
+// assignment.
+func WriteYAMLFromKeys(path string, keys [][2]string) error {
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("write yaml %s: file already exists (use UpdateYAMLKeys to modify)", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("write yaml %s: mkdir: %w", path, err)
+	}
+	rootMap := map[string]any{}
+	for _, kv := range keys {
+		segments, err := parsePath(kv[0])
+		if err != nil {
+			return fmt.Errorf("write yaml %s: %w", path, err)
+		}
+		if err := setNested(rootMap, segments, decodeTypedValue(Interpolate(kv[1]))); err != nil {
+			return fmt.Errorf("write yaml %s: %w", path, err)
+		}
+	}
+	return writeYAML(path, rootMap)
+}
 
 // UpdateYAMLKeys reads the YAML file at path, applies each (dotted-path,
 // value) pair as an upsert, and writes the file back. Path syntax uses
@@ -208,6 +234,30 @@ func SubstituteFileBlock(path, spec string) error {
 		return fmt.Errorf("%s: substitution old block is not present", path)
 	}
 	return SubstituteFile(path, oldBlock, newBlock)
+}
+
+// decodeTypedValue converts the YAML-significant literals that Helm
+// evaluates differently when quoted. Booleans are decoded because
+// Go templates treat the string "false" as truthy. Collection
+// literals like "[]" are decoded so Helm sees an empty list instead
+// of a non-empty string. Numbers are left as strings: Helm coerces
+// them in template expressions, and eagerly parsing "1.0" as a float
+// would lose the trailing zero on round-trip.
+func decodeTypedValue(s string) any {
+	switch s {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	var decoded any
+	if err := yaml.Unmarshal([]byte(s), &decoded); err == nil {
+		switch decoded.(type) {
+		case []any, map[string]any:
+			return decoded
+		}
+	}
+	return s
 }
 
 // readYAMLAny reads path and unmarshals into a generic any value.

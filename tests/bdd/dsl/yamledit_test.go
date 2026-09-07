@@ -313,6 +313,120 @@ func TestSubstituteFileBlockRejectsMissingOldBlock(t *testing.T) {
 	}
 }
 
+// TestWriteYAMLFromKeysCreatesNewFile verifies that WriteYAMLFromKeys
+// produces a nested YAML structure from dotted-path key/value pairs
+// and creates intermediate directories.
+func TestWriteYAMLFromKeysCreatesNewFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sub", "region-b.yaml")
+
+	keys := [][2]string{
+		{"llmRequestRouter.fullnameOverride", "llm-request-router-region-b"},
+		{"llmRequestRouter.replicaCount", "2"},
+		{"llmRequestRouter.workload.kind", "StatefulSet"},
+	}
+	if err := WriteYAMLFromKeys(path, keys); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	out := string(got)
+	for _, want := range []string{
+		"fullnameOverride: llm-request-router-region-b",
+		"replicaCount: \"2\"",
+		"kind: StatefulSet",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestWriteYAMLFromKeysPreservesBoolsAndCollections verifies that
+// booleans and collection literals are decoded to native YAML types
+// while numbers remain as quoted strings.
+func TestWriteYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "typed.yaml")
+
+	keys := [][2]string{
+		{"router.enabled", "true"},
+		{"router.pki.enabled", "false"},
+		{"router.replicaCount", "2"},
+		{"router.discovery.remoteWatchUrls", "[]"},
+		{"router.name", "region-b"},
+	}
+	if err := WriteYAMLFromKeys(path, keys); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	out := string(got)
+
+	for _, want := range []string{
+		"enabled: true",
+		"enabled: false",
+		"remoteWatchUrls: []",
+		"name: region-b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		`enabled: "true"`,
+		`enabled: "false"`,
+		`remoteWatchUrls: "[]"`,
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("value emitted as quoted string %q:\n%s", unwanted, out)
+		}
+	}
+	// Numbers stay as quoted strings; Helm coerces them in templates.
+	if !strings.Contains(out, `replicaCount: "2"`) {
+		t.Fatalf("replicaCount should remain a quoted string:\n%s", out)
+	}
+}
+
+// TestWriteYAMLFromKeysRejectsExistingFile confirms that
+// WriteYAMLFromKeys refuses to overwrite an existing file.
+func TestWriteYAMLFromKeysRejectsExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exists.yaml")
+	writeFile(t, path, "key: value\n")
+
+	err := WriteYAMLFromKeys(path, [][2]string{{"key", "new"}})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v, want already-exists error", err)
+	}
+}
+
+// TestWriteYAMLFromKeysInterpolatesValues confirms that ${VAR}
+// references in value cells are expanded before writing.
+func TestWriteYAMLFromKeysInterpolatesValues(t *testing.T) {
+	t.Setenv("BDD_TEST_HOST", "region-b.example.invalid")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "interpolated.yaml")
+
+	keys := [][2]string{
+		{"service.host", "${BDD_TEST_HOST}"},
+	}
+	if err := WriteYAMLFromKeys(path, keys); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "host: region-b.example.invalid") {
+		t.Fatalf("interpolation failed:\n%s", got)
+	}
+}
+
 func TestParsePathInvalidShapes(t *testing.T) {
 	bads := []string{
 		"a..b",

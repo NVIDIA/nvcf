@@ -365,6 +365,53 @@ func TestIUpdateYAMLFileWritesKeys(t *testing.T) {
 	}
 }
 
+// TestIWriteYAMLFileCreatesAndRestores verifies that the write-yaml
+// step creates the file and that the Ledger removes it on restore.
+func TestIWriteYAMLFileCreatesAndRestores(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	rel := "out/region-b-values.yaml"
+	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
+
+	table := docTable(t, [][]string{
+		{"llmRequestRouter.fullnameOverride", "llm-request-router-region-b"},
+		{"llmRequestRouter.replicaCount", "2"},
+	})
+	if err := sc.iWriteYAMLFile(rel, table); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(got), "fullnameOverride: llm-request-router-region-b") {
+		t.Fatalf("missing key:\n%s", got)
+	}
+
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(abs); err == nil {
+		t.Fatal("file should be removed after restore")
+	}
+}
+
+// TestIWriteYAMLFileRejectsExistingFile confirms that the write-yaml
+// step refuses to overwrite an existing file.
+func TestIWriteYAMLFileRejectsExistingFile(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	rel := "existing.yaml"
+	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
+	if err := os.WriteFile(abs, []byte("key: value\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	table := docTable(t, [][]string{{"key", "new"}})
+	err := sc.iWriteYAMLFile(rel, table)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v, want already-exists error", err)
+	}
+}
+
 func TestISubstituteBlockReplacesAndRestoresFile(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	rel := "global.yaml.gotmpl"
