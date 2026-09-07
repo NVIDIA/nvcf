@@ -25,24 +25,26 @@ import (
 
 func TestParseRole(t *testing.T) {
 	tests := []struct {
-		in   string
-		want string
+		in        string
+		want      clustervalidator.Role
+		wantKnown bool
 	}{
-		// Known roles are normalized.
-		{"control-plane", clustervalidator.RoleControlPlane},
-		{"CONTROL-PLANE", clustervalidator.RoleControlPlane},
-		{" control-plane ", clustervalidator.RoleControlPlane},
-		{"compute-plane", clustervalidator.RoleComputePlane},
-		{"COMPUTE-PLANE", clustervalidator.RoleComputePlane},
-		// Unknown values (including unset) fall back to "" = compute-plane default.
-		{"", ""},
-		{"gpu", ""},
-		{"both", ""},
-		{"control_plane", ""}, // underscore, not hyphen
+		// Known roles are normalized and reported as known.
+		{"control-plane", clustervalidator.RoleControlPlane, true},
+		{"CONTROL-PLANE", clustervalidator.RoleControlPlane, true},
+		{" control-plane ", clustervalidator.RoleControlPlane, true},
+		{"compute-plane", clustervalidator.RoleComputePlane, true},
+		{"COMPUTE-PLANE", clustervalidator.RoleComputePlane, true},
+		// Unknown values fall back to compute-plane and are reported as unknown.
+		{"", clustervalidator.RoleComputePlane, false},
+		{"gpu", clustervalidator.RoleComputePlane, false},
+		{"both", clustervalidator.RoleComputePlane, false},
+		{"control_plane", clustervalidator.RoleComputePlane, false}, // underscore, not hyphen
 	}
 	for _, tt := range tests {
-		if got := parseRole(tt.in); got != tt.want {
-			t.Errorf("parseRole(%q) = %q, want %q", tt.in, got, tt.want)
+		got, gotKnown := parseRole(tt.in)
+		if got != tt.want || gotKnown != tt.wantKnown {
+			t.Errorf("parseRole(%q) = (%q, %v), want (%q, %v)", tt.in, got, gotKnown, tt.want, tt.wantKnown)
 		}
 	}
 }
