@@ -313,27 +313,21 @@ func TestSubstituteFileBlockRejectsMissingOldBlock(t *testing.T) {
 	}
 }
 
-// TestWriteYAMLFromKeysCreatesNewFile verifies that WriteYAMLFromKeys
-// produces a nested YAML structure from dotted-path key/value pairs
-// and creates intermediate directories.
-func TestWriteYAMLFromKeysCreatesNewFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sub", "region-b.yaml")
-
+// TestRenderYAMLFromKeysBuildsNestedDocument verifies that
+// RenderYAMLFromKeys produces a nested YAML structure from dotted-path
+// key/value pairs without touching the filesystem.
+func TestRenderYAMLFromKeysBuildsNestedDocument(t *testing.T) {
 	keys := [][2]string{
 		{"llmRequestRouter.fullnameOverride", "llm-request-router-region-b"},
 		{"llmRequestRouter.replicaCount", "2"},
 		{"llmRequestRouter.workload.kind", "StatefulSet"},
 	}
-	if err := WriteYAMLFromKeys(path, keys); err != nil {
-		t.Fatalf("write: %v", err)
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
 	}
 
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	out := string(got)
+	out := string(body)
 	for _, want := range []string{
 		"fullnameOverride: llm-request-router-region-b",
 		"replicaCount: \"2\"",
@@ -345,13 +339,10 @@ func TestWriteYAMLFromKeysCreatesNewFile(t *testing.T) {
 	}
 }
 
-// TestWriteYAMLFromKeysPreservesBoolsAndCollections verifies that
+// TestRenderYAMLFromKeysPreservesBoolsAndCollections verifies that
 // booleans and collection literals are decoded to native YAML types
 // while numbers remain as quoted strings.
-func TestWriteYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "typed.yaml")
-
+func TestRenderYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
 	keys := [][2]string{
 		{"router.enabled", "true"},
 		{"router.pki.enabled", "false"},
@@ -359,15 +350,11 @@ func TestWriteYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
 		{"router.discovery.remoteWatchUrls", "[]"},
 		{"router.name", "region-b"},
 	}
-	if err := WriteYAMLFromKeys(path, keys); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	got, err := os.ReadFile(path)
+	body, err := RenderYAMLFromKeys(keys)
 	if err != nil {
-		t.Fatalf("read: %v", err)
+		t.Fatalf("render: %v", err)
 	}
-	out := string(got)
+	out := string(body)
 
 	for _, want := range []string{
 		"enabled: true",
@@ -394,36 +381,36 @@ func TestWriteYAMLFromKeysPreservesBoolsAndCollections(t *testing.T) {
 	}
 }
 
-// TestWriteYAMLFromKeysRejectsExistingFile confirms that
-// WriteYAMLFromKeys refuses to overwrite an existing file.
-func TestWriteYAMLFromKeysRejectsExistingFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "exists.yaml")
-	writeFile(t, path, "key: value\n")
-
-	err := WriteYAMLFromKeys(path, [][2]string{{"key", "new"}})
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("err = %v, want already-exists error", err)
+// TestRenderYAMLFromKeysRejectsInvalidPath confirms that a malformed
+// dotted path surfaces as an error instead of a partial document.
+func TestRenderYAMLFromKeysRejectsInvalidPath(t *testing.T) {
+	keys := [][2]string{
+		{"router.name", "region-b"},
+		{"router..enabled", "true"},
+	}
+	body, err := RenderYAMLFromKeys(keys)
+	if err == nil || !strings.Contains(err.Error(), "empty segment") {
+		t.Fatalf("err = %v, want invalid-path error", err)
+	}
+	if body != nil {
+		t.Fatalf("body should be nil on error, got:\n%s", body)
 	}
 }
 
-// TestWriteYAMLFromKeysInterpolatesValues confirms that ${VAR}
-// references in value cells are expanded before writing.
-func TestWriteYAMLFromKeysInterpolatesValues(t *testing.T) {
+// TestRenderYAMLFromKeysInterpolatesValues confirms that ${VAR}
+// references in value cells are expanded before serialization.
+func TestRenderYAMLFromKeysInterpolatesValues(t *testing.T) {
 	t.Setenv("BDD_TEST_HOST", "region-b.example.invalid")
-	dir := t.TempDir()
-	path := filepath.Join(dir, "interpolated.yaml")
 
 	keys := [][2]string{
 		{"service.host", "${BDD_TEST_HOST}"},
 	}
-	if err := WriteYAMLFromKeys(path, keys); err != nil {
-		t.Fatalf("write: %v", err)
+	body, err := RenderYAMLFromKeys(keys)
+	if err != nil {
+		t.Fatalf("render: %v", err)
 	}
-
-	got, _ := os.ReadFile(path)
-	if !strings.Contains(string(got), "host: region-b.example.invalid") {
-		t.Fatalf("interpolation failed:\n%s", got)
+	if !strings.Contains(string(body), "host: region-b.example.invalid") {
+		t.Fatalf("interpolation failed:\n%s", body)
 	}
 }
 

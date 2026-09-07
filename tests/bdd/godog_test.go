@@ -1460,20 +1460,25 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	}
 
 	// Watch alias applied inline to both clusters with DSL-interpolated
-	// control-plane IP (no envsubst dependency).
-	if !commandRanThatContainsAll(runs,
-		"kubectl --context k3d-ncp-local-cp apply -f -",
-		"name: region-b-watch",
-		"ip: 192.0.2.10",
-	) {
-		t.Fatal("Region B watch alias was not applied to the control-plane cluster")
-	}
-	if !commandRanThatContainsAll(runs,
-		"kubectl --context k3d-ncp-local-compute-1 apply -f -",
-		"name: region-b-watch",
-		"ip: 192.0.2.10",
-	) {
-		t.Fatal("Region B watch alias was not applied to the compute cluster")
+	// control-plane IP (no envsubst dependency). Each apply must carry
+	// both the Service and the Endpoints resource; a name and IP alone
+	// would also match an unrelated resource.
+	for _, cluster := range []struct {
+		context string
+		label   string
+	}{
+		{context: "k3d-ncp-local-cp", label: "control-plane"},
+		{context: "k3d-ncp-local-compute-1", label: "compute"},
+	} {
+		if !commandRanThatContainsAll(runs,
+			"kubectl --context "+cluster.context+" apply -f -",
+			"kind: Service",
+			"kind: Endpoints",
+			"name: region-b-watch",
+			"ip: 192.0.2.10",
+		) {
+			t.Fatalf("Region B watch alias Service and Endpoints were not applied to the %s cluster", cluster.label)
+		}
 	}
 
 	if !commandRanThatContains(runs, "rollout status statefulset/llm-request-router-region-b") {

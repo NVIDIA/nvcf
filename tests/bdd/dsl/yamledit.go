@@ -20,7 +20,6 @@ package dsl
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -46,29 +45,30 @@ const (
 	MatchSubset
 )
 
-// WriteYAMLFromKeys creates a new YAML file at path from the supplied
-// dotted-path/value pairs. The file must not already exist; use
-// UpdateYAMLKeys to modify an existing file. Parent directories are
-// created as needed. Value cells run through Interpolate before
-// assignment.
-func WriteYAMLFromKeys(path string, keys [][2]string) error {
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("write yaml %s: file already exists (use UpdateYAMLKeys to modify)", path)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("write yaml %s: mkdir: %w", path, err)
-	}
+// RenderYAMLFromKeys builds a YAML document from the supplied
+// dotted-path/value pairs and returns its serialized bytes. It is the
+// pure counterpart of UpdateYAMLKeys for a file that does not exist
+// yet: the caller owns the destination path, the existence check, and
+// the write. Path syntax matches UpdateYAMLKeys. Value cells run
+// through Interpolate and then decodeTypedValue so booleans and
+// collection literals reach Helm as native YAML types rather than
+// quoted strings.
+func RenderYAMLFromKeys(keys [][2]string) ([]byte, error) {
 	rootMap := map[string]any{}
 	for _, kv := range keys {
 		segments, err := parsePath(kv[0])
 		if err != nil {
-			return fmt.Errorf("write yaml %s: %w", path, err)
+			return nil, fmt.Errorf("render yaml: %w", err)
 		}
 		if err := setNested(rootMap, segments, decodeTypedValue(Interpolate(kv[1]))); err != nil {
-			return fmt.Errorf("write yaml %s: %w", path, err)
+			return nil, fmt.Errorf("render yaml: %w", err)
 		}
 	}
-	return writeYAML(path, rootMap)
+	body, err := yaml.Marshal(rootMap)
+	if err != nil {
+		return nil, fmt.Errorf("render yaml: marshal: %w", err)
+	}
+	return body, nil
 }
 
 // UpdateYAMLKeys reads the YAML file at path, applies each (dotted-path,

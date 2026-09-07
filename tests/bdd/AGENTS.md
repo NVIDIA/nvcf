@@ -62,8 +62,9 @@ logic into `dsl/`.
   namespace, and intended Gateway parent plus the shared context and timeout.
   The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but
   does not allowlist route kinds or duplicate Gateway API validation.
-- File-mutating steps (`I copy the file`, `I update yaml file`,
-  `I prepare self-managed secrets file`, `I substitute a block`)
+- File-mutating steps (`I copy the file`, `I write yaml file`,
+  `I update yaml file`, `I prepare self-managed secrets file`,
+  `I substitute a block`)
   snapshot the destination through `Suite.Ledger` before the first write.
   Suite teardown restores every snapshotted path.
 - `Given command has succeeded:` keys on the fully resolved command

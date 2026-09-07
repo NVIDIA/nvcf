@@ -106,6 +106,7 @@ refactor in every consumer; that is a feature.
 | Step | Notes |
 |------|-------|
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
+| `And I write yaml file {string} with values:` (two-column table of dotted-path and value) | Creates a new YAML file from the visible table. The destination must not already exist; the step fails instead of overwriting so an authored file is never silently replaced. Parent directories are created. Path syntax and `${VAR}` expansion match `I update yaml file`. Boolean literals and collection literals such as `[]` are written as native YAML types, not quoted strings, because Helm treats the string `"false"` as truthy. Numbers stay as strings. The destination is ledger-backed and removed at teardown. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
 | `And I prepare Helmfile environment {string} for stack {string} from fixture {string} with values:` (two-column table of dotted-path and value) | Validates the stack and environment names, derives `deploy/stacks/<stack>/environments/<environment>.yaml` from the absolute repository root, copies the explicit fixture, and applies the visible values table with the same YAML update and `${VAR}` interpolation behavior. Supported stacks are `self-managed`, `observability`, and `nvcf-compute-plane`. The destination is ledger-backed. |
 | `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
@@ -288,7 +289,7 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
 ## File restoration
 
 Every step that writes into a path under the repo working tree
-(`I copy the file ... to ...`, `I update yaml file ...`,
+(`I copy the file ... to ...`, `I write yaml file ...`, `I update yaml file ...`,
 `I prepare self-managed secrets file ...`, `I substitute a block ...`)
 registers that path with the runner's
 restoration ledger:
