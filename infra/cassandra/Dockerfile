@@ -31,6 +31,26 @@ RUN mkdir /tmp/java-libraries && \
       printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c - || exit 1; \
     done < /tmp/java-libraries.lock
 
+FROM --platform=$BUILDPLATFORM alpine:3.21 AS exporter-repacker
+RUN apk add --no-cache curl unzip zip
+
+# The release build supplies a compatible exporter agent. Replace the complete
+# shaded Netty module set with checksum-pinned security updates while retaining
+# the agent implementation, manifest, and unrelated dependencies.
+ARG EXPORTER_JAR=files/.gitkeep
+ARG EXPORTER_JAVAAGENT=""
+COPY ${EXPORTER_JAR} /tmp/exporter-input.jar
+COPY scripts/repack-exporter-netty.sh /usr/local/bin/repack-exporter-netty
+RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
+      echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
+      exit 1; \
+    fi && \
+    if [ ! -s /tmp/exporter-input.jar ] && [ -n "${EXPORTER_JAVAAGENT}" ]; then \
+      echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
+      exit 1; \
+    fi && \
+    repack-exporter-netty /tmp/exporter-input.jar /tmp/cassandra-exporter-agent.jar
+
 FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
 
 # Refresh the OpenSSL runtime packages independently of the upstream image
@@ -56,8 +76,6 @@ RUN apt-get update && \
 # builds override this with --build-arg EXPORTER_JAR=files/<real-jar> (see
 # Makefile / .gitlab-ci.yml). To build with the exporter locally, download
 # the jar into files/ and pass --build-arg EXPORTER_JAR=files/<jar-name>.
-ARG EXPORTER_JAR=files/.gitkeep
-
 # The javaagent flag itself is also gated behind a build arg. Without a real
 # jar, wiring -javaagent unconditionally would point the JVM at the empty
 # .gitkeep placeholder and abort startup with "Error opening zip file or JAR
@@ -66,7 +84,7 @@ ARG EXPORTER_JAR=files/.gitkeep
 # passes neither, so the image boots with no agent and no metrics.
 ARG EXPORTER_JAVAAGENT=""
 
-COPY ${EXPORTER_JAR} /opt/cassandra/lib/cassandra-exporter-agent.jar
+COPY --from=exporter-repacker /tmp/cassandra-exporter-agent.jar /opt/cassandra/lib/cassandra-exporter-agent.jar
 COPY scripts/cassandra-env.sh /etc/cassandra/cassandra-env.sh
 COPY --from=yq-downloader /tmp/yq /usr/local/bin/yq
 COPY --from=yq-downloader /tmp/java-libraries/*.jar /opt/cassandra/lib/
