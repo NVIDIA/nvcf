@@ -663,7 +663,8 @@ async fn gather_scaling_inputs(
         }
     }
 
-    if cache_source {
+    // ControlPlane is inferred from metric absence, so a scrape race must be re-probed next cycle.
+    if cache_source && metric_source != MetricSource::ControlPlane {
         routing_cache.sources.insert(key, metric_source);
     }
 
@@ -1161,8 +1162,9 @@ mod tests {
         client: &TimeseriesDbClient,
         function_id: &Uuid,
         function_version_id: &Uuid,
-    ) -> GatheredScalingInputs {
-        gather_scaling_inputs(
+    ) -> (GatheredScalingInputs, MetricRoutingCache) {
+        let routing_cache = new_metric_routing_cache();
+        let gathered = gather_scaling_inputs(
             client,
             function_id,
             function_version_id,
@@ -1170,10 +1172,11 @@ mod tests {
             "stg",
             true,
             &ScalingSettings::default(),
-            &new_metric_routing_cache(),
+            &routing_cache,
         )
         .await
-        .expect("gather scaling inputs")
+        .expect("gather scaling inputs");
+        (gathered, routing_cache)
     }
 
     fn gateway_version(function_version_id: Uuid, current_instances: usize) -> GatewayTarget {
@@ -1388,9 +1391,14 @@ mod tests {
             .create_async()
             .await;
 
-        let gathered = gather_for_test(&ts_client(server.url()), &fid, &idle_version).await;
+        let (gathered, routing_cache) =
+            gather_for_test(&ts_client(server.url()), &fid, &idle_version).await;
 
         assert_eq!(gathered.inputs.metric_source, MetricSource::LlmGateway);
+        assert_eq!(
+            routing_cache.sources.get(&(fid, idle_version)),
+            Some(MetricSource::LlmGateway)
+        );
         assert_eq!(gathered.inputs.current_instances, 2);
         assert_eq!(gathered.inputs.utilization_samples, vec![25.0]);
         assert!(gathered.inputs.recently_invoked);
@@ -1491,9 +1499,10 @@ mod tests {
         );
     }
 
-    /// No worker or gateway series -> fall back to control-plane metrics.
+    /// No worker or gateway series -> fall back to control-plane metrics without
+    /// caching that absence-based classification.
     #[tokio::test]
-    async fn test_gather_falls_back_to_control_plane_when_other_sources_are_absent() {
+    async fn test_control_plane_fallback_is_not_cached() {
         let fid = Uuid::new_v4();
         let fvid = Uuid::new_v4();
         let mut server = mockito::Server::new_async().await;
@@ -1539,10 +1548,12 @@ mod tests {
             .create_async()
             .await;
 
-        let gathered = gather_for_test(&ts_client(server.url()), &fid, &fvid).await;
+        let (gathered, routing_cache) =
+            gather_for_test(&ts_client(server.url()), &fid, &fvid).await;
 
         assert_eq!(gathered.inputs.current_instances, 7);
         assert_eq!(gathered.inputs.metric_source, MetricSource::ControlPlane);
+        assert_eq!(routing_cache.sources.get(&(fid, fvid)), None);
     }
 
     #[tokio::test]
