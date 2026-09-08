@@ -222,14 +222,16 @@ class RenderedStackTests(unittest.TestCase):
             "models": {
                 "stargate-dev-model": {
                     "algorithm": "wait-and-widen",
-                    "comparator": "ttft",
+                    "comparator": "utilization",
                     "require_cache_affinity_key": True,
                     "require_input_tokens": True,
-                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_backend_selection_count": 2,
                     "cache_affinity_input_tokens_scale": 0.1,
                     "cache_affinity_virtual_nodes": 150,
                     "max_queue_time_floor_ms": 100,
                     "max_queue_time_ceil_ms": 5000,
+                    "n": 2,
+                    "max_queued": 1,
                 }
             },
         }
