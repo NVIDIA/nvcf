@@ -226,6 +226,7 @@ class RenderedStackTests(unittest.TestCase):
                     "require_cache_affinity_key": True,
                     "require_input_tokens": True,
                     "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_input_tokens_scale": 0.1,
                     "cache_affinity_virtual_nodes": 150,
                     "max_queue_time_floor_ms": 100,
                     "max_queue_time_ceil_ms": 5000,
