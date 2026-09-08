@@ -63,6 +63,8 @@ pub(crate) struct SseEventFacts {
     pub(crate) protocol: Option<SseEventProtocol>,
     pub(crate) generated_output: Option<GeneratedOutput>,
     pub(crate) exact_usage: Option<ExactUsage>,
+    pub(crate) chat_choices: Vec<ChatChoiceCalibration>,
+    pub(crate) reasoning_output_observed: bool,
     pub(crate) calibration_ineligible: bool,
     pub(crate) terminal: Option<RelayOutcome>,
 }
@@ -75,31 +77,10 @@ pub(crate) struct ParsedSseMessage {
     pub(crate) received_at: Instant,
 }
 
-impl ParsedSseMessage {
-    pub(crate) fn chat_choice_calibration(
-        &self,
-    ) -> impl Iterator<Item = ChatChoiceCalibration> + '_ {
-        self.parsed
-            .as_ref()
-            .filter(|value| value["object"].as_str() == Some("chat.completion.chunk"))
-            .and_then(|value| value["choices"].as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|choice| {
-                choice["index"].as_u64().map(|index| ChatChoiceCalibration {
-                    index,
-                    safely_finished: matches!(
-                        choice["finish_reason"].as_str(),
-                        Some("stop" | "length")
-                    ),
-                })
-            })
-    }
-}
-
 #[derive(Debug, Default)]
 struct SseMessageBuffer {
     buffer: BytesMut,
+    output_token_calibration_enabled: bool,
 }
 
 impl SseMessageBuffer {
@@ -133,8 +114,13 @@ impl SseMessageBuffer {
     fn pop_event(&mut self, event_end: usize) -> ParsedSseMessage {
         let raw_event = self.buffer.split_to(event_end).freeze();
         let fields = extract_sse_fields(raw_event.as_ref());
-        let (parsed, mut facts) = classify_sse_event(fields.event_name.as_deref(), &fields.data);
-        facts.calibration_ineligible |= fields.conflicting_event_names;
+        let (parsed, mut facts) = classify_sse_event(
+            fields.event_name.as_deref(),
+            &fields.data,
+            self.output_token_calibration_enabled,
+        );
+        facts.calibration_ineligible |=
+            self.output_token_calibration_enabled && fields.conflicting_event_names;
         ParsedSseMessage {
             raw_event,
             parsed,
@@ -184,6 +170,7 @@ pub(crate) fn upstream_sse_message_stream<S>(
     first_output_timeout: Duration,
     output_chunk_timeout: Duration,
     max_buffer_bytes: usize,
+    output_token_calibration_enabled: bool,
 ) -> UpstreamSseMessageStream
 where
     S: Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Unpin + 'static,
@@ -196,6 +183,7 @@ where
         first_output_deadline,
         output_chunk_timeout,
         max_buffer_bytes,
+        output_token_calibration_enabled,
     )));
     Box::pin(async_stream::stream! {
         while let Some(message) = delivery_rx.recv().await {
@@ -213,10 +201,14 @@ async fn produce_sse_messages<S>(
     first_output_deadline: tokio::time::Instant,
     output_chunk_timeout: Duration,
     max_buffer_bytes: usize,
+    output_token_calibration_enabled: bool,
 ) where
     S: Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Unpin + 'static,
 {
-    let mut sse_messages = SseMessageBuffer::default();
+    let mut sse_messages = SseMessageBuffer {
+        output_token_calibration_enabled,
+        ..SseMessageBuffer::default()
+    };
     let mut timeout_phase = SseReadTimeoutPhase::FirstOutput;
     let mut deadline = first_output_deadline;
 
@@ -335,7 +327,11 @@ async fn deliver_sse_message(
     true
 }
 
-fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, SseEventFacts) {
+fn classify_sse_event(
+    event_name: Option<&str>,
+    data: &str,
+    output_token_calibration_enabled: bool,
+) -> (Option<Value>, SseEventFacts) {
     let trimmed = data.trim();
     if trimmed == SSE_DONE_SENTINEL {
         let terminal = match terminal_outcome(event_name) {
@@ -345,9 +341,10 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
         return (
             None,
             SseEventFacts {
-                protocol: Some(SseEventProtocol::ChatCompletions),
-                calibration_ineligible: event_name
-                    .is_some_and(|event_name| event_name.starts_with("response.")),
+                protocol: output_token_calibration_enabled
+                    .then_some(SseEventProtocol::ChatCompletions),
+                calibration_ineligible: output_token_calibration_enabled
+                    && event_name.is_some_and(|event_name| event_name.starts_with("response.")),
                 terminal: Some(terminal),
                 ..SseEventFacts::default()
             },
@@ -366,7 +363,7 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
         return (
             parsed,
             SseEventFacts {
-                calibration_ineligible: !trimmed.is_empty(),
+                calibration_ineligible: output_token_calibration_enabled && !trimmed.is_empty(),
                 terminal,
                 ..SseEventFacts::default()
             },
@@ -374,16 +371,25 @@ fn classify_sse_event(event_name: Option<&str>, data: &str) -> (Option<Value>, S
     };
     let json_event_type = value["type"].as_str();
     let event_type = json_event_type.or(event_name);
-    let protocol = sse_event_protocol(value, event_type);
-    let (generated_output, generated_output_ineligible) = generated_output(value, event_type);
-    let (exact_usage, usage_ineligible) = exact_usage(value, protocol);
+    let protocol = output_token_calibration_enabled
+        .then(|| sse_event_protocol(value, event_type))
+        .flatten();
+    let (generated_output, generated_output_ineligible, chat_choices) =
+        generated_output(value, event_type, output_token_calibration_enabled);
+    let (exact_usage, usage_ineligible) =
+        exact_usage(value, protocol, output_token_calibration_enabled);
+    let (event_ineligible, reasoning_output_observed) = if output_token_calibration_enabled {
+        calibration_event(value, json_event_type, event_name)
+    } else {
+        (false, false)
+    };
     let facts = SseEventFacts {
         protocol,
         generated_output,
         exact_usage,
-        calibration_ineligible: generated_output_ineligible
-            || usage_ineligible
-            || calibration_ineligible_event(value, json_event_type, event_name),
+        chat_choices,
+        reasoning_output_observed,
+        calibration_ineligible: generated_output_ineligible || usage_ineligible || event_ineligible,
         terminal: merge_terminal_outcomes(
             terminal_outcome(json_event_type),
             terminal_outcome(event_name),
@@ -402,63 +408,57 @@ fn sse_event_protocol(value: &Value, event_type: Option<&str>) -> Option<SseEven
     }
 }
 
-fn calibration_ineligible_event(
+fn calibration_event(
     value: &Value,
     json_event_type: Option<&str>,
     event_name: Option<&str>,
-) -> bool {
+) -> (bool, bool) {
     let is_chat_completion_chunk = value["object"].as_str() == Some("chat.completion.chunk");
     let identifiers_match = match (json_event_type, event_name) {
         (Some(json_event_type), Some(event_name)) => json_event_type == event_name,
         _ => true,
     };
     if !identifiers_match {
-        return true;
+        return (true, false);
     }
 
     if is_chat_completion_chunk {
-        return json_event_type.is_some()
-            || event_name.is_some_and(|event_name| !matches!(event_name, "chunk" | "message"))
-            || value["choices"].as_array().is_none_or(|choices| {
-                choices.iter().any(|choice| {
-                    let finish_reason = &choice["finish_reason"];
-                    let delta = &choice["delta"];
-                    choice["index"].as_u64().is_none()
-                        || (!finish_reason.is_null()
-                            && !matches!(finish_reason.as_str(), Some("stop" | "length")))
-                        || delta.as_object().is_none()
-                        || !delta["function_call"].is_null()
-                        || (!delta["tool_calls"].is_null()
-                            && delta["tool_calls"]
-                                .as_array()
-                                .is_none_or(|calls| !calls.is_empty()))
-                        || chat_audio_is_calibration_ineligible(delta)
-                })
-            });
+        return (
+            json_event_type.is_some()
+                || event_name.is_some_and(|event_name| !matches!(event_name, "chunk" | "message")),
+            false,
+        );
     }
 
     match json_event_type.or(event_name) {
-        Some("response.created" | "response.queued" | "response.in_progress") => {
-            !response_output_is_calibration_safe(value, true)
+        Some("response.created" | "response.in_progress") => {
+            response_output_calibration(value, true, false)
         }
-        Some("response.output_item.added" | "response.output_item.done") => !matches!(
-            value["item"]["type"].as_str(),
-            Some("message" | "reasoning")
+        Some("response.queued") => response_output_calibration(value, true, true),
+        Some("response.output_item.added" | "response.output_item.done") => {
+            let item_type = value["item"]["type"].as_str();
+            (
+                !matches!(item_type, Some("message" | "reasoning")),
+                item_type == Some("reasoning"),
+            )
+        }
+        Some("response.content_part.added" | "response.content_part.done") => (
+            !matches!(
+                value["part"]["type"].as_str(),
+                Some("output_text" | "refusal" | "reasoning_text")
+            ),
+            false,
         ),
-        Some("response.content_part.added" | "response.content_part.done") => !matches!(
-            value["part"]["type"].as_str(),
-            Some("output_text" | "refusal" | "reasoning_text")
-        ),
-        Some("response.output_text.delta") => value["delta"].as_str().is_none(),
-        Some("response.output_text.done") => value["text"].as_str().is_none(),
-        Some("response.refusal.delta") => value["delta"].as_str().is_none(),
-        Some("response.refusal.done") => value["refusal"].as_str().is_none(),
+        Some("response.output_text.delta") => (value["delta"].as_str().is_none(), false),
+        Some("response.output_text.done") => (value["text"].as_str().is_none(), false),
+        Some("response.refusal.delta") => (value["delta"].as_str().is_none(), false),
+        Some("response.refusal.done") => (value["refusal"].as_str().is_none(), false),
         Some("response.reasoning_text.delta" | "response.audio.transcript.delta") => {
-            value["delta"].as_str().is_none()
+            (value["delta"].as_str().is_none(), false)
         }
-        Some("response.reasoning_text.done") => value["text"].as_str().is_none(),
-        Some("response.completed") => !response_output_is_calibration_safe(value, false),
-        Some(_) | None => true,
+        Some("response.reasoning_text.done") => (value["text"].as_str().is_none(), false),
+        Some("response.completed") => response_output_calibration(value, false, false),
+        Some(_) | None => (true, false),
     }
 }
 
@@ -480,13 +480,26 @@ fn chat_audio_is_calibration_ineligible(delta: &Value) -> bool {
     !transcript_is_text || contains_binary_data
 }
 
-fn response_output_is_calibration_safe(value: &Value, allow_empty: bool) -> bool {
-    value["response"]["output"].as_array().is_some_and(|items| {
-        (allow_empty || !items.is_empty())
-            && items
-                .iter()
-                .all(|item| matches!(item["type"].as_str(), Some("message" | "reasoning")))
-    })
+fn response_output_calibration(
+    value: &Value,
+    allow_empty: bool,
+    allow_missing: bool,
+) -> (bool, bool) {
+    let output = &value["response"]["output"];
+    if output.is_null() {
+        return (!allow_missing, false);
+    }
+    let Some(items) = output.as_array() else {
+        return (true, false);
+    };
+    let reasoning_output_observed = items
+        .iter()
+        .any(|item| item["type"].as_str() == Some("reasoning"));
+    let safe = (allow_empty || !items.is_empty())
+        && items
+            .iter()
+            .all(|item| matches!(item["type"].as_str(), Some("message" | "reasoning")));
+    (!safe, reasoning_output_observed)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -614,16 +627,43 @@ const RESPONSES_OUTPUT_ALLOWLIST: &[ResponsesOutputSpec] = &[
     },
 ];
 
-fn generated_output(value: &Value, event_type: Option<&str>) -> (Option<GeneratedOutput>, bool) {
+fn generated_output(
+    value: &Value,
+    event_type: Option<&str>,
+    output_token_calibration_enabled: bool,
+) -> (Option<GeneratedOutput>, bool, Vec<ChatChoiceCalibration>) {
     let mut output = GeneratedOutput::default();
     let mut saw_generated_output = false;
     let mut calibration_ineligible = false;
+    let mut chat_choices = Vec::new();
 
     if value["object"].as_str() == Some("chat.completion.chunk")
         && let Some(choices) = value["choices"].as_array()
     {
         for choice in choices {
             let delta = &choice["delta"];
+            if output_token_calibration_enabled {
+                match choice["index"].as_u64() {
+                    Some(index) => chat_choices.push(ChatChoiceCalibration {
+                        index,
+                        safely_finished: matches!(
+                            choice["finish_reason"].as_str(),
+                            Some("stop" | "length")
+                        ),
+                    }),
+                    None => calibration_ineligible = true,
+                }
+                let finish_reason = &choice["finish_reason"];
+                calibration_ineligible |= (!finish_reason.is_null()
+                    && !matches!(finish_reason.as_str(), Some("stop" | "length")))
+                    || delta.as_object().is_none()
+                    || !delta["function_call"].is_null()
+                    || (!delta["tool_calls"].is_null()
+                        && delta["tool_calls"]
+                            .as_array()
+                            .is_none_or(|calls| !calls.is_empty()))
+                    || chat_audio_is_calibration_ineligible(delta);
+            }
             for spec in CHAT_DELTA_TEXT_FIELDS {
                 add_generated_text(
                     &mut output,
@@ -680,7 +720,8 @@ fn generated_output(value: &Value, event_type: Option<&str>) -> (Option<Generate
 
     (
         saw_generated_output.then_some(output),
-        calibration_ineligible,
+        output_token_calibration_enabled && calibration_ineligible,
+        chat_choices,
     )
 }
 
@@ -709,11 +750,21 @@ fn add_generated_text(
     }
 }
 
-fn exact_usage(value: &Value, protocol: Option<SseEventProtocol>) -> (Option<ExactUsage>, bool) {
+const CHAT_OUTPUT_DETAIL_FIELDS: &[&str] = &[
+    "accepted_prediction_tokens",
+    "audio_tokens",
+    "reasoning_tokens",
+    "rejected_prediction_tokens",
+];
+const RESPONSES_OUTPUT_DETAIL_FIELDS: &[&str] = &["reasoning_tokens"];
+
+fn exact_usage(
+    value: &Value,
+    protocol: Option<SseEventProtocol>,
+    output_token_calibration_enabled: bool,
+) -> (Option<ExactUsage>, bool) {
     let usage = &value["usage"];
     let response_usage = &value["response"]["usage"];
-    let completion_details = &usage["completion_tokens_details"];
-    let output_details = &response_usage["output_tokens_details"];
     let (input_tokens, invalid_input_tokens) =
         merge_u64_fields([&usage["prompt_tokens"], &response_usage["input_tokens"]]);
     let (output_tokens, invalid_output_tokens) = merge_u64_fields([
@@ -721,6 +772,19 @@ fn exact_usage(value: &Value, protocol: Option<SseEventProtocol>) -> (Option<Exa
         &response_usage["output_tokens"],
         &value["output_tokens_so_far"],
     ]);
+    if !output_token_calibration_enabled {
+        return (
+            (input_tokens.is_some() || output_tokens.is_some()).then_some(ExactUsage {
+                input_tokens,
+                output_tokens,
+                reasoning_tokens: None,
+            }),
+            false,
+        );
+    }
+
+    let completion_details = &usage["completion_tokens_details"];
+    let output_details = &response_usage["output_tokens_details"];
     let (reasoning_tokens, invalid_reasoning_tokens) = merge_u64_fields([
         &completion_details["reasoning_tokens"],
         &output_details["reasoning_tokens"],
@@ -733,9 +797,14 @@ fn exact_usage(value: &Value, protocol: Option<SseEventProtocol>) -> (Option<Exa
         &completion_details["rejected_prediction_tokens"],
         &output_details["rejected_prediction_tokens"],
     ]);
+    let (accepted_prediction_tokens, invalid_accepted_prediction_tokens) =
+        merge_u64_fields([&completion_details["accepted_prediction_tokens"]]);
     let invalid_container = [usage, response_usage, completion_details, output_details]
         .into_iter()
         .any(|value| !value.is_null() && value.as_object().is_none());
+    let unknown_output_details =
+        output_details_have_unknown_fields(completion_details, CHAT_OUTPUT_DETAIL_FIELDS)
+            || output_details_have_unknown_fields(output_details, RESPONSES_OUTPUT_DETAIL_FIELDS);
     let chat_usage_observed = !usage.is_null() || !value["output_tokens_so_far"].is_null();
     let responses_usage_observed = !response_usage.is_null();
     let usage_protocol_mismatch = match protocol {
@@ -750,8 +819,11 @@ fn exact_usage(value: &Value, protocol: Option<SseEventProtocol>) -> (Option<Exa
         || invalid_reasoning_tokens
         || invalid_audio_tokens
         || invalid_rejected_prediction_tokens
+        || invalid_accepted_prediction_tokens
+        || unknown_output_details
         || audio_tokens.is_some_and(|tokens| tokens > 0)
-        || rejected_prediction_tokens.is_some_and(|tokens| tokens > 0);
+        || rejected_prediction_tokens.is_some_and(|tokens| tokens > 0)
+        || accepted_prediction_tokens.is_some_and(|tokens| tokens > 0);
     (
         (input_tokens.is_some() || output_tokens.is_some() || reasoning_tokens.is_some())
             .then_some(ExactUsage {
@@ -761,6 +833,14 @@ fn exact_usage(value: &Value, protocol: Option<SseEventProtocol>) -> (Option<Exa
             }),
         calibration_ineligible,
     )
+}
+
+fn output_details_have_unknown_fields(details: &Value, known_fields: &[&str]) -> bool {
+    details.as_object().is_some_and(|details| {
+        details
+            .iter()
+            .any(|(field, _)| !known_fields.contains(&field))
+    })
 }
 
 fn merge_u64_fields<const N: usize>(values: [&Value; N]) -> (Option<u64>, bool) {
@@ -856,8 +936,15 @@ fn extract_sse_fields(event_bytes: &[u8]) -> ExtractedSseFields {
 mod tests {
     use super::*;
 
+    fn calibration_buffer() -> SseMessageBuffer {
+        SseMessageBuffer {
+            output_token_calibration_enabled: true,
+            ..SseMessageBuffer::default()
+        }
+    }
+
     fn parse_event(raw_event: impl AsRef<[u8]>) -> ParsedSseMessage {
-        let mut messages = SseMessageBuffer::default();
+        let mut messages = calibration_buffer();
         messages.push_bytes(raw_event.as_ref());
         let parsed = messages
             .next()
@@ -872,7 +959,7 @@ mod tests {
 
     #[test]
     fn yields_only_complete_messages_and_preserves_raw_bytes() {
-        let mut messages = SseMessageBuffer::default();
+        let mut messages = calibration_buffer();
         messages.push_bytes(b"data: first\n\ndata: sec");
         let first = messages.next().expect("first event should be complete");
         assert_eq!(first.raw_event, Bytes::from_static(b"data: first\n\n"));
@@ -1066,7 +1153,9 @@ mod tests {
         let message = r#"{"type":"response.output_item.added","item":{"type":"message"}}"#;
         assert!(!parse_data(message).facts.calibration_ineligible);
         let reasoning = r#"{"type":"response.output_item.added","item":{"type":"reasoning"}}"#;
-        assert!(!parse_data(reasoning).facts.calibration_ineligible);
+        let reasoning = parse_data(reasoning).facts;
+        assert!(!reasoning.calibration_ineligible);
+        assert!(reasoning.reasoning_output_observed);
         let reasoning_part =
             r#"{"type":"response.content_part.added","part":{"type":"reasoning_text"}}"#;
         assert!(!parse_data(reasoning_part).facts.calibration_ineligible);
@@ -1236,6 +1325,13 @@ mod tests {
             r#"{"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"text"}}]}"#,
         );
         assert!(!chat.facts.calibration_ineligible);
+        assert_eq!(
+            chat.facts.chat_choices,
+            [ChatChoiceCalibration {
+                index: 0,
+                safely_finished: false,
+            }]
+        );
     }
 
     #[test]
@@ -1311,7 +1407,7 @@ mod tests {
 
     #[test]
     fn parses_multiline_crlf_chat_events() {
-        let mut messages = SseMessageBuffer::default();
+        let mut messages = calibration_buffer();
         messages.push_bytes(
             b": keepalive\r\nevent: chunk\r\ndata: {\r\ndata: \"object\":\"chat.completion.chunk\",\r\ndata: \"choices\":[{\"delta\":{\"content\":\"hi\"}}]\r\ndata: }\r\n\r\n",
         );
@@ -1375,7 +1471,11 @@ mod tests {
 
     #[test]
     fn non_visible_completion_details_are_calibration_ineligible() {
-        for field in ["audio_tokens", "rejected_prediction_tokens"] {
+        for field in [
+            "accepted_prediction_tokens",
+            "audio_tokens",
+            "rejected_prediction_tokens",
+        ] {
             let data = serde_json::json!({
                 "object": "chat.completion.chunk",
                 "choices": [],
@@ -1412,10 +1512,12 @@ mod tests {
             r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":"2"}}}"#,
             r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5,"completion_tokens_details":{"audio_tokens":"1"}}}"#,
             r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5,"completion_tokens_details":"invalid"}}"#,
+            r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5,"completion_tokens_details":{"future_tokens":0}}}"#,
             r#"{"object":"chat.completion.chunk","usage":{"completion_tokens":5},"response":{"usage":{"output_tokens":6}}}"#,
             r#"{"object":"chat.completion.chunk","choices":[],"response":{"usage":{"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0}}}}"#,
             r#"{"type":"response.completed","usage":{"completion_tokens":5},"response":{"output":[{"type":"message"}]}}"#,
             r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5,"output_tokens_details":"invalid"}}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5,"output_tokens_details":{"future_tokens":0}}}}"#,
         ] {
             assert!(
                 parse_data(data).facts.calibration_ineligible,
@@ -1446,6 +1548,44 @@ mod tests {
             );
             assert!(!parsed.facts.calibration_ineligible);
         }
+    }
+
+    #[test]
+    fn response_queued_without_output_is_calibration_eligible() {
+        let facts = parse_data(r#"{"type":"response.queued","response":{"id":"resp-1"}}"#).facts;
+
+        assert_eq!(facts.protocol, Some(SseEventProtocol::Responses));
+        assert!(!facts.calibration_ineligible);
+    }
+
+    #[test]
+    fn completed_reasoning_output_is_recorded_without_usage_details() {
+        let facts = parse_data(
+            r#"{"type":"response.completed","response":{"output":[{"type":"reasoning"}],"usage":{"output_tokens":5}}}"#,
+        )
+        .facts;
+
+        assert!(facts.reasoning_output_observed);
+        assert!(!facts.calibration_ineligible);
+    }
+
+    #[test]
+    fn disabled_output_calibration_skips_calibration_only_classification() {
+        let mut messages = SseMessageBuffer::default();
+        messages.push_bytes(
+            b"data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"}}],\"usage\":{\"completion_tokens\":5,\"completion_tokens_details\":{\"future_tokens\":1}}}\n\n",
+        );
+
+        let facts = messages.next().expect("complete SSE event").facts;
+        assert!(facts.generated_output.is_some());
+        assert_eq!(
+            facts.exact_usage.and_then(|usage| usage.output_tokens),
+            Some(5)
+        );
+        assert_eq!(facts.protocol, None);
+        assert!(facts.chat_choices.is_empty());
+        assert!(!facts.reasoning_output_observed);
+        assert!(!facts.calibration_ineligible);
     }
 
     #[test]
@@ -1495,6 +1635,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             11,
+            true,
         );
 
         match messages.next().await {
@@ -1521,6 +1662,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             13,
+            true,
         );
 
         assert!(matches!(
@@ -1544,6 +1686,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             11,
+            true,
         );
 
         let mut received = 0;
@@ -1565,6 +1708,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             1024,
+            true,
         );
 
         match messages.next().await {
@@ -1582,6 +1726,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(5),
             1024,
+            true,
         );
 
         tx.send(Ok::<_, reqwest::Error>(Bytes::from_static(
@@ -1625,6 +1770,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             1024,
+            true,
         );
 
         tokio::time::advance(Duration::from_millis(1001)).await;
@@ -1648,6 +1794,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             1024,
+            true,
         );
         let output = Bytes::from_static(
             b"data: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n",
@@ -1713,6 +1860,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             1024,
+            true,
         );
         tx.send(Ok::<_, reqwest::Error>(Bytes::from_static(
             b": metadata\n\ndata: {\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n",
@@ -1745,6 +1893,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             1024,
+            true,
         );
         let metadata = (0..20)
             .map(|index| format!("data: {{\"index\":{index}}}\n\n"))
@@ -1780,6 +1929,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             1024,
+            true,
         );
 
         let terminal = messages.next().await.unwrap().unwrap();

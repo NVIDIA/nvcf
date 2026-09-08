@@ -107,6 +107,7 @@ pub(crate) struct OutputCalibrationFacts {
     pub(crate) raw_output_units: u64,
     pub(crate) exact_output_tokens_baseline: Option<u64>,
     pub(crate) calibration_ineligible: bool,
+    pub(crate) reasoning_output_observed: bool,
     pub(crate) reasoning_text_observed: bool,
     pub(crate) reasoning_tokens: Option<u64>,
 }

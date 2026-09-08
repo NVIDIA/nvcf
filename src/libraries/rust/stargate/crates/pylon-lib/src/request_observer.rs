@@ -345,6 +345,15 @@ impl RequestObserver {
         backend.output_calibration.calibration_ineligible |= calibration_ineligible;
     }
 
+    pub(crate) fn observe_reasoning_output(&mut self) {
+        let backend = Self::backend_mut(
+            &mut self.state,
+            &self.request_id,
+            "reasoning output observation",
+        );
+        backend.output_calibration.reasoning_output_observed = true;
+    }
+
     pub(crate) fn observe_sse_protocol(&mut self, protocol: SseEventProtocol) {
         let matches_endpoint = matches!(
             (self.endpoint, protocol),
@@ -1392,6 +1401,7 @@ mod tests {
                 raw_output_units: 4,
                 exact_output_tokens_baseline: Some(10),
                 calibration_ineligible: true,
+                reasoning_output_observed: false,
                 reasoning_text_observed: true,
                 reasoning_tokens: Some(3),
             }

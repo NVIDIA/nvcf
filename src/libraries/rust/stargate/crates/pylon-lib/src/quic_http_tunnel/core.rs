@@ -462,8 +462,11 @@ impl TunnelRequestLifecycle {
             if let Some(protocol) = message.facts.protocol {
                 obs.observe_sse_protocol(protocol);
             }
-            for choice in message.chat_choice_calibration() {
+            for &choice in &message.facts.chat_choices {
                 obs.observe_chat_choice_calibration(choice);
+            }
+            if message.facts.reasoning_output_observed {
+                obs.observe_reasoning_output();
             }
             if message.facts.calibration_ineligible {
                 obs.observe_output_calibration_details(None, true);
@@ -631,6 +634,7 @@ async fn relay_upstream_response(
             app.first_output_timeout,
             app.output_chunk_timeout,
             app.max_sse_buffer_bytes,
+            app.runtime_state.output_token_calibration_enabled(),
         );
         transport
             .send_response_head(status, response_head)

@@ -151,6 +151,7 @@ pub(super) async fn send_canary_request(
         timeout,
         timeout,
         DEFAULT_MAX_SSE_BUFFER_BYTES,
+        false,
     );
     let mut output_tokens = OutputTokenParser::new();
     let mut observed_tokens = 0_u64;

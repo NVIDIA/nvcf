@@ -2769,9 +2769,9 @@ mod tests {
         exact_output_tokens: u64,
         raw_output_units: u64,
         calibration_ineligible: bool,
-        reasoning_text_observed: bool,
-        reasoning_tokens: Option<u64>,
+        reasoning: (bool, bool, Option<u64>),
     ) {
+        let (reasoning_output_observed, reasoning_text_observed, reasoning_tokens) = reasoning;
         let submitted_at = std::time::Instant::now();
         let interval = crate::runtime_state::RequestInputInterval {
             submitted_at,
@@ -2793,6 +2793,7 @@ mod tests {
                 raw_output_units,
                 exact_output_tokens_baseline: Some(exact_output_tokens),
                 calibration_ineligible,
+                reasoning_output_observed,
                 reasoning_text_observed,
                 reasoning_tokens,
             },
@@ -2809,8 +2810,7 @@ mod tests {
                 exact,
                 raw,
                 false,
-                false,
-                None,
+                (false, false, None),
             );
         }
 
@@ -2879,8 +2879,7 @@ mod tests {
                 exact,
                 raw,
                 false,
-                false,
-                None,
+                (false, false, None),
             );
         }
         assert_eq!(
@@ -2897,8 +2896,7 @@ mod tests {
             30,
             3,
             false,
-            false,
-            None,
+            (false, false, None),
         );
         assert_eq!(
             aggregator.per_model["model-a"]
@@ -3003,8 +3001,7 @@ mod tests {
                 1,
                 4,
                 false,
-                false,
-                None,
+                (false, false, None),
             );
         }
         let model_state = &mut aggregator
@@ -3056,11 +3053,31 @@ mod tests {
             smoothing_window_size: 3,
             min_output_tokens: 5,
         ));
-        for (request_id, exact, raw, ineligible, reasoning_text, reasoning_tokens) in [
-            ("undersized", 4, 1, false, false, None),
-            ("empty", 10, 0, false, false, None),
-            ("modal", 10, 2, true, false, None),
-            ("hidden-reasoning", 10, 2, false, false, Some(1)),
+        for (request_id, exact, raw, ineligible, reasoning) in [
+            ("undersized", 4, 1, false, (false, false, None)),
+            ("empty", 10, 0, false, (false, false, None)),
+            ("modal", 10, 2, true, (false, false, None)),
+            (
+                "hidden-reasoning-with-details",
+                10,
+                2,
+                false,
+                (true, false, Some(1)),
+            ),
+            (
+                "hidden-reasoning-without-details",
+                10,
+                2,
+                false,
+                (true, false, None),
+            ),
+            (
+                "reasoning-exceeds-output",
+                5,
+                2,
+                false,
+                (true, true, Some(6)),
+            ),
         ] {
             record_output_calibration_sample(
                 &mut aggregator,
@@ -3068,8 +3085,7 @@ mod tests {
                 exact,
                 raw,
                 ineligible,
-                reasoning_text,
-                reasoning_tokens,
+                reasoning,
             );
         }
         assert_eq!(
@@ -3080,20 +3096,12 @@ mod tests {
             0
         );
 
-        for (request_id, reasoning_text, reasoning_tokens) in [
-            ("visible-reasoning", true, Some(1)),
-            ("reasoning-unavailable", false, None),
-            ("zero-hidden-reasoning", false, Some(0)),
+        for (request_id, reasoning) in [
+            ("visible-reasoning", (true, true, Some(1))),
+            ("no-reasoning", (false, false, None)),
+            ("visible-reasoning-without-details", (true, true, None)),
         ] {
-            record_output_calibration_sample(
-                &mut aggregator,
-                request_id,
-                10,
-                2,
-                false,
-                reasoning_text,
-                reasoning_tokens,
-            );
+            record_output_calibration_sample(&mut aggregator, request_id, 10, 2, false, reasoning);
         }
         assert_eq!(
             aggregator.per_model["model-a"]
@@ -3115,8 +3123,7 @@ mod tests {
                 10,
                 2,
                 false,
-                false,
-                None,
+                (false, false, None),
             );
         }
         let retired = aggregator.current_generation("model-a").unwrap().clone();

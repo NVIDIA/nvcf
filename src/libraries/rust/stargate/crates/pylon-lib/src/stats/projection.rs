@@ -362,6 +362,10 @@ fn calibration_sample_is_valid(
         && observation.output_tokens >= min_output_tokens
         && facts.raw_output_units > 0
         && !facts.calibration_ineligible
-        && !(facts.reasoning_tokens.is_some_and(|tokens| tokens > 0)
+        && facts
+            .reasoning_tokens
+            .is_none_or(|tokens| tokens <= observation.output_tokens)
+        && !((facts.reasoning_output_observed
+            || facts.reasoning_tokens.is_some_and(|tokens| tokens > 0))
             && !facts.reasoning_text_observed)
 }
