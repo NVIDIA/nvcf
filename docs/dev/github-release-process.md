@@ -492,8 +492,8 @@ exactly the version tags under that service path.
 
 Seeding tags only establishes the version floor. Nothing publishes a
 GitHub Release until `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` and
-`NVCF_GITHUB_RELEASE_DRY_RUN=false`, as described in the dry-run gate
+`NVCF_GITHUB_RELEASE_DRY_RUN=false`, as described in the Publish gate
 above. A tag pushed with the `NV_GITHUB_TOKEN` secret, or another
 workflow-capable token, starts the tag workflow, but it stays inert
-while the dry-run gate is on. Tags pushed with the default
-`GITHUB_TOKEN` do not trigger the follow-up workflow.
+if either variable is unset, falling back to dry-run. Tags pushed
+with the default `GITHUB_TOKEN` do not trigger the follow-up workflow.
