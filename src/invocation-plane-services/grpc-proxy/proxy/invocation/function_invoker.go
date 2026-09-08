@@ -20,10 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jellydator/ttlcache/v3"
 	"io"
 	"math/rand/v2"
 	"net"
-	"sync"
 	"time"
 
 	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
@@ -64,8 +64,9 @@ type FunctionInvoker struct {
 	requestRegistration *StatefulRequestRegistration
 	geoLookup           geoLookuper
 	rateLimit           rateLimiter
-	// Resolved work-stream handles, keyed by stream name. See workStream.
-	workStreams sync.Map
+	// Resolved work-stream handles, keyed by stream name. Bounded; see
+	// workStreamCacheCapacity.
+	workStreams *ttlcache.Cache[string, jetstream.Stream]
 }
 
 func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths ConnectPaths, jetstreamPlacementTag, region string, geoLookup geoLookuper, rateLimit rateLimiter) (*FunctionInvoker, error) {
@@ -78,6 +79,13 @@ func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths C
 		return nil, err
 	}
 
+	workStreams := ttlcache.New(
+		ttlcache.WithTTL[string, jetstream.Stream](workStreamCacheTTL),
+		ttlcache.WithCapacity[string, jetstream.Stream](workStreamCacheCapacity),
+		ttlcache.WithDisableTouchOnHit[string, jetstream.Stream](),
+	)
+	go workStreams.Start()
+
 	return &FunctionInvoker{
 		nc:                  nc,
 		js:                  js,
@@ -87,10 +95,16 @@ func NewFunctionInvoker(nc *nats.Conn, nvcfClient pb.ProxyClient, connectPaths C
 		requestRegistration: requestRegistration,
 		geoLookup:           geoLookup,
 		rateLimit:           rateLimit,
+		workStreams:         workStreams,
 	}, nil
 }
 
 func (f *FunctionInvoker) Close() error {
+	// Started in NewFunctionInvoker; without this its cleanup goroutine
+	// outlives the invoker.
+	if f.workStreams != nil {
+		f.workStreams.Stop()
+	}
 	f.js.CleanupPublisher()
 	if closer, ok := f.rateLimit.(io.Closer); ok {
 		_ = closer.Close()

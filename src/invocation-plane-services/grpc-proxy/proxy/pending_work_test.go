@@ -40,9 +40,30 @@ import (
 // recordingPurger stands in for the function invoker, capturing which requests
 // shutdown asked to drop.
 type recordingPurger struct {
-	mu     sync.Mutex
-	purged map[uuid.UUID]string
-	err    error
+	mu       sync.Mutex
+	purged   map[uuid.UUID]string
+	attempts int
+	err      error
+}
+
+func (p *recordingPurger) attemptCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.attempts
+}
+
+// waitForAttempt waits for the asynchronous purge to actually reach the
+// purger, so an assertion about what a failure left behind is not just racing
+// a goroutine that has not started.
+func waitForAttempt(t *testing.T, purger *recordingPurger, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for purger.attemptCount() < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("purge never reached the purger: %d attempts, want %d", purger.attemptCount(), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func newRecordingPurger() *recordingPurger {
@@ -56,6 +77,10 @@ func (p *recordingPurger) InvokeStatefulFunction(_ context.Context, _ net.Conn, 
 func (p *recordingPurger) PurgePendingWork(_ context.Context, requestId uuid.UUID, functionVersionId string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Counted before the error check so a failing purge is still observable.
+	// Without this a test cannot tell "the purge failed" from "the purge has
+	// not run yet", which silently makes assertions about failure vacuous.
+	p.attempts++
 	if p.err != nil {
 		return p.err
 	}
@@ -131,6 +156,21 @@ func TestClosePurgeSkippedWhenInvokerCannotPurge(t *testing.T) {
 
 // purgeCount reads one series of the purge counter. The counters are
 // process-global, so every assertion below is a delta.
+// waitForPurge waits for the asynchronous departure purge. Scheduling is
+// synchronous but the queue call is not, because the eviction path that
+// schedules it must never block.
+func waitForPurge(t *testing.T, purger *recordingPurger, want int) map[uuid.UUID]string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got := purger.purgedRequests()
+		if len(got) >= want || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func purgeCount(t *testing.T, result, trigger string) float64 {
 	t.Helper()
 	return testutil.ToFloat64(metrics.PendingWorkPurgedTotal.WithLabelValues(result, trigger))
@@ -156,7 +196,7 @@ func TestClientDepartureTriggerPurgesAndIsAttributed(t *testing.T) {
 
 	s.purgeDepartedClientWork(reqID, "ver")
 
-	if got := purger.purgedRequests(); len(got) != 1 || got[reqID] != "ver" {
+	if got := waitForPurge(t, purger, 1); len(got) != 1 || got[reqID] != "ver" {
 		t.Fatalf("expected the departed client's work to be purged, got %v", got)
 	}
 	if got := purgeCount(t, metrics.PurgeSucceeded, metrics.PurgeTriggerClientDeparted) - before; got != 1 {
@@ -188,6 +228,7 @@ func TestFailedDeparturePurgeKeepsTheEntryForShutdown(t *testing.T) {
 	s.pendingWork.Set(reqID, pendingWorkInfo{functionVersionId: "ver"}, ttlcache.NoTTL)
 
 	s.purgeDepartedClientWork(reqID, "ver")
+	waitForAttempt(t, purger, 1)
 
 	if s.pendingWork.Get(reqID) == nil {
 		t.Fatal("a failed purge dropped the entry, so shutdown can never retry it")
@@ -318,7 +359,7 @@ func TestCancellingOneRpcDoesNotPurgeWorkAnotherIsWaitingOn(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("eviction callback never ran")
 	}
-	if got := purger.purgedRequests(); len(got) != 1 || got[reqID] != "ver" {
+	if got := waitForPurge(t, purger, 1); len(got) != 1 || got[reqID] != "ver" {
 		t.Errorf("eviction should have purged the abandoned work, got %v", got)
 	}
 }

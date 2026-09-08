@@ -19,8 +19,10 @@ package invocation
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -64,6 +66,18 @@ func (f *FunctionInvoker) PurgePendingWork(ctx context.Context, requestId uuid.U
 	return nil
 }
 
+// workStreamCacheCapacity bounds the resolved-handle cache.
+//
+// The key is one stream per region and function version, and the region is
+// fixed for a pod, so the key space grows with every function version this pod
+// has ever served. Small entries, but unbounded over the life of a process is
+// not a property worth having in a cache that exists only to save a lookup.
+const workStreamCacheCapacity = 1024
+
+// workStreamCacheTTL keeps a handle only while it is being used. A version that
+// stops receiving traffic should not hold a slot forever.
+const workStreamCacheTTL = time.Hour
+
 // workStream returns a handle for a work stream, resolving it once per stream.
 //
 // A purge is two JetStream calls, a lookup and the purge itself, and the
@@ -72,15 +86,13 @@ func (f *FunctionInvoker) PurgePendingWork(ctx context.Context, requestId uuid.U
 // handle halves the calls the remedy makes against a queue that is already
 // under strain.
 func (f *FunctionInvoker) workStream(ctx context.Context, streamName string) (jetstream.Stream, error) {
-	if cached, ok := f.workStreams.Load(streamName); ok {
-		return cached.(jetstream.Stream), nil
+	if cached := f.workStreams.Get(streamName); cached != nil {
+		return cached.Value(), nil
 	}
 	stream, err := f.js.Stream(ctx, streamName)
 	if err != nil {
 		return nil, err
 	}
-	// LoadOrStore rather than Store: a concurrent caller may have resolved the
-	// same stream first, and handing back one handle keeps them interchangeable.
-	actual, _ := f.workStreams.LoadOrStore(streamName, stream)
-	return actual.(jetstream.Stream), nil
+	f.workStreams.Set(streamName, stream, ttlcache.DefaultTTL)
+	return stream, nil
 }

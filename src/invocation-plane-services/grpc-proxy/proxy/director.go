@@ -291,6 +291,11 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		// for the shared entry, and only once its TTL has run out, which is
 		// the same budget after which the client is sent a gateway timeout.
 		// At that point the work cannot be delivered to anyone.
+		//
+		// Scheduled rather than run inline: ttlcache invokes eviction
+		// callbacks synchronously, so doing the queue calls here would stall
+		// eviction of every other entry behind this one, and with it the
+		// connection closes that eviction drives.
 		if !wc.EverConnected() && purgeDepartedClientWork != nil {
 			purgeDepartedClientWork(i.Key().requestId, i.Key().functionVersionId)
 		}
@@ -435,17 +440,26 @@ func (s *StreamDirector) purgeDepartedClientWork(requestId uuid.UUID, functionVe
 		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipShuttingDown).Inc()
 		return
 	}
+	// Budget is taken here, on the caller's goroutine, so an exhausted budget
+	// costs nothing and no goroutine is created for work that will not run.
 	select {
 	case s.departurePurges <- struct{}{}:
-		defer func() { <-s.departurePurges }()
 	default:
-		// Budget exhausted. Leave the entry pending so the shutdown purge
-		// still knows about it, and shed rather than pile more calls onto a
-		// queue that is evidently already under strain.
+		// Leave the entry pending so the shutdown purge still knows about it,
+		// and shed rather than pile more calls onto a queue that is evidently
+		// already under strain.
 		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipBudgetExhausted).Inc()
 		return
 	}
+	go func() {
+		defer func() { <-s.departurePurges }()
+		s.runDeparturePurge(purger, requestId, functionVersionId)
+	}()
+}
 
+// runDeparturePurge performs the queue call. Separated from the scheduling
+// above so the caller, which is the cache eviction path, never blocks on it.
+func (s *StreamDirector) runDeparturePurge(purger pendingWorkPurger, requestId uuid.UUID, functionVersionId string) {
 	ctx, cancel := context.WithTimeout(context.Background(), departurePurgeTimeout)
 	defer cancel()
 
