@@ -246,3 +246,31 @@ func TestSubmitDetailedVerbosityNeverLogsIdentifyingValues(t *testing.T) {
 		}
 	}
 }
+
+// TestSubmitDetailedVerbosityTruncatesOversizedFields guards against an
+// unbounded log line: Model has no length validation upstream, so a
+// malformed or adversarial record could otherwise put an arbitrarily large
+// value there.
+func TestSubmitDetailedVerbosityTruncatesOversizedFields(t *testing.T) {
+	huge := strings.Repeat("a", 5000)
+	path := writeSegment(t,
+		`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":1,"request":{"request_id":"req-1","model":"`+huge+`"}}`,
+	)
+	logs := captureLogs(t)
+
+	client := &Client{verbosity: config.DebugVerbosityDetailed}
+	if _, err := client.Submit(context.Background(), backend.SubmitRequest{
+		Segment: segment.Segment{Index: 0, Path: path},
+		Path:    path,
+	}); err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+
+	output := logs.String()
+	if strings.Contains(output, huge) {
+		t.Error("detailed verbosity logged an oversized field without truncation")
+	}
+	if !strings.Contains(output, "...(truncated)") {
+		t.Error("detailed verbosity did not mark the oversized field as truncated")
+	}
+}

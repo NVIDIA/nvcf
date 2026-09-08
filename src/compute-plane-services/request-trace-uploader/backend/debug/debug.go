@@ -133,12 +133,30 @@ func (c *Client) Capabilities() backend.Capabilities {
 	}
 }
 
+// maxLoggedFieldBytes bounds a free-text metadata field before logRecord logs
+// it. Model, ToolClass, Status, and DropReason come straight from segment
+// JSON with no upstream length validation, so a malformed or adversarial
+// record could otherwise put an arbitrarily large value in a field this
+// backend treats as short metadata, inflating one log line without limit.
+const maxLoggedFieldBytes = 256
+
+// truncate bounds a string before it is logged. It cuts on a byte boundary
+// rather than a rune boundary: precise multi-byte truncation is not worth the
+// complexity for a diagnostic aid, and a split multi-byte character at the
+// boundary is still visibly marked as truncated.
+func truncate(s string) string {
+	if len(s) <= maxLoggedFieldBytes {
+		return s
+	}
+	return s[:maxLoggedFieldBytes] + "...(truncated)"
+}
+
 // logRecord logs one detailed-verbosity line for a single record. It carries
 // non-identifying metrics and metadata only: token counts, timing, model
 // name, tool class and status, and whether a payload is complete. It never
 // logs a request identifier, a session identifier, a header value, or a
 // request or response body, matching the containment rule Submit's basic
-// summary already follows.
+// summary already follows. Free-text fields are bounded by truncate.
 func logRecord(segment, index int, rec *record.Record) {
 	args := []any{
 		"segment", segment,
@@ -157,7 +175,7 @@ func logRecord(segment, index int, rec *record.Record) {
 	}
 	if req := rec.Request; req != nil {
 		if req.Model != "" {
-			args = append(args, "model", req.Model)
+			args = append(args, "model", truncate(req.Model))
 		}
 		if req.InputTokens != nil {
 			args = append(args, "input_tokens", *req.InputTokens)
@@ -180,10 +198,10 @@ func logRecord(segment, index int, rec *record.Record) {
 	}
 	if tool := rec.Tool; tool != nil {
 		if tool.ToolClass != "" {
-			args = append(args, "tool_class", tool.ToolClass)
+			args = append(args, "tool_class", truncate(tool.ToolClass))
 		}
 		if tool.Status != "" {
-			args = append(args, "status", tool.Status)
+			args = append(args, "status", truncate(tool.Status))
 		}
 		if tool.DurationMS != nil {
 			args = append(args, "duration_ms", *tool.DurationMS)
@@ -192,10 +210,10 @@ func logRecord(segment, index int, rec *record.Record) {
 	if payload := rec.Payload; payload != nil {
 		args = append(args, "payload_complete", payload.Complete)
 		if payload.Model != "" {
-			args = append(args, "model", payload.Model)
+			args = append(args, "model", truncate(payload.Model))
 		}
 		if payload.DropReason != "" {
-			args = append(args, "drop_reason", payload.DropReason)
+			args = append(args, "drop_reason", truncate(payload.DropReason))
 		}
 	}
 	slog.Info("debug backend read a record", args...)
