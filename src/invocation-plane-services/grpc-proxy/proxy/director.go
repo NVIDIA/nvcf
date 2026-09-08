@@ -288,9 +288,15 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		span.End()
 
 		// Purge here rather than when a request is cancelled. This fires once
-		// for the shared entry, and only once its TTL has run out, which is
-		// the same budget after which the client is sent a gateway timeout.
-		// At that point the work cannot be delivered to anyone.
+		// for the shared entry, however many requests shared it.
+		//
+		// Eviction is usually not the TTL. The client connection closing runs
+		// onInactive, which deletes the entry, so in practice this fires the
+		// moment the client goes away, well inside the timeout. That is still
+		// the right moment, since the entry is per connection and routing and
+		// its client is gone, but it means the purge rate tracks client
+		// disconnects rather than the slower TTL, which is what the bound
+		// below exists to contain.
 		//
 		// Scheduled rather than run inline: ttlcache invokes eviction
 		// callbacks synchronously, so doing the queue calls here would stall
@@ -397,23 +403,6 @@ const (
 	issuedTokenCacheCapacity = 50000
 )
 
-// purgePendingWork drops the work requests for sessions that never got a
-// worker CONNECT.
-//
-// Best effort by design. A session records its pending work just before the
-// invocation publishes the work request, so a shutdown landing precisely
-// between those two steps will miss that one request. Closing that window
-// needs an admission gate and a drain timeout, which is more machinery and
-// another tunable than the gap justifies: a missed request is simply left as
-// it is today, and today every one of them is left.
-//
-// Their tokens exist only in this pod's memory, so once it is
-// gone every one of them is guaranteed to be rejected; leaving them queued
-// means each is still pulled, still takes a concurrency slot, and still fails.
-//
-// Sessions with a worker already attached are deliberately not touched. Those
-// can reattach through another pod, and their work request has already left the
-// queue anyway.
 // purgeDepartedClientWork drops the queued work for a request whose client
 // stopped waiting before any worker attached.
 //
@@ -483,6 +472,23 @@ func (s *StreamDirector) runDeparturePurge(purger pendingWorkPurger, requestId u
 		zap.Stringer("request_id", requestId))
 }
 
+// purgePendingWork drops the work requests for sessions that never got a
+// worker CONNECT.
+//
+// Best effort by design. A session records its pending work just before the
+// invocation publishes the work request, so a shutdown landing precisely
+// between those two steps will miss that one request. Closing that window
+// needs an admission gate and a drain timeout, which is more machinery and
+// another tunable than the gap justifies: a missed request is simply left as
+// it is today, and today every one of them is left.
+//
+// Their tokens exist only in this pod's memory, so once it is
+// gone every one of them is guaranteed to be rejected; leaving them queued
+// means each is still pulled, still takes a concurrency slot, and still fails.
+//
+// Sessions with a worker already attached are deliberately not touched. Those
+// can reattach through another pod, and their work request has already left the
+// queue anyway.
 func (s *StreamDirector) purgePendingWork() {
 	purger, ok := s.functionInvoker.(pendingWorkPurger)
 	if !ok {
@@ -745,11 +751,6 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 				functionVersionId: apiFuncVersion,
 				mintedAt:          now,
 			}, ttlcache.DefaultTTL)
-			// Remembered until the worker CONNECTs back, so that a shutdown can
-			// find the requests whose tokens are about to be lost with this pod
-			// and drop them from the work queue instead of leaving them to be
-			// pulled and rejected.
-			s.pendingWork.Set(requestId, pendingWorkInfo{functionVersionId: apiFuncVersion}, ttlcache.DefaultTTL)
 			// Diagnostic shadow record, longer lived than the auth entry, so a
 			// later rejection can say "expired N seconds ago" instead of just
 			// "not found". Never consulted when granting access.
@@ -762,6 +763,25 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 		if err != nil {
 			zap.L().Warn("failed to open stateful work request", zap.Error(err), zap.String("function id", functionId), zap.Stringer("request id", requestId))
 			return nil, fmt.Errorf("failed to open stateful work request: %w", err)
+		}
+
+		// Remembered until the worker CONNECTs back, so a shutdown can find the
+		// requests whose tokens are about to be lost with this pod and drop
+		// them from the work queue rather than leave them to be pulled and
+		// rejected.
+		//
+		// Only for work that actually reached the rq stream. A streaming
+		// version publishes to llsrq and a session join publishes to
+		// stateful_session.reconnect, neither of which a purge can drop from,
+		// and for a streaming version the rq stream may not exist at all.
+		// Recording those would make every later purge look up a stream that
+		// cannot hold the message: a wasted round trip, reported as a failure
+		// whose metric tells the on-call it is a permissions problem.
+		//
+		// Set here rather than in the callback above, which has to run before
+		// the worker is notified. Nothing reads this before a purge.
+		if invokeResponse.QueuedToWorkStream {
+			s.pendingWork.Set(invokeResponse.RequestId, pendingWorkInfo{functionVersionId: apiFunctionVersionId}, ttlcache.DefaultTTL)
 		}
 
 		workerConnection := s.workers.Get(workerConnectionKey{

@@ -35,8 +35,12 @@ func requestWorkStream(region, functionVersionId string) string {
 	return fmt.Sprintf("rq_%s_%s", region, functionVersionId)
 }
 
-func requestWorkSubject(region, functionVersionId string, requestId uuid.UUID) string {
-	return fmt.Sprintf("rq.%s.%s.%s", region, functionVersionId, requestId)
+// requestWorkSubject is the subject a purge targets. It delegates to the
+// publisher rather than restating the format: the two live in one package, and
+// a second copy would let a change to the publisher silently desynchronise the
+// purger, leaving purges that succeed while removing nothing.
+func (f *FunctionInvoker) requestWorkSubject(functionVersionId string, requestId uuid.UUID) string {
+	return f.requestStreamSubject(functionVersionId, requestId)
 }
 
 // PurgePendingWork drops a stateful work request that is still queued.
@@ -59,7 +63,7 @@ func (f *FunctionInvoker) PurgePendingWork(ctx context.Context, requestId uuid.U
 	if err != nil {
 		return fmt.Errorf("failed to look up work stream %s: %w", streamName, err)
 	}
-	subject := requestWorkSubject(f.region, functionVersionId, requestId)
+	subject := f.requestWorkSubject(functionVersionId, requestId)
 	if err := stream.Purge(ctx, jetstream.WithPurgeSubject(subject)); err != nil {
 		return fmt.Errorf("failed to purge work subject %s: %w", subject, err)
 	}

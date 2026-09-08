@@ -426,10 +426,13 @@ var (
 			Buckets:   []float64{1, 5, 8, 10, 15, 30, 45, 60, 120, 300, 600, 1800, 3600},
 		})
 
-	// PendingWorkPurgedTotal counts stateful work requests dropped from the
-	// work queue during shutdown because this pod held the only copy of their
-	// worker token. A persistent failed count usually means this service lacks
-	// purge rights on the work queue rather than a transient NATS error.
+	// PendingWorkPurgeSkippedTotal records a purge that did nothing and why,
+	// per attempt rather than per shutdown. Paired with PendingWorkPurgedTotal
+	// it makes the zero case legible: an unexplained zero means the purge did
+	// not run, which is a different problem from an empty queue.
+	//
+	// budget_exhausted and shutting_down are per request, so under saturation
+	// or during a drain they count once per abandoned tunnel, not once overall.
 	// PendingWorkPurgeSkippedTotal records a shutdown that purged nothing and
 	// why. Paired with PendingWorkPurgedTotal it makes the zero case legible:
 	// an unexplained zero means the purge did not run, which is a different
@@ -438,9 +441,13 @@ var (
 		prometheus.CounterOpts{
 			Namespace: RootNamespace,
 			Name:      "pending_work_purge_skipped_total",
-			Help:      "shutdowns where the pending work purge did nothing, by reason",
+			Help:      "pending work purges that did nothing, by reason",
 		}, []string{"reason"})
 
+	// PendingWorkPurgedTotal counts queued stateful work requests dropped from
+	// the work queue, by outcome and by which trigger dropped them. A
+	// persistent failed count usually means this service lacks purge rights on
+	// the work queue rather than a transient NATS error.
 	PendingWorkPurgedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: RootNamespace,

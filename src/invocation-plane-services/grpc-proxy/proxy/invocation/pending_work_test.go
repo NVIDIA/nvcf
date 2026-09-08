@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,7 +36,7 @@ func TestRequestWorkStreamAndSubjectMatchTheInvocationService(t *testing.T) {
 	assert.Equal(t, "rq_us-west-2_66666666-7777-8888-9999-000000000000",
 		requestWorkStream(region, versionId))
 	assert.Equal(t, "rq.us-west-2.66666666-7777-8888-9999-000000000000.11111111-2222-3333-4444-555555555555",
-		requestWorkSubject(region, versionId, requestId))
+		(&FunctionInvoker{region: region}).requestWorkSubject(versionId, requestId))
 }
 
 // The subject has to fall inside the stream's own subject space, otherwise a
@@ -45,6 +45,6 @@ func TestRequestWorkSubjectIsCoveredByTheStreamSubjectSpace(t *testing.T) {
 	region := "eu-west-1"
 	versionId := uuid.New().String()
 
-	subject := requestWorkSubject(region, versionId, uuid.New())
+	subject := (&FunctionInvoker{region: region}).requestWorkSubject(versionId, uuid.New())
 	assert.Regexp(t, `^rq\.`+region+`\.`+versionId+`\.`, subject)
 }

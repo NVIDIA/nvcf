@@ -168,15 +168,18 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 		zap.L().Error("failed to register worker", zap.Error(err))
 		_ = spanError(span, err)
 		_ = conn.Close()
+	} else {
+		// Only once a worker is actually attached is this request no longer
+		// queued. Dropping the record on the failure path above would leave
+		// work in the queue that nothing remembers, so a shutdown could never
+		// purge it, which is the state this change exists to avoid.
+		s.pendingWork.Delete(parsedRequestId)
 	}
 
 	// workers can't reconnect to the client if their connection drops because the client has
 	// already been sent away, so no point in keeping the auth around.
 	// also need to make sure we don't allow reconnects to guard against replay attacks with 0-rtt.
 	s.workerAuth.Delete(auth)
-	// The worker is attached, so this request is no longer queued and must not
-	// be purged if this pod shuts down. The session can reattach elsewhere.
-	s.pendingWork.Delete(parsedRequestId)
 }
 
 // networkPeerAddress returns the transport-level remote host of the tunnel connection and

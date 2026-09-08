@@ -116,6 +116,15 @@ func (f *FunctionInvoker) Close() error {
 type Result struct {
 	WorkerAuthorizationToken string
 	RequestId                uuid.UUID
+	// QueuedToWorkStream reports whether this invocation published to the
+	// rq work stream, which is the only queue PurgePendingWork can drop from.
+	//
+	// Streaming versions publish to llsrq and a session join publishes to
+	// stateful_session.reconnect, and for a streaming version the rq stream may
+	// not exist at all. Recording those as pending work makes every later purge
+	// look up a stream that cannot hold the message, which costs a round trip
+	// and reports a failure that reads as missing purge rights.
+	QueuedToWorkStream bool
 }
 
 func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.Conn, clientAuth, functionId, functionVersionId string, existingRequestId *uuid.UUID, onWorkerAuthSet func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (Result, context.CancelFunc, error) {
@@ -159,7 +168,7 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 
 		onWorkerAuthSet(workerAuthToken, requestId, proxyAuthResponse.FunctionId, functionVersion.FunctionVersionId)
 
-		cancelInvokingWorker, err := f.startNewSession(ctx, conn, requestId, proxyAuthResponse, workerAuthToken, functionVersion)
+		cancelInvokingWorker, queued, err := f.startNewSession(ctx, conn, requestId, proxyAuthResponse, workerAuthToken, functionVersion)
 		if err != nil {
 			return Result{}, nil, err
 		}
@@ -168,6 +177,7 @@ func (f *FunctionInvoker) InvokeStatefulFunction(ctx context.Context, conn net.C
 		return Result{
 			WorkerAuthorizationToken: workerAuthToken,
 			RequestId:                requestId,
+			QueuedToWorkStream:       queued,
 		}, cancelInvokingWorker, nil
 	} else {
 		// if there is an existing request id, check that it matches up with an existing request
@@ -218,27 +228,29 @@ func pickFunctionVersion(proxyAuthResponse *pb.ProxyAuthResponse) (*pb.ProxyAuth
 	return proxyAuthResponse.FunctionVersions[rand.IntN(len(proxyAuthResponse.FunctionVersions))], nil
 }
 
-func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, requestId uuid.UUID, proxyAuthResponse *pb.ProxyAuthResponse, workerAuthToken string, functionVersion *pb.ProxyAuthResponse_FunctionVersion) (context.CancelFunc, error) {
+func (f *FunctionInvoker) startNewSession(ctx context.Context, conn net.Conn, requestId uuid.UUID, proxyAuthResponse *pb.ProxyAuthResponse, workerAuthToken string, functionVersion *pb.ProxyAuthResponse_FunctionVersion) (context.CancelFunc, bool, error) {
 	marshalledInvokeFunctionRequest, err := f.marshalStatefulSessionRequest(requestId, proxyAuthResponse, workerAuthToken)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	if functionVersion.GetType() == pb.ProxyAuthResponse_FunctionVersion_STREAMING {
 		go f.sendLLSInvocationRequest(ctx, conn, requestId, functionVersion, marshalledInvokeFunctionRequest)
-	} else {
-		subject := f.requestStreamSubject(functionVersion.FunctionVersionId, requestId)
-		_, err = f.js.PublishMsg(ctx, &nats.Msg{
-			Subject: subject,
-			Header:  otelHeaders(ctx),
-			Data:    marshalledInvokeFunctionRequest,
-		})
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to publish function invocation request to nats: %w", err)
-		}
+		// Published to llsrq, which PurgePendingWork cannot drop from, and for
+		// a streaming version the rq stream may not exist at all.
+		return cancel, false, nil
 	}
-	return cancel, nil
+	subject := f.requestStreamSubject(functionVersion.FunctionVersionId, requestId)
+	_, err = f.js.PublishMsg(ctx, &nats.Msg{
+		Subject: subject,
+		Header:  otelHeaders(ctx),
+		Data:    marshalledInvokeFunctionRequest,
+	})
+	if err != nil {
+		cancel()
+		return nil, false, fmt.Errorf("failed to publish function invocation request to nats: %w", err)
+	}
+	return cancel, true, nil
 }
 
 func (f *FunctionInvoker) sendLLSInvocationRequest(ctx context.Context, conn net.Conn, requestId uuid.UUID, functionVersion *pb.ProxyAuthResponse_FunctionVersion, marshalledInvokeFunctionRequest []byte) {
