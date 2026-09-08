@@ -101,6 +101,7 @@ define_stargate_metrics! {
         routing_selections_total("routing_selections_total", "Total number of primary and ranked fallback cluster choices used for upstream attempts", ["routing_key", "model", "algorithm", "selection"]);
         routing_kv_free_token_fallback_selections_total("routing_kv_free_token_fallback_selections_total", "Total number of selected routes reached after a higher-ranked candidate was skipped by KV free-token eligibility", ["routing_key", "model", "algorithm"]);
         proxy_retry_exhausted_total("proxy_retry_exhausted_total", "Total number of proxy requests that exhausted retry options", ["routing_key", "model", "reason"]);
+        backend_loss_cancellations_total("backend_loss_cancellations_total", "Total number of in-flight requests cancelled because their backend registration was lost, by outcome", ["routing_key", "model", "outcome"]);
         admission_rejections_total("admission_rejections_total", "Total number of requests rejected by local admission control", ["routing_key", "model", "reason"]);
         quic_connection_evictions_total("quic_connection_evictions_total", "Total number of QUIC connection pool evictions", ["inference_server_id", "reason"]);
         quic_hot_path_reconnect_total("quic_hot_path_reconnect_total", "Total number of direct QUIC reconnects attempted on the proxy hot path", ["inference_server_id", "result"]);
@@ -189,6 +190,7 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, routing_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str, selection: &str) => [routing_key.unwrap_or(""), model, algorithm, selection];
         GenericCounter<AtomicU64>, routing_kv_free_token_fallback_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str) => [routing_key.unwrap_or(""), model, algorithm];
         GenericCounter<AtomicU64>, proxy_retry_exhausted_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
+        GenericCounter<AtomicU64>, backend_loss_cancellations_total(routing_key: Option<&str>, model: &str, outcome: &str) => [routing_key.unwrap_or(""), model, outcome];
         GenericCounter<AtomicU64>, admission_rejections_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, quic_connection_evictions_total(inference_server_id: &str, reason: &str) => [inference_server_id, reason];
         GenericCounter<AtomicU64>, quic_hot_path_reconnect_total(inference_server_id: &str, result: &str) => [inference_server_id, result];

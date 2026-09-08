@@ -68,8 +68,10 @@ tunnel_tests! {
     direct_webtransport_tunnel_preserves_request_head => assert_direct_tunnel_preserves_request_head(WebTransport),
     direct_http3_tunnel_proxies_request_to_upstream => assert_direct_model_proxy(Http3, "req-h3-direct", "model-h3", "/v1/models?source=http3"),
     direct_webtransport_tunnel_proxies_request_to_upstream => assert_direct_model_proxy(WebTransport, "req-wt-direct", "model-wt", "/v1/models?source=webtransport"),
-    direct_http3_response_body_survives_generation_retirement => assert_response_body_survives_generation_retirement(Http3, "req-h3-evict-body", "model-h3"),
-    direct_webtransport_response_body_survives_generation_retirement => assert_response_body_survives_generation_retirement(WebTransport, "req-wt-evict-body", "model-wt"),
+    direct_http3_response_body_survives_generation_retirement => assert_response_body_after_generation_retirement(Http3, "req-h3-retire-body", "model-h3", Retirement::KeepConnections),
+    direct_webtransport_response_body_survives_generation_retirement => assert_response_body_after_generation_retirement(WebTransport, "req-wt-retire-body", "model-wt", Retirement::KeepConnections),
+    direct_http3_response_body_fails_fast_when_retirement_closes_connections => assert_response_body_after_generation_retirement(Http3, "req-h3-close-body", "model-h3", Retirement::CloseConnections),
+    direct_webtransport_response_body_fails_fast_when_retirement_closes_connections => assert_response_body_after_generation_retirement(WebTransport, "req-wt-close-body", "model-wt", Retirement::CloseConnections),
     reverse_http3_tunnel_proxies_request_to_upstream => assert_reverse_model_proxy(Http3, "req-h3-reverse", "model-h3", "/v1/models?source=reverse-http3"),
     reverse_webtransport_tunnel_proxies_request_to_upstream => assert_reverse_model_proxy(WebTransport, "req-wt-reverse", "model-wt", "/v1/models?source=reverse-webtransport"),
     raw_quic_tunnel_tls_configs_do_not_negotiate_alpn => assert_tunnel_alpn(RawQuic, None),
@@ -1093,10 +1095,20 @@ async fn direct_webtransport_connect_response_uses_connect_timeout() {
     server_task.abort();
 }
 
-async fn assert_response_body_survives_generation_retirement(
+enum Retirement {
+    /// Plain `retire()`: router shutdown, where in-flight bodies must drain.
+    KeepConnections,
+    /// `retire_and_close_connections()`: backend loss, where in-flight bodies
+    /// must fail promptly instead of waiting for the QUIC idle timeout
+    /// (NVIDIA/nvcf#1533).
+    CloseConnections,
+}
+
+async fn assert_response_body_after_generation_retirement(
     tunnel_protocol: TunnelTransportProtocol,
     request_id: &str,
     model: &str,
+    retirement: Retirement,
 ) {
     let release_body = Arc::new(tokio::sync::Notify::new());
     let app = Router::new().route(
@@ -1139,10 +1151,44 @@ async fn assert_response_body_survives_generation_retirement(
         .unwrap();
     assert_eq!(response.status, StatusCode::OK);
 
-    assert!(fixture.registration.tunnel_connections().retire());
-    release_body.notify_waiters();
-    let body = response_body(response).await;
-    assert_eq!(body, b"first-second");
+    match retirement {
+        Retirement::KeepConnections => {
+            assert!(fixture.registration.tunnel_connections().retire());
+            release_body.notify_waiters();
+            let body = response_body(response).await;
+            assert_eq!(body, b"first-second");
+        }
+        Retirement::CloseConnections => {
+            let closed = fixture
+                .registration
+                .tunnel_connections()
+                .retire_and_close_connections();
+            assert!(
+                closed.is_some_and(|count| count > 0),
+                "retirement should close the live connection set, got {closed:?}"
+            );
+            // The backend never releases the second chunk; only the close can
+            // end this read.
+            let mut body_stream = response.body_stream;
+            let outcome = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    match body_stream.recv_body().await {
+                        Ok(Some(_)) => continue,
+                        Ok(None) => return Ok(()),
+                        Err(error) => return Err(error),
+                    }
+                }
+            })
+            .await
+            .expect("response body should settle promptly once connections close");
+            assert!(
+                outcome.is_err(),
+                "response body should fail once connections close"
+            );
+            // Let the parked handler finish so the tunnel can drain at shutdown.
+            release_body.notify_waiters();
+        }
+    }
     fixture.shutdown().await;
 }
 

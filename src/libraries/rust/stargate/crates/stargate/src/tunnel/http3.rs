@@ -72,6 +72,10 @@ impl Http3ConnectionHandle {
         self.connection.stable_id()
     }
 
+    pub(super) fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
+        self.connection.close(error_code, reason);
+    }
+
     pub(super) async fn open_streaming_request(
         self,
         request: OpenTunnelRequest<'_>,

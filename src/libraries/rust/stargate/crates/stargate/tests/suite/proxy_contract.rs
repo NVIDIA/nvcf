@@ -2921,3 +2921,661 @@ async fn pulsar_missing_input_tokens_header_returns_400() {
         .assert_missing_header("req-no-input-tokens", ("x-cache-affinity-key", "prefix-a"))
         .await;
 }
+
+// Backend loss while a request is in flight (NVIDIA/nvcf#1533).
+//
+// A stalling backend accepts the request over its tunnel and then never
+// answers (or answers headers and then never finishes the body). Stopping its
+// registration mid-request stands in for the relay reporting a dead worker:
+// the generation retires and its connections close, and the client outcome
+// must arrive well inside the QUIC idle timeout instead of hanging for it.
+
+const BACKEND_LOSS_OUTCOME_BOUND: Duration = Duration::from_secs(5);
+
+const BACKEND_LOSS_TUNNEL_CASES: [TunnelTestCase; 4] = [
+    TunnelTestCase::direct(TunnelTransportProtocol::RawQuic),
+    TunnelTestCase::direct(TunnelTransportProtocol::Http3),
+    TunnelTestCase::direct(TunnelTransportProtocol::WebTransport),
+    TunnelTestCase::reverse(TunnelTransportProtocol::RawQuic),
+];
+
+#[derive(Clone)]
+struct StallingChatBackend {
+    addr: std::net::SocketAddr,
+    hits: Arc<AtomicUsize>,
+    release: Arc<tokio::sync::watch::Sender<bool>>,
+}
+
+impl StallingChatBackend {
+    fn hits(&self) -> usize {
+        self.hits.load(Ordering::SeqCst)
+    }
+
+    /// Resolves once the backend has received a request, before it answers.
+    async fn wait_for_hit(&self) {
+        wait_until(
+            "stalling backend received the proxied request",
+            Duration::from_secs(10),
+            Duration::from_millis(20),
+            || {
+                let hits = self.hits();
+                async move { if hits > 0 { Ok(()) } else { Err("no hit yet") } }
+            },
+        )
+        .await;
+    }
+
+    /// Lets stalled handlers finish. Tunnel shutdown drains in-flight forwards,
+    /// so a test must call this before `ProxyFixture::shutdown`.
+    fn release(&self) {
+        // No receiver left means every handler already finished.
+        let _ = self.release.send(true);
+    }
+}
+
+async fn start_stalling_chat_backend(headers_before_stall: bool) -> StallingChatBackend {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_for_app = hits.clone();
+    let (release, released) = tokio::sync::watch::channel(false);
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(move |_req: Request| {
+                let hits = hits_for_app.clone();
+                let mut released = released.clone();
+                async move {
+                    // Counted on arrival and the body is never read: a client
+                    // still uploading is an in-flight request too.
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    if headers_before_stall {
+                        let stream = async_stream::stream! {
+                            yield Ok::<_, std::io::Error>(Bytes::from_static(
+                                b"data: {\"object\":\"chat.completion.chunk\"}\n\n",
+                            ));
+                            let mut released = released;
+                            // A dropped sender also counts as released.
+                            let _ = released.wait_for(|released| *released).await;
+                        };
+                        return Response::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", "text/event-stream")
+                            .body(Body::from_stream(stream))
+                            .expect("stalling stream response should build");
+                    }
+                    // A dropped sender also counts as released.
+                    let _ = released.wait_for(|released| *released).await;
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from("data: [DONE]\n\n"))
+                        .expect("released response should build")
+                }
+            }),
+        )
+        .route("/health", get(|| async { "ok" }));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    StallingChatBackend {
+        addr,
+        hits,
+        release: Arc::new(release),
+    }
+}
+
+impl ProxyFixture {
+    fn direct_tunnel_registration(
+        &mut self,
+        case: TunnelTestCase,
+        backend_id: &str,
+        upstream_http_base_url: String,
+        tunnel: QuicHttpTunnelHandle,
+        runtime_state: PylonRuntimeState,
+    ) -> InferenceServerRegistrationConfig {
+        let quic_url = format!("quic://{}", tunnel.listen_addr());
+        self.own_tunnel(tunnel);
+        let mut config = active_registration_config_with_state(
+            self.grpc_addr,
+            backend_id,
+            "",
+            quic_url,
+            upstream_http_base_url,
+            runtime_state,
+        );
+        config.tunnel_protocol = case.protocol;
+        config
+    }
+
+    async fn start_direct_tunnel(
+        case: TunnelTestCase,
+        upstream_http_base_url: String,
+        runtime_state: &PylonRuntimeState,
+    ) -> QuicHttpTunnelHandle {
+        let mut tunnel_config =
+            QuicHttpTunnelConfig::new("127.0.0.1:0".parse().unwrap(), upstream_http_base_url);
+        tunnel_config.tunnel_protocol = case.protocol;
+        tunnel_config.forwarding.runtime_state = runtime_state.clone();
+        start_quic_http_tunnel(tunnel_config)
+            .await
+            .expect("backend tunnel failed to start")
+    }
+
+    /// The stalling backend's registration client is returned to the caller,
+    /// so a test can stop that one registration while the fixture keeps the
+    /// rest up.
+    async fn add_stalling_backend(
+        &mut self,
+        case: TunnelTestCase,
+        backend_id: &str,
+        runtime_state: PylonRuntimeState,
+        headers_before_stall: bool,
+    ) -> (StallingChatBackend, InferenceServerRegistrationClient) {
+        let backend = start_stalling_chat_backend(headers_before_stall).await;
+        let upstream = format!("http://{}", backend.addr);
+        let config = if case.reverse_tunnel() {
+            reverse_registration_config_for_protocol(
+                self.grpc_addr,
+                backend_id,
+                "",
+                upstream,
+                case.protocol,
+                runtime_state,
+            )
+        } else {
+            let tunnel = Self::start_direct_tunnel(case, upstream.clone(), &runtime_state).await;
+            self.direct_tunnel_registration(case, backend_id, upstream, tunnel, runtime_state)
+        };
+        let registration = start_registration(config, "stalling backend registration failed");
+        (backend, registration)
+    }
+
+    /// A healthy sibling that answers at once and counts what it served.
+    async fn add_capturing_backend(
+        &mut self,
+        case: TunnelTestCase,
+        backend_id: &str,
+        runtime_state: PylonRuntimeState,
+    ) -> CapturingChatBackend {
+        if case.reverse_tunnel() {
+            return self
+                .add_capturing_reverse_backend(backend_id, "", case.protocol, runtime_state, false)
+                .await;
+        }
+        let backend = start_capturing_chat_backend(false).await;
+        let upstream = format!("http://{}", backend.addr);
+        let tunnel = Self::start_direct_tunnel(case, upstream.clone(), &runtime_state).await;
+        let config =
+            self.direct_tunnel_registration(case, backend_id, upstream, tunnel, runtime_state);
+        self.register(config, "capturing backend registration failed");
+        backend
+    }
+
+    /// Readiness without sending a proxied request, since a stalling backend
+    /// would swallow the probe that `wait_for_routing` relies on.
+    async fn wait_for_active_servers(&self, model: &str, count: usize) {
+        let sample = format!(
+            r#"stargate_active_inference_servers{{model="{model}",routing_key=""}} {count}"#
+        );
+        wait_until(
+            &format!("{count} active inference servers for {model}"),
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            || {
+                let metrics = self.metrics();
+                let sample = sample.clone();
+                async move {
+                    if metrics.contains(&sample) {
+                        Ok(())
+                    } else {
+                        Err("gauge not at expected count")
+                    }
+                }
+            },
+        )
+        .await;
+    }
+}
+
+fn backend_loss_counter_sample(model: &str, outcome: &str) -> String {
+    format!(
+        r#"stargate_backend_loss_cancellations_total{{model="{model}",outcome="{outcome}",routing_key=""}} 1"#
+    )
+}
+
+/// Sends `request`, stops `lost_registration` once `in_flight` reports the
+/// request has reached the lost backend but before it answers, and returns the
+/// client's response and the elapsed time.
+async fn lose_backend_mid_request(
+    in_flight: impl std::future::Future<Output = ()>,
+    lost_registration: &mut InferenceServerRegistrationClient,
+    request: reqwest::RequestBuilder,
+) -> (reqwest::Response, Duration) {
+    let started = tokio::time::Instant::now();
+    let request = request.send();
+    let mut request = std::pin::pin!(request);
+    tokio::select! {
+        response = &mut request => {
+            panic!("request finished before the backend was lost: {response:?}");
+        }
+        () = in_flight => {}
+    }
+    lost_registration.stop();
+    let response = tokio::time::timeout(Duration::from_secs(30), request)
+        .await
+        .expect("client hung after backend loss")
+        .expect("request failed after backend loss");
+    (response, started.elapsed())
+}
+
+struct LostAndSibling {
+    lost: StallingChatBackend,
+    lost_registration: InferenceServerRegistrationClient,
+    sibling: CapturingChatBackend,
+}
+
+/// Lost backend (queue 0 beats the sibling's deep queue) plus a healthy
+/// sibling for `model`.
+async fn add_lost_and_sibling_backends(
+    fixture: &mut ProxyFixture,
+    case: TunnelTestCase,
+    model: &str,
+    lost_runtime: PylonRuntimeState,
+    headers_before_stall: bool,
+) -> LostAndSibling {
+    let (lost, lost_registration) = fixture
+        .add_stalling_backend(
+            case,
+            "lost-backend",
+            lost_runtime.clone(),
+            headers_before_stall,
+        )
+        .await;
+    let sibling_runtime = active_runtime(model);
+    let sibling = fixture
+        .add_capturing_backend(case, "sibling-backend", sibling_runtime.clone())
+        .await;
+    set_model_queue(&lost_runtime, model, 0);
+    set_model_queue(&sibling_runtime, model, 100_000);
+    fixture.wait_for_active_servers(model, 2).await;
+    LostAndSibling {
+        lost,
+        lost_registration,
+        sibling,
+    }
+}
+
+async fn exercise_backend_loss_redispatch(case: TunnelTestCase) {
+    let label = format!("{}-{}", case.direction_label(), case.protocol_label());
+    let (mut fixture, _) =
+        ProxyFixture::start_for_tunnel_case(&format!("test-sg-backend-loss-{label}"), case).await;
+    let model = format!("backend-loss-{label}-model");
+    let LostAndSibling {
+        lost,
+        mut lost_registration,
+        sibling,
+    } = add_lost_and_sibling_backends(&mut fixture, case, &model, active_runtime(&model), false)
+        .await;
+
+    let request = fixture.chat_request(&model, &format!("req-lost-{label}"));
+    let (response, elapsed) =
+        lose_backend_mid_request(lost.wait_for_hit(), &mut lost_registration, request).await;
+
+    assert_eq!(
+        lost.hits(),
+        1,
+        "{label}: request should reach the lost backend first"
+    );
+    assert_eq!(response.status(), StatusCode::OK, "{label}");
+    assert_eq!(
+        response_header(&response, "x-inference-server-id"),
+        Some("sibling-backend"),
+        "{label}"
+    );
+    assert_eq!(sibling.hits(), 1, "{label}: exactly one re-dispatch");
+    assert!(
+        elapsed < BACKEND_LOSS_OUTCOME_BOUND,
+        "{label}: re-dispatch took {elapsed:?}, expected under {BACKEND_LOSS_OUTCOME_BOUND:?}"
+    );
+    let text = response.text().await.expect("sibling response body");
+    assert_sse_done(&parse_sse_events(&text).expect("sibling response should be SSE"));
+
+    let metrics = fixture.metrics();
+    assert_metric_sample(
+        &metrics,
+        &backend_loss_counter_sample(&model, "re_dispatched"),
+        true,
+        "missing re-dispatched backend loss counter",
+    );
+    assert_metric_sample(
+        &metrics,
+        &format!(
+            r#"stargate_proxy_retries_total{{model="{model}",reason="backend_lost",routing_key=""}} 1"#
+        ),
+        true,
+        "missing backend_lost retry counter",
+    );
+    lost.release();
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn backend_loss_before_headers_redispatches_to_sibling() {
+    for case in BACKEND_LOSS_TUNNEL_CASES {
+        exercise_backend_loss_redispatch(case).await;
+    }
+}
+
+#[tokio::test]
+async fn backend_loss_after_headers_terminates_stream_fast() {
+    let case = TunnelTestCase::direct(TunnelTransportProtocol::RawQuic);
+    let (mut fixture, _) =
+        ProxyFixture::start_for_tunnel_case("test-sg-backend-loss-midstream", case).await;
+    let model = "backend-loss-stream-model";
+    let LostAndSibling {
+        lost,
+        mut lost_registration,
+        sibling,
+    } = add_lost_and_sibling_backends(&mut fixture, case, model, active_runtime(model), true).await;
+
+    let response = fixture
+        .chat_request(model, "req-lost-stream")
+        .send()
+        .await
+        .expect("headers should arrive before the backend stalls");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_header(&response, "x-inference-server-id"),
+        Some("lost-backend")
+    );
+    assert_eq!(lost.hits(), 1);
+
+    // Headers are out; now lose the backend and the body must end promptly.
+    lost_registration.stop();
+    let started = tokio::time::Instant::now();
+    let body = tokio::time::timeout(Duration::from_secs(30), response.bytes())
+        .await
+        .expect("response body hung after backend loss");
+    let elapsed = started.elapsed();
+    assert!(
+        body.is_err(),
+        "truncated stream should surface as an error, got {:?}",
+        body.map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    );
+    assert!(
+        elapsed < BACKEND_LOSS_OUTCOME_BOUND,
+        "stream termination took {elapsed:?}"
+    );
+    assert_eq!(
+        sibling.hits(),
+        0,
+        "a started response must never be re-dispatched"
+    );
+
+    assert_metric_sample(
+        &fixture.metrics(),
+        &backend_loss_counter_sample(model, "terminated"),
+        true,
+        "missing terminated backend loss counter",
+    );
+    lost.release();
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn backend_loss_without_alternative_fails_fast() {
+    let case = TunnelTestCase::direct(TunnelTransportProtocol::RawQuic);
+    let (mut fixture, _) =
+        ProxyFixture::start_for_tunnel_case("test-sg-backend-loss-alone", case).await;
+    let model = "backend-loss-alone-model";
+    let lost_runtime = active_runtime(model);
+    let (lost, mut lost_registration) = fixture
+        .add_stalling_backend(case, "lonely-backend", lost_runtime, false)
+        .await;
+    fixture.wait_for_active_servers(model, 1).await;
+
+    let request = fixture.chat_request(model, "req-lost-alone");
+    let (response, elapsed) =
+        lose_backend_mid_request(lost.wait_for_hit(), &mut lost_registration, request).await;
+
+    assert!(
+        response.status().is_server_error(),
+        "expected a fast 5xx, got {}",
+        response.status()
+    );
+    assert!(
+        elapsed < BACKEND_LOSS_OUTCOME_BOUND,
+        "fast failure took {elapsed:?}"
+    );
+    let metrics = fixture.metrics();
+    assert_metric_sample(
+        &metrics,
+        &backend_loss_counter_sample(model, "no_alternative"),
+        true,
+        "missing no_alternative backend loss counter",
+    );
+    assert_metric_sample(
+        &metrics,
+        &backend_loss_counter_sample(model, "re_dispatched"),
+        false,
+        "a request with no sibling must not count as re-dispatched",
+    );
+    lost.release();
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn backend_loss_with_exhausted_budget_fails_without_redispatch() {
+    let case = TunnelTestCase::direct(TunnelTransportProtocol::RawQuic);
+    let (mut fixture, _) =
+        ProxyFixture::start_for_tunnel_case("test-sg-backend-loss-budget", case).await;
+    let model = "backend-loss-budget-model";
+    let LostAndSibling {
+        lost,
+        mut lost_registration,
+        sibling,
+    } = add_lost_and_sibling_backends(&mut fixture, case, model, active_runtime(model), false)
+        .await;
+
+    let request = fixture
+        .chat_request(model, "req-lost-budget")
+        .header("x-stargate-max-wait-ms", "0");
+    let (response, elapsed) =
+        lose_backend_mid_request(lost.wait_for_hit(), &mut lost_registration, request).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(
+        elapsed < BACKEND_LOSS_OUTCOME_BOUND,
+        "budget-exhausted failure took {elapsed:?}"
+    );
+    assert_eq!(sibling.hits(), 0, "no budget left means no re-dispatch");
+    let metrics = fixture.metrics();
+    assert_metric_sample(
+        &metrics,
+        &backend_loss_counter_sample(model, "failed"),
+        true,
+        "missing failed backend loss counter",
+    );
+    assert_metric_sample(
+        &metrics,
+        &format!(
+            r#"stargate_proxy_retry_exhausted_total{{model="{model}",reason="retry_budget_exhausted",routing_key=""}} 1"#
+        ),
+        true,
+        "missing retry budget exhaustion counter",
+    );
+    lost.release();
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn backend_loss_with_incomplete_request_body_fails_without_redispatch() {
+    let case = TunnelTestCase::direct(TunnelTransportProtocol::RawQuic);
+    let (mut fixture, _) =
+        ProxyFixture::start_for_tunnel_case("test-sg-backend-loss-upload", case).await;
+    let model = "backend-loss-upload-model";
+    // The Pylon buffers the request body before forwarding, so the backend
+    // never sees this request. The Pylon observes arrival before the body read,
+    // so its observation stream is the in-flight signal instead.
+    let (lost_runtime, observations) = PylonRuntimeState::observed(
+        InferenceServerStatus::Active,
+        &[model.to_string()],
+        16,
+        None,
+    );
+    lost_runtime.set_model_stats(
+        model,
+        CurrentModelStats {
+            last_mean_input_tps: 1000.0,
+            ..CurrentModelStats::default()
+        },
+    );
+    let LostAndSibling {
+        lost,
+        mut lost_registration,
+        sibling,
+    } = add_lost_and_sibling_backends(&mut fixture, case, model, lost_runtime, false).await;
+
+    // The client is still uploading when the backend dies, so the request
+    // body is not replayable and must not be re-sent.
+    let (release_body, released) = tokio::sync::watch::channel(false);
+    let body_stream = async_stream::stream! {
+        yield Ok::<_, std::io::Error>(Bytes::from_static(
+            br#"{"model":"backend-loss-upload-model","messages":[{"role":"user","content":"hi"}],"stream":true"#,
+        ));
+        let mut released = released;
+        // A dropped sender also counts as released.
+        let _ = released.wait_for(|released| *released).await;
+        yield Ok(Bytes::from_static(b"}"));
+    };
+    let request = proxy_request(
+        &reqwest::Client::new(),
+        fixture.http_addr,
+        "/v1/chat/completions",
+        model,
+        "req-lost-upload",
+    )
+    .body(reqwest::Body::wrap_stream(body_stream));
+    let arrived = async {
+        observations
+            .recv_async()
+            .await
+            .expect("pylon should observe the proxied request");
+    };
+    let (response, elapsed) =
+        lose_backend_mid_request(arrived, &mut lost_registration, request).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(
+        elapsed < BACKEND_LOSS_OUTCOME_BOUND,
+        "incomplete-body failure took {elapsed:?}"
+    );
+    assert_eq!(
+        sibling.hits(),
+        0,
+        "an unfinished upload must not be replayed"
+    );
+    assert_metric_sample(
+        &fixture.metrics(),
+        &backend_loss_counter_sample(model, "failed"),
+        true,
+        "missing failed backend loss counter",
+    );
+    // No receiver left means the upload already ended.
+    let _ = release_body.send(true);
+    lost.release();
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn backend_loss_leaves_requests_on_healthy_backends_untouched() {
+    let case = TunnelTestCase::direct(TunnelTransportProtocol::RawQuic);
+    let (mut fixture, _) =
+        ProxyFixture::start_for_tunnel_case("test-sg-backend-loss-neighbor", case).await;
+    let lost_model = "backend-loss-neighbor-lost-model";
+    let healthy_model = "backend-loss-neighbor-healthy-model";
+    let (lost, mut lost_registration) = fixture
+        .add_stalling_backend(case, "lost-backend", active_runtime(lost_model), false)
+        .await;
+    let (healthy, _healthy_registration) = fixture
+        .add_stalling_backend(
+            case,
+            "healthy-backend",
+            active_runtime(healthy_model),
+            false,
+        )
+        .await;
+    fixture.wait_for_active_servers(lost_model, 1).await;
+    fixture.wait_for_active_servers(healthy_model, 1).await;
+
+    let healthy_request = tokio::spawn(
+        fixture
+            .chat_request(healthy_model, "req-healthy-neighbor")
+            .send(),
+    );
+    healthy.wait_for_hit().await;
+
+    let request = fixture.chat_request(lost_model, "req-lost-neighbor");
+    let (lost_response, _) =
+        lose_backend_mid_request(lost.wait_for_hit(), &mut lost_registration, request).await;
+    assert!(lost_response.status().is_server_error());
+
+    // The healthy backend's connection must not have been closed with it.
+    healthy.release();
+    let healthy_response = tokio::time::timeout(BACKEND_LOSS_OUTCOME_BOUND, healthy_request)
+        .await
+        .expect("healthy request hung after a neighbor's backend loss")
+        .expect("healthy request task panicked")
+        .expect("healthy request failed");
+    assert_eq!(healthy_response.status(), StatusCode::OK);
+    assert_eq!(
+        response_header(&healthy_response, "x-inference-server-id"),
+        Some("healthy-backend")
+    );
+    lost.release();
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn router_shutdown_still_drains_in_flight_requests() {
+    let case = TunnelTestCase::direct(TunnelTransportProtocol::RawQuic);
+    let (mut fixture, _) =
+        ProxyFixture::start_for_tunnel_case("test-sg-backend-loss-drain", case).await;
+    let model = "router-drain-model";
+    let (backend, _registration) = fixture
+        .add_stalling_backend(case, "draining-backend", active_runtime(model), false)
+        .await;
+    fixture.wait_for_active_servers(model, 1).await;
+
+    let in_flight = tokio::spawn(fixture.chat_request(model, "req-drain").send());
+    backend.wait_for_hit().await;
+
+    // Router shutdown ends every registration session, but that must not cut
+    // the tunnels under requests the HTTP drain is still completing.
+    fixture.handle.begin_shutdown();
+    backend.release();
+    let response = tokio::time::timeout(BACKEND_LOSS_OUTCOME_BOUND, in_flight)
+        .await
+        .expect("in-flight request hung during router shutdown")
+        .expect("in-flight request task panicked")
+        .expect("in-flight request failed during router shutdown");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response_header(&response, "x-inference-server-id"),
+        Some("draining-backend")
+    );
+    // The counter family may exist at zero (its child is resolved per attempt);
+    // what matters is that nothing was counted.
+    let metrics = fixture.metrics();
+    let counted = metrics
+        .lines()
+        .filter(|line| line.starts_with("stargate_backend_loss_cancellations_total{"))
+        .filter(|line| !line.ends_with(" 0"))
+        .collect::<Vec<_>>();
+    assert!(
+        counted.is_empty(),
+        "router shutdown must not be counted as backend loss: {counted:?}"
+    );
+    fixture.shutdown().await;
+}
