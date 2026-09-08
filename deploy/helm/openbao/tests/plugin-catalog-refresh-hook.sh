@@ -16,6 +16,21 @@ helm dependency build "${chart_dir}" >/dev/null
 rendered="${test_root}/rendered.yaml"
 helm template openbao "${chart_dir}" -f "${values_file}" >"${rendered}"
 
+# Helm upgrades using --reuse-values do not add newly introduced default
+# subtrees. Rendering must remain compatible with persisted pre-change values.
+legacy_values="${test_root}/legacy-values.yaml"
+awk '
+  /^    refreshJWTPluginCatalog:$/ { skip = 1; next }
+  skip && /^  [a-zA-Z]/ { skip = 0 }
+  !skip { print }
+' "${chart_source}/values.yaml" >"${legacy_values}"
+helm template openbao "${chart_dir}" -f "${legacy_values}" \
+  --set openbao.server.image.registry=example.com \
+  --set openbao.server.image.repository=nvcf/nvcf-openbao \
+  --set openbao.migrations.image.registry=example.com \
+  --set openbao.migrations.image.repository=nvcf/nvcf-openbao-migrations \
+  >/dev/null
+
 hook_document="${test_root}/refresh-hook.yaml"
 awk '
   /^---$/ {

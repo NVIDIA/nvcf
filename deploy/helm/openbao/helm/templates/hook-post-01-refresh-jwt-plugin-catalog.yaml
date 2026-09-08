@@ -14,6 +14,7 @@
 # limitations under the License.
 
 {{- $serverFullname := include "nvcf-openbao.serverFullname" . }}
+{{- $hookValues := .Values.openbao.hooks.refreshJWTPluginCatalog | default .Values.openbao.hooks.migrations }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -27,7 +28,7 @@ metadata:
 spec:
   backoffLimit: 6
   template:
-    {{- with .Values.openbao.hooks.refreshJWTPluginCatalog.podAnnotations }}
+    {{- with $hookValues.podAnnotations }}
     metadata:
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -38,7 +39,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.openbao.hooks.refreshJWTPluginCatalog.schedulingGates }}
+      {{- with $hookValues.schedulingGates }}
       schedulingGates:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -84,7 +85,7 @@ spec:
               mountPath: /secrets/root_token
               readOnly: true
           resources:
-            {{- toYaml .Values.openbao.hooks.refreshJWTPluginCatalog.resources | nindent 12 }}
+            {{- toYaml $hookValues.resources | nindent 12 }}
       volumes:
         - name: {{ $serverFullname }}-root-token
           secret:
