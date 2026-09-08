@@ -114,6 +114,9 @@ jobs:
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
 
+      - name: Test OpenBao auto-unseal retry behavior
+        run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail
