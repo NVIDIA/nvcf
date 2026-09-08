@@ -34,6 +34,8 @@ func init() {
 // Client uploads segments to a generic S3-compatible object store with one
 // synchronous PutObject call per segment.
 type Client struct {
+	// s3 is nil in dry-run mode: Submit logs the computed bucket, key, and
+	// size instead of calling the store.
 	s3     *s3.Client
 	bucket string
 	prefix string
@@ -42,6 +44,10 @@ type Client struct {
 	// two different segments: segment.Discover indexes restart from zero
 	// independently per instance, so a bare file name is not globally unique.
 	source string
+	// dryRun computes and logs what Submit would upload without calling the
+	// store or requiring credentials. See Capabilities: a dry run never
+	// exports, so its source segments are never deleted.
+	dryRun bool
 }
 
 // hostname resolves the identifier used to namespace object keys per
@@ -65,13 +71,19 @@ type credentials struct {
 // at the first upload. config.Load already rejects a non-https endpoint, but
 // New enforces it again: a config.Config can also be constructed directly,
 // bypassing Load.
+//
+// DryRun skips the credential requirement: it never calls the store, so it
+// never authenticates to one. Bucket, region, and the endpoint scheme are
+// still validated, so a dry run exercises the same configuration a real
+// upload would.
 func New(cfg config.Config) (backend.Client, error) {
 	return newClient(cfg, nil)
 }
 
 // newClient builds the backend with an optional transport override, so a test
 // can point it at an httptest.Server whose TLS certificate the default
-// transport would not trust. A nil transport uses the SDK default.
+// transport would not trust. A nil transport uses the SDK default. It is
+// unused in dry-run mode, which never constructs an S3 client.
 //
 // The resulting HTTP client always rejects a redirect to a non-https URL,
 // regardless of the transport: an https:// endpoint only bounds the first
@@ -84,13 +96,26 @@ func newClient(cfg config.Config, transport http.RoundTripper) (backend.Client, 
 	if strings.TrimSpace(cfg.ObjectStore.Region) == "" {
 		return nil, fmt.Errorf("%s is required for the objectstore backend", config.EnvObjectStoreRegion)
 	}
-	creds, err := loadCredentials(cfg.SecretsFile)
-	if err != nil {
-		return nil, err
+	if cfg.ObjectStore.Endpoint != "" && !strings.HasPrefix(cfg.ObjectStore.Endpoint, "https://") {
+		return nil, fmt.Errorf("%s must be an absolute https:// URL; a non-TLS endpoint would send credentials and segment data in cleartext", config.EnvObjectStoreEndpoint)
 	}
 	source, err := hostname()
 	if err != nil {
 		return nil, fmt.Errorf("objectstore backend: read hostname to namespace object keys: %w", err)
+	}
+
+	if cfg.ObjectStore.DryRun {
+		return &Client{
+			bucket: cfg.ObjectStore.Bucket,
+			prefix: cfg.ObjectStore.KeyPrefix,
+			source: source,
+			dryRun: true,
+		}, nil
+	}
+
+	creds, err := loadCredentials(cfg.SecretsFile)
+	if err != nil {
+		return nil, err
 	}
 
 	options := s3.Options{
@@ -105,9 +130,6 @@ func newClient(cfg config.Config, transport http.RoundTripper) (backend.Client, 
 		UsePathStyle: cfg.ObjectStore.PathStyle,
 	}
 	if cfg.ObjectStore.Endpoint != "" {
-		if !strings.HasPrefix(cfg.ObjectStore.Endpoint, "https://") {
-			return nil, fmt.Errorf("%s must be an absolute https:// URL; a non-TLS endpoint would send credentials and segment data in cleartext", config.EnvObjectStoreEndpoint)
-		}
 		options.BaseEndpoint = aws.String(cfg.ObjectStore.Endpoint)
 	}
 	options.HTTPClient = &http.Client{
@@ -154,6 +176,10 @@ func loadCredentials(path string) (credentials, error) {
 // Submit uploads the segment at request.Path and returns once the store has
 // durably accepted it. The returned id is the object key: Status looks
 // nothing up because Capabilities declares TerminalOutcomeSync.
+//
+// In dry-run mode, Submit stats the segment, computes the key, logs both
+// along with the bucket and size, and returns without opening the file or
+// contacting a store.
 func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (string, error) {
 	info, err := os.Stat(request.Path)
 	if err != nil {
@@ -161,6 +187,16 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 	}
 	if info.Size() > maxObjectBytes {
 		return "", fmt.Errorf("objectstore backend: segment is %d bytes, over the %d byte single-object limit", info.Size(), maxObjectBytes)
+	}
+
+	key := c.key(request.Path)
+	if c.dryRun {
+		slog.Info("objectstore backend: dry run, not uploading",
+			"segment", request.Segment.Index,
+			"bucket", c.bucket,
+			"key", key,
+			"bytes", info.Size())
+		return key, nil
 	}
 
 	file, err := os.Open(request.Path)
@@ -173,7 +209,6 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 		}
 	}()
 
-	key := c.key(request.Path)
 	if _, err := c.s3.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(c.bucket),
 		Key:           aws.String(key),
@@ -196,6 +231,10 @@ func (c *Client) Status(context.Context, string) (backend.Status, error) {
 // call: a Submit that returns success is already durable, resubmitting the
 // same segment overwrites the same key, and segments are independent objects
 // so nothing requires in-order delivery.
+//
+// Exports is false in dry-run mode: nothing was sent anywhere, so a caller
+// must never delete a source segment on the strength of a dry-run Submit
+// succeeding, the same rule debug's Capabilities enforces for its own reads.
 func (c *Client) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
 		ResubmitSafe:        true,
@@ -203,7 +242,7 @@ func (c *Client) Capabilities() backend.Capabilities {
 		OutOfOrderTolerant:  true,
 		AcceptedFormats:     []backend.Format{backend.FormatGzipJSONL},
 		MaxObjectBytes:      maxObjectBytes,
-		Exports:             true,
+		Exports:             !c.dryRun,
 	}
 }
 

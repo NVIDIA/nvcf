@@ -36,6 +36,7 @@ const (
 	EnvObjectStoreEndpoint  = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_ENDPOINT"
 	EnvObjectStoreKeyPrefix = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_KEY_PREFIX"
 	EnvObjectStorePathStyle = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_PATH_STYLE"
+	EnvObjectStoreDryRun    = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_DRY_RUN"
 	DefaultSecretsFile      = "/var/secrets/secrets.json"
 	DefaultHealthAddr       = ":8011"
 	DefaultSegmentPrefix    = "request-trace"
@@ -103,6 +104,11 @@ type ObjectStorePolicy struct {
 	// PathStyle selects path-style bucket addressing, which most non-AWS
 	// S3-compatible stores require.
 	PathStyle bool
+	// DryRun computes and logs the bucket, key, and size the backend would
+	// upload, but never calls the store and never requires credentials. It
+	// exists to exercise config, key computation, and hostname namespacing
+	// without a destination, the same role debug plays for the read path.
+	DryRun bool
 }
 
 // KratosPolicy bounds the asynchronous job polling that only the Kratos Bulk
@@ -196,6 +202,7 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		Endpoint:  objectStoreEndpoint,
 		KeyPrefix: strings.Trim(strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreKeyPrefix, "")), "/"),
 		PathStyle: boolValue(lookup, EnvObjectStorePathStyle, false, &warnings),
+		DryRun:    boolValue(lookup, EnvObjectStoreDryRun, false, &warnings),
 	}
 
 	return Config{

@@ -133,6 +133,36 @@ func TestLoadAcceptsAnHTTPSObjectStoreEndpoint(t *testing.T) {
 	}
 }
 
+func TestLoadParsesObjectStoreDryRun(t *testing.T) {
+	cfg, _, err := Load(testLookup(map[string]string{
+		EnvSourceDir:         "/records",
+		EnvBackend:           "objectstore",
+		EnvObjectStoreDryRun: "true",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.ObjectStore.DryRun {
+		t.Fatal("ObjectStore.DryRun = false, want true")
+	}
+}
+
+func TestLoadDefaultsObjectStoreDryRunToFalse(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir: "/records",
+		EnvBackend:   "objectstore",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if cfg.ObjectStore.DryRun {
+		t.Fatal("ObjectStore.DryRun = true, want false by default")
+	}
+}
+
 func testLookup(values map[string]string) LookupFunc {
 	return func(name string) (string, bool) {
 		value, ok := values[name]

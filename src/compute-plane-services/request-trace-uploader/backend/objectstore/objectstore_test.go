@@ -336,3 +336,99 @@ func TestCapabilitiesDeclareExportAndSyncOutcome(t *testing.T) {
 		t.Errorf("Capabilities().MaxObjectBytes = %d, want %d", caps.MaxObjectBytes, maxObjectBytes)
 	}
 }
+
+// TestNewDryRunSkipsCredentials confirms a dry run needs no secrets file: it
+// never authenticates to a store, so requiring credentials would defeat the
+// point of testing config and key computation without one.
+func TestNewDryRunSkipsCredentials(t *testing.T) {
+	cfg := baseConfig(filepath.Join(t.TempDir(), "missing.json"), "https://127.0.0.1:0")
+	cfg.ObjectStore.DryRun = true
+	if _, err := New(cfg); err != nil {
+		t.Fatalf("New() error = %v, want a dry run to skip the credentials file", err)
+	}
+}
+
+// TestNewDryRunStillRequiresBucketRegionAndHTTPS confirms a dry run still
+// validates the settings a real upload would need, so it exercises the same
+// configuration surface rather than a reduced one.
+func TestNewDryRunStillRequiresBucketRegionAndHTTPS(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{name: "missing bucket", mutate: func(c *config.Config) { c.ObjectStore.Bucket = "" }},
+		{name: "missing region", mutate: func(c *config.Config) { c.ObjectStore.Region = "" }},
+		{name: "http endpoint", mutate: func(c *config.Config) { c.ObjectStore.Endpoint = "http://127.0.0.1:0" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig(filepath.Join(t.TempDir(), "missing.json"), "https://127.0.0.1:0")
+			cfg.ObjectStore.DryRun = true
+			tt.mutate(&cfg)
+			if _, err := New(cfg); err == nil {
+				t.Fatal("New() error = nil, want dry run to still validate this setting")
+			}
+		})
+	}
+}
+
+func TestSubmitDryRunLogsAndDoesNotUpload(t *testing.T) {
+	withHostname(t, "pod-a")
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("dry run must not contact the store")
+	}))
+	defer server.Close()
+
+	cfg := baseConfig(filepath.Join(t.TempDir(), "missing.json"), server.URL)
+	cfg.ObjectStore.KeyPrefix = "segments"
+	cfg.ObjectStore.DryRun = true
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	path := writeSegment(t, "fixture")
+	id, err := client.Submit(context.Background(), backend.SubmitRequest{Path: path})
+	if err != nil {
+		t.Fatalf("Submit() error = %v", err)
+	}
+	if id != "segments/pod-a/request-trace.000000.jsonl.gz" {
+		t.Errorf("Submit() id = %q, want the computed object key", id)
+	}
+
+	status, err := client.Status(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status != backend.StatusSuccess {
+		t.Errorf("Status() = %v, want success", status)
+	}
+}
+
+func TestSubmitDryRunFailsOnAMissingSegment(t *testing.T) {
+	cfg := baseConfig(filepath.Join(t.TempDir(), "missing.json"), "https://127.0.0.1:0")
+	cfg.ObjectStore.DryRun = true
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = client.Submit(context.Background(), backend.SubmitRequest{Path: "/nonexistent/request-trace.000000.jsonl.gz"})
+	if err == nil {
+		t.Fatal("Submit() error = nil, want a stat failure even in dry-run mode")
+	}
+}
+
+// TestCapabilitiesDryRunDoesNotExport guards the deletion decision in
+// service.Refresh: a dry run must report Exports=false so a caller never
+// deletes a source segment on the strength of a dry-run Submit succeeding.
+func TestCapabilitiesDryRunDoesNotExport(t *testing.T) {
+	cfg := baseConfig(filepath.Join(t.TempDir(), "missing.json"), "https://127.0.0.1:0")
+	cfg.ObjectStore.DryRun = true
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if client.Capabilities().Exports {
+		t.Error("Capabilities().Exports = true, want false for a dry run")
+	}
+}
