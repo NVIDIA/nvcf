@@ -57,6 +57,9 @@ const (
 	maxCreationSkip                       = uint64(50)
 	defaultVisibilityTimeoutSeconds       = int64(30)
 	creationQueueVisibilityTimeoutSeconds = int64(360)
+
+	// queueComponentName identifies the creation queue in the health payload.
+	queueComponentName = "queue"
 )
 
 type QueueManager struct {
@@ -83,6 +86,11 @@ type QueueManager struct {
 	statusGetter health.StatusGetter
 	// health status flag for liveness probe verification
 	healthy atomic.Bool
+	// polled records whether at least one queue poll has completed. healthy is
+	// deliberately not usable for readiness: it is set true in the constructor
+	// before any poll has happened, so it cannot distinguish "the queue is
+	// working" from "the queue has not been tried yet".
+	polled atomic.Bool
 	// paused indicates if the queue manager is paused (e.g., due to no GPUs available).
 	// When paused, creation messages are not processed but termination messages continue.
 	paused atomic.Bool
@@ -349,7 +357,7 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		// Process termination messages
 		if termQWOutput.err != nil {
 			log.WithError(termQWOutput.err).Error("Failed to fetch termination messages")
-			qm.SetStatusOK(false)
+			qm.setPollResult(false)
 			return termQWOutput.err
 		}
 
@@ -382,7 +390,7 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 			}
 		}
 
-		qm.SetStatusOK(true)
+		qm.setPollResult(true)
 		return nil
 	}
 
@@ -501,7 +509,7 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 	// Wait for all work to finish
 	p.Wait()
 
-	qm.SetStatusOK(!anyQueuePullError)
+	qm.setPollResult(!anyQueuePullError)
 	return nil
 }
 
@@ -851,6 +859,42 @@ func (qm *QueueManager) ExtendCreationMessableVisibilityTimeoutV2(ctx context.Co
 func (qm *QueueManager) SetStatusOK(ok bool) { qm.healthy.Store(ok) }
 func (qm *QueueManager) StatusOK() bool      { return qm.healthy.Load() }
 func (qm *QueueManager) Name() string        { return "queuemanager" }
+
+// setPollResult records the outcome of a completed queue poll. It keeps polled
+// and healthy in lockstep so readiness can tell "not tried yet" apart from
+// "tried and working", which SetStatusOK alone cannot express.
+func (qm *QueueManager) setPollResult(ok bool) {
+	qm.SetStatusOK(ok)
+	qm.polled.Store(true)
+}
+
+// GetComponentStatus implements health.ComponentStatusGetter so the creation
+// queue gates the readiness probe. Without it /healthz reports the backend
+// healthy purely because startup progressed, even when no consumer exists and
+// every poll is failing, which is what nvcf#1590 reports.
+//
+// StatusLevelError is required, not stylistic: the readiness aggregate only
+// flips overall status unhealthy for components strictly below StatusLevelWarn,
+// so a Warn-level component would appear in the payload and gate nothing.
+func (qm *QueueManager) GetComponentStatus(_ context.Context) (types.AgentHealth, error) {
+	ch := types.ComponentHealth{
+		Status:      types.HealthStatusHealthy,
+		StatusLevel: types.StatusLevelError,
+	}
+	switch {
+	case !qm.polled.Load():
+		// Startup: credentials may exist but nothing has consumed the queue yet.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors, "creation queue has not been polled yet")
+	case !qm.StatusOK():
+		// Polling is failing, e.g. the stream or consumer cannot be reached.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors, "creation queue polling is failing")
+	}
+	return types.AgentHealth{
+		Components: map[string]types.ComponentHealth{queueComponentName: ch},
+	}, nil
+}
 
 // Pause pauses queue processing. Creation messages will not be processed,
 // but termination messages will continue to be processed.

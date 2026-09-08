@@ -20,6 +20,8 @@ package health
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +45,9 @@ type StatusGetter interface {
 type StatusCache interface {
 	StatusGetter
 	GetStatusForLevel(level nvcatypes.StatusLevel) nvcatypes.AgentHealth
+	// AddGetter registers a component whose construction happens after this
+	// cache is built. See BackendStatusCache.AddGetter.
+	AddGetter(g ComponentStatusGetter)
 }
 
 type ComponentStatusGetter interface {
@@ -57,7 +62,11 @@ func (f GetComponentStatusFunc) GetComponentStatus(ctx context.Context) (nvcatyp
 
 type BackendStatusCache struct {
 	backendStatus atomic.Value
-	getters       []ComponentStatusGetter
+
+	// gmu guards getters, which can be appended to after construction via
+	// AddGetter while RefreshStatusForLevel reads it from the refresh loop.
+	gmu     sync.RWMutex
+	getters []ComponentStatusGetter
 
 	// If set, wait at least this long before the next refresh.
 	// This prevents chatty component queries.
@@ -85,6 +94,25 @@ func NewBackendStatusCache(
 	})
 
 	return cache
+}
+
+// AddGetter registers a component after construction, mirroring the liveness
+// getter's AddChecker. It exists because some components are not constructed
+// until after the startup health gate has already run against this cache, so
+// they cannot be passed to NewBackendStatusCache without deadlocking startup
+// on a component that is not-ready by construction.
+func (c *BackendStatusCache) AddGetter(g ComponentStatusGetter) {
+	c.gmu.Lock()
+	defer c.gmu.Unlock()
+	c.getters = append(c.getters, g)
+}
+
+// snapshotGetters returns a stable copy so a concurrent AddGetter cannot change
+// the set between the fan-out and the result count that terminates the gather.
+func (c *BackendStatusCache) snapshotGetters() []ComponentStatusGetter {
+	c.gmu.RLock()
+	defer c.gmu.RUnlock()
+	return slices.Clone(c.getters)
 }
 
 // WaitForHealthSuccess blocks the current thread until the AgentHealth is completely healthy
@@ -170,8 +198,10 @@ func (c *BackendStatusCache) RefreshStatusForLevel(ctx context.Context, level nv
 		c.lastRefresh = c.nowFunc()
 	}
 
+	getters := c.snapshotGetters()
+
 	results := make(chan statusResult)
-	for _, getter := range c.getters {
+	for _, getter := range getters {
 		go func(getter ComponentStatusGetter) {
 			ah, err := getter.GetComponentStatus(ctx)
 			if err != nil && !nvcaerrors.IsNotExist(err) {
@@ -190,7 +220,7 @@ func (c *BackendStatusCache) RefreshStatusForLevel(ctx context.Context, level nv
 		GPUUsage:   map[nvcatypes.GPUName]nvcatypes.GPUResource{},
 		Components: map[string]nvcatypes.ComponentHealth{},
 	}
-	i := len(c.getters)
+	i := len(getters)
 	errs := make([]error, i)
 	for res := range results {
 		if res.err != nil {

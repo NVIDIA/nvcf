@@ -1422,6 +1422,14 @@ func (a *Agent) Start(ctx context.Context) error {
 	)
 	a.livenessCheckGetter.AddChecker(a.queueManager)
 
+	// Also gate readiness on the queue, so /healthz cannot report the backend
+	// healthy before anything is consuming the creation queue (nvcf#1590).
+	// Registered here rather than passed to NewBackendStatusCache above because
+	// the queue manager does not exist until after the startup health gate has
+	// already run against that cache; adding a not-ready-by-construction
+	// component to it would stall startup instead of gating readiness.
+	a.backendHealthCache.AddGetter(a.queueManager)
+
 	// If GracefulNoGPU is enabled and we started without GPUs, pause the queue manager
 	// and set up callbacks to handle GPU availability changes
 	if a.gpuRegistration.enabled() {
