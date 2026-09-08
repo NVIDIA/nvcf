@@ -215,10 +215,16 @@ openbao:
               if [ -f /vault/userconfig/unseal/unseal_key ]; then
                 UNSEAL_KEY=$(cat /vault/userconfig/unseal/unseal_key)
                 if [ ! -z "$UNSEAL_KEY" ]; then
-                    echo "Unsealing OpenBao..."
-                    bao operator unseal $UNSEAL_KEY
-                    sleep 60
+                  echo "Unsealing OpenBao..."
+                  if bao operator unseal "$UNSEAL_KEY"; then
                     echo "OpenBao unsealed"
+                    sleep 60
+                    continue
+                  else
+                    echo "OpenBao unseal attempt failed; retrying in 10 seconds..."
+                    sleep 10
+                    continue
+                  fi
                 else
                   echo "Unseal key is empty, waiting..."
                 fi
