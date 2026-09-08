@@ -104,6 +104,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/admin/health/liveness", get(routes::get_liveness))
         .route("/admin/health/readiness", get(routes::get_readiness))
         .route("/health", get(routes::get_health))
+        // Also served here, not just on the main app below, so build metadata
+        // stays readable while the service is still waiting on Cassandra.
+        .route("/info", get(routes::get_info))
         .with_state(health.clone());
     let probe_addr = SocketAddr::from(([0, 0, 0, 0], PROBE_PORT));
     let probe_listener = tokio::net::TcpListener::bind(probe_addr).await?;
