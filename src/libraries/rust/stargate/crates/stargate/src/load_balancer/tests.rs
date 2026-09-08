@@ -1111,7 +1111,7 @@ fn legacy_algorithm_names_remain_compatible_in_detailed_configs() {
 #[test]
 fn detailed_model_config_parses_wait_and_widen_cache_affinity() {
     let router = router_from_json(
-        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2}}}"#,
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2,"cache_affinity_input_tokens_scale":0.1}}}"#,
     );
     let model_config = router.algorithm_config("model-a");
     assert_eq!(
@@ -1125,6 +1125,34 @@ fn detailed_model_config_parses_wait_and_widen_cache_affinity() {
     assert_eq!(
         wait_and_widen_config.cache_affinity_backend_selection_count,
         Some(2)
+    );
+    assert_eq!(wait_and_widen_config.cache_affinity_input_tokens_scale, 0.1);
+}
+
+#[test]
+fn wait_and_widen_rejects_cache_affinity_input_tokens_scale_outside_unit_interval() {
+    for scale in [-0.1, 1.1] {
+        assert_json_rejected::<LoadBalancerAlgorithmConfig>(
+            &format!(
+                r#"{{"algorithm":"wait-and-widen","cache_affinity_input_tokens_scale":{scale}}}"#
+            ),
+            "cache_affinity_input_tokens_scale must be between 0.0 and 1.0",
+        );
+    }
+
+    let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::WaitAndWiden);
+    config
+        .wait_and_widen_settings_mut()
+        .expect("wait-and-widen config should expose mutable settings")
+        .cache_affinity_input_tokens_scale = Some(1.1);
+    let error = match create_load_balancer_with_config(&config) {
+        Ok(_) => panic!("programmatic invalid input scale should fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("cache_affinity_input_tokens_scale")
     );
 }
 
@@ -1255,6 +1283,7 @@ fn wait_and_widen_config_resolves_internal_defaults() {
 
     assert_eq!(config.cache_affinity_virtual_nodes, 1);
     assert_eq!(config.cache_affinity_backend_selection_count, None);
+    assert_eq!(config.cache_affinity_input_tokens_scale, 1.0);
     assert_eq!(config.ttft_bucket_size, Duration::from_millis(20));
     assert_eq!(config.next_bucket_unlock_factor, 0.25);
     assert_eq!(config.sample_count, 1);
@@ -1959,6 +1988,60 @@ fn wait_and_widen_cache_affinity_falls_back_when_primary_is_full() {
 }
 
 #[test]
+fn wait_and_widen_affinity_prefill_discount_delays_cold_fallback_until_later_bucket() {
+    let make_config = |input_tokens_scale| {
+        let mut config = wait_and_widen_affinity_algorithm_config(8, 1, Some(2));
+        let settings = config
+            .wait_and_widen_settings_mut()
+            .expect("wait-and-widen config should expose settings");
+        settings.cache_affinity_input_tokens_scale = input_tokens_scale;
+        settings.max_queue_time_floor_ms = Some(100);
+        settings.max_queue_time_ceil_ms = Some(5_000);
+        WaitAndWidenConfig::from_algorithm_config(&config)
+    };
+
+    let target = target();
+    let affinity_key = "cached-prefix";
+    let baseline_config = make_config(None);
+    let mut candidates = [
+        priority_candidate("backend-a", 0, 10),
+        priority_candidate("backend-b", 0, 0),
+    ];
+    let request = LoadBalancerRequest {
+        request_slo: Some(Duration::from_secs(10)),
+        ..request(&target, Some(affinity_key), Some(1_000))
+    };
+    let affinity_index = cache_affinity_candidate_indices(&baseline_config, &request, &candidates)
+        .expect("cache affinity should select a backend")[0];
+    let cold_index = 1 - affinity_index;
+    candidates[affinity_index].stats.max_engine_concurrency = 1;
+    candidates[affinity_index].stats.num_running_queries = 1;
+
+    let baseline = WaitAndWidenLoadBalancer::new(baseline_config);
+    let baseline_choice = choose(&baseline, &request, &candidates);
+    assert_eq!(
+        baseline_choice.candidate.cluster_id,
+        candidates[cold_index].cluster_id
+    );
+
+    let discounted = WaitAndWidenLoadBalancer::new(make_config(Some(0.1)));
+    assert!(
+        discounted.choose_for_test(&request, &candidates).is_none(),
+        "the full affinity backend should anchor the first TTFT bucket"
+    );
+
+    let later_request = LoadBalancerRequest {
+        received_at: Instant::now() - Duration::from_secs(3),
+        ..request
+    };
+    let later_choice = choose(&discounted, &later_request, &candidates);
+    assert_eq!(
+        later_choice.candidate.cluster_id,
+        candidates[cold_index].cluster_id
+    );
+}
+
+#[test]
 fn wait_and_widen_two_affinity_candidates_still_filter_capacity() {
     let config = wait_and_widen_affinity_config(8, 2, Some(2));
     let lb = WaitAndWidenLoadBalancer::new(config.clone());
@@ -2325,15 +2408,19 @@ fn wait_and_widen_ttft_uses_priority_queue_and_ignore_flags() {
     let mut candidate = work_candidate("estimated", 7, 100.0, 999);
     candidate.stats.queue_time_estimate_ms_by_priority = HashMap::from([(4, 25)]);
 
-    let full = wait_and_widen_ttft_components(&candidate, Some(200), 4, false, false);
+    let full = wait_and_widen_ttft_components(&candidate, Some(200), 1.0, 4, false, false);
     assert_eq!(full.queue_ms, 25.0);
     assert_eq!(full.ttft_ms, 2032.0);
 
-    let ignore_queue = wait_and_widen_ttft_components(&candidate, Some(200), 4, true, false);
+    let discounted = wait_and_widen_ttft_components(&candidate, Some(200), 0.1, 4, false, false);
+    assert_eq!(discounted.queue_ms, 25.0);
+    assert_eq!(discounted.ttft_ms, 232.0);
+
+    let ignore_queue = wait_and_widen_ttft_components(&candidate, Some(200), 1.0, 4, true, false);
     assert_eq!(ignore_queue.queue_ms, 25.0);
     assert_eq!(ignore_queue.ttft_ms, 2007.0);
 
-    let ignore_prefill = wait_and_widen_ttft_components(&candidate, Some(200), 4, false, true);
+    let ignore_prefill = wait_and_widen_ttft_components(&candidate, Some(200), 1.0, 4, false, true);
     assert_eq!(ignore_prefill.queue_ms, 25.0);
     assert_eq!(ignore_prefill.ttft_ms, 32.0);
 }
