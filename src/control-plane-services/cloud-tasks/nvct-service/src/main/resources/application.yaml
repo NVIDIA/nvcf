@@ -212,6 +212,13 @@ server:
 nvct:
   fqdn: http://localhost:${server.port}
   global-fqdn-grpc: http://localhost:${grpc.server.port}
+  ess:
+    registry-credential-cache:
+      # How long a registry credential secret read from ESS is served from the
+      # in-memory cache before the next read re-fetches it from ESS.
+      ttl: PT5M
+      # Maximum number of registry credential secrets held in the cache.
+      max-size: 3072
   sidecars:
     tracing-key: ${kv.worker-tracing}
     hostname: stg.nvcr.io
