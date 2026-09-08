@@ -143,6 +143,20 @@ func (w *WorkerConnection) WaitForConnection(ctx context.Context) (http.Handler,
 	return handler, handler != nil
 }
 
+// EverConnected reports whether a worker ever attached to this connection.
+//
+// Distinct from WorkerClosed, which answers whether an attached worker has
+// since gone away. Callers deciding whether queued work was ever delivered
+// need "did anyone take it", not "is it still here".
+func (w *WorkerConnection) EverConnected() bool {
+	select {
+	case <-w.connPopulated:
+		return true
+	default:
+		return false
+	}
+}
+
 func (w *WorkerConnection) WorkerClosed() bool {
 	select {
 	case <-w.connPopulated:

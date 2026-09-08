@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"nvcf-grpc-proxy/proxy/worker"
+	"time"
 
 	"net"
 	"nvcf-grpc-proxy/proxy/metrics"
@@ -252,4 +254,89 @@ func TestDeparturePurgeStopsOnceShuttingDown(t *testing.T) {
 func skipCount(t *testing.T, reason string) float64 {
 	t.Helper()
 	return testutil.ToFloat64(metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(reason))
+}
+
+// A worker request is shared by every RPC on a connection with the same
+// function routing, so one RPC being cancelled says nothing about whether
+// anyone is still waiting. Purging on that signal destroys the shared work and
+// leaves the surviving RPC unable to ever get a worker.
+//
+// Requested in review on NVIDIA/nvcf#1031.
+func TestCancellingOneRpcDoesNotPurgeWorkAnotherIsWaitingOn(t *testing.T) {
+	purger := newRecordingPurger()
+	s := &StreamDirector{
+		functionInvoker: purger,
+		pendingWork:     ttlcache.New[uuid.UUID, pendingWorkInfo](),
+		shuttingDown:    &atomic.Bool{},
+		departurePurges: make(chan struct{}, departurePurgeConcurrency),
+	}
+	reqID := uuid.New()
+	key := workerConnectionKey{requestId: reqID, functionId: "fn", functionVersionId: "ver"}
+	wc := worker.NewWorkerConnection(reqID, "fn", "ver", func() {}, func() {})
+
+	// Mirrors production: the purge is driven by eviction of the shared entry,
+	// never by a single request's context.
+	evicted := make(chan struct{})
+	workers := ttlcache.New[workerConnectionKey, *worker.WorkerConnection]()
+	workers.OnEviction(func(_ context.Context, _ ttlcache.EvictionReason, i *ttlcache.Item[workerConnectionKey, *worker.WorkerConnection]) {
+		if !i.Value().EverConnected() {
+			s.purgeDepartedClientWork(i.Key().requestId, i.Key().functionVersionId)
+		}
+		close(evicted)
+	})
+	workers.Set(key, wc, ttlcache.NoTTL)
+	s.pendingWork.Set(reqID, pendingWorkInfo{functionVersionId: "ver"}, ttlcache.NoTTL)
+
+	// Two RPCs waiting on the one shared connection, each with its own context.
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+
+	firstDone := make(chan bool, 1)
+	go func() { _, ok := wc.WaitForConnection(firstCtx); firstDone <- ok }()
+	go func() { _, _ = wc.WaitForConnection(secondCtx) }()
+
+	// Cancel only the first. This is the case that used to purge.
+	cancelFirst()
+	if ok := <-firstDone; ok {
+		t.Fatal("precondition: the cancelled RPC should not have connected")
+	}
+
+	if got := purger.purgedRequests(); len(got) != 0 {
+		t.Fatalf("cancelling one RPC purged work the other is waiting on: %v", got)
+	}
+	if s.pendingWork.Get(reqID) == nil {
+		t.Error("the shared pending entry was dropped while an RPC was still waiting")
+	}
+
+	// Once the entry is evicted, which in production means its TTL ran out and
+	// the client has been sent a gateway timeout, the work is genuinely
+	// abandoned and is purged exactly once.
+	workers.Delete(key)
+	select {
+	case <-evicted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("eviction callback never ran")
+	}
+	if got := purger.purgedRequests(); len(got) != 1 || got[reqID] != "ver" {
+		t.Errorf("eviction should have purged the abandoned work, got %v", got)
+	}
+}
+
+// Eviction must not purge work a worker already took: that work has left the
+// queue, and the session can still reattach through another pod.
+func TestEvictionDoesNotPurgeOnceAWorkerAttached(t *testing.T) {
+	wc := worker.NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+	if wc.EverConnected() {
+		t.Fatal("a fresh worker connection reports as connected")
+	}
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	if err := wc.SetConnection(server); err != nil {
+		t.Fatalf("SetConnection: %v", err)
+	}
+	if !wc.EverConnected() {
+		t.Error("a worker attached but EverConnected reports otherwise, so its work would be purged")
+	}
 }

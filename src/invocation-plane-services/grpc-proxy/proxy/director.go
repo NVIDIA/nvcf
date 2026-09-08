@@ -160,6 +160,12 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	// report shutdown rather than attributing a drain to a client or worker.
 	shuttingDown := &atomic.Bool{}
 
+	// Assigned once the director exists. Eviction is the only place that can
+	// tell queued work is genuinely abandoned: a worker-connection entry is
+	// shared by every RPC on a connection with the same function routing, so
+	// no single request's cancellation means nobody is waiting.
+	var purgeDepartedClientWork func(uuid.UUID, string)
+
 	cache := ttlcache.New(
 		ttlcache.WithTTL[workerConnectionKey, *worker.WorkerConnection](consts.Timeout),
 		ttlcache.WithLoader(ttlcache.NewSuppressedLoader(
@@ -281,11 +287,19 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 			))
 		span.End()
 
+		// Purge here rather than when a request is cancelled. This fires once
+		// for the shared entry, and only once its TTL has run out, which is
+		// the same budget after which the client is sent a gateway timeout.
+		// At that point the work cannot be delivered to anyone.
+		if !wc.EverConnected() && purgeDepartedClientWork != nil {
+			purgeDepartedClientWork(i.Key().requestId, i.Key().functionVersionId)
+		}
+
 		_ = wc.Close()
 	})
 	go cache.Start()
 
-	return &StreamDirector{
+	director := &StreamDirector{
 		workers:         cache,
 		shuttingDown:    shuttingDown,
 		departurePurges: make(chan struct{}, departurePurgeConcurrency),
@@ -295,6 +309,11 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
 	}
+	// Closed over by the eviction handler above, which runs before this
+	// returns only if an entry is evicted during construction, which cannot
+	// happen: the cache is empty until the director serves a request.
+	purgeDepartedClientWork = director.purgeDepartedClientWork
+	return director
 }
 
 // Timer names reported in local_timeout. Only the proxy's own timers can be
@@ -740,11 +759,13 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 		if cancelInvokingWorker != nil {
 			go func() {
 				// once a connection shows up or the context goes away we should stop looking for a worker
-				_, connected := workerConnection.WaitForConnection(ctx)
+				// Deliberately does not purge on this context ending. It
+				// belongs to one RPC, and this worker request is shared by
+				// every RPC on the connection with the same function routing,
+				// so one cancellation says nothing about whether anyone is
+				// still waiting. The purge is driven from cache eviction.
+				workerConnection.WaitForConnection(ctx)
 				cancelInvokingWorker()
-				if !connected {
-					s.purgeDepartedClientWork(invokeResponse.RequestId, apiFunctionVersionId)
-				}
 			}()
 		}
 		return workerConnection, nil
