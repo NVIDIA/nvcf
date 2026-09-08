@@ -201,7 +201,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-openbao-server
-    version: 0.32.1
+    version: 0.32.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-pki
@@ -861,7 +861,7 @@ artifacts:
   - name: helm-nvcf-openbao-server
     type: chart
     registry: staging
-    version: 0.32.1
+    version: 0.32.2
   - name: helm-nvcf-pki
     type: chart
     registry: staging

@@ -15,7 +15,7 @@ secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
 : "${NVCF_PUBLISHED_CHART_REPOSITORY:?NVCF_PUBLISHED_CHART_REPOSITORY is required}"
 published_chart_registry="$NVCF_PUBLISHED_CHART_REGISTRY"
 published_chart_repository="$NVCF_PUBLISHED_CHART_REPOSITORY"
-published_chart_version=0.32.1
+published_chart_version=0.32.2
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
