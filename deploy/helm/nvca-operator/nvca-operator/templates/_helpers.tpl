@@ -127,6 +127,7 @@ and takes precedence for one minor-version transition.
 */}}
 {{- define "nvcaop.effectiveAgentConfig" -}}
 {{- $byoo := .Values.byoo | default dict -}}
+{{- $utils := .Values.utils | default dict -}}
 {{- $agent := dict -}}
 {{- with $byoo.resources }}
 {{- $_ := set $agent "BYOOResources" . -}}
@@ -140,10 +141,10 @@ and takes precedence for one minor-version transition.
 {{- with $byoo.additionalResourceOverhead }}
 {{- $_ := set $agent "additionalResourceOverhead" . -}}
 {{- end -}}
-{{- with $byoo.fluentBitResources }}
+{{- with ($byoo.fluentbit | default dict).resources }}
 {{- $_ := set $agent "BYOOFluentBitResources" . -}}
 {{- end -}}
-{{- with .Values.utilsResources }}
+{{- with $utils.resources }}
 {{- $_ := set $agent "UtilsResources" . -}}
 {{- end -}}
 {{- $config := dict -}}

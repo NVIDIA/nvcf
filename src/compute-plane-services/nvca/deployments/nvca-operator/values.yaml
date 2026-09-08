@@ -121,7 +121,7 @@ ddcsIPAllowList: ""
 ## @param byoo.logChunking.dryRun Record chunking metrics without modifying log payloads.
 ## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
 ## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead.
-## @param byoo.fluentBitResources Resource requests and limits for the BYOO FluentBit container
+## @param byoo.fluentbit.resources Resource requests and limits for the BYOO FluentBit container
 byoo:
   resources:
     limits:
@@ -143,18 +143,20 @@ byoo:
     cpu: "8"
     ephemeral-storage: 5Gi
     memory: 10Gi
-  fluentBitResources:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 100m
-      memory: 128Mi
+  fluentbit:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
 
-## @param utilsResources Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.
-utilsResources:
-  cpu: "4"
-  memory: 4Gi
+## @param utils.resources Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.
+utils:
+  resources:
+    cpu: "4"
+    memory: 4Gi
 
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
 ## @description agentConfig.mergeConfig is deprecated for BYOO settings. Use the top-level byoo values instead.
