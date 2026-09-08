@@ -106,15 +106,11 @@ public class TerminateInstanceService {
 
     @Observed
     public TerminateInstancesResponse terminateInstances(
-            @NotNull String ncaId,
-            @NotNull UUID deploymentId,
-            @Nullable UUID gpuSpecificationId,
+            String ncaId,
+            UUID deploymentId,
+            UUID gpuSpecificationId,
             int instanceCount,
-            @NotNull Map<String, Object> auditProps) {
-        if (instanceCount <= 0) {
-            throw new IcmsBadRequestException("InstanceCount should be greater than zero");
-        }
-
+            Map<String, Object> auditProps) {
         List<InstanceV2Entity> deploymentInstances = gpuSpecificationId == null
                 ? instanceV2Repository.findInstancesByDeploymentId(deploymentId)
                 : instanceV2Repository.findInstancesByGpuSpecificationId(

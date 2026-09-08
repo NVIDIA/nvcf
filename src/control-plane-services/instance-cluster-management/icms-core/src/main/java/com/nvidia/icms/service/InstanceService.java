@@ -113,11 +113,11 @@ public class InstanceService {
     }
 
     public TerminateInstancesResponse terminateInstances(
-            @NotNull String ncaId,
-            @NotNull UUID deploymentId,
-            @Nullable UUID gpuSpecificationId,
+            String ncaId,
+            UUID deploymentId,
+            UUID gpuSpecificationId,
             int instanceCount,
-            @NotNull Map<String, Object> auditProps) {
+            Map<String, Object> auditProps) {
         return terminateInstanceService.terminateInstances(
                 ncaId, deploymentId, gpuSpecificationId, instanceCount, auditProps);
     }

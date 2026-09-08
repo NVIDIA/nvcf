@@ -51,6 +51,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -779,6 +780,41 @@ class InstanceControllerTest extends IntegrationTest {
 
         verify(instanceService).terminateInstances(
                 eq(ncaId), eq(workloadId), eq(null), eq(2), Mockito.any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void terminateInstanceCountPerWorkload_withNonPositiveCount_returnsBadRequest(
+            int instanceCount) throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/instances";
+
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", String.valueOf(instanceCount)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(instanceService);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void terminateInstanceCountPerGpuSpec_withNonPositiveCount_returnsBadRequest(
+            int instanceCount) throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/gpuSpecs/" + gpuSpecId + "/instances";
+
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", String.valueOf(instanceCount)))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(instanceService);
     }
 
     @Test
