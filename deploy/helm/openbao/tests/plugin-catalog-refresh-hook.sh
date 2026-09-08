@@ -24,12 +24,17 @@ awk '
   skip && /^  [a-zA-Z]/ { skip = 0 }
   !skip { print }
 ' "${chart_source}/values.yaml" >"${legacy_values}"
+legacy_hook="${test_root}/legacy-refresh-hook.yaml"
 helm template openbao "${chart_dir}" -f "${legacy_values}" \
+  --set-json 'openbao.hooks.refreshJWTPluginCatalog=null' \
+  --set openbao.hooks.migrations.resources.requests.cpu=99m \
   --set openbao.server.image.registry=example.com \
   --set openbao.server.image.repository=nvcf/nvcf-openbao \
   --set openbao.migrations.image.registry=example.com \
   --set openbao.migrations.image.repository=nvcf/nvcf-openbao-migrations \
-  >/dev/null
+  --show-only templates/hook-post-01-refresh-jwt-plugin-catalog.yaml \
+  >"${legacy_hook}"
+grep -q 'cpu: 99m' "${legacy_hook}"
 
 hook_document="${test_root}/refresh-hook.yaml"
 awk '
