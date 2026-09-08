@@ -66,6 +66,24 @@ downloads_dir=${work_dir}/downloads
 mkdir -p "${payload_dir}" "${downloads_dir}"
 unzip -q "${input}" -d "${payload_dir}"
 
+exporter_metadata_dir=${payload_dir}/META-INF/maven/com.zegelin.cassandra-exporter
+[ -d "${exporter_metadata_dir}" ] || {
+    echo "exporter Maven metadata is missing: META-INF/maven/com.zegelin.cassandra-exporter" >&2
+    exit 1
+}
+exporter_poms=$(find "${exporter_metadata_dir}" -name pom.xml -type f -print)
+[ -n "${exporter_poms}" ] || {
+    echo "exporter Maven metadata contains no pom.xml files" >&2
+    exit 1
+}
+
+# Replacing shaded classes invalidates any signatures covering the input JAR.
+# Remove top-level signature metadata so the JVM does not reject the repacked
+# agent with a SecurityException when it reads modified entries.
+find "${payload_dir}/META-INF" -maxdepth 1 -type f \
+    \( -name '*.SF' -o -name '*.RSA' -o -name '*.DSA' -o -name '*.EC' -o -name 'SIG-*' \) \
+    -exec rm -f {} +
+
 # Remove the complete shaded Netty payload and its dependency metadata. The
 # module-set check above makes this fail closed if the exporter gains another
 # Netty module that is not pinned here.
@@ -104,7 +122,7 @@ done
 
 # The exporter POMs are scanner-visible provenance. Update only their Netty
 # version declarations so they describe the dependency payload just inserted.
-find "${payload_dir}/META-INF/maven/com.zegelin.cassandra-exporter" -name pom.xml -type f |
+printf '%s\n' "${exporter_poms}" |
 while read -r pom; do
     if ! awk -v version="${NETTY_VERSION}" '
         /<dependency>/ { in_dependency = 1; dependency = "" }
