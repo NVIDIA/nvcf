@@ -116,6 +116,29 @@ for expected in \
     fail "control profile did not render autoscaler value: $expected"
 done
 
+write_autoscaler_values "$work_dir/custom-autoscaler-values.yaml" \
+  --state-values-set-string functionAutoscaler.env.SCALING__LOOKBACK_SECONDS=90 \
+  --state-values-set-string functionAutoscaler.env.SCALING__SCALE_TO_ZERO_IDLE_TIMEOUT_SECONDS=300 \
+  --state-values-set-string functionAutoscaler.env.NVCF_API__DRY_RUN=true
+
+custom_autoscaler_values="$work_dir/custom-autoscaler-values.yaml"
+for expected in \
+  'SCALING__LOOKBACK_SECONDS: "90"' \
+  'SCALING__SCALE_TO_ZERO_IDLE_TIMEOUT_SECONDS: "300"' \
+  'NVCF_API__DRY_RUN: "true"'; do
+  grep -q "$expected" "$custom_autoscaler_values" ||
+    fail "custom autoscaler env did not render or override defaults: $expected"
+done
+
+if write_autoscaler_values "$work_dir/invalid-autoscaler-values.yaml" \
+  --state-values-set-string functionAutoscaler.env=invalid \
+  >"$work_dir/invalid-autoscaler-env.log" 2>&1; then
+  fail "non-map functionAutoscaler.env was accepted"
+fi
+grep -q 'functionAutoscaler.env must be a map' \
+  "$work_dir/invalid-autoscaler-env.log" ||
+  fail "invalid functionAutoscaler.env did not return the expected error"
+
 helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
   --namespace nvcf \
   --values "$autoscaler_values" \
