@@ -140,6 +140,12 @@ and takes precedence for one minor-version transition.
 {{- with $byoo.additionalResourceOverhead }}
 {{- $_ := set $agent "additionalResourceOverhead" . -}}
 {{- end -}}
+{{- with $byoo.fluentBitResources }}
+{{- $_ := set $agent "BYOOFluentBitResources" . -}}
+{{- end -}}
+{{- with .Values.utilsResources }}
+{{- $_ := set $agent "UtilsResources" . -}}
+{{- end -}}
 {{- $config := dict -}}
 {{- if $agent }}
 {{- $_ := set $config "agent" $agent -}}
@@ -164,7 +170,7 @@ ConfigMap annotation lets the operator emit a source-aware migration warning.
 {{- $config := $mergeConfigData | fromYaml | default dict -}}
 {{- $agent := $config.agent | default dict -}}
 {{- range $key, $_ := $agent }}
-{{- if or (hasPrefix "byoo" (lower $key)) (eq $key "additionalResourceOverhead") }}
+{{- if or (hasPrefix "byoo" (lower $key)) (eq $key "additionalResourceOverhead") (eq $key "UtilsResources") }}
 {{- $legacyBYOO = true -}}
 {{- end -}}
 {{- end -}}

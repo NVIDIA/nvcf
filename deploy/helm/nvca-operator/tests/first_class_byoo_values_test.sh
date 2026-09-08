@@ -55,9 +55,13 @@ assert_equal "4Gi" "$(agent_config_value "${default_manifest}" '.agent.BYOOResou
 assert_equal "262144" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "unexpected BYOO log chunk payload size"
 assert_equal "1000000" "$(agent_config_value "${default_manifest}" '.agent.byooOtelCollector.exporterHelper.sendingQueue.batch.maxSize')" "unexpected BYOO exporter batch limit"
 assert_equal "8" "$(agent_config_value "${default_manifest}" '.agent.additionalResourceOverhead.cpu')" "unexpected BYOO capacity reservation"
+assert_equal "500m" "$(agent_config_value "${default_manifest}" '.agent.BYOOFluentBitResources.limits.cpu')" "unexpected BYOO FluentBit CPU limit"
+assert_equal "128Mi" "$(agent_config_value "${default_manifest}" '.agent.BYOOFluentBitResources.requests.memory')" "unexpected BYOO FluentBit memory request"
+assert_equal "4" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.cpu')" "unexpected utils CPU sizing"
+assert_equal "4Gi" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.memory')" "unexpected utils memory sizing"
 
 yq eval '
-  .agentConfig.mergeConfig = "agent:\n  BYOOResources:\n    limits:\n      cpu: 1500m\n  byooLogChunking:\n    maxPayloadBytes: 131072\ncluster:\n  validationPolicy:\n    name: Unrestricted\n    allowedExtraKubernetesTypes:\n      - group: nvidia.com\n        kind: DynamoGraphDeployment\n        resource: dynamographdeployments\n        version: v1alpha1" |
+  .agentConfig.mergeConfig = "agent:\n  BYOOResources:\n    limits:\n      cpu: 1500m\n  byooLogChunking:\n    maxPayloadBytes: 131072\n  UtilsResources:\n    cpu: \"6\"\ncluster:\n  validationPolicy:\n    name: Unrestricted\n    allowedExtraKubernetesTypes:\n      - group: nvidia.com\n        kind: DynamoGraphDeployment\n        resource: dynamographdeployments\n        version: v1alpha1" |
   .agentConfig.mergeConfig style="literal"
 ' "${repo_root}/nvca-operator/values.yaml" > "${legacy_values}"
 
@@ -72,5 +76,6 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
 
 assert_equal "1500m" "$(agent_config_value "${legacy_manifest}" '.agent.BYOOResources.limits.cpu')" "legacy BYOO resources did not override the chart default"
 assert_equal "131072" "$(agent_config_value "${legacy_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "legacy BYOO chunking did not override the chart default"
+assert_equal "6" "$(agent_config_value "${legacy_manifest}" '.agent.UtilsResources.cpu')" "legacy utils resources did not override the chart default"
 assert_equal "dynamographdeployments" "$(agent_config_value "${legacy_manifest}" '.cluster.validationPolicy.allowedExtraKubernetesTypes[0].resource')" "legacy validation policy was dropped"
 assert_equal "true" "$(yq -er 'select(.kind == "ConfigMap" and .metadata.name == "agent-config-merge") | .metadata.annotations."nvcf.nvidia.com/legacy-byoo-config"' "${legacy_manifest}")" "legacy BYOO config was not annotated"

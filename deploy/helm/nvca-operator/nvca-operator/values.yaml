@@ -102,6 +102,7 @@ ddcsIPAllowList: ""
 ## @param byoo.logChunking.dryRun Record chunking metrics without modifying log payloads.
 ## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
 ## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead.
+## @param byoo.fluentBitResources Resource requests and limits for the BYOO FluentBit container
 byoo:
   resources:
     limits:
@@ -123,6 +124,17 @@ byoo:
     cpu: "8"
     ephemeral-storage: 5Gi
     memory: 10Gi
+  fluentBitResources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+## @param utilsResources Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.
+utilsResources:
+  cpu: "4"
+  memory: 4Gi
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
 ## @description agentConfig.mergeConfig is deprecated for BYOO settings. Use the top-level byoo values instead.
 agentConfig:
@@ -273,15 +285,17 @@ agent:
       cpu: 100m
       memory: 200Mi
 ## @section Webhook Container Resource configuration
+## @param webhook.resources.limits.cpu CPU limit for the nvca webhook container
 ## @param webhook.resources.limits.memory Memory limit for the nvca webhook container
 ## @param webhook.resources.requests.cpu CPU request for the nvca webhook container
 ## @param webhook.resources.requests.memory Memory request for the nvca webhook container
 webhook:
   resources:
     limits:
+      cpu: 200m
       memory: 200Mi
     requests:
-      cpu: 500m
+      cpu: 50m
       memory: 50Mi
 ## @section NGC Configuration
 

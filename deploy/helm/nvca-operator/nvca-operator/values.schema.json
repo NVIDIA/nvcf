@@ -302,7 +302,31 @@
                     "additionalProperties": {
                         "type": "string"
                     }
+                },
+                "fluentBitResources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
                 }
+            }
+        },
+        "utilsResources": {
+            "type": "object",
+            "description": "Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.",
+            "additionalProperties": {
+                "type": "string"
             }
         },
         "operatorConfig": {

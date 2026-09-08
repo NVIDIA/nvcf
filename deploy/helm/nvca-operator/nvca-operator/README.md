@@ -54,6 +54,8 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `byoo.logChunking.dryRun`                 | Record chunking metrics without modifying log payloads.                                                                                                                                               | `false`                    |
 | `byoo.otelCollector`                      | Structured BYOO OTel collector rendering overrides.                                                                                                                                                   | See `values.yaml`          |
 | `byoo.additionalResourceOverhead`         | Cluster capacity reserved for BYOO and related DaemonSet overhead.                                                                                                                                     | See `values.yaml`          |
+| `byoo.fluentBitResources`                 | Resource requests and limits for the BYOO FluentBit container.                                                                                                                                       | See `values.yaml`          |
+| `utilsResources`                          | Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.                                                                          | See `values.yaml`          |
 | `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Deprecated for BYOO settings; use `byoo` instead.                                                                                                     | `""`                       |
 | `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name` | Secret containing the workload transport trust bundle; empty disables the source. Example: `nvcf-trust`. | `""` |
 | `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key` | Secret data key containing certificate-only PEM. | `ca.crt` |
@@ -106,8 +108,9 @@ This release does not wire the catalog into backend selection. Runtime use requi
 
 | Name                                | Description                                   | Value   |
 | ----------------------------------- | --------------------------------------------- | ------- |
+| `webhook.resources.limits.cpu`      | CPU limit for the nvca webhook container      | `200m`  |
 | `webhook.resources.limits.memory`   | Memory limit for the nvca webhook container   | `200Mi` |
-| `webhook.resources.requests.cpu`    | CPU request for the nvca webhook container    | `500m`  |
+| `webhook.resources.requests.cpu`    | CPU request for the nvca webhook container    | `50m`   |
 | `webhook.resources.requests.memory` | Memory request for the nvca webhook container | `50Mi`  |
 
 ### NGC Configuration
