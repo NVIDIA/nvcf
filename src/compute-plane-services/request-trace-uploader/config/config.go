@@ -38,6 +38,7 @@ const (
 	EnvObjectStoreKeyPrefix = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_KEY_PREFIX"
 	EnvObjectStorePathStyle = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_PATH_STYLE"
 	EnvObjectStoreDryRun    = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_DRY_RUN"
+	EnvDebugVerbosity       = "REQUEST_TRACE_UPLOADER_DEBUG_VERBOSITY"
 	DefaultSecretsFile      = "/var/secrets/secrets.json"
 	DefaultHealthAddr       = ":8011"
 	DefaultSegmentPrefix    = "request-trace"
@@ -65,6 +66,24 @@ const (
 	BackendDebug Backend = "debug"
 )
 
+// DebugVerbosity controls how much the debug backend logs per segment.
+type DebugVerbosity string
+
+const (
+	// DebugVerbosityBasic logs one summary line per segment: counts and
+	// shapes only. This is the default, and matches the containment rule
+	// every uploader backend follows: no request identifiers, session
+	// identifiers, header values, or record bodies in a log line.
+	DebugVerbosityBasic DebugVerbosity = "basic"
+	// DebugVerbosityDetailed adds one line per record with its index, event
+	// type, and byte size, plus the non-identifying metrics and metadata
+	// each record type carries (tokens, timing, model, tool class and
+	// status). It still never logs a request identifier, a session
+	// identifier, a header value, or a request or response body: verbosity
+	// changes resolution, not the containment rule.
+	DebugVerbosityDetailed DebugVerbosity = "detailed"
+)
+
 // LookupFunc obtains one environment setting.
 type LookupFunc func(string) (string, bool)
 
@@ -74,17 +93,18 @@ type LookupFunc func(string) (string, bool)
 // uploader scans a single prefix. Record classification comes from event_type
 // on each record, which the parsing increment adds.
 type Config struct {
-	SourceDir     string
-	SegmentPrefix string
-	Backend       Backend
-	SecretsFile   string
-	StateDir      string
-	QuarantineDir string
-	HealthAddr    string
-	ScanInterval  time.Duration
-	RetryPolicy   RetryPolicy
-	Kratos        KratosPolicy
-	ObjectStore   ObjectStorePolicy
+	SourceDir      string
+	SegmentPrefix  string
+	Backend        Backend
+	SecretsFile    string
+	StateDir       string
+	QuarantineDir  string
+	HealthAddr     string
+	ScanInterval   time.Duration
+	RetryPolicy    RetryPolicy
+	Kratos         KratosPolicy
+	ObjectStore    ObjectStorePolicy
+	DebugVerbosity DebugVerbosity
 }
 
 // ObjectStorePolicy configures the generic S3-compatible backend. Bucket and
@@ -205,6 +225,7 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		PathStyle: boolValue(lookup, EnvObjectStorePathStyle, false, &warnings),
 		DryRun:    boolValue(lookup, EnvObjectStoreDryRun, false, &warnings),
 	}
+	debugVerbosity := debugVerbosityValue(lookup, EnvDebugVerbosity, &warnings)
 
 	return Config{
 		SourceDir:     sourceDir,
@@ -227,7 +248,8 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 			MaximumBackoff:   maximumBackoff,
 			Multiplier:       multiplier,
 		},
-		ObjectStore: objectStore,
+		ObjectStore:    objectStore,
+		DebugVerbosity: debugVerbosity,
 	}, warnings, nil
 }
 
@@ -295,6 +317,25 @@ func backendValue(lookup LookupFunc, name string) (Backend, error) {
 		return Backend(value), nil
 	default:
 		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, BackendObjectStore, BackendKratos, BackendDebug)
+	}
+}
+
+// debugVerbosityValue reads the debug backend's log verbosity. An unknown
+// value falls back to DebugVerbosityBasic with a warning rather than a hard
+// error: this only changes logging, not correctness, so it does not belong
+// with the required-value checks that fail Load outright.
+func debugVerbosityValue(lookup LookupFunc, name string, warnings *[]string) DebugVerbosity {
+	value, ok := lookup(name)
+	value = strings.TrimSpace(value)
+	if !ok || value == "" {
+		return DebugVerbosityBasic
+	}
+	switch DebugVerbosity(value) {
+	case DebugVerbosityBasic, DebugVerbosityDetailed:
+		return DebugVerbosity(value)
+	default:
+		*warnings = append(*warnings, name)
+		return DebugVerbosityBasic
 	}
 }
 

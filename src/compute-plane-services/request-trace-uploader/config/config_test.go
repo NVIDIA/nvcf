@@ -164,6 +164,56 @@ func TestLoadDefaultsObjectStoreDryRunToFalse(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsDebugVerbosityToBasic(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir: "/records",
+		EnvBackend:   "debug",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if cfg.DebugVerbosity != DebugVerbosityBasic {
+		t.Fatalf("debug verbosity = %q, want %q", cfg.DebugVerbosity, DebugVerbosityBasic)
+	}
+}
+
+func TestLoadAcceptsDetailedDebugVerbosity(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir:      "/records",
+		EnvBackend:        "debug",
+		EnvDebugVerbosity: "detailed",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if cfg.DebugVerbosity != DebugVerbosityDetailed {
+		t.Fatalf("debug verbosity = %q, want %q", cfg.DebugVerbosity, DebugVerbosityDetailed)
+	}
+}
+
+func TestLoadFallsBackForInvalidDebugVerbosity(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvSourceDir:      "/records",
+		EnvBackend:        "debug",
+		EnvDebugVerbosity: "verbose",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DebugVerbosity != DebugVerbosityBasic {
+		t.Fatalf("debug verbosity = %q, want the safe default %q", cfg.DebugVerbosity, DebugVerbosityBasic)
+	}
+	if len(warnings) != 1 || warnings[0] != EnvDebugVerbosity {
+		t.Fatalf("warnings = %v, want [%q]", warnings, EnvDebugVerbosity)
+	}
+}
+
 func testLookup(values map[string]string) LookupFunc {
 	return func(name string) (string, bool) {
 		value, ok := values[name]
