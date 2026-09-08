@@ -20,7 +20,7 @@ use reqwest::header::HeaderMap;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
 use crate::runtime_state::{
-    ModelGeneration, PylonRuntimeState, RequestInputInterval, RequestObservationMetadata,
+    ModelGeneration, PylonRuntimeState, RequestInputInterval, RequestObservationEvent,
 };
 
 mod embeddings;
@@ -429,17 +429,18 @@ impl RequestObserver {
         };
         log_observation(&observation);
         self.runtime_state.observe_request_for_generation(
-            observation,
-            self.generation.clone(),
-            RequestObservationMetadata {
+            RequestObservationEvent {
+                observation,
+                generation: self.generation.clone(),
+                changed_generations: Vec::new(),
                 input_interval,
-                request_input_tokens: self.request_input_tokens,
                 input_tokens_explicit: self.input_tokens_explicit,
                 raw_output_units: backend.map_or(0, |backend| backend.raw_output_units),
                 upstream_duration: backend
                     .and_then(|backend| backend.last_upstream_event_at)
                     .map(|instant| instant.saturating_duration_since(self.started_at)),
             },
+            self.request_input_tokens,
         );
     }
 }
@@ -926,10 +927,6 @@ mod tests {
                 submitted_at,
                 first_generated_output_at,
             })
-        );
-        assert_eq!(
-            output.input_processing_duration(),
-            Some(Duration::from_millis(10))
         );
 
         observer.observe_estimated_output_tokens_total(2);

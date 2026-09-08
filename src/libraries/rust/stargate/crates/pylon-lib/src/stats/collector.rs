@@ -785,14 +785,16 @@ mod tests {
         };
         let request_input_tokens = observation.input_tokens;
         runtime_state.observe_request_for_generation(
-            observation,
-            generation,
-            crate::runtime_state::RequestObservationMetadata {
+            crate::runtime_state::RequestObservationEvent {
+                observation,
+                generation,
+                changed_generations: Vec::new(),
                 input_interval,
-                request_input_tokens,
+                input_tokens_explicit: false,
                 raw_output_units,
-                ..Default::default()
+                upstream_duration: None,
             },
+            request_input_tokens,
         );
     }
 
@@ -2274,15 +2276,28 @@ mod tests {
             )
         };
 
-        for _ in 0..2 {
-            apply_fallback_observation_with_interval(
-                &mut aggregator,
-                &later_cumulative,
+        apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &later_cumulative,
+            interval,
+            false,
+        );
+        let config = aggregator.config.clone();
+        let repeated_rate = aggregator
+            .per_model
+            .get_mut("model-a")
+            .expect("test model should exist")
+            .metrics
+            .request_input_intervals
+            .observe(
+                &later_cumulative.request_id,
                 interval,
+                later_cumulative.input_tokens,
                 false,
+                &config,
             );
-        }
 
+        assert_eq!(repeated_rate, None);
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics

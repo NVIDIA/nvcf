@@ -478,16 +478,12 @@ impl TunnelRequestLifecycle {
                 obs.observe_input_tokens_total(input_tokens);
             }
             if let Some(output_tokens) = exact_usage.output_tokens {
-                match parser.observe_exact_output_tokens(output_tokens) {
-                    ExactOutputUpdate::Applied => {
-                        obs.observe_output_tokens_generated_so_far(output_tokens);
-                        quality_progress = Some(RequestOutputTokenProgress::Cumulative {
-                            tokens: output_tokens,
-                        });
-                    }
-                    ExactOutputUpdate::Regressed => {
-                        obs.observe_output_tokens_generated_so_far(output_tokens);
-                    }
+                let update = parser.observe_exact_output_tokens(output_tokens);
+                obs.observe_output_tokens_generated_so_far(output_tokens);
+                if update == ExactOutputUpdate::Applied {
+                    quality_progress = Some(RequestOutputTokenProgress::Cumulative {
+                        tokens: output_tokens,
+                    });
                 }
             }
         }
@@ -748,11 +744,49 @@ pub(super) async fn forward_tunnel_request(
             lifecycle.fail();
             return send_problem_response(transport, StatusCode::BAD_REQUEST, error).await;
         }
-        let rewrite_result = if app.force_chat_completions_include_usage
+        let pending_chat_usage_rewrite = if app.force_chat_completions_include_usage
             && observation_endpoint == Some(RequestObservationEndpoint::ChatCompletions)
         {
-            let Ok(chat_usage_rewrite_permit) =
-                app.chat_usage_rewrite_permits.clone().try_acquire_owned()
+            match prepare_chat_completions_usage_rewrite(&body_bytes) {
+                Ok(rewrite) => rewrite,
+                Err(error) => {
+                    lifecycle.fail();
+                    return send_problem_response(transport, StatusCode::BAD_REQUEST, error).await;
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(decision) = lifecycle.admit_queue(app, &request_headers) {
+            let QueueAdmissionDecision::Rejected {
+                expected_ms,
+                actual_ms,
+                threshold_ms,
+                ..
+            } = &decision
+            else {
+                unreachable!("queue admission returned a non-rejection")
+            };
+            return send_complete_response(
+                transport,
+                StatusCode::TOO_MANY_REQUESTS,
+                queue_mismatch_response_headers(app, &decision)?,
+                serde_json::json!({
+                    "type": "about:blank",
+                    "title": "Too Many Requests",
+                    "status": StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                    "detail": "local queue estimate exceeded Stargate routing estimate",
+                    "reason": RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
+                    "expected_queue_ms": expected_ms,
+                    "actual_queue_ms": actual_ms,
+                    "threshold_ms": threshold_ms,
+                })
+                .to_string(),
+            )
+            .await;
+        }
+        if let Some(body) = pending_chat_usage_rewrite {
+            let Ok(rewrite_permit) = app.chat_usage_rewrite_permits.clone().try_acquire_owned()
             else {
                 lifecycle.fail();
                 let status = StatusCode::SERVICE_UNAVAILABLE;
@@ -781,11 +815,11 @@ pub(super) async fn forward_tunnel_request(
                 .await;
             };
             let rewrite_task = AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
-                let _chat_usage_rewrite_permit = chat_usage_rewrite_permit;
-                force_chat_completions_include_usage(body_bytes)
+                let _rewrite_permit = rewrite_permit;
+                apply_chat_completions_usage_rewrite(body)
             }));
             match rewrite_task.await {
-                Ok(result) => result,
+                Ok(prepared_body) => body_bytes = prepared_body,
                 Err(error) => {
                     lifecycle.fail();
                     return Err(anyhow!(
@@ -793,47 +827,7 @@ pub(super) async fn forward_tunnel_request(
                     ));
                 }
             }
-        } else {
-            Ok((body_bytes, false))
-        };
-        let (prepared_body, body_mutated) = match rewrite_result {
-            Ok(body_bytes) => body_bytes,
-            Err(error) => {
-                lifecycle.fail();
-                return send_problem_response(transport, StatusCode::BAD_REQUEST, error).await;
-            }
-        };
-        body_bytes = prepared_body;
-        if body_mutated {
             request_headers.remove(CONTENT_LENGTH);
-        }
-        if let Some(decision) = lifecycle.admit_queue(app, &request_headers) {
-            let QueueAdmissionDecision::Rejected {
-                expected_ms,
-                actual_ms,
-                threshold_ms,
-                ..
-            } = &decision
-            else {
-                unreachable!("queue admission returned a non-rejection")
-            };
-            return send_complete_response(
-                transport,
-                StatusCode::TOO_MANY_REQUESTS,
-                queue_mismatch_response_headers(app, &decision)?,
-                serde_json::json!({
-                    "type": "about:blank",
-                    "title": "Too Many Requests",
-                    "status": StatusCode::TOO_MANY_REQUESTS.as_u16(),
-                    "detail": "local queue estimate exceeded Stargate routing estimate",
-                    "reason": RETRY_REASON_QUEUE_ESTIMATE_MISMATCH,
-                    "expected_queue_ms": expected_ms,
-                    "actual_queue_ms": actual_ms,
-                    "threshold_ms": threshold_ms,
-                })
-                .to_string(),
-            )
-            .await;
         }
     }
 
@@ -1033,30 +1027,38 @@ fn validate_request_body(
         .ok_or(stream_error)
 }
 
-fn force_chat_completions_include_usage(
-    body_bytes: Vec<u8>,
-) -> Result<(Vec<u8>, bool), &'static str> {
-    let mut body = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+fn prepare_chat_completions_usage_rewrite(
+    body_bytes: &[u8],
+) -> Result<Option<serde_json::Value>, &'static str> {
+    let body = serde_json::from_slice::<serde_json::Value>(body_bytes)
         .map_err(|_| "request body must be valid JSON")?;
     let object = body
-        .as_object_mut()
+        .as_object()
         .ok_or("request body must be a JSON object")?;
-    let stream_options = object
-        .entry("stream_options")
-        .or_insert_with(|| serde_json::json!({}));
+    let Some(stream_options) = object.get("stream_options") else {
+        return Ok(Some(body));
+    };
     let stream_options = stream_options
-        .as_object_mut()
+        .as_object()
         .ok_or("stream_options must be a JSON object")?;
     match stream_options.get("include_usage") {
-        Some(serde_json::Value::Bool(true)) => return Ok((body_bytes, false)),
-        Some(serde_json::Value::Bool(false)) | None => {}
-        Some(_) => return Err("stream_options.include_usage must be a boolean"),
+        Some(serde_json::Value::Bool(true)) => Ok(None),
+        Some(serde_json::Value::Bool(false)) | None => Ok(Some(body)),
+        Some(_) => Err("stream_options.include_usage must be a boolean"),
     }
+}
+
+fn apply_chat_completions_usage_rewrite(mut body: serde_json::Value) -> Vec<u8> {
+    let object = body
+        .as_object_mut()
+        .expect("prepared request body should be a JSON object");
+    let stream_options = object
+        .entry("stream_options")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("prepared stream_options should be a JSON object");
     stream_options.insert("include_usage".to_string(), serde_json::Value::Bool(true));
-    Ok((
-        serde_json::to_vec(&body).expect("parsed request JSON should serialize"),
-        true,
-    ))
+    serde_json::to_vec(&body).expect("parsed request JSON should serialize")
 }
 
 pub(super) fn is_health_request_path(path_and_query: &str) -> bool {
@@ -1398,7 +1400,10 @@ mod tests {
     }
 
     fn force_chat_usage(body: &[u8]) -> Result<(Vec<u8>, bool), &'static str> {
-        force_chat_completions_include_usage(body.to_vec())
+        match prepare_chat_completions_usage_rewrite(body)? {
+            Some(body) => Ok((apply_chat_completions_usage_rewrite(body), true)),
+            None => Ok((body.to_vec(), false)),
+        }
     }
 
     #[test]
@@ -1531,6 +1536,91 @@ mod tests {
                     r#"pylon_retryable_responses_total{inference_server_id="test-pylon",reason="chat_usage_rewrite_saturated",status="503"} 1"#,
                 )
         );
+    }
+
+    #[tokio::test]
+    async fn queue_rejection_precedes_chat_usage_rewrite_capacity() {
+        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
+        app.force_chat_completions_include_usage = true;
+        app.runtime_state.update_model_throughput("model-a", 100.0);
+        let _queued_request = app.runtime_state.track_request(&RequiredTunnelHeaders {
+            request_id: "req-already-queued".to_string(),
+            routing_key: None,
+            model_id: "model-a".to_string(),
+            priority: None,
+            input_tokens: 100,
+            accepted_at: Instant::now(),
+        });
+        let capacity = app.chat_usage_rewrite_permits.available_permits();
+        let _permits = (0..capacity)
+            .map(|_| {
+                app.chat_usage_rewrite_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("configured rewrite capacity should be available")
+            })
+            .collect::<Vec<_>>();
+        let mut request = observed_request("/v1/chat/completions");
+        request.headers.insert(
+            HEADER_STARGATE_EXPECTED_QUEUE_MS,
+            HeaderValue::from_static("0"),
+        );
+        let mut transport = TestTransport {
+            request_body: br#"{"messages":[],"stream":true}"#.to_vec(),
+            ..TestTransport::default()
+        };
+
+        forward_tunnel_request(&app, request, &mut transport)
+            .await
+            .expect("queue mismatch should return a problem response");
+
+        assert_eq!(transport.response_heads, [StatusCode::TOO_MANY_REQUESTS]);
+        assert_eq!(
+            transport.response_headers[0]
+                .get(HEADER_STARGATE_RETRY_REASON)
+                .and_then(|value| value.to_str().ok()),
+            Some(RETRY_REASON_QUEUE_ESTIMATE_MISMATCH)
+        );
+    }
+
+    #[tokio::test]
+    async fn already_enabled_chat_usage_bypasses_rewrite_capacity() {
+        let upstream = TestHttpServer::spawn(Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                AxumResponse::builder()
+                    .header(CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from("data: [DONE]\n\n"))
+                    .expect("test response should build")
+            }),
+        ))
+        .await;
+        let (mut app, _observations) = observed_app(upstream.as_str());
+        app.force_chat_completions_include_usage = true;
+        let capacity = app.chat_usage_rewrite_permits.available_permits();
+        let _permits = (0..capacity)
+            .map(|_| {
+                app.chat_usage_rewrite_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("configured rewrite capacity should be available")
+            })
+            .collect::<Vec<_>>();
+        let mut transport = TestTransport {
+            request_body:
+                br#"{"messages":[],"stream":true,"stream_options":{"include_usage":true}}"#.to_vec(),
+            ..TestTransport::default()
+        };
+
+        forward_tunnel_request(
+            &app,
+            observed_request("/v1/chat/completions"),
+            &mut transport,
+        )
+        .await
+        .expect("compliant request should bypass saturated rewrite capacity");
+
+        assert_eq!(transport.response_heads, [StatusCode::OK]);
     }
 
     #[test]

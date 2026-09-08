@@ -76,7 +76,7 @@ impl RequestIntervalKey {
 
 #[derive(Debug)]
 struct RetainedInputInterval {
-    key: RequestIntervalKey,
+    request_id: String,
     interval: RequestInputInterval,
     input_tokens: u64,
     input_tokens_explicit: bool,
@@ -112,8 +112,9 @@ impl RequestInputIntervalWindow {
         {
             return None;
         }
-        let key = RequestIntervalKey::new(request_id, interval.submitted_at);
-        let existing = self.intervals.iter().position(|entry| entry.key == key);
+        let existing = self.intervals.iter().position(|entry| {
+            entry.request_id == request_id && entry.interval.submitted_at == interval.submitted_at
+        });
         let min_input_tokens = config.min_input_tokens.max(1);
         if input_tokens_explicit && input_tokens < min_input_tokens {
             if let Some(index) = existing {
@@ -132,11 +133,15 @@ impl RequestInputIntervalWindow {
                 .get_mut(index)
                 .expect("located input interval should remain retained");
             if entry.input_tokens_explicit && !input_tokens_explicit {
-                return self.record_current_rate(config.duration_floor);
+                return None;
             }
+            let rate_changed = entry.interval != interval || entry.input_tokens != input_tokens;
             entry.interval = interval;
             entry.input_tokens = input_tokens;
             entry.input_tokens_explicit |= input_tokens_explicit;
+            if !rate_changed {
+                return None;
+            }
         } else {
             if self
                 .evicted_through
@@ -154,7 +159,7 @@ impl RequestInputIntervalWindow {
             self.intervals.insert(
                 insertion_index,
                 RetainedInputInterval {
-                    key,
+                    request_id: request_id.to_string(),
                     interval,
                     input_tokens,
                     input_tokens_explicit,
