@@ -26,6 +26,13 @@ const DEFAULT_OTEL_SERVICE_NAME: &str = "pylon";
 
 mod startup;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+enum OutputTokenCalibrationMode {
+    #[default]
+    Off,
+    SinglePylon,
+}
+
 #[derive(clap::Parser, Debug)]
 #[command(name = "pylon")]
 struct Args {
@@ -92,6 +99,9 @@ struct Args {
     /// Force exact usage in streaming Chat Completions requests sent upstream
     #[arg(long, default_value_t = false)]
     force_chat_completions_include_usage: bool,
+    /// Output-token estimate calibration. single-pylon asserts one active Pylon per cluster ID
+    #[arg(long, value_enum, default_value = "off", value_name = "MODE")]
+    output_token_calibration: OutputTokenCalibrationMode,
     /// Interval between active canary requests in milliseconds. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
