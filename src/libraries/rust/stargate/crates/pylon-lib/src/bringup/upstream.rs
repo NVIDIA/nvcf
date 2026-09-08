@@ -151,6 +151,7 @@ pub(super) async fn send_canary_request(
         timeout,
         timeout,
         DEFAULT_MAX_SSE_BUFFER_BYTES,
+        false,
     );
     let mut output_tokens = OutputTokenParser::new();
     let mut observed_tokens = 0_u64;
@@ -282,6 +283,7 @@ fn finish_observation(
             Instant::now(),
             completion.usage.completion_tokens > 0,
             0,
+            false,
         );
         generation.observe_output_tokens_total(u64::from(completion.usage.completion_tokens));
         observer.complete();
