@@ -542,10 +542,15 @@ func (s *StreamDirector) Close() error {
 	// Mark first: DeleteAll evicts every entry, and without this those
 	// evictions would be misreported as client or worker initiated.
 	s.shuttingDown.Store(true)
-	// Before the caches go away, drop the queued work this pod can no longer
-	// authenticate. Best effort: a failure here must not hold up shutdown.
-	s.purgePendingWork()
+	// Drain the worker cache first. Eviction is what closes tunnels and records
+	// why, and none of that should wait behind queue calls. The departure purge
+	// those evictions would otherwise trigger is skipped while shutting down,
+	// so the work they leave behind is picked up by the purge below.
 	s.workers.DeleteAll()
+	// Then drop the queued work this pod can no longer authenticate. Bounded by
+	// consts.Timeout against a 240s termination grace period, so it reports
+	// what it could not finish rather than running until SIGKILL.
+	s.purgePendingWork()
 	s.workers.Stop()
 	s.workerAuth.Stop()
 	s.issuedTokens.Stop()
