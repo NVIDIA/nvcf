@@ -1775,7 +1775,7 @@ fn power_of_n_uses_each_configured_comparator() {
 }
 
 #[test]
-fn wait_and_widen_uses_comparator_in_every_selection_path() {
+fn wait_and_widen_uses_comparator_without_cache_affinity() {
     let candidates = [
         candidate("lower-ttft-higher-queue", 1024)
             .with_rtt_ms(5)
@@ -1786,21 +1786,14 @@ fn wait_and_widen_uses_comparator_in_every_selection_path() {
     ];
     let target = target();
 
-    for (cache_affinity_key, ignore_queue_time) in
-        [(None, false), (None, true), (Some("prefix-a"), false)]
-    {
+    for ignore_queue_time in [false, true] {
         let load_balancer = wait_and_widen_load_balancer(|settings| {
             settings.comparator = Some(ClusterComparator::NumRequestsQueued);
             settings.ttft_bucket_size_ms = Some(100);
             settings.n = Some(2);
             settings.ignore_queue_time = ignore_queue_time.then_some(true);
-            if cache_affinity_key.is_some() {
-                settings.seed = Some("seed-1".to_string());
-                settings.cache_affinity_virtual_nodes = Some(8);
-                settings.cache_affinity_backend_selection_count = Some(2);
-            }
         });
-        let request = request(&target, cache_affinity_key, Some(1));
+        let request = request(&target, None, Some(1));
 
         assert_repeated_choice(
             load_balancer.as_ref(),
@@ -1988,7 +1981,48 @@ fn wait_and_widen_cache_affinity_falls_back_when_primary_is_full() {
 }
 
 #[test]
-fn wait_and_widen_affinity_prefill_discount_delays_cold_fallback_until_later_bucket() {
+fn wait_and_widen_uses_ordered_affinity_primary_then_backup() {
+    let mut config = wait_and_widen_affinity_algorithm_config(8, 2, Some(2));
+    config
+        .wait_and_widen_settings_mut()
+        .expect("wait-and-widen config should expose settings")
+        .comparator = Some(ClusterComparator::Utilization);
+    let internal_config = WaitAndWidenConfig::from_algorithm_config(&config);
+    let lb = WaitAndWidenLoadBalancer::new(internal_config.clone());
+    let target = target();
+    let request = request(&target, Some("prefix-a"), Some(1));
+    let mut candidates = candidates(&["ordered-a", "ordered-b", "global"]);
+    let affinity_indices =
+        cache_affinity_candidate_indices(&internal_config, &request, &candidates)
+            .expect("cache affinity should select primary and backup");
+    let primary_index = affinity_indices[0];
+    let backup_index = affinity_indices[1];
+    candidates[primary_index].stats.max_engine_concurrency = 10;
+    candidates[primary_index].stats.num_running_queries = 9;
+    candidates[backup_index].stats.max_engine_concurrency = 10;
+
+    let primary = lb
+        .choose_for_test(&request, &candidates)
+        .expect("an available primary should be selected");
+    assert_eq!(
+        primary.candidate.cluster_id,
+        candidates[primary_index].cluster_id
+    );
+    assert_eq!(primary.rank_depth, 1);
+
+    candidates[primary_index].stats.num_running_queries = 10;
+    let backup = lb
+        .choose_for_test(&request, &candidates)
+        .expect("a full primary should fall back to its backup");
+    assert_eq!(
+        backup.candidate.cluster_id,
+        candidates[backup_index].cluster_id
+    );
+    assert_eq!(backup.rank_depth, 2);
+}
+
+#[test]
+fn wait_and_widen_affinity_wait_budget_delays_global_fallback() {
     let make_config = |input_tokens_scale| {
         let mut config = wait_and_widen_affinity_algorithm_config(8, 1, Some(2));
         let settings = config
@@ -2008,7 +2042,7 @@ fn wait_and_widen_affinity_prefill_discount_delays_cold_fallback_until_later_buc
         priority_candidate("backend-b", 0, 0),
     ];
     let request = LoadBalancerRequest {
-        request_slo: Some(Duration::from_secs(10)),
+        request_slo: Some(Duration::from_secs(20)),
         ..request(&target, Some(affinity_key), Some(1_000))
     };
     let affinity_index = cache_affinity_candidate_indices(&baseline_config, &request, &candidates)
@@ -2039,6 +2073,37 @@ fn wait_and_widen_affinity_prefill_discount_delays_cold_fallback_until_later_buc
         later_choice.candidate.cluster_id,
         candidates[cold_index].cluster_id
     );
+    assert_eq!(later_choice.rank_depth, 2);
+}
+
+#[test]
+fn wait_and_widen_affinity_wait_never_consumes_cold_candidate_slo() {
+    let mut config = wait_and_widen_affinity_algorithm_config(8, 1, Some(2));
+    let settings = config
+        .wait_and_widen_settings_mut()
+        .expect("wait-and-widen config should expose settings");
+    settings.cache_affinity_input_tokens_scale = Some(0.1);
+    let config = WaitAndWidenConfig::from_algorithm_config(&config);
+    let lb = WaitAndWidenLoadBalancer::new(config.clone());
+    let target = target();
+    let mut candidates = candidates(&["slo-a", "slo-b"]);
+    let request = LoadBalancerRequest {
+        request_slo: Some(Duration::from_secs(5)),
+        ..request(&target, Some("cached-prefix"), Some(1_000))
+    };
+    let affinity_index = cache_affinity_candidate_indices(&config, &request, &candidates)
+        .expect("cache affinity should select a primary")[0];
+    candidates[affinity_index].stats.max_engine_concurrency = 1;
+    candidates[affinity_index].stats.num_running_queries = 1;
+
+    let choice = lb
+        .choose_for_test(&request, &candidates)
+        .expect("global fallback should unlock when a cold request already consumes the SLO");
+    assert_ne!(
+        choice.candidate.cluster_id,
+        candidates[affinity_index].cluster_id
+    );
+    assert_eq!(choice.rank_depth, 2);
 }
 
 #[test]
