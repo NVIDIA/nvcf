@@ -1,0 +1,135 @@
+---
+# Source: helm-nvcf-grpc-proxy/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpc-proxy-deployment
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-grpc-proxy-1.7.1
+    app.kubernetes.io/name: helm-nvcf-grpc-proxy
+    app.kubernetes.io/instance: grpc-proxy
+    app.kubernetes.io/version: "1.33.2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-grpc-proxy
+      app.kubernetes.io/instance: grpc-proxy
+      app.kubernetes.io/component: deployment
+  template:
+    metadata:
+      annotations:
+        checksum/config-env: 89403993932532a030fa8f59607cc388664500fbcfa2d99db9e9129a3d8c3638
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-grpc-proxy
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-template-file-secrets.json: /vault/config/templates/secrets.json.tmpl
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/auth-path: auth/jwt
+        vault.hashicorp.com/role: grpc-proxy-proxy
+        vault.hashicorp.com/secret-volume-path: /vault/secrets
+      labels:
+        app.kubernetes.io/name: helm-nvcf-grpc-proxy
+        app.kubernetes.io/instance: grpc-proxy
+        app.kubernetes.io/component: deployment
+    spec:
+      serviceAccountName: grpc-proxy-proxy
+      securityContext:
+        {}
+      containers:
+        - name: helm-nvcf-grpc-proxy
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            runAsUser: 1000
+          image: "nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.33.2"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: ENABLE_HTTP1_CONNECT
+              value: "true"
+            - name: GEO_DISABLED
+              value: "true"
+            - name: JETSTREAM_PLACEMENT_TAG
+              value: "dc:ncp"
+            - name: NATS_FQDN
+              value: "nats://nats.nats-system.svc.cluster.local:4222"
+            - name: NVCF_FQDN_GRPC
+              value: "http://api.nvcf.svc.cluster.local:9090"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: ""
+            - name: RATE_LIMIT_ADDR
+              value: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+            - name: RATE_LIMIT_ENABLED
+              value: "true"
+            - name: TRACING
+              value: "none"
+          envFrom:
+            - configMapRef:
+                name: grpc-proxy-env
+          ports:
+            - name: client
+              containerPort: 10081
+              protocol: TCP
+            - name: worker-tcp
+              containerPort: 10086
+              protocol: TCP
+            - name: metrics
+              containerPort: 10083
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: client
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: client
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+        - name: vault-config-templates
+          configMap:
+            name: grpc-proxy-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl

@@ -1,0 +1,45 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/server-config-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-server-config
+  namespace: vault-system
+  labels:
+    helm.sh/chart: openbao-0.28.3
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+data:
+  extraconfig-from-values.hcl: |-
+    
+    ui = true
+    storage "raft" {
+      path = "/openbao/data/"
+      retry_join {
+        leader_api_addr = "http://openbao-server-0.openbao-server-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://openbao-server-1.openbao-server-internal:8200"
+      }
+      retry_join {
+        leader_api_addr = "http://openbao-server-2.openbao-server-internal:8200"
+      }
+    }
+    listener "tcp" {
+        tls_disable = 1
+        address = "[::]:8200"
+        cluster_address = "[::]:8201"
+    
+        custom_response_headers {
+          "default" = {
+            "X-Custom-Header" = ["HOSTNAME"],
+          },
+        }
+    }
+    plugin_directory = "/openbao/plugins/"
+    service_registration "kubernetes" {}
+    # Disable standby reads introduced in v2.5.0. Without this, standby
+    # nodes serve reads locally with eventual consistency, which causes the
+    # JWT secrets plugin to lose lease state after issuance.
+    disable_standby_reads = true

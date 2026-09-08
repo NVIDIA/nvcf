@@ -1,0 +1,38 @@
+---
+# Source: helm-nvcf-nvct-api/templates/rbac-config-reader.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nvct-api-remote-config-reader
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-nvct-api-1.5.2
+    app.kubernetes.io/name: helm-nvcf-nvct-api
+    app.kubernetes.io/instance: nvct-api
+    app.kubernetes.io/version: "1.65.0"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["list", "watch"]
+---
+# Source: helm-nvcf-nvct-api/templates/rbac-config-reader.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nvct-api-remote-config-reader
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-nvct-api-1.5.2
+    app.kubernetes.io/name: helm-nvcf-nvct-api
+    app.kubernetes.io/instance: nvct-api
+    app.kubernetes.io/version: "1.65.0"
+    app.kubernetes.io/managed-by: Helm
+subjects:
+  - kind: ServiceAccount
+    name: nvct-api
+    namespace: nvcf
+roleRef:
+  kind: Role
+  name: nvct-api-remote-config-reader
+  apiGroup: rbac.authorization.k8s.io

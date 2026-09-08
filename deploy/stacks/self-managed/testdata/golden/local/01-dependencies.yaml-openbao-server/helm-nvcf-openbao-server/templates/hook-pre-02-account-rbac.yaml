@@ -1,0 +1,97 @@
+---
+# Source: helm-nvcf-openbao-server/templates/hook-pre-02-account-rbac.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Create the RBAC/SA during pre-install to ensure it's available
+# this way it can avoid using hook weights
+
+# Give the job rbac to read,patch,create secrets in the namespace
+# it will read/update the unseal key and create the root token
+
+# The serviceaccount (and therefore its permissions) are used in both
+# of the post-install jobs
+---
+# Source: helm-nvcf-openbao-server/templates/hook-pre-02-account-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-server-initialize-cluster
+  namespace: vault-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+---
+# Source: helm-nvcf-openbao-server/templates/hook-pre-02-account-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-server-initialize-cluster
+  namespace: vault-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+rules:
+  # create unseal and jwt secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "patch", "get"]
+  # for determining when cluster pods are in ready state
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # job scripts can exec to bao pods
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # scripts/deploy.sh check_sidecar_version() reads the StatefulSet spec to
+  # verify openbao and auto-unseal-sidecar container images match at runtime
+  # (complements the template-time guard in validate-sidecar-version.yaml)
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get"]
+---
+# Source: helm-nvcf-openbao-server/templates/hook-pre-02-account-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-server-initialize-cluster
+  namespace: vault-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+subjects:
+  - kind: ServiceAccount
+    namespace: vault-system
+    name: openbao-server-initialize-cluster
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-server-initialize-cluster
+---
+# Source: helm-nvcf-openbao-server/templates/hook-pre-02-account-rbac.yaml
+# Allow job to access `openid/v1/jwks`
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-server-openid-reader
+  namespace: vault-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+subjects:
+  - kind: ServiceAccount
+    namespace: vault-system
+    name: openbao-server-initialize-cluster
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery

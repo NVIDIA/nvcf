@@ -1,0 +1,146 @@
+---
+# Source: helm-nvcf-sis/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spot-instance-service
+  namespace: sis
+  labels:
+    helm.sh/chart: helm-nvcf-sis-2.0.0
+    app.kubernetes.io/name: helm-nvcf-sis
+    app.kubernetes.io/instance: sis
+    app.kubernetes.io/version: "1.2.2"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-sis
+      app.kubernetes.io/instance: sis
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "sis-api"
+        vault.hashicorp.com/auth-path: "auth/jwt"
+        vault.hashicorp.com/agent-service-account-token-volume-name: "openbao-token"
+        vault.hashicorp.com/auth-config-token-path: "/var/run/secrets/openbao/serviceaccount/token"
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-sis
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/secret-volume-path: "/home/tomcat/vault-agent/secrets"
+        vault.hashicorp.com/agent-inject-secret-vault-secrets.json: "services/all/kv/data/nvcf/sis"
+        vault.hashicorp.com/agent-inject-template-file-vault-secrets.json: "/vault/config/templates/secrets.json.tmpl"
+        checksum/config-env: cb3d3d99ef00341f30af376b1fab115c154688012a393a9cd8d84bdf3a31a553
+      labels:
+        app.kubernetes.io/name: helm-nvcf-sis
+        app.kubernetes.io/instance: sis
+    spec:
+      terminationGracePeriodSeconds: 60
+      serviceAccountName: sis-api
+      securityContext:
+        {}
+      volumes:
+        # Chart-owned: OpenBao-audience projected token for vault-agent auth.
+        # Name/path contract lives in the sis.openbaoToken* helpers.
+        - name: openbao-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+                  audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+        - name: vault-config-templates
+          configMap:
+            name: spot-instance-service-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+      containers:
+        - name: helm-nvcf-sis
+          securityContext:
+            capabilities:
+              add:
+              - NET_BIND_SERVICE
+              drop:
+              - ALL
+            runAsUser: 1000
+          image: "nvcr.io/nvidia/nvcf/icms-service-oss:1.2.2"
+          imagePullPolicy: IfNotPresent
+          lifecycle:
+            null
+          volumeMounts:
+            - name: openbao-token
+              mountPath: /var/run/secrets/openbao/serviceaccount
+              readOnly: true
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+          livenessProbe:
+            failureThreshold: 6
+            httpGet:
+              path: /actuator/health/liveness
+              port: management-port
+            periodSeconds: 10
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 1
+            httpGet:
+              path: /actuator/health/readiness
+              port: management-port
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 3
+            timeoutSeconds: 1
+          startupProbe:
+            failureThreshold: 30
+            httpGet:
+              path: /actuator/health/readiness
+              port: management-port
+            periodSeconds: 5
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SPRING_PROFILES_ACTIVE
+              value: "ncp"
+            - name: REMOTE_CONFIG_ENABLED
+              value: "true"
+            - name: REMOTE_CONFIG_NAME
+              value: "spot-instance-service-remote-config"
+          envFrom:
+            - configMapRef:
+                name: spot-instance-service-env
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: management-port
+              containerPort: 8181
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 4
+              memory: 6Gi
+            requests:
+              cpu: 4
+              memory: 4Gi

@@ -1,0 +1,20 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/injector-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao-server-agent-injector-svc
+  namespace: vault-system
+  labels:
+    app.kubernetes.io/name: openbao-agent-injector
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: 10250
+  selector:
+    app.kubernetes.io/name: openbao-agent-injector
+    app.kubernetes.io/instance: openbao-server
+    component: webhook

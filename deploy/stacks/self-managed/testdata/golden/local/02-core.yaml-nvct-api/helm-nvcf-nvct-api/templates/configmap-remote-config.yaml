@@ -1,0 +1,22 @@
+---
+# Source: helm-nvcf-nvct-api/templates/configmap-remote-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvct-api-remote-config
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-nvct-api-1.5.2
+    app.kubernetes.io/name: helm-nvcf-nvct-api
+    app.kubernetes.io/instance: nvct-api
+    app.kubernetes.io/version: "1.65.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  nvct-api.yaml: |-
+    nvct:
+      sidecars:
+        ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.1.0
+        init-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_init:2.107.0
+        otel-collector-container: dummy
+        otel-container: dummy
+        utils-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_task:2.107.0

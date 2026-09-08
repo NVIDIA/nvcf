@@ -1,0 +1,144 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/injector-deployment.yaml
+# Deployment for the injector
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openbao-server-agent-injector
+  namespace: vault-system
+  labels:
+    app.kubernetes.io/name: openbao-agent-injector
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+    component: webhook
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openbao-agent-injector
+      app.kubernetes.io/instance: openbao-server
+      component: webhook
+  
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openbao-agent-injector
+        app.kubernetes.io/instance: openbao-server
+        component: webhook
+    spec:
+      
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: openbao-agent-injector
+                  app.kubernetes.io/instance: "openbao-server"
+                  component: webhook
+              topologyKey: kubernetes.io/hostname
+  
+      
+      
+      
+      serviceAccountName: "openbao-server-agent-injector"
+      
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsGroup: 1000
+        runAsUser: 100
+        fsGroup: 1000
+      hostNetwork: false
+      containers:
+        - name: sidecar-injector
+          resources:
+            limits:
+              cpu: 250m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+  
+          image: "nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4"
+          imagePullPolicy: "IfNotPresent"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: AGENT_INJECT_LISTEN
+              value: :10250
+            - name: AGENT_INJECT_LOG_LEVEL
+              value: info
+            - name: AGENT_INJECT_VAULT_ADDR
+              value: http://openbao-server.vault-system.svc:8200
+            - name: AGENT_INJECT_VAULT_AUTH_PATH
+              value: auth/kubernetes
+            - name: AGENT_INJECT_VAULT_IMAGE
+              value: "nvcr.io/nvidia/nvcf/nvcf-openbao:2.5.5-nv-1.3.1"
+            - name: AGENT_INJECT_TLS_AUTO
+              value: openbao-server-agent-injector-cfg
+            - name: AGENT_INJECT_TLS_AUTO_HOSTS
+              value: openbao-server-agent-injector-svc,openbao-server-agent-injector-svc.vault-system,openbao-server-agent-injector-svc.vault-system.svc
+            - name: AGENT_INJECT_LOG_FORMAT
+              value: standard
+            - name: AGENT_INJECT_REVOKE_ON_SHUTDOWN
+              value: "false"
+            - name: AGENT_INJECT_USE_LEADER_ELECTOR
+              value: "true"
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AGENT_INJECT_CPU_REQUEST
+              value: "250m"
+            - name: AGENT_INJECT_CPU_LIMIT
+              value: "500m"
+            - name: AGENT_INJECT_MEM_REQUEST
+              value: "64Mi"
+            - name: AGENT_INJECT_MEM_LIMIT
+              value: "128Mi"
+            - name: AGENT_INJECT_DEFAULT_TEMPLATE
+              value: "map"
+            - name: AGENT_INJECT_TEMPLATE_CONFIG_EXIT_ON_RETRY_FAILURE
+              value: "true"
+            
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          args:
+            - agent-inject
+            - 2>&1
+          livenessProbe:
+            httpGet:
+              path: /health/ready
+              port: 10250
+              scheme: HTTPS
+            failureThreshold: 2
+            initialDelaySeconds: 5
+            periodSeconds: 2
+            successThreshold: 1
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 10250
+              scheme: HTTPS
+            failureThreshold: 2
+            initialDelaySeconds: 5
+            periodSeconds: 2
+            successThreshold: 1
+            timeoutSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: 10250
+              scheme: HTTPS
+            failureThreshold: 12
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 5

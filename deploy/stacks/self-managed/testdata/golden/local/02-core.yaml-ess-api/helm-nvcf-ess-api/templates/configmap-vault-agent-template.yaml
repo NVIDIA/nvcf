@@ -1,0 +1,51 @@
+---
+# Source: helm-nvcf-ess-api/templates/configmap-vault-agent-template.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ess-api-vault-agent-tpl
+  namespace: ess
+  labels:
+    helm.sh/chart: helm-nvcf-ess-api-1.7.2
+    app.kubernetes.io/name: helm-nvcf-ess-api
+    app.kubernetes.io/instance: ess-api
+    app.kubernetes.io/version: "0.4.15"
+    app.kubernetes.io/managed-by: Helm
+data:
+  secrets.json.tmpl: |-
+    {
+      "kv": {
+        {{- with secret "services/ess-api/kv/data/cassandra/creds" }}
+        "cassandraUsername": {{ .Data.data.username | toJSON }},
+        "cassandraPassword": {{ .Data.data.password | toJSON }},
+        {{- end }}
+    
+        {{- with secret "services/all/kv/encryption/keys/audit" }}
+        "audit-hmac-keys": {{ .Data.data.keys | toJSON }},
+        "audit-hmac-kid": {{ .Data.data.current_kid | toJSON }},
+        {{- end }}
+    
+        "crypto": {
+        {{- with secret "services/all/kv/encryption/keys/stored_data" }}
+        {{- $keys := .Data.data.keys | base64Decode | parseJSON }}
+          "masterKey": "{{ sprig_first $keys.keys | toJSON | base64Encode }}",
+          "allMasterKeys": "{{ $keys.keys | toJSON | base64Encode }}"
+        {{- end }}
+        }
+      }
+    }

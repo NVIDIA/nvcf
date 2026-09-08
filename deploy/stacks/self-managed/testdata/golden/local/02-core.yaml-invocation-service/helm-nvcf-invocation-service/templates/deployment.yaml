@@ -1,0 +1,97 @@
+---
+# Source: helm-nvcf-invocation-service/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invocation-service
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-invocation-service-1.6.0
+    app.kubernetes.io/name: helm-nvcf-invocation-service
+    app.kubernetes.io/instance: invocation-service
+    app.kubernetes.io/version: "0.12.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-invocation-service
+      app.kubernetes.io/instance: invocation-service
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "invocation-api"
+        vault.hashicorp.com/auth-path: "auth/jwt"
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-invocation-service
+        vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl" 
+        vault.hashicorp.com/secret-volume-path: "/vault/secrets"
+        checksum/config-env: 888b322fa5086a8197f92ccf8f2bbff7f1d95e410579330808d3071a35a04e45
+      labels:
+        app.kubernetes.io/name: helm-nvcf-invocation-service
+        app.kubernetes.io/instance: invocation-service
+    spec:
+      serviceAccountName: invocation-api
+      securityContext:
+        {}
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                expirationSeconds: 3600
+                path: token
+        - name: vault-config-templates
+          configMap:
+            name: invocation-service-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+      containers:
+        - name: helm-nvcf-invocation-service
+          securityContext:
+            null
+          image: "nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.12.0"
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              name: token
+              readOnly: true
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            - configMapRef:
+                name: invocation-service-env
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 500m
+              memory: 512Mi

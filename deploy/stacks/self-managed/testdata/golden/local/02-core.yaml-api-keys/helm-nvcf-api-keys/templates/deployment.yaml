@@ -1,0 +1,129 @@
+---
+# Source: helm-nvcf-api-keys/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-keys
+  namespace: api-keys
+  labels:
+    helm.sh/chart: helm-nvcf-api-keys-1.6.0
+    app.kubernetes.io/name: helm-nvcf-api-keys
+    app.kubernetes.io/instance: api-keys
+    app.kubernetes.io/version: "0.0.4"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-api-keys
+      app.kubernetes.io/instance: api-keys
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "api-keys-api"
+        vault.hashicorp.com/auth-path: "auth/jwt"
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-api-keys
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl" 
+        vault.hashicorp.com/secret-volume-path: "/home/app/vault"
+        checksum/config-env: 4c5013931a675adee0d6496c12db07b426f6b99422dc2b76b83993e04bd06fcc
+      labels:
+        helm.sh/chart: helm-nvcf-api-keys-1.6.0
+        app.kubernetes.io/name: helm-nvcf-api-keys
+        app.kubernetes.io/instance: api-keys
+        app.kubernetes.io/version: "0.0.4"
+        app.kubernetes.io/managed-by: Helm
+    spec:
+      serviceAccountName: api-keys-api
+      containers:
+        - name: helm-nvcf-api-keys
+          image: "nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.8.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: management-port
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            - configMapRef:
+                name: api-keys-env
+          startupProbe:
+            failureThreshold: 36
+            httpGet:
+              path: /admin/health/readiness
+              port: management-port
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 1
+          livenessProbe:
+            failureThreshold: 6
+            httpGet:
+              path: /admin/health/liveness
+              port: management-port
+            periodSeconds: 10
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 1
+            httpGet:
+              path: /admin/health/readiness
+              port: management-port
+            periodSeconds: 10
+            successThreshold: 3
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: 200m
+              memory: 1Gi
+            requests:
+              cpu: 150m
+              memory: 0.5Gi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            runAsUser: 1000
+          volumeMounts:
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+            - name: token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            
+      volumes:
+        - name: vault-config-templates
+          configMap:
+            name: api-keys-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+        - name: token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+                  audience: http://openbao-server.vault-system.svc.cluster.local:8200

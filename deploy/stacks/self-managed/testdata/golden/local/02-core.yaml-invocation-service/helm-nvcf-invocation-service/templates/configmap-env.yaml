@@ -1,0 +1,39 @@
+---
+# Source: helm-nvcf-invocation-service/templates/configmap-env.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: invocation-service-env
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-invocation-service-1.6.0
+    app.kubernetes.io/name: helm-nvcf-invocation-service
+    app.kubernetes.io/instance: invocation-service
+    app.kubernetes.io/version: "0.12.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  NATS_PROPERTIES__NATS_ADDRESS: "nats://nats.nats-system.svc.cluster.local:4222"
+  NATS_PROPERTIES__REGION: "ncp"
+  NVCF_API_ADDRESS: "http://api.nvcf.svc.cluster.local:9090"
+  OAUTH2_BASE_URL: "https://oauth2.example.com"
+  RATE_LIMIT_ADDRESS: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+  RATE_LIMIT_ENABLED: "true"
+  REGIONAL_NVCF_API_GRPC_ADDRESS: "http://api.nvcf.svc.cluster.local:9090"
+  S3_PROPERTIES__ENABLE_LARGE_RESPONSE_URL: "false"
+  SECRETS_PATH: "/vault/secrets/secrets.json"
+  SERVER__ENVFILTER_DIRECTIVE: "otel::tracing=off,otel=off,server=trace,info"
+  WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS: "http://invocation.nvcf.svc.cluster.local:8080"

@@ -1,0 +1,128 @@
+---
+# Source: helm-nvcf-notary-service/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notary-service
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-notary-service-1.4.2
+    app.kubernetes.io/name: helm-nvcf-notary-service
+    app.kubernetes.io/instance: notary-service
+    app.kubernetes.io/version: "1.14.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-notary-service
+      app.kubernetes.io/instance: notary-service
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "nvcf-notary"
+        vault.hashicorp.com/auth-path: "auth/jwt"
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-notary-service
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl" 
+        vault.hashicorp.com/secret-volume-path: "/home/app/vault"
+        checksum/config-env: 0110d878dfe8d30225c9a153438713a8a90a45a7670358cf9d10ffa1b70f5453
+      labels:
+        app.kubernetes.io/name: helm-nvcf-notary-service
+        app.kubernetes.io/instance: notary-service
+    spec:
+      serviceAccountName: nvcf-notary
+      securityContext:
+        {}
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                expirationSeconds: 3600
+                path: token
+        - name: vault-config-templates
+          configMap:
+            name: notary-service-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+      containers:
+        - name: helm-nvcf-notary-service
+          securityContext:
+            capabilities:
+              add:
+              - NET_BIND_SERVICE
+              drop:
+              - ALL
+            runAsUser: 1000
+          image: "nvcr.io/nvidia/nvcf/notary-service:1.14.0"
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              name: token
+              readOnly: true
+            - mountPath: /vault/config/templates
+              name: vault-config-templates
+              readOnly: true
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            - configMapRef:
+                name: notary-service-env
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: management
+              containerPort: 8181
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 6
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 1
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 1
+          startupProbe:
+            failureThreshold: 30
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            limits:
+              cpu: 2
+              memory: 4Gi
+            requests:
+              cpu: 1
+              memory: 2Gi
