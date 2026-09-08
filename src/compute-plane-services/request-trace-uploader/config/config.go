@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -94,9 +95,9 @@ type ObjectStorePolicy struct {
 	Region string
 	// Endpoint overrides the AWS endpoint resolution for an S3-compatible
 	// store that is not AWS. Empty uses the SDK default for Region. When set,
-	// it must be an absolute https:// URL: Load rejects a plain http://
-	// endpoint because it would send credentials and segment data in
-	// cleartext.
+	// it must satisfy ValidObjectStoreEndpoint: an absolute https:// URL with
+	// a host. A non-https or hostless endpoint would send credentials and
+	// segment data in cleartext, or to nowhere.
 	Endpoint string
 	// KeyPrefix is joined with each segment's file name to form its object
 	// key. Empty uploads to the bucket root.
@@ -193,8 +194,8 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	multiplier := floatValue(lookup, EnvRetryMultiplier, DefaultRetryMultiplier, 1.1, 10.0, &warnings)
 
 	objectStoreEndpoint := strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreEndpoint, ""))
-	if objectStoreEndpoint != "" && !strings.HasPrefix(objectStoreEndpoint, "https://") {
-		return Config{}, nil, fmt.Errorf("%s must be an absolute https:// URL; a non-TLS endpoint would send credentials and segment data in cleartext", EnvObjectStoreEndpoint)
+	if !ValidObjectStoreEndpoint(objectStoreEndpoint) {
+		return Config{}, nil, fmt.Errorf("%s must be an absolute https:// URL with a host; a non-https or hostless endpoint is invalid", EnvObjectStoreEndpoint)
 	}
 	objectStore := ObjectStorePolicy{
 		Bucket:    strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreBucket, "")),
@@ -264,6 +265,23 @@ func optionalName(lookup LookupFunc, name, fallback string) (string, error) {
 		return "", fmt.Errorf("%s must not contain a path separator", name)
 	}
 	return value, nil
+}
+
+// ValidObjectStoreEndpoint reports whether endpoint is a safe value for
+// ObjectStorePolicy.Endpoint: empty, meaning use the SDK default for Region,
+// or an absolute https:// URL with a nonempty host. A bare scheme such as
+// "https://" parses without error but has no host, so a prefix check alone
+// would accept it; both Load and the objectstore backend's own constructor
+// call this so the rule cannot be bypassed by constructing a Config directly.
+func ValidObjectStoreEndpoint(endpoint string) bool {
+	if endpoint == "" {
+		return true
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "https" && parsed.Host != ""
 }
 
 func backendValue(lookup LookupFunc, name string) (Backend, error) {

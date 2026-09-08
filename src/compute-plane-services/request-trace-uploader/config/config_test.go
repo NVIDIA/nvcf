@@ -109,6 +109,7 @@ func TestLoadRejectsInvalidRequiredValues(t *testing.T) {
 		{name: "prefix with separator", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvSegmentPrefix: "nested/prefix"}},
 		{name: "http objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "http://minio.internal:9000"}},
 		{name: "schemeless objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "minio.internal:9000"}},
+		{name: "hostless objectstore endpoint", env: map[string]string{EnvSourceDir: "/records", EnvBackend: "objectstore", EnvObjectStoreEndpoint: "https://"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

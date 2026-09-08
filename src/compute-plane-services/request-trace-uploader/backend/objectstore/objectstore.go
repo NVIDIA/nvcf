@@ -96,8 +96,8 @@ func newClient(cfg config.Config, transport http.RoundTripper) (backend.Client, 
 	if strings.TrimSpace(cfg.ObjectStore.Region) == "" {
 		return nil, fmt.Errorf("%s is required for the objectstore backend", config.EnvObjectStoreRegion)
 	}
-	if cfg.ObjectStore.Endpoint != "" && !strings.HasPrefix(cfg.ObjectStore.Endpoint, "https://") {
-		return nil, fmt.Errorf("%s must be an absolute https:// URL; a non-TLS endpoint would send credentials and segment data in cleartext", config.EnvObjectStoreEndpoint)
+	if !config.ValidObjectStoreEndpoint(cfg.ObjectStore.Endpoint) {
+		return nil, fmt.Errorf("%s must be an absolute https:// URL with a host; a non-https or hostless endpoint is invalid", config.EnvObjectStoreEndpoint)
 	}
 	source, err := hostname()
 	if err != nil {

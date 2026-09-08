@@ -99,6 +99,16 @@ func TestNewRejectsAnHTTPEndpoint(t *testing.T) {
 	}
 }
 
+// TestNewRejectsAnHTTPSEndpointWithNoHost guards against a scheme-only
+// endpoint: "https://" has the right prefix but no host, so a prefix check
+// alone would accept it and newClient would only fail later, deep in the SDK.
+func TestNewRejectsAnHTTPSEndpointWithNoHost(t *testing.T) {
+	cfg := baseConfig(writeSecrets(t, `{"access_key_id":"a","secret_access_key":"b"}`), "https://")
+	if _, err := New(cfg); err == nil {
+		t.Fatal("New() error = nil, want a hostless endpoint to be rejected")
+	}
+}
+
 func TestNewFailsWhenHostnameIsUnavailable(t *testing.T) {
 	original := hostname
 	hostname = func() (string, error) { return "", errors.New("no hostname") }
