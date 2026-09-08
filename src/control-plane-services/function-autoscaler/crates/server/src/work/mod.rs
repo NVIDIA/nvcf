@@ -1712,6 +1712,18 @@ mod tests {
     }
 
     #[test]
+    fn test_should_retry_scaling_request_after_failure() {
+        let id = Uuid::new_v4();
+        let vid = Uuid::new_v4();
+        let cached = FunctionCachedState {
+            last_predicted_desired_instance_count: None,
+            last_predicted_error_code: Some(NvcfApiError::UnknownError.to_string()),
+        };
+
+        assert!(!should_skip_scaling_request(id, vid, Some(&cached), 5));
+    }
+
+    #[test]
     fn test_should_skip_scaling_request_with_function_not_found() {
         let id = Uuid::new_v4();
         let vid = Uuid::new_v4();
