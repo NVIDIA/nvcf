@@ -18,6 +18,11 @@ go_archive_version=${GO_ARCHIVE_VERSION:-v0.3.0}
 output_dir=${OUTPUT_DIR:-"$repo_root/files/openbao"}
 source_url=${BAO_SOURCE_URL:-"https://github.com/openbao/openbao/releases/download/v${bao_version}/openbao-dist-v${bao_version}.tar.xz"}
 
+case "$output_dir" in
+  /*) ;;
+  *) output_dir="$(pwd)/$output_dir" ;;
+esac
+
 if [ -n "${WORK_DIR:-}" ]; then
   work_dir=$WORK_DIR
   work_dir_is_ours=0
