@@ -247,15 +247,31 @@ nats:
         {{- end }}
   {{- end }}
 
+  # One merged config: block -- a second config: key under nats: would be
+  # silently collapsed. Surfaces server TLS for split-plane workers that reach
+  # NATS over an L4-passthrough LB: TLS must terminate at the server (an LB
+  # can't -- the INFO-first client deadlocks a terminated handshake), and
+  # allow_non_tls keeps in-cluster plaintext clients on :4222. Emitted only when
+  # set, so an env file that sets neither renders identical.
+  {{- $natsTls := dig "nats" "config" "nats" "tls" dict .Values }}
+  {{- $allowNonTls := dig "nats" "config" "merge" "allow_non_tls" nil .Values }}
   config:
     merge:
       server_tags:
         {{- toYaml $natsServerTags | nindent 8 }}
+      {{- if kindIs "bool" $allowNonTls }}
+      allow_non_tls: {{ $allowNonTls }}
+      {{- end }}
     {{- if .Values.global.storageClass }}
     jetstream:
       fileStore:
         pvc:
           storageClassName: {{ .Values.global.storageClass }}
+    {{- end }}
+    {{- with $natsTls }}
+    nats:
+      tls:
+        {{- toYaml . | nindent 8 }}
     {{- end }}
 
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}

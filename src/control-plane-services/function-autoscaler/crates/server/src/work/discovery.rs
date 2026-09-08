@@ -194,11 +194,12 @@ fn llm_gateway_discovery_query(env: &str, ignore_env: bool, shard: DiscoveryShar
         let metric_env = MetricEnvironments::from_config(env);
         format!(r#", aws_env="{}""#, metric_env.aws)
     };
+    // A group list copies labels from the left side, which has no version metadata.
     format!(
         r#"(sum by(function_id) (
             increase(llm_api_gateway_http_requests_total{{function_id=~"{function_id_regex}", function_id!="none"{env_matcher}}}[5m])
         ) > 0)
-        * on(function_id) group_right(function_version_id, nca_id)
+        * on(function_id) group_right()
         max by(function_id, function_version_id, nca_id) (
             nvcf_function_info{{function_id=~"{function_id_regex}"{env_matcher}}}
         )"#
@@ -996,6 +997,7 @@ mod tests {
                     assert_eq!(query.query.matches(&matcher).count(), 2);
                     assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 2);
                     assert!(query.query.contains("llm_api_gateway_http_requests_total"));
+                    assert!(query.query.contains("* on(function_id) group_right()"));
                 } else {
                     assert_eq!(query.query.matches(&matcher).count(), 4);
                     assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);

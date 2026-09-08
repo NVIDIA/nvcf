@@ -96,10 +96,13 @@ func TestInitializeRejectsUnreadableSecret(t *testing.T) {
 
 // stubBackend stands in for a real destination and records what it was asked
 // to do, so a test can tell "the segment was submitted" apart from "nothing
-// happened".
+// happened". By default it behaves like a real exporting backend; set
+// diagnostic to behave like debug, which reports success but exports nothing.
 type stubBackend struct {
-	submitted []string
-	statuses  []string
+	submitted  []string
+	statuses   []string
+	diagnostic bool
+	status     backend.Status
 }
 
 func (b *stubBackend) Submit(_ context.Context, request backend.SubmitRequest) (string, error) {
@@ -109,7 +112,14 @@ func (b *stubBackend) Submit(_ context.Context, request backend.SubmitRequest) (
 
 func (b *stubBackend) Status(_ context.Context, id string) (backend.Status, error) {
 	b.statuses = append(b.statuses, id)
+	if b.status != "" {
+		return b.status, nil
+	}
 	return backend.StatusSuccess, nil
+}
+
+func (b *stubBackend) Capabilities() backend.Capabilities {
+	return backend.Capabilities{TerminalOutcomeSync: true, Exports: !b.diagnostic}
 }
 
 func TestRefreshSubmitsEveryClosedSegment(t *testing.T) {
@@ -148,9 +158,61 @@ func TestRefreshSubmitsEveryClosedSegment(t *testing.T) {
 		t.Errorf("statuses = %v, want the id from each submit", stub.statuses)
 	}
 	for _, path := range want {
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("source %s was removed: %v", filepath.Base(path), err)
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("source %s was not removed after a confirmed export: %v", filepath.Base(path), err)
 		}
+	}
+}
+
+func TestRefreshRetainsSourceWhenBackendDoesNotExport(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"request-trace.000000.jsonl.gz",
+		"request-trace.000001.jsonl.gz",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stub := &stubBackend{diagnostic: true}
+	svc := NewWithBackend(config.Config{
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+		StateDir:      filepath.Join(root, "state"),
+		QuarantineDir: filepath.Join(root, "quarantine"),
+	}, stub)
+
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "request-trace.000000.jsonl.gz")); err != nil {
+		t.Errorf("source was removed by a backend that does not export: %v", err)
+	}
+}
+
+func TestRefreshRetainsSourceOnPendingStatus(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "request-trace.000000.jsonl.gz"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "request-trace.000001.jsonl.gz"), []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := &stubBackend{status: backend.StatusPending}
+	svc := NewWithBackend(config.Config{
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+		StateDir:      filepath.Join(root, "state"),
+		QuarantineDir: filepath.Join(root, "quarantine"),
+	}, stub)
+
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "request-trace.000000.jsonl.gz")); err != nil {
+		t.Errorf("source was removed while its upload is still pending: %v", err)
 	}
 }
 

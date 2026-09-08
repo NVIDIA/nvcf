@@ -98,6 +98,19 @@ jobs:
       - name: Lint and render every chart with a CI values file
         run: ./tools/ci/check-helm-charts
 
+      - name: Check NVCA Operator chart is synced with its monorepo source
+        # Pins the version fields to whatever is already committed in the
+        # vendored chart, so this only fails on real content drift between
+        # src/compute-plane-services/nvca/deployments/nvca-operator and
+        # deploy/helm/nvca-operator/nvca-operator, not on pending version bumps.
+        run: |
+          set -euo pipefail
+          cd deploy/helm/nvca-operator
+          NVCA_VERSION="$(yq '.selfManaged.nvcaVersion' nvca-operator/values.yaml)" \
+          NVCA_OPERATOR_VERSION="$(yq '.appVersion' nvca-operator/Chart.yaml)" \
+          NVCA_SHARED_STORAGE_IMAGE_TAG="$(yq '.selfManaged.sharedStorage.imageTag' nvca-operator/values.yaml)" \
+            make check-vendor-chart
+
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
 

@@ -7,7 +7,8 @@ This repository contains the Helm chart for deploying NVCF ingress routes via th
 The chart deploys `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `UDPRoute`, and
 `ReferenceGrant` resources that attach to an existing Gateway provisioned
 separately by the cluster operator, such as Envoy Gateway, Istio, Traefik, or
-Kong. Secure LLM worker routing also renders an optional cert-manager
+Kong. It also reserves enabled HTTPRoute hostnames with a Kubernetes validating
+admission policy. Secure LLM worker routing renders an optional cert-manager
 `Certificate` and an Envoy Gateway `BackendTrafficPolicy` for long-lived gRPC
 streams. The chart includes optional `PodMonitor` resources for scraping Envoy
 Gateway proxy metrics with Prometheus.
@@ -20,7 +21,7 @@ services referenced by the routes (`api`,
 
 ## Prerequisites
 
-- Kubernetes cluster
+- Kubernetes 1.30 or later
 - Helm 3.x
 - `kubectl`
 - A Gateway API compatible controller installed in the cluster
@@ -77,6 +78,8 @@ Important settings to review before deployment:
 - `llmRequestRouter.grpcTls.*` for the dedicated gRPC listener identity,
   explicit plaintext opt-in, and certificate ownership mode
 - `nvcfGatewayRoutes.routes.<route>.enabled` to toggle individual routes
+- `nvcfGatewayRoutes.hostnameConflictPolicy.enabled` to reject other
+  HTTPRoutes that reuse an enabled chart route's hostname on the shared listener
 - `nvcfGatewayRoutes.routes.nvcfApi.grpc.enabled` and
   `nvcfGatewayRoutes.routes.nvctApi.grpc.enabled` to expose API gRPC routes
 - `nvcfGatewayRoutes.routes.<http-route>.hostnames` to override the templated HTTP route hostnames
@@ -87,6 +90,11 @@ Important settings to review before deployment:
 The default values use `localhost` as the domain and assume backend services are named consistently with NVCF defaults. Override these for any shared or production environment.
 
 Enabled `HTTPRoute` entries must not share a resolved hostname because each `HTTPRoute` in this chart uses a root `PathPrefix /` match on the shared Gateway. Helm rendering fails if two enabled HTTPRoutes would claim the same hostname.
+
+The hostname conflict policy is enabled by default. It rejects create and
+update requests for another HTTPRoute that reuses a hostname reserved by this
+chart on the configured shared Gateway listener. Disable it only when another
+admission controller owns the same hostname policy.
 
 ## Routes
 

@@ -9,6 +9,7 @@ go_library(
     deps = [
         "//src/compute-plane-services/request-trace-uploader/backend",
         "//src/compute-plane-services/request-trace-uploader/backend/debug",
+        "//src/compute-plane-services/request-trace-uploader/backend/objectstore",
         "//src/compute-plane-services/request-trace-uploader/config",
         "//src/compute-plane-services/request-trace-uploader/service",
     ],

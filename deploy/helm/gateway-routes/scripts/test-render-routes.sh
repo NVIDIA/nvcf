@@ -21,7 +21,8 @@ default_render="$(mktemp)"
 enabled_render="$(mktemp)"
 annotated_render="$(mktemp)"
 disabled_render="$(mktemp)"
-trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render"' EXIT
+hostname_conflict_error="$(mktemp)"
+trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render" "$hostname_conflict_error"' EXIT
 
 if ! command -v yq >/dev/null 2>&1; then
   echo "yq is required for render tests" >&2
@@ -63,6 +64,22 @@ assert_yq_eq "$repo_root/chart/values.yaml" '.nvcfGatewayRoutes.routes.grpcWorke
 assert_yq_eq "$repo_root/chart/values.yaml" '.nvcfGatewayRoutes.routes.nats | has("hostnames")' false
 
 helm template nvcf-gateway-routes "$repo_root/chart" > "$default_render"
+
+# Admission guard for chart-owned HTTPRoute hostnames.
+assert_yq_eq "$default_render" '[select(.kind == "ValidatingAdmissionPolicy")] | length' 1
+assert_yq_eq "$default_render" '[select(.kind == "ValidatingAdmissionPolicyBinding")] | length' 1
+assert_yq_eq "$default_render" 'select(.kind == "ValidatingAdmissionPolicy") | .spec.failurePolicy' Fail
+assert_yq_eq "$default_render" 'select(.kind == "ValidatingAdmissionPolicy") | .spec.matchConstraints.resourceRules[0].resources[0]' httproutes
+assert_yq_eq "$default_render" 'select(.kind == "ValidatingAdmissionPolicyBinding") | .spec.validationActions[0]' Deny
+
+reserved_hostnames="$(yq ea -r 'select(.kind == "ValidatingAdmissionPolicy") | .spec.variables[] | select(.name == "reservedHostnames") | .expression' "$default_render")"
+case "$reserved_hostnames" in
+  *'"api.localhost": "gateway/nvcf-api"'*'"events.localhost": "gateway/event-ledger"'*) ;;
+  *)
+    echo "admission policy does not reserve every enabled HTTPRoute hostname: $reserved_hostnames" >&2
+    exit 1
+    ;;
+esac
 
 # Default-enabled HTTPRoutes.
 assert_resource_count "$default_render" HTTPRoute nvcf-api gateway 1
@@ -133,10 +150,21 @@ assert_resource_field "$default_render" HTTPRoute reval gateway '.spec.rules[0].
 helm template nvcf-gateway-routes "$repo_root/chart" \
   --set nvcfGatewayRoutes.routes.reval.enabled=false \
   --set nvcfGatewayRoutes.routes.eventLedger.enabled=false \
+  --set nvcfGatewayRoutes.hostnameConflictPolicy.enabled=false \
   > "$disabled_render"
 
 assert_resource_count "$disabled_render" HTTPRoute reval gateway 0
 assert_resource_count "$disabled_render" HTTPRoute event-ledger gateway 0
+assert_yq_eq "$disabled_render" '[select(.kind == "ValidatingAdmissionPolicy")] | length' 0
+assert_yq_eq "$disabled_render" '[select(.kind == "ValidatingAdmissionPolicyBinding")] | length' 0
+
+if helm template nvcf-gateway-routes "$repo_root/chart" \
+  --set-string 'nvcfGatewayRoutes.routes.eventLedger.hostnames[0]=api.localhost' \
+  >/dev/null 2>"$hostname_conflict_error"; then
+  echo "expected duplicate HTTPRoute hostname render to fail" >&2
+  exit 1
+fi
+grep -Fq 'routes event-ledger and nvcf-api both use hostname "api.localhost"' "$hostname_conflict_error"
 
 # Default-enabled TCPRoute.
 assert_resource_count "$default_render" TCPRoute grpc gateway 1
