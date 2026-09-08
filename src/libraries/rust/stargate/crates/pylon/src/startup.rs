@@ -110,6 +110,7 @@ pub(crate) struct PylonStartupPlan {
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
+    force_chat_completions_include_usage: bool,
     health_paths: UpstreamHealthPaths,
     startup_health_wait: Duration,
     metrics_addr: SocketAddr,
@@ -165,6 +166,7 @@ impl PylonStartupPlan {
                 canary_max_generation_threshold: args.canary_max_generation_threshold,
             },
             request_quality_monitor: request_quality_monitor_config_from_args(args),
+            force_chat_completions_include_usage: args.force_chat_completions_include_usage,
             health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
             startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
@@ -589,6 +591,7 @@ fn tunnel_forwarding_config_from_plan(
     metrics: Arc<PylonMetrics>,
 ) -> TunnelForwardingConfig {
     TunnelForwardingConfig {
+        force_chat_completions_include_usage: plan.force_chat_completions_include_usage,
         runtime_state,
         request_quality_monitor: plan.request_quality_monitor.clone(),
         metrics: Some(metrics),
@@ -674,10 +677,6 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
             .is_none_or(|input_tps| input_tps.is_finite() && input_tps > 0.0),
         "initial input TPS must be finite and positive"
     );
-    ensure!(
-        !args.benchmark_pin_input_tps || args.initial_input_tps.is_some(),
-        "--benchmark-pin-input-tps requires --initial-input-tps"
-    );
     if args.do_calibration {
         ensure!(
             args.calibration_requests > 0,
@@ -693,10 +692,7 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     }
 
     Ok(match args.initial_input_tps {
-        Some(input_tps) => ModelInitialization::ConfiguredInputTps {
-            input_tps,
-            pin: args.benchmark_pin_input_tps,
-        },
+        Some(input_tps) => ModelInitialization::ConfiguredInputTps { input_tps },
         None => ModelInitialization::Uncalibrated,
     })
 }
@@ -1044,6 +1040,17 @@ mod tests {
         tunnel_forwarding_config_from_plan(plan, PylonRuntimeState::default(), metrics)
     }
 
+    #[test]
+    fn exact_chat_usage_cli_is_disabled_by_default_and_accepts_opt_in() {
+        let (_, default_plan) = startup(&[]);
+        assert!(!default_plan.force_chat_completions_include_usage);
+        assert!(!test_forwarding(&default_plan).force_chat_completions_include_usage);
+
+        let (_, enabled_plan) = startup(&["--force-chat-completions-include-usage"]);
+        assert!(enabled_plan.force_chat_completions_include_usage);
+        assert!(test_forwarding(&enabled_plan).force_chat_completions_include_usage);
+    }
+
     fn test_observation() -> RequestObservation {
         RequestObservation {
             endpoint: RequestObservationEndpoint::ChatCompletions,
@@ -1092,10 +1099,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::new()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1652,10 +1656,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: plan.upstream.clone(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1_000.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1_000.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1672,7 +1673,7 @@ mod tests {
         let mut observation = test_observation();
         observation.input_tokens = 1000;
 
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
         let stats = receive_queued_model_stats(&runtime_state, "model-a").await;
 
         assert_eq!(stats.queue_size, 1);

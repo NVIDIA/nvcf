@@ -95,15 +95,9 @@ pub struct RequestObservationEvent {
     pub(crate) observation: RequestObservation,
     pub(crate) generation: Option<ModelGeneration>,
     pub(crate) changed_generations: Vec<ModelGeneration>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the stacked throughput projection")
-    )]
     pub(crate) input_interval: Option<RequestInputInterval>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the stacked throughput projection")
-    )]
+    pub(crate) input_tokens_explicit: bool,
+    pub(crate) raw_output_units: u64,
     pub(crate) upstream_duration: Option<Duration>,
 }
 
@@ -111,6 +105,23 @@ pub struct RequestObservationEvent {
 pub(crate) struct RequestInputInterval {
     pub(crate) submitted_at: Instant,
     pub(crate) first_generated_output_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RequestObservationMetadata {
+    pub(crate) input_interval: Option<RequestInputInterval>,
+    pub(crate) request_input_tokens: u64,
+    pub(crate) input_tokens_explicit: bool,
+    pub(crate) raw_output_units: u64,
+    pub(crate) upstream_duration: Option<Duration>,
+}
+
+impl RequestInputInterval {
+    #[cfg(test)]
+    pub(crate) fn duration(self) -> Duration {
+        self.first_generated_output_at
+            .saturating_duration_since(self.submitted_at)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -422,24 +433,28 @@ impl PylonRuntimeState {
         model_ids
     }
 
-    pub fn observe_request(&self, observation: RequestObservation) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn observe_request_for_test(&self, observation: RequestObservation) {
         let generation = self.current_generation(&observation.model_id);
-        self.observe_request_for_generation(observation, generation, None, None);
+        let request_input_tokens = observation.input_tokens;
+        self.observe_request_for_generation(
+            observation,
+            generation,
+            RequestObservationMetadata {
+                request_input_tokens,
+                ..Default::default()
+            },
+        );
     }
 
     pub(crate) fn observe_request_for_generation(
         &self,
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
-        input_interval: Option<RequestInputInterval>,
-        upstream_duration: Option<Duration>,
+        metadata: RequestObservationMetadata,
     ) {
-        let event = self.transition_request_observation_for_generation(
-            observation,
-            generation,
-            input_interval,
-            upstream_duration,
-        );
+        let event =
+            self.transition_request_observation_for_generation(observation, generation, metadata);
         if let Some(tx) = &self.observation_tx
             && let Err(error) = tx.try_send(event)
         {
@@ -478,11 +493,14 @@ impl PylonRuntimeState {
         let generation = self
             .current_generation(&observation.model_id)
             .expect("test model generation should already exist");
+        let request_input_tokens = observation.input_tokens;
         self.transition_request_observation_for_generation(
             observation,
             Some(generation),
-            None,
-            None,
+            RequestObservationMetadata {
+                request_input_tokens,
+                ..Default::default()
+            },
         )
     }
 
@@ -490,9 +508,15 @@ impl PylonRuntimeState {
         &self,
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
-        input_interval: Option<RequestInputInterval>,
-        upstream_duration: Option<Duration>,
+        metadata: RequestObservationMetadata,
     ) -> RequestObservationEvent {
+        let RequestObservationMetadata {
+            input_interval,
+            request_input_tokens,
+            input_tokens_explicit,
+            raw_output_units,
+            upstream_duration,
+        } = metadata;
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
         // currency check would let a retired generation reinsert queue state.
@@ -515,12 +539,16 @@ impl PylonRuntimeState {
                     generation,
                     changed_generations: Vec::new(),
                     input_interval,
+                    input_tokens_explicit,
+                    raw_output_units,
                     upstream_duration,
                 };
             }
         }
+        let mut live_observation = observation.clone();
+        live_observation.input_tokens = request_input_tokens;
         let transition = self.live_requests.transition_generation_observation_with(
-            &observation,
+            &live_observation,
             generation.as_ref(),
             |transition| {
                 if let Some(metrics) = &self.metrics {
@@ -533,6 +561,8 @@ impl PylonRuntimeState {
             generation,
             changed_generations: transition.changed_generations,
             input_interval,
+            input_tokens_explicit,
+            raw_output_units,
             upstream_duration,
         }
     }
@@ -613,12 +643,26 @@ impl RequestObservationEvent {
         self.observation
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the stacked throughput projection")
-    )]
+    #[cfg(test)]
+    pub(crate) fn input_processing_duration(&self) -> Option<Duration> {
+        self.input_interval().map(RequestInputInterval::duration)
+    }
+
     pub(crate) fn input_interval(&self) -> Option<RequestInputInterval> {
         self.input_interval
+    }
+
+    pub(crate) fn input_tokens_explicit(&self) -> bool {
+        self.input_tokens_explicit
+    }
+
+    pub(crate) fn raw_output_units(&self) -> u64 {
+        self.raw_output_units
+    }
+
+    pub(crate) fn output_duration(&self) -> Duration {
+        self.upstream_duration
+            .unwrap_or(self.observation.total_duration)
     }
 }
 
@@ -639,7 +683,9 @@ mod tests {
 
     use stargate_proto::pb::InferenceServerStatus;
 
-    use super::{ModelGeneration, PylonRuntimeState, RequestGenerationAdmission};
+    use super::{
+        ModelGeneration, PylonRuntimeState, RequestGenerationAdmission, RequestObservationMetadata,
+    };
     use crate::PylonMetrics;
     use crate::request_observer::{
         RequestObservation, RequestObservationEndpoint, RequestObservationState,
@@ -699,7 +745,7 @@ mod tests {
         );
         let mut observation = observation("req-runtime-owner", "model-runtime-owner", None);
 
-        runtime_state.observe_request(observation.clone());
+        runtime_state.observe_request_for_test(observation.clone());
 
         let emitted = observation_rx.try_recv().expect("observation should emit");
         assert_eq!(emitted.observation().request_id, observation.request_id);
@@ -710,7 +756,7 @@ mod tests {
         assert_eq!(live.queued_input_size, 42);
 
         observation.state = RequestObservationState::Complete;
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
         assert_eq!(
             runtime_state
                 .snapshot_live_model("model-runtime-owner")
@@ -730,10 +776,10 @@ mod tests {
         );
         let mut observation = observation("req-local-rejection", "model-a", Some("rk-a"));
 
-        runtime_state.observe_request(observation.clone());
+        runtime_state.observe_request_for_test(observation.clone());
         runtime_state.finish_queue_request(&observation.request_id);
         observation.state = RequestObservationState::Failed;
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
@@ -759,9 +805,9 @@ mod tests {
         );
         let mut observation = observation("req-full-stats-channel", "model-a", Some("rk-a"));
 
-        runtime_state.observe_request(observation.clone());
+        runtime_state.observe_request_for_test(observation.clone());
         observation.state = RequestObservationState::Failed;
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
@@ -784,10 +830,14 @@ mod tests {
             1,
             None,
         );
-        runtime_state.observe_request(observation("req-retained", "model-a", None));
+        runtime_state.observe_request_for_test(observation("req-retained", "model-a", None));
         let subscriber = RecordingTracingSubscriber::default();
         tracing::subscriber::with_default(subscriber.clone(), || {
-            runtime_state.observe_request(observation("req-dropped-full", "model-a", None));
+            runtime_state.observe_request_for_test(observation(
+                "req-dropped-full",
+                "model-a",
+                None,
+            ));
         });
 
         assert_drop_warning(&subscriber, "req-dropped-full", "full");
@@ -804,7 +854,11 @@ mod tests {
         drop(observation_rx);
         let subscriber = RecordingTracingSubscriber::default();
         tracing::subscriber::with_default(subscriber.clone(), || {
-            runtime_state.observe_request(observation("req-dropped-disconnected", "model-a", None));
+            runtime_state.observe_request_for_test(observation(
+                "req-dropped-disconnected",
+                "model-a",
+                None,
+            ));
         });
 
         assert_drop_warning(&subscriber, "req-dropped-disconnected", "disconnected");
@@ -877,8 +931,10 @@ mod tests {
         runtime_state.transition_request_observation_for_generation(
             first_observation.clone(),
             Some(first.clone()),
-            None,
-            None,
+            RequestObservationMetadata {
+                request_input_tokens: first_observation.input_tokens,
+                ..Default::default()
+            },
         );
         assert_eq!(runtime_state.snapshot_live_model("model-a").queue_size, 1);
 
@@ -889,8 +945,7 @@ mod tests {
         runtime_state.transition_request_observation_for_generation(
             first_observation,
             Some(first),
-            None,
-            None,
+            RequestObservationMetadata::default(),
         );
 
         assert_eq!(
@@ -916,7 +971,11 @@ mod tests {
 
         let mut stale = observation("req-first", "model-a", Some("rk-a"));
         stale.state = RequestObservationState::Failed;
-        runtime_state.transition_request_observation_for_generation(stale, Some(first), None, None);
+        runtime_state.transition_request_observation_for_generation(
+            stale,
+            Some(first),
+            RequestObservationMetadata::default(),
+        );
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
@@ -929,7 +988,7 @@ mod tests {
     fn observing_an_unknown_model_never_creates_a_generation() {
         let runtime_state = PylonRuntimeState::new(InferenceServerStatus::Active, &[]);
 
-        runtime_state.observe_request(observation("req-unknown", "model-a", None));
+        runtime_state.observe_request_for_test(observation("req-unknown", "model-a", None));
 
         assert_eq!(runtime_state.current_generation("model-a"), None);
         assert!(runtime_state.advertised_models().is_empty());

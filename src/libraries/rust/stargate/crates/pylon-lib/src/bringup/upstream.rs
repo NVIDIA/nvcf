@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::DEFAULT_MAX_SSE_BUFFER_BYTES;
 use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
-use crate::output_token_parser::OutputTokenParser;
+use crate::output_token_parser::{ExactOutputUpdate, OutputTokenParser};
 use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
 };
@@ -157,18 +157,18 @@ pub(super) async fn send_canary_request(
     let mut completed = false;
     while let Some(message) = messages.next().await {
         let message = message.map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
-        if let Some(generated_output) = message.facts.generated_output
-            && let Some(delta) = output_tokens
-                .observe_estimated_output_tokens(generated_output.estimated_token_units)
-        {
-            observed_tokens = observed_tokens.saturating_add(delta);
+        if let Some(generated_output) = message.facts.generated_output {
+            observed_tokens = output_tokens
+                .observe_generated_characters(generated_output.characters)
+                .displayed_tokens;
         }
         if let Some(tokens) = message
             .facts
             .exact_usage
             .and_then(|usage| usage.output_tokens)
+            && output_tokens.observe_exact_output_tokens(tokens) == ExactOutputUpdate::Applied
         {
-            observed_tokens = output_tokens.observe_exact_output_tokens(tokens);
+            observed_tokens = tokens;
         }
         if observed_tokens > u64::from(canary_max_generation_threshold) {
             return Err(BringupError::RunawayGeneration {
@@ -278,7 +278,11 @@ fn finish_observation(
         let generation = observer
             .generation_mut()
             .expect("chat completion observer should expose generation progress");
-        generation.observe_generated_output(Instant::now(), completion.usage.completion_tokens > 0);
+        generation.observe_generated_output(
+            Instant::now(),
+            completion.usage.completion_tokens > 0,
+            0,
+        );
         generation.observe_output_tokens_total(u64::from(completion.usage.completion_tokens));
         observer.complete();
     }

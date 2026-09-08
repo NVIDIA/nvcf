@@ -89,6 +89,9 @@ struct Args {
     /// Bootstrap input TPS for every configured model instead of running calibration
     #[arg(long, value_name = "TPS")]
     initial_input_tps: Option<f64>,
+    /// Force exact usage in streaming Chat Completions requests sent upstream
+    #[arg(long, default_value_t = false)]
+    force_chat_completions_include_usage: bool,
     /// Interval between active canary requests in milliseconds. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
@@ -119,9 +122,6 @@ struct Args {
     /// Upstream HTTP path for the engine stats stream
     #[arg(long, default_value = "/pylon/v1/stats/stream", value_name = "PATH")]
     engine_stats_stream_path: String,
-    /// Keep --initial-input-tps fixed for deterministic benchmark/test experiments
-    #[arg(long, default_value_t = false, hide = true)]
-    benchmark_pin_input_tps: bool,
     /// Minimum interval between registration/stat updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
@@ -566,17 +566,6 @@ mod tests {
         let args = parse_args("--do-calibration --calibration-requests 0");
 
         assert!(startup::PylonStartupPlan::from_args(&args).is_err());
-    }
-
-    #[test]
-    fn benchmark_pin_requires_initial_input_tps() {
-        let uncalibrated = parse_args("--benchmark-pin-input-tps");
-        let calibration = parse_args("--do-calibration --benchmark-pin-input-tps");
-        let initial = parse_args("--initial-input-tps 2200 --benchmark-pin-input-tps");
-
-        assert!(startup::PylonStartupPlan::from_args(&uncalibrated).is_err());
-        assert!(startup::PylonStartupPlan::from_args(&calibration).is_err());
-        assert!(startup::PylonStartupPlan::from_args(&initial).is_ok());
     }
 
     #[test]
