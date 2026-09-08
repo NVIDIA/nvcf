@@ -426,10 +426,12 @@ fn calibration_ineligible_event(
                     choice["index"].as_u64().is_none()
                         || (!finish_reason.is_null()
                             && !matches!(finish_reason.as_str(), Some("stop" | "length")))
-                        || delta["function_call"].is_object()
-                        || delta["tool_calls"]
-                            .as_array()
-                            .is_some_and(|calls| !calls.is_empty())
+                        || delta.as_object().is_none()
+                        || !delta["function_call"].is_null()
+                        || (!delta["tool_calls"].is_null()
+                            && delta["tool_calls"]
+                                .as_array()
+                                .is_none_or(|calls| !calls.is_empty()))
                         || chat_audio_is_calibration_ineligible(delta)
                 })
             });
@@ -1083,6 +1085,49 @@ mod tests {
     }
 
     #[test]
+    fn malformed_chat_delta_shapes_are_calibration_ineligible() {
+        for (case, delta) in [
+            ("null-delta", serde_json::Value::Null),
+            ("scalar-delta", serde_json::json!("invalid")),
+            (
+                "malformed-function-call",
+                serde_json::json!({"content": "visible", "function_call": "invalid"}),
+            ),
+            (
+                "malformed-tool-calls",
+                serde_json::json!({"content": "visible", "tool_calls": {}}),
+            ),
+        ] {
+            let event = serde_json::json!({
+                "object": "chat.completion.chunk",
+                "choices": [{
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": "stop",
+                }],
+            });
+            assert!(
+                parse_data(&event.to_string()).facts.calibration_ineligible,
+                "malformed Chat delta must fail closed: {case}"
+            );
+        }
+
+        let empty_tool_fields = serde_json::json!({
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "delta": {"function_call": null, "tool_calls": []},
+                "finish_reason": "stop",
+            }],
+        });
+        assert!(
+            !parse_data(&empty_tool_fields.to_string())
+                .facts
+                .calibration_ineligible
+        );
+    }
+
+    #[test]
     fn unsafe_or_unknown_chat_finish_reasons_are_calibration_ineligible() {
         for finish_reason in [
             serde_json::json!("content_filter"),
@@ -1428,10 +1473,7 @@ mod tests {
         assert_eq!(typed_named_error.facts.terminal, Some(RelayOutcome::Failed));
 
         let responses_done = parse_event("event: response.completed\ndata: [DONE]\n\n");
-        assert_eq!(
-            responses_done.facts.terminal,
-            Some(RelayOutcome::Complete)
-        );
+        assert_eq!(responses_done.facts.terminal, Some(RelayOutcome::Complete));
         assert!(responses_done.facts.calibration_ineligible);
     }
 

@@ -35,6 +35,8 @@ use headers::MissingRequiredHeaderError;
 pub(crate) use headers::{RequiredTunnelHeaders, validate_required_tunnel_headers};
 pub(crate) use tunnel::TunnelRequestObserver;
 
+const MAX_TRACKED_CHAT_CHOICES: usize = 128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestObservationState {
     Queued,
@@ -370,6 +372,13 @@ impl RequestObserver {
             self.observe_output_calibration_details(None, true);
             return;
         }
+        if !state.choices.contains_key(&choice.index)
+            && state.choices.len() >= MAX_TRACKED_CHAT_CHOICES
+        {
+            self.chat_calibration = None;
+            self.observe_output_calibration_details(None, true);
+            return;
+        }
         let choice_state = if choice.safely_finished {
             ChatChoiceState::Finished
         } else {
@@ -429,6 +438,9 @@ impl RequestObserver {
     }
 
     pub(crate) fn complete(&mut self) {
+        if self.is_terminal() {
+            return;
+        }
         let unfinished_chat_choices = self.chat_calibration.as_ref().is_some_and(|state| {
             state
                 .choices
@@ -708,6 +720,55 @@ mod tests {
     }
 
     #[test]
+    fn chat_calibration_stops_tracking_after_the_choice_limit() {
+        let (runtime_state, _rx) = observed_runtime(4);
+        let mut observer = test_observer(
+            "req-choice-limit",
+            runtime_state.with_single_pylon_output_token_calibration(),
+        );
+        observer.submit_now();
+
+        for index in 0..MAX_TRACKED_CHAT_CHOICES as u64 {
+            observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+                index,
+                safely_finished: false,
+            });
+        }
+        assert_eq!(
+            observer
+                .chat_calibration
+                .as_ref()
+                .expect("choice tracking should remain active at the limit")
+                .choices
+                .len(),
+            MAX_TRACKED_CHAT_CHOICES
+        );
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: 0,
+            safely_finished: false,
+        });
+        assert!(observer.chat_calibration.is_some());
+
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: MAX_TRACKED_CHAT_CHOICES as u64,
+            safely_finished: false,
+        });
+
+        assert!(observer.chat_calibration.is_none());
+        assert!(
+            response(&observer)
+                .output_calibration
+                .calibration_ineligible
+        );
+
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: MAX_TRACKED_CHAT_CHOICES as u64 + 1,
+            safely_finished: false,
+        });
+        assert!(observer.chat_calibration.is_none());
+    }
+
+    #[test]
     fn only_exact_process_calibration_observations_are_debug_only() {
         let generation = ModelGeneration::new("model-a", 1);
         let calibration = next_generated_request_id(GeneratedRequestKind::Calibration, &generation);
@@ -956,6 +1017,30 @@ mod tests {
             observer.state.observation_state(),
             RequestObservationState::Failed
         );
+    }
+
+    #[test]
+    fn chat_observer_ignores_completion_after_terminalization_with_unfinished_choice() {
+        let (runtime_state, rx) = observed_runtime(8);
+        let mut observer = test_observer(
+            "req-chat-repeated-completion",
+            runtime_state.with_single_pylon_output_token_calibration(),
+        );
+        observer.submit_now();
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: 0,
+            safely_finished: false,
+        });
+        observer.fail();
+        while rx.try_recv().is_ok() {}
+
+        observer.complete();
+
+        assert_eq!(
+            observer.state.observation_state(),
+            RequestObservationState::Failed
+        );
+        assert!(rx.is_empty(), "repeated terminalization must not emit");
     }
 
     #[tokio::test]
