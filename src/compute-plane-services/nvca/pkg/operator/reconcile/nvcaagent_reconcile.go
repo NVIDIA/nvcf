@@ -1490,11 +1490,10 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
 	}
 	if bc.shouldWarnForLegacyBYOOConfig(cm) {
-		log.Warnf(
-			"ConfigMap %s/%s contains deprecated agentConfig.mergeConfig BYOO settings; migrate to top-level chart byoo values before the next minor release",
-			cm.Namespace,
-			cm.Name,
-		)
+		log.WithFields(logrus.Fields{
+			"configmapNamespace": cm.Namespace,
+			"configmapName":      cm.Name,
+		}).Warn("ConfigMap contains deprecated agentConfig.mergeConfig BYOO settings; migrate to top-level chart byoo values before the next minor release")
 	}
 	return cfg, true, nil
 }
