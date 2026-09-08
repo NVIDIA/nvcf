@@ -56,6 +56,7 @@ pub(super) struct WaitAndWidenConfig {
     pub(super) seed: Option<String>,
     pub(super) cache_affinity_virtual_nodes: usize,
     pub(super) cache_affinity_backend_selection_count: Option<usize>,
+    pub(super) cache_affinity_input_tokens_scale: f64,
     queue_slo: Option<RangeInclusive<Duration>>,
     pub(super) ttft_bucket_size: Duration,
     pub(super) next_bucket_unlock_factor: f64,
@@ -79,6 +80,9 @@ impl WaitAndWidenConfig {
             cache_affinity_backend_selection_count: config
                 .cache_affinity_backend_selection_count
                 .filter(|count| *count > 0),
+            cache_affinity_input_tokens_scale: config
+                .validated_cache_affinity_input_tokens_scale()
+                .expect("wait-and-widen settings should be validated before use"),
             queue_slo: config
                 .max_queue_time_floor_ms
                 .zip(config.max_queue_time_ceil_ms)
@@ -152,11 +156,16 @@ impl LoadBalancer for WaitAndWidenLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
-        if let Some(affinity_indices) =
+        let affinity_indices =
             self.cache_affinity
-                .candidate_indices(&self.config, request, candidates)
-            && let Some(choice) =
-                self.choose_from_candidate_indices(request, candidates, affinity_indices.as_slice())
+                .candidate_indices(&self.config, request, candidates);
+        if let Some(affinity_indices) = &affinity_indices
+            && let Some(choice) = self.choose_from_candidate_indices(
+                request,
+                candidates,
+                affinity_indices.as_slice(),
+                self.config.cache_affinity_input_tokens_scale,
+            )
         {
             return Some(choice);
         }
@@ -165,8 +174,25 @@ impl LoadBalancer for WaitAndWidenLoadBalancer {
             return None;
         }
         let config = &self.config;
-        fast_path::choose_from_single_bucket(config, request, candidates)
-            .or_else(|| self.choose_from_candidate_iter(request, candidates.iter(), candidates))
+        if (affinity_indices.is_none() || config.cache_affinity_input_tokens_scale == 1.0)
+            && let Some(choice) = fast_path::choose_from_single_bucket(config, request, candidates)
+        {
+            return Some(choice);
+        }
+
+        let affinity_indices = affinity_indices.as_deref().map_or(&[][..], Vec::as_slice);
+        self.choose_from_candidate_iter(
+            request,
+            candidates.iter().enumerate().map(|(index, candidate)| {
+                let input_tokens_scale = if affinity_indices.contains(&index) {
+                    config.cache_affinity_input_tokens_scale
+                } else {
+                    1.0
+                };
+                (candidate, input_tokens_scale)
+            }),
+            candidates,
+        )
     }
 }
 
@@ -192,13 +218,17 @@ impl WaitAndWidenLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         candidate_indices: &[usize],
+        input_tokens_scale: f64,
     ) -> Option<LoadBalancerCandidateChoice> {
         if candidate_indices.is_empty() {
             return None;
         }
-        if let Some(choice) =
-            self.choose_from_two_ready_affinity_candidates(request, candidates, candidate_indices)
-        {
+        if let Some(choice) = self.choose_from_two_ready_affinity_candidates(
+            request,
+            candidates,
+            candidate_indices,
+            input_tokens_scale,
+        ) {
             return Some(choice);
         }
 
@@ -207,7 +237,9 @@ impl WaitAndWidenLoadBalancer {
         // temporary Vec for every affinity hit.
         self.choose_from_candidate_iter(
             request,
-            candidate_indices.iter().map(|index| &candidates[*index]),
+            candidate_indices
+                .iter()
+                .map(|index| (&candidates[*index], input_tokens_scale)),
             candidates,
         )
     }
@@ -217,6 +249,7 @@ impl WaitAndWidenLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         candidate_indices: &[usize],
+        input_tokens_scale: f64,
     ) -> Option<LoadBalancerCandidateChoice> {
         let &[index_a, index_b] = candidate_indices else {
             return None;
@@ -238,6 +271,7 @@ impl WaitAndWidenLoadBalancer {
             ttft(
                 candidate,
                 request.input_tokens,
+                input_tokens_scale,
                 request.priority,
                 self.config.ignore_queue_time,
                 self.config.ignore_input_processing_time,
@@ -279,27 +313,27 @@ impl WaitAndWidenLoadBalancer {
     fn choose_from_candidate_iter<'a>(
         &self,
         request: &LoadBalancerRequest<'_>,
-        candidates: impl ExactSizeIterator<Item = &'a RoutedClusterSnapshot>,
+        candidates: impl ExactSizeIterator<Item = (&'a RoutedClusterSnapshot, f64)>,
         candidate_index_source: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
         // TTFT determines bucket eligibility and unlock timing. The configured
         // comparator is applied after the unlocked candidates are sampled.
         let mut ttfts = CandidateTtftAccumulator::new(&self.config, request, candidates.len());
         if let RequestExclusions::One(excluded_cluster_id) = RequestExclusions::from(request) {
-            for candidate in candidates {
+            for (candidate, input_tokens_scale) in candidates {
                 if candidate.cluster_id != excluded_cluster_id {
-                    ttfts.push_ttft(candidate);
+                    ttfts.push_ttft(candidate, input_tokens_scale);
                 }
             }
         } else if request.has_excluded_clusters() || ttfts.filters_by_queue_slo() {
-            for candidate in candidates {
+            for (candidate, input_tokens_scale) in candidates {
                 if !request.excludes_cluster(&candidate.cluster_id) {
-                    ttfts.push_ttft(candidate);
+                    ttfts.push_ttft(candidate, input_tokens_scale);
                 }
             }
         } else {
-            for candidate in candidates {
-                ttfts.push_ttft(candidate);
+            for (candidate, input_tokens_scale) in candidates {
+                ttfts.push_ttft(candidate, input_tokens_scale);
             }
         }
 

@@ -26,6 +26,12 @@ use super::{LoadBalancer, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig};
 pub fn create_load_balancer_with_config(
     config: &LoadBalancerAlgorithmConfig,
 ) -> anyhow::Result<Arc<dyn LoadBalancer>> {
+    if let Some(settings) = config.wait_and_widen_settings() {
+        settings
+            .validated_cache_affinity_input_tokens_scale()
+            .map_err(anyhow::Error::msg)?;
+    }
+
     if config.algorithm() == LoadBalancerAlgorithm::PulsarWaitAndWiden
         && config
             .wait_and_widen_settings()

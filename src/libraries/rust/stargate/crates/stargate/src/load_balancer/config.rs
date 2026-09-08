@@ -195,6 +195,7 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub comparator: Option<ClusterComparator>,
     pub cache_affinity_virtual_nodes: Option<usize>,
     pub cache_affinity_backend_selection_count: Option<usize>,
+    pub cache_affinity_input_tokens_scale: Option<f64>,
     pub max_queue_time_floor_ms: Option<u64>,
     pub max_queue_time_ceil_ms: Option<u64>,
     pub ttft_bucket_size_ms: Option<u64>,
@@ -203,6 +204,18 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub max_queued: Option<u64>,
     pub ignore_queue_time: Option<bool>,
     pub ignore_input_processing_time: Option<bool>,
+}
+
+impl WaitAndWidenAlgorithmConfig {
+    pub(crate) fn validated_cache_affinity_input_tokens_scale(&self) -> Result<f64, String> {
+        let scale = self.cache_affinity_input_tokens_scale.unwrap_or(1.0);
+        if !(0.0..=1.0).contains(&scale) {
+            return Err(format!(
+                "cache_affinity_input_tokens_scale must be between 0.0 and 1.0, got {scale}"
+            ));
+        }
+        Ok(scale)
+    }
 }
 
 fn deserialize_present_comparator<'de, D>(
@@ -550,8 +563,17 @@ impl RawLoadBalancerAlgorithmConfig {
 
     fn into_config(self) -> Result<LoadBalancerAlgorithmConfig, String> {
         let (common, settings, consider_kv_free_tokens) = self.normalized();
-        if let LoadBalancerAlgorithmSettings::PowerOfN(config) = &settings {
-            config.validated_sample_count()?;
+        match &settings {
+            LoadBalancerAlgorithmSettings::PowerOfN(config) => {
+                config.validated_sample_count()?;
+            }
+            LoadBalancerAlgorithmSettings::WaitAndWiden(config)
+            | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => {
+                config.validated_cache_affinity_input_tokens_scale()?;
+            }
+            LoadBalancerAlgorithmSettings::RoundRobin
+            | LoadBalancerAlgorithmSettings::Random
+            | LoadBalancerAlgorithmSettings::Pulsar(_) => {}
         }
         common.into_config(settings, consider_kv_free_tokens)
     }

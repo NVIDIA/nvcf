@@ -82,13 +82,17 @@ pub(crate) struct Ttft {
 pub(crate) fn ttft(
     candidate: &RoutedClusterSnapshot,
     input_tokens: Option<u64>,
+    input_tokens_scale: f64,
     priority: u32,
     ignore_queue_time: bool,
     ignore_input_processing_time: bool,
 ) -> Ttft {
     let input_tps = input_tps(candidate);
     let queue_ms = queue_delay_ms_with_tps(candidate, priority, input_tps);
-    let prefill_ms = processing_delay_ms(input_tokens.unwrap_or_default() as f64, input_tps);
+    let prefill_ms = processing_delay_ms(
+        input_tokens.unwrap_or_default() as f64 * input_tokens_scale,
+        input_tps,
+    );
     let ttft_ms = rtt_ms(candidate)
         + if ignore_queue_time { 0.0 } else { queue_ms }
         + if ignore_input_processing_time {
@@ -114,6 +118,7 @@ fn ttft_ms(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_>)
     ttft(
         candidate,
         request.input_tokens,
+        1.0,
         request.priority,
         false,
         false,
