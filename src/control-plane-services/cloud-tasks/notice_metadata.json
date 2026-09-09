@@ -35,6 +35,13 @@
       "name": "proto-google-common-protos",
       "url": "https://github.com/googleapis/sdk-platform-java"
     },
+    "com.google.api.grpc:proto-google-common-protos:2.64.1": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "proto-google-common-protos",
+      "url": "https://github.com/googleapis/sdk-platform-java"
+    },
     "com.google.code.gson:gson:2.13.2": {
       "licenses": [
         "Apache-2.0"
@@ -105,7 +112,21 @@
       "name": "io.grpc:grpc-api",
       "url": "https://github.com/grpc/grpc-java"
     },
+    "io.grpc:grpc-api:1.83.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-api",
+      "url": "https://github.com/grpc/grpc-java"
+    },
     "io.grpc:grpc-context:1.63.0": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-context",
+      "url": "https://github.com/grpc/grpc-java"
+    },
+    "io.grpc:grpc-context:1.83.1": {
       "licenses": [
         "Apache 2.0"
       ],
@@ -119,6 +140,13 @@
       "name": "io.grpc:grpc-core",
       "url": "https://github.com/grpc/grpc-java"
     },
+    "io.grpc:grpc-core:1.83.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-core",
+      "url": "https://github.com/grpc/grpc-java"
+    },
     "io.grpc:grpc-inprocess:1.63.0": {
       "licenses": [
         "Apache 2.0"
@@ -126,7 +154,21 @@
       "name": "io.grpc:grpc-inprocess",
       "url": "https://github.com/grpc/grpc-java"
     },
+    "io.grpc:grpc-inprocess:1.83.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-inprocess",
+      "url": "https://github.com/grpc/grpc-java"
+    },
     "io.grpc:grpc-netty-shaded:1.63.0": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-netty-shaded",
+      "url": "https://github.com/grpc/grpc-java"
+    },
+    "io.grpc:grpc-netty-shaded:1.83.1": {
       "licenses": [
         "Apache 2.0"
       ],
@@ -147,6 +189,13 @@
       "name": "io.grpc:grpc-protobuf-lite",
       "url": "https://github.com/grpc/grpc-java"
     },
+    "io.grpc:grpc-protobuf-lite:1.83.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-protobuf-lite",
+      "url": "https://github.com/grpc/grpc-java"
+    },
     "io.grpc:grpc-protobuf:1.63.0": {
       "licenses": [
         "Apache 2.0"
@@ -161,7 +210,21 @@
       "name": "io.grpc:grpc-protobuf",
       "url": "https://github.com/grpc/grpc-java"
     },
+    "io.grpc:grpc-protobuf:1.83.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-protobuf",
+      "url": "https://github.com/grpc/grpc-java"
+    },
     "io.grpc:grpc-services:1.63.0": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-services",
+      "url": "https://github.com/grpc/grpc-java"
+    },
+    "io.grpc:grpc-services:1.83.1": {
       "licenses": [
         "Apache 2.0"
       ],
@@ -182,7 +245,21 @@
       "name": "io.grpc:grpc-stub",
       "url": "https://github.com/grpc/grpc-java"
     },
+    "io.grpc:grpc-stub:1.83.1": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-stub",
+      "url": "https://github.com/grpc/grpc-java"
+    },
     "io.grpc:grpc-util:1.63.0": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "io.grpc:grpc-util",
+      "url": "https://github.com/grpc/grpc-java"
+    },
+    "io.grpc:grpc-util:1.83.1": {
       "licenses": [
         "Apache 2.0"
       ],
@@ -238,6 +315,13 @@
       "name": "micrometer-registry-prometheus",
       "url": "https://github.com/micrometer-metrics/micrometer"
     },
+    "io.micrometer:micrometer-registry-prometheus:1.17.1": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "micrometer-registry-prometheus",
+      "url": "https://github.com/micrometer-metrics/micrometer"
+    },
     "io.netty:netty-codec-native-quic:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -246,6 +330,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-codec-native-quic:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Codec/Native/Quic",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-codec-native-quic:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -266,6 +357,13 @@
       "name": "Netty/Resolver/DNS/Classes/MacOS",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-resolver-dns-classes-macos:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Classes/MacOS",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-resolver-dns-native-macos:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -274,6 +372,13 @@
       "url": "https://netty.io/"
     },
     "io.netty:netty-resolver-dns-native-macos:4.2.16.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Resolver/DNS/Native/MacOS",
+      "url": "https://netty.io/"
+    },
+    "io.netty:netty-resolver-dns-native-macos:4.2.17.Final": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -294,6 +399,13 @@
       "name": "Netty/Transport/Classes/Epoll",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport-classes-epoll:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Classes/Epoll",
+      "url": "https://netty.io/"
+    },
     "io.netty:netty-transport-native-epoll:4.2.15.Final": {
       "licenses": [
         "Apache License, Version 2.0"
@@ -308,7 +420,21 @@
       "name": "Netty/Transport/Native/Epoll",
       "url": "https://netty.io/"
     },
+    "io.netty:netty-transport-native-epoll:4.2.17.Final": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Netty/Transport/Native/Epoll",
+      "url": "https://netty.io/"
+    },
     "io.perfmark:perfmark-api:0.26.0": {
+      "licenses": [
+        "Apache 2.0"
+      ],
+      "name": "perfmark:perfmark-api",
+      "url": "https://github.com/perfmark/perfmark"
+    },
+    "io.perfmark:perfmark-api:0.27.0": {
       "licenses": [
         "Apache 2.0"
       ],
@@ -322,7 +448,21 @@
       "name": "Prometheus Metrics Config",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-config:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Config",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-core:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Core",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-core:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -336,7 +476,21 @@
       "name": "Prometheus Metrics Exposition Formats",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-exposition-formats:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-exposition-textformats:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Exposition Text Formats",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-exposition-textformats:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -350,7 +504,21 @@
       "name": "Prometheus Metrics Model",
       "url": "http://github.com/prometheus/client_java"
     },
+    "io.prometheus:prometheus-metrics-model:1.7.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Model",
+      "url": "http://github.com/prometheus/client_java"
+    },
     "io.prometheus:prometheus-metrics-tracer-common:1.4.3": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "Prometheus Metrics Tracer Common",
+      "url": "http://github.com/prometheus/client_java"
+    },
+    "io.prometheus:prometheus-metrics-tracer-common:1.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
@@ -400,12 +568,26 @@
       "name": "net.javacrumbs.shedlock:shedlock-core",
       "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
     },
+    "net.javacrumbs.shedlock:shedlock-core:7.9.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "net.javacrumbs.shedlock:shedlock-core",
+      "url": "https://github.com/lukas-krecan/ShedLock"
+    },
     "net.javacrumbs.shedlock:shedlock-provider-cassandra:7.7.0": {
       "licenses": [
         "The Apache Software License, Version 2.0"
       ],
       "name": "net.javacrumbs.shedlock:shedlock-provider-cassandra",
       "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
+    },
+    "net.javacrumbs.shedlock:shedlock-provider-cassandra:7.9.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "net.javacrumbs.shedlock:shedlock-provider-cassandra",
+      "url": "https://github.com/lukas-krecan/ShedLock"
     },
     "net.javacrumbs.shedlock:shedlock-spring:7.7.0": {
       "licenses": [
@@ -414,7 +596,21 @@
       "name": "net.javacrumbs.shedlock:shedlock-spring",
       "url": "http://nexus.sonatype.org/oss-repository-hosting.html"
     },
+    "net.javacrumbs.shedlock:shedlock-spring:7.9.0": {
+      "licenses": [
+        "The Apache Software License, Version 2.0"
+      ],
+      "name": "net.javacrumbs.shedlock:shedlock-spring",
+      "url": "https://github.com/lukas-krecan/ShedLock"
+    },
     "org.apache.commons:commons-collections4:4.5.0": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Apache Commons Collections",
+      "url": "https://commons.apache.org/proper/commons-collections/"
+    },
+    "org.apache.commons:commons-collections4:4.6.0": {
       "licenses": [
         "Apache-2.0"
       ],
@@ -470,7 +666,21 @@
       "name": "Bouncy Castle PKIX, CMS, EAC, TSP, PKCS, OCSP, CMP, and CRMF APIs",
       "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
     },
+    "org.bouncycastle:bcpkix-jdk18on:1.85": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle PKIX, CMS, EAC, TSP, PKCS, OCSP, CMP, and CRMF APIs",
+      "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
+    },
     "org.bouncycastle:bcutil-jdk18on:1.80.2": {
+      "licenses": [
+        "Bouncy Castle Licence"
+      ],
+      "name": "Bouncy Castle ASN.1 Extension and Utility APIs",
+      "url": "https://www.bouncycastle.org/download/bouncy-castle-java/"
+    },
+    "org.bouncycastle:bcutil-jdk18on:1.85": {
       "licenses": [
         "Bouncy Castle Licence"
       ],
@@ -491,7 +701,21 @@
       "name": "Animal Sniffer Annotations",
       "url": "https://www.mojohaus.org/animal-sniffer"
     },
+    "org.codehaus.mojo:animal-sniffer-annotations:1.27": {
+      "licenses": [
+        "MIT license"
+      ],
+      "name": "Animal Sniffer Annotations",
+      "url": "https://www.mojohaus.org/animal-sniffer"
+    },
     "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.2.21": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Kotlin Stdlib Jdk7",
+      "url": "https://kotlinlang.org/"
+    },
+    "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.21": {
       "licenses": [
         "Apache-2.0"
       ],
@@ -505,7 +729,21 @@
       "name": "Kotlin Stdlib Jdk8",
       "url": "https://kotlinlang.org/"
     },
+    "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.21": {
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "name": "Kotlin Stdlib Jdk8",
+      "url": "https://kotlinlang.org/"
+    },
     "org.springframework.boot:spring-boot-starter-aspectj:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-aspectj",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-aspectj:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -519,7 +757,21 @@
       "name": "spring-boot-starter-tomcat-runtime",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-tomcat-runtime:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat-runtime",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-starter-tomcat:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-starter-tomcat:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -533,7 +785,21 @@
       "name": "spring-boot-starter-webmvc",
       "url": "https://spring.io/projects/spring-boot"
     },
+    "org.springframework.boot:spring-boot-starter-webmvc:4.1.1": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-starter-webmvc",
+      "url": "https://spring.io/projects/spring-boot"
+    },
     "org.springframework.boot:spring-boot-tomcat:4.0.7": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-boot-tomcat",
+      "url": "https://spring.io/projects/spring-boot"
+    },
+    "org.springframework.boot:spring-boot-tomcat:4.1.1": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -547,7 +813,21 @@
       "name": "spring-cloud-kubernetes-client-autoconfig",
       "url": "https://cloud.spring.io/spring-cloud-kubernetes-client-autoconfig"
     },
+    "org.springframework.cloud:spring-cloud-kubernetes-client-autoconfig:5.0.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-kubernetes-client-autoconfig",
+      "url": "https://cloud.spring.io/spring-cloud-kubernetes-client-autoconfig"
+    },
     "org.springframework.cloud:spring-cloud-kubernetes-client-config:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-kubernetes-client-config",
+      "url": "https://cloud.spring.io/spring-cloud-kubernetes-client-config"
+    },
+    "org.springframework.cloud:spring-cloud-kubernetes-client-config:5.0.3": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -561,7 +841,21 @@
       "name": "spring-cloud-kubernetes-commons",
       "url": "https://cloud.spring.io/spring-cloud-kubernetes-commons"
     },
+    "org.springframework.cloud:spring-cloud-kubernetes-commons:5.0.3": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "spring-cloud-kubernetes-commons",
+      "url": "https://cloud.spring.io/spring-cloud-kubernetes-commons"
+    },
     "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config:5.0.2": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Cloud Kubernetes :: Kubernetes Native Starter :: Config",
+      "url": "https://cloud.spring.io/spring-cloud-starter-kubernetes-client-config"
+    },
+    "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config:5.0.3": {
       "licenses": [
         "Apache License, Version 2.0"
       ],
@@ -576,6 +870,13 @@
       "url": "https://github.com/spring-projects/spring-retry"
     },
     "org.springframework:spring-context-support:7.0.8": {
+      "licenses": [
+        "Apache License, Version 2.0"
+      ],
+      "name": "Spring Context Support",
+      "url": "https://github.com/spring-projects/spring-framework"
+    },
+    "org.springframework:spring-context-support:7.0.9": {
       "licenses": [
         "Apache License, Version 2.0"
       ],

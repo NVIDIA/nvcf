@@ -34,8 +34,8 @@ test "$default_chart" = 'nvcf/nvcf-gateway-routes' || {
   echo "gateway-routes-local-chart: expected default chart, got ${default_chart:-missing}" >&2
   exit 1
 }
-test "$default_version" = '1.17.0' || {
-  echo "gateway-routes-local-chart: expected default version 1.17.0, got ${default_version:-missing}" >&2
+test "$default_version" = '1.18.0' || {
+  echo "gateway-routes-local-chart: expected default version 1.18.0, got ${default_version:-missing}" >&2
   exit 1
 }
 

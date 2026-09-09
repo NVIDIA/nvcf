@@ -767,7 +767,7 @@ impl TrackedPromptPhase {
 }
 
 impl QueueTrackedRequestGuard {
-    pub(crate) fn on_upstream_response_headers(&mut self) {
+    pub(crate) fn on_backend_submission(&mut self) {
         let mut state = self.live_requests.inner.lock();
         state.advance_request_phase(&self.request_id, TrackedPromptPhase::InputProcessing);
     }
@@ -1025,10 +1025,10 @@ mod tests {
         let _priority_two = live_requests.track_request(&required("req-p2", 2, 20));
         let mut priority_four = live_requests.track_request(&required("req-p4", 4, 30));
         let mut zero_input = live_requests.track_request(&required("req-zero", 1, 0));
-        priority_four.on_upstream_response_headers();
+        priority_four.on_backend_submission();
 
         assert_eq!(live_requests.snapshot_model("model-a").queue_size, 3);
-        zero_input.on_upstream_response_headers();
+        zero_input.on_backend_submission();
         let snapshot = live_requests.snapshot_model("model-a");
 
         assert_eq!(snapshot.queue_size, 3);
@@ -1148,7 +1148,7 @@ mod tests {
         let live_requests = LiveRequestState::default();
         let mut request = live_requests.track_request(&required("req-output", 0, 100));
         request.observe_output();
-        request.on_upstream_response_headers();
+        request.on_backend_submission();
 
         let snapshot = live_requests.snapshot_model("model-a");
         assert_eq!(snapshot.queue_size, 0);
@@ -1197,11 +1197,11 @@ mod tests {
     }
 
     #[test]
-    fn upstream_response_headers_do_not_apply_retired_progress_contract() {
+    fn backend_submission_does_not_apply_retired_progress_contract() {
         let live_requests = LiveRequestState::default();
         let mut request = live_requests.track_request(&required("req-progress", 0, 100));
 
-        request.on_upstream_response_headers();
+        request.on_backend_submission();
 
         let snapshot = live_requests.snapshot_model("model-a");
         assert_eq!(snapshot.queued_input_size, 100);

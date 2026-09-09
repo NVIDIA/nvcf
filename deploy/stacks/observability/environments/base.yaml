@@ -28,7 +28,7 @@ metricsBackend:
     clientPrivateKeyPath: ""
 
 prometheusOperatorCrds:
-  version: "30.0.0"
+  version: "31.0.1"
   values:
     crds:
       alertmanagerconfigs:
@@ -53,7 +53,7 @@ prometheusOperatorCrds:
         enabled: false
 
 opentelemetryOperator:
-  version: "0.114.1"
+  version: "0.122.0"
   admissionWebhooks:
     certManager:
       enabled: false
@@ -62,11 +62,11 @@ opentelemetryOperator:
   manager:
     collectorImage:
       repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
-      tag: "0.129.1"
+      tag: "0.160.0"
 
 collector:
   collectorName: nvcf-observability
-  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
+  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.160.0
   targetAllocator:
     allocationStrategy: consistent-hashing
     prometheusCR:
@@ -101,7 +101,7 @@ collector:
             - prometheusremotewrite
 
 victoriaMetrics:
-  version: "0.38.0"
+  version: "0.45.0"
   server:
     retentionPeriod: "1"
     persistentVolume:

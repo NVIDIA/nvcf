@@ -43,5 +43,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test dependency version comparisons
+        run: migrations/openbao/tests/verify-openbao-version-test.sh
+
+      - name: Test kubectl source-build contract
+        run: migrations/openbao/tests/verify-kubectl-build-test.sh
+
       - name: Run kv write retry test
         run: migrations/openbao/tests/kv-write-retry-test.sh

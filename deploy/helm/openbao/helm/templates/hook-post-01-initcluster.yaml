@@ -67,11 +67,13 @@ spec:
         - name: init-script
           configMap:
             name: {{ $serverFullname }}-init-script
-            defaultMode: 0500
+            # The migrations image runs as the upstream non-root OpenBao user.
+            # These ConfigMaps contain executable scripts, not secrets.
+            defaultMode: 0555
         - name: utils-script
           configMap:
             name: {{ $serverFullname }}-utils-script
-            defaultMode: 0500
+            defaultMode: 0555
 ---
 apiVersion: v1
 kind: ConfigMap

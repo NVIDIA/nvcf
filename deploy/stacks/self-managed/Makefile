@@ -25,6 +25,7 @@ test:
 	@tests/ess-base-url-wiring.sh
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
+	@tests/nats-tls-wiring.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"

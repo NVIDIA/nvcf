@@ -19,4 +19,4 @@ description: A Helm chart for NVCF API deployment
 
 type: application
 version: 0.0.0 # autoversioning enabled via release pipeline
-appVersion: "1.16.3"
+appVersion: "1.16.4"

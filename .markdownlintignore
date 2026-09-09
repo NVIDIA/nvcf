@@ -1,0 +1,7 @@
+# Third-party markdown this repository does not own and cannot fix.
+#
+# Listing git-tracked files is not enough on its own here: vendor/ is tracked,
+# and 609 of the 1394 tracked .md files are vendored Go dependencies. Two of
+# them ship their own .markdownlint.yaml, tuned for a different project.
+vendor/
+third_party/

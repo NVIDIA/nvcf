@@ -382,8 +382,16 @@ pub struct Delta {
 }
 
 pub async fn dummy_chat(State(state): State<DummyState>, Json(req): Json<ChatRequest>) -> Response {
+    dummy_chat_with_tokens(state.model, req, 3).await
+}
+
+async fn dummy_chat_with_tokens(
+    model: String,
+    req: ChatRequest,
+    completion_tokens: u32,
+) -> Response {
+    let prompt_tokens = req.messages.len().max(1);
     if req.stream == Some(true) {
-        let model = state.model.clone();
         let stream = async_stream::stream! {
             yield Ok::<_, std::convert::Infallible>(Event::default().data(
                 serde_json::to_string(&ChunkCompletion {
@@ -423,6 +431,17 @@ pub async fn dummy_chat(State(state): State<DummyState>, Json(req): Json<ChatReq
                     }],
                 }).unwrap(),
             ));
+            yield Ok(Event::default().data(serde_json::json!({
+                "id": "chunk-1",
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens as usize,
+                },
+            }).to_string()));
             yield Ok(Event::default().data("[DONE]"));
         };
         return Sse::new(stream)
@@ -433,16 +452,16 @@ pub async fn dummy_chat(State(state): State<DummyState>, Json(req): Json<ChatReq
     Json(serde_json::json!({
         "id": "test-1",
         "object": "chat.completion",
-        "model": state.model,
+        "model": model,
         "choices": [{
             "index": 0,
             "message": { "role": "assistant", "content": "Hello world!" },
             "finish_reason": "stop",
         }],
         "usage": {
-            "prompt_tokens": req.messages.len().max(1),
-            "completion_tokens": 3,
-            "total_tokens": req.messages.len().max(1) + 3,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens as usize,
         },
     }))
     .into_response()
@@ -485,11 +504,11 @@ pub async fn lifecycle_dummy_chat(
             .into_response();
     }
 
+    let completion_tokens = state.completion_tokens.load(Ordering::SeqCst);
     if req.stream == Some(true) {
-        return dummy_chat(State(DummyState { model: state.model }), Json(req)).await;
+        return dummy_chat_with_tokens(state.model, req, completion_tokens).await;
     }
 
-    let completion_tokens = state.completion_tokens.load(Ordering::SeqCst);
     Json(serde_json::json!({
         "id": "test-1",
         "object": "chat.completion",
@@ -1281,10 +1300,7 @@ pub async fn start_and_register_backend_with_bringup(
         ModelLifecycleConfig {
             upstream_http_base_url: upstream_http_base_url.clone(),
             source: ModelSource::Static(BTreeSet::from([model.to_string()])),
-            initialization: ModelInitialization::ConfiguredInputTps {
-                input_tps: 1.0,
-                pin: true,
-            },
+            initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
             bringup,
             health_paths: pylon_lib::UpstreamHealthPaths::default(),
             startup_health_wait: std::time::Duration::ZERO,

@@ -10,7 +10,7 @@
 # context, so the stage below compiles it from the same commit that produces
 # the image. Nothing is vendored and nothing is injected, so `docker build .`
 # here produces the same image as the release pipeline.
-ARG BAO_VERSION=2.5.5
+ARG BAO_VERSION=2.6.2
 ARG GO_VERSION=1.25
 
 FROM golang:${GO_VERSION}-alpine AS plugin-build
@@ -26,10 +26,15 @@ COPY plugins/vault-plugin-secrets-jwt/ ./
 RUN GOOS=linux GOARCH="${TARGETARCH}" CGO_ENABLED=0 \
     go build -trimpath -o /out/vault-plugin-secrets-jwt ./cmd/vault-plugin-secrets-jwt
 
-FROM openbao/openbao:${BAO_VERSION}
+FROM openbao/openbao:${BAO_VERSION}@sha256:11fd73a2102cda9c55d5d881a8c3210303146a7ec1e8ac76f526e175c6d24641
 
+# OpenBao 2.6.2 runs as the non-root openbao user by default. Escalate only
+# while installing the image's runtime packages, then restore that identity.
+USER root
 # hadolint ignore=DL3018
 RUN apk add --no-cache curl jq bash && \
     mkdir -p /openbao/plugins
 
 COPY --from=plugin-build --chmod=0555 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
+
+USER openbao

@@ -174,7 +174,7 @@ functionAutoscaler:
 # API environment entries are merged over the stack defaults. Remote config is
 # passed to the API chart and overrides its packaged application profile. When
 # the LLM addon is enabled, the stack defaults the Pylon image from
-# global.sidecars (or global.image) at version 0.14.1.
+# global.sidecars (or global.image) at version 0.16.2.
 api:
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
@@ -194,14 +194,14 @@ nvctApi:
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
-# upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
+# upstream source, docker.io/alpine/k8s:1.37.0. Leave these unset unless you
 # have mirrored the image into your own registry, in which case set registry
 # and repository together:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
 #       repository: <your-repository>/alpine-k8s
-#       tag: "1.36.1"
+#       tag: "1.37.0"
 
 accounts:
   limits:
@@ -220,16 +220,39 @@ nats:
       server_tags:
         - "dc:ncp"
         - "aws-region:ncp"
+      # --- Split-plane server TLS (optional; both settings default off) ---
+      # Use case: when GPU workers run outside the cluster they reach NATS over
+      # an L4 (TCP) passthrough load balancer, so TLS must terminate at the NATS
+      # server itself -- an LB can't terminate it because the NATS client is
+      # INFO-first (the server speaks first) and a terminated handshake deadlocks.
+      # Set the two knobs below to serve TLS from NATS to those workers.
+      #
+      # Gotchas:
+      #   1. allow_non_tls is mixed-mode: the server then accepts BOTH TLS and
+      #      plaintext on :4222. Enable it only intentionally -- it lets in-cluster
+      #      plaintext clients keep connecting while remote workers use TLS. Leave
+      #      it off if every client can speak TLS.
+      #   2. Changing allow_non_tls (or the tls block) requires a NATS
+      #      restart/rollout to take effect.
+      #   3. The cert in secretName must have a SAN covering the exact hostname the
+      #      external workers connect to (the LB / public NATS hostname), and those
+      #      workers must trust the issuing CA and use a TLS-capable NATS client
+      #      config.
+      # allow_non_tls: true
+    # nats:
+    #   tls:
+    #     enabled: true
+    #     secretName: nats-server-tls   # cert-manager-issued; SAN = external NATS hostname
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
-  # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
+  # upstream source, docker.io/natsio/nats-server-config-reloader:0.24.0.
   # Leave these unset unless you have mirrored the image into your own
   # registry, in which case set registry and repository together:
   # reloader:
   #   image:
   #     registry: <your-registry>
   #     repository: <your-repository>/nats-server-config-reloader
-  #     tag: "0.23.0"
+  #     tag: "0.24.0"
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:
@@ -255,10 +278,9 @@ cassandra:
   resourcesPreset: "xlarge"
   migrations:
     image:
-      # 0.17.1 and later drop tables used by the published function autoscaler.
-      # Keep this explicit because the pinned published Cassandra chart defaults
-      # to an incompatible migration image.
-      tag: 0.17.0
+      # 0.17.3 includes the current NVCT task schema while preserving the
+      # legacy tables required by the published function autoscaler 1.21.0.
+      tag: 0.17.3
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
@@ -452,7 +474,7 @@ addons:
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
       # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag and then 0.16.2 if
+      # tag falls back to openbao.migrations.image.tag and then 0.19.1 if
       # neither location is set.
       # image:
       #   registry: ""

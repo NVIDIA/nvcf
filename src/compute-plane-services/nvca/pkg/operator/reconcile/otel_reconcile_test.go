@@ -249,12 +249,12 @@ func assertICMSLane(t *testing.T, config string) {
 	require.Len(t, records, 2, "filter/icms-events must have kind and reason drop conditions")
 	// First condition must drop non-ICMSRequest kinds (exclusion, not inclusion).
 	assert.Contains(t, records[0].(string), `!= "ICMSRequest"`, "filter/icms-events kind condition must drop non-ICMSRequest events")
-	// Second condition must allowlist the three supported reasons via not(...in[...]).
-	assert.Contains(t, records[1].(string), "not(", "filter/icms-events reason condition must use not() to drop unsupported reasons")
-	for _, reason := range []string{"InstanceCreation", "InstanceStatusUpdate", "InstanceTermination"} {
-		assert.Contains(t, records[1].(string), reason, "filter/icms-events allowlist must include reason %q", reason)
-	}
-	assert.NotContains(t, records[1].(string), "ModelCaching", "filter/icms-events must exclude ModelCaching")
+	// Second condition must drop records outside the three supported reasons.
+	expectedReasonFilter := `log.attributes["k8s.event.reason"] != "InstanceCreation" and ` +
+		`log.attributes["k8s.event.reason"] != "InstanceStatusUpdate" and ` +
+		`log.attributes["k8s.event.reason"] != "InstanceTermination"`
+	assert.Equal(t, expectedReasonFilter, records[1].(string),
+		"filter/icms-events reason condition must exactly retain the supported reasons")
 
 	liftProc, ok := processors["transform/lift-icms-annotations"].(map[string]any)
 	require.True(t, ok, "transform/lift-icms-annotations processor must be declared")

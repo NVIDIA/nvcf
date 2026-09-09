@@ -60,6 +60,20 @@ func TestNotifySharedReloadDropsPendingNotification(t *testing.T) {
 	}
 }
 
+func TestGatewayConfigValidateRejectsVanityHostMatchingOpenAIHost(t *testing.T) {
+	cfg := &GatewayConfig{}
+	cfg.OpenAI.Host = "api.example.com"
+	cfg.Vanity = map[string]VanityEntry{
+		"example": {
+			Host: "api.example.com",
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `vanity.example.host "api.example.com" conflicts with openai.host`)
+}
+
 func TestGatewayConfigValidateAcceptsOpenAIShadowDefaults(t *testing.T) {
 	cfg := &GatewayConfig{}
 	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{

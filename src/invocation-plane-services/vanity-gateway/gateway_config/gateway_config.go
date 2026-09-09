@@ -435,6 +435,9 @@ func isHTTPFieldNameChar(ch byte) bool {
 
 func (c *GatewayConfig) validateVanityConfig() error {
 	for vanityName, vanity := range c.Vanity {
+		if vanity.Host != "" && vanity.Host == c.OpenAI.Host {
+			return fmt.Errorf("vanity.%s.host %q conflicts with openai.host", vanityName, vanity.Host)
+		}
 		for pathKey, path := range vanity.Paths {
 			location := "vanity." + vanityName + ".paths." + pathKey
 			if path.sessionTimeoutPresent || path.SessionTimeout != nil {

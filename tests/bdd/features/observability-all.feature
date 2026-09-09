@@ -177,17 +177,7 @@ Feature: Install local Helmfile observability for both planes
     # Prove the function is idle before the first request creates demand. The
     # compute-plane CLI lists only scheduled functions, so no matching entry
     # also represents zero instances.
-    # TODO(https://github.com/NVIDIA/nvcf/issues/1419): replace this shell
-    # command with a selected-function instance-count DSL assertion.
-    When I successfully run command:
-      """
-      /bin/bash -c 'set -euo pipefail
-      status="$("$1" --config "$2" status --json)"
-      function_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .functionId" <<<"$status")"
-      version_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .versionId" <<<"$status")"
-      functions="$("$1" --config "$2" cluster agent list-functions --compute-plane-context "$3" --kubeconfig "$4" --json)"
-      jq -e --arg function_id "$function_id" --arg version_id "$version_id" "[.[] | select(.functionId == \$function_id and .functionVersionId == \$version_id)] | all(.instanceCount == 0)" <<<"$functions" >/dev/null' bdd-autoscaler-zero ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml k3d-ncp-local ${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml
-      """
+    Then the function selected by NVCF CLI should have no scheduled compute-plane instances using context "k3d-ncp-local" and kubeconfig "${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml"
 
     # The invocation plane returns after its short hold-open window while the
     # autoscaler and compute plane complete a cold start. A successful response
@@ -201,22 +191,7 @@ Feature: Install local Helmfile observability for both planes
       | bdd-autoscaler-echo  |
       | API error 504         |
 
-    # TODO(https://github.com/NVIDIA/nvcf/issues/1419): replace this polling
-    # loop with a selected-function instance-readiness DSL assertion.
-    When I successfully run command:
-      """
-      /bin/bash -c 'set -euo pipefail
-      status="$("$1" --config "$2" status --json)"
-      function_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .functionId" <<<"$status")"
-      version_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .versionId" <<<"$status")"
-      for attempt in {1..120}; do
-        if "$1" --config "$2" cluster agent get-function "$function_id" "$version_id" --compute-plane-context "$3" --kubeconfig "$4" --json | jq -e ".instanceCount == 1 and ([.instances[] | select((.status | ascii_downcase) == \"running\")] | length == 1)" >/dev/null; then
-          exit 0
-        fi
-        sleep 5
-      done
-      exit 1' bdd-autoscaler ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml k3d-ncp-local ${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml
-      """
+    Then the function selected by NVCF CLI should report "1" compute-plane instances with status "running" using context "k3d-ncp-local" and kubeconfig "${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml" within "10m"
 
     And I successfully invoke the function selected by NVCF CLI over HTTP with timeout "600" seconds and poll duration "5" seconds:
       """
