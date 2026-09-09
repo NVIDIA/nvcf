@@ -61,8 +61,6 @@ public class SecurityConfiguration {
                                 // and liveness probes, metrics, prometheus etc. are accessible
                                 // via management port.
                                 .requestMatchers("/actuator/**").permitAll()
-                                // shared build-info endpoint (nv-boot-starter-core); no
-                                // sensitive data, meant for unauthenticated build identification
                                 .requestMatchers("/info").permitAll()
                                 .anyRequest().authenticated());
         return http.build();

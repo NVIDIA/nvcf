@@ -50,8 +50,6 @@ public class SecurityConfiguration {
                     "/v1/health",
                     "/v3/openapi",
                     "/actuator/**",
-                    // shared build-info endpoint (nv-boot-starter-core); no sensitive data,
-                    // meant for unauthenticated build identification
                     "/info");
             if (nvcaConfigurationProperties.isOidcClusterIdentityEnabled()) {
                 // NATS auth-callout webhook contract. Authentication is

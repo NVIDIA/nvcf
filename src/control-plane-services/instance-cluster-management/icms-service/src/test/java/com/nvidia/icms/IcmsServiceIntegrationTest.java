@@ -34,6 +34,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.web.client.RestTemplate;
+import tools.jackson.databind.json.JsonMapper;
 
 @SpringBootTest(
         classes = App.class,
@@ -44,6 +45,8 @@ import org.springframework.web.client.RestTemplate;
 @AutoConfigureTestRestTemplate
 @Import(CassandraTestConfiguration.class)
 class IcmsServiceIntegrationTest {
+
+    private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
 
     @Autowired
     private TestRestTemplate testRestTemplate;
@@ -68,5 +71,18 @@ class IcmsServiceIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody()).containsIgnoringCase("status");
+    }
+
+    @SneakyThrows
+    @Test
+    void infoEndpointReturnsOk() {
+        var response = testRestTemplate.exchange(
+                RequestEntity.get(URI.create("/info")).build(),
+                String.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var info = JSON_MAPPER.readTree(response.getBody());
+        assertThat(info.has("service")).isTrue();
+        assertThat(info.has("version")).isTrue();
+        assertThat(info.has("commit")).isTrue();
     }
 }

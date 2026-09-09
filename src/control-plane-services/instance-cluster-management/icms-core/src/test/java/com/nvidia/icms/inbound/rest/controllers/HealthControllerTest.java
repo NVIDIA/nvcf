@@ -28,7 +28,6 @@ class HealthControllerTest extends IntegrationTest {
 
     private static final String LEGACY_HEALTH_ENDPOINT = "/v1/health";
     private static final String HEALTH_ENDPOINT = "/health";
-    private static final String INFO_ENDPOINT = "/info";
 
     @Autowired
     private MockMvc mockMvc;
@@ -47,16 +46,5 @@ class HealthControllerTest extends IntegrationTest {
         mockMvc.perform(MockMvcRequestBuilders.get(HEALTH_ENDPOINT)
                                 .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(MockMvcResultMatchers.status().isOk());
-    }
-
-    @Test
-    void getInfo_withNoAuthToken_returnsSuccess()
-            throws Exception {
-        mockMvc.perform(MockMvcRequestBuilders.get(INFO_ENDPOINT)
-                                .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(MockMvcResultMatchers.status().isOk())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.service").exists())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.version").exists())
-                .andExpect(MockMvcResultMatchers.jsonPath("$.commit").exists());
     }
 }
