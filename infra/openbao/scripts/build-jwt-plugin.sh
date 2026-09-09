@@ -25,10 +25,10 @@ repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 plugin_src=${PLUGIN_SRC:-"$repo_root/plugins/vault-plugin-secrets-jwt"}
 vault_api_version=${VAULT_API_VERSION:-v1.15.0}
 vault_sdk_version=${VAULT_SDK_VERSION:-v0.15.2}
-x_net_version=${X_NET_VERSION:-v0.57.0}
+x_net_version=${X_NET_VERSION:-v0.58.0}
 x_crypto_version=${X_CRYPTO_VERSION:-v0.56.0}
 x_text_version=${X_TEXT_VERSION:-v0.41.0}
-grpc_version=${GRPC_VERSION:-v1.83.1}
+grpc_version=${GRPC_VERSION:-v1.83.2}
 go_jose_version=${GO_JOSE_VERSION:-v4.1.4}
 output_dir=${OUTPUT_DIR:-"$repo_root/files/plugins"}
 
