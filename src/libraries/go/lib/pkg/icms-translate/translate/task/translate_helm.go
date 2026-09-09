@@ -356,7 +356,7 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 		VolumeMounts:    utilsContainerVolumeMounts,
 	}
 	// mutate startup / liveness / readiness probes
-	common.MutateUtilsProbes(&utilsContainer)
+	common.MutateUtilsContainer(&utilsContainer)
 	utilsPod.Spec.Containers = append(utilsPod.Spec.Containers, utilsContainer)
 
 	if hasTelemetries {

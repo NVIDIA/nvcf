@@ -88,6 +88,21 @@ func TestAddNVIDIAGPUNoScheduleToleration(t *testing.T) {
 	}
 }
 
+func TestMutateUtilsContainer(t *testing.T) {
+	container := corev1.Container{}
+
+	MutateUtilsContainer(&container)
+
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          UtilsMetricsPortName,
+		ContainerPort: UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
+	assert.NotNil(t, container.StartupProbe)
+	assert.NotNil(t, container.ReadinessProbe)
+	assert.NotNil(t, container.LivenessProbe)
+}
+
 func TestMergeTolerations(t *testing.T) {
 	t.Run("adds_new_tolerations_and_skips_exact_duplicates", func(t *testing.T) {
 		noExecuteSeconds := int64(30)

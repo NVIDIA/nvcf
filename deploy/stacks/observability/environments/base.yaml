@@ -186,5 +186,5 @@ defaultMonitors:
             operator: Exists
       interval: 30s
       path: /metrics
-      port: metrics
+      port: worker-metrics
       labels: {}

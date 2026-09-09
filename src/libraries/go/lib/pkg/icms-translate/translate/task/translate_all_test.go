@@ -51,6 +51,7 @@ func TestTranslateContainerCreatesTaskPod(t *testing.T) {
 	assert.Equal(t, corev1.RestartPolicyNever, pod.Spec.RestartPolicy)
 
 	utilsContainer := findTaskContainerByName(t, pod.Spec.Containers, common.UtilsContainerName)
+	assertTaskUtilsMetricsPort(t, utilsContainer)
 	assert.Equal(t, "nvcr.io/nvidia/utils:latest", utilsContainer.Image)
 	assert.Equal(t, string(common.UploadResult), envValue(utilsContainer.Env, resultHandlingStratEnvKey))
 }
@@ -107,6 +108,7 @@ func TestTranslateHelmChartCreatesUtilsPod(t *testing.T) {
 	assert.Equal(t, "nvcr.io/nvidia/init:latest", pod.Spec.InitContainers[0].Image)
 
 	utilsContainer := findTaskContainerByName(t, pod.Spec.Containers, common.UtilsContainerName)
+	assertTaskUtilsMetricsPort(t, utilsContainer)
 	assert.Equal(t, "nvcr.io/nvidia/utils:latest", utilsContainer.Image)
 	assert.Equal(t, "request-task", envValue(utilsContainer.Env, "INSTANCE_ID"))
 	assert.Equal(t, string(common.UploadResult), envValue(utilsContainer.Env, resultHandlingStratEnvKey))
@@ -339,6 +341,15 @@ func findTaskContainerByName(t *testing.T, containers []corev1.Container, name s
 
 	t.Fatalf("container %q not found", name)
 	return corev1.Container{}
+}
+
+func assertTaskUtilsMetricsPort(t *testing.T, container corev1.Container) {
+	t.Helper()
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          common.UtilsMetricsPortName,
+		ContainerPort: common.UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
 }
 
 func findTaskVolumeByName(t *testing.T, volumes []corev1.Volume, name string) corev1.VolumeSource {

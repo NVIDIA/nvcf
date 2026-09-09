@@ -435,7 +435,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			VolumeMounts:    utilsContainerVolumeMounts,
 		}
 		// mutate startup / liveness / readiness probes
-		common.MutateUtilsProbes(&utilsContainer)
+		common.MutateUtilsContainer(&utilsContainer)
 		pod.Spec.Containers = append(pod.Spec.Containers, utilsContainer)
 
 		// Setup telemetry for the pod

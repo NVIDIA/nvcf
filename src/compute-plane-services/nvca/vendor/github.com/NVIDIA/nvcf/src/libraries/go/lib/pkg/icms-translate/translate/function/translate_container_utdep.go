@@ -553,7 +553,7 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 		VolumeMounts:    utilsContainerVolumeMounts,
 	}
 	// mutate startup / liveness / readiness probes
-	common.MutateUtilsProbes(&utilsContainer)
+	common.MutateUtilsContainer(&utilsContainer)
 	utilsPod.Spec.Containers = append(utilsPod.Spec.Containers, utilsContainer)
 
 	replicas := int32(1)

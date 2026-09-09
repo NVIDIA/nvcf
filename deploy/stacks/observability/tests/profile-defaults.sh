@@ -198,6 +198,8 @@ grep -q '^    - key: icms-request-id$' "$worker_monitor_manifest" ||
   fail "worker PodMonitor must select NVCA-managed workload pods"
 grep -q '^      operator: Exists$' "$worker_monitor_manifest" ||
   fail "worker PodMonitor label expression must use Exists"
+grep -q '^      port: "worker-metrics"$' "$worker_monitor_manifest" ||
+  fail "worker PodMonitor must scrape the named worker metrics port"
 
 for monitor in state-metrics function-autoscaler invocation-service grpc-proxy llm-api-gateway; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_control_manifests" ||

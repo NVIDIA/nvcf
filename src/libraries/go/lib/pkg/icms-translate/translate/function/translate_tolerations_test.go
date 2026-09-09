@@ -104,6 +104,9 @@ func TestTranslateContainerUtilsDeploy_AppliesConfiguredTolerations(t *testing.T
 			Effect:   corev1.TaintEffectNoSchedule,
 		},
 	)
+	assertUtilsMetricsPort(t, findContainerByName(
+		t, utilsDeployment.Spec.Template.Spec.Containers, common.UtilsContainerName,
+	))
 }
 
 func TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations(t *testing.T) {
@@ -132,6 +135,9 @@ func TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations(t *testing.T
 			Effect:   corev1.TaintEffectNoSchedule,
 		},
 	)
+	assertUtilsMetricsPort(t, findContainerByName(
+		t, utilsDeployment.Spec.Template.Spec.Containers, common.UtilsContainerName,
+	))
 }
 
 func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
@@ -376,6 +382,7 @@ func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	require.NoError(t, err)
 
 	pod := findPodByName(t, objs, "0-request")
+	assertUtilsMetricsPort(t, findContainerByName(t, pod.Spec.Containers, common.UtilsContainerName))
 	assert.Equal(t, "value", envSliceToMap(findContainerByName(t, pod.Spec.Containers, inferenceContainerName).Env)["INFERENCE_ENV"])
 	assert.Equal(t, "ess", findContainerByName(t, pod.Spec.Containers, "ess").Name)
 	require.Len(t, pod.Spec.InitContainers, 2)
@@ -409,7 +416,7 @@ func TestTranslateHelmChartWithCacheAndSecrets(t *testing.T) {
 
 	pod := findPodByName(t, objs, common.UtilsPodName)
 	assert.Equal(t, "ess", findContainerByName(t, pod.Spec.Containers, "ess").Name)
-	assert.Equal(t, common.UtilsContainerName, findContainerByName(t, pod.Spec.Containers, common.UtilsContainerName).Name)
+	assertUtilsMetricsPort(t, findContainerByName(t, pod.Spec.Containers, common.UtilsContainerName))
 	require.Len(t, pod.Spec.InitContainers, 2)
 	assert.Equal(t, "ess-init", pod.Spec.InitContainers[1].Name)
 	assert.NotNil(t, findObjectByName(t, objs, "rw-pvc-helm-function-cache"))
@@ -676,4 +683,13 @@ func findObjectByName(t *testing.T, objs []metav1.Object, name string) metav1.Ob
 func assertTolerationsMatch(t *testing.T, got []corev1.Toleration, want ...corev1.Toleration) {
 	t.Helper()
 	assert.ElementsMatch(t, want, got)
+}
+
+func assertUtilsMetricsPort(t *testing.T, container corev1.Container) {
+	t.Helper()
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          common.UtilsMetricsPortName,
+		ContainerPort: common.UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
 }
