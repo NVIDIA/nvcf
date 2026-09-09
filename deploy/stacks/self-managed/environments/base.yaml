@@ -157,6 +157,9 @@ observability:
 
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
+  # Additional application settings. Environment variables use `__` between
+  # nested keys, for example SCALING__LOOKBACK_SECONDS.
+  env: {}
   region: local
   cassandra:
     contactPoints: cassandra.cassandra-system.svc.cluster.local
