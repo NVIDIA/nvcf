@@ -109,9 +109,15 @@ or the pod is killed mid-drain.
 
 - `openai`: per-endpoint model routes, keyed by endpoint (`chatCompletions`,
   `completions`, `embeddings`, `responses`, and the image endpoints). Each route
-  requires `modelName` and `functionID`.
+  requires `modelName` and `functionID`, and supports shadow-traffic fields such
+  as `shadowModelName`, `shadowPercentage`, and
+  `shadowCancelOnClientDisconnect`.
 - `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
   path requires `path` and `functionID`.
+
+Both sections are empty by default.
+`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
+across all routes.
 
 An `openai` model may set `functionType: LLM` to be served by the LLM Gateway
 instead of the invocation service, supported in `chatCompletions`, `responses`,
@@ -130,52 +136,15 @@ that would fail the container fails the render instead:
 - `vanityGateway.config.llmGatewayEndpoint` must be set, and must be an `http`
   or `https` origin with no path
 
+Shadow traffic is supported. Each shadow target is resolved from the same model
+table and routed by its own `functionType`, so a shadow of an LLM model reaches
+the LLM Gateway, and an LLM model may shadow a model served by the invocation
+service.
+
 `mappingConfig` is rendered into a ConfigMap, which is not a secret store. Do
 not put credentials in `customHeaders` on any route. Caller `Authorization`
 headers are forwarded to the upstream untouched, so a static credential is not
 needed for authenticated routes.
-
-Roll the release to an image that understands `shadows` before adding
-`shadows` to `mappingConfig`. An older gateway ignores the key when it loads the
-mapping, so the route silently stops shadowing with no error and no log line.
-
-Use `shadows` to set policy for each shadow target:
-
-```yaml
-primary:
-  modelName: example/primary
-  functionID: primary-function-id
-  shadows:
-    - modelName: private/example/shadow-a
-      percentage: 10
-      samplingMethod: perBearerKey
-      cancelOnClientDisconnect: true
-    - modelName: private/example/shadow-b
-      percentage: 50
-      samplingMethod: random
-shadow-a:
-  modelName: private/example/shadow-a
-  functionID: shadow-a-function-id
-shadow-b:
-  modelName: private/example/shadow-b
-  functionID: shadow-b-function-id
-```
-
-Each shadow model must be another model route in the same OpenAI endpoint.
-`percentage` defaults to `100`, `samplingMethod` defaults to `random`, and
-`cancelOnClientDisconnect` defaults to `false`.
-Each target is routed by its own `functionType`, so a shadow of an LLM model
-reaches the LLM Gateway, and an LLM model may shadow a model served by the
-invocation service.
-Shadowing is not supported for `imageEdits` or `imageVariations` routes.
-
-Legacy `shadowModelName`, `shadowModelNames`, `shadowPercentage`,
-`shadowSamplingMethod`, and `shadowCancelOnClientDisconnect` fields remain
-supported. Their policy applies to every legacy shadow target. Do not combine
-the `shadows` field with legacy shadow fields on the same route.
-
-Both sections are empty by default. `vanityGateway.config.shadowMaxConcurrent`
-bounds concurrent shadow requests across all routes.
 
 ## Notes
 
