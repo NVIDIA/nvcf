@@ -34,6 +34,25 @@ tolerations:
 {{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix -}}
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix -}}
 {{- $certManagerNamespace := "cert-manager" -}}
+{{- $apiGrpcServiceURL := printf "http://api.%s.svc.cluster.local:9090" $nvcfNamespace -}}
+{{- $cassandraContactPoints := printf "cassandra.%s.svc.cluster.local" $cassandraNamespace -}}
+{{- $invocationServiceURL := printf "http://invocation.%s.svc.cluster.local:8080" $nvcfNamespace -}}
+{{- $llmApiGatewayServiceURL := printf "http://llm-api-gateway.%s.svc.cluster.local:8080" $nvcfNamespace -}}
+{{- $llmRequestRouterServiceHost := printf "llm-request-router.%s.svc.cluster.local" $nvcfNamespace -}}
+{{- $llmRequestRouterHeadlessWildcardHost := printf "*.llm-request-router-headless.%s.svc.cluster.local" $nvcfNamespace -}}
+{{- $llmRequestRouterDefaultDnsNames := list $llmRequestRouterServiceHost $llmRequestRouterHeadlessWildcardHost -}}
+{{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace -}}
+{{- $openBaoServerURL := printf "http://openbao-server.%s.svc.cluster.local:8200" $vaultNamespace -}}
+{{- $rateLimiterServiceURL := printf "http://ratelimiter.%s.svc.cluster.local:7777" $nvcfNamespace -}}
+{{- $adminIssuerProxyHealthEndpoint := printf "admin-token-issuer-proxy.%s.svc.cluster.local:8080/healthz" $apiKeysNamespace -}}
+{{- $llmRequestRouterHealthzEndpoint := printf "%s:8000/healthz" $llmRequestRouterServiceHost -}}
+{{- $llmRequestRouterReadyzEndpoint := printf "%s:8000/readyz" $llmRequestRouterServiceHost -}}
+{{- $natsAuthCalloutHealthEndpoint := printf "nvcf-nats-auth-callout-service.%s.svc.cluster.local:8080/health" $natsNamespace -}}
+{{- $natsHeadlessHealthEndpoint := printf "nats-headless.%s.svc.cluster.local:8222/healthz?js-server-only" $natsNamespace -}}
+{{- $notaryHealthEndpoint := printf "notary.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
+{{- $openBaoHealthEndpoint := printf "openbao-server.%s.svc.cluster.local:8200/v1/sys/health?standbyok=true" $vaultNamespace -}}
+{{- $rateLimiterHealthEndpoint := printf "ratelimiter.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
+{{- $revalHealthEndpoint := printf "reval.%s.svc.cluster.local:8082/healthz" $nvcfNamespace -}}
 
 cassandra:
   global:
@@ -337,7 +356,7 @@ natsAuthCalloutService:
 {{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
 {{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
-{{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default "nats://nats.nats-system.svc.cluster.local:4222" }}
+{{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default $natsServiceURL }}
 {{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
 {{- /* In-cluster ESS base URL for the API's/NVCT's own ESS calls. Defaults to
        the worker-advertised ESS URL so existing installs are unchanged; set it
@@ -351,7 +370,7 @@ natsAuthCalloutService:
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
-{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- $llmRequestRouterDefaultAddress := printf "%s:%v" $llmRequestRouterServiceHost $llmRequestRouterGrpcPort }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
 {{- if hasPrefix "https://" $llmRequestRouterWorkerAuthority }}
@@ -611,7 +630,7 @@ invocation:
   {{- end }}
   {{- if .Values.rateLimiter.enabled }}
   {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
-  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" "http://ratelimiter.nvcf.svc.cluster.local:7777" }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" $rateLimiterServiceURL }}
   {{- end }}
   {{- with $invocationWorkerBaseURL }}
   {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
@@ -728,7 +747,7 @@ grpcproxy:
     {{- end }}
     {{- if .Values.rateLimiter.enabled }}
     RATE_LIMIT_ENABLED: "true"
-    RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+    RATE_LIMIT_ADDR: {{ $rateLimiterServiceURL | quote }}
     {{- end }}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
@@ -916,9 +935,9 @@ functionautoscaler:
         "CONFIG" "/etc/server/config/settings-local.yaml"
         "SECRETS_PATH" "/vault/secrets/secrets.json"
         "REGION" (dig "functionAutoscaler" "region" "local" .Values)
-        "CASSANDRA__CONTACT_POINTS" (dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values)
+        "CASSANDRA__CONTACT_POINTS" (dig "functionAutoscaler" "cassandra" "contactPoints" "" .Values | default $cassandraContactPoints)
         "CASSANDRA__IS_DEVELOPMENT" (printf "%v" (dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values))
-        "NVCF_API__NVCF_API_GRPC_ADDRESS" (dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values)
+        "NVCF_API__NVCF_API_GRPC_ADDRESS" (dig "functionAutoscaler" "nvcfApi" "grpcAddress" "" .Values | default $apiGrpcServiceURL)
         "NVCF_API__DISABLE_AUTH" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values))
         "NVCF_API__DRY_RUN" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values))
         "TIMESERIES_DB__TIMESERIES_DB_URL" (required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint)
@@ -1175,8 +1194,10 @@ llmRequestRouter:
   {{- if not (kindIs "slice" $existingSecretDnsNames) }}
   {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
-  {{- $defaultManagedDnsNames := list "llm-request-router.nvcf.svc.cluster.local" "*.llm-request-router-headless.nvcf.svc.cluster.local" }}
-  {{- if and (gt (len $existingSecretDnsNames) 0) (not (deepEqual $existingSecretDnsNames $defaultManagedDnsNames)) }}
+  {{- if eq (len $existingSecretDnsNames) 0 }}
+  {{- $existingSecretDnsNames = $llmRequestRouterDefaultDnsNames }}
+  {{- end }}
+  {{- if not (deepEqual $existingSecretDnsNames $llmRequestRouterDefaultDnsNames) }}
   {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate; only the unchanged stable-base defaults are allowed when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
   {{- $existingSecretAllowedDomains := dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
@@ -1238,8 +1259,11 @@ llmRequestRouter:
   {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
   {{- end }}
   {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
+  {{- if not (kindIs "slice" $dnsNames) }}
+  {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.enabled is true" }}
+  {{- end }}
   {{- if eq (len $dnsNames) 0 }}
-  {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
+  {{- $dnsNames = $llmRequestRouterDefaultDnsNames }}
   {{- end }}
   certificate:
     enabled: true
@@ -1298,8 +1322,8 @@ vanityGateway:
     pullPolicy: {{ dig "addons" "vanityGateway" "image" "pullPolicy" "IfNotPresent" .Values }}
   config:
     mappingPath: {{ dig "addons" "vanityGateway" "config" "mappingPath" "/etc/vanity-gateway/config/config.yaml" .Values | quote }}
-    nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "http://invocation.nvcf.svc.cluster.local:8080" .Values | quote }}
-    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "http://llm-api-gateway.nvcf.svc.cluster.local:8080" .Values | quote }}
+    nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "" .Values | default $invocationServiceURL | quote }}
+    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "" .Values | default $llmApiGatewayServiceURL | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     otelExporterOtlpEndpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
     {{- else }}
@@ -1420,7 +1444,7 @@ nvcfUi:
       - name: notary-service
         namespace: {{ $nvcfNamespace }}
         endpoints:
-          - notary.nvcf.svc.cluster.local:8080/health
+          - {{ $notaryHealthEndpoint }}
       - name: grpc-proxy
         namespace: {{ $grpcBackend.namespace }}
         endpoints:
@@ -1429,7 +1453,7 @@ nvcfUi:
       - name: ratelimiter
         namespace: {{ $nvcfNamespace }}
         endpoints:
-          - ratelimiter.nvcf.svc.cluster.local:8080/health
+          - {{ $rateLimiterHealthEndpoint }}
       {{- end }}
       {{- if dig "addons" "llm" "enabled" false .Values }}
       - name: llm-api-gateway
@@ -1440,13 +1464,13 @@ nvcfUi:
       - name: llm-request-router
         namespace: {{ $nvcfNamespace }}
         endpoints:
-          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
-          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
+          - {{ $llmRequestRouterHealthzEndpoint }}
+          - {{ $llmRequestRouterReadyzEndpoint }}
       {{- end }}
       - name: reval
         namespace: {{ $nvcfNamespace }}
         endpoints:
-          - reval.nvcf.svc.cluster.local:8082/healthz
+          - {{ $revalHealthEndpoint }}
       - name: invocation-service
         namespace: {{ $invocationBackend.namespace }}
         endpoints:
@@ -1472,22 +1496,22 @@ nvcfUi:
       - name: admin-issuer-proxy
         namespace: {{ $apiKeysNamespace }}
         endpoints:
-          - admin-token-issuer-proxy.api-keys.svc.cluster.local:8080/healthz
+          - {{ $adminIssuerProxyHealthEndpoint }}
       - name: nats-auth-callout-service
         namespace: {{ $natsNamespace }}
         endpoints:
-          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/health
+          - {{ $natsAuthCalloutHealthEndpoint }}
       {{- if dig "nats" "enabled" true .Values }}
       - name: nats
         namespace: {{ $natsNamespace }}
         endpoints:
-          - nats-headless.nats-system.svc.cluster.local:8222/healthz?js-server-only
+          - {{ $natsHeadlessHealthEndpoint }}
       {{- end }}
       {{- if dig "openbao" "enabled" true .Values }}
       - name: openbao-server
         namespace: {{ $vaultNamespace }}
         endpoints:
-          - openbao-server.vault-system.svc.cluster.local:8200/v1/sys/health?standbyok=true
+          - {{ $openBaoHealthEndpoint }}
         k8s_workloads:
           - name: openbao-server-agent-injector
             type: deployment

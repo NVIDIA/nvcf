@@ -20,6 +20,7 @@ environments:
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix }}
 {{- $cassandraNamespace := printf "%scassandra-system" $controlPlaneNamespacePrefix }}
 {{- $certManagerNamespace := "cert-manager" }}
+{{- $openBaoServerURL := printf "http://openbao-server.%s.svc.cluster.local:8200" $vaultNamespace }}
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
 {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
 {{- $manageIssuer := false }}
@@ -174,14 +175,14 @@ releases:
       - clusterIssuer:
           enabled: true
           name: {{ $issuerName | quote }}
-          server: "http://openbao-server.vault-system.svc.cluster.local:8200"
+          server: {{ $openBaoServerURL | quote }}
           path: "services/all/pki/nvcf-service-issuing/sign/nvcf-service-server"
           auth:
             mountPath: "/v1/auth/jwt"
             role: "cert-manager"
             serviceAccount:
               name: "cert-manager"
-              audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+              audience: {{ $openBaoServerURL | quote }}
     wait: true
     waitForJobs: true
     labels:
