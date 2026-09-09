@@ -1,24 +1,24 @@
 # Register a Cluster with GitOps
 
-Use this workflow to register a cluster in any NGC organization without using the
-NGC cluster-registration UI. Sign in through the NGC CLI email authentication
-flow, complete the browser-based OAuth login, and select the organization that
-will own the cluster. The login creates a temporary Starfleet session for NGC
-CLI cluster operations. It does not create or convert a service account key
-(SAK).
+Use this workflow to register a cluster in any NGC organization without using
+the NGC cluster-registration UI. Sign in through the NGC CLI and complete the
+browser-based OAuth login. This gives the CLI a temporary user session that can
+create the cluster. An organization service account key (SAK) does not replace
+this login.
 
 Successful registration generates a separate, cluster-scoped NGC Cluster Key
-for the operator and NGC artifact access. You must capture and securely store
-this key because the registration output shows it only once.
+for the operator, private Helm chart, and runtime images. Capture and store this
+key because the registration output shows it only once.
 
 <Note>
 
-NGC cluster registration is an API operation, not a Kubernetes resource. Run the
-interactive login and registration from a secured administrator workstation.
-The generated Cluster Key cannot be recovered with `ngc cf cluster info`, so
-import it into your secret mechanism before discarding the registration output.
-After registration, keep the operator release and non-secret cluster
-configuration in Git and let a GitOps controller reconcile them.
+NGC cluster registration changes the control plane before the GitOps controller
+installs anything in Kubernetes. Run the login and registration from a
+workstation you control because the command output contains the Cluster Key.
+The key cannot be recovered with `ngc cf cluster info`, so import it into your
+secret mechanism before discarding the registration output. After registration,
+keep the operator release and non-secret cluster configuration in Git and let a
+GitOps controller reconcile them.
 
 </Note>
 
@@ -56,9 +56,10 @@ The help output must list `email` as a value for `--auth-option`:
 
 ## 1. Sign in to NGC
 
-The NGC CLI uses email authentication to establish a temporary Starfleet
-session for cluster create and delete operations. This session is separate from
-both an organization SAK and the Cluster Key generated later.
+The NGC CLI opens a browser and exchanges the completed email login for a
+temporary OAuth user session. Cluster create and delete operations use this
+session. An organization SAK does not authorize these operations. The Cluster
+Key generated later authenticates the installed cluster software.
 
 Make sure `NGC_API_KEY` and `NGC_CLI_API_KEY` are not set. Either environment
 API key can take precedence over the saved OAuth session. An API-key-authenticated
@@ -70,9 +71,9 @@ ngc config set --auth-option email
 ```
 
 Run this command without `--org` or `--team`. Select the organization and team
-after the browser authentication completes. Supplying those flags before an
-authenticated Starfleet session exists can save an unauthenticated configuration
-and fail with `Invalid org - If not Authenticated, org cannot be set.`
+after the browser authentication completes. Supplying those flags before the
+OAuth session exists can save an unauthenticated configuration and fail with
+`Invalid org - If not Authenticated, org cannot be set.`
 
 At the prompts:
 
@@ -185,20 +186,20 @@ CLUSTER_ID="$(
 
 If `CLUSTER_ID` is not empty, do not run `cluster create` again. Verify that the
 Cluster Key from the original registration is already present in your secret
-mechanism before continuing. The NGC CLI cannot retrieve the original key; if
-the key was not saved, use **Rotate Key** in the NGC UI and import the new key.
+mechanism before continuing. The NGC CLI cannot retrieve the original key. If
+the key was not saved, use `Rotate Key` in the NGC UI and import the new key.
 
 <Warning>
 
-Do not repoint an existing NVCA Helm release at a second NGC cluster record by
-changing `clusterName`, `clusterID`, `clusterGroupID`, and the Cluster Key in
-place. The operator supports one `NVCFBackend` per Kubernetes cluster. An
-identity change can leave both the old and new backends in the cluster, which
-stops the operator before it can rotate the agent credential. To register a new
-control-plane identity, first use the supported unregister and cleanup workflow,
-or install it on a fresh Kubernetes cluster. For a version-only upgrade, retain
-the existing registration identifiers and Cluster Key and change only the
-approved chart and NVCA versions.
+Do not use this workflow to repoint an existing NVCA Helm release at a second
+NGC cluster record. Changing `clusterName`, `clusterID`, `clusterGroupID`, and
+the Cluster Key in place can leave both the old and new `NVCFBackend` objects in
+the cluster. The operator supports only one backend and stops before it can
+rotate the agent credential. Before registering a new control-plane identity,
+remove the existing installation with your approved unregister and cleanup
+procedure, or use a fresh Kubernetes cluster. For a version-only upgrade, keep
+the existing registration identifiers and Cluster Key. Change only the approved
+chart and NVCA versions.
 
 </Warning>
 
@@ -268,7 +269,6 @@ CLUSTER_ID="$(
   jq -er --arg name "${CLUSTER_NAME}" \
     '[.[] | select(.clusterName == $name)][0].clusterId'
 )"
-
 ```
 
 If the command reports that `NGC_CLI_API_KEY` is invalid, confirm that the
@@ -354,15 +354,17 @@ Configure the GitOps secret mechanism to create these secrets:
 | `nvca-operator-image-pull` | `nvca-operator` | A `kubernetes.io/dockerconfigjson` credential for `nvcr.io` with username `$oauthtoken` and the Cluster Key as password | Operator and agent images |
 | Chart repository credential | GitOps controller namespace | Username `$oauthtoken` and the Cluster Key as password; for Flux, use an `Opaque` Secret with `username` and `password` keys | GitOps Helm source |
 
-Keep all three credentials encrypted or externally materialized. Do not put the
-Cluster Key in a Helm values file, command-line `--set` argument, or plain
-Kubernetes Secret in Git. After all three projections have reconciled and been
-verified, delete the protected local registration files and directory.
+Keep all three source secrets encrypted or externally materialized. Do not put
+the Cluster Key in a Helm values file, command-line `--set` argument, or plain
+Kubernetes Secret in Git. After the secret mechanism creates all three source
+secrets and you verify them, delete the protected local registration files and
+directory.
 
 The runtime image-pull Secret starts in the operator namespace. The operator
 mirrors it into the agent namespace when it creates the NVCA workload. This
 ordering can cause an initial anonymous image-pull failure before the mirrored
-Secret becomes available. The agent pull must recover without manual changes.
+Secret becomes available. This is temporary only if the agent pod recovers
+without manual changes.
 
 ```bash
 if test -n "${registration_dir:-}"; then
@@ -507,13 +509,12 @@ ready.
 
 <Warning>
 
-The NGC CLI does not currently expose a cluster management-mode option or a
-command that marks the NGC UI read-only. Setting
-`ngcConfig.clusterSource: helm-managed` makes the operator use only the
-Git-managed cluster configuration. Do not make later configuration changes in
-the NGC UI. If preventing UI changes is a hard requirement, the current public
-CLI does not provide a fully equivalent replacement for the UI management-mode
-switch.
+The NGC CLI cannot currently set the cluster management mode or mark the NGC UI
+read-only. Setting `ngcConfig.clusterSource: helm-managed` makes the operator use
+the Git-managed cluster configuration, but it does not lock the UI. This is a
+current tooling gap. Do not change the cluster configuration in the UI after
+moving it to Git. If a UI lock is required, stop here because the CLI cannot
+enforce it.
 
 </Warning>
 
@@ -530,6 +531,8 @@ operator and cluster agent:
 kubectl -n nvca-operator rollout status deployment/nvca-operator
 kubectl -n nvca-operator get nvcfbackend
 kubectl -n nvca-operator get pods
+kubectl -n nvca-system rollout status deployment/nvca
+kubectl -n nvca-system get pods
 
 ngc cf cluster info "${CLUSTER_ID}" \
   --org "${NGC_ORG}" \
@@ -538,8 +541,9 @@ ngc cf cluster info "${CLUSTER_ID}" \
   jq '{clusterId, clusterName, status, nvcaVersion, nvcaLastConnected}'
 ```
 
-The `NVCFBackend` health should become `healthy`, and the NGC cluster record
-should report a current `nvcaLastConnected` value.
+The operator and agent deployments should become Ready. The `NVCFBackend`
+health should become `healthy`, and the NGC cluster record should report
+`READY` with a current `nvcaLastConnected` value.
 
 The first agent image pull can report `FailedToRetrieveImagePullSecret`, an
 anonymous registry `403`, or `ErrImagePull` while the operator mirrors
@@ -556,8 +560,8 @@ kubectl -n nvca-system get pods
 
 The generated Cluster Key expires after 90 days. Record its expiration in your
 secret-management process and rotate it before it expires. The NGC CLI does not
-expose a cluster-key rotation command; use **Rotate Key** for the cluster in the
-NGC UI, replace the stored Cluster Key, and verify that all three projections
+expose a cluster-key rotation command. Use `Rotate Key` for the cluster in the
+NGC UI, replace the stored Cluster Key, and verify that all three source secrets
 from step 4 reconcile successfully.
 
 ## Related Documentation
