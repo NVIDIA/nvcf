@@ -130,11 +130,11 @@ async fn get_function_utilization_history(
     env: &str,
     metric_source: MetricSource,
     ignore_env: bool,
-    lookback_minutes: i64,
+    lookback: StdDuration,
     utilization_window_seconds: u64,
 ) -> Result<Vec<(i64, String)>> {
     let end_time = Utc::now();
-    let start_time = end_time - Duration::minutes(lookback_minutes);
+    let start_time = end_time - Duration::from_std(lookback)?;
     let step = TIMESERIES_DB_QUERY_STEP;
 
     let metric_env = MetricEnvironments::from_config(env);
@@ -254,7 +254,7 @@ async fn get_byoc_instance_count(
     function_version_id: &Uuid,
     env: &str,
     ignore_env: bool,
-) -> Result<usize> {
+) -> Result<Option<usize>> {
     let env_suffix = if ignore_env {
         String::new()
     } else {
@@ -323,20 +323,14 @@ async fn get_byoc_instance_count(
                             timestamp,
                             value_str
                         );
-                        return Ok(count.round() as usize);
+                        return Ok(Some(count.round() as usize));
                     }
                 }
             }
         }
     }
 
-    tracing::debug!(
-        "No instance count data from TimeseriesDb for BYOC function {}:{}, returning 0",
-        function_id,
-        function_version_id
-    );
-    // No data found - return 0
-    Ok(0)
+    Ok(None)
 }
 
 async fn llm_gateway_metrics_present(
@@ -477,12 +471,12 @@ async fn get_gateway_target(
 async fn llm_gateway_recently_invoked(
     timeseries_db_client: &TimeseriesDbClient,
     function_id: &Uuid,
-    lookback_seconds: u64,
+    lookback: StdDuration,
     env: &str,
     ignore_env: bool,
 ) -> Result<bool> {
     let end_time = Utc::now();
-    let lookback_seconds = lookback_seconds.max(1);
+    let lookback_seconds = lookback.as_secs().max(1);
     let env_suffix = if ignore_env {
         String::new()
     } else {
@@ -495,7 +489,7 @@ async fn llm_gateway_recently_invoked(
     let response = timeseries_db_client
         .query_range(
             &query,
-            end_time - Duration::minutes(1),
+            end_time,
             end_time,
             TIMESERIES_DB_QUERY_STEP,
         )
@@ -580,11 +574,11 @@ async fn gather_scaling_inputs(
     ignore_env: bool,
     scaling_settings: &ScalingSettings,
     routing_cache: &MetricRoutingCache,
-) -> Result<GatheredScalingInputs> {
+) -> Result<Option<GatheredScalingInputs>> {
     let key = (*function_id, *function_version_id);
     let cached_source = routing_cache.sources.get(&key);
     let mut metric_source = cached_source.unwrap_or(MetricSource::WorkerThreads);
-    let mut current_instances = 0;
+    let mut current_instances = None;
     let mut gateway_target = None;
     let mut cache_source = cached_source.is_none();
 
@@ -599,7 +593,7 @@ async fn gather_scaling_inputs(
         )
         .await
         {
-            Ok(Some(count)) => current_instances = count,
+            Ok(Some(count)) => current_instances = Some(count),
             Ok(None) if cached_source.is_none() => {
                 metric_source = if llm_gateway_metrics_present(
                     timeseries_db_client,
@@ -617,7 +611,7 @@ async fn gather_scaling_inputs(
             Ok(None) => {}
             Err(error) => {
                 tracing::warn!(
-                    "TimeseriesDb worker count failed for {}:{} (nca_id={}), using 0: {}",
+                    "TimeseriesDb worker count failed for {}:{} (nca_id={}): {}",
                     function_id,
                     function_version_id,
                     nca_id,
@@ -639,7 +633,7 @@ async fn gather_scaling_inputs(
                 routing_cache,
             )
             .await?;
-            current_instances = target.total_current_instances;
+            current_instances = Some(target.total_current_instances);
             gateway_target = Some(target);
         }
         MetricSource::ControlPlane => {
@@ -653,12 +647,12 @@ async fn gather_scaling_inputs(
             .await
             .unwrap_or_else(|error| {
                 tracing::warn!(
-                    "CP instance count failed for {}:{}, using 0: {}",
+                    "CP instance count failed for {}:{}: {}",
                     function_id,
                     function_version_id,
                     error
                 );
-                0
+                None
             });
         }
     }
@@ -668,6 +662,17 @@ async fn gather_scaling_inputs(
         routing_cache.sources.insert(key, metric_source);
     }
 
+    let Some(current_instances) = current_instances else {
+        metrics::record_missing_current_instances();
+        tracing::warn!(
+            "Skipping scaling cycle for {}:{} because current instance data is unavailable from {:?}",
+            function_id,
+            function_version_id,
+            metric_source,
+        );
+        return Ok(None);
+    };
+
     let raw_utilization = get_function_utilization_history(
         timeseries_db_client,
         function_id,
@@ -675,7 +680,7 @@ async fn gather_scaling_inputs(
         env,
         metric_source,
         ignore_env,
-        scaling_settings.lookback.as_secs() as i64 / 60,
+        scaling_settings.lookback,
         scaling_settings.utilization_window_seconds,
     )
     .await?;
@@ -685,7 +690,7 @@ async fn gather_scaling_inputs(
         llm_gateway_recently_invoked(
             timeseries_db_client,
             function_id,
-            scaling_settings.scale_to_zero_idle_timeout.as_secs(),
+            scaling_settings.scale_to_zero_idle_timeout,
             env,
             ignore_env,
         )
@@ -694,7 +699,7 @@ async fn gather_scaling_inputs(
         !get_recently_invoked_functions(
             timeseries_db_client,
             Some(*function_version_id),
-            scaling_settings.scale_to_zero_idle_timeout.as_secs() as i64 / 60,
+            scaling_settings.scale_to_zero_idle_timeout,
             env,
             ignore_env,
         )
@@ -702,7 +707,7 @@ async fn gather_scaling_inputs(
         .is_empty()
     };
 
-    Ok(GatheredScalingInputs {
+    Ok(Some(GatheredScalingInputs {
         inputs: ScalingInputs {
             metric_source,
             current_instances,
@@ -710,7 +715,7 @@ async fn gather_scaling_inputs(
             recently_invoked,
         },
         gateway_target,
-    })
+    }))
 }
 
 // Function that creates or removes our node entry in Cassandra based on readiness.
@@ -877,6 +882,9 @@ async fn make_scaling_requests(
                             function.function_id, function.function_version_id
                         )
                     })?;
+                    let Some(gathered) = gathered else {
+                        return Ok(());
+                    };
 
                     if gathered.gateway_target.as_ref().is_some_and(|target| {
                         target.function_version_id != function.function_version_id
@@ -1175,7 +1183,8 @@ mod tests {
             &routing_cache,
         )
         .await
-        .expect("gather scaling inputs");
+        .expect("gather scaling inputs")
+        .expect("current instance data");
         (gathered, routing_cache)
     }
 
@@ -1277,7 +1286,7 @@ mod tests {
             "stg",
             MetricSource::ControlPlane,
             true,
-            5,
+            StdDuration::from_secs(5 * 60),
             60,
         )
         .await
@@ -1319,7 +1328,7 @@ mod tests {
                 configured_env,
                 MetricSource::ControlPlane,
                 false,
-                5,
+                StdDuration::from_secs(5 * 60),
                 60,
             )
             .await
@@ -1473,7 +1482,7 @@ mod tests {
                 "prod",
                 MetricSource::LlmGateway,
                 false,
-                5,
+                StdDuration::from_secs(5 * 60),
                 70,
             )
             .await
@@ -1493,7 +1502,13 @@ mod tests {
             .create_async()
             .await;
         assert!(
-            llm_gateway_recently_invoked(&ts_client(server.url()), &fid, 0, "prod", false)
+            llm_gateway_recently_invoked(
+                &ts_client(server.url()),
+                &fid,
+                StdDuration::ZERO,
+                "prod",
+                false,
+            )
                 .await
                 .expect("gateway recent invocation query")
         );
@@ -1587,14 +1602,122 @@ mod tests {
             get_byoc_instance_count(&client, &fid, &fvid, "prd", false)
                 .await
                 .expect("prod cp instance count"),
-            3
+            Some(3)
         );
         assert_eq!(
             get_byoc_instance_count(&client, &fid, &fvid, "stg", false)
                 .await
                 .expect("stage cp instance count"),
-            3
+            Some(3)
         );
+    }
+
+    #[tokio::test]
+    async fn test_byoc_instance_count_distinguishes_missing_from_zero() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+
+        let mut empty_server = mockito::Server::new_async().await;
+        let _empty = empty_server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "nvcf_function_instances_current".into(),
+            ))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+
+        assert_eq!(
+            get_byoc_instance_count(
+                &ts_client(empty_server.url()),
+                &fid,
+                &fvid,
+                "stg",
+                true,
+            )
+            .await
+            .expect("missing cp instance count"),
+            None
+        );
+
+        let mut zero_server = mockito::Server::new_async().await;
+        let _zero = zero_server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "nvcf_function_instances_current".into(),
+            ))
+            .with_status(200)
+            .with_body(vm_series(
+                &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
+                "0",
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+
+        assert_eq!(
+            get_byoc_instance_count(
+                &ts_client(zero_server.url()),
+                &fid,
+                &fvid,
+                "stg",
+                true,
+            )
+            .await
+            .expect("zero cp instance count"),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gather_scaling_inputs_skips_when_instance_count_is_missing() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+
+        let _worker = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("worker_thread_count_total".into()))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+        let _gateway = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("http_requests_total".into()))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+        let _control_plane = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "nvcf_function_instances_current".into(),
+            ))
+            .with_status(200)
+            .with_body(vm_empty())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let gathered = gather_scaling_inputs(
+            &ts_client(server.url()),
+            &fid,
+            &fvid,
+            "nca",
+            "stg",
+            true,
+            &ScalingSettings::default(),
+            &new_metric_routing_cache(),
+        )
+        .await
+        .expect("gather scaling inputs");
+
+        assert!(gathered.is_none());
     }
 
     /// Happy path: worker count, utilization, and recent invocations are gathered
@@ -1632,7 +1755,8 @@ mod tests {
             &routing_cache,
         )
         .await
-        .expect("gather inputs");
+        .expect("gather inputs")
+        .expect("current instance data");
         let inputs = gathered.inputs;
 
         assert_eq!(inputs.current_instances, 5);

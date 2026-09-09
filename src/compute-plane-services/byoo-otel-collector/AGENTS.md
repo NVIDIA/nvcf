@@ -34,15 +34,15 @@ drift, generated config drift, and otelconfig validation. Do not add a subtree
 Use the script instead of editing version strings by hand:
 
 ```bash
-./scripts/update-collector-version.sh v0.157.0 v1.63.0
+./scripts/update-collector-version.sh v0.160.0 v1.66.0
 ```
 
 The script updates version references in `otel-collector-build.yaml`,
 `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`,
 `Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`, and
 `.gitlab-ci.yml` when that file exists. Run it from the BYOO collector root.
-You can pass versions with or without the `v` prefix (for example, `v0.157.0`
-or `0.157.0`). Pass the optional `v1.x.y` provider version when the stable
+You can pass versions with or without the `v` prefix (for example, `v0.160.0`
+or `0.160.0`). Pass the optional `v1.x.y` provider version when the stable
 collector modules need a matching release. After running, regenerate `otelcol/`
 if needed, review `git diff`, and run the relevant build or validation command.
 

@@ -34,6 +34,7 @@ stack). It binds three ports:
 ```
 TIMESERIES_DB__TIMESERIES_DB_URL=http://localhost:8428 \
 TIMESERIES_DB__DISABLE_AUTH=true \
+SERVER__PORT=8083 \
 cargo run --bin server
 ```
 
@@ -55,14 +56,13 @@ The README's bare `cargo run` does not work without these.
 
 ## Port Conflict on 8080
 
-`crates/server/src/server.rs:328` hardcodes the main HTTP listener to
-`8080` and ignores `ServerSettings.port`. On dev machines that run
+The main HTTP listener defaults to `8080`. On dev machines that run
 `k3d-ncp-local-serverlb`, `:8080` is already taken and the autoscaler will
 exit with `AddrInUse`.
 
-Workaround used here: patched `server.rs:328` from `8080` to `8083` for
-local runs. Do not commit. A proper fix is to read
-`ServerSettings.ip_address` and `ServerSettings.port` from the config.
+The run command above sets `SERVER__PORT=8083` so local runs do not conflict
+with the cluster load balancer. `SERVER__IP_ADDRESS` can similarly override
+the default `0.0.0.0` bind address.
 
 ## Mock Server Function Categories
 
