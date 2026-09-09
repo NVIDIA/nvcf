@@ -121,14 +121,14 @@ const (
 	SrvCertsMountDir           = "/certs/server"
 	CACertsMountDir            = "/certs/ca"
 
-	agentConfigDir                = "/var/run/nvca"
-	agentConfigFile               = "config.yaml"
-	agentConfigFilePath           = agentConfigDir + "/" + agentConfigFile
-	agentConfigConfigMapName      = "agent-config"
-	agentConfigMergeConfigMapName = "agent-config-merge"
-	nvcaOperatorConfigMapName     = "nvca-operator-config"
-	agentConfigVolumeName         = "agent-config"
-	legacyBYOOConfigAnnotation    = "nvcf.nvidia.com/legacy-byoo-config"
+	agentConfigDir                   = "/var/run/nvca"
+	agentConfigFile                  = "config.yaml"
+	agentConfigFilePath              = agentConfigDir + "/" + agentConfigFile
+	agentConfigConfigMapName         = "agent-config"
+	agentConfigMergeConfigMapName    = "agent-config-merge"
+	nvcaOperatorConfigMapName        = "nvca-operator-config"
+	agentConfigVolumeName            = "agent-config"
+	legacyFirstClassConfigAnnotation = "nvcf.nvidia.com/legacy-first-class-config"
 
 	// ReVal config.
 	ReValCacheVolumeName = "reval-rendered-helmcharts"
@@ -1489,27 +1489,27 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 		return nvcaconfig.Config{}, false,
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
 	}
-	if bc.shouldWarnForLegacyBYOOConfig(cm) {
+	if bc.shouldWarnForLegacyFirstClassConfig(cm) {
 		log.WithFields(logrus.Fields{
 			"configmapNamespace": cm.Namespace,
 			"configmapName":      cm.Name,
-		}).Warn("ConfigMap contains deprecated agentConfig.mergeConfig BYOO settings; migrate to top-level chart byoo values before the next minor release")
+		}).Warn("ConfigMap contains deprecated agentConfig.mergeConfig settings that now have first-class chart values; migrate to the top-level byoo/utils/storage/worker chart values before the next minor release")
 	}
 	return cfg, true, nil
 }
 
-func (bc *BackendK8sCache) shouldWarnForLegacyBYOOConfig(cm *corev1.ConfigMap) bool {
-	if cm.Annotations[legacyBYOOConfigAnnotation] != "true" {
+func (bc *BackendK8sCache) shouldWarnForLegacyFirstClassConfig(cm *corev1.ConfigMap) bool {
+	if cm.Annotations[legacyFirstClassConfigAnnotation] != "true" {
 		return false
 	}
 
-	bc.legacyBYOOConfigWarningMu.Lock()
-	defer bc.legacyBYOOConfigWarningMu.Unlock()
-	if bc.legacyBYOOConfigWarningSeen && bc.legacyBYOOConfigWarningResourceVersion == cm.ResourceVersion {
+	bc.legacyFirstClassConfigWarningMu.Lock()
+	defer bc.legacyFirstClassConfigWarningMu.Unlock()
+	if bc.legacyFirstClassConfigWarningSeen && bc.legacyFirstClassConfigWarningResourceVersion == cm.ResourceVersion {
 		return false
 	}
-	bc.legacyBYOOConfigWarningResourceVersion = cm.ResourceVersion
-	bc.legacyBYOOConfigWarningSeen = true
+	bc.legacyFirstClassConfigWarningResourceVersion = cm.ResourceVersion
+	bc.legacyFirstClassConfigWarningSeen = true
 	return true
 }
 
