@@ -163,14 +163,14 @@ impl<'a> ProxyRequestRun<'a> {
             tokio::time::sleep(delay).await;
             return None;
         }
-        let Some(selection) = decision.selected() else {
+        let Some(choice) = decision.selected() else {
             return self
                 .resolve_no_routing_choice(num_candidates, eligible_candidate_count)
                 .await;
         };
         let selected_cluster = SelectedClusterRun::new(
             target_snapshot.expect("a selected candidate must come from a routing target snapshot"),
-            selection,
+            self.request.lb_resolution.selection(choice),
             self.request.request_inputs.priority,
         );
         self.run_selected_cluster(&selected_cluster).await

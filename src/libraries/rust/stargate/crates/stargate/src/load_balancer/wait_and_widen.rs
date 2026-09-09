@@ -185,7 +185,7 @@ impl WaitAndWidenLoadBalancer {
         {
             // Affinity uses the same TTFT buckets, admission and comparator as
             // public routing. A busy ring primary must not bypass those rules.
-            if let Some(choice) = self.choose_from_candidate_indices_at(
+            if let Some(choice) = self.choose_from_candidate_indices(
                 request,
                 candidates,
                 &affinity_indices,
@@ -200,21 +200,21 @@ impl WaitAndWidenLoadBalancer {
 
             // The affinity hold is spent once. Public bucket zero opens at X;
             // subsequent buckets use only time elapsed since X.
-            return self
-                .decide_from_candidate_iter(
-                    request,
-                    candidates
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| !affinity_indices.contains(index))
-                        .map(|(_, candidate)| (candidate, 1.0)),
-                    candidates,
-                    elapsed.saturating_sub(self.config.cache_affinity_wait),
-                )
-                .map(|mut choice| {
-                    choice.rank_depth = affinity_indices.len() + 1;
-                    choice
-                });
+            let mut decision = self.decide_from_candidate_iter(
+                request,
+                candidates
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !affinity_indices.contains(index))
+                    .map(|(_, candidate)| candidate),
+                candidates,
+                1.0,
+                elapsed.saturating_sub(self.config.cache_affinity_wait),
+            );
+            if let LoadBalancerDecision::Selected(choice) = &mut decision {
+                choice.rank_depth = affinity_indices.len() + 1;
+            }
+            return decision;
         }
 
         if candidates.is_empty() {
@@ -225,13 +225,10 @@ impl WaitAndWidenLoadBalancer {
         {
             return LoadBalancerDecision::Selected(choice);
         }
-        self.choose_from_candidate_iter(
-            request,
-            candidates.iter().map(|candidate| (candidate, 1.0)),
-            candidates,
-            elapsed,
-        )
-        .into()
+        // Non-affinity requests keep the existing explicit routing-retry policy.
+        self.decide_from_candidate_iter(request, candidates.iter(), candidates, 1.0, elapsed)
+            .selected()
+            .into()
     }
 
     pub(super) fn new(config: WaitAndWidenConfig) -> Self {
@@ -256,22 +253,6 @@ impl WaitAndWidenLoadBalancer {
         candidates: &[RoutedClusterSnapshot],
         candidate_indices: &[usize],
         input_tokens_scale: f64,
-    ) -> Option<LoadBalancerCandidateChoice> {
-        self.choose_from_candidate_indices_at(
-            request,
-            candidates,
-            candidate_indices,
-            input_tokens_scale,
-            request.received_at.elapsed(),
-        )
-    }
-
-    fn choose_from_candidate_indices_at(
-        &self,
-        request: &LoadBalancerRequest<'_>,
-        candidates: &[RoutedClusterSnapshot],
-        candidate_indices: &[usize],
-        input_tokens_scale: f64,
         elapsed: Duration,
     ) -> Option<LoadBalancerCandidateChoice> {
         if candidate_indices.is_empty() {
@@ -289,14 +270,14 @@ impl WaitAndWidenLoadBalancer {
         // Cache-affinity selection stores indices into the current candidate
         // slice. Routing over references avoids cloning snapshots into a
         // temporary Vec for every affinity hit.
-        self.choose_from_candidate_iter(
+        self.decide_from_candidate_iter(
             request,
-            candidate_indices
-                .iter()
-                .map(|index| (&candidates[*index], input_tokens_scale)),
+            candidate_indices.iter().map(|index| &candidates[*index]),
             candidates,
+            input_tokens_scale,
             elapsed,
         )
+        .selected()
     }
 
     fn choose_from_two_ready_candidates(
@@ -365,22 +346,12 @@ impl WaitAndWidenLoadBalancer {
         ))
     }
 
-    fn choose_from_candidate_iter<'a>(
-        &self,
-        request: &LoadBalancerRequest<'_>,
-        candidates: impl Iterator<Item = (&'a RoutedClusterSnapshot, f64)>,
-        candidate_index_source: &[RoutedClusterSnapshot],
-        elapsed: Duration,
-    ) -> Option<LoadBalancerCandidateChoice> {
-        self.decide_from_candidate_iter(request, candidates, candidate_index_source, elapsed)
-            .selected()
-    }
-
     fn decide_from_candidate_iter<'a>(
         &self,
         request: &LoadBalancerRequest<'_>,
-        candidates: impl Iterator<Item = (&'a RoutedClusterSnapshot, f64)>,
+        candidates: impl Iterator<Item = &'a RoutedClusterSnapshot>,
         candidate_index_source: &[RoutedClusterSnapshot],
+        input_tokens_scale: f64,
         elapsed: Duration,
     ) -> LoadBalancerDecision {
         // TTFT determines bucket eligibility and unlock timing. The configured
@@ -391,19 +362,19 @@ impl WaitAndWidenLoadBalancer {
             candidates.size_hint().1.unwrap_or(0),
         );
         if let RequestExclusions::One(excluded_cluster_id) = RequestExclusions::from(request) {
-            for (candidate, input_tokens_scale) in candidates {
+            for candidate in candidates {
                 if candidate.cluster_id != excluded_cluster_id {
                     ttfts.push_ttft(candidate, input_tokens_scale);
                 }
             }
         } else if request.has_excluded_clusters() || ttfts.filters_by_queue_slo() {
-            for (candidate, input_tokens_scale) in candidates {
+            for candidate in candidates {
                 if !request.excludes_cluster(&candidate.cluster_id) {
                     ttfts.push_ttft(candidate, input_tokens_scale);
                 }
             }
         } else {
-            for (candidate, input_tokens_scale) in candidates {
+            for candidate in candidates {
                 ttfts.push_ttft(candidate, input_tokens_scale);
             }
         }

@@ -2136,6 +2136,51 @@ fn wait_and_widen_affinity_deadline_does_not_depend_on_estimates_or_slo() {
 }
 
 #[test]
+fn wait_and_widen_prefill_discount_is_limited_to_the_affinity_group() {
+    for (scale, expected_affine_position) in [(1.0, 0), (0.1, 1)] {
+        let mut config = wait_and_widen_affinity_algorithm_config(8, 2, Some(2));
+        let settings = config.wait_and_widen_settings_mut().unwrap();
+        settings.cache_affinity_wait_ms = Some(100);
+        settings.cache_affinity_input_tokens_scale = Some(scale);
+        let config = wait_and_widen_config(&config);
+        let lb = WaitAndWidenLoadBalancer::new(config.clone());
+        let target = target();
+        let request = request(&target, Some("prefix"), Some(1_000));
+        let mut candidates = candidates(&["a", "b", "c", "d"]);
+        let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+        let public: Vec<_> = (0..candidates.len())
+            .filter(|index| !affine.contains(index))
+            .collect();
+        // Full prefill favors the faster processor (1500 vs 2001 ms).
+        // Discounted prefill favors the closer backend (600 vs 201 ms).
+        for group in [affine.as_slice(), public.as_slice()] {
+            candidates[group[0]].rtt = Duration::from_millis(500);
+            candidates[group[0]].stats.last_mean_input_tps = 1_000.0;
+            candidates[group[1]].rtt = Duration::from_millis(1);
+            candidates[group[1]].stats.last_mean_input_tps = 500.0;
+        }
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::ZERO)
+            .selected()
+            .unwrap();
+        assert_eq!(choice.candidate_index, affine[expected_affine_position]);
+
+        for index in &affine {
+            candidates[*index].stats.max_engine_concurrency = 1;
+            candidates[*index].stats.num_running_queries = 1;
+        }
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::from_millis(100))
+            .selected()
+            .unwrap();
+        assert_eq!(
+            choice.candidate_index, public[0],
+            "public prefill must remain undiscounted"
+        );
+    }
+}
+
+#[test]
 fn wait_and_widen_affinity_wait_requires_a_configured_group_and_key() {
     for (selection_count, key) in [(None, Some("prefix")), (Some(1), None)] {
         let lb = wait_and_widen_load_balancer(|settings| {

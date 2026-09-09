@@ -54,6 +54,17 @@ impl LoadBalancerAlgorithmResolution {
     pub fn config(&self) -> &LoadBalancerAlgorithmConfig {
         self.definition.config()
     }
+
+    pub(crate) fn selection(
+        &self,
+        choice: LoadBalancerCandidateChoice,
+    ) -> LoadBalancerCandidateSelection {
+        LoadBalancerCandidateSelection {
+            choice,
+            effective_algorithm: self.config().algorithm(),
+            requested_algorithm: self.requested_algorithm.clone(),
+        }
+    }
 }
 
 impl LoadBalancerRouter {
@@ -183,6 +194,7 @@ impl LoadBalancerRouter {
     ) -> Option<LoadBalancerCandidateSelection> {
         self.decide_with_algorithm_resolution(target_state, request, candidates, resolution)
             .selected()
+            .map(|choice| resolution.selection(choice))
     }
 
     pub fn decide_with_algorithm_resolution(
@@ -191,18 +203,13 @@ impl LoadBalancerRouter {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         resolution: &LoadBalancerAlgorithmResolution,
-    ) -> LoadBalancerDecision<LoadBalancerCandidateSelection> {
+    ) -> LoadBalancerDecision {
         if candidates.is_empty() {
             return LoadBalancerDecision::Unavailable;
         }
 
         let lb = target_state.load_balancer(&resolution.definition);
         lb.decide(request, candidates)
-            .map(|choice| LoadBalancerCandidateSelection {
-                choice,
-                effective_algorithm: resolution.config().algorithm(),
-                requested_algorithm: resolution.requested_algorithm.clone(),
-            })
     }
 
     pub fn algorithm_name(&self, model_id: &str) -> String {
