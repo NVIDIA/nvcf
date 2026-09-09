@@ -772,8 +772,26 @@ highAvailability:
       enabled: true
       minAvailable: 1
 
+  # Tier-2 quorum services (Cassandra, NATS, OpenBao). Under HA their peers get
+  # hostname pod anti-affinity (matching app.kubernetes.io/instance per release)
+  # so the 3 quorum members land on distinct nodes. whenUnsatisfiable follows
+  # mode: ha-preferred → preferred/soft (stays schedulable on small pools),
+  # ha-enforced → required/hard. The upstream OpenBao chart ships a hard
+  # anti-affinity by default that the stack disables for single-node installs;
+  # this re-enables it (soft/hard by mode) under HA. Set enabled: false to keep
+  # the chart defaults.
+  tier2:
+    podAntiAffinity:
+      enabled: true
+
   nats:
     replicas: 3
+    # JetStream stream replica factor (RF). Applied under HA to the stream
+    # creators — nvcf-api and invocation-service — so the worker/result streams
+    # they declare are replicated across the NATS cluster (survives a node
+    # loss). RF must be <= nats.replicas. Default 2 per the SDD.
+    jetstream:
+      replicaFactor: 2
     podDisruptionBudget:
       enabled: true
       merge:

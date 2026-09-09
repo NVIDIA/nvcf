@@ -77,6 +77,21 @@ if awk '/^rateLimiter:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/ratelimiter-off
   fail "ratelimiter: HA affinity leaked while highAvailability.mode=none"
 fi
 
+# Tier-2 (#989): anti-affinity must not leak into the quorum charts when off.
+render_chart_values cassandra "$work_dir/cassandra-off.yaml" "$deps" || fail "render cassandra (ha none)"
+if grep -q "podAntiAffinity:" "$work_dir/cassandra-off.yaml"; then
+  fail "cassandra: Tier-2 anti-affinity leaked while highAvailability.mode=none"
+fi
+
+# JetStream RF (#989): the RF env must not leak into the stream creators when off.
+if awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-off.yaml" | grep -q "NVCF_NATS_REPLICAS:"; then
+  fail "api: JetStream RF env leaked while highAvailability.mode=none"
+fi
+render_chart_values invocation-service "$work_dir/invocation-off.yaml" "$core" || fail "render invocation (ha none)"
+if grep -q "NATS_PROPERTIES__REPLICAS:" "$work_dir/invocation-off.yaml"; then
+  fail "invocation: JetStream RF env leaked while highAvailability.mode=none"
+fi
+
 echo "== highAvailability ha-preferred: stateless / quorum sizing =="
 write_env <<'EOF'
 highAvailability:
@@ -96,20 +111,34 @@ grep -q "whenUnsatisfiable: ScheduleAnyway" "$work_dir/api-on.yaml" ||
   fail "api: expected ScheduleAnyway topology spread when highAvailability.mode=ha-preferred"
 awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-on.yaml" | grep -q "podDisruptionBudget:" ||
   fail "api: expected podDisruptionBudget when highAvailability.mode=ha-preferred"
+grep -q 'NVCF_NATS_REPLICAS: "2"' "$work_dir/api-on.yaml" ||
+  fail "api: expected JetStream RF NVCF_NATS_REPLICAS=2 when highAvailability.mode=ha-preferred"
+
+render_chart_values invocation-service "$work_dir/invocation-on.yaml" "$core" || fail "render invocation (ha-preferred)"
+grep -q 'NATS_PROPERTIES__REPLICAS: "2"' "$work_dir/invocation-on.yaml" ||
+  fail "invocation: expected JetStream RF NATS_PROPERTIES__REPLICAS=2 when highAvailability.mode=ha-preferred"
 
 render_chart_values cassandra "$work_dir/cassandra-on.yaml" "$deps" || fail "render cassandra (ha-preferred)"
 grep -E "replicaCount:[[:space:]]*3" "$work_dir/cassandra-on.yaml" >/dev/null ||
   fail "cassandra: expected replicaCount 3 when highAvailability.mode=ha-preferred"
 grep -A2 "podDisruptionBudget:" "$work_dir/cassandra-on.yaml" | grep -q "enabled: true" ||
   fail "cassandra: expected HA PDB enabled"
+grep -q "podAntiAffinity:" "$work_dir/cassandra-on.yaml" ||
+  fail "cassandra: expected Tier-2 anti-affinity when highAvailability.mode=ha-preferred"
+grep -q "preferredDuringSchedulingIgnoredDuringExecution:" "$work_dir/cassandra-on.yaml" ||
+  fail "cassandra: expected preferred Tier-2 anti-affinity when highAvailability.mode=ha-preferred"
 
 render_chart_values openbao-server "$work_dir/openbao-on.yaml" "$deps" || fail "render openbao (ha-preferred)"
 grep -A5 "^[[:space:]]*ha:" "$work_dir/openbao-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||
   fail "openbao: expected server.ha.replicas 3 when highAvailability.mode=ha-preferred"
+grep -q "podAntiAffinity:" "$work_dir/openbao-on.yaml" ||
+  fail "openbao: expected Tier-2 anti-affinity when highAvailability.mode=ha-preferred"
 
 render_chart_values nats "$work_dir/nats-on.yaml" "$deps" || fail "render nats (ha-preferred)"
 grep -A5 "cluster:" "$work_dir/nats-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||
   fail "nats: expected config.cluster.replicas 3 when highAvailability.mode=ha-preferred"
+grep -q "podAntiAffinity:" "$work_dir/nats-on.yaml" ||
+  fail "nats: expected Tier-2 anti-affinity when highAvailability.mode=ha-preferred"
 
 # Hot-path helpers (#988): rateLimiter + nats-auth-callout to 2 replicas.
 render_chart_values ratelimiter "$work_dir/ratelimiter-on.yaml" "$core" --state-values-set rateLimiter.enabled=true ||
@@ -143,6 +172,10 @@ grep -q "requiredDuringSchedulingIgnoredDuringExecution:" "$work_dir/api-enforce
   fail "api: expected required anti-affinity when highAvailability.mode=ha-enforced"
 grep -q "whenUnsatisfiable: DoNotSchedule" "$work_dir/api-enforced.yaml" ||
   fail "api: expected DoNotSchedule topology spread when highAvailability.mode=ha-enforced"
+
+render_chart_values cassandra "$work_dir/cassandra-enforced.yaml" "$deps" || fail "render cassandra (ha-enforced)"
+grep -q "requiredDuringSchedulingIgnoredDuringExecution:" "$work_dir/cassandra-enforced.yaml" ||
+  fail "cassandra: expected required Tier-2 anti-affinity when highAvailability.mode=ha-enforced"
 
 render_chart_values ratelimiter "$work_dir/ratelimiter-enforced.yaml" "$core" --state-values-set rateLimiter.enabled=true ||
   fail "render ratelimiter (ha-enforced)"

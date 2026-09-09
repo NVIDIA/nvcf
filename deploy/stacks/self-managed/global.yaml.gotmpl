@@ -43,6 +43,9 @@ stateless — nvcf-api, invocation, grpc-proxy, admin-token-issuer-proxy, and
   topology spread, PDB.
 hotPath   — rateLimiter, nats-auth-callout: 2 replicas + anti-affinity +
   zone topology spread + PDB.
+tier2     — Cassandra, NATS, OpenBao: quorum sizing (3) + PDB + hostname pod
+  anti-affinity so the 3 peers land on distinct nodes. NATS JetStream RF is
+  applied to the stream creators (nvcf-api, invocation) via their env.
 
 In-scope charts MUST expose the required value hooks.
 */}}
@@ -54,6 +57,14 @@ In-scope charts MUST expose the required value hooks.
      nats-auth-callout) under HA. Defaults to 2. */}}
 {{- define "nvcf.ha.hotPathReplicaCount" -}}
 {{- dig "highAvailability" "hotPath" "replicaCount" 2 . -}}
+{{- end -}}
+
+{{/* JetStream stream replica factor (RF) under HA. Applied to the stream
+     creators — nvcf-api (Java, nvcf.nats.replicas) and invocation (Rust,
+     nats_properties.replicas) — via their env so the streams they declare are
+     replicated across the NATS cluster. Defaults to 2 per the SDD. */}}
+{{- define "nvcf.ha.natsStreamReplicas" -}}
+{{- dig "highAvailability" "nats" "jetstream" "replicaFactor" 2 . -}}
 {{- end -}}
 
 {{/* Soft/hard pod anti-affinity on hostname for a Helm release instance name.
@@ -111,6 +122,45 @@ topologySpreadConstraints:
 {{- end -}}
 {{- end -}}
 
+{{/* Hostname pod anti-affinity for a Tier-2 quorum release (Cassandra, NATS,
+     OpenBao) so the 3 quorum peers land on distinct nodes. Matches
+     app.kubernetes.io/instance = release name. ha-preferred → preferred (soft,
+     stays schedulable on small pools), ha-enforced → required (hard). Emits the
+     podAntiAffinity body only (no affinity: wrapper) so callers can nest it as a
+     map (Cassandra affinity, NATS podTemplate.merge.spec.affinity) or a string
+     (OpenBao server.affinity). Gated by highAvailability.tier2.podAntiAffinity.
+     Context: dict "Values" $.Values "instance" "<release-instance>" */}}
+{{- define "nvcf.ha.tier2Affinity" -}}
+{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
+{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
+{{- $paa := dig "highAvailability" "tier2" "podAntiAffinity" dict .Values -}}
+{{- if dig "enabled" true $paa -}}
+podAntiAffinity:
+{{- if eq $haMode "ha-enforced" }}
+  requiredDuringSchedulingIgnoredDuringExecution:
+    - labelSelector:
+        matchExpressions:
+          - key: app.kubernetes.io/instance
+            operator: In
+            values:
+              - {{ .instance | quote }}
+      topologyKey: kubernetes.io/hostname
+{{- else }}
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/instance
+              operator: In
+              values:
+                - {{ .instance | quote }}
+        topologyKey: kubernetes.io/hostname
+{{- end }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString }}
 {{- if not (has $haMode (list "none" "ha-preferred" "ha-enforced")) }}
 {{- fail (printf "highAvailability.mode must be none, ha-preferred, or ha-enforced, got %q" $haMode) }}
@@ -149,6 +199,12 @@ cassandra:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "cassandra" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- with include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "cassandra") }}
+  affinity:
+    {{- . | nindent 4 }}
+  {{- end }}
   {{- end }}
   persistence:
     size: {{ .Values.global.storageSize | default "10Gi" }}
@@ -276,6 +332,14 @@ openbao:
     podDisruptionBudget:
       minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
+    {{- if $haEnabled }}
+    {{- with include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "openbao-server") }}
+    # String form: the OpenBao chart tpl-renders server.affinity. The wrapper
+    # sets it to "" for single-node installs; HA re-enables hostname spread.
+    affinity: |
+      {{- . | nindent 6 }}
+    {{- end }}
+    {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
@@ -339,7 +403,11 @@ nats:
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
-  {{- if or $natsNs $natsTol }}
+  {{- $natsAffinity := "" -}}
+  {{- if $haEnabled -}}
+  {{- $natsAffinity = include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "nats") -}}
+  {{- end -}}
+  {{- if or $natsNs $natsTol $natsAffinity }}
   podTemplate:
     merge:
       spec:
@@ -348,6 +416,10 @@ nats:
         {{- end }}
         {{- with $natsTol }}
         {{- . | nindent 8 }}
+        {{- end }}
+        {{- with $natsAffinity }}
+        affinity:
+          {{- . | nindent 10 }}
         {{- end }}
   {{- end }}
 
@@ -727,6 +799,11 @@ api:
   {{- if .Values.global.observability.tracing.enabled }}
   {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
   {{- end }}
+  {{- if $haEnabled }}
+  {{- /* JetStream RF for the worker/result streams this service declares
+         (nvcf.nats.replicas → NVCF_NATS_REPLICAS via Spring relaxed binding). */}}
+  {{- $_ := set $apiEnv "NVCF_NATS_REPLICAS" (include "nvcf.ha.natsStreamReplicas" .Values) }}
+  {{- end }}
   {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
     {{- toYaml $apiEnv | nindent 4 }}
@@ -749,6 +826,11 @@ invocation:
   {{- end }}
   {{- with $invocationWorkerBaseURL }}
   {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
+  {{- end }}
+  {{- if $haEnabled }}
+  {{- /* JetStream RF for the streams this service declares
+         (nats_properties.replicas → NATS_PROPERTIES__REPLICAS). */}}
+  {{- $_ := set $invocationEnv "NATS_PROPERTIES__REPLICAS" (include "nvcf.ha.natsStreamReplicas" .Values) }}
   {{- end }}
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
