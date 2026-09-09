@@ -51,11 +51,12 @@ scaling:
   lookback_seconds: 600
   decay_factor: 0.1
   policy:
-    type: Static
+    type: Custom
     settings:
-      scaling_thresholds:
+      ttl_seconds: 300
+      default_thresholds:
         scale_up_threshold: 70.0
         scale_down_threshold: 30.0
-      scaling_factors:
+      default_factors:
         scale_up_factor: 1.2
         scale_down_factor: 0.8

@@ -86,11 +86,20 @@ impl PolicyCache {
 
         // Cache miss - fetch from gRPC
         match self.fetch_from_grpc(function_version_id).await {
-            Ok(config) => {
+            Ok(Some(config)) => {
                 // Store in cache
                 self.cache.insert(function_version_id, config.clone()).await;
                 tracing::info!(
                     "Successfully fetched and cached custom policy for function_version_id: {}",
+                    function_version_id
+                );
+                Ok(config)
+            }
+            Ok(None) => {
+                let config = self.get_default_config(function_version_id);
+                self.cache.insert(function_version_id, config.clone()).await;
+                tracing::debug!(
+                    "Cached platform-default policy for function_version_id: {}",
                     function_version_id
                 );
                 Ok(config)
@@ -107,7 +116,10 @@ impl PolicyCache {
     }
 
     /// Fetch policy from gRPC service
-    async fn fetch_from_grpc(&self, function_version_id: Uuid) -> Result<CustomScalingConfig> {
+    async fn fetch_from_grpc(
+        &self,
+        function_version_id: Uuid,
+    ) -> Result<Option<CustomScalingConfig>> {
         self.grpc_client.fetch_policy(function_version_id).await
     }
 
