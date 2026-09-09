@@ -102,7 +102,13 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 
 	refused := 0
 	for _, chart := range charts {
-		p, err := PlanFor(root, chart, version)
+		var p Plan
+		var err error
+		if len(chart.ValuesPaths) > 0 {
+			p, err = PlanForValuesPaths(root, chart.Entry, version, chart.ValuesPaths)
+		} else {
+			p, err = PlanFor(root, chart.Entry, version)
+		}
 		if err != nil {
 			return 1, err
 		}
@@ -119,7 +125,12 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 			}
 			fmt.Fprintf(out, "  %s: %s -> %s (%s)\n", chart.ID, p.Current, version, p.Detail)
 			if write {
-				if err := Apply(root, chart, version, p); err != nil {
+				if len(chart.ValuesPaths) > 0 {
+					err = ApplyValuesPaths(root, chart.Entry, version, chart.ValuesPaths)
+				} else {
+					err = Apply(root, chart.Entry, version, p)
+				}
+				if err != nil {
 					return 1, err
 				}
 			}

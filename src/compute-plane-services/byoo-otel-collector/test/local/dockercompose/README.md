@@ -32,4 +32,3 @@ vault login -method=oidc -path=oidc role=namespace-reader
 ```bash
 consul-template -template="../accounts-secrets.json.ctmpl:accounts-secrets.json" -once
 ```
-

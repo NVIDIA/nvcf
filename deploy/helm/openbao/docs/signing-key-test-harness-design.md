@@ -919,4 +919,3 @@ go build -o signing-key-harness .
 | OpenSSL | 1.1+ | EC key generation (used by bash script) |
 
 **No external Go dependencies** — uses only standard library.
-

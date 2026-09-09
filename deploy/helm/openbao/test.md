@@ -23,11 +23,14 @@
 
 - **Image Pull Secrets**: Configure NGC credentials — see [Image Pull Secrets](README.md#image-pull-secrets---ngcnvcrio)
 - **Kubernetes Cluster**: Running cluster (e.g., Colima, k3d, minikube)
+
   ```bash
   # Example with Colima (isolated setup for testing)
   colima start --profile amd64 --kubernetes
   ```
+
 - **Set kubectl context**: Ensure you're targeting the correct cluster
+
   ```bash
   # Check current context
   kubectl config current-context
@@ -44,12 +47,14 @@
 ## 1. Deploy a Fresh Cluster
 
 ### Option A: Deploy with baseline version
+
 ```bash
 make uninstall                                    # Clean previous deployment
 make install additional_values=values.local.yaml  # Deploy baseline version
 ```
 
 ### Option B: Deploy with new version
+
 ```bash
 # 1. Build the image locally (from repo root)
 unset DOCKER_HOST
@@ -68,6 +73,7 @@ make install additional_values=values.local.yaml,upgrade/values-upgrades.yaml
 ```
 
 ### Verify Deployment
+
 ```bash
 kubectl get pods -n vault-system
 ./tools/raft-list-peers.sh
@@ -78,6 +84,7 @@ kubectl get pods -n vault-system
 > **Setup**: Run `./utils/lb.sh` once before running HA tests. LoadBalancer persists across tests.
 
 ### Test 1: Seal Status Check
+
 Continuously verifies seal status through LoadBalancer during pod failures.
 
 ```bash
@@ -93,6 +100,7 @@ kubectl delete pod openbao-server-0 -n vault-system --force --grace-period=0
 ---
 
 ### Test 2: KV Read/Write/Delete
+
 Continuous KV operations through LoadBalancer to verify data plane HA.
 
 ```bash
@@ -108,6 +116,7 @@ Continuous KV operations through LoadBalancer to verify data plane HA.
 ---
 
 ### Test 3: Basic KV Test
+
 Direct KV operations against individual pods.
 
 ```bash
@@ -120,6 +129,6 @@ kubectl delete pod openbao-server-1 -n vault-system --force --grace-period=0
 
 **Expected**: Operations continue unaffected.
 
-
 ## 2. Upgrade an Existing Cluster
+
 For detailed walkthrough, see **[upgrade runbook](./upgrade/runbook.md)**.

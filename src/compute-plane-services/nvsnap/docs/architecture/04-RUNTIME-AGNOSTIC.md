@@ -11,6 +11,7 @@ NVSNAP must work with any CRI-compliant container runtime:
 | Docker (via cri-dockerd) | Legacy, shim overhead | Additional complexity |
 
 **Problem**: Depending on runtime APIs means:
+
 - Tracking multiple API versions
 - Different code paths for each runtime
 - Breakage on runtime updates

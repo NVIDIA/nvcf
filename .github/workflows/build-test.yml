@@ -109,10 +109,14 @@ jobs:
           NVCA_VERSION="$(yq '.selfManaged.nvcaVersion' nvca-operator/values.yaml)" \
           NVCA_OPERATOR_VERSION="$(yq '.appVersion' nvca-operator/Chart.yaml)" \
           NVCA_SHARED_STORAGE_IMAGE_TAG="$(yq '.selfManaged.sharedStorage.imageTag' nvca-operator/values.yaml)" \
+          NVCA_OTEL_COLLECTOR_IMAGE_TAG="$(yq '.otelCollector.imageTag' nvca-operator/values.yaml)" \
             make check-vendor-chart
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
+
+      - name: Run observability Helmfile profile tests
+        run: make -C deploy/stacks/observability test
 
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh

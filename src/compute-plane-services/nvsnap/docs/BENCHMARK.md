@@ -69,7 +69,6 @@ bring-up floor (scheduling, framework import, CUDA init, tensor-parallel
 worker spawn) that both cold and warm starts pay; cachedir compresses the
 disk work, not live process initialization.
 
-
 ## Environment
 
 - **Cluster**: example-gpu-cluster (GKE)

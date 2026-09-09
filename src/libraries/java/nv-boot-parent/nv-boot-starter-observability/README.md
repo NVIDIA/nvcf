@@ -40,6 +40,7 @@ spring:
 ```
 
 MVC/Servlet:
+
 ```xml
 <dependencies>
     <dependency>
@@ -50,6 +51,7 @@ MVC/Servlet:
 ```
 
 Webflux/Reactive:
+
 ```xml
 <dependencies>
     <dependency>
@@ -65,7 +67,7 @@ Webflux/Reactive:
 - **Filtered log stack traces** – Logback configuration that filters noisy stack trace elements
   (Spring, Reactor, Netty, reflection, etc.) via `StackFilteringThrowableConverter`. Loaded by
   `LogbackEnvironmentPostProcessor` at startup.
-- **OTel semantic conventions** – HTTP spans use OpenTelemetry attribute 
+- **OTel semantic conventions** – HTTP spans use OpenTelemetry attribute
     names (`http.request.method`, `url.path`, `http.route`, etc.) for consistency with the OTel Java agent
 - **Resource attributes** – Adds host, process, and runtime attributes (PID, arch, OS, Java version) to spans
 - **Attribute redaction** – Redacts sensitive column values (e.g. passwords, secrets) from Cassandra query spans
@@ -73,8 +75,8 @@ Webflux/Reactive:
     `@DoNotTraceValue` annotation scanning (scanning requires Spring Data Cassandra on the classpath)
 - **Exception shortening** – Shortens exception stack traces in span events to keep only tracked
     packages (e.g. `com.nvidia`) plus one line of context
-- **Management context tracing** – When actuator runs on a separate 
-    port (e.g. `management.server.port=8181`), HTTP requests to actuator endpoints are 
+- **Management context tracing** – When actuator runs on a separate
+    port (e.g. `management.server.port=8181`), HTTP requests to actuator endpoints are
     traced via `ServerHttpObservationFilter` (MVC only) registered in the management context
 - **Cassandra observability** – When Spring Data Cassandra’s observability types are on the
     classpath, registers a `CqlSessionBuilderCustomizer` named
@@ -224,8 +226,8 @@ management:
         scan-package: com.nvidia.foo.bar.app_root     # Root package of the app.
 ```
 
-- `management.tracing.redaction.enabled` – Enable redaction wiring (default: `true`). Actual 
-   redaction runs only when `sensitive-columns` is non-empty and/or `scan-package` discovers 
+- `management.tracing.redaction.enabled` – Enable redaction wiring (default: `true`). Actual
+   redaction runs only when `sensitive-columns` is non-empty and/or `scan-package` discovers
    columns; set to `false` to disable the feature entirely.
 - `management.tracing.redaction.cassandra.sensitive-columns` – Column names to redact in Cassandra query traces.
   Values matching `column = 'value'` are replaced with `column = ?`. Case-insensitive.
@@ -240,7 +242,7 @@ management:
 ### Exception shortening
 
 - `management.tracing.exceptions.shorten` – Enable shortening (default: `true`)
-- `management.tracing.exceptions.packages` – Package prefixes to keep in stack traces 
+- `management.tracing.exceptions.packages` – Package prefixes to keep in stack traces
    (default: `["com.nvidia"]`). Stack traces are truncated after the last line matching any
    of these packages, plus one line.
 

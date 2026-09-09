@@ -109,6 +109,7 @@ flowchart LR
     Agent2 -- peer fetch --> Agent1
     Agent2 -- fallback --> Blob
 ```
+
 </details>
 
 The system has five components:
@@ -177,6 +178,7 @@ flowchart TB
     vol -.-> E
     E --> P --> S --> M --> U
 ```
+
 </details>
 
 ### How it works
@@ -279,6 +281,7 @@ sequenceDiagram
     Agent->>Srv: register checkpoint
     Srv-->>User: 202 Accepted
 ```
+
 </details>
 
 Steps in detail:
@@ -364,6 +367,7 @@ sequenceDiagram
     CRIU-->>Pod: resume process tree
     Pod-->>User: /v1/completions OK
 ```
+
 </details>
 
 The novel piece in this flow is **cascading fetch**: on a cross-node
@@ -413,6 +417,7 @@ flowchart LR
     PVC -.-> Restore
     Blob -.-> Restore
 ```
+
 </details>
 
 | Tier | Latency profile | Persistence | Where it lives |

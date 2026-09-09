@@ -1,0 +1,10 @@
+global:
+  helm:
+    sources:
+      registry: "nvcr.io"
+      repository: "0651155215864979/ncp-dev"
+  image:
+    registry: nvcr.io
+    repository: 0651155215864979/ncp-dev
+  imagePullSecrets:
+    - name: nvcr-pull-secret

@@ -28,6 +28,7 @@ postgres:
 ```
 
 **Validation Rules:**
+
 - If `database.provider` is `postgres` or `postgresql`, either:
   - `postgres.existingSecret` must be set, OR
   - Both `postgres.username` AND `postgres.password` must be provided
@@ -155,6 +156,7 @@ healthChecks:
 ```
 
 **Available Health Endpoints:**
+
 - `/healthz` - Primary health check endpoint (recommended)
 - `/health` - Alternative health check endpoint
 - `/v1/ping` - Basic connectivity test
@@ -202,11 +204,13 @@ helm template test-release ./deploy \
 ## Installation Examples
 
 ### SQLite (Default)
+
 ```bash
 helm install my-release ./deploy
 ```
 
 ### PostgreSQL with credentials
+
 ```bash
 helm install my-release ./deploy \
   --set serviceConfig.database.provider=postgres \
@@ -215,6 +219,7 @@ helm install my-release ./deploy \
 ```
 
 ### PostgreSQL with existing secret
+
 ```bash
 # Create secret first
 kubectl create secret generic my-postgres-secret \
@@ -228,6 +233,7 @@ helm install my-release ./deploy \
 ```
 
 ### With metrics enabled
+
 ```bash
 helm install my-release ./deploy \
   --set metrics.enabled=true \
@@ -235,6 +241,7 @@ helm install my-release ./deploy \
 ```
 
 ### With metrics and Grafana dashboard enabled
+
 ```bash
 helm install my-release ./deploy \
   --set metrics.enabled=true \
@@ -243,6 +250,7 @@ helm install my-release ./deploy \
 ```
 
 ### With custom health check configuration
+
 ```bash
 helm install my-release ./deploy \
   --set healthChecks.livenessProbe.initialDelaySeconds=15 \
@@ -251,6 +259,7 @@ helm install my-release ./deploy \
 ```
 
 ### With health checks disabled
+
 ```bash
 helm install my-release ./deploy \
   --set healthChecks.livenessProbe.enabled=false \
@@ -275,4 +284,4 @@ Error: When metrics.enabled is false, dashboard.enabled cannot be true. Dashboar
 
 ## Values File Structure
 
-See `values.yaml` for the complete configuration structure and all available options. 
+See `values.yaml` for the complete configuration structure and all available options.

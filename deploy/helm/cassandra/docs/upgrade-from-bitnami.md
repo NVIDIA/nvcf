@@ -96,6 +96,7 @@ re-adopted, and the new pod comes up on the old data. In the Phase 4 test the
 PVC stayed `Bound` throughout and the new UID-999 pod mounted and read it.
 
 Two caveats:
+
 - This is a one-time migration hop (Bitnami-shaped StatefulSet to
   in-house-shaped StatefulSet). Ordinary upgrades within the in-house chart
   later do not hit this, because the StatefulSet spec shape stays stable, unless
@@ -110,6 +111,7 @@ Two caveats:
 ### Option A: in-place adopt (legacy layout + config compat)
 
 Reuse the existing PVC in place. Mechanics:
+
 - Recreate the StatefulSet: `kubectl delete statefulset cassandra
   --cascade=orphan` (keeps the pod and PVC), delete the old pod (the PVC
   persists), then `helm upgrade` so the new StatefulSet adopts
@@ -122,7 +124,6 @@ Reuse the existing PVC in place. Mechanics:
   data requires, at least `uuid_sstable_identifiers_enabled: true`, via the
   existing conf initContainer patch. The full set of settings that must match
   is not yet enumerated.
-
 
 The orphan-delete-and-recreate runbook is scripted with safety checks at
 `upgrade/migrate-from-bitnami.sh` (dry-run by default). It is provisional until
@@ -160,6 +161,7 @@ cutover; more operator steps; larger data means longer restore.
 ## Recommendation for discussion
 
 Given we are pre-1.0.0 and want a clean result:
+
 - Ship Option A as the convenience path for environments that want in-place
   adoption, but only after the full cassandra.yaml config-compat set is
   enumerated and encoded, and with the orphan-delete-and-recreate documented as
@@ -169,6 +171,7 @@ Given we are pre-1.0.0 and want a clean result:
   acceptable.
 
 Open questions for Brad:
+
 - Do we commit to supporting in-place adoption (A), or make backup/restore (C)
   the only supported migration and keep the chart clean of legacy-layout knobs?
 - If A, what is the complete set of cassandra.yaml settings the current Bitnami

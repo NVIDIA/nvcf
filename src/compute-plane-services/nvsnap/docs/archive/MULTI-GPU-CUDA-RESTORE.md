@@ -2,10 +2,11 @@
 
 **Status:** design — not yet implemented. Captures the architecture we'll
 follow when we re-attempt multi-GPU GPU-state restore. Single-GPU CRIU
-+ cuda-checkpoint already works; this doc is for the multi-GPU path
+- cuda-checkpoint already works; this doc is for the multi-GPU path
 (currently blocked at the libcudart wall — see MEMORY.md).
 
 **Related docs:**
+
 - `docs/CUDA-INTERPOSITION-DESIGN.md` — the cuMemAlloc/Free interposition substrate WrapCore is built on.
 - `docs/MULTI-GPU-PLAN.md` — older planning doc, superseded by this one for the GPU-state half.
 - `docs/NCCL-MULTI-GPU-CHECKLIST.md` — operational checklist; this doc is the architecture.

@@ -56,6 +56,7 @@ The `sed 's/^00*//'` command removes leading zeros from the hex representation o
 - Stripping them changes the mathematical value of the key
 
 **Example:**
+
 ```
 Original hex:    00a1b2c3d4...  (64 chars, starts with 00)
 After sed:       a1b2c3d4...    (62 chars, leading 00 removed)
@@ -168,6 +169,7 @@ Fields:
 ### 5.3 Where the Key is Used
 
 The `nvcf-notary` service:
+
 1. Retrieves the signing key from OpenBao
 2. Uses it to sign JWTs for function invocation assertions
 3. Downstream services verify these JWTs
@@ -211,11 +213,13 @@ The `nvcf-notary` service:
 ### 7.1 Applied Fix (Line 146)
 
 **Before:**
+
 ```bash
 D_PADDED=$(printf "%064s" "$D_VALUE")
 ```
 
 **After:**
+
 ```bash
 # Note: printf %s pads with spaces, so we must replace them with zeros
 D_PADDED=$(printf "%064s" "$D_VALUE" | tr ' ' '0')
@@ -238,6 +242,7 @@ printf "%064s" "abc" | tr ' ' '0' → "00000000000000000000000000000000000000000
 ## 8. Verification - Test Harness Results
 
 A Go-based test harness was developed to statistically validate the bug and fix. The harness:
+
 1. Calls the bash `generate_asymmetric_signing_key()` function
 2. Parses the resulting JWK
 3. Signs a JWT using Go's `crypto/ecdsa`
@@ -429,13 +434,14 @@ Consider also reviewing line 115 (`sed 's/^00*//'`) to ensure leading zeros are 
 ## 12. References
 
 ### Standards
+
 - [RFC 7517 - JSON Web Key (JWK)](https://tools.ietf.org/html/rfc7517)
 - [RFC 7518 - JSON Web Algorithms (JWA)](https://tools.ietf.org/html/rfc7518) - Section 6.2.2 (EC Private Key)
 - [NIST FIPS 186-4](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.186-4.pdf) - P-256 Curve specification
 
 ### Internal Documentation
+
 - Test Harness: `tests/signing-key-harness/`
 - Test Harness Design: `docs/signing-key-test-harness-design.md`
 - Buggy Script (for testing): `tests/signing-key-harness/testdata/encryption_setup_buggy.sh`
 - Fixed Script (for testing): `tests/signing-key-harness/testdata/encryption_setup_fixed.sh`
-

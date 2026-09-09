@@ -385,7 +385,7 @@ To enable Prometheus metrics:
    prometheus-agent kube-prometheus-stack
 ```
 
-2. **Enable Metrics in GXCache**:
+1. **Enable Metrics in GXCache**:
 
 ```bash
  helm upgrade gxcache -n gxcache . \
@@ -394,7 +394,7 @@ To enable Prometheus metrics:
    --set service.metrics.enabled=true
 ```
 
-3. **Access Prometheus**:
+1. **Access Prometheus**:
 
 ```bash
  kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090
@@ -414,24 +414,28 @@ GXCache logs include:
 ### Common Issues
 
 **Webhook Not Working**
-   - Verify webhook is running and healthy
-   - Check webhook configuration and secrets
-   - Ensure proper RBAC permissions
+
+- Verify webhook is running and healthy
+- Check webhook configuration and secrets
+- Ensure proper RBAC permissions
 
 **Cache Not Storing Shaders**
-   - Verify GXCache service is running
-   - Check storage configuration and persistent volumes
-   - Review application logs for shader compilation errors
+
+- Verify GXCache service is running
+- Check storage configuration and persistent volumes
+- Review application logs for shader compilation errors
 
 **Low Cache Hit Ratio**
-   - Review cache size configuration
-   - Check cache eviction policies
-   - Monitor storage performance
+
+- Review cache size configuration
+- Check cache eviction policies
+- Monitor storage performance
 
 **Storage Issues**
-   - Verify storage class availability
-   - Check persistent volume claims
-   - Monitor disk space usage
+
+- Verify storage class availability
+- Check persistent volume claims
+- Monitor disk space usage
 
 ## Best Practices
 

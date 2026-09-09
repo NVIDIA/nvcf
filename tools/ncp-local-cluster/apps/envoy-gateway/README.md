@@ -5,6 +5,7 @@ This directory contains configuration for enabling Gateway API support in the k3
 ## Overview
 
 The Gateway API is a Kubernetes-native way to define ingress routing that is:
+
 - **Vendor-neutral**: Works across different ingress controllers
 - **Role-oriented**: Separates infrastructure (Gateway) from application routing (HTTPRoute)
 - **Expressive**: Supports advanced routing like wildcard subdomains
@@ -38,6 +39,7 @@ make setup-gateway-api
 ```
 
 This will:
+
 1. Install Gateway API CRDs (v1.2.1)
 2. Install/upgrade Envoy Gateway v1.5.4 from OCI registry (`oci://docker.io/envoyproxy/gateway-helm`) in the `envoy-gateway-system` namespace
 3. Apply GatewayClass and Gateway resources, including the HTTPS gRPC and UDP
@@ -71,22 +73,27 @@ kubectl get svc -n envoy-gateway-system | grep LoadBalancer
 Once Gateway API infrastructure is ready:
 
 1. **Deploy and validate the nginx sample**:
+
    ```bash
    make validate-gateway
    ```
+
    This will deploy an nginx sample and an `HTTPRoute` to test the gateway. The validation waits for the Gateway to be ready and tests hostname-based routing.
 
 2. **Verify Gateway is ready**:
+
    ```bash
    kubectl get gateway -n envoy-gateway-system
    kubectl describe gateway shared-gw -n envoy-gateway-system
    ```
 
 3. **Test routing**:
+
    ```bash
    curl http://nginx.localhost:8080/
    # Should return "Welcome to nginx!"
    ```
+
    Note: Ensure `nginx.localhost` resolves to `127.0.0.1` (check `/etc/hosts`)
 
 ## Troubleshooting
@@ -94,11 +101,15 @@ Once Gateway API infrastructure is ready:
 ### GatewayClass not found
 
 If `kubectl get gatewayclass` returns no resources:
+
 1. Check Envoy Gateway logs:
+
    ```bash
    kubectl logs -n envoy-gateway-system -l app.kubernetes.io/name=envoy-gateway
    ```
+
 2. Check Envoy Gateway deployment status:
+
    ```bash
    kubectl get deployment -n envoy-gateway-system
    kubectl describe deployment eg -n envoy-gateway-system
@@ -107,12 +118,14 @@ If `kubectl get gatewayclass` returns no resources:
 ### HTTPRoute not attaching
 
 Check HTTPRoute status:
+
 ```bash
 kubectl get httproute -A
 kubectl describe httproute nginx-route -n sample
 ```
 
 Common issues:
+
 - Gateway doesn't exist yet
 - Namespace mismatch in `parentRefs`
 - Backend service doesn't exist
@@ -121,20 +134,27 @@ Common issues:
 ### Gateway route validation fails
 
 If `make validate-gateway` fails:
+
 1. Check Gateway status:
+
    ```bash
    kubectl get gateway shared-gw -n envoy-gateway-system -o yaml
    ```
+
    Ensure `status.conditions` shows `Programmed: True`
 2. Check HTTPRoute is attached:
+
    ```bash
    kubectl get gateway shared-gw -n envoy-gateway-system -o jsonpath='{.status.listeners[0].attachedRoutes}'
    ```
+
 3. Verify hostname resolution:
+
    ```bash
    ping nginx.localhost
    # Should resolve to 127.0.0.1
    ```
+
    If not, add to `/etc/hosts`: `127.0.0.1 nginx.localhost`
 
 ## Configuration Files

@@ -25,23 +25,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestShouldWarnForLegacyBYOOConfig(t *testing.T) {
+func TestShouldWarnForLegacyFirstClassConfig(t *testing.T) {
 	cache := &BackendK8sCache{}
 	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
 		Namespace:       "nvca-operator",
 		Name:            agentConfigMergeConfigMapName,
 		ResourceVersion: "1",
 		Annotations: map[string]string{
-			legacyBYOOConfigAnnotation: "true",
+			legacyFirstClassConfigAnnotation: "true",
 		},
 	}}
 
-	assert.True(t, cache.shouldWarnForLegacyBYOOConfig(configMap))
-	assert.False(t, cache.shouldWarnForLegacyBYOOConfig(configMap))
+	assert.True(t, cache.shouldWarnForLegacyFirstClassConfig(configMap))
+	assert.False(t, cache.shouldWarnForLegacyFirstClassConfig(configMap))
 
 	configMap.ResourceVersion = "2"
-	assert.True(t, cache.shouldWarnForLegacyBYOOConfig(configMap))
+	assert.True(t, cache.shouldWarnForLegacyFirstClassConfig(configMap))
 
 	configMap.Annotations = nil
-	assert.False(t, cache.shouldWarnForLegacyBYOOConfig(configMap))
+	assert.False(t, cache.shouldWarnForLegacyFirstClassConfig(configMap))
 }
