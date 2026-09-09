@@ -206,10 +206,9 @@ public class XAccountMiscEndpointsController {
         var gpuSpecs = deploymentContext.gpuSpecs().stream()
                 .collect(Collectors.toMap(
                         spec -> spec.getKey().getGpuSpecificationId(), spec -> spec));
-        var rolloverSpecs = rolloverRequest.rolloverSpecifications();
-        validateRolloverRequest(function, deploymentId, gpuSpecs, rolloverSpecs);
+        validateRolloverRequest(function, deploymentId, gpuSpecs, rolloverRequest);
 
-        var icmsRequestIds = rolloverSpecs.stream()
+        var icmsRequestIds = rolloverRequest.rolloverSpecifications().stream()
                 .map(rolloverSpec -> icmsAllocatorService.scheduleNewInstance(
                         function, deploymentId, gpuSpecs.get(rolloverSpec.gpuSpecId()),
                         rolloverSpec.numInstances()))
@@ -221,9 +220,9 @@ public class XAccountMiscEndpointsController {
             FunctionEntity function,
             UUID deploymentId,
             Map<UUID, GpuSpecificationEntity> gpuSpecs,
-            List<RolloverSpecificationDto> rolloverSpecs) {
+            RolloverRequest rolloverRequest) {
         var requestedGpuSpecIds = new HashSet<UUID>();
-        rolloverSpecs.forEach(rolloverSpec -> {
+        rolloverRequest.rolloverSpecifications().forEach(rolloverSpec -> {
             var gpuSpecificationId = rolloverSpec.gpuSpecId();
             if (!requestedGpuSpecIds.add(gpuSpecificationId)) {
                 var mesg = MESG_DUPLICATE_ROLLOVER_SPEC.formatted(
