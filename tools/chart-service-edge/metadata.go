@@ -24,9 +24,42 @@ type Entry struct {
 	Path string `json:"path"`
 	// Deploys is nil when the key is absent and non-nil empty when the chart
 	// declares it ships no first-party image. That distinction is the whole
-	// point of the audit, so it must survive decoding: a []string does exactly
+	// point of the audit, so it must survive decoding: a []Deploy does exactly
 	// that, where a map lookup or a len() test would flatten the two together.
-	Deploys []string `json:"deploys"`
+	Deploys []Deploy `json:"deploys"`
+}
+
+// Deploy is one service a chart ships. A plain JSON string names the service
+// and lets chart-version-bumper's single appVersion/image-tag agreement
+// decide which values.yaml line belongs to it. A chart with more than one
+// first-party image cannot use that evidence, so a deploy entry may instead
+// be an object naming the exact values.yaml paths (dotted, for example
+// "otelCollector.imageTag") that carry that service's tag. This tool only
+// audits which service ids are declared, so it does not care which shape a
+// given entry takes; UnmarshalJSON exists so decoding either shape succeeds.
+type Deploy struct {
+	Service     string
+	ValuesPaths []string
+}
+
+func (d *Deploy) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*d = Deploy{Service: s}
+		return nil
+	}
+	var obj struct {
+		Service     string   `json:"service"`
+		ValuesPaths []string `json:"values_paths"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return fmt.Errorf("deploys entry: %w", err)
+	}
+	if obj.Service == "" {
+		return fmt.Errorf("deploys entry missing \"service\"")
+	}
+	*d = Deploy{Service: obj.Service, ValuesPaths: obj.ValuesPaths}
+	return nil
 }
 
 // Metadata is the decoded release metadata file.

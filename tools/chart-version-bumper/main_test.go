@@ -218,7 +218,7 @@ func TestApplyRewritesOnlyTheTagLinesMatchingAppVersion(t *testing.T) {
 	]}`)
 	f.chart(t, "multi", "1.0.0", "app:\n  image:\n    tag: \"1.0.0\"\nsidecar:\n  image:\n    tag: \"3.3.3\"")
 
-	chart := Entry{ID: "multi", Path: "deploy/helm/multi", Deploys: []string{"svc"}}
+	chart := Entry{ID: "multi", Path: "deploy/helm/multi", Deploys: []Deploy{{Service: "svc"}}}
 	if err := Apply(f.root, chart, "2.0.0", Plan{Action: ActionBoth, Current: "1.0.0"}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -357,8 +357,16 @@ func TestRealChartsResolve(t *testing.T) {
 			t.Errorf("chart %s declares an edge but no Chart.yaml was found under %s", e.ID, e.Path)
 			continue
 		}
-		if _, err := PlanFor(root, e, "9.9.9"); err != nil {
-			t.Errorf("planning %s failed: %v", e.ID, err)
+		for _, d := range e.Deploys {
+			if len(d.ValuesPaths) > 0 {
+				if _, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths); err != nil {
+					t.Errorf("planning %s (%s values paths) failed: %v", e.ID, d.Service, err)
+				}
+				continue
+			}
+			if _, err := PlanFor(root, e, "9.9.9"); err != nil {
+				t.Errorf("planning %s failed: %v", e.ID, err)
+			}
 		}
 		seen++
 	}
@@ -419,7 +427,7 @@ func TestAMissingValuesFileLeavesChartYamlAlone(t *testing.T) {
 
 	// With values.yaml gone the chart plans appversion-only, so force the
 	// both-file path directly to exercise the ordering.
-	chart := Entry{ID: "c", Path: "deploy/helm/c", Deploys: []string{"svc"}}
+	chart := Entry{ID: "c", Path: "deploy/helm/c", Deploys: []Deploy{{Service: "svc"}}}
 	err := Apply(f.root, chart, "2.0.0", Plan{Action: ActionBoth, Current: "1.0.0"})
 	if err == nil {
 		t.Fatal("Apply should fail when values.yaml cannot be read")
@@ -534,4 +542,162 @@ func TestBlockImageIsStillAccepted(t *testing.T) {
 	if got := f.read(t, "c", "values.yaml"); !strings.Contains(got, `tag: "2.0.0"`) {
 		t.Fatalf("image tag did not move:\n%s", got)
 	}
+}
+
+func TestValuesPathBumpsOnlyItsOwnFieldInAMultiImageChart(t *testing.T) {
+	// nvca-operator's real shape: one appVersion-owning service (nvca) plus a
+	// sidecar (byoo-otel-collector) whose tag lives at its own values.yaml
+	// path. The declared path must move, appVersion must not, and the other
+	// service's image must not.
+	f := newFixture(t, `{"services":[
+	 {"id":"nvca","path":"src/nvca"},
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"c","path":"deploy/helm/c","deploys":["nvca",{"service":"sidecar","values_paths":["otelCollector.imageTag"]}]}
+	]}`)
+	f.chart(t, "c", "3.0.0", "image:\n  tag: \"3.0.0\"\notelCollector:\n  imageTag: 0.157.0-nv-0.2.1\n")
+
+	code, out, errOut := f.run(t, "src/sidecar/v0.160.0-nv-0.2.4", true)
+	if code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "c: 0.157.0-nv-0.2.1 -> 0.160.0-nv-0.2.4 (declared values path(s): otelCollector.imageTag)") {
+		t.Fatalf("plan output did not describe the values-path bump:\n%s", out)
+	}
+	values := f.read(t, "c", "values.yaml")
+	if !strings.Contains(values, "imageTag: \"0.160.0-nv-0.2.4\"") {
+		t.Fatalf("the declared path did not move:\n%s", values)
+	}
+	if !strings.Contains(values, "tag: \"3.0.0\"") {
+		t.Fatalf("the other service's image must be left alone:\n%s", values)
+	}
+	if got := f.read(t, "c", "Chart.yaml"); !strings.Contains(got, `appVersion: "3.0.0"`) {
+		t.Fatalf("appVersion belongs to the other service and must not move:\n%s", got)
+	}
+}
+
+func TestValuesPathsAllMoveTogether(t *testing.T) {
+	// A service can own more than one field in the same chart, as nvca-operator
+	// does with four separate otelCollector.imageTag-shaped fields.
+	f := newFixture(t, `{"services":[
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{"service":"sidecar","values_paths":["a.tag","b.tag"]}]}
+	]}`)
+	f.chart(t, "c", "0.0.0", "a:\n  tag: \"1.0.0\"\nb:\n  tag: \"1.0.0\"\n")
+
+	if code, _, errOut := f.run(t, "src/sidecar/v2.0.0", true); code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s", code, errOut)
+	}
+	values := f.read(t, "c", "values.yaml")
+	if strings.Count(values, `tag: "2.0.0"`) != 2 {
+		t.Fatalf("both declared paths should have moved:\n%s", values)
+	}
+}
+
+func TestValuesPathsDisagreeRefusesRatherThanForcingAgreement(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{"service":"sidecar","values_paths":["a.tag","b.tag"]}]}
+	]}`)
+	f.chart(t, "c", "0.0.0", "a:\n  tag: \"1.0.0\"\nb:\n  tag: \"9.9.9\"\n")
+	before := f.read(t, "c", "values.yaml")
+
+	code, _, errOut := f.run(t, "src/sidecar/v2.0.0", true)
+	if code != RefusedExit {
+		t.Fatalf("want refusal, got %d", code)
+	}
+	if !strings.Contains(errOut, "declared values paths disagree") {
+		t.Fatalf("want the disagreement reason:\n%s", errOut)
+	}
+	if after := f.read(t, "c", "values.yaml"); after != before {
+		t.Fatalf("nothing may be written on a refusal:\n%s", after)
+	}
+}
+
+func TestValuesPathNotFoundIsAClearRefusal(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{"service":"sidecar","values_paths":["missing.tag"]}]}
+	]}`)
+	f.chart(t, "c", "0.0.0", "a:\n  tag: \"1.0.0\"\n")
+
+	code, _, errOut := f.run(t, "src/sidecar/v2.0.0", false)
+	if code != RefusedExit {
+		t.Fatalf("want refusal, got %d", code)
+	}
+	if !strings.Contains(errOut, `values path "missing.tag" not found`) {
+		t.Fatalf("want the not-found reason:\n%s", errOut)
+	}
+}
+
+func TestValuesPathDistinguishesRepeatedLeafKeysByFullAncestry(t *testing.T) {
+	// Two fields both end in "imageTag", nested under different parents. A
+	// nearest-parent-only match cannot tell them apart; this is why
+	// resolveValuesPath walks the full path instead.
+	f := newFixture(t, `{"services":[
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{"service":"sidecar","values_paths":["helmManaged.otelCollector.imageTag"]}]}
+	]}`)
+	f.chart(t, "c", "0.0.0",
+		"otelCollector:\n  imageTag: 0.157.0-nv-0.2.1\nhelmManaged:\n  otelCollector:\n    imageTag: 0.157.0-nv-0.2.1\n")
+
+	if code, _, errOut := f.run(t, "src/sidecar/v0.160.0-nv-0.2.4", true); code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s", code, errOut)
+	}
+	values := f.read(t, "c", "values.yaml")
+	if !strings.Contains(values, "otelCollector:\n  imageTag: 0.157.0-nv-0.2.1") {
+		t.Fatalf("the top-level field was not declared, so it must be left alone verbatim:\n%s", values)
+	}
+	if !strings.Contains(values, "    imageTag: \"0.160.0-nv-0.2.4\"") {
+		t.Fatalf("the declared nested field did not move:\n%s", values)
+	}
+}
+
+func TestValuesPathRerunIsANoOp(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"sidecar","path":"src/sidecar"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{"service":"sidecar","values_paths":["otelCollector.imageTag"]}]}
+	]}`)
+	f.chart(t, "c", "0.0.0", "otelCollector:\n  imageTag: 1.0.0\n")
+	f.run(t, "src/sidecar/v2.0.0", true)
+	before := f.read(t, "c", "values.yaml")
+
+	code, out, _ := f.run(t, "src/sidecar/v2.0.0", true)
+	if code != 0 {
+		t.Fatalf("a repeat run should be clean, got %d", code)
+	}
+	if !strings.Contains(out, "already 2.0.0") {
+		t.Fatalf("it should say the chart is already there:\n%s", out)
+	}
+	if after := f.read(t, "c", "values.yaml"); after != before {
+		t.Fatalf("a repeat run rewrote the file:\n%s\n---\n%s", before, after)
+	}
+}
+
+func TestDeployEntryAcceptsBothStringAndObjectShapesInOneList(t *testing.T) {
+	// nvca-operator's real declaration mixes a bare string (nvca, default
+	// appVersion evidence) with an object (byoo-otel-collector, explicit
+	// paths) in the same deploys list.
+	m := decodeMetadata(t, `{"services":[
+	 {"id":"c","path":"deploy/helm/c","deploys":["nvca",{"service":"sidecar","values_paths":["a.tag"]}]}
+	]}`)
+	entry := m.Services[0]
+	if len(entry.Deploys) != 2 {
+		t.Fatalf("want 2 deploy entries, got %d", len(entry.Deploys))
+	}
+	if entry.Deploys[0].Service != "nvca" || len(entry.Deploys[0].ValuesPaths) != 0 {
+		t.Fatalf("the string form should decode as a bare service with no paths: %+v", entry.Deploys[0])
+	}
+	if entry.Deploys[1].Service != "sidecar" || strings.Join(entry.Deploys[1].ValuesPaths, ",") != "a.tag" {
+		t.Fatalf("the object form should decode its service and paths: %+v", entry.Deploys[1])
+	}
+}
+
+func decodeMetadata(t *testing.T, body string) *Metadata {
+	t.Helper()
+	f := newFixture(t, body)
+	m, err := LoadMetadata(f.root)
+	if err != nil {
+		t.Fatalf("metadata did not decode: %v", err)
+	}
+	return m
 }

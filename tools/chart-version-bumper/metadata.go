@@ -21,7 +21,44 @@ const ChartPrefix = "deploy/helm/"
 type Entry struct {
 	ID      string   `json:"id"`
 	Path    string   `json:"path"`
-	Deploys []string `json:"deploys"`
+	Deploys []Deploy `json:"deploys"`
+}
+
+// Deploy is one service a chart ships. A plain JSON string names the service
+// and leaves ValuesPaths empty, so PlanFor/Apply use the default evidence: the
+// chart's single image tag agrees with its appVersion, or it does not.
+//
+// A chart that ships more than one first-party image cannot use that
+// evidence: several tags could equal the old appVersion, or none could,
+// without saying which one is this service's. For that case a deploy entry
+// is an object naming ValuesPaths, the exact values.yaml paths (dotted, for
+// example "otelCollector.imageTag") that carry this service's tag. Those
+// paths move to the released version and nothing else does: appVersion is
+// left alone, because in a multi-image chart it belongs to whichever other
+// service (if any) uses the default single-image evidence.
+type Deploy struct {
+	Service     string
+	ValuesPaths []string
+}
+
+func (d *Deploy) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*d = Deploy{Service: s}
+		return nil
+	}
+	var obj struct {
+		Service     string   `json:"service"`
+		ValuesPaths []string `json:"values_paths"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return fmt.Errorf("deploys entry: %w", err)
+	}
+	if obj.Service == "" {
+		return fmt.Errorf("deploys entry missing \"service\"")
+	}
+	*d = Deploy{Service: obj.Service, ValuesPaths: obj.ValuesPaths}
+	return nil
 }
 
 // Metadata is the decoded release metadata file.
@@ -71,16 +108,26 @@ func (m *Metadata) ServiceForTag(tag string) (serviceID, version string, err err
 	return bestID, tag[len(bestPath)+2:], nil
 }
 
-// ChartsDeploying returns the chart entries that declare they deploy serviceID.
-func (m *Metadata) ChartsDeploying(serviceID string) []Entry {
-	var out []Entry
+// ChartDeploy pairs a chart entry with how the released service's tag is
+// found in it. ValuesPaths is empty for the default appVersion/image-tag
+// agreement evidence, and holds the declared dotted paths when the deploy
+// edge named them explicitly.
+type ChartDeploy struct {
+	Entry
+	ValuesPaths []string
+}
+
+// ChartsDeploying returns the chart entries that declare they deploy
+// serviceID, one ChartDeploy per chart.
+func (m *Metadata) ChartsDeploying(serviceID string) []ChartDeploy {
+	var out []ChartDeploy
 	for _, e := range m.Services {
 		if !strings.HasPrefix(e.Path, ChartPrefix) {
 			continue
 		}
-		for _, s := range e.Deploys {
-			if s == serviceID {
-				out = append(out, e)
+		for _, d := range e.Deploys {
+			if d.Service == serviceID {
+				out = append(out, ChartDeploy{Entry: e, ValuesPaths: d.ValuesPaths})
 				break
 			}
 		}
