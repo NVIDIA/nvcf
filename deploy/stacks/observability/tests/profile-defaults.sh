@@ -10,6 +10,7 @@ fail() {
   exit 1
 }
 
+# List enabled releases for the selected observability profile.
 profile_releases() {
   local profile="$1"
   HELMFILE_ENV=local helmfile \
@@ -22,8 +23,9 @@ profile_releases() {
     sort
 }
 
-# `show-dag` eagerly prepares the placeholder OCI charts. Debug rendering of
-# `list --skip-charts` keeps this test offline while preserving `needs` edges.
+# Render the evaluated Helmfile state without downloading charts, then recover
+# its YAML documents in "$work_dir/<output_name>.yaml". `show-dag` cannot be
+# used here because it eagerly prepares the placeholder OCI charts.
 render_release_state() {
   local output_name="$1"
   shift
@@ -54,6 +56,7 @@ render_release_state() {
   test -s "$state_file" || fail "could not recover the $output_name Helmfile state"
 }
 
+# Print the `needs` entries for a named release from a rendered Helmfile state.
 release_needs() {
   local state_file="$1"
   local release_name="$2"
@@ -66,6 +69,7 @@ release_needs() {
   ' "$state_file"
 }
 
+# Render default monitor manifests for the selected observability profile.
 render_monitors() {
   local profile="$1"
   local output_dir="$work_dir/$profile"
