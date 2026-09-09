@@ -72,6 +72,7 @@ type OpenAIDirector struct {
 	llmGatewayDirector *LLMGatewayDirector
 	shadower           *TrafficShadower
 	shadowRandomBucket func() int
+	shadowBodyRewriter func(body []byte, modelName string) ([]byte, error)
 
 	// Cache for filtered models
 	filteredModelsCache        []ModelInfo
@@ -722,10 +723,11 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	var droppedTargetModels []string
 	finishers := make([]func(error), 0, len(shadows))
 	for _, shadow := range shadows {
-		shadowBody, err := rewriteShadowRequestModel(rawBody, shadow.modelName)
+		shadowBody, err := d.rewriteShadowBody(rawBody, shadow.modelName)
 		if err != nil {
 			zap.L().Warn("shadow body rewrite failed, dropping target", append(
 				middleware.TraceFields(resolved.request.Context()),
+				zap.String("function_id", resolved.functionInfo.functionId),
 				zap.String("primary_model", resolved.modelName),
 				zap.String("shadow_model", shadow.modelName),
 				zap.Error(err),
@@ -771,6 +773,13 @@ func (d *OpenAIDirector) randomShadowBucket() int {
 		return d.shadowRandomBucket()
 	}
 	return rand.IntN(100)
+}
+
+func (d *OpenAIDirector) rewriteShadowBody(body []byte, modelName string) ([]byte, error) {
+	if d.shadowBodyRewriter != nil {
+		return d.shadowBodyRewriter(body, modelName)
+	}
+	return rewriteShadowRequestModel(body, modelName)
 }
 
 func admittedShadows(req *http.Request, shadows []shadowConfig, randomBucket func() int) []shadowConfig {

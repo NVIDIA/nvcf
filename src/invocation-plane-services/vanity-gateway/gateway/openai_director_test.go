@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,7 +50,12 @@ func testShadowConfigs(modelNames []string, percentage int) []shadowConfig {
 	return testShadowConfigsWithPolicy(modelNames, percentage, config.ShadowSamplingMethodRandom, false)
 }
 
-func testShadowConfigsWithPolicy(modelNames []string, percentage int, samplingMethod config.ShadowSamplingMethod, cancelOnClientDisconnect bool) []shadowConfig {
+func testShadowConfigsWithPolicy(
+	modelNames []string,
+	percentage int,
+	samplingMethod config.ShadowSamplingMethod,
+	cancelOnClientDisconnect bool,
+) []shadowConfig {
 	shadows := make([]shadowConfig, 0, len(modelNames))
 	for _, modelName := range modelNames {
 		shadows = append(shadows, shadowConfig{
@@ -367,8 +373,10 @@ func TestBuildModelMappingPreservesAndDefaultsShadowSamplingMethod(t *testing.T)
 	}, privateModelMatcher)
 	require.NoError(t, err)
 
-	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, mapping.modelNameToNVCFUrl["facebook/opt-125m"].shadows[0].samplingMethod)
-	assert.Equal(t, config.ShadowSamplingMethodRandom, mapping.modelNameToNVCFUrl["meta/llama-3.1-8b"].shadows[0].samplingMethod)
+	optShadows := mapping.modelNameToNVCFUrl["facebook/opt-125m"].shadows
+	llamaShadows := mapping.modelNameToNVCFUrl["meta/llama-3.1-8b"].shadows
+	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, optShadows[0].samplingMethod)
+	assert.Equal(t, config.ShadowSamplingMethodRandom, llamaShadows[0].samplingMethod)
 }
 
 func TestResolveModelMappedRequestAddsMetricAttributes(t *testing.T) {
@@ -590,6 +598,67 @@ func TestDispatchShadowIfNeededReplaysHandlerAndRewritesBody(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(receivedBody), &shadowBody))
 	assert.Equal(t, "private/facebook/opt-125m-shadow", shadowBody["model"])
 	assert.Equal(t, true, shadowBody["stream"])
+}
+
+func TestDispatchShadowIfNeededIsolatesRewriteFailure(t *testing.T) {
+	var receivedModels sync.Map
+	var receivedCount atomic.Int32
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err == nil {
+			receivedModels.Store(payload["model"], true)
+		}
+		receivedCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	vanity, err := NewVanityDirector(backend.URL, backend.Client().Transport)
+	require.NoError(t, err)
+
+	failingTarget := "private/facebook/opt-125m-broken"
+	healthyTarget := "private/facebook/opt-125m-shadow"
+	shadows := testShadowConfigs([]string{failingTarget, healthyTarget}, 100)
+	modelMapping := map[string]FunctionInfo{
+		"facebook/opt-125m": {functionId: "primary-func", shadows: shadows},
+		failingTarget:       {functionId: "broken-func"},
+		healthyTarget:       {functionId: "shadow-func"},
+	}
+
+	director := &OpenAIDirector{
+		shadower:       NewTrafficShadower(10, 30*time.Second),
+		vanityDirector: vanity,
+		shadowBodyRewriter: func(body []byte, modelName string) ([]byte, error) {
+			if modelName == failingTarget {
+				return nil, errors.New("injected rewrite failure")
+			}
+			return rewriteShadowRequestModel(body, modelName)
+		},
+	}
+	primaryBody := `{"model":"facebook/opt-125m","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(primaryBody))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resolved := resolvedOpenAIRequest{
+		request:      req,
+		functionInfo: FunctionInfo{functionId: "primary-func", shadows: shadows},
+	}
+	finish := director.dispatchShadowIfNeeded(resolved, modelMapping)
+
+	assert.Eventually(t, func() bool { return receivedCount.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+	_, healthyReceived := receivedModels.Load(healthyTarget)
+	_, failingReceived := receivedModels.Load(failingTarget)
+	assert.True(t, healthyReceived, "healthy target must still be dispatched")
+	assert.False(t, failingReceived, "failing target must be dropped")
+
+	// The primary request body is untouched by the failed rewrite.
+	body, err := io.ReadAll(resolved.request.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, primaryBody, string(body))
+	finish(nil)
 }
 
 func TestDispatchShadowIfNeededPerBearerKeyUsesBearerBucket(t *testing.T) {
