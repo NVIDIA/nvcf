@@ -167,6 +167,7 @@ def verify_mockdc(config: dict, mockdc: dict) -> None:
             "json",
         )
     )["items"]
+    pods = [pod for pod in pods if not pod["metadata"].get("deletionTimestamp")]
     if len(pods) != 2:
         raise VerificationError(
             f"MockDC {mockdc['name']} has {len(pods)} Pods; expected 2"
