@@ -116,7 +116,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          # The generated otelcol module says `go 1.25.0`, but Linux
+          # The generated otelcol module says `go 1.26.0`, but Linux
           # builds of OTel v0.160.0 need the patched toolchain line used
           # by this subtree's Bazel module.
           go-version-file: src/compute-plane-services/byoo-otel-collector/go.work
