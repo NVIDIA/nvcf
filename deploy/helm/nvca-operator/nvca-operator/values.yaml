@@ -97,41 +97,21 @@ enableGXCache: true
 ## @param ddcsIPAllowList provides comma separated CIDR ranges to allowList
 ddcsIPAllowList: ""
 ## @section BYOO Configuration
-## @param byoo.resources Resource requests and limits for the BYOO OTel collector container
+## @param byoo.resources Resource requests and limits for the BYOO OTel collector container. Leave unset to keep the agent's built-in defaults.
 ## @param byoo.logChunking.maxPayloadBytes Maximum log chunk payload size in bytes. Zero disables the override.
 ## @param byoo.logChunking.dryRun Record chunking metrics without modifying log payloads.
 ## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
-## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead.
-## @param byoo.fluentbit.resources Resource requests and limits for the BYOO FluentBit container
+## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead. Leave unset to keep the agent's built-in defaults.
+## @param byoo.fluentbit.resources Resource requests and limits for the BYOO FluentBit container. Leave unset to keep the agent's built-in defaults.
 byoo:
-  resources:
-    limits:
-      cpu: 1000m
-      memory: 4Gi
-    requests:
-      cpu: 1000m
-      memory: 4Gi
+  resources: {}
   logChunking:
-    maxPayloadBytes: 262144
+    maxPayloadBytes: 0
     dryRun: false
-  otelCollector:
-    exporterHelper:
-      sendingQueue:
-        batch:
-          sizer: bytes
-          maxSize: 1000000
-  additionalResourceOverhead:
-    cpu: "8"
-    ephemeral-storage: 5Gi
-    memory: 10Gi
+  otelCollector: {}
+  additionalResourceOverhead: {}
   fluentbit:
-    resources:
-      limits:
-        cpu: 500m
-        memory: 512Mi
-      requests:
-        cpu: 100m
-        memory: 128Mi
+    resources: {}
 ## @param utils.resources Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.
 utils:
   resources:

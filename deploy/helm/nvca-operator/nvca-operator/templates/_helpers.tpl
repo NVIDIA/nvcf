@@ -154,7 +154,11 @@ and takes precedence for one minor-version transition.
 {{- $agentConfig := .Values.agentConfig | default dict -}}
 {{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
 {{- if $mergeConfigData }}
-{{- $config = mergeOverwrite $config ($mergeConfigData | fromYaml | default dict) -}}
+{{- $parsedMergeConfig := $mergeConfigData | fromYaml -}}
+{{- if hasKey $parsedMergeConfig "Error" -}}
+{{- fail (printf "agentConfig.mergeConfig contains invalid YAML: %s" $parsedMergeConfig.Error) -}}
+{{- end -}}
+{{- $config = mergeOverwrite $config ($parsedMergeConfig | default dict) -}}
 {{- end -}}
 {{- $config | toYaml -}}
 {{- end -}}
