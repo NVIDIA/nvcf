@@ -48,6 +48,11 @@ type ShadowConfig struct {
 // ignore or turn into defaults. Keys match case-insensitively, as encoding/json
 // and the route-level keys do.
 func decodeShadowConfig(data json.RawMessage) (ShadowConfig, error) {
+	// encoding/json decodes null into an empty map, which would surface later as
+	// a missing modelName instead of the real problem.
+	if isJSONNull(data) {
+		return ShadowConfig{}, fmt.Errorf("shadow config must not be null")
+	}
 	fields := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return ShadowConfig{}, fmt.Errorf("shadow config must be a mapping: %w", err)

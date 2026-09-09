@@ -421,6 +421,13 @@ func TestGatewayConfigLoadRejectsMalformedPerTargetShadowValues(t *testing.T) {
 			expected: `decode model "facebook/opt-125m": shadows[0]: shadow config must be a mapping`,
 		},
 		{
+			name: "null entry",
+			shadows: `        shadows:
+          - modelName: private/facebook/opt-125m-shadow
+          - null`,
+			expected: `decode model "facebook/opt-125m": shadows[1]: shadow config must not be null`,
+		},
+		{
 			name: "null model name",
 			shadows: `        shadows:
           - modelName: null
