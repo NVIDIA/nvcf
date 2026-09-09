@@ -133,6 +133,7 @@ takes longer (25 s) than transferring uncompressed (1.2 s). The right
 architecture *with* RDMA is "ship raw bytes, don't compress."
 
 Programming model — you need a library:
+
 - **NIXL** (NVIDIA Inference Xfer Library): purpose-built for moving
   inference state over RDMA. Closest tool to our use case.
 - **UCX**: abstracts RDMA verbs + TCP behind one API; picks best

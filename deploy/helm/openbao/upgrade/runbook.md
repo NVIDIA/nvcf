@@ -13,9 +13,11 @@
 - **Image Pull Secrets**: Configure NGC credentials as described in [README.md - Image Pull Secrets](../README.md#image-pull-secrets---ngcnvcrio)
 - **Colima**: Running Kubernetes cluster (e.g., `colima start --profile amd64 --kubernetes`)
 - **kubectl context**: Set to your target cluster before running commands
+
   ```bash
   kubectl config use-context colima-amd64  # or your cluster context
   ```
+
 - **Baseline Deployment**: OpenBao v2.2.2 deployed via `make install additional_values=values.local.yaml`
 
 ---
@@ -60,10 +62,11 @@ To accurately measure the impact of a rolling upgrade with HA enabled, we stand 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-> The LoadBalancer IP is assigned by MetalLB from the pool configured in `utils/lb.sh` 
+> The LoadBalancer IP is assigned by MetalLB from the pool configured in `utils/lb.sh`
 > (default: `192.168.5.240-250`). The first available IP is typically `192.168.5.240`.
 
 **Why LoadBalancer for testing?**
+
 - Routes requests to healthy pods automatically
 - Shows real availability during pod restarts
 - Gives accurate picture of client-side impact during rollout
@@ -111,6 +114,7 @@ make uninstall
 ```
 
 **What this does**:
+
 - Runs `helm uninstall openbao-server`
 - Deletes the `vault-system` namespace
 - Removes all PVCs (Raft data is deleted!)
@@ -118,6 +122,7 @@ make uninstall
 > ⚠️ **Warning**: This deletes all secrets stored in OpenBao. Only do this in test environments!
 
 **If cluster-scoped resources remain** (webhooks, clusterroles):
+
 ```bash
 kubectl delete mutatingwebhookconfiguration,clusterrole,clusterrolebinding \
   -l app.kubernetes.io/instance=openbao-server
@@ -145,6 +150,7 @@ make install additional_values=values.local.yaml
 ⏱️ **Wait time**: ~2-3 minutes for pods to be ready
 
 **Watch the installation**:
+
 ```bash
 kubectl get pods -n vault-system -w
 ```
@@ -158,6 +164,7 @@ kubectl get pods -n vault-system
 ```
 
 ✅ **Expected output**:
+
 ```
 NAME                                            READY   STATUS      RESTARTS   AGE
 openbao-server-0                                2/2     Running     0          2m
@@ -171,6 +178,7 @@ openbao-server-migrations-xxx                   0/1     Completed   0          1
 > 💡 **Tip**: `2/2` means both containers are running: the main `openbao` container and the `auto-unseal-sidecar`.
 
 **Verify versions**:
+
 ```bash
 for i in 0 1 2; do
   echo -n "openbao-server-$i: "
@@ -189,6 +197,7 @@ done
 ```
 
 **What this does**:
+
 1. Creates a `nvcf` namespace
 2. Deploys an nginx pod with OpenBao annotations
 3. Verifies the injector injects the agent sidecar
@@ -197,11 +206,12 @@ done
 ✅ **Expected**: Pod shows `2/2` containers (nginx + openbao-agent)
 
 **Cleanup** (or keep running to test post-upgrade):
+
 ```bash
 ./tests/services/test.sh <COLIMA_PROFILE> --cleanup
 ```
 
-> 💡 You can leave this pod running during the upgrade to verify that existing injected pods 
+> 💡 You can leave this pod running during the upgrade to verify that existing injected pods
 > continue working after the server upgrade.
 
 ---
@@ -246,6 +256,7 @@ echo "LoadBalancer IP: $LB_IP"
 ✅ **Expected**: `192.168.5.240` (first IP from MetalLB pool configured in `utils/lb.sh`)
 
 **Quick health check**:
+
 ```bash
 ./tests/openbao/loadbalancer_ha_seal_status_check.sh <COLIMA_PROFILE>
 # Let it run for a few cycles, then Ctrl+C
@@ -262,6 +273,7 @@ echo "LoadBalancer IP: $LB_IP"
 ### Why Continuous Tests?
 
 These tests run in a loop, constantly reading/writing to OpenBao. They'll show you:
+
 - **Green**: Cluster is healthy, requests succeeding
 - **Brief blips**: Normal during pod restarts (1-2 seconds)
 - **Extended errors**: Something is wrong, investigate
@@ -269,12 +281,13 @@ These tests run in a loop, constantly reading/writing to OpenBao. They'll show y
 ### Step 3.1: Open Terminal Windows
 
 You'll need:
+
 | Terminal | Purpose |
 |----------|---------|
 | Terminal 1 | KV read/write test (keep running during upgrade) |
 | Terminal 2 | Seal status test (keep running during upgrade) |
 
-> 💡 The upgrade script can run in any terminal. It pauses to let you start the test 
+> 💡 The upgrade script can run in any terminal. It pauses to let you start the test
 > scripts, then handles the helm upgrade automatically when you press Enter.
 
 ### Step 3.2: Start KV Test (Terminal 1)
@@ -287,6 +300,7 @@ You'll need:
 ```
 
 **What to watch for**:
+
 - ✅ `SUCCESS` messages = cluster is healthy
 - ⚠️ Occasional failures during upgrade = normal (LoadBalancer re-routing)
 - ❌ Continuous failures = something is wrong
@@ -301,6 +315,7 @@ You'll need:
 ```
 
 **What to watch for**:
+
 - ✅ `sealed: false` = pod is healthy and accepting requests
 - ❌ `sealed: true` = pod needs manual unsealing (shouldn't happen with auto-unseal)
 
@@ -333,6 +348,7 @@ kubectl get pods -n vault-system -w
 ```
 
 **The script will**:
+
 1. Switch Docker context to your Colima profile
 2. Build the 2.4.4 image (or skip if already built)
 3. Show current pod versions
@@ -340,7 +356,7 @@ kubectl get pods -n vault-system -w
 5. **Automatically run** `helm upgrade` with RollingUpdate strategy
 6. Verify all pods upgraded
 
-> 💡 The script pauses and shows you what monitoring terminals to open. Once you confirm 
+> 💡 The script pauses and shows you what monitoring terminals to open. Once you confirm
 > Terminals 1 & 2 are running, press Enter and the script handles the rest.
 
 ### Step 4.3: What You'll See (Terminal 3 - Pod Watch)
@@ -422,6 +438,7 @@ done
 Go back to Terminals 1 and 2. Stop the tests with `Ctrl+C`.
 
 **Analyze the output**:
+
 - **Success rate >99%**: Upgrade successful ✅
 - **Success rate 95-99%**: Acceptable, brief leader election delays
 - **Success rate <95%**: Investigate what went wrong
@@ -454,7 +471,7 @@ kubectl get deploy openbao-server-agent-injector -n vault-system \
 
 ### Step 6.2: Re-test Injector with New Version
 
-**What you're doing**: Delete the test pod and re-deploy to verify the upgraded injector 
+**What you're doing**: Delete the test pod and re-deploy to verify the upgraded injector
 injects the new agent version.
 
 ```bash
@@ -466,6 +483,7 @@ injects the new agent version.
 ```
 
 **Verify the injected agent uses the new version**:
+
 ```bash
 kubectl get pod -n nvcf -o jsonpath='{.items[0].spec.containers[?(@.name=="openbao-agent")].image}'
 ```
@@ -473,6 +491,7 @@ kubectl get pod -n nvcf -o jsonpath='{.items[0].spec.containers[?(@.name=="openb
 ✅ **Expected**: Image tag shows `2.4.4`
 
 **Cleanup when done**:
+
 ```bash
 ./tests/services/test.sh <COLIMA_PROFILE> --cleanup
 ```

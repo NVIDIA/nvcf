@@ -493,6 +493,7 @@ spec:
 #### Issue 1: Network Namespace Restore Failure
 
 **Symptom**:
+
 ```
 Error (criu/net.c:1469): net: Unknown peer net namespace err:0
 ```
@@ -520,6 +521,7 @@ criuOpts.External = []string{fmt.Sprintf("net[%d]:extNetNs", netnsInode)}
 #### Issue 2: Missing Mount Targets
 
 **Symptom**:
+
 ```
 Error (criu/mount.c:2540): mnt: Can't bind-mount at 
 /tmp/.criu.mntns.xxx/run/nvidia-container-devices/GPU-xxx: No such file or directory
@@ -551,6 +553,7 @@ func ensureExtMountTargets(extMnts []*criurpc.ExtMountMap) error {
 #### Issue 3: iptables-restore Not Found
 
 **Symptom**:
+
 ```
 Error (criu/util.c:641): execvp("iptables-restore", ...) failed: No such file or directory
 ```
@@ -569,6 +572,7 @@ RUN printf '#include <stdlib.h>\nint main(){return 0;}\n' > /tmp/true.c && \
 #### Issue 4: io_uring SQPOLL Segfault
 
 **Symptom**:
+
 ```
 CRIU segfaults at "Obtaining task auxv..." when checkpointing uvloop with io_uring
 ```
@@ -593,6 +597,7 @@ static void nvsnap_quiesce_io_uring(void) {
 #### Issue 5: uvloop Worker Process Crash
 
 **Symptom**:
+
 ```
 RuntimeError('Engine process (pid 76) died.')
 vLLM GPU worker dies ~60s after restore
@@ -807,7 +812,7 @@ spec:
 
 ### Requirements for GDS
 
-1. **Hardware**: 
+1. **Hardware**:
    - NVIDIA Ampere or newer GPU
    - NVMe drives with GDS support
    - PCIe Gen4 x16 for full bandwidth
@@ -839,6 +844,7 @@ spec:
 ### Known Compatibility Considerations
 
 #### vLLM
+
 ```
 Status: 🔄 In Progress
 
@@ -854,6 +860,7 @@ Mitigations:
 ```
 
 #### SGLang
+
 ```
 Status: 📋 Planned
 
@@ -869,6 +876,7 @@ Testing Plan:
 ```
 
 #### TensorRT-LLM
+
 ```
 Status: 📋 Planned
 
@@ -884,6 +892,7 @@ Testing Plan:
 ```
 
 #### Text Generation Inference (TGI)
+
 ```
 Status: 📋 Planned
 

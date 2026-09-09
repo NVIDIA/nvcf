@@ -137,18 +137,21 @@ curl -X POST http://10.34.5.64:8081/restore \
 ## Troubleshooting
 
 ### Check Agent Status
+
 ```bash
 ssh user@node "systemctl status nvsnap-agent"
 ssh user@node "journalctl -u nvsnap-agent -f"
 ```
 
 ### Verify CRIU
+
 ```bash
 ssh user@node "criu check"
 ssh user@node "criu --version"
 ```
 
 ### Test cuda-checkpoint
+
 ```bash
 ssh user@node "cuda-checkpoint --help"
 ```

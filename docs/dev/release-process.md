@@ -489,6 +489,7 @@ from the pipeline's perspective but isn't truly idempotent at the
 registry layer.
 
 This matters when:
+
 - A release-worthy commit gets re-published by accident (the tag
   pipeline re-fires after the default-branch one). The second push
   is a no-op via skip.

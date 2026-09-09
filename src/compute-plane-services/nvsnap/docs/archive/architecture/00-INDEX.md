@@ -95,6 +95,7 @@ NVSNAP is a GPU checkpoint/restore system for Kubernetes that enables:
 **Decision**: Library interposition (LD_PRELOAD)
 
 **Why**:
+
 - No kernel dependencies
 - Works with any kernel version
 - Easier to deploy (no privileged operations)
@@ -105,6 +106,7 @@ NVSNAP is a GPU checkpoint/restore system for Kubernetes that enables:
 **Decision**: Use Linux primitives, not container runtime APIs
 
 **Why**:
+
 - No dependency on containerd/CRI-O versions
 - Single code path for all runtimes
 - Future-proof for new runtimes
@@ -115,6 +117,7 @@ NVSNAP is a GPU checkpoint/restore system for Kubernetes that enables:
 **Decision**: Track creation parameters, recreate on restore
 
 **Why**:
+
 - NCCL communicators can't be serialized
 - New connections are created on restore
 - Application sees same handles (remapped internally)
@@ -125,6 +128,7 @@ NVSNAP is a GPU checkpoint/restore system for Kubernetes that enables:
 **Decision**: Coordinated checkpoint with barrier protocol
 
 **Why**:
+
 - All processes must checkpoint atomically
 - NCCL operations must be drained first
 - Shared memory and IPC must be consistent
@@ -209,32 +213,38 @@ nvsnap/
 ## Success Criteria
 
 ### Milestone 1 Complete
+
 - [ ] CRIU checkpoint/restore works
 - [ ] Runtime-agnostic process discovery
 - [ ] Works on containerd AND CRI-O
 - [ ] 80%+ unit test coverage
 
 ### Milestone 2 Complete
+
 - [ ] Single GPU CUDA programs checkpoint/restore
 - [ ] libnvsnap.so with <5% overhead
 - [ ] Works with CUDA 11.8 and 12.x
 
 ### Milestone 3 Complete
+
 - [ ] PyTorch training checkpoints mid-epoch
 - [ ] Training loss continues correctly after restore
 - [ ] DataLoader state preserved
 
 ### Milestone 4 Complete
+
 - [ ] Multi-GPU DDP training works
 - [ ] NCCL communicators reconstructed
 - [ ] FSDP sharding preserved
 
 ### Milestone 5 Complete
+
 - [ ] vLLM inference checkpoint/restore
 - [ ] KV cache preserved efficiently
 - [ ] Tensor parallelism works
 
 ### Milestone 6 Complete
+
 - [ ] Production-ready with HA
 - [ ] Web UI functional
 - [ ] Multi-cluster support

@@ -87,6 +87,7 @@ sequenceDiagram
 ### Local Development Setup
 
 1. **Start the Local Environment**:
+
    ```bash
    # Start core services (Cassandra, VictoriaMetrics, Grafana)
    cd local_env
@@ -112,6 +113,7 @@ sequenceDiagram
    The mock server can be started in two ways:
 
    **Option 1: Docker Compose with local profile (Recommended)**
+
    ```bash
    cd local_env
    docker-compose --profile local up
@@ -123,12 +125,14 @@ sequenceDiagram
    **Option 2: Manual setup (when not using local profile)**
 
    - Install dependencies:
+
    ```bash
    cd local_env/mock_server
    pip install -r requirements.txt
    ```
 
    - Start the mock server on port 8082:
+
    ```bash
    python mock_server.py
    ```
@@ -143,6 +147,7 @@ sequenceDiagram
    - **Content-Type**: `application/json`
 
    **Request Body**:
+
    ```json
    {
        "requiredNumberOfInstances": 5,
@@ -152,6 +157,7 @@ sequenceDiagram
    ```
 
    **Example using curl**:
+
    ```bash
    curl -X PUT http://localhost:8082/v2/nvcf/accounts/test-nca/predictions/functions/$(uuidgen)/versions/$(uuidgen) \
      -H "Content-Type: application/json" \
@@ -163,6 +169,7 @@ sequenceDiagram
    ```
 
 4. **Run the Service**:
+
    ```bash
    cargo run --bin server
    ```

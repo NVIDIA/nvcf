@@ -104,8 +104,8 @@ Same as `/v1/validate` but also returns the rendered Kubernetes manifests.
 
 ### Authentication
 
-* **Header:** `Authorization: Bearer <token>`
-* **Required scopes:** `helmreval:validate` / `helmreval:render` (when using the `Local` authorizer)
+- **Header:** `Authorization: Bearer <token>`
+- **Required scopes:** `helmreval:validate` / `helmreval:render` (when using the `Local` authorizer)
 
 ## Authorization
 
@@ -143,6 +143,7 @@ make test-server
 ```
 
 This runs `test/test_server.sh`, which:
+
 1. Generates an ephemeral RSA keypair, starts a mock JWKS server on port `8888`, and signs a short-lived JWT carrying the required scopes
 2. Starts local helm (`:8282`) and image (`:8383`) registries via `make run-test-regs`
 3. Starts the reval server via `make run`

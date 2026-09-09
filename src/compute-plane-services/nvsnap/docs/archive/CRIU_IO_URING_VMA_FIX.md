@@ -72,6 +72,7 @@ Each io_uring has two types of mappings:
 ### Key Changes
 
 1. Add struct to track fd info before VMA processing:
+
 ```c
 struct io_uring_fd_info {
     int fd;
@@ -83,9 +84,9 @@ struct io_uring_fd_info {
 };
 ```
 
-2. Pre-scan all io_uring fds and calculate expected sizes
+1. Pre-scan all io_uring fds and calculate expected sizes
 
-3. Match VMAs by size instead of inode
+2. Match VMAs by size instead of inode
 
 ---
 
