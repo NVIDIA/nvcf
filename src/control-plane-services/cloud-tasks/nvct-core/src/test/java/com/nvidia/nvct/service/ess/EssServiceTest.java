@@ -222,35 +222,48 @@ class EssServiceTest {
 
     @Test
     void testRegistryCredentialSecretServedFromCache() {
-        MockEssServer.getMockEssServer().resetRequests();
+        // The EssService cache is a shared singleton, so the credential may already be cached by
+        // another test. Assert on the delta of the second read instead of an absolute request count.
+        var essRequest = getRequestedFor(urlPathMatching(
+                "/v1/accounts/[^/]+/registry-credentials/" + REGISTRY_CRED_ID_DOCKER)).build();
 
         var first = essService.getRegistryCredentialSecret(TEST_NCA_ID, REGISTRY_CRED_ID_DOCKER);
+        var essRequestsAfterFirstRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
+
         var second = essService.getRegistryCredentialSecret(TEST_NCA_ID, REGISTRY_CRED_ID_DOCKER);
+        var essRequestsAfterSecondRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
 
         assertThat(first).isPresent();
         assertThat(second).isPresent();
         assertThat(second.get().value()).isEqualTo(first.get().value());
 
-        // The second read is served from the cache, so ESS is queried only once.
-        MockEssServer.getMockEssServer().verify(1, getRequestedFor(
-                urlPathMatching("/v1/accounts/[^/]+/registry-credentials/" + REGISTRY_CRED_ID_DOCKER)));
+        // The second read is served from the cache and does not hit ESS again.
+        assertThat(essRequestsAfterSecondRead).isEqualTo(essRequestsAfterFirstRead);
     }
 
     @Test
     void testMissingRegistryCredentialSecretIsNotCached() {
-        MockEssServer.getMockEssServer().resetRequests();
+        // A random id is never cached by another test, so counts start from zero.
         var unknownRegistryCredentialId = UUID.randomUUID();
+        var essRequest = getRequestedFor(urlPathMatching(
+                "/v1/accounts/[^/]+/registry-credentials/" + unknownRegistryCredentialId)).build();
 
         var first = essService.getRegistryCredentialSecret(TEST_NCA_ID, unknownRegistryCredentialId);
+        var essRequestsAfterFirstRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
+
         var second = essService.getRegistryCredentialSecret(TEST_NCA_ID, unknownRegistryCredentialId);
+        var essRequestsAfterSecondRead =
+                MockEssServer.getMockEssServer().countRequestsMatching(essRequest).getCount();
 
         assertThat(first).isEmpty();
         assertThat(second).isEmpty();
 
-        // A missing secret is not cached, so both reads hit ESS.
-        MockEssServer.getMockEssServer().verify(2, getRequestedFor(
-                urlPathMatching("/v1/accounts/[^/]+/registry-credentials/"
-                                        + unknownRegistryCredentialId)));
+        // A missing secret is not cached, so each read hits ESS.
+        assertThat(essRequestsAfterFirstRead).isEqualTo(1);
+        assertThat(essRequestsAfterSecondRead).isEqualTo(2);
     }
 
     @Test
