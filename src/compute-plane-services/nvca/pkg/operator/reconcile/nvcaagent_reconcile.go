@@ -36,6 +36,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/sirupsen/logrus"
 	yamlv3 "gopkg.in/yaml.v3"
@@ -231,13 +232,6 @@ func getRequestsNamespace(nb *nvidiaiov1.NVCFBackend) string {
 	return requestsNamespace
 }
 
-func makeWorkloadNamespaceLabelSelectors(icmsInstanceTypes ...string) map[string][]string {
-	labels := getAppLabels()
-	selVals := make(map[string][]string, len(labels))
-	selVals[nvcatypes.WorkloadInstanceTypeLabel] = icmsInstanceTypes
-	return selVals
-}
-
 func boolPtr(b bool) *bool { return &b }
 
 func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
@@ -248,6 +242,7 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		// so must be managed by it.
 		ManagedbyLabelKey:                   nvcaoptypes.NVCAModuleName,
 		nvcatypes.WorkloadInstanceTypeLabel: WorkloadInstanceTypeValuePodSpec,
+		controlplane.OwnerLabel:             bc.controlPlaneIdentityOrDefault().String(),
 	}
 
 	reqNSObj := &corev1.Namespace{
@@ -297,7 +292,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        systemNamespace,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 	}
 
@@ -311,7 +306,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 			Name:        systemNamespace,
 			Namespace:   systemNamespace,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			ScopeSelector: &corev1.ScopeSelector{
@@ -733,7 +728,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			Name:        nvcaoptypes.NVCAModuleName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 		AutomountServiceAccountToken: boolPtr(false),
 		ImagePullSecrets:             getImagePullSecretReferences(ctx, nb, bc.generateImagePullSecret, bc.additionalImagePullSecrets),
@@ -748,12 +743,13 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 	readOnlyVerbs := []string{"get", "list", "watch"}
 	crudVerbs := []string{"get", "list", "watch", "create", "update", "delete", "patch"}
 	crudWithCollectionVerbs := []string{"get", "list", "watch", "create", "update", "delete", "deletecollection", "patch"}
+	clusterScopedName := bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName)
 
 	cr := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        clusterScopedName,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
@@ -800,7 +796,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			{
 				APIGroups:     []string{"admissionregistration.k8s.io"},
 				Resources:     []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"},
-				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
+				ResourceNames: []string{clusterScopedName},
 				Verbs:         []string{"get", "list", "watch"},
 			},
 			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
@@ -959,9 +955,9 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 
 	crb := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        clusterScopedName,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 		Subjects: []rbacv1.Subject{
 			{
@@ -972,7 +968,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 		},
 		RoleRef: rbacv1.RoleRef{
 			Kind:     "ClusterRole",
-			Name:     nvcaoptypes.NVCAModuleName,
+			Name:     clusterScopedName,
 			APIGroup: "rbac.authorization.k8s.io",
 		},
 	}
@@ -2414,7 +2410,7 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 			AdminAddr:                               fmt.Sprintf("127.0.0.1:%d", nvcaAdminPortHTTP),
 			SystemNamespace:                         systemNamespace,
 			RequestsNamespace:                       requestsNamespace,
-			NamespaceLabels:                         getAppLabels(),
+			NamespaceLabels:                         bc.controlPlaneAppLabels(),
 			ComputeBackend:                          backendType,
 			HelmRepositoryPrefix:                    bc.helmRepositoryPrefix,
 			HelmReValStageOAuthTokenURL:             effectiveConfig.HelmReValStageOAuthTokenURL,
@@ -2590,8 +2586,9 @@ func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Con
 ) error {
 	whc := &admissionregistrationv1.MutatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName),
 			Annotations: getNBAnnotations(nb),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 	}
 
@@ -2602,9 +2599,9 @@ func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Con
 		// Note: the helm storage mutating webhook is now just a stub for backwards-compatibility.
 		// The MiniService mutating webhook now handles all storage mutations.
 		// This must be removed in a future release.
-		makeHelmStorageMutatingWebhook(nb, webhookCert),
+		bc.makeHelmStorageMutatingWebhook(nb, webhookCert),
 		bc.makeHelmPersistentStorageWebhook(nb, webhookCert),
-		makeNVCAMutatingWebhook(nb, webhookCert))
+		bc.makeNVCAMutatingWebhook(nb, webhookCert))
 
 	return bc.createOrUpdateMutatingWebhookConfiguration(ctx, whc)
 }

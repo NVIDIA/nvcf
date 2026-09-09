@@ -79,7 +79,7 @@ type StatusCollector interface {
 // In split-cluster mode (both --control-plane-context and --compute-plane-context
 // are set) two separate kube clients are constructed and handed to the Collector.
 // In single-cluster mode only ControlPlaneKube is populated.
-var newStatusCollector = func(clusterName, ncaID, icmsURL string) (StatusCollector, error) {
+var newStatusCollector = func(clusterName, ncaID, icmsURL, controlPlaneOwner string) (StatusCollector, error) {
 	controlKube, err := buildKubeClientForCtx(selfHostedControlPlaneContext)
 	if err != nil {
 		return nil, fmt.Errorf("build control-plane kube client: %w", err)
@@ -112,6 +112,7 @@ var newStatusCollector = func(clusterName, ncaID, icmsURL string) (StatusCollect
 		NCAID:               ncaID,
 		Cluster:             clusterName,
 		Components:          status.DefaultComponents(),
+		ExpectedOwner:       controlPlaneOwner,
 	}, nil
 }
 
@@ -164,8 +165,12 @@ func runSelfHostedStatus(cobraCmd *cobra.Command, _ []string) error {
 	}
 
 	icmsURL := resolveICMSURL(selfHostedICMSURL)
+	controlPlaneOwner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return err
+	}
 
-	coll, err := newStatusCollector(clusterName, ncaID, icmsURL)
+	coll, err := newStatusCollector(clusterName, ncaID, icmsURL, controlPlaneOwner)
 	if err != nil {
 		return err
 	}

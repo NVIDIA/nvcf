@@ -32,6 +32,8 @@
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: admin-token-issuer-proxy
   namespace: api-keys
 spec:

@@ -24,6 +24,7 @@ metadata:
     app.kubernetes.io/name: cassandra
     app.kubernetes.io/instance: cassandra
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   clusterIP: None
   publishNotReadyAddresses: true

@@ -60,7 +60,7 @@ include Makefile.dist
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nvca-entrypoints test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-placement test-nvca-entrypoints test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -130,6 +130,9 @@ dist: clean-dist
 	# Copy helmfile.d files
 	@cp -r "$(MAKEFILE_DIR)/helmfile.d" "$(DIST_DIR)/"
 
+	# Copy renderers used by helmfile post-rendering and output-dir normalization
+	@cp -r "$(MAKEFILE_DIR)/renderers" "$(DIST_DIR)/"
+
 	# Copy local charts referenced by helmfile.d releases via relative paths
 	@cp -r "$(MAKEFILE_DIR)/charts" "$(DIST_DIR)/"
 
@@ -178,13 +181,31 @@ test-register-cluster:
 test-kube-context:
 	@tests/kube-context.sh
 
+test-control-plane-owner-label-renderer:
+	@tests/verify-control-plane-owner-label-renderer.sh
+
+test-control-plane-owner-output-dir-env:
+	@tests/verify-control-plane-owner-output-dir-env.sh
+
+test-control-plane-owner-helmfile-validation:
+	@tests/verify-control-plane-owner-helmfile-validation.sh
+
+test-control-plane-owner-namespace-delete:
+	@tests/verify-control-plane-owner-namespace-delete.sh
+
+test-control-plane-owner-namespace-marker:
+	@tests/verify-control-plane-owner-namespace-marker.sh
+
+test-control-plane-owner-label-placement: render-local
+	@tests/verify-control-plane-owner-label-placement.sh "$(DIST_DIR)/out"
+
 test-nvca-entrypoints: render-local
 	@tests/nvca-entrypoints.sh "$(DIST_DIR)/out"
 
 test-compare-golden:
 	@tests/test-compare-golden.sh
 
-test-local: test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nvca-entrypoints
+test-local: test-observability-profile test-register-cluster test-kube-context test-compare-golden test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-nvca-entrypoints test-control-plane-owner-label-placement
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local

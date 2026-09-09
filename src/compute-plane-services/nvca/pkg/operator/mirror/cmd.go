@@ -23,6 +23,7 @@ import (
 	"fmt"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	cli "github.com/urfave/cli/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -125,6 +126,11 @@ func NewRunCommand() *cli.Command {
 				Usage:   "base64 encoded JSON array of imagePullSecret objects with name field",
 				EnvVars: []string{AdditionalImagePullSecretsEnvVar},
 			},
+			&cli.StringFlag{
+				Name:    "control-plane-id",
+				Usage:   "Self-managed NVCF control-plane ID. Empty means the legacy default control plane.",
+				EnvVars: []string{"NVCF_CONTROL_PLANE_OWNER"},
+			},
 		},
 		Action: runAction,
 	}
@@ -138,6 +144,10 @@ func runAction(c *cli.Context) error {
 	targetNamespace := c.String("target-namespace")
 	kubeconfigPath := c.String("kubeconfig")
 	resyncPeriod := c.Duration("resync-period")
+	controlPlaneIdentity, err := controlPlaneIdentityFromCLI(c)
+	if err != nil {
+		return err
+	}
 
 	// Decode additional image pull secrets from base64 encoded flag
 	additionalSecrets, err := DecodeImagePullSecrets(c.String("additional-image-pull-secrets-b64"))
@@ -166,7 +176,7 @@ func runAction(c *cli.Context) error {
 		log.Info("No additional image pull secrets configured, cleaning up any existing secrets")
 
 		// Cleanup any existing secrets with the additional-image-pull-secret label
-		if err := CleanupAllAdditionalSecrets(ctx, clientset, targetNamespace); err != nil {
+		if err := CleanupAllAdditionalSecretsForControlPlane(ctx, clientset, targetNamespace, controlPlaneIdentity); err != nil {
 			log.WithError(err).Warn("Failed to cleanup additional image pull secrets")
 			// Non-fatal, continue
 		}
@@ -182,16 +192,21 @@ func runAction(c *cli.Context) error {
 		"targetNamespace": targetNamespace,
 		"secretNames":     secretNames,
 		"resyncPeriod":    resyncPeriod,
+		"controlPlaneID":  controlPlaneIdentity.String(),
 	}).Info("Starting nvca-mirror sidecar")
 
 	// Create and run the controller
-	controller := NewController(
+	controller, err := NewControllerForControlPlane(
 		clientset,
 		sourceNamespace,
 		targetNamespace,
 		secretNames,
 		resyncPeriod,
+		controlPlaneIdentity,
 	)
+	if err != nil {
+		return err
+	}
 
 	if err := controller.Run(ctx); err != nil {
 		return fmt.Errorf("controller failed: %w", err)
@@ -199,6 +214,14 @@ func runAction(c *cli.Context) error {
 
 	log.Info("nvca-mirror sidecar stopped")
 	return nil
+}
+
+func controlPlaneIdentityFromCLI(c *cli.Context) (controlplane.Identity, error) {
+	identity, err := controlplane.IdentityFromConfig(c.String("control-plane-id"))
+	if err != nil {
+		return controlplane.Identity{}, fmt.Errorf("invalid control-plane-id: %w", err)
+	}
+	return identity, nil
 }
 
 // getKubeConfig returns the Kubernetes configuration

@@ -25,6 +25,7 @@ metadata:
     app.kubernetes.io/instance: sis
     app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 rules:
   # list + watch only, and namespace-wide: spring-cloud-kubernetes client-config
   # fetches via listNamespacedConfigMap and filters in memory (get is never
@@ -45,6 +46,7 @@ metadata:
     app.kubernetes.io/instance: sis
     app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 subjects:
   # Intentionally hardcoded: matches the chart's ServiceAccount and the OpenBao
   # JWT auth role (vault.hashicorp.com/role: sis-api) that pin the literal name.

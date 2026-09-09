@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // RenderOptions controls a single invocation of 'helmfile template' or
@@ -106,10 +107,32 @@ func Render(opts RenderOptions) error {
 	cmd := exec.CommandContext(ctx, opts.HelmfileBin, args...)
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
-	cmd.Env = append(os.Environ(), "HELMFILE_ENV="+opts.Env)
-	cmd.Env = append(cmd.Env, opts.ExtraEnv...)
+	cmd.Env = commandEnv(os.Environ(), append([]string{"HELMFILE_ENV=" + opts.Env}, opts.ExtraEnv...)...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helmfile %v: %w", args, err)
 	}
 	return nil
+}
+
+func commandEnv(base []string, overrides ...string) []string {
+	overridden := make(map[string]bool, len(overrides))
+	for _, item := range overrides {
+		if key, ok := envKey(item); ok {
+			overridden[key] = true
+		}
+	}
+
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, item := range base {
+		if key, ok := envKey(item); ok && overridden[key] {
+			continue
+		}
+		out = append(out, item)
+	}
+	return append(out, overrides...)
+}
+
+func envKey(item string) (string, bool) {
+	key, _, ok := strings.Cut(item, "=")
+	return key, ok && key != ""
 }

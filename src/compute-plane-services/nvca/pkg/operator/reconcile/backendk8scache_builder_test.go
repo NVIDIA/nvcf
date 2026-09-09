@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -190,6 +191,33 @@ func TestWithWorkloadTolerations(t *testing.T) {
 
 	require.NotNil(t, result)
 	assert.Equal(t, tolerations, result.BackendK8sCache.workloadTolerations)
+}
+
+func TestWithControlPlaneIdentity(t *testing.T) {
+	builder := NewBackendK8sCacheBuilder()
+	assert.Equal(t, controlplane.DefaultIdentity(), builder.BackendK8sCache.controlPlaneIdentity)
+
+	identity, err := controlplane.NewIdentity("plane-a")
+	require.NoError(t, err)
+
+	result := builder.WithControlPlaneIdentity(identity)
+
+	require.NotNil(t, result)
+	assert.Equal(t, identity, result.BackendK8sCache.controlPlaneIdentity)
+}
+
+func TestBackendK8sCacheBuilder_StartPropagatesOperatorNamespace(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+	const operatorNamespace = "custom-operator"
+
+	cache, _, err := NewBackendK8sCacheBuilder().
+		WithClients(mockKubeClientsForIntegrationTests()).
+		WithSystemNamespace(operatorNamespace).
+		Start(ctx)
+
+	require.NoError(t, err)
+	assert.Equal(t, operatorNamespace, cache.operatorNamespace)
 }
 
 func TestObjectsEqual(t *testing.T) {

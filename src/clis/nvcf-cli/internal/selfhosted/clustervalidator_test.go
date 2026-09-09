@@ -120,17 +120,60 @@ func TestRunClusterValidator_EmptyImage(t *testing.T) {
 	assert.Empty(t, client.Actions(), "no API calls should be made when input validation fails")
 }
 
+func TestRunClusterValidatorForOwner_SurfacePullSecretOwnerConflict(t *testing.T) {
+	cfg := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretName,
+			Namespace: clusterValidatorNamespace,
+			Labels:    clusterValidatorLabelsForOwner("plane-b"),
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	})
+
+	res := runClusterValidatorForOwner(
+		context.Background(),
+		client,
+		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26",
+		"",
+		false,
+		"plane-a",
+	)
+
+	require.Error(t, res.Err)
+	assert.Contains(t, res.Err.Error(), "resolving validator pull secret")
+	assert.Contains(t, res.Err.Error(), "plane-b")
+	assert.False(t, hasActionPrefix(client.Actions(), "create", "jobs"))
+}
+
 func TestClusterValidatorCheck_OrchestratorErrorStaysWarning(t *testing.T) {
 	cv := func(_ context.Context, _ ClusterValidatorParams) ClusterValidatorResult {
 		return ClusterValidatorResult{Err: fmt.Errorf("transient: API server unreachable")}
 	}
-	r := clusterValidatorCheck(cv, "", "", "", false).Run(context.Background())
+	r := clusterValidatorCheck(cv, "", "", "", false, "").Run(context.Background())
 	assert.False(t, r.Passed)
 	assert.Equal(t, "warning", r.Severity,
 		"transient orchestrator failures should not fail the overall preflight")
 	assert.Contains(t, r.Message, "cluster-validator did not complete")
 }
 
+func TestClusterValidatorCheck_PassesControlPlaneOwner(t *testing.T) {
+	var got ClusterValidatorParams
+	cv := func(_ context.Context, p ClusterValidatorParams) ClusterValidatorResult {
+		got = p
+		return ClusterValidatorResult{Passed: true, JobName: "validator-job"}
+	}
+
+	r := clusterValidatorCheck(cv, "admin@gpu", "validator:1", "pull-secret", true, "plane-a").Run(context.Background())
+
+	assert.True(t, r.Passed)
+	assert.Equal(t, "admin@gpu", got.KubeContext)
+	assert.Equal(t, "validator:1", got.Image)
+	assert.Equal(t, "pull-secret", got.PullSecret)
+	assert.True(t, got.NoCleanup)
+	assert.Equal(t, "plane-a", got.ControlPlaneOwner)
+}
 
 func TestRunClusterValidator_HappyPath(t *testing.T) {
 	client := fake.NewSimpleClientset()
@@ -450,6 +493,13 @@ func TestBuildClusterValidatorJobShape(t *testing.T) {
 		"preflight invocation must tag the validator so it does not attempt the metrics ConfigMap write")
 }
 
+func TestBuildClusterValidatorJobShape_WithOwnerLabels(t *testing.T) {
+	job := buildClusterValidatorJobForOwner("test-job", "img:1", "", false, "plane-a")
+
+	assert.Equal(t, "plane-a", job.Labels[controlPlaneOwnerLabel])
+	assert.Equal(t, "plane-a", job.Spec.Template.Labels[controlPlaneOwnerLabel])
+}
+
 func TestBuildClusterValidatorJobShape_WithPullSecret(t *testing.T) {
 	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", false)
 	require.Len(t, job.Spec.Template.Spec.ImagePullSecrets, 1)
@@ -466,6 +516,36 @@ func TestBuildClusterValidatorJobShape_NoCleanup(t *testing.T) {
 	job := buildClusterValidatorJob("test-job", "img:1", "", true)
 	assert.Nil(t, job.Spec.TTLSecondsAfterFinished,
 		"--no-cleanup must omit TTLSecondsAfterFinished so the Job persists for debugging")
+}
+
+func TestSweepPriorClusterValidatorJobsForOwnerUsesOwnerSelector(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	sweepPriorClusterValidatorJobsForOwner(context.Background(), client, "plane-a")
+
+	actions := client.Actions()
+	require.Len(t, actions, 1)
+	action, ok := actions[0].(ktesting.DeleteCollectionAction)
+	require.True(t, ok)
+	selector := action.GetListRestrictions().Labels.String()
+	assert.Contains(t, selector, "app.kubernetes.io/name="+clusterValidatorAppLabel)
+	assert.Contains(t, selector, "app.kubernetes.io/managed-by=nvcf-cli")
+	assert.Contains(t, selector, controlPlaneOwnerLabel+"=plane-a")
+}
+
+func TestSweepManagedPullSecretsForOwnerUsesOwnerSelector(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	sweepManagedPullSecretsForOwner(context.Background(), client, "plane-a")
+
+	actions := client.Actions()
+	require.Len(t, actions, 1)
+	action, ok := actions[0].(ktesting.DeleteCollectionAction)
+	require.True(t, ok)
+	selector := action.GetListRestrictions().Labels.String()
+	assert.Contains(t, selector, "app.kubernetes.io/name="+clusterValidatorAppLabel)
+	assert.Contains(t, selector, "app.kubernetes.io/managed-by=nvcf-cli")
+	assert.Contains(t, selector, controlPlaneOwnerLabel+"=plane-a")
 }
 
 func TestCleanValidatorOutput_StripsANSI(t *testing.T) {
@@ -535,4 +615,3 @@ func alreadyExistsReactor(resource, name string) ktesting.ReactionFunc {
 		return true, nil, apierrors.NewAlreadyExists(gr, name)
 	}
 }
-

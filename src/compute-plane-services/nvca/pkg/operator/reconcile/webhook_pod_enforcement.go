@@ -42,7 +42,7 @@ func (bc *BackendK8sCache) makePodEnforcementMutatingWebhooks(
 		whPath := "/mutate-pod-enforcement"
 
 		return admissionregistrationv1.MutatingWebhook{
-			Name:                    shortName + ".nvca.nvcf.nvidia.io",
+			Name:                    bc.controlPlaneWebhookName(shortName),
 			AdmissionReviewVersions: []string{"v1"},
 			FailurePolicy:           &fpt,
 			SideEffects:             &sec,
@@ -66,14 +66,14 @@ func (bc *BackendK8sCache) makePodEnforcementMutatingWebhooks(
 	}
 
 	mwMiniService := newBaseWebhook("mutate-miniservice-pod-enforcement")
-	targetLabelSels := makeWorkloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
+	targetLabelSels := bc.workloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
 	targetLabelSels[needsEnforceLabel] = []string{"true"}
 	mwMiniService.NamespaceSelector = &metav1.LabelSelector{
 		MatchExpressions: makeLabelSelectorRequirements(targetLabelSels),
 	}
 
 	mwPod := newBaseWebhook("mutate-pod-enforcement")
-	podSpecTargetLabels := makeWorkloadNamespaceLabelSelectors(WorkloadInstanceTypeValuePodSpec)
+	podSpecTargetLabels := bc.workloadNamespaceLabelSelectors(WorkloadInstanceTypeValuePodSpec)
 	mwPod.NamespaceSelector = &metav1.LabelSelector{
 		MatchExpressions: makeLabelSelectorRequirements(podSpecTargetLabels),
 	}

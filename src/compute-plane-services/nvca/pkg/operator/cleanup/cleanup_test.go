@@ -22,8 +22,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -1278,6 +1280,97 @@ func TestCleanupBackendResources_WithWebhooks(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCleanupBackendResourcesSkipsForeignOwnedObjects(t *testing.T) {
+	ctx := context.Background()
+	planeA, err := controlplane.NewIdentity("plane-a")
+	require.NoError(t, err)
+	planeB, err := controlplane.NewIdentity("plane-b")
+	require.NoError(t, err)
+	planeAName, err := controlplane.DNSLabelName(planeA, NVCAModuleName)
+	require.NoError(t, err)
+	planeBName, err := controlplane.DNSLabelName(planeB, NVCAModuleName)
+	require.NoError(t, err)
+
+	scheme := runtime.NewScheme()
+	icmsGVR := schema.GroupVersionResource{
+		Group:    "nvca.nvcf.nvidia.io",
+		Version:  "v2beta1",
+		Resource: "icmsrequests",
+	}
+
+	backend := &nvidiaiov1.NVCFBackend{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backend",
+			Namespace: "test-namespace",
+		},
+	}
+
+	k8sClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: DefaultNVCASystemNamespace,
+			Labels: map[string]string{
+				controlplane.OwnerLabel: planeA.String(),
+			},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: DefaultNVCARequestsNamespace,
+			Labels: map[string]string{
+				controlplane.OwnerLabel: planeB.String(),
+			},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: DefaultModelCacheInitNamespace,
+		}},
+		&admissionregistrationv1.ValidatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{
+			Name: planeAName,
+			Labels: map[string]string{
+				controlplane.OwnerLabel: planeA.String(),
+			},
+		}},
+		&admissionregistrationv1.MutatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{
+			Name: planeBName,
+			Labels: map[string]string{
+				controlplane.OwnerLabel: planeB.String(),
+			},
+		}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: planeAName,
+			Labels: map[string]string{
+				controlplane.OwnerLabel: planeA.String(),
+			},
+		}},
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+			Name: planeBName,
+			Labels: map[string]string{
+				controlplane.OwnerLabel: planeB.String(),
+			},
+		}},
+	)
+	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{
+			icmsGVR: "ICMSRequestList",
+		})
+
+	err = CleanupBackendResources(ctx, k8sClient, dynamicClient, backend, WithControlPlaneIdentity(planeA))
+	require.NoError(t, err)
+
+	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, DefaultNVCASystemNamespace, metav1.GetOptions{})
+	assert.Error(t, err, "owned system namespace should be deleted")
+	_, err = k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, planeAName, metav1.GetOptions{})
+	assert.Error(t, err, "owned validating webhook should be deleted")
+	_, err = k8sClient.RbacV1().ClusterRoles().Get(ctx, planeAName, metav1.GetOptions{})
+	assert.Error(t, err, "owned ClusterRole should be deleted")
+
+	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, DefaultNVCARequestsNamespace, metav1.GetOptions{})
+	assert.NoError(t, err, "foreign requests namespace should be kept")
+	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, DefaultModelCacheInitNamespace, metav1.GetOptions{})
+	assert.NoError(t, err, "unlabeled namespace should be kept by named cleanup")
+	_, err = k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, planeBName, metav1.GetOptions{})
+	assert.NoError(t, err, "foreign mutating webhook should be kept")
+	_, err = k8sClient.RbacV1().ClusterRoleBindings().Get(ctx, planeBName, metav1.GetOptions{})
+	assert.NoError(t, err, "foreign ClusterRoleBinding should be kept")
+}
+
 func TestRemoveRBACFinalizers_EmptyNames(t *testing.T) {
 	ctx := context.Background()
 	k8sClient := fake.NewSimpleClientset()
@@ -1683,6 +1776,84 @@ func TestDeleteWorkloadNamespaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteWorkloadNamespacesForControlPlaneScopesByOwner(t *testing.T) {
+	ctx := context.Background()
+	planeA, err := controlplane.NewIdentity("plane-a")
+	require.NoError(t, err)
+	planeB, err := controlplane.NewIdentity("plane-b")
+	require.NoError(t, err)
+
+	k8sClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "owned-workload",
+			Labels: map[string]string{
+				workloadNamespaceLabelSelector: "miniservice",
+				controlplane.OwnerLabel:        planeA.String(),
+			},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "foreign-workload",
+			Labels: map[string]string{
+				workloadNamespaceLabelSelector: "miniservice",
+				controlplane.OwnerLabel:        planeB.String(),
+			},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "legacy-workload",
+			Labels: map[string]string{
+				workloadNamespaceLabelSelector: "helm_chart",
+			},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "regular-namespace",
+			Labels: map[string]string{
+				controlplane.OwnerLabel: planeA.String(),
+			},
+		}},
+	)
+
+	err = deleteWorkloadNamespacesForControlPlane(ctx, k8sClient, planeA)
+	require.NoError(t, err)
+
+	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, "owned-workload", metav1.GetOptions{})
+	assert.Error(t, err)
+
+	for _, name := range []string{"foreign-workload", "legacy-workload", "regular-namespace"} {
+		_, err := k8sClient.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		assert.NoError(t, err)
+	}
+}
+
+func TestDeleteWorkloadNamespacesAdoptsLegacyDefaultNamespaces(t *testing.T) {
+	ctx := context.Background()
+
+	k8sClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "legacy-workload",
+			Labels: map[string]string{
+				workloadNamespaceLabelSelector: "miniservice",
+			},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "foreign-workload",
+			Labels: map[string]string{
+				workloadNamespaceLabelSelector: "helm_chart",
+				controlplane.OwnerLabel:        "plane-a",
+			},
+		}},
+	)
+
+	err := deleteWorkloadNamespaces(ctx, k8sClient)
+	require.NoError(t, err)
+
+	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, "legacy-workload", metav1.GetOptions{})
+	assert.Error(t, err)
+
+	foreign, err := k8sClient.CoreV1().Namespaces().Get(ctx, "foreign-workload", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a", foreign.Labels[controlplane.OwnerLabel])
 }
 
 func TestCleanupBackendResources_WithWorkloadNamespaces(t *testing.T) {

@@ -23,28 +23,63 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 )
 
 func newTestController(secretNames []string, objects ...runtime.Object) *Controller {
+	return newTestControllerForIdentity(testedIdentity(), secretNames, objects...)
+}
+
+func newTestControllerForIdentity(
+	identity controlplane.Identity,
+	secretNames []string,
+	objects ...runtime.Object,
+) *Controller {
 	clientset := fake.NewSimpleClientset(objects...)
 
-	return NewController(
+	controller, err := NewControllerForControlPlane(
 		clientset,
 		"source-namespace",
 		"target-namespace",
 		secretNames,
 		DefaultResyncPeriod,
+		identity,
 	)
+	if err != nil {
+		panic(err)
+	}
+	return controller
+}
+
+func testedIdentity() controlplane.Identity {
+	return controlplane.DefaultIdentity()
+}
+
+func namedTestIdentity(t *testing.T, id string) controlplane.Identity {
+	t.Helper()
+	identity, err := controlplane.NewIdentity(id)
+	require.NoError(t, err)
+	return identity
+}
+
+func additionalSecretLabels(owner string) map[string]string {
+	return map[string]string{
+		AdditionalImagePullSecretLabelKey: "true",
+		ManagedbyLabelKey:                 ManagedByValue,
+		controlplane.OwnerLabel:           owner,
+	}
 }
 
 func TestHandleSecretAdd(t *testing.T) {
@@ -118,6 +153,7 @@ func TestHandleSecretAdd(t *testing.T) {
 				assert.Equal(t, tt.secret.Data, secret.Data)
 				assert.Equal(t, tt.secret.Type, secret.Type)
 				assert.Equal(t, "true", secret.Labels[AdditionalImagePullSecretLabelKey])
+				assert.Equal(t, controlplane.DefaultOwner, secret.Labels[controlplane.OwnerLabel])
 			} else {
 				// Verify secret was not created
 				_, err := controller.clientset.CoreV1().Secrets("target-namespace").Get(
@@ -302,6 +338,7 @@ func TestSyncSecret(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "existing-secret",
 					Namespace: "target-namespace",
+					Labels:    additionalSecretLabels(controlplane.DefaultOwner),
 				},
 				Type: corev1.SecretTypeDockerConfigJson,
 				Data: map[string][]byte{
@@ -347,9 +384,220 @@ func TestSyncSecret(t *testing.T) {
 				assert.Equal(t, tt.secret.Type, secret.Type)
 				assert.Equal(t, "true", secret.Labels[AdditionalImagePullSecretLabelKey])
 				assert.Equal(t, ManagedByValue, secret.Labels[ManagedbyLabelKey])
+				assert.Equal(t, controlplane.DefaultOwner, secret.Labels[controlplane.OwnerLabel])
 			}
 		})
 	}
+}
+
+func TestSyncSecretSkipsForeignOrUnownedNamedPlaneTargets(t *testing.T) {
+	planeA := namedTestIdentity(t, "plane-a")
+	planeB := namedTestIdentity(t, "plane-b")
+	ctx := context.Background()
+
+	tests := []struct {
+		name           string
+		existingLabels map[string]string
+	}{
+		{
+			name:           "foreign owner",
+			existingLabels: additionalSecretLabels(planeB.String()),
+		},
+		{
+			name: "legacy unowned mirror secret",
+			existingLabels: map[string]string{
+				AdditionalImagePullSecretLabelKey: "true",
+			},
+		},
+		{
+			name:           "unmanaged same-name secret",
+			existingLabels: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			targetNS := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "target-namespace",
+				},
+			}
+			sourceSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-name",
+					Namespace: "source-namespace",
+				},
+				Type: corev1.SecretTypeDockerConfigJson,
+				Data: map[string][]byte{
+					".dockerconfigjson": []byte("new-data"),
+				},
+			}
+			existingSecret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "shared-name",
+					Namespace: "target-namespace",
+					Labels:    tt.existingLabels,
+				},
+				Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{
+					"existing": []byte("keep-me"),
+				},
+			}
+			controller := newTestControllerForIdentity(planeA, []string{"shared-name"}, targetNS, existingSecret)
+
+			err := controller.syncSecret(ctx, sourceSecret)
+			require.NoError(t, err)
+
+			actual, err := controller.clientset.CoreV1().Secrets("target-namespace").Get(
+				ctx,
+				"shared-name",
+				metav1.GetOptions{},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, corev1.SecretTypeOpaque, actual.Type)
+			assert.Equal(t, map[string][]byte{"existing": []byte("keep-me")}, actual.Data)
+			assert.Equal(t, tt.existingLabels, actual.Labels)
+		})
+	}
+}
+
+func TestCleanupOrphanedSecretsScopesByControlPlaneOwner(t *testing.T) {
+	planeA := namedTestIdentity(t, "plane-a")
+	planeB := namedTestIdentity(t, "plane-b")
+	ctx := context.Background()
+
+	targetNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "target-namespace",
+		},
+	}
+	ownedTracked := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "owned-tracked",
+			Namespace: "target-namespace",
+			Labels:    additionalSecretLabels(planeA.String()),
+		},
+	}
+	ownedOrphan := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "owned-orphan",
+			Namespace: "target-namespace",
+			Labels:    additionalSecretLabels(planeA.String()),
+		},
+	}
+	foreignOrphan := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foreign-orphan",
+			Namespace: "target-namespace",
+			Labels:    additionalSecretLabels(planeB.String()),
+		},
+	}
+	legacyOrphan := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "legacy-orphan",
+			Namespace: "target-namespace",
+			Labels: map[string]string{
+				AdditionalImagePullSecretLabelKey: "true",
+			},
+		},
+	}
+	controller := newTestControllerForIdentity(
+		planeA,
+		[]string{"owned-tracked"},
+		targetNS,
+		ownedTracked,
+		ownedOrphan,
+		foreignOrphan,
+		legacyOrphan,
+	)
+
+	err := controller.cleanupOrphanedSecrets(ctx)
+	require.NoError(t, err)
+
+	_, err = controller.clientset.CoreV1().Secrets("target-namespace").Get(ctx, "owned-orphan", metav1.GetOptions{})
+	assert.True(t, k8serrors.IsNotFound(err))
+
+	for _, name := range []string{"owned-tracked", "foreign-orphan", "legacy-orphan"} {
+		_, err := controller.clientset.CoreV1().Secrets("target-namespace").Get(ctx, name, metav1.GetOptions{})
+		assert.NoError(t, err)
+	}
+}
+
+func TestCleanupOrphanedSecretsAdoptsLegacyDefaultSecrets(t *testing.T) {
+	ctx := context.Background()
+
+	targetNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "target-namespace",
+		},
+	}
+	legacyTracked := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "legacy-tracked",
+			Namespace: "target-namespace",
+			Labels: map[string]string{
+				AdditionalImagePullSecretLabelKey: "true",
+			},
+		},
+	}
+	legacyOrphan := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "legacy-orphan",
+			Namespace: "target-namespace",
+			Labels: map[string]string{
+				AdditionalImagePullSecretLabelKey: "true",
+			},
+		},
+	}
+	controller := newTestController([]string{"legacy-tracked"}, targetNS, legacyTracked, legacyOrphan)
+
+	err := controller.cleanupOrphanedSecrets(ctx)
+	require.NoError(t, err)
+
+	_, err = controller.clientset.CoreV1().Secrets("target-namespace").Get(ctx, "legacy-orphan", metav1.GetOptions{})
+	assert.True(t, k8serrors.IsNotFound(err))
+
+	actual, err := controller.clientset.CoreV1().Secrets("target-namespace").Get(
+		ctx,
+		"legacy-tracked",
+		metav1.GetOptions{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, controlplane.DefaultOwner, actual.Labels[controlplane.OwnerLabel])
+}
+
+func TestReplayConfiguredSecrets(t *testing.T) {
+	ctx := context.Background()
+	targetNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "target-namespace",
+		},
+	}
+	controller := newTestController([]string{"tracked-secret"}, targetNS)
+	informer := cache.NewSharedIndexInformer(nil, &corev1.Secret{}, 0, cache.Indexers{})
+	sourceSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tracked-secret",
+			Namespace: "source-namespace",
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{
+			".dockerconfigjson": []byte("test-data"),
+		},
+	}
+	require.NoError(t, informer.GetStore().Add(sourceSecret))
+
+	err := controller.replayConfiguredSecrets(ctx, informer)
+	require.NoError(t, err)
+
+	actual, err := controller.clientset.CoreV1().Secrets("target-namespace").Get(
+		ctx,
+		"tracked-secret",
+		metav1.GetOptions{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, sourceSecret.Data, actual.Data)
+	assert.Equal(t, controlplane.DefaultOwner, actual.Labels[controlplane.OwnerLabel])
 }
 
 func TestCleanupOrphanedSecrets(t *testing.T) {
@@ -368,18 +616,14 @@ func TestCleanupOrphanedSecrets(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "keep-me",
 						Namespace: "target-namespace",
-						Labels: map[string]string{
-							AdditionalImagePullSecretLabelKey: "true",
-						},
+						Labels:    additionalSecretLabels(controlplane.DefaultOwner),
 					},
 				},
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "delete-me",
 						Namespace: "target-namespace",
-						Labels: map[string]string{
-							AdditionalImagePullSecretLabelKey: "true",
-						},
+						Labels:    additionalSecretLabels(controlplane.DefaultOwner),
 					},
 				},
 			},
@@ -394,18 +638,14 @@ func TestCleanupOrphanedSecrets(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "secret1",
 						Namespace: "target-namespace",
-						Labels: map[string]string{
-							AdditionalImagePullSecretLabelKey: "true",
-						},
+						Labels:    additionalSecretLabels(controlplane.DefaultOwner),
 					},
 				},
 				{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "secret2",
 						Namespace: "target-namespace",
-						Labels: map[string]string{
-							AdditionalImagePullSecretLabelKey: "true",
-						},
+						Labels:    additionalSecretLabels(controlplane.DefaultOwner),
 					},
 				},
 			},
@@ -420,9 +660,7 @@ func TestCleanupOrphanedSecrets(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "secret1",
 						Namespace: "target-namespace",
-						Labels: map[string]string{
-							AdditionalImagePullSecretLabelKey: "true",
-						},
+						Labels:    additionalSecretLabels(controlplane.DefaultOwner),
 					},
 				},
 			},
@@ -724,6 +962,7 @@ func TestSyncSecretWithConflict(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:            "test-secret",
 					Namespace:       "target-namespace",
+					Labels:          additionalSecretLabels(controlplane.DefaultOwner),
 					ResourceVersion: "1",
 				},
 				Type: corev1.SecretTypeDockerConfigJson,
@@ -1361,6 +1600,66 @@ func TestCleanupAllAdditionalSecrets(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCleanupAllAdditionalSecretsForControlPlaneScopesByOwner(t *testing.T) {
+	planeA := namedTestIdentity(t, "plane-a")
+	planeB := namedTestIdentity(t, "plane-b")
+	ctx := context.Background()
+
+	targetNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "target-namespace",
+		},
+	}
+	owned := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "owned",
+			Namespace: "target-namespace",
+			Labels:    additionalSecretLabels(planeA.String()),
+		},
+	}
+	foreign := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foreign",
+			Namespace: "target-namespace",
+			Labels:    additionalSecretLabels(planeB.String()),
+		},
+	}
+	legacy := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "legacy",
+			Namespace: "target-namespace",
+			Labels: map[string]string{
+				AdditionalImagePullSecretLabelKey: "true",
+			},
+		},
+	}
+	unmanaged := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "unmanaged",
+			Namespace: "target-namespace",
+		},
+	}
+	clientset := fake.NewSimpleClientset(targetNS, owned, foreign, legacy, unmanaged)
+
+	deleteCollectionSelector := ""
+	var deleteSelector labels.Selector
+	clientset.PrependReactor("delete-collection", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		deleteCollectionAction := action.(k8stesting.DeleteCollectionAction)
+		deleteSelector = deleteCollectionAction.GetListRestrictions().Labels
+		deleteCollectionSelector = deleteSelector.String()
+		return true, nil, nil
+	})
+
+	err := CleanupAllAdditionalSecretsForControlPlane(ctx, clientset, "target-namespace", planeA)
+	require.NoError(t, err)
+	assert.Contains(t, deleteCollectionSelector, AdditionalImagePullSecretLabelKey+"=true")
+	assert.Contains(t, deleteCollectionSelector, controlplane.OwnerLabel+"="+planeA.String())
+	assert.True(t, deleteSelector.Matches(labels.Set(owned.Labels)))
+	assert.False(t, deleteSelector.Matches(labels.Set(foreign.Labels)))
+	assert.False(t, deleteSelector.Matches(labels.Set(legacy.Labels)))
+	assert.False(t, deleteSelector.Matches(labels.Set(unmanaged.Labels)))
 }
 
 func TestCleanupAllAdditionalSecrets_ErrorCases(t *testing.T) {

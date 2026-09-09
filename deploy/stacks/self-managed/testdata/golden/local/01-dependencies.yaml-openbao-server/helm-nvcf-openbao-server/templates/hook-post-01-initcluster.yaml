@@ -3,6 +3,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: openbao-server-init-script
   namespace: vault-system
   annotations:
@@ -456,6 +458,8 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: openbao-server-utils-script
   namespace: vault-system
   annotations:
@@ -656,6 +660,8 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: openbao-server-initialize-cluster
   namespace: vault-system
   annotations:

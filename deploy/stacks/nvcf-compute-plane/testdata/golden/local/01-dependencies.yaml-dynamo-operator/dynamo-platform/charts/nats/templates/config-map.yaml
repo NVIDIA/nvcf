@@ -26,4 +26,5 @@ metadata:
     app.kubernetes.io/name: nats
     app.kubernetes.io/version: 2.11.1
     helm.sh/chart: nats-1.3.2
+    nvcf.nvidia.com/control-plane-owner: shared
   name: dynamo-operator-nats-config

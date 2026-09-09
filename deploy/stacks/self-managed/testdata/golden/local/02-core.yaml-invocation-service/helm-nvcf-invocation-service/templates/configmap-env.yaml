@@ -25,6 +25,7 @@ metadata:
     app.kubernetes.io/instance: invocation-service
     app.kubernetes.io/version: "0.12.1"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   NATS_PROPERTIES__NATS_ADDRESS: "nats://nats.nats-system.svc.cluster.local:4222"
   NATS_PROPERTIES__REGION: "ncp"

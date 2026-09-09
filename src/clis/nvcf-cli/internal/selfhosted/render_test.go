@@ -73,6 +73,30 @@ func TestRender_ExtraEnvIsForwarded(t *testing.T) {
 	assert.Contains(t, stdout.String(), "cluster=ncp-test")
 }
 
+func TestRender_ExtraEnvOverridesParentEnv(t *testing.T) {
+	t.Setenv("NVCF_CONTROL_PLANE_OWNER", "from-parent")
+
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "helmfile")
+	require.NoError(t, os.WriteFile(fake,
+		[]byte("#!/bin/sh\nprintf 'owner=%s\\n' \"$NVCF_CONTROL_PLANE_OWNER\"\n"), 0o755))
+
+	stack := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stack, "helmfile.d"), 0o755))
+
+	var stdout, stderr bytes.Buffer
+	err := Render(RenderOptions{
+		StackPath:   stack,
+		Env:         "local",
+		HelmfileBin: fake,
+		ExtraEnv:    []string{"NVCF_CONTROL_PLANE_OWNER=plane-a"},
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "owner=plane-a")
+}
+
 func TestRender_NonZeroExitPropagates(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "helmfile")

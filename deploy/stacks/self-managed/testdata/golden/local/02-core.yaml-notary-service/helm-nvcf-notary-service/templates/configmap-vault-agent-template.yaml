@@ -26,6 +26,7 @@ metadata:
     app.kubernetes.io/instance: notary-service
     app.kubernetes.io/version: "1.14.1"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   secrets.json.tmpl: |-
     {

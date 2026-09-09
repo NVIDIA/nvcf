@@ -38,9 +38,75 @@ func TestSelfHosted_RegisteredOnRoot(t *testing.T) {
 func TestSelfHosted_HasGlobalFlags(t *testing.T) {
 	cmd, _, _ := rootCmd.Find([]string{"self-hosted"})
 	for _, name := range []string{"control-plane-stack", "compute-plane-stack", "env", "no-apply", "non-interactive", "token", "output", "wait", "icms-url", "nats-url",
-		"control-plane-context", "compute-plane-context"} {
+		"control-plane-context", "compute-plane-context", "control-plane-id"} {
 		assert.NotNil(t, cmd.PersistentFlags().Lookup(name), "missing flag %q", name)
 	}
+}
+
+func TestSelfHostedControlPlaneIdentity_DefaultsToLegacy(t *testing.T) {
+	prev := selfHostedControlPlaneID
+	t.Cleanup(func() { selfHostedControlPlaneID = prev })
+	selfHostedControlPlaneID = ""
+
+	identity, err := selfHostedControlPlaneOwner()
+	require.NoError(t, err)
+	assert.Equal(t, "default", identity)
+}
+
+func TestSelfHostedControlPlaneIdentity_ValidatesNamedID(t *testing.T) {
+	prev := selfHostedControlPlaneID
+	t.Cleanup(func() { selfHostedControlPlaneID = prev })
+	selfHostedControlPlaneID = "plane-a"
+
+	identity, err := selfHostedControlPlaneOwner()
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a", identity)
+}
+
+func TestSelfHostedControlPlaneIdentity_RejectsReservedID(t *testing.T) {
+	prev := selfHostedControlPlaneID
+	t.Cleanup(func() { selfHostedControlPlaneID = prev })
+	selfHostedControlPlaneID = "default"
+
+	_, err := selfHostedControlPlaneOwner()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --control-plane-id")
+	assert.Contains(t, err.Error(), "reserved")
+}
+
+func TestSelfHostedControlPlaneEnv(t *testing.T) {
+	prev := selfHostedControlPlaneID
+	t.Cleanup(func() { selfHostedControlPlaneID = prev })
+	selfHostedControlPlaneID = "plane-a"
+
+	env, err := selfHostedControlPlaneEnv()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NVCF_CONTROL_PLANE_OWNER=plane-a"}, env)
+}
+
+func TestWithSelfHostedControlPlaneEnv(t *testing.T) {
+	prev := selfHostedControlPlaneID
+	t.Cleanup(func() { selfHostedControlPlaneID = prev })
+	selfHostedControlPlaneID = "plane-a"
+
+	env, err := withSelfHostedControlPlaneEnv([]string{"CLUSTER_NAME=gpu-a"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NVCF_CONTROL_PLANE_OWNER=plane-a", "CLUSTER_NAME=gpu-a"}, env)
+}
+
+func TestSelfHostedFlags_InvalidControlPlaneIDErrors(t *testing.T) {
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--local-only", "--control-plane-id=default"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		selfHostedControlPlaneID = ""
+		checkPre = false
+		checkLocalOnly = false
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --control-plane-id")
+	assert.Contains(t, err.Error(), "reserved")
 }
 
 func TestSelfHostedFlags_OnlyOneContextErrors(t *testing.T) {

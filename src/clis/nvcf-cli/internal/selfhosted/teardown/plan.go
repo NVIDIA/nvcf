@@ -19,6 +19,7 @@ package teardown
 
 import (
 	"fmt"
+	"strings"
 
 	"nvcf-cli/internal/selfhosted/progress"
 )
@@ -30,6 +31,7 @@ type PlanOpts struct {
 	KubeContext string
 	StackPath   string
 	Releases    []ReleaseRef // pre-enumerated; in production the caller walks helmfile.d/
+	Selector    string       // optional helmfile release selector used by real destroy
 }
 
 // DownPlan is the output of Plan: the ordered phase sequence plus the set of
@@ -70,10 +72,7 @@ func Plan(opts PlanOpts) (DownPlan, error) {
 
 	will := make([]progress.ReleaseDescriptor, 0, len(opts.Releases))
 	for _, rel := range opts.Releases {
-		cmd := fmt.Sprintf("helm uninstall %s -n %s", rel.Name, rel.Namespace)
-		if opts.KubeContext != "" {
-			cmd += " --kube-context=" + opts.KubeContext
-		}
+		cmd := planReleaseCommand(opts, rel)
 		will = append(will, progress.ReleaseDescriptor{
 			Kind:      "helm",
 			Name:      rel.Name,
@@ -87,4 +86,24 @@ func Plan(opts PlanOpts) (DownPlan, error) {
 		TotalEstSec:   total,
 		WillUninstall: will,
 	}, nil
+}
+
+func planReleaseCommand(opts PlanOpts, rel ReleaseRef) string {
+	if opts.Selector == "" {
+		cmd := fmt.Sprintf("helm uninstall %s -n %s", rel.Name, rel.Namespace)
+		if opts.KubeContext != "" {
+			cmd += " --kube-context=" + opts.KubeContext
+		}
+		return cmd
+	}
+
+	args := []string{"helmfile"}
+	if opts.StackPath != "" {
+		args = append(args, "-f", strings.TrimRight(opts.StackPath, "/")+"/helmfile.d/")
+	}
+	if opts.KubeContext != "" {
+		args = append(args, "--kube-context="+opts.KubeContext)
+	}
+	args = append(args, "--selector", opts.Selector, "destroy")
+	return strings.Join(args, " ")
 }

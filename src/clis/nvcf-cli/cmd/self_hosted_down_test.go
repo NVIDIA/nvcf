@@ -52,6 +52,7 @@ func resetDownFlags(t *testing.T) {
 		selfHostedJSON = false
 		selfHostedPlain = false
 		selfHostedAccessible = false
+		selfHostedControlPlaneID = ""
 		selfHostedDownCmd.SetContext(nil)
 	})
 }
@@ -158,6 +159,11 @@ func TestDown_PlanOnlyEmitsPlanned(t *testing.T) {
 	assert.True(t, finalPlanOnly, "final event must have planOnly=true")
 	// WillUninstall must enumerate the compute-plane releases.
 	assert.NotEmpty(t, willUninstall, "willUninstall must be populated with release descriptors")
+	firstRelease, ok := willUninstall[0].(map[string]interface{})
+	require.True(t, ok, "willUninstall entries must be objects")
+	command, _ := firstRelease["command"].(string)
+	assert.Contains(t, command, "helmfile")
+	assert.Contains(t, command, "--selector control-plane-owner=default")
 }
 
 // TestDown_HelpListsAllFlags verifies that all documented flags are registered
@@ -259,7 +265,7 @@ func installFakeHelmfile(t *testing.T) string {
 	logPath := filepath.Join(dir, "helmfile.log")
 	binPath := filepath.Join(dir, "helmfile")
 	script := `#!/bin/sh
-printf '%s\n' "$PWD|$*|CLUSTER_NAME=${CLUSTER_NAME}|OUTPUT_DIR=${OUTPUT_DIR}" >> "$NVCF_TEST_HELMFILE_LOG"
+printf '%s\n' "$PWD|$*|CLUSTER_NAME=${CLUSTER_NAME}|OUTPUT_DIR=${OUTPUT_DIR}|CONTROL_PLANE_OWNER=${NVCF_CONTROL_PLANE_OWNER}" >> "$NVCF_TEST_HELMFILE_LOG"
 `
 	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
 	t.Setenv("NVCF_TEST_HELMFILE_LOG", logPath)
@@ -351,7 +357,9 @@ func TestDown_ClusterNameCleansControlPlaneWhenLastClusterRemoved(t *testing.T) 
 	// The worker helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml
 	// at render time, so destroy must export it like install does.
 	assert.Contains(t, invocations[0], "OUTPUT_DIR="+filepath.Join(computePlaneStack, "out"))
+	assert.Contains(t, invocations[0], "--selector control-plane-owner=default")
 	assert.Contains(t, invocations[1], filepath.Join(controlPlaneStack, "helmfile.d")+"/")
+	assert.Contains(t, invocations[1], "--selector control-plane-owner=default")
 	assert.Contains(t, invocations[1], "--sequential-helmfiles")
 }
 
@@ -470,6 +478,7 @@ func TestDownAll_LocalAbsentControlPlaneUninstallsFallbackComputePlanes(t *testi
 	assert.Contains(t, invocations[1], "CLUSTER_NAME=gpu-b")
 	for _, invocation := range invocations {
 		assert.Contains(t, invocation, filepath.Join(computePlaneStack, "helmfile.d")+"/")
+		assert.Contains(t, invocation, "--selector control-plane-owner=default")
 	}
 }
 
@@ -539,5 +548,7 @@ func TestDown_ClusterNameUsesPersistedClusterIDBeforeCheckingRemainingClusters(t
 	invocations := strings.Split(strings.TrimSpace(string(body)), "\n")
 	require.Len(t, invocations, 2, "single-cluster down must destroy compute and control planes after deleting the persisted cluster ID")
 	assert.Contains(t, invocations[0], filepath.Join(computePlaneStack, "helmfile.d")+"/")
+	assert.Contains(t, invocations[0], "--selector control-plane-owner=default")
 	assert.Contains(t, invocations[1], filepath.Join(controlPlaneStack, "helmfile.d")+"/")
+	assert.Contains(t, invocations[1], "--selector control-plane-owner=default")
 }

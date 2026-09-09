@@ -140,8 +140,17 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("resolving helm runtime: %w", err)
 	}
+	controlPlaneEnv, err := selfHostedControlPlaneEnv()
+	if err != nil {
+		return err
+	}
 
 	if installControlPlane {
+		if !selfHostedNoApply {
+			if err := checkNamedControlPlaneInstallAllowed(c.Context(), selfHostedControlPlaneContext); err != nil {
+				return err
+			}
+		}
 		if err := selfhosted.Render(selfhosted.RenderOptions{
 			StackPath:       resolved.Path,
 			Env:             selfHostedEnv,
@@ -151,6 +160,7 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 			Stdout:          c.OutOrStdout(),
 			Stderr:          c.ErrOrStderr(),
 			Ctx:             c.Context(),
+			ExtraEnv:        controlPlaneEnv,
 		}); err != nil {
 			return err
 		}
@@ -191,6 +201,9 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 		return nil
 	}
 	// --compute-plane: register cluster then render worker-layer manifests.
+	if err := checkNamedControlPlaneInstallAllowed(c.Context(), selfHostedComputePlaneContext); err != nil {
+		return err
+	}
 	icmsURL := resolveICMSURL(selfHostedICMSURL)
 	cc, err := newClusterClientForSelfHosted(icmsURL)
 	if err != nil {
@@ -243,6 +256,17 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 		return fmt.Errorf("writing register-values: %w", err)
 	}
 
+	computePlaneEnv, err := withSelfHostedControlPlaneEnv([]string{
+		"CLUSTER_NAME=" + installClusterName,
+		"CLUSTER_ID=" + resp.ClusterID,
+		"CLUSTER_GROUP_ID=" + resp.ClusterGroupID,
+		"IDENTITY_SOURCE=" + identitySource,
+		"NCA_ID=" + ncaID,
+		"CLUSTER_REGION=" + region,
+	})
+	if err != nil {
+		return err
+	}
 	return selfhosted.Render(selfhosted.RenderOptions{
 		StackPath:       resolved.Path,
 		Env:             selfHostedEnv,
@@ -252,14 +276,7 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 		Stdout:          c.OutOrStdout(),
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             c.Context(),
-		ExtraEnv: []string{
-			"CLUSTER_NAME=" + installClusterName,
-			"CLUSTER_ID=" + resp.ClusterID,
-			"CLUSTER_GROUP_ID=" + resp.ClusterGroupID,
-			"IDENTITY_SOURCE=" + identitySource,
-			"NCA_ID=" + ncaID,
-			"CLUSTER_REGION=" + region,
-		},
+		ExtraEnv:        computePlaneEnv,
 	})
 }
 

@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/component: operator-lease-role
     app.kubernetes.io/name: grove-operator
     app.kubernetes.io/part-of: grove
+    nvcf.nvidia.com/control-plane-owner: shared
   name: grove:system:grove-operator-lease
   namespace: 'grove-system'
 rules:

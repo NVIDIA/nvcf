@@ -30,12 +30,14 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
@@ -88,6 +90,7 @@ func (bc *BackendK8sCache) setupTLSCertSecrets(ctx context.Context, nb *nvidiaio
 			Name:        NVCAWebhookTLSCertSecretName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 		Data: map[string][]byte{
 			TLSCertName: wc.TLSCert,
@@ -104,6 +107,7 @@ func (bc *BackendK8sCache) setupTLSCASecret(ctx context.Context, nb *nvidiaiov1.
 			Name:        NVCAWebhookTLSCASecretName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 		Data: map[string][]byte{
 			TLSCAName: wc.CACertBytes,
@@ -241,6 +245,51 @@ func makeLabelSelectorRequirements(labels map[string][]string) []metav1.LabelSel
 		i++
 	}
 	return nsLabelSelReqs
+}
+
+func (bc *BackendK8sCache) controlPlaneIdentityOrDefault() controlplane.Identity {
+	if bc != nil && bc.controlPlaneIdentity.Valid() {
+		return bc.controlPlaneIdentity
+	}
+	return controlplane.DefaultIdentity()
+}
+
+func (bc *BackendK8sCache) controlPlaneResourceName(legacyName string) string {
+	name, err := controlplane.DNSLabelName(bc.controlPlaneIdentityOrDefault(), legacyName)
+	if err != nil {
+		panic(err)
+	}
+	return name
+}
+
+func (bc *BackendK8sCache) controlPlaneWebhookName(legacyShortName string) string {
+	return bc.controlPlaneResourceName(legacyShortName) + ".nvca.nvcf.nvidia.io"
+}
+
+func (bc *BackendK8sCache) controlPlaneAppLabels() map[string]string {
+	labels, err := controlplane.AddOwnerLabel(getAppLabels(), bc.controlPlaneIdentityOrDefault())
+	if err != nil {
+		panic(err)
+	}
+	return labels
+}
+
+func makeWorkloadNamespaceLabelSelectors(icmsInstanceTypes ...string) map[string][]string {
+	return map[string][]string{
+		nvcatypes.WorkloadInstanceTypeLabel: icmsInstanceTypes,
+	}
+}
+
+func (bc *BackendK8sCache) workloadNamespaceLabelSelectors(icmsInstanceTypes ...string) map[string][]string {
+	selectors := makeWorkloadNamespaceLabelSelectors(icmsInstanceTypes...)
+	selectors[controlplane.OwnerLabel] = []string{bc.controlPlaneIdentityOrDefault().String()}
+	return selectors
+}
+
+func (bc *BackendK8sCache) workloadNamespaceSelector(icmsInstanceTypes ...string) *metav1.LabelSelector {
+	return &metav1.LabelSelector{
+		MatchExpressions: makeLabelSelectorRequirements(bc.workloadNamespaceLabelSelectors(icmsInstanceTypes...)),
+	}
 }
 
 func makeWebhookClientConfig(

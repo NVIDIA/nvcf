@@ -11,6 +11,7 @@ metadata:
     app.kubernetes.io/version: "1.4.2"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dgdr-profiling
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
 # ConfigMaps - needed for saving profiling results
 - apiGroups: [""]
@@ -48,6 +49,7 @@ metadata:
     app.kubernetes.io/version: "1.4.2"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dgdr-profiling
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

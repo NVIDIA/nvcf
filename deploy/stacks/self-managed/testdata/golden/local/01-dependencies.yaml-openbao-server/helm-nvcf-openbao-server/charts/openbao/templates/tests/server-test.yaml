@@ -3,6 +3,8 @@
 apiVersion: v1
 kind: Pod
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: openbao-server-server-test
   namespace: vault-system
   annotations:

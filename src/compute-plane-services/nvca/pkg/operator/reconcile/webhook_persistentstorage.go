@@ -19,7 +19,6 @@ package operator
 
 import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
@@ -34,17 +33,14 @@ func (bc *BackendK8sCache) makeHelmPersistentStorageWebhook(
 	st := admissionregistrationv1.NamespacedScope
 	whPath := "/mutate-helm-persistent-storage"
 
-	targetLabelSels := makeWorkloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
 	return admissionregistrationv1.MutatingWebhook{
-		Name:                    "mutate-helm-persistent-storage.nvca.nvcf.nvidia.io",
+		Name:                    bc.controlPlaneWebhookName("mutate-helm-persistent-storage"),
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           &fpt,
 		SideEffects:             &sec,
 		MatchPolicy:             &mp,
 		ClientConfig:            makeWebhookClientConfig(nb, webhookCert, whPath),
-		NamespaceSelector: &metav1.LabelSelector{
-			MatchExpressions: makeLabelSelectorRequirements(targetLabelSels),
-		},
+		NamespaceSelector:       bc.workloadNamespaceSelector(WorkloadInstanceTypeValueMiniService),
 		Rules: []admissionregistrationv1.RuleWithOperations{
 			{
 				Rule: admissionregistrationv1.Rule{

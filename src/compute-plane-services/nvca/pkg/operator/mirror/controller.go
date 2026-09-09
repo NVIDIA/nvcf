@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -55,12 +57,13 @@ var (
 
 // Controller watches secrets in a source namespace and copies them to a target namespace
 type Controller struct {
-	clientset       kubernetes.Interface
-	sourceNamespace string
-	targetNamespace string
-	secretNames     []string
-	resyncPeriod    time.Duration
-	informerFactory informers.SharedInformerFactory
+	clientset            kubernetes.Interface
+	sourceNamespace      string
+	targetNamespace      string
+	secretNames          []string
+	resyncPeriod         time.Duration
+	controlPlaneIdentity controlplane.Identity
+	informerFactory      informers.SharedInformerFactory
 }
 
 // NewController creates a new MirrorController
@@ -71,13 +74,41 @@ func NewController(
 	secretNames []string,
 	resyncPeriod time.Duration,
 ) *Controller {
-	return &Controller{
-		clientset:       clientset,
-		sourceNamespace: sourceNamespace,
-		targetNamespace: targetNamespace,
-		secretNames:     secretNames,
-		resyncPeriod:    resyncPeriod,
+	controller, err := NewControllerForControlPlane(
+		clientset,
+		sourceNamespace,
+		targetNamespace,
+		secretNames,
+		resyncPeriod,
+		controlplane.DefaultIdentity(),
+	)
+	if err != nil {
+		panic(err)
 	}
+	return controller
+}
+
+// NewControllerForControlPlane creates a MirrorController for a specific control plane.
+func NewControllerForControlPlane(
+	clientset kubernetes.Interface,
+	sourceNamespace string,
+	targetNamespace string,
+	secretNames []string,
+	resyncPeriod time.Duration,
+	identity controlplane.Identity,
+) (*Controller, error) {
+	if !identity.Valid() {
+		return nil, fmt.Errorf("invalid control plane identity %q", identity.String())
+	}
+
+	return &Controller{
+		clientset:            clientset,
+		sourceNamespace:      sourceNamespace,
+		targetNamespace:      targetNamespace,
+		secretNames:          secretNames,
+		resyncPeriod:         resyncPeriod,
+		controlPlaneIdentity: identity,
+	}, nil
 }
 
 // Run starts the controller and blocks until the context is canceled
@@ -142,6 +173,14 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 	log.Info("Informer cache synced")
 
+	if err := c.adoptLegacyMirroredSecrets(ctx); err != nil {
+		return fmt.Errorf("failed to adopt legacy mirrored secrets: %w", err)
+	}
+
+	if err := c.replayConfiguredSecrets(ctx, informer); err != nil {
+		return fmt.Errorf("failed to replay configured secrets: %w", err)
+	}
+
 	// Run initial cleanup
 	if err := c.cleanupOrphanedSecrets(ctx); err != nil {
 		log.WithError(err).Error("Failed to cleanup orphaned secrets")
@@ -202,15 +241,17 @@ func (c *Controller) syncSecret(ctx context.Context, secret *corev1.Secret) erro
 		return fmt.Errorf("target namespace %q does not exist: %w", c.targetNamespace, err)
 	}
 
+	targetLabels, err := c.mirroredSecretLabels()
+	if err != nil {
+		return err
+	}
+
 	// Create the target secret template
 	targetSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secret.Name,
 			Namespace: c.targetNamespace,
-			Labels: map[string]string{
-				AdditionalImagePullSecretLabelKey: "true",
-				ManagedbyLabelKey:                 ManagedByValue,
-			},
+			Labels:    targetLabels,
 		},
 		Type: secret.Type,
 		Data: secret.Data,
@@ -243,14 +284,26 @@ func (c *Controller) syncSecret(ctx context.Context, secret *corev1.Secret) erro
 			return err
 		}
 
-		// Secret exists, update it
+		if !c.canManageTargetSecret(existing) {
+			log.WithFields(map[string]interface{}{
+				"secret":                secret.Name,
+				"targetNamespace":       c.targetNamespace,
+				"controlPlaneIdentity":  c.controlPlaneIdentity.String(),
+				"existingSecretOwner":   existing.Labels[controlplane.OwnerLabel],
+				"existingSecretManaged": existing.Labels[AdditionalImagePullSecretLabelKey],
+			}).Warn("Skipping existing mirrored secret that is not owned by this control plane")
+			return nil
+		}
+
+		// Secret exists and belongs to this controller, update it.
 		existing.Data = targetSecret.Data
 		existing.Type = targetSecret.Type
 		if existing.Labels == nil {
 			existing.Labels = make(map[string]string)
 		}
-		existing.Labels[AdditionalImagePullSecretLabelKey] = "true"
-		existing.Labels[ManagedbyLabelKey] = ManagedByValue
+		for key, value := range targetLabels {
+			existing.Labels[key] = value
+		}
 
 		_, err = c.clientset.CoreV1().Secrets(c.targetNamespace).Update(
 			ctx,
@@ -275,8 +328,14 @@ func (c *Controller) cleanupOrphanedSecrets(ctx context.Context) error {
 	log := core.GetLogger(ctx)
 	log.Info("Cleaning up orphaned secrets")
 
-	// List all secrets in target namespace with our label
-	labelSelector := fmt.Sprintf("%s=true", AdditionalImagePullSecretLabelKey)
+	if err := c.adoptLegacyMirroredSecrets(ctx); err != nil {
+		return err
+	}
+
+	labelSelector, err := c.mirroredSecretSelector()
+	if err != nil {
+		return err
+	}
 	secrets, err := c.clientset.CoreV1().Secrets(c.targetNamespace).List(
 		ctx,
 		metav1.ListOptions{
@@ -323,6 +382,111 @@ func (c *Controller) isTrackedSecret(name string) bool {
 	return false
 }
 
+func (c *Controller) replayConfiguredSecrets(ctx context.Context, informer cache.SharedIndexInformer) error {
+	if len(c.secretNames) == 0 {
+		return nil
+	}
+
+	for _, obj := range informer.GetStore().List() {
+		secret, ok := obj.(*corev1.Secret)
+		if !ok {
+			return fmt.Errorf("expected *corev1.Secret but got %T", obj)
+		}
+		if !c.isTrackedSecret(secret.Name) {
+			continue
+		}
+		if err := c.syncSecret(ctx, secret); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Controller) mirroredSecretLabels() (map[string]string, error) {
+	return controlplane.AddOwnerLabel(map[string]string{
+		AdditionalImagePullSecretLabelKey: "true",
+		ManagedbyLabelKey:                 ManagedByValue,
+	}, c.controlPlaneIdentity)
+}
+
+func (c *Controller) mirroredSecretSelector() (string, error) {
+	return mirroredSecretSelector(c.controlPlaneIdentity)
+}
+
+func mirroredSecretSelector(identity controlplane.Identity) (string, error) {
+	if !identity.Valid() {
+		return "", fmt.Errorf("invalid control plane identity %q", identity.String())
+	}
+	return labels.SelectorFromSet(labels.Set{
+		AdditionalImagePullSecretLabelKey: "true",
+		controlplane.OwnerLabel:           identity.String(),
+	}).String(), nil
+}
+
+func (c *Controller) adoptLegacyMirroredSecrets(ctx context.Context) error {
+	return adoptLegacyMirroredSecrets(ctx, c.clientset, c.targetNamespace, c.controlPlaneIdentity)
+}
+
+func adoptLegacyMirroredSecrets(
+	ctx context.Context,
+	clientset kubernetes.Interface,
+	targetNamespace string,
+	identity controlplane.Identity,
+) error {
+	if !identity.Valid() {
+		return fmt.Errorf("invalid control plane identity %q", identity.String())
+	}
+	if !identity.IsDefault() {
+		return nil
+	}
+
+	legacySelector := labels.SelectorFromSet(labels.Set{
+		AdditionalImagePullSecretLabelKey: "true",
+	}).String()
+	secrets, err := clientset.CoreV1().Secrets(targetNamespace).List(
+		ctx,
+		metav1.ListOptions{
+			LabelSelector: legacySelector,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to list legacy mirrored secrets in target namespace: %w", err)
+	}
+
+	for _, secret := range secrets.Items {
+		if secret.Labels[controlplane.OwnerLabel] != "" {
+			continue
+		}
+		secretToUpdate := secret.DeepCopy()
+		if secretToUpdate.Labels == nil {
+			secretToUpdate.Labels = map[string]string{}
+		}
+		secretToUpdate.Labels[controlplane.OwnerLabel] = identity.String()
+		if _, err := clientset.CoreV1().Secrets(targetNamespace).Update(
+			ctx,
+			secretToUpdate,
+			metav1.UpdateOptions{},
+		); err != nil {
+			return fmt.Errorf("failed to adopt legacy mirrored secret %q: %w", secret.Name, err)
+		}
+	}
+	return nil
+}
+
+func (c *Controller) canManageTargetSecret(secret *corev1.Secret) bool {
+	if controlplane.IsOwnedBy(secret.Labels, c.controlPlaneIdentity) {
+		return true
+	}
+	if !c.controlPlaneIdentity.IsDefault() {
+		return false
+	}
+	if secret.Labels[controlplane.OwnerLabel] != "" {
+		return false
+	}
+	return secret.Labels[AdditionalImagePullSecretLabelKey] == "true" ||
+		secret.Labels[ManagedbyLabelKey] == ManagedByValue
+}
+
 // validateSecretsExist validates that all configured secrets exist in the source namespace
 // This is called once at startup to fail fast if secrets are missing
 func (c *Controller) validateSecretsExist(ctx context.Context) error {
@@ -355,11 +519,27 @@ func (c *Controller) validateSecretsExist(ctx context.Context) error {
 // from the target namespace. This is used when no secrets are configured to ensure cleanup.
 // All errors are non-fatal and logged.
 func CleanupAllAdditionalSecrets(ctx context.Context, clientset kubernetes.Interface, targetNamespace string) error {
+	return CleanupAllAdditionalSecretsForControlPlane(ctx, clientset, targetNamespace, controlplane.DefaultIdentity())
+}
+
+// CleanupAllAdditionalSecretsForControlPlane removes all additional image pull secrets
+// owned by the given control plane from the target namespace.
+func CleanupAllAdditionalSecretsForControlPlane(
+	ctx context.Context,
+	clientset kubernetes.Interface,
+	targetNamespace string,
+	identity controlplane.Identity,
+) error {
 	log := core.GetLogger(ctx)
 	log.WithField("targetNamespace", targetNamespace).Info("Cleaning up all additional image pull secrets")
 
+	labelSelector, err := mirroredSecretSelector(identity)
+	if err != nil {
+		return err
+	}
+
 	// Check if target namespace exists
-	_, err := clientset.CoreV1().Namespaces().Get(ctx, targetNamespace, metav1.GetOptions{})
+	_, err = clientset.CoreV1().Namespaces().Get(ctx, targetNamespace, metav1.GetOptions{})
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			log.WithField("targetNamespace", targetNamespace).Info("Target namespace does not exist, nothing to cleanup")
@@ -370,8 +550,11 @@ func CleanupAllAdditionalSecrets(ctx context.Context, clientset kubernetes.Inter
 		return nil
 	}
 
-	// Delete all secrets with our label using DeleteCollection
-	labelSelector := fmt.Sprintf("%s=true", AdditionalImagePullSecretLabelKey)
+	if err := adoptLegacyMirroredSecrets(ctx, clientset, targetNamespace, identity); err != nil {
+		log.WithError(err).Warnf("Failed to adopt legacy additional image pull secrets, skipping cleanup")
+		return nil
+	}
+
 	err = clientset.CoreV1().Secrets(targetNamespace).DeleteCollection(
 		ctx,
 		metav1.DeleteOptions{},

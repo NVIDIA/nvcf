@@ -12,6 +12,7 @@ metadata:
     app.kubernetes.io/instance: openbao-server
     app.kubernetes.io/managed-by: Helm
     openbao-active: "true"
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   publishNotReadyAddresses: true
   ports:

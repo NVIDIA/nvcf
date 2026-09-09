@@ -6,5 +6,7 @@
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: shared
   name: build
 value: 100

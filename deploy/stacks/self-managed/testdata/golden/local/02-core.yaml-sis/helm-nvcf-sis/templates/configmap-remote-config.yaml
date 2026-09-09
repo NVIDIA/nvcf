@@ -25,6 +25,7 @@ metadata:
     app.kubernetes.io/instance: sis
     app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   # The data key is tied to spring.application.name (icms-api), NOT to the
   # ConfigMap name. Renaming or dropping it silently reverts the app to the

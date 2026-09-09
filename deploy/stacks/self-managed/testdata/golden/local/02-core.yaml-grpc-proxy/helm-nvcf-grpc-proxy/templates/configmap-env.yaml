@@ -25,6 +25,7 @@ metadata:
     app.kubernetes.io/instance: grpc-proxy
     app.kubernetes.io/version: "1.33.4"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   ENABLE_HTTP1_CONNECT: "true"
   GEO_DISABLED: "true"

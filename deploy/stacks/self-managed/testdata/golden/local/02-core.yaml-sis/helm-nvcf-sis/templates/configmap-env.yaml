@@ -27,6 +27,7 @@ metadata:
     app.kubernetes.io/instance: sis
     app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   AWS_REGION: "ncp"
   HOSTNAME: "sis-api"

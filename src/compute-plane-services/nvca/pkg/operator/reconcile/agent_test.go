@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -595,6 +596,22 @@ func TestNewAgent_Success(t *testing.T) {
 	assert.Equal(t, 1, agent.numDispatchers)
 	assert.NotNil(t, agent.getTickerEventsFunc)
 	assert.NotNil(t, agent.getBackendK8sKubeClientsChFunc)
+	assert.Equal(t, controlplane.DefaultIdentity(), agent.ControlPlaneIdentity)
+}
+
+func TestNewAgent_PreservesControlPlaneIdentity(t *testing.T) {
+	ctx := core.WithDefaultLogger(context.Background())
+	identity, err := controlplane.NewIdentity("plane-a")
+	require.NoError(t, err)
+
+	opts := &AgentOptions{
+		SystemNamespace:      "nvca-system",
+		ControlPlaneIdentity: identity,
+	}
+
+	agent, err := NewAgent(ctx, opts)
+	require.NoError(t, err)
+	assert.Equal(t, identity, agent.ControlPlaneIdentity)
 }
 
 func TestGetBackendK8sKubeClientsCh(t *testing.T) {

@@ -63,7 +63,7 @@ func (bc *BackendK8sCache) setupMiniServiceRBACConfigmap(ctx context.Context, nb
 			Name:        MiniServiceRBACConfigmapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      bc.controlPlaneAppLabels(),
 		},
 		Data: rbacData,
 	}
@@ -78,19 +78,18 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 	mp := admissionregistrationv1.Equivalent
 	st := admissionregistrationv1.NamespacedScope
 	vpath := "/validate"
-	sport := getWebHooksSvcPort(nb)
 
-	targetLabelSels := makeWorkloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
+	targetLabelSels := bc.workloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
 	nsLabelSelReqs := makeLabelSelectorRequirements(targetLabelSels)
 
 	vw := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   nvcaoptypes.NVCAModuleName,
-			Labels: getAppLabels(),
+			Name:   bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName),
+			Labels: bc.controlPlaneAppLabels(),
 		},
 		Webhooks: []admissionregistrationv1.ValidatingWebhook{
 			{
-				Name:                    "validate-helm-charts.nvca.nvcf.nvidia.io",
+				Name:                    bc.controlPlaneWebhookName("validate-helm-charts"),
 				AdmissionReviewVersions: []string{"v1"},
 				FailurePolicy:           &fpt,
 				SideEffects:             &sec,
@@ -98,15 +97,7 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 				NamespaceSelector: &metav1.LabelSelector{
 					MatchExpressions: nsLabelSelReqs,
 				},
-				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					CABundle: webhookCert.CACertBytes,
-					Service: &admissionregistrationv1.ServiceReference{
-						Name:      nvcaoptypes.NVCAModuleName,
-						Namespace: getSystemNamespace(nb),
-						Path:      &vpath,
-						Port:      &sport,
-					},
-				},
+				ClientConfig: makeWebhookClientConfig(nb, webhookCert, vpath),
 				Rules: []admissionregistrationv1.RuleWithOperations{
 					{
 						Rule: admissionregistrationv1.Rule{

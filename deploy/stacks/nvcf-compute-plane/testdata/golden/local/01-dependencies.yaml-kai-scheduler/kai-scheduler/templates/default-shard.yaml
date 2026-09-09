@@ -5,6 +5,8 @@
 apiVersion: kai.scheduler/v1
 kind: SchedulingShard
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: shared
   name: default
   annotations:
     helm.sh/resource-policy: keep

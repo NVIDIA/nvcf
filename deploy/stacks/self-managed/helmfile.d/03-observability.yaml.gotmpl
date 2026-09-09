@@ -7,6 +7,11 @@ environments:
 ---
 
 {{- $observabilityProfile := dig "observability" "profile" "disabled" .Values }}
+{{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
+{{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
+{{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
+{{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
+{{- end }}
 {{- if not (has $observabilityProfile (list "disabled" "control" "compute" "all")) }}
 {{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
 {{- end }}
@@ -48,17 +53,27 @@ helmDefaults:
 templates:
   service: &service
     chart: nvcf/helm-nvcf-{{`{{ .Release.Name }}`}}
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
     labels:
       release-group: observability
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
   functionAutoscaler: &functionAutoscaler
     chart: nvcf/helm-nvcf-function-autoscaler
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     labels:
       release-group: observability
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
 releases:
 

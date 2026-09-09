@@ -27,6 +27,7 @@ metadata:
     app.kubernetes.io/version: "3.5.2"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: cleanup
+    nvcf.nvidia.com/control-plane-owner: default
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-20"
@@ -45,6 +46,7 @@ metadata:
     app.kubernetes.io/version: "3.5.2"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: cleanup
+    nvcf.nvidia.com/control-plane-owner: default
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-20"
@@ -146,6 +148,7 @@ metadata:
     app.kubernetes.io/version: "3.5.2"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: cleanup
+    nvcf.nvidia.com/control-plane-owner: default
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-20"

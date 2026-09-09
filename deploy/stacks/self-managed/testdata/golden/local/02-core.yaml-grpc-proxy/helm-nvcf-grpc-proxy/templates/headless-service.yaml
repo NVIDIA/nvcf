@@ -27,6 +27,7 @@ metadata:
     app.kubernetes.io/version: "1.33.4"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: headless
+    nvcf.nvidia.com/control-plane-owner: default
 # TODO maybe use this headless service instead of POD_IP
 spec:
   clusterIP: None  # This makes it a headless service

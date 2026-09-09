@@ -25,6 +25,7 @@ metadata:
     app.kubernetes.io/instance: api
     app.kubernetes.io/version: "1.18.0"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -42,6 +43,7 @@ metadata:
     app.kubernetes.io/instance: api
     app.kubernetes.io/version: "1.18.0"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 subjects:
   - kind: ServiceAccount
     name: nvcf-api

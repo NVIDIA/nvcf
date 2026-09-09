@@ -26,6 +26,7 @@ metadata:
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.5.2"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   
   selector:
@@ -102,6 +103,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: NVCF_CONTROL_PLANE_OWNER
+          value: "default"
         args:
           - /usr/bin/nvca-operator
           - --nca-id
@@ -199,6 +202,8 @@ spec:
               fieldPath: metadata.namespace
         - name: NVCA_ADDITIONAL_IMAGE_PULL_SECRETS_JSON_BASE64
           value: "W3sibmFtZSI6Im52Y3ItcHVsbC1zZWNyZXQifV0="
+        - name: NVCF_CONTROL_PLANE_OWNER
+          value: "default"
         resources:
           requests:
             cpu: "10m"

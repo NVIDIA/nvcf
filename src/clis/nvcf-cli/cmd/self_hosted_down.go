@@ -139,11 +139,16 @@ func runDownPlanOnly(ctx context.Context, sink progress.EventSink, started time.
 	}
 
 	releases := defaultDownReleases(plane)
+	selector, err := selfHostedHelmfileOwnerSelector()
+	if err != nil {
+		return err
+	}
 	plan, err := teardown.Plan(teardown.PlanOpts{
 		Plane:       plane,
 		ClusterName: downClusterName,
 		KubeContext: selfHostedComputePlaneContext,
 		Releases:    releases,
+		Selector:    selector,
 	})
 	if err != nil {
 		return err
@@ -348,12 +353,21 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 			"CLUSTER_REGION="+rv.Region,
 		)
 	}
+	extra, err = withSelfHostedControlPlaneEnv(extra)
+	if err != nil {
+		return err
+	}
+	selector, err := selfHostedHelmfileOwnerSelector()
+	if err != nil {
+		return err
+	}
 
 	if err := teardown.Destroy(teardown.DestroyOpts{
 		Plane:           downPlaneCompute,
 		ClusterName:     clusterName,
 		KubeContext:     selfHostedComputePlaneContext,
 		StackPath:       resolved.Path,
+		Selector:        selector,
 		Env:             selfHostedEnv,
 		HelmRuntimeMode: helmRuntimeMode,
 		Stdout:          c.OutOrStdout(),
@@ -458,15 +472,25 @@ func runDownControlPlane(c *cobra.Command, ctx context.Context, sink progress.Ev
 		return fmt.Errorf("resolve stack: %w", err)
 	}
 
+	extraEnv, err := selfHostedControlPlaneEnv()
+	if err != nil {
+		return err
+	}
+	selector, err := selfHostedHelmfileOwnerSelector()
+	if err != nil {
+		return err
+	}
 	if err := teardown.Destroy(teardown.DestroyOpts{
 		Plane:           downPlaneControl,
 		KubeContext:     selfHostedControlPlaneContext,
 		StackPath:       resolved.Path,
+		Selector:        selector,
 		Env:             selfHostedEnv,
 		HelmRuntimeMode: helmRuntimeMode,
 		Stdout:          c.OutOrStdout(),
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             ctx,
+		ExtraEnv:        extraEnv,
 	}, sink); err != nil {
 		return fmt.Errorf("helmfile destroy control-plane: %w", err)
 	}

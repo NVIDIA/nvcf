@@ -19,7 +19,6 @@ package operator
 
 import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
@@ -35,21 +34,14 @@ func (bc *BackendK8sCache) makeNVCAPodNodeAffinityMutatingWebhook(
 	const whShortName = "mutate-pod-nodeaffinity"
 	whPath := "/" + whShortName
 
-	targetLabelSels := makeWorkloadNamespaceLabelSelectors(
-		WorkloadInstanceTypeValuePodSpec,
-		WorkloadInstanceTypeValueMiniService,
-	)
-
 	return admissionregistrationv1.MutatingWebhook{
-		Name:                    whShortName + ".nvca.nvcf.nvidia.io",
+		Name:                    bc.controlPlaneWebhookName(whShortName),
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           &fpt,
 		SideEffects:             &sec,
 		MatchPolicy:             &mp,
 		ClientConfig:            makeWebhookClientConfig(nb, webhookCert, whPath),
-		NamespaceSelector: &metav1.LabelSelector{
-			MatchExpressions: makeLabelSelectorRequirements(targetLabelSels),
-		},
+		NamespaceSelector:       bc.workloadNamespaceSelector(WorkloadInstanceTypeValuePodSpec, WorkloadInstanceTypeValueMiniService),
 		Rules: []admissionregistrationv1.RuleWithOperations{
 			{
 				Rule: admissionregistrationv1.Rule{

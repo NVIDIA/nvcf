@@ -38,6 +38,8 @@ const (
 	clusterValidatorName         = "nvcf-preflight-validator"
 	clusterValidatorContainer    = "validator"
 	clusterValidatorAppLabel     = "nvcf-cluster-validator"
+	controlPlaneOwnerLabel       = "nvcf.nvidia.com/control-plane-owner"
+	controlPlaneDefaultOwner     = "default"
 	clusterValidatorPollInterval = 2 * time.Second
 	clusterValidatorTTLSeconds   = int32(600)
 	clusterValidatorHintURL      = "https://docs.nvidia.com/nvcf/self-managed-clusters#cluster-validator"
@@ -67,10 +69,11 @@ var (
 )
 
 type ClusterValidatorParams struct {
-	KubeContext string
-	Image       string
-	PullSecret  string
-	NoCleanup   bool
+	KubeContext       string
+	Image             string
+	PullSecret        string
+	NoCleanup         bool
+	ControlPlaneOwner string
 }
 
 // Err is non-nil only when the run failed to execute (RBAC bootstrap,
@@ -98,12 +101,22 @@ func NewClusterValidator() ClusterValidator {
 		if err != nil {
 			return ClusterValidatorResult{Err: fmt.Errorf("building kubernetes client: %w", err)}
 		}
-		return runClusterValidator(ctx, client, p.Image, p.PullSecret, p.NoCleanup)
+		return runClusterValidatorForOwner(ctx, client, p.Image, p.PullSecret, p.NoCleanup, p.ControlPlaneOwner)
 	}
 }
 
 // Testable core. Pass a fake clientset to unit-test without a real cluster.
 func runClusterValidator(ctx context.Context, client kubernetes.Interface, image, pullSecret string, noCleanup bool) ClusterValidatorResult {
+	return runClusterValidatorForOwner(ctx, client, image, pullSecret, noCleanup, "")
+}
+
+func runClusterValidatorForOwner(
+	ctx context.Context,
+	client kubernetes.Interface,
+	image, pullSecret string,
+	noCleanup bool,
+	controlPlaneOwner string,
+) ClusterValidatorResult {
 	if image == "" {
 		// Defensive: callers gate on configured image before invoking the
 		// validator, so this branch shouldn't fire in normal use.
@@ -113,26 +126,26 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	vctx, cancel := context.WithTimeout(ctx, clusterValidatorTimeout)
 	defer cancel()
 
-	// Resolver errors are non-fatal: fall through to the caller's value and
-	// let waitForClusterValidatorJob surface ImagePullBackOff if needed.
-	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image); err == nil {
+	if resolved, err := resolveValidatorPullSecretForOwner(ctx, client, pullSecret, image, controlPlaneOwner); err != nil {
+		return ClusterValidatorResult{Err: fmt.Errorf("resolving validator pull secret: %w", err)}
+	} else {
 		pullSecret = resolved
 	}
 	// Sweep any pull secrets we created (mirror or env-mint) after the
 	// Job terminates. Uses a fresh context so cleanup runs even when
 	// vctx has expired. Operator-supplied secrets via the flag aren't
 	// labeled by us and are skipped.
-	defer sweepManagedPullSecrets(context.Background(), client)
+	defer sweepManagedPullSecretsForOwner(context.Background(), client, controlPlaneOwner)
 
 	if err := ensureClusterValidatorRBAC(vctx, client); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
 	}
 
-	sweepPriorClusterValidatorJobs(vctx, client)
+	sweepPriorClusterValidatorJobsForOwner(vctx, client, controlPlaneOwner)
 
 	jobName := fmt.Sprintf("%s-%d", clusterValidatorName, time.Now().UnixNano())
 	if _, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
-		vctx, buildClusterValidatorJob(jobName, image, pullSecret, noCleanup), metav1.CreateOptions{},
+		vctx, buildClusterValidatorJobForOwner(jobName, image, pullSecret, noCleanup, controlPlaneOwner), metav1.CreateOptions{},
 	); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("creating validator Job: %w", err)}
 	}
@@ -231,6 +244,18 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 }
 
 func clusterValidatorLabels() map[string]string {
+	return baseClusterValidatorLabels()
+}
+
+func clusterValidatorLabelsForOwner(controlPlaneOwner string) map[string]string {
+	labels := baseClusterValidatorLabels()
+	if owner := strings.TrimSpace(controlPlaneOwner); owner != "" {
+		labels[controlPlaneOwnerLabel] = owner
+	}
+	return labels
+}
+
+func baseClusterValidatorLabels() map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       clusterValidatorAppLabel,
 		"app.kubernetes.io/managed-by": "nvcf-cli",
@@ -238,14 +263,25 @@ func clusterValidatorLabels() map[string]string {
 	}
 }
 
+func clusterValidatorLabelSelector(controlPlaneOwner string) string {
+	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli", clusterValidatorAppLabel)
+	if owner := strings.TrimSpace(controlPlaneOwner); owner != "" {
+		selector += "," + controlPlaneOwnerLabel + "=" + owner
+	}
+	return selector
+}
+
 // Errors are swallowed: a stale Job is preferable to blocking the new run.
 func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Interface) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli", clusterValidatorAppLabel)
+	sweepPriorClusterValidatorJobsForOwner(ctx, client, "")
+}
+
+func sweepPriorClusterValidatorJobsForOwner(ctx context.Context, client kubernetes.Interface, controlPlaneOwner string) {
 	propagation := metav1.DeletePropagationBackground
 	_ = client.BatchV1().Jobs(clusterValidatorNamespace).DeleteCollection(
 		ctx,
 		metav1.DeleteOptions{PropagationPolicy: &propagation},
-		metav1.ListOptions{LabelSelector: selector},
+		metav1.ListOptions{LabelSelector: clusterValidatorLabelSelector(controlPlaneOwner)},
 	)
 }
 
@@ -258,11 +294,14 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 // labeled by us and are skipped by the selector. Errors are swallowed:
 // failing to clean up is preferable to failing the check itself.
 func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli", clusterValidatorAppLabel)
+	sweepManagedPullSecretsForOwner(ctx, client, "")
+}
+
+func sweepManagedPullSecretsForOwner(ctx context.Context, client kubernetes.Interface, controlPlaneOwner string) {
 	_ = client.CoreV1().Secrets(clusterValidatorNamespace).DeleteCollection(
 		ctx,
 		metav1.DeleteOptions{},
-		metav1.ListOptions{LabelSelector: selector},
+		metav1.ListOptions{LabelSelector: clusterValidatorLabelSelector(controlPlaneOwner)},
 	)
 }
 
@@ -279,7 +318,12 @@ func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface) {
 // create/update. Tagging the invocation keeps preflight a clean no-op rather
 // than emitting a confusing "failed to create summary ConfigMap" warning.
 func buildClusterValidatorJob(name, image, pullSecret string, noCleanup bool) *batchv1.Job {
+	return buildClusterValidatorJobForOwner(name, image, pullSecret, noCleanup, "")
+}
+
+func buildClusterValidatorJobForOwner(name, image, pullSecret string, noCleanup bool, controlPlaneOwner string) *batchv1.Job {
 	backoff := int32(0)
+	labels := clusterValidatorLabelsForOwner(controlPlaneOwner)
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: clusterValidatorName,
 		RestartPolicy:      corev1.RestartPolicyNever,
@@ -301,12 +345,12 @@ func buildClusterValidatorJob(name, image, pullSecret string, noCleanup bool) *b
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorLabels(),
+			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: &backoff,
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: clusterValidatorLabels()},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec:       podSpec,
 			},
 		},

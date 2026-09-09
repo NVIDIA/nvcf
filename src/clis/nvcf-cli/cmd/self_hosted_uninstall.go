@@ -114,16 +114,26 @@ func runUninstallDestroy(c *cobra.Command) error {
 		return fmt.Errorf("resolve stack: %w", err)
 	}
 
+	extraEnv, err := selfHostedControlPlaneEnv()
+	if err != nil {
+		return err
+	}
+	selector, err := selfHostedHelmfileOwnerSelector()
+	if err != nil {
+		return err
+	}
 	if err := teardown.Destroy(teardown.DestroyOpts{
 		Plane:           plane,
 		ClusterName:     uninstallClusterName,
 		KubeContext:     kubeCtx,
 		StackPath:       resolved.Path,
+		Selector:        selector,
 		Env:             selfHostedEnv,
 		HelmRuntimeMode: helmRuntimeMode,
 		Stdout:          c.OutOrStdout(),
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             ctx,
+		ExtraEnv:        extraEnv,
 	}, &uninstallNoopSink{}); err != nil {
 		return fmt.Errorf("helmfile destroy: %w", err)
 	}

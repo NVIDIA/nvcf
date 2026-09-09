@@ -24,6 +24,21 @@ for target in template install apply destroy; do
   fi
 done
 
+install_output="$({
+  make -n -C "${test_dir}" install \
+    DEV_MODE=1 \
+    CLUSTER_NAME=gpu-a \
+    HELMFILE_ENV=local \
+    KUBECONFIG_FILE=/tmp/gpu-kubeconfig \
+    COMPUTE_KUBE_CONTEXT='compute context'
+} 2>&1)"
+if ! grep -Fq -- 'renderers/mark-control-plane-namespaces.sh' <<<"${install_output}" ||
+  ! grep -Fq -- '--kubeconfig "/tmp/gpu-kubeconfig"' <<<"${install_output}" ||
+  ! grep -Fq -- '--context "compute context"' <<<"${install_output}"; then
+  printf 'install did not preserve the selected context for namespace marking:\n%s\n' "${install_output}" >&2
+  exit 1
+fi
+
 destroy_output="$({
   make -n -C "${test_dir}" destroy \
     DEV_MODE=1 \
@@ -32,7 +47,9 @@ destroy_output="$({
     KUBECONFIG_FILE=/tmp/gpu-kubeconfig \
     COMPUTE_KUBE_CONTEXT='compute context'
 } 2>&1)"
-if ! grep -Fq -- 'kubectl --kubeconfig /tmp/gpu-kubeconfig --context "compute context"' <<<"${destroy_output}"; then
+if ! grep -Fq -- 'renderers/delete-owned-namespace.sh' <<<"${destroy_output}" ||
+  ! grep -Fq -- '--kubeconfig "/tmp/gpu-kubeconfig"' <<<"${destroy_output}" ||
+  ! grep -Fq -- '--context "compute context"' <<<"${destroy_output}"; then
   printf 'destroy did not preserve the selected context for namespace cleanup:\n%s\n' "${destroy_output}" >&2
   exit 1
 fi

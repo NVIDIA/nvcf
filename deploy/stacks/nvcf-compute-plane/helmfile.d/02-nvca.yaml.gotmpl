@@ -14,6 +14,12 @@ environments:
 
 ---
 
+{{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
+{{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
+{{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
+{{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
+{{- end }}
+
 {{- /*
   nvca-operator.featureGateValues normalizes a selfManaged feature gate list.
   Every gate in the default set below is enabled unless it is already present or
@@ -183,6 +189,10 @@ releases:
     chart: nvcf/helm-nvca-operator
     version: 1.24.0
     namespace: nvca-operator
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
       # Cluster-scoped registration values produced by
@@ -308,5 +318,6 @@ releases:
         {{- end }}
     labels:
       release-group: workers
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
     wait: true
     waitForJobs: true

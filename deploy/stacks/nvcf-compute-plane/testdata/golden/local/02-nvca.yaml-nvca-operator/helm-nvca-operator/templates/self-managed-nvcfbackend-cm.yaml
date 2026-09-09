@@ -29,6 +29,7 @@ metadata:
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.5.2"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   cluster-dto.yaml: |
     clusterId: "de5f65fe-08d7-47e7-bf30-860e2fe88c57"

@@ -34,6 +34,7 @@ metadata:
     app.kubernetes.io/name: cassandra
     app.kubernetes.io/instance: cassandra
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   cassandra-overrides.yaml: |
     authenticator: PasswordAuthenticator

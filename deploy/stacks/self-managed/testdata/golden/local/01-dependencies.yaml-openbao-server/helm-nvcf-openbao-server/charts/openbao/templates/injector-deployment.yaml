@@ -11,6 +11,7 @@ metadata:
     app.kubernetes.io/instance: openbao-server
     app.kubernetes.io/managed-by: Helm
     component: webhook
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   replicas: 2
   selector:

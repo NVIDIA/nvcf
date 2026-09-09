@@ -43,6 +43,7 @@ func resetStatusFlags(t *testing.T) {
 		selfHostedJSON = false
 		selfHostedPlain = false
 		selfHostedAccessible = false
+		selfHostedControlPlaneID = ""
 	})
 }
 
@@ -70,7 +71,7 @@ func injectFakeCollector(t *testing.T, fc *fakeCollector) {
 	t.Helper()
 	prev := newStatusCollector
 	t.Cleanup(func() { newStatusCollector = prev })
-	newStatusCollector = func(_, _, _ string) (StatusCollector, error) {
+	newStatusCollector = func(_, _, _, _ string) (StatusCollector, error) {
 		return fc, nil
 	}
 }
@@ -186,4 +187,29 @@ func TestStatusCmd_RendererSelection(t *testing.T) {
 	output := buf.String()
 	// Fat composed snapshot: components array should appear inside the snapshot object.
 	assert.Contains(t, output, `"components"`, "composed snapshot should include components array")
+}
+
+func TestStatusCmd_PassesControlPlaneOwnerToCollector(t *testing.T) {
+	resetStatusFlags(t)
+	fc := &fakeCollector{}
+	prev := newStatusCollector
+	var gotOwner string
+	t.Cleanup(func() { newStatusCollector = prev })
+	newStatusCollector = func(_, _, _, controlPlaneOwner string) (StatusCollector, error) {
+		gotOwner = controlPlaneOwner
+		return fc, nil
+	}
+
+	var stderr bytes.Buffer
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{
+		"self-hosted",
+		"--control-plane-id", "plane-a",
+		"status",
+		"--json",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Equal(t, "plane-a", gotOwner)
 }
