@@ -811,9 +811,10 @@ class GithubReleaseTest(unittest.TestCase):
             service["tag_format"],
             "src/compute-plane-services/byoo-otel-collector/v${upstream_version}-nv-${version}",
         )
+        upstream_version = self.github_release.tag_upstream_version(service, root)
         self.assertEqual(
             self.github_release.tag_for_version(service, "0.1.0", root),
-            "src/compute-plane-services/byoo-otel-collector/v0.157.0-nv-0.1.0",
+            f"src/compute-plane-services/byoo-otel-collector/v{upstream_version}-nv-0.1.0",
         )
 
     def test_cloud_tasks_chart_continues_its_published_lineage(self):
