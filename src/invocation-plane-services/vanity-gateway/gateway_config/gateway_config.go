@@ -53,10 +53,14 @@ func (s *ShadowConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return fmt.Errorf("shadow config must be a mapping: %w", err)
 	}
+	// Keys match case-insensitively, as encoding/json and the route-level keys do.
 	var unknownFields, nullFields []string
 	for field, raw := range fields {
-		switch field {
-		case "modelName", "percentage", "samplingMethod", "cancelOnClientDisconnect":
+		switch {
+		case strings.EqualFold(field, "modelName"),
+			strings.EqualFold(field, "percentage"),
+			strings.EqualFold(field, "samplingMethod"),
+			strings.EqualFold(field, "cancelOnClientDisconnect"):
 			if isJSONNull(raw) {
 				nullFields = append(nullFields, field)
 			}
