@@ -222,12 +222,6 @@ top-level `shadowPercentage`, `shadowSamplingMethod`, and
 combine `shadows` with any legacy top-level shadow field. Config validation
 rejects the mixed form.
 
-Roll out `shadows` in this order: upgrade every gateway that reads a mapping,
-then update any CI validator that gates the mapping, then convert routes. A
-gateway built before this field existed ignores the `shadows` key when it loads
-the mapping, so a converted route silently stops shadowing there. Nothing fails
-and nothing is logged.
-
 The default sampling method, `random`, draws one request-local bucket from `0`
 to `99` for each primary request. Every `random` shadow on that request uses the
 same bucket and admits the request when `bucket < percentage`.
