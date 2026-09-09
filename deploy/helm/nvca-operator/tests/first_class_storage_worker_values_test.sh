@@ -40,6 +40,17 @@ agent_config_value() {
   yq -er "select(.kind == \"ConfigMap\" and .metadata.name == \"agent-config-merge\") | .data.\"config.yaml\" | from_yaml | ${expression}" "${manifest}"
 }
 
+# agent_config_has reports key presence without yq -e's exit-status handling,
+# since -e also reports failure for a present `false` result, which would
+# make a boolean `has()` check indistinguishable from a real error.
+agent_config_has() {
+  local manifest="$1"
+  local parent_expression="$2"
+  local key="$3"
+
+  yq -r "select(.kind == \"ConfigMap\" and .metadata.name == \"agent-config-merge\") | .data.\"config.yaml\" | from_yaml | (${parent_expression} // {}) | has(\"${key}\")" "${manifest}"
+}
+
 assert_equal() {
   local expected="$1"
   local actual="$2"
@@ -62,6 +73,21 @@ assert_absent() {
   fi
 }
 
+# assert_key_absent checks key presence with `has()` rather than relying on
+# assert_absent's yq -er exit status, which also returns non-zero for a
+# present `false` value. That makes assert_absent unsuitable for boolean
+# fields: it cannot tell "unset" apart from "explicitly false".
+assert_key_absent() {
+  local manifest="$1"
+  local parent_expression="$2"
+  local key="$3"
+  local message="$4"
+
+  local has
+  has="$(agent_config_has "${manifest}" "${parent_expression}" "${key}")"
+  assert_equal "false" "${has}" "${message}"
+}
+
 # storage.* and worker.* default to unset so a no-op chart upgrade keeps the
 # agent's built-in storage/worker defaults.
 render "${default_manifest}"
@@ -73,8 +99,8 @@ assert_absent "${default_manifest}" '.agent.computeBackend' "computeBackend shou
 assert_absent "${default_manifest}" '.agent.requestsNamespace' "requestsNamespace should be unset by default"
 assert_absent "${default_manifest}" '.agent.namespaceLabels' "namespaceLabels should be unset by default"
 assert_absent "${default_manifest}" '.agent.featureFlags' "featureFlags should be unset by default"
-assert_absent "${default_manifest}" '.agent.skipSelfDestruct' "skipSelfDestruct should be unset by default"
-assert_absent "${default_manifest}" '.agent.forceSelfDestruct' "forceSelfDestruct should be unset by default"
+assert_key_absent "${default_manifest}" '.agent' "skipSelfDestruct" "skipSelfDestruct should be unset by default"
+assert_key_absent "${default_manifest}" '.agent' "forceSelfDestruct" "forceSelfDestruct should be unset by default"
 assert_absent "${default_manifest}" '.agent.csiVolumeMountOptions' "csiVolumeMountOptions should be unset by default"
 assert_absent "${default_manifest}" '.agent.credRenewInterval' "credRenewInterval should be unset by default"
 assert_absent "${default_manifest}" '.agent.heartbeatInterval' "heartbeatInterval should be unset by default"
