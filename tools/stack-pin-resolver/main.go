@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Command stack-pin-resolver resolves which self-managed stack pins a released
-// chart, and edits them.
+// Command stack-pin-resolver resolves which stack pins (across every stack
+// under deploy/stacks, not just self-managed) a released chart, and edits
+// them.
 //
 //	stack-pin-resolver --audit
 //	stack-pin-resolver --tag deploy/helm/nats/v0.8.0 [--write]
