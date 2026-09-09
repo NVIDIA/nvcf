@@ -42,18 +42,16 @@ type ShadowConfig struct {
 	Percentage               *int                 `json:"percentage,omitempty" yaml:"percentage,omitempty"`
 	SamplingMethod           ShadowSamplingMethod `json:"samplingMethod,omitempty" yaml:"samplingMethod,omitempty"`
 	CancelOnClientDisconnect bool                 `json:"cancelOnClientDisconnect,omitempty" yaml:"cancelOnClientDisconnect,omitempty"`
-	// Recorded while decoding and reported by validation, which knows the route
-	// and list index the decoder does not.
-	unknownFields []string
-	nullFields    []string
 }
 
-func (s *ShadowConfig) UnmarshalJSON(data []byte) error {
+// decodeShadowConfig rejects unknown and null keys, which encoding/json would
+// ignore or turn into defaults. Keys match case-insensitively, as encoding/json
+// and the route-level keys do.
+func decodeShadowConfig(data json.RawMessage) (ShadowConfig, error) {
 	fields := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &fields); err != nil {
-		return fmt.Errorf("shadow config must be a mapping: %w", err)
+		return ShadowConfig{}, fmt.Errorf("shadow config must be a mapping: %w", err)
 	}
-	// Keys match case-insensitively, as encoding/json and the route-level keys do.
 	var unknownFields, nullFields []string
 	for field, raw := range fields {
 		switch {
@@ -70,16 +68,18 @@ func (s *ShadowConfig) UnmarshalJSON(data []byte) error {
 	}
 	slices.Sort(unknownFields)
 	slices.Sort(nullFields)
-
-	type shadowConfigAlias ShadowConfig
-	var alias shadowConfigAlias
-	if err := json.Unmarshal(data, &alias); err != nil {
-		return fmt.Errorf("decode shadow config: %w", err)
+	if len(unknownFields) > 0 {
+		return ShadowConfig{}, fmt.Errorf("unknown shadow config field %q", unknownFields[0])
 	}
-	*s = ShadowConfig(alias)
-	s.unknownFields = unknownFields
-	s.nullFields = nullFields
-	return nil
+	if len(nullFields) > 0 {
+		return ShadowConfig{}, fmt.Errorf("%s must not be null", nullFields[0])
+	}
+
+	var shadow ShadowConfig
+	if err := json.Unmarshal(data, &shadow); err != nil {
+		return ShadowConfig{}, fmt.Errorf("decode shadow config: %w", err)
+	}
+	return shadow, nil
 }
 
 func isJSONNull(raw json.RawMessage) bool {
@@ -203,9 +203,11 @@ func decodeShadowList(raw json.RawMessage) (shadows []ShadowConfig, isList bool,
 	}
 	shadows = make([]ShadowConfig, len(items))
 	for i, item := range items {
-		if err := json.Unmarshal(item, &shadows[i]); err != nil {
+		shadow, err := decodeShadowConfig(item)
+		if err != nil {
 			return nil, true, fmt.Errorf("shadows[%d]: %w", i, err)
 		}
+		shadows[i] = shadow
 	}
 	return shadows, true, nil
 }
@@ -469,12 +471,6 @@ func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) err
 	seen := make(map[string]struct{}, len(shadows))
 	for i, shadow := range shadows {
 		shadowLocation := shadowTargetLocation(location, i, true)
-		if len(shadow.unknownFields) > 0 {
-			return fmt.Errorf("%s: unknown shadow config field %q", shadowLocation, shadow.unknownFields[0])
-		}
-		if len(shadow.nullFields) > 0 {
-			return fmt.Errorf("%s: %s must not be null", shadowLocation, shadow.nullFields[0])
-		}
 		if shadow.ModelName == "" {
 			return fmt.Errorf("%s: modelName is required", shadowLocation)
 		}

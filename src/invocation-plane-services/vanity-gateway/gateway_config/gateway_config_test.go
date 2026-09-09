@@ -386,7 +386,7 @@ v2config:
 
 			_, err = SetupConfigWithConfigPath(configPath)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "openai.chatCompletions.primary.shadows[0]: unknown shadow config field")
+			assert.ErrorContains(t, err, `decode model "facebook/opt-125m": shadows[0]: unknown shadow config field`)
 		})
 	}
 }
@@ -425,28 +425,28 @@ func TestGatewayConfigLoadRejectsMalformedPerTargetShadowValues(t *testing.T) {
 			shadows: `        shadows:
           - modelName: null
             percentage: 10`,
-			expected: "openai.chatCompletions.primary.shadows[0]: modelName must not be null",
+			expected: `decode model "facebook/opt-125m": shadows[0]: modelName must not be null`,
 		},
 		{
 			name: "null percentage",
 			shadows: `        shadows:
           - modelName: private/facebook/opt-125m-shadow
             percentage: null`,
-			expected: "openai.chatCompletions.primary.shadows[0]: percentage must not be null",
+			expected: `decode model "facebook/opt-125m": shadows[0]: percentage must not be null`,
 		},
 		{
 			name: "null sampling method",
 			shadows: `        shadows:
           - modelName: private/facebook/opt-125m-shadow
             samplingMethod: null`,
-			expected: "openai.chatCompletions.primary.shadows[0]: samplingMethod must not be null",
+			expected: `decode model "facebook/opt-125m": shadows[0]: samplingMethod must not be null`,
 		},
 		{
 			name: "null cancellation policy",
 			shadows: `        shadows:
           - modelName: private/facebook/opt-125m-shadow
             cancelOnClientDisconnect: null`,
-			expected: "openai.chatCompletions.primary.shadows[0]: cancelOnClientDisconnect must not be null",
+			expected: `decode model "facebook/opt-125m": shadows[0]: cancelOnClientDisconnect must not be null`,
 		},
 	}
 
