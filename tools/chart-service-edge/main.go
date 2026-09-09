@@ -101,9 +101,9 @@ func Audit(meta *Metadata, strict bool, out, errOut io.Writer) int {
 			continue
 		}
 		var unknown []string
-		for _, s := range c.Deploys {
-			if !serviceIDs[s] {
-				unknown = append(unknown, s)
+		for _, d := range c.Deploys {
+			if !serviceIDs[d.Service] {
+				unknown = append(unknown, d.Service)
 			}
 		}
 		if len(unknown) > 0 {
@@ -116,7 +116,11 @@ func Audit(meta *Metadata, strict bool, out, errOut io.Writer) int {
 	for _, c := range declared {
 		target := "(no first-party image)"
 		if len(c.Deploys) > 0 {
-			target = strings.Join(c.Deploys, ", ")
+			names := make([]string, len(c.Deploys))
+			for i, d := range c.Deploys {
+				names[i] = d.Service
+			}
+			target = strings.Join(names, ", ")
 		}
 		fmt.Fprintf(out, "  %-26s -> %s\n", c.ID, target)
 	}
