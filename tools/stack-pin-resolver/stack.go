@@ -79,6 +79,14 @@ type Release struct {
 	// scalar. WritePin then replaces only the quoted default inside that
 	// expression, leaving the surrounding template untouched.
 	DigDefault bool
+	// DigExpression is the exact value half of the version line (m[2] in
+	// LoadStack) when DigDefault is set. WritePin requires the line to still
+	// hold this exact text before rewriting: matching digVersionDefaultRE
+	// again only proves the current line looks like *some* dig(...) default,
+	// not that it is still the same one LoadStack read. Without this, an
+	// edit that changed which key or default the expression names between
+	// LoadStack and WritePin would have its new default silently overwritten.
+	DigExpression string
 }
 
 // ChartNameForRelease returns the chart a stack release pins.
@@ -158,14 +166,20 @@ func LoadStack(root string) ([]Release, error) {
 			fieldIndent := blk.indent + 2
 			versionLine, version, malformed := -1, "", ""
 			digDefault := false
+			digExpression := ""
 			for i, line := range body {
 				m := versionLineRE.FindStringSubmatch(line)
 				if m == nil || len(m[1])-len("version:")-countTrailingSpace(m[1]) != fieldIndent {
 					continue
 				}
 				if !versionValueRE.MatchString(m[2]) {
-					if dm := digVersionDefaultRE.FindStringSubmatch(m[2]); dm != nil {
-						versionLine, version, digDefault = blk.start+i, dm[1], true
+					// The extracted default must itself pass the same version
+					// check a plain scalar would: dig accepts any quoted
+					// string, so "latest" or "" would otherwise resolve as a
+					// legitimate pin and either report false success or have
+					// Bump overwrite it with something that was never a version.
+					if dm := digVersionDefaultRE.FindStringSubmatch(m[2]); dm != nil && versionValueRE.MatchString(dm[1]) {
+						versionLine, version, digDefault, digExpression = blk.start+i, dm[1], true, m[2]
 						break
 					}
 					// A release-level version that cannot be read is reported.
@@ -183,7 +197,10 @@ func LoadStack(root string) ([]Release, error) {
 				continue
 			}
 
-			r := Release{Name: blk.name, File: relPath, Version: version, VersionLine: versionLine, DigDefault: digDefault}
+			r := Release{
+				Name: blk.name, File: relPath, Version: version, VersionLine: versionLine,
+				DigDefault: digDefault, DigExpression: digExpression,
+			}
 			if malformed != "" {
 				r.Unresolved = fmt.Sprintf("version is not a recognisable pin: %s", malformed)
 				out = append(out, r)
@@ -250,13 +267,20 @@ func WritePin(root string, r Release, version string) error {
 		return fmt.Errorf("%s: line %d in %s is no longer a version pin", r.Release(), r.VersionLine+1, path)
 	}
 	if r.DigDefault {
+		// Require the exact expression LoadStack read, not just something
+		// that still matches the dig-default shape: shape alone cannot tell
+		// this expression apart from one edited to name a different key or
+		// default between LoadStack and WritePin, and rewriting that one
+		// would overwrite a value this run never resolved or reported.
+		if m[2] != r.DigExpression {
+			return fmt.Errorf("%s: line %d in %s is no longer the dig-default version pin this run resolved", r.Release(), r.VersionLine+1, path)
+		}
 		// Replace only the quoted default inside the dig(...) expression, so
 		// the template around it, and any environment override it still
-		// respects, survive the bump untouched.
+		// respects, survive the bump untouched. The match cannot fail: m[2]
+		// is byte-identical to r.DigExpression, which LoadStack only set
+		// after this same regex matched it.
 		idx := digVersionDefaultRE.FindStringSubmatchIndex(m[2])
-		if idx == nil {
-			return fmt.Errorf("%s: line %d in %s is no longer a dig-default version pin", r.Release(), r.VersionLine+1, path)
-		}
 		lines[r.VersionLine] = m[1] + m[2][:idx[2]] + version + m[2][idx[3]:] + m[3]
 	} else {
 		lines[r.VersionLine] = m[1] + version + m[3]

@@ -586,3 +586,55 @@ func TestDigDefaultExtractsTheLastQuotedArgument(t *testing.T) {
 		t.Fatalf("want the last quoted argument as the resolved version:\n%s%s", out, errOut)
 	}
 }
+
+func TestDigDefaultThatIsNotAVersionIsUnresolved(t *testing.T) {
+	// dig accepts any quoted string as its default, not just a version. A
+	// floating value like "latest", or an empty default, must be reported
+	// unresolved rather than accepted as a legitimate pin, matching what a
+	// plain (non-templated) version line already requires.
+	for _, bad := range []string{`"latest"`, `""`} {
+		body := "releases:\n  - name: alpha\n    version: {{ dig \"x\" \"version\" " + bad + " .Values | quote }}\n"
+		f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+		code, out, errOut := f.audit(t)
+		if code != 1 {
+			t.Errorf("default %s: want unresolved, got exit %d\n%s", bad, code, out)
+		}
+		if !strings.Contains(errOut, "not a recognisable pin") {
+			t.Errorf("default %s: want the unreadable-pin reason, got %q", bad, errOut)
+		}
+	}
+}
+
+func TestWritePinRefusesADigExpressionEditedSinceLoadStack(t *testing.T) {
+	// LoadStack resolves the version from whatever dig(...) expression it
+	// reads. If that line is edited to a different key or default before
+	// WritePin runs, rewriting its new default would silently overwrite a
+	// value this run never saw or reported, only because the edited line
+	// still happens to match the dig-default shape.
+	f := newStack(t, stackMeta, map[string]string{
+		"00-stack.yaml.gotmpl": "releases:\n  - name: alpha\n" +
+			"    version: {{ dig \"x\" \"version\" \"1.0.0\" .Values | quote }}\n",
+	})
+	releases, err := LoadStack(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 1 || !releases[0].DigDefault {
+		t.Fatalf("fixture did not resolve as expected: %+v", releases)
+	}
+	r := releases[0]
+
+	// Something else edits the same line to a different key/default between
+	// LoadStack and WritePin.
+	f.fileAt(t, defaultStackDir, "00-stack.yaml.gotmpl",
+		"releases:\n  - name: alpha\n    version: {{ dig \"y\" \"version\" \"9.9.9\" .Values | quote }}\n")
+
+	if err := WritePin(f.root, r, "2.0.0"); err == nil {
+		t.Fatal("WritePin must refuse a dig expression that changed since LoadStack")
+	} else if !strings.Contains(err.Error(), "no longer the dig-default version pin this run resolved") {
+		t.Fatalf("want the changed-expression reason, got: %v", err)
+	}
+	if got := f.read(t, "00-stack.yaml.gotmpl"); !strings.Contains(got, `"9.9.9"`) {
+		t.Fatalf("the edited line must be left alone:\n%s", got)
+	}
+}
