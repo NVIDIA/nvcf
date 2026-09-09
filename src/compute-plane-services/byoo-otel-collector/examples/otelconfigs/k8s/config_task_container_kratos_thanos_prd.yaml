@@ -108,6 +108,8 @@ receivers:
 exporters:
   prometheus_remote_write/KRATOS_THANOS-kratos-thanos-nvcf-metrics:
     endpoint: https://receivers.thanos.example.com/api/v1/receive
+    target_info:
+      enabled: false
     tls:
       cert_file: /etc/byoo-otel-collector/secrets/kratos-thanos-nvcf-clientCert
       key_file: /etc/byoo-otel-collector/secrets/kratos-thanos-nvcf-clientKey

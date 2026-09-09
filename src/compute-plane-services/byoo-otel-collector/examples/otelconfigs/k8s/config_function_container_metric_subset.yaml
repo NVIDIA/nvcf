@@ -113,6 +113,8 @@ exporters:
     send_timestamps: true
   prometheus_remote_write/PROMETHEUS-workload-metrics-metrics:
     endpoint: https://workload-metrics.example.invalid/api/v1/write
+    target_info:
+      enabled: false
     tls:
       cert_file: /etc/byoo-otel-collector/secrets/workload-metrics-clientCert
       key_file: /etc/byoo-otel-collector/secrets/workload-metrics-clientKey

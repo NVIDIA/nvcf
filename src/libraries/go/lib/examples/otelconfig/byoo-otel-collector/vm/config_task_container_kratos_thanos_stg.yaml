@@ -124,6 +124,8 @@ receivers:
 exporters:
   prometheusremotewrite/KRATOS_THANOS-kratos-thanos-sandbox-metrics:
     endpoint: https://prometheus-rw.example.com/api/v1/receive
+    target_info:
+      enabled: false
     tls:
       ca_file: /etc/byoo-otel-collector/secrets/kratos-thanos-sandbox-caFile
       cert_file: /etc/byoo-otel-collector/secrets/kratos-thanos-sandbox-clientCert

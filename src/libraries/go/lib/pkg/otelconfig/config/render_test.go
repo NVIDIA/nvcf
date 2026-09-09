@@ -18,6 +18,7 @@ limitations under the License.
 package otelconfig
 
 import (
+	"strings"
 	"testing"
 
 	"fmt"
@@ -305,4 +306,51 @@ func indexOf(haystack []string, needle string) int {
 		}
 	}
 	return -1
+}
+
+// TestRemoteWriteExporterDisablesTargetInfo pins that the remote-write exporter
+// does not emit target_info. The series is generated from resource attributes
+// only, so it never carries the function, instance or account labels that
+// metricstransform adds as datapoint labels, and reduces to a label set that is
+// identical across every collector federating the same upstream on a node.
+func TestRemoteWriteExporterDisablesTargetInfo(t *testing.T) {
+	for _, provider := range []Provider{ProviderThanos, ProviderPrometheus} {
+		t.Run(string(provider), func(t *testing.T) {
+			input := fmt.Sprintf(
+				`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": %q, "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "m"}}}`,
+				provider,
+			)
+			raw, err := RenderOtelConfigFromBytes([]byte(input), backendconfig.TemplateConfig{
+				BackendType:  backendconfig.K8s,
+				WorkloadType: backendconfig.Container,
+			})
+			if err != nil {
+				t.Fatalf("render failed: %v", err)
+			}
+
+			var cfg struct {
+				Exporters map[string]struct {
+					TargetInfo *struct {
+						Enabled *bool `yaml:"enabled"`
+					} `yaml:"target_info"`
+				} `yaml:"exporters"`
+			}
+			if err := yaml.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+
+			var checked int
+			for id, exporter := range cfg.Exporters {
+				if !strings.HasPrefix(id, "prometheusremotewrite/") {
+					continue
+				}
+				checked++
+				if exporter.TargetInfo == nil || exporter.TargetInfo.Enabled == nil {
+					t.Fatalf("%s does not set target_info.enabled", id)
+				}
+				assert.False(t, *exporter.TargetInfo.Enabled, "%s must disable target_info", id)
+			}
+			assert.Equal(t, 1, checked, "expected exactly one remote-write exporter")
+		})
+	}
 }
