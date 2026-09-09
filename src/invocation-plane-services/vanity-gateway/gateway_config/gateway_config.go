@@ -401,14 +401,33 @@ func uniqueShadowModelNames(legacyModelName string, modelNames []string) ([]stri
 	return result, nil
 }
 
-func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
+// validateShadowFormShape rejects a route that mixes the two shadow forms or
+// gives shadows a value that is not a list. Both forms are validated further
+// by their callers.
+func validateShadowFormShape(location string, entry ModelFunctionDetails) error {
 	if entry.hasMixedShadowFields() {
-		return nil, fmt.Errorf("%s: shadows cannot be combined with legacy shadow fields", location)
+		return fmt.Errorf("%s: shadows cannot be combined with legacy shadow fields", location)
+	}
+	if entry.shadowsNotList {
+		return fmt.Errorf("%s: shadows must be a list", location)
+	}
+	return nil
+}
+
+// shadowTargetLocation names one target in an error. Legacy targets share the
+// route location because the legacy fields carry no index.
+func shadowTargetLocation(location string, index int, perTarget bool) string {
+	if !perTarget {
+		return location
+	}
+	return fmt.Sprintf("%s.shadows[%d]", location, index)
+}
+
+func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
+	if err := validateShadowFormShape(location, entry); err != nil {
+		return nil, err
 	}
 	if entry.hasShadowsField() {
-		if entry.shadowsNotList {
-			return nil, fmt.Errorf("%s: shadows must be a list", location)
-		}
 		if err := validatePerTargetShadowConfigs(location, entry.Shadows); err != nil {
 			return nil, err
 		}
@@ -449,7 +468,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) error {
 	seen := make(map[string]struct{}, len(shadows))
 	for i, shadow := range shadows {
-		shadowLocation := fmt.Sprintf("%s.shadows[%d]", location, i)
+		shadowLocation := shadowTargetLocation(location, i, true)
 		if len(shadow.unknownFields) > 0 {
 			return fmt.Errorf("%s: unknown shadow config field %q", shadowLocation, shadow.unknownFields[0])
 		}
@@ -558,14 +577,12 @@ func isMultipartOpenAISection(sectionName string) bool {
 
 func validateMultipartOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
 	for modelKey, entry := range entries {
-		if entry.hasMixedShadowFields() {
-			return fmt.Errorf("openai.%s.%s: shadows cannot be combined with legacy shadow fields", sectionName, modelKey)
-		}
-		if entry.shadowsNotList {
-			return fmt.Errorf("openai.%s.%s: shadows must be a list", sectionName, modelKey)
+		location := "openai." + sectionName + "." + modelKey
+		if err := validateShadowFormShape(location, entry); err != nil {
+			return err
 		}
 		if len(entry.Shadows) > 0 || entry.hasLegacyShadowConfig() {
-			return fmt.Errorf("openai.%s.%s: shadow config is unsupported for multipart image endpoints", sectionName, modelKey)
+			return fmt.Errorf("%s: shadow config is unsupported for multipart image endpoints", location)
 		}
 	}
 	return nil
@@ -596,10 +613,7 @@ func validateShadowTargetNames(
 	perTarget bool,
 ) error {
 	for i, shadow := range shadows {
-		shadowLocation := location
-		if perTarget {
-			shadowLocation = fmt.Sprintf("%s.shadows[%d]", location, i)
-		}
+		shadowLocation := shadowTargetLocation(location, i, perTarget)
 		if shadow.ModelName == modelName {
 			return fmt.Errorf("%s: shadow target cannot reference the same model", shadowLocation)
 		}
