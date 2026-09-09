@@ -37,6 +37,34 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/secrets"
 )
 
+const (
+	otelCollectorConfigFlag       = "--config"
+	otelCollectorFeatureGatesFlag = "--feature-gates"
+
+	// ottl.functions.enableLambda is required by the rendered metrics pipeline,
+	// which filters empty attribute values with an OTTL lambda. The gate is
+	// alpha, so a collector upgrade that removes it will fail the runtime
+	// startup check in CI rather than in a deployment.
+	otelCollectorFeatureGates = "ottl.functions.enableLambda"
+)
+
+// otelCollectorArgs completes the argument list passed to the collector,
+// leaving any caller-supplied value for a flag untouched.
+//
+// The feature gate is not optional: the rendered metrics pipeline filters empty
+// attribute values with an OTTL lambda, which the collector rejects at
+// config-parse time unless the gate is enabled. The renderer and the collector
+// ship in the same image, so the config and the gate can never be out of step.
+func otelCollectorArgs(args []string, otelConfigPath string) []string {
+	if !slices.Contains(args, otelCollectorConfigFlag) {
+		args = append(args, otelCollectorConfigFlag, otelConfigPath)
+	}
+	if !slices.Contains(args, otelCollectorFeatureGatesFlag) {
+		args = append(args, otelCollectorFeatureGatesFlag, otelCollectorFeatureGates)
+	}
+	return args
+}
+
 // processWaiter is the subset of *os.Process used by runSecretsCheckLoop, extracted so tests
 // can exercise the wait-error logging without spawning a real OS process.
 type processWaiter interface {
@@ -179,12 +207,7 @@ func NewCommand() *cobra.Command {
 			}
 
 			// run the otel-collector
-			// check if the config flag is already present in the args
-			configFlag := "--config"
-			configFlagExists := slices.Contains(args, configFlag)
-			if !configFlagExists {
-				args = append(args, configFlag, otelConfigPath)
-			}
+			args = otelCollectorArgs(args, otelConfigPath)
 			otelCollectorProc, err := otelcollector.RunOtelCollector(args)
 			if err != nil {
 				return err

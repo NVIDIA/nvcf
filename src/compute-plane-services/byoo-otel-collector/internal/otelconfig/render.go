@@ -82,20 +82,28 @@ const (
 	defaultMetricSubsetPort              = 19091
 )
 
-// emptyCapableResourceAttrs are the resource attributes the Prometheus receiver
-// can write with an empty value. CreateResource guards server.address behind
-// isDiscernibleHost and populates service.name/service.instance.id from labels
-// that are required to be non-empty, but writes these two unconditionally: a
-// scrape target whose instance label carries no port yields server.port="", and
-// a target with no scheme label yields url.scheme="".
+// dropEmptyLabelsContexts are the OTTL contexts filtered for empty attribute
+// values before export.
 //
 // A Prometheus-compatible receiver rejects the whole write request when any
-// series carries a label with an empty value, so one such attribute drops every
-// unrelated metric batched with it.
-var emptyCapableResourceAttrs = []string{
-	"server.port",
-	"url.scheme",
-}
+// series carries a label with an empty value, and the remote-write exporter
+// classifies the resulting 4xx as permanent, so one empty attribute silently
+// drops every unrelated metric batched with it.
+//
+// resource covers server.port and url.scheme, which the Prometheus receiver's
+// CreateResource writes unconditionally (unlike server.address, which it guards
+// behind isDiscernibleHost): a scrape target whose instance label carries no
+// port yields server.port="".
+//
+// scope covers the otel_scope_* labels, which the translator's createAttributes
+// writes without an empty check. This is the only path the exporter does not
+// already guard.
+//
+// datapoint is deliberately excluded. The exporter's createAttributes drops
+// empty datapoint attribute values itself, and that statement would run once
+// per datapoint rather than once per resource, allocating a replacement map for
+// every point in every batch for no additional coverage.
+var dropEmptyLabelsContexts = []string{"resource", "scope"}
 
 var defaultWorkloadMetricsDropLabels = []string{
 	"metric_subset_enabled",
@@ -562,23 +570,26 @@ func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labe
 	return workloadMetricsDropLabelsProcessorID
 }
 
-// addDropEmptyLabelsProcessor removes resource attributes that carry an empty
-// value before the metrics reach the exporter, so they never become an empty
-// Prometheus label. See emptyCapableResourceAttrs for why these keys.
+// addDropEmptyLabelsProcessor removes attributes that carry an empty value
+// before the metrics reach the exporter, so they never become an empty
+// Prometheus label. See dropEmptyLabelsContexts for the contexts and why.
+//
+// The Filter lambda requires the ottl.functions.enableLambda feature gate,
+// which the wrapper passes to the collector; see otelCollectorFeatureGates.
 func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
-	statements := make([]string, 0, len(emptyCapableResourceAttrs))
-	for _, attr := range emptyCapableResourceAttrs {
-		statements = append(statements,
-			fmt.Sprintf(`delete_key(attributes, %q) where attributes[%q] == ""`, attr, attr))
+	blocks := make([]map[string]interface{}, 0, len(dropEmptyLabelsContexts))
+	for _, ottlContext := range dropEmptyLabelsContexts {
+		blocks = append(blocks, map[string]interface{}{
+			"context": ottlContext,
+			"statements": []string{
+				fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
+					ottlContext, ottlContext),
+			},
+		})
 	}
 	otelConfig.Processors[dropEmptyLabelsProcessorID] = map[string]interface{}{
-		"error_mode": "ignore",
-		"metric_statements": []map[string]interface{}{
-			{
-				"context":    "resource",
-				"statements": statements,
-			},
-		},
+		"error_mode":        "ignore",
+		"metric_statements": blocks,
 	}
 	return dropEmptyLabelsProcessorID
 }

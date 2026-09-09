@@ -241,8 +241,10 @@ processors:
     metric_statements:
       - context: resource
         statements:
-          - delete_key(attributes, "server.port") where attributes["server.port"] == ""
-          - delete_key(attributes, "url.scheme") where attributes["url.scheme"] == ""
+          - set(resource.attributes, Filter(resource.attributes, (_, v) => v != ""))
+      - context: scope
+        statements:
+          - set(scope.attributes, Filter(scope.attributes, (_, v) => v != ""))
 extensions:
   basicauth/GRAFANA_CLOUD-Grafana_prd-logs:
     client_auth:

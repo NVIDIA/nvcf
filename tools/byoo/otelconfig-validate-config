@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+# The rendered metrics pipeline filters empty attribute values with an OTTL
+# lambda, which the collector rejects at config-parse time unless this gate
+# is enabled. The wrapper passes the same gate at runtime.
+OTEL_FEATURE_GATES="--feature-gates=ottl.functions.enableLambda"
+
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 tool_root="${repo_root}/tools/byoo"
 examples_root="${repo_root}/src/libraries/go/lib/examples/otelconfig/byoo-otel-collector"
@@ -24,7 +29,7 @@ validate_otel_config() {
     local config_path="$1"
 
     set +e
-    timeout_output=$(timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
+    timeout_output=$(timeout 2 ./_output/bin/otelcol-contrib ${OTEL_FEATURE_GATES} --config="$config_path" 2>&1)
     exit_code=$?
     set -e
 
@@ -55,7 +60,7 @@ run_matrix() {
                 go run "${create_cmd}" "$input_file" _output "${backend}" "${workload}" "${compute}"
                 config_path="_output/byoo-otel-collector/config.${compute}_${backend}_${workload}.yaml"
                 echo "Validate configs ..."
-                ./_output/bin/otelcol-contrib validate --config="$config_path"
+                ./_output/bin/otelcol-contrib ${OTEL_FEATURE_GATES} validate --config="$config_path"
                 validate_otel_config "$config_path"
                 rm "$config_path"
             done

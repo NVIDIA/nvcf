@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -77,4 +78,42 @@ func TestWaitAndLogProcessExit(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOtelCollectorArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "adds config and feature gate when absent",
+			args: nil,
+			want: []string{"--config", "/tmp/cfg.yaml", "--feature-gates", "ottl.functions.enableLambda"},
+		},
+		{
+			name: "keeps a caller-supplied config path",
+			args: []string{"--config", "/custom.yaml"},
+			want: []string{"--config", "/custom.yaml", "--feature-gates", "ottl.functions.enableLambda"},
+		},
+		{
+			name: "keeps caller-supplied feature gates",
+			args: []string{"--feature-gates", "some.other.gate"},
+			want: []string{"--feature-gates", "some.other.gate", "--config", "/tmp/cfg.yaml"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := otelCollectorArgs(tt.args, "/tmp/cfg.yaml")
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// The rendered metrics pipeline uses an OTTL lambda, which the collector
+// rejects at config-parse time unless this gate is on. If the gate name ever
+// changes upstream, this fails alongside the CI runtime startup check.
+func TestOtelCollectorFeatureGateIsLambda(t *testing.T) {
+	assert.Equal(t, "ottl.functions.enableLambda", otelCollectorFeatureGates)
 }

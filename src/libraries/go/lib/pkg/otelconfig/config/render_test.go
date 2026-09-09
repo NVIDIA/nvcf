@@ -273,15 +273,20 @@ func TestMetricsPipelineDropsEmptyResourceAttrs(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s is not defined", dropEmptyLabelsProcessorID)
 			}
-			if len(proc.MetricStatements) != 1 || proc.MetricStatements[0].Context != "resource" {
-				t.Fatalf("expected a single resource-context block, got %+v", proc.MetricStatements)
+			var gotContexts []string
+			for _, block := range proc.MetricStatements {
+				gotContexts = append(gotContexts, block.Context)
+				want := fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
+					block.Context, block.Context)
+				assert.Contains(t, block.Statements, want,
+					"context %q is missing its empty-value filter", block.Context)
 			}
+			assert.Equal(t, dropEmptyLabelsContexts, gotContexts)
 
-			for _, attr := range emptyCapableResourceAttrs {
-				want := fmt.Sprintf(`delete_key(attributes, %q) where attributes[%q] == ""`, attr, attr)
-				assert.Contains(t, proc.MetricStatements[0].Statements, want,
-					"missing a delete statement for %q", attr)
-			}
+			// datapoint is excluded deliberately: the exporter already drops
+			// empty datapoint attribute values, and the statement would run
+			// once per point rather than once per resource.
+			assert.NotContains(t, gotContexts, "datapoint")
 
 			procs := cfg.Service.Pipelines["metrics"].Processors
 			assert.Contains(t, procs, dropEmptyLabelsProcessorID)
