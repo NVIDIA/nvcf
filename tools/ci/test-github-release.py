@@ -881,6 +881,58 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertFalse(self.github_release.should_process_auto_service(nvca, "grpc-proxy", "main", "main"))
         self.assertTrue(self.github_release.should_process_auto_service(grpc_proxy, "grpc-proxy", "main", "main"))
 
+    # Image sources that live beside a chart of the same name. Each pair
+    # releases independently: the chart from deploy/helm/<name>, the image
+    # from infra/<name>. The image tag prefix is what the internal publishing
+    # configuration dispatches on, so it is pinned here.
+    INFRA_IMAGE_SOURCES = (
+        ("openbao-image", "infra/openbao", "openbao", "deploy/helm/openbao"),
+        ("cassandra-image", "infra/cassandra", "cassandra", "deploy/helm/cassandra"),
+    )
+
+    def test_infra_image_sources_release_independently_of_their_charts(self):
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        by_id = {service["id"]: service for service in metadata["services"]}
+        self.assertEqual(len(by_id), len(metadata["services"]), "service ids must be unique")
+
+        for image_id, image_path, chart_id, chart_path in self.INFRA_IMAGE_SOURCES:
+            with self.subTest(image=image_id):
+                image, chart = by_id[image_id], by_id[chart_id]
+                self.assertEqual(image["path"], image_path)
+                self.assertEqual(chart["path"], chart_path)
+                self.assertNotEqual(image["service_name"], chart["service_name"])
+                # Default tag format from the path: this exact prefix is what
+                # the internal image lane is configured to dispatch on.
+                self.assertEqual(self.github_release.tag_prefix(image, root), f"{image_path}/v")
+                self.assertEqual(self.github_release.tag_prefix(chart, root), f"{chart_path}/v")
+
+    def test_release_worthy_infra_commit_touches_the_image_stream_only(self):
+        # A fix under infra/openbao must release infra/openbao/v* and leave the
+        # deploy/helm/openbao stream untouched, and the reverse.
+        image = {"id": "openbao-image", "path": "infra/openbao", "service_name": "nvcf-openbao"}
+        chart = {"id": "openbao", "path": "deploy/helm/openbao", "service_name": "helm-nvcf-openbao-server"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            for path in (image["path"], chart["path"]):
+                (root / path).mkdir(parents=True)
+                (root / path / "README.md").write_text(f"{path}\n")
+            self.commit_all(root, "seed openbao chart and image")
+            git(root, "tag", "infra/openbao/v1.3.1")
+            git(root, "tag", "deploy/helm/openbao/v0.32.2")
+
+            (root / image["path"] / "README.md").write_text("fix(openbao): bump grpc\n")
+            self.commit_all(root, "fix(openbao): bump grpc")
+
+            self.assertTrue(self.github_release.releases_a_version("fix(openbao): bump grpc"))
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(self.github_release.only_generated_changes(root, image, []))
+                self.assertTrue(self.github_release.only_generated_changes(root, chart, []))
+                self.assertEqual(
+                    self.github_release.latest_service_tag(image, root), "infra/openbao/v1.3.1"
+                )
+
     def test_no_service_uses_the_retired_version_file_model(self):
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
         for service in metadata["services"]:
