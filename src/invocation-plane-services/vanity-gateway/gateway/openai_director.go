@@ -43,6 +43,7 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/valyala/bytebufferpool"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 	"golang.org/x/exp/maps"
 )
 
@@ -723,6 +724,12 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	for _, shadow := range shadows {
 		shadowBody, err := rewriteShadowRequestModel(rawBody, shadow.modelName)
 		if err != nil {
+			zap.L().Warn("shadow body rewrite failed, dropping target", append(
+				middleware.TraceFields(resolved.request.Context()),
+				zap.String("primary_model", resolved.modelName),
+				zap.String("shadow_model", shadow.modelName),
+				zap.Error(err),
+			)...)
 			droppedCount++
 			droppedReasons = append(droppedReasons, shadowDroppedReasonBodyRewriteError)
 			droppedTargetModels = append(droppedTargetModels, shadow.modelName)
@@ -748,7 +755,14 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 		}
 		dispatchedCount++
 	}
-	recordShadowDispatchSummary(resolved.request.Context(), targetModelNames, dispatchedCount, droppedCount, droppedReasons, droppedTargetModels)
+	recordShadowDispatchSummary(
+		resolved.request.Context(),
+		targetModelNames,
+		dispatchedCount,
+		droppedCount,
+		droppedReasons,
+		droppedTargetModels,
+	)
 	return finishShadows(finishers)
 }
 
