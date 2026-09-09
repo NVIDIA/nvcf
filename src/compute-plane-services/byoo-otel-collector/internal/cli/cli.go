@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,21 +48,35 @@ const (
 	otelCollectorFeatureGates = "ottl.functions.enableLambda"
 )
 
-// otelCollectorArgs completes the argument list passed to the collector,
-// leaving any caller-supplied value for a flag untouched.
+// hasFlag reports whether args already carries flag, in either the
+// "--flag value" or "--flag=value" form.
+func hasFlag(args []string, flag string) bool {
+	prefix := flag + "="
+	for _, arg := range args {
+		if arg == flag || strings.HasPrefix(arg, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// otelCollectorArgs completes the argument list passed to the collector.
 //
-// The feature gate is not optional: the rendered metrics pipeline filters empty
-// attribute values with an OTTL lambda, which the collector rejects at
-// config-parse time unless the gate is enabled. The renderer and the collector
-// ship in the same image, so the config and the gate can never be out of step.
+// A caller-supplied --config wins: adding a second one would make the collector
+// merge both sources rather than use theirs.
+//
+// The feature gate is different, and is appended unconditionally. The rendered
+// metrics pipeline filters empty attribute values with an OTTL lambda, which the
+// collector rejects at config-parse time unless ottl.functions.enableLambda is
+// enabled, so skipping it when the caller passes gates of their own would leave
+// the collector unable to start. --feature-gates accumulates across repeated
+// flags, so a caller's gates survive alongside this one and a duplicate is
+// harmless.
 func otelCollectorArgs(args []string, otelConfigPath string) []string {
-	if !slices.Contains(args, otelCollectorConfigFlag) {
+	if !hasFlag(args, otelCollectorConfigFlag) {
 		args = append(args, otelCollectorConfigFlag, otelConfigPath)
 	}
-	if !slices.Contains(args, otelCollectorFeatureGatesFlag) {
-		args = append(args, otelCollectorFeatureGatesFlag, otelCollectorFeatureGates)
-	}
-	return args
+	return append(args, otelCollectorFeatureGatesFlag, otelCollectorFeatureGates)
 }
 
 // processWaiter is the subset of *os.Process used by runSecretsCheckLoop, extracted so tests

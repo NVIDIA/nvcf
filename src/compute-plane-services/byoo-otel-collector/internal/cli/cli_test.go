@@ -81,6 +81,8 @@ func TestWaitAndLogProcessExit(t *testing.T) {
 }
 
 func TestOtelCollectorArgs(t *testing.T) {
+	const gate = "ottl.functions.enableLambda"
+
 	tests := []struct {
 		name string
 		args []string
@@ -89,17 +91,30 @@ func TestOtelCollectorArgs(t *testing.T) {
 		{
 			name: "adds config and feature gate when absent",
 			args: nil,
-			want: []string{"--config", "/tmp/cfg.yaml", "--feature-gates", "ottl.functions.enableLambda"},
+			want: []string{"--config", "/tmp/cfg.yaml", "--feature-gates", gate},
 		},
 		{
 			name: "keeps a caller-supplied config path",
 			args: []string{"--config", "/custom.yaml"},
-			want: []string{"--config", "/custom.yaml", "--feature-gates", "ottl.functions.enableLambda"},
+			want: []string{"--config", "/custom.yaml", "--feature-gates", gate},
 		},
 		{
-			name: "keeps caller-supplied feature gates",
-			args: []string{"--feature-gates", "some.other.gate"},
-			want: []string{"--feature-gates", "some.other.gate", "--config", "/tmp/cfg.yaml"},
+			name: "recognizes the --config=value form and does not duplicate it",
+			args: []string{"--config=/custom.yaml"},
+			want: []string{"--config=/custom.yaml", "--feature-gates", gate},
+		},
+		{
+			// The required gate must survive alongside caller-supplied gates:
+			// without it the rendered config does not parse and the collector
+			// never starts. Repeated --feature-gates flags accumulate.
+			name: "appends the required gate alongside caller-supplied gates",
+			args: []string{"--feature-gates", "ottl.PanicDuplicateName"},
+			want: []string{"--feature-gates", "ottl.PanicDuplicateName", "--config", "/tmp/cfg.yaml", "--feature-gates", gate},
+		},
+		{
+			name: "appends the required gate alongside the --feature-gates=value form",
+			args: []string{"--feature-gates=ottl.PanicDuplicateName"},
+			want: []string{"--feature-gates=ottl.PanicDuplicateName", "--config", "/tmp/cfg.yaml", "--feature-gates", gate},
 		},
 	}
 
