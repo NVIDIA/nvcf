@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+
+defaults:
+  maxTokens: 256
+  timeoutSeconds: 30
+  requestSloMs: 10000
+  maxWaitMs: 10000
+  cooldownSeconds: 60
+
+algorithms:
+  wait-and-widen:
+    routingHeader: null
+  power-of-n:
+    routingHeader: powerOfN
+
+suites:
+  smoke:
+    - smoke
+  capacity:
+    - smoke
+    - saturation
+  cache-affinity:
+    - smoke
+    - session-affinity
+    - mixed-sessions
+  canonical:
+    - smoke
+    - saturation
+    - session-affinity
+    - mixed-sessions
+
+scenarios:
+  smoke:
+    kind: requests
+    requests: 32
+    rate: 8
+    workers: 8
+    promptBytes: 2048
+
+  saturation:
+    kind: sweep
+    rates: [8, 16, 24, 32, 48]
+    durationSeconds: 120
+    minimumWorkers: 32
+    workersPerRps: 2
+    promptBytes: 2048
+
+  session-affinity:
+    kind: session-affinity
+    sessions: 512
+    turnsPerSession: 12
+    repeats: 3
+    rate: 24
+    workers: 48
+    stablePrefixBytes: 3584
+    turnBytes: 512
+
+  mixed-sessions:
+    kind: mixed-sessions
+    durationSeconds: 600
+    repeats: 2
+    hot:
+      rate: 8
+      workers: 128
+      minPromptBytes: 2048
+      maxPromptBytes: 16384
+    short:
+      rate: 4
+      workers: 64
+      promptBytesByTurn: [2048, 4096, 6144]
