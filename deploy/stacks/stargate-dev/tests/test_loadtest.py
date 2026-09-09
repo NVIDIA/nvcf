@@ -136,6 +136,36 @@ class CanonicalSuiteTests(unittest.TestCase):
         self.assertEqual(command.call_count, 2)
         sleep.assert_called_once_with(5)
 
+    def test_cache_reset_restarts_stargate_after_backends(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = object.__new__(LOADTEST.Campaign)
+            campaign.output = Path(directory)
+            campaign.stargate_context = "stargate"
+            empty = {
+                "backend-0": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
+                "backend-1": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
+            }
+            with (
+                mock.patch.object(
+                    campaign,
+                    "backend_targets",
+                    return_value=[("mock-a", "backend-0"), ("mock-b", "backend-1")],
+                ),
+                mock.patch.object(campaign, "cache_stats", side_effect=[empty, empty]),
+                mock.patch.object(campaign, "kubectl", return_value="") as kubectl,
+                mock.patch.object(campaign, "verify_region") as verify,
+                mock.patch.object(campaign, "log"),
+            ):
+                campaign.reset_caches("test")
+
+        self.assertIn(
+            mock.call(
+                "stargate", ["rollout", "restart", "deployment/llm-request-router"]
+            ),
+            kubectl.call_args_list,
+        )
+        verify.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

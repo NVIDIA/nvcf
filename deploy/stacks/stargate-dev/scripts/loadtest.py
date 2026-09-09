@@ -732,6 +732,20 @@ class Campaign:
                 ["rollout", "status", f"deployment/{deployment}", "--timeout=5m"],
                 timeout=330,
             )
+        self.kubectl(
+            self.stargate_context,
+            ["rollout", "restart", "deployment/llm-request-router"],
+        )
+        self.kubectl(
+            self.stargate_context,
+            [
+                "rollout",
+                "status",
+                "deployment/llm-request-router",
+                "--timeout=5m",
+            ],
+            timeout=330,
+        )
         self.verify_region()
         stats = self.cache_stats()
         if any(
