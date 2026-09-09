@@ -58,29 +58,18 @@ nats:
       repository: "<REPOSITORY>/alpine-k8s"
 
   # Uncomment and set if using node selectors
-
   # podTemplate:
-
-  # merge:
-
-  # spec:
-
-  # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
+  #   merge:
+  #     spec:
+  #       nodeSelector:
+  #         nvcf.nvidia.com/workload: control-plane
 
   # Uncomment and set to configure storage class for JetStream
-
   # config:
-
-  # jetstream:
-
-  # fileStore:
-
-  # pvc:
-
-  # storageClassName: "<STORAGE_CLASS>"
-
+  #   jetstream:
+  #     fileStore:
+  #       pvc:
+  #         storageClassName: "<STORAGE_CLASS>"
 ```
 
 Replace all `<REGISTRY>` and `<REPOSITORY>` placeholders with your actual registry values.
@@ -224,7 +213,6 @@ openbao:
               fi
               sleep 10
             done
-
 ```
 
 Replace the following placeholders:
@@ -414,11 +402,8 @@ cassandra:
     size: "10Gi"  # 50-100Gi recommended for production
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: cassandra
-
+  #   nvcf.nvidia.com/workload: cassandra
 ```
 
 Replace all `<REGISTRY>` and `<REPOSITORY>` placeholders with your actual registry values.

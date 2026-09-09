@@ -175,36 +175,29 @@ Save it as `environments/<name>.yaml` (e.g., `environments/my-local.yaml`) in yo
 # Deploy with: HELMFILE_ENV=<name> helmfile sync
 
 global:
-
   # Domain for local access (routes use .localhost TLD)
-
   domain: "localhost"
 
   # Helm chart registry (where helmfile pulls OCI charts from)
-
   helm:
     sources:
       registry: nvcr.io
       repository: 0833294136851237/nvcf-ncp-staging
 
   # Container image registry (where Kubernetes pulls images from)
-
   image:
     registry: nvcr.io
     repository: 0833294136851237/nvcf-ncp-staging
 
   # Pull secret created by create-nvcr-pull-secrets.sh (run once before deploying)
-
   imagePullSecrets:
     - name: nvcr-pull-secret
 
   # Disable node selectors for local development (pods schedule on any node)
-
   nodeSelectors:
     enabled: false
 
   # k3d uses the local-path StorageClass by default
-
   storageClass: local-path
   storageSize: 2Gi
 
@@ -216,7 +209,6 @@ global:
       collectorProtocol: http
 
 # Single Cassandra replica for local development
-
 cassandra:
   enabled: true
   replicaCount: 1
@@ -235,7 +227,6 @@ openbao:
       enabled: true
 
 # Gateway configuration matching the standard control plane installation Step 1
-
 ingress:
   gatewayApi:
     enabled: true
@@ -258,7 +249,6 @@ ingress:
         name: nvcf-gateway
         namespace: envoy-gateway
         listenerName: tcp
-
 ```
 
 

@@ -346,7 +346,6 @@ To customize a network policy:
                          protocol: TCP
                        - port: 8889
                          protocol: TCP
-
 ```
 
 2. Apply the configmap:
@@ -356,12 +355,11 @@ To customize a network policy:
    kubectl apply -f patchcm.yaml
 ```
 
-1. Verify the changes:
+3. Verify the changes:
 
    ```bash
 
    kubectl logs -n nvca-operator -l app.kubernetes.io/name=nvca-operator
-
 ```
 
    You should see a message indicating successful patching:
@@ -400,7 +398,7 @@ To configure CSI volume mount options:
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-1. View current mount options configuration:
+2. View current mount options configuration:
 
 ```bash
 kubectl get nvcfbackend -n nvca-operator "$nvcf_cluster_name" -o yaml | grep -A 5 "MountOptions"
@@ -414,7 +412,7 @@ kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name" 
   -p '{"spec":{"overrides":{"agentConfig":{"cacheMountOptionsEnabled":true,"cacheMountOptions":"ro,norecovery,nouuid"}}}}'
 ```
 
-1. Verify the changes:
+4. Verify the changes:
 
 ```bash
 kubectl get nvcfbackend -n nvca-operator "$nvcf_cluster_name" -o yaml | grep -A 5 "MountOptions"
@@ -575,13 +573,13 @@ NVCFBackend will be overwritten on the next Helm upgrade.
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-1. View current feature flags:
+2. View current feature flags:
 
 ```bash
 kubectl get nvcfbackends -n nvca-operator -o yaml | grep -A 5 "featureGate:"
 ```
 
-1. Patch the feature flags. Note that this will override all feature flags.
+3. Patch the feature flags. Note that this will override all feature flags.
 
 <Warning>
 When modifying feature flags, you must preserve any existing feature flags you want to keep. The patch command will override all feature flags, so you need to include all desired feature flags in the value array.
@@ -609,7 +607,7 @@ spec:
       ...
 ```
 
-1. Verify the changes:
+4. Verify the changes:
 
 ```bash
 kubectl get pods -n nvca-system -o yaml | grep -i feature
@@ -692,19 +690,19 @@ helm repo add csi-driver-smb https://raw.githubusercontent.com/kubernetes-csi/cs
 helm install csi-driver-smb csi-driver-smb/csi-driver-smb --namespace kube-system --version v1.16.0
 ```
 
-1. Get the NVCF cluster name:
+2. Get the NVCF cluster name:
 
 ```bash
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-1. Enable the Helm shared storage feature flag:
+3. Enable the Helm shared storage feature flag:
 
 ```bash
 kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name" --type=merge -p '{"spec":{"overrides":{"featureGate":{"values":["LogPosting","HelmSharedStorage", "CachingSupport"]}}}}'
 ```
 
-1. Verify that the feature flag is enabled:
+4. Verify that the feature flag is enabled:
 
 ```bash
 kubectl get pods -n nvca-system -o yaml | grep HelmSharedStorage

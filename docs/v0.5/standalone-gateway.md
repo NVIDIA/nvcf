@@ -164,7 +164,6 @@ nvcfGatewayRoutes:
       routeAnnotations: {}
     grpc:
       routeAnnotations: {}
-
 ```
 </Accordion>
 
@@ -271,12 +270,10 @@ curl -s -X POST "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
   }' | jq .
 
 # Extract function and version IDs from the response
-
 export FUNCTION_ID=<function-id-from-response>
 export FUNCTION_VERSION_ID=<version-id-from-response>
 
 # Deploy the function (adjust instanceType and gpu for your cluster)
-
 curl -s -X POST "http://${GATEWAY_ADDR}/v2/nvcf/deployments/functions/${FUNCTION_ID}/versions/${FUNCTION_VERSION_ID}" \
   -H "Host: api.${GATEWAY_ADDR}" \
   -H "Content-Type: application/json" \
@@ -294,7 +291,6 @@ curl -s -X POST "http://${GATEWAY_ADDR}/v2/nvcf/deployments/functions/${FUNCTION
   }' | jq .
 
 # Generate an invocation API key
-
 EXPIRES_AT=$(date -u -v+1d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%SZ')
 SERVICE_ID="nvidia-cloud-functions-ncp-service-id-aketm"
 
@@ -325,13 +321,11 @@ export API_KEY=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/keys" \
 echo "API Key: ${API_KEY:0:20}..."
 
 # Wait for deployment to be ready, then invoke the function
-
 curl -s -X POST "http://${GATEWAY_ADDR}/echo" \
   -H "Host: ${FUNCTION_ID}.invocation.${GATEWAY_ADDR}" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${API_KEY}" \
   -d '{"message": "hello world", "repeats": 1}' | jq .
-
 ```
 
 <Note>

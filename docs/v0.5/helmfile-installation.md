@@ -75,7 +75,6 @@ Install the Kubernetes Gateway API CRDs v1.2.0. Note if replacing the version (v
 # Replace with desired version
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
 ```
-
 </Accordion>
 
 <Accordion title="Install helm-diff plugin">
@@ -144,7 +143,7 @@ kubectl create namespace sis && \
 kubectl create namespace nvcf
 ```
 
-1. Next, label the namespaces for NVCF platform identification:
+2. Next, label the namespaces for NVCF platform identification:
 
 ```bash
 kubectl label namespace envoy-gateway nvcf/platform=true && \
@@ -154,7 +153,7 @@ kubectl label namespace ess nvcf/platform=true && \
 kubectl label namespace nvcf nvcf/platform=true
 ```
 
-1. Install Envoy Gateway:
+3. Install Envoy Gateway:
 
 ```bash
 helm install eg oci://docker.io/envoyproxy/gateway-helm \
@@ -162,7 +161,7 @@ helm install eg oci://docker.io/envoyproxy/gateway-helm \
   -n envoy-gateway-system
 ```
 
-1. Create the GatewayClass resource:
+4. Create the GatewayClass resource:
 
 ```bash
 kubectl apply -f - <<EOF
@@ -175,7 +174,7 @@ spec:
 EOF
 ```
 
-1. Create the Gateway resource:
+5. Create the Gateway resource:
 
 <Note>
 The `annotations` section below is **cloud-provider specific** and controls how the external load balancer is provisioned. Choose the appropriate annotations for your environment:
@@ -226,7 +225,7 @@ spec:
 EOF
 ```
 
-1. Verify the Gateway is ready:
+6. Verify the Gateway is ready:
 
 ```bash
 # Check Gateway status
@@ -242,7 +241,7 @@ echo "$GATEWAY_ADDR"
 # e.g. abc123-4567890.us-west-2.elb.amazonaws.com
 ```
 
-1. Proceed to Step 2. Ensure you have your GATEWAY_ADDR ready to use in your environment configuration.
+7. Proceed to Step 2. Ensure you have your GATEWAY_ADDR ready to use in your environment configuration.
 
 <Warning>
 **The Gateway address is embedded throughout your deployment.** The `domain` value in your environment file, the Gateway API HTTPRoutes/TCPRoutes, and service discovery all depend on this address. If the Gateway or its underlying load balancer is deleted and recreated (e.g., due to a TCPRoute misconfiguration), a **new address** will be assigned.
@@ -272,7 +271,6 @@ touch environments/<environment-name>.yaml
 
 The following example shows a typical configuration for Amazon EKS:
 </Accordion>
-
 ```yaml title="environments/eks-example.yaml"
 global:
 
@@ -395,6 +393,7 @@ ingress:
         namespace: "envoy-gateway" # must be set by the environment
         listenerName: tcp
 ```
+
 
 #### `domain` and `ingress` Configuration
 
@@ -599,7 +598,6 @@ HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra template
 # Apply changes to just that release
 HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
 ```
-
 </Accordion>
 
 ### Step 3. Configure your secrets file (`secrets/<environment-name>-secrets.yaml`)
@@ -621,28 +619,18 @@ touch secrets/<environment-name>-secrets.yaml
 ```yaml title="secrets/example-secrets.yaml"
 
 # Required structure for any environment secrets.
-
 # This is the minimal set of values to provide.
 
 # Notes:
-
 # Cassandra:
-
-# The password should match the value set in the cassandra keyspace migrations
-
+#   The password should match the value set in the cassandra keyspace migrations
 #
-
 # API:
-
-# The value for the registry will be used in three places, as it is
-
-# expected the same registry is used as a single source for all images.
-
-# openbao.migrations.env[1].value
-
-# api.accountBootstrap.registryCredentials[0].secret.value
-
-# api.accountBootstrap.registryCredentials[1].secret.value
+#   The value for the registry will be used in three places, as it is
+#   expected the same registry is used as a single source for all images.
+#     openbao.migrations.env[1].value
+#     api.accountBootstrap.registryCredentials[0].secret.value
+#     api.accountBootstrap.registryCredentials[1].secret.value
 
 openbao:
   migrations:
@@ -673,7 +661,6 @@ api:
         artifactTypes: ["HELM"]
         tags: []
         description: "NGC Helm registry"
-
 ```
 
 

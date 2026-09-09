@@ -439,21 +439,18 @@ Container Cache logs include:
 
 **Cache Not Working**
 : - Verify containerd configuration on worker nodes
-
-- Check network connectivity to Container Cache service
-- Ensure proper DNS resolution
+  - Check network connectivity to Container Cache service
+  - Ensure proper DNS resolution
 
 **Low Cache Hit Ratio**
 : - Review cache size configuration
-
-- Check cache eviction policies
-- Monitor storage performance
+  - Check cache eviction policies
+  - Monitor storage performance
 
 **Storage Issues**
 : - Verify storage class availability
-
-- Check persistent volume claims
-- Monitor disk space usage
+  - Check persistent volume claims
+  - Monitor disk space usage
 
 ## Best Practices
 

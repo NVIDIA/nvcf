@@ -452,7 +452,7 @@ export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonp
 echo "Gateway Address: $GATEWAY_ADDR"
 ```
 
-1. Generate an admin token:
+2. Generate an admin token:
 
 ```bash
 # Generate an admin API token
@@ -463,7 +463,7 @@ export NVCF_TOKEN=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/admin/keys" \
 echo "Token generated: ${NVCF_TOKEN:0:20}..."
 ```
 
-1. Create, deploy, and invoke a test function:
+3. Create, deploy, and invoke a test function:
 
 ```bash
 # Create a test function

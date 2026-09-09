@@ -31,7 +31,6 @@ Compute-plane commands run from the repository root with `make -C`.
 ```bash
 git clone https://github.com/nvidia/nvcf.git
 ```
-
 </Info>
 
 ## Installation order

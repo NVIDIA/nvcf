@@ -154,40 +154,27 @@ Edit `terraform/envs/<your-environment>/terraform.tfvars` to match your requirem
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-
 # REQUIRED: Cluster Identification
-
 # -----------------------------------------------------------------------------
-
 cluster_name = "my-self-hosted-cluster" # Must be under 20 characters if enabling LLS (EA limitation)
 cluster_version = "1.32"
 region       = "us-west-2"
 environment  = "production"
 
 # -----------------------------------------------------------------------------
-
 # VPC and Networking (larger for control plane + workloads)
-
 # -----------------------------------------------------------------------------
-
 # Default: null lets AWS auto-assign a non-colliding CIDR.
-
 # Override with a specific CIDR if you need deterministic addressing:
-
-# vpc_cidr = "10.110.0.0/16"
-
+#   vpc_cidr = "10.110.0.0/16"
 vpc_cidr = null
 
 availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
 
 # When vpc_cidr is null, leave these as null for automatic subnet calculation.
-
 # When using a specific vpc_cidr, override with matching subnets, e.g.:
-
-# private_subnet_cidrs = ["10.110.0.0/19", "10.110.32.0/19", "10.110.64.0/19"]
-
-# public_subnet_cidrs  = ["10.110.101.0/24", "10.110.102.0/24", "10.110.103.0/24"]
-
+#   private_subnet_cidrs = ["10.110.0.0/19", "10.110.32.0/19", "10.110.64.0/19"]
+#   public_subnet_cidrs  = ["10.110.101.0/24", "10.110.102.0/24", "10.110.103.0/24"]
 private_subnet_cidrs = null
 public_subnet_cidrs  = null
 
@@ -196,15 +183,10 @@ service_ipv4_cidr = "172.20.0.0/16"
 create_nat_gateways = true
 
 # -----------------------------------------------------------------------------
-
 # Node Pool Configuration (Control Plane + BYOC)
-
 # -----------------------------------------------------------------------------
-
 node_pools = {
-
   # NVCF Control Plane Nodes
-
   "nvcf-control-plane" = {
     instance_type    = "m5.4xlarge"  # Control plane services need CPU/memory
     desired_capacity = 3
@@ -218,7 +200,6 @@ node_pools = {
   },
   
   # Compute nodes for BYOC workloads
-
   "compute" = {
     instance_type    = "m5.2xlarge"
     desired_capacity = 3
@@ -231,13 +212,9 @@ node_pools = {
   },
   
   # GPU nodes for BYOC workloads
-
   # Change to appropriate GPU instance type for your workload. For single-GPU simulation workloads, this should be g6e.4xlarge.
-
   # For very basic workloads to test the stack, we recommend g5.4xlarge (A10G) or for inference workloads, A100, H100 or better.
-
   # min_capacity is 1 because the NVCF cluster agent (NVCA) will not be able to start if there are no GPU nodes.
-
   "gpu" = {
     instance_type    = "g6e.4xlarge"
     desired_capacity = 2
@@ -251,7 +228,6 @@ node_pools = {
   },
   
   # Cassandra nodes for control plane storage
-
   "cassandra" = {
     instance_type    = "r5.2xlarge"  # Memory-optimized for database
     desired_capacity = 3
@@ -265,7 +241,6 @@ node_pools = {
   },
   
   # OpenBao nodes for secrets management
-
   "openbao" = {
     instance_type    = "m5.xlarge"
     desired_capacity = 3
@@ -280,115 +255,73 @@ node_pools = {
 }
 
 # Storage configuration (larger for control plane data)
-
 node_root_volume_size     = 100  # GB for control plane nodes
 gpu_node_root_volume_size = 250  # GB for GPU nodes
 
 # AMI Configuration
-
 # Default (null) automatically discovers the latest Ubuntu 22.04 EKS-optimized AMI for your region
-
 # This is RECOMMENDED for most deployments (always uses latest security patches)
-
 # This determines the base OS image for the EKS nodes.
-
 node_ami_id = null
 
 # Advanced: Pin a specific AMI for compliance/reproducibility
-
 # NOTE: AMI IDs are region-specific. Examples:
-
-# us-west-2: ami-0bce1583264e581a6
-
-# us-east-1: ami-0e70225fadb23da91
-
-# us-east-2: ami-0a12b3c4d5e6f7890
-
+#   us-west-2: ami-0bce1583264e581a6
+#   us-east-1: ami-0e70225fadb23da91
+#   us-east-2: ami-0a12b3c4d5e6f7890
 # Uncomment and update for your region:
-
 # node_ami_id = "ami-0bce1583264e581a6"
 
 # SSH access (recommended for control plane troubleshooting)
-
 # ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample..."
 
 # -----------------------------------------------------------------------------
-
 # Feature Flags
-
 # -----------------------------------------------------------------------------
 
 # Set to true to create ECR repositories and copy NVCF images from NGC
-
 # IMPORTANT: Requires NGC_API_KEY to be set in your environment
-
 create_sm_ecr_repos = true
 
 # =============================================================================
-
 # Additional Configuration (Optional)
-
 # =============================================================================
 
 # Observability - OPTIONAL, DEPRECATED
-
 # WARNING: The CloudWatch Observability addon is disabled to avoid conflicts
-
 # with the stack bring-up.
-
 enable_cloudwatch_observability = false
 
 # S3 Buckets - OPTIONAL, REQUIRED for DDCS and UCC (Simulation components)
-
 create_s3_buckets = true
 s3_bucket_name    = "my-self-hosted-data" # REPLACE: Must be globally unique
 
 # Autoscaling (important for handling varying workload)
-
 enable_autoscaling = true
 
 # -----------------------------------------------------------------------------
-
 # Advanced Autoscaling Configuration (optional)
-
 # -----------------------------------------------------------------------------
-
 # Uncomment and customize for fine-grained control
 
 # autoscaling_cooldown_period = 300
-
 # autoscaling_polling_interval = 30
-
 # autoscaling_scale_up_threshold = 70
-
 # autoscaling_scale_down_threshold = 30
-
 # gpu_autoscaling_enabled = true
-
 # gpu_autoscaling_min_nodes = 0
-
 # gpu_autoscaling_max_nodes = 10
-
 # compute_autoscaling_enabled = true
-
 # compute_autoscaling_min_nodes = 2
-
 # compute_autoscaling_max_nodes = 15
-
 # autoscaling_metrics = ["CPUUtilization", "MemoryUtilization"]
-
 # enable_spot_instances = false
-
 # spot_instance_percentage = 0
-
 # enable_predictive_scaling = false
 
 # -----------------------------------------------------------------------------
-
 # Tags
-
 # -----------------------------------------------------------------------------
-
 tags = {
   Environment  = "production"
   Project      = "nvcf-self-hosted"
@@ -398,7 +331,6 @@ tags = {
   Owner        = "platform-team"
   Architecture = "self-hosted-full"
 }
-
 ```
 
 
@@ -545,7 +477,7 @@ Review the plan output to verify expected resources will be created based on you
 
 </Note>
 
-1. Apply the configuration.
+2. Apply the configuration.
 
 ```bash
 terraform apply
@@ -567,7 +499,7 @@ Use the same `region` and `cluster_name` values from your `terraform.tfvars` con
 
 </Note>
 
-1. Verify cluster health:
+2. Verify cluster health:
 
 ```bash
 # Check all nodes are Ready
@@ -594,7 +526,7 @@ The NVIDIA GPU Operator is **required** for GPU workloads. It installs GPU drive
 export NGC_API_KEY="nvapi-xxxxxxxxxxxxx"  # Your NGC API key
 ```
 
-1. Deploy the GPU Operator:
+2. Deploy the GPU Operator:
 
 ```bash
 # Navigate to core-apps under the nvcf-base top-level directory
@@ -603,7 +535,7 @@ cd /path/to/nvcf-base/core-apps
 helmfile apply --selector component=gpu
 ```
 
-1. Verify deployment is proceeding.
+3. Verify deployment is proceeding.
 
 **Expected Duration:** 5-10 minutes
 

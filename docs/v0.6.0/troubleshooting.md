@@ -285,7 +285,7 @@ labels:
   release-group: workers
 ```
 
-1. **Remove \`\`--dry-run=server\`\`** from the `helmDefaults.diffArgs` section. This prevents server-side validation during the diff phase, which fails when the CRD doesn't exist:
+2. **Remove \`\`--dry-run=server\`\`** from the `helmDefaults.diffArgs` section. This prevents server-side validation during the diff phase, which fails when the CRD doesn't exist:
 
 ```yaml
 helmDefaults:

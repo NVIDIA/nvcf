@@ -69,7 +69,6 @@ defaultQueue:
       quota: -1
       limit: -1
       overQuotaWeight: 1
-
 ```
 </Accordion>
 

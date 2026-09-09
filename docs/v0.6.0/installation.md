@@ -54,7 +54,7 @@ Every installation path follows the same high-level sequence:
 
 ### Cluster Version
 
-- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions).
+- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions). 
 - Support for dynamic persistent volume provisioning
 
 ### Required Operators and Components

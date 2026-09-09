@@ -46,7 +46,6 @@ After Docker starts, verify that the CLI can reach it:
 ```bash
 docker version
 ```
-
 </Accordion>
 
 <Accordion title="Install k3d, kubectl, Helm, and Helmfile">

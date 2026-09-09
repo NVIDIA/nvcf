@@ -42,11 +42,8 @@ apikeys:
     repository: "<REPOSITORY>/nv-api-keys"
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 
@@ -97,11 +94,8 @@ sis:
     repository: "<REPOSITORY>/spot"
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 
@@ -148,7 +142,6 @@ ess:
   image:
     registry: "<REGISTRY>"
     repository: "<REPOSITORY>/ess-api"
-
 ```
 </Accordion>
 
@@ -242,11 +235,8 @@ api:
     NVCF_SIDECARS_REPOSITORY: "<REPOSITORY>"
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 
@@ -348,11 +338,8 @@ invocation:
     repository: "<REPOSITORY>/nvcf-invocation-service"
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 
@@ -401,11 +388,8 @@ grpcproxy:
     repository: "<REPOSITORY>/nvcf-grpc-proxy"
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 
@@ -454,11 +438,8 @@ notary:
     repository: "<REPOSITORY>/notary-service"
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 
@@ -508,11 +489,8 @@ reval:
     repository: "<REPOSITORY>/reval-server"
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 
@@ -564,20 +542,14 @@ adminIssuerProxy:
     repository: "<REPOSITORY>/admin-token-issuer-proxy"
 
   # Gateway is disabled during Phase 2 (core services) because the Gateway
-
   # resource and CRDs are not yet installed. The gateway route for the admin
-
   # endpoint is created in Phase 3 when the Gateway Routes chart is installed.
-
   gateway:
     enabled: false
 
   # Uncomment for node selectors
-
   # nodeSelector:
-
-  # nvcf.nvidia.com/workload: control-plane
-
+  #   nvcf.nvidia.com/workload: control-plane
 ```
 </Accordion>
 

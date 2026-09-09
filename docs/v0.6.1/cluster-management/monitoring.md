@@ -115,7 +115,7 @@ The NVIDIA Cluster Agent provides OpenTelemetry integration for exporting traces
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-1. Apply the tracing configuration:
+3. Apply the tracing configuration:
 
 ```bash
 kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name"  --type=merge --patch="{\"spec\":{\"overrides\":{\"featureGate\":{\"otelConfig\":{\"exporter\":\"lightstep\",\"serviceName\":\"nvcf-nvca\",\"accessToken\":\"${LS_ACCESS_TOKEN}\"}}}}}"
