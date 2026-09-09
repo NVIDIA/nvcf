@@ -72,7 +72,7 @@ Both opt-in. Default suite behavior is unchanged.
 
 ### Env var (BDD-driven)
 
-```
+```text
 BDD_CLEANUP_MODE = "" | "stack-single" | "stack-multi" | "topology-single" | "topology-multi"
 ```
 

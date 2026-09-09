@@ -16,7 +16,7 @@ Per-file PUT of all 5,418 files to the blobstore:
 
 ## Spike 1 — tar + zstd-3, streaming upload (#74)
 
-```
+```bash
 tar -C <parent> -cf - <dump> | zstd -T0 -3 | tee >(sha256sum) | curl --upload-file -
 ```
 
@@ -42,7 +42,7 @@ single-stream and disk-bound.**
 
 ## Spike 2 — mkfs.erofs + ship + mount (#75)
 
-```
+```text
 mkfs.erofs -zlz4hc,9 <out.erofs> <dump>     # Ubuntu 22.04 = erofs-utils 1.4
 sha256sum <out.erofs>
 curl --upload-file <out.erofs>

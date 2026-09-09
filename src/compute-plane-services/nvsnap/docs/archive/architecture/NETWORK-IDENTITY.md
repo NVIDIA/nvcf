@@ -20,7 +20,7 @@ This affects:
 
 NVSNAP provides a **Network Identity Layer** that preserves network connectivity across checkpoint/restore:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                   NVSNAP Network Identity                     │
 ├─────────────────────────────────────────────────────────────┤
@@ -34,7 +34,7 @@ NVSNAP provides a **Network Identity Layer** that preserves network connectivity
 
 ### Component Diagram
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                      NVSNAP Controller                            │
 │                                                                  │
@@ -58,7 +58,7 @@ NVSNAP provides a **Network Identity Layer** that preserves network connectivity
 
 ### Data Flow
 
-```
+```text
 CHECKPOINT PHASE:
 ┌──────────┐    ┌───────────┐    ┌──────────────────────┐
 │ kubectl  │───>│ Controller│───>│ Agent                │
@@ -149,7 +149,7 @@ func setupLoopbackAlias(originalIP string) error {
 
 ### Behavior
 
-```
+```text
 Before Restore:
   Pod IP: 192.168.67.200 (new)
   Worker tries: bind("192.168.67.131", 29500)  ← FAILS
@@ -249,7 +249,7 @@ func applyPeerDNAT(mappings []IPMapping) error {
 
 ### Coordination Flow
 
-```
+```text
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │    User      │     │  Controller  │     │    Agents    │
 └──────┬───────┘     └──────┬───────┘     └──────┬───────┘

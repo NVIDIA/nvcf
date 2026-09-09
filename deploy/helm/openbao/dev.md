@@ -22,7 +22,7 @@
 
 ### Useful Debug Commands
 
-```
+```bash
 # MetaLLB loadbalancer related commands
 kubectl logs -n metallb-system -l app=metallb,component=speaker
 kubectl logs -n metallb-system -l app=metallb,component=controller

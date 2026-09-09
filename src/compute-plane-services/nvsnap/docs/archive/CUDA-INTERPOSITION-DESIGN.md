@@ -98,7 +98,7 @@ For production, the fixed-size array should be replaced with a hash map (dev_ptr
 
 ## Checkpoint Flow
 
-```
+```text
 Agent                              Worker Process (per GPU)
   |                                    |
   | 1. Create quiesce trigger          | quiesce thread polling
@@ -179,7 +179,7 @@ void nvsnap_gpu_checkpoint(void) {
 
 ## Restore Flow
 
-```
+```text
 CRIU restores process (no GPU state)
   |
   | Process resumes execution

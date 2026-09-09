@@ -12,7 +12,7 @@ The Gateway API is a Kubernetes-native way to define ingress routing that is:
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │  Cluster Operator Role (Infrastructure)         │
 │  - Gateway API CRDs                             │

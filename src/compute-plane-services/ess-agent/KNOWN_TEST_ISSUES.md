@@ -21,7 +21,7 @@ any individual test runs).
 
 **Symptom:**
 
-```
+```text
 panic: Error making API request | URL: POST http://127.0.0.1:<port>/v1/sys/mounts/pki
        | Code: 403 | Detail: permission denied
 ```
@@ -68,13 +68,13 @@ When set, `dependency.TestMain` exits 0 immediately.
 
 **Symptom (root):**
 
-```
+```text
 cli_test.go: timeout: "ESS Agent instance id: …\nESS Agent init(mode): false\n"
 ```
 
 **Symptom (manager):**
 
-```
+```text
 panic: test timed out after 30m0s
     running tests: TestRunner_Start/single_dependency (3m0s)
 ```
@@ -106,7 +106,7 @@ require a privileged runner or the custom CI image). Remove the
 
 **Symptom:**
 
-```
+```text
 syslog_test.go: err: Unix syslog delivery error
 ```
 
@@ -128,7 +128,7 @@ that this test only runs locally / on full VMs.
 
 **Symptom:**
 
-```
+```text
 ==================
 WARNING: DATA RACE
 ...

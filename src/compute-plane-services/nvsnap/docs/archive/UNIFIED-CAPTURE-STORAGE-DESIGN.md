@@ -27,7 +27,7 @@ A single storage abstraction shared by both paths.
 
 The per-capture PVC pattern via `gpdrox` PV-flip stays. Every artifact lands here, keyed by content hash. The StorageClass `nvsnap-capture` is the integration point per cloud:
 
-```
+```text
 GCP    → pd.csi.storage.gke.io       pd-ssd   xfs   ROX-after-flip
 AWS    → ebs.csi.aws.com             gp3      xfs   RWO-after-flip
 Azure  → disk.csi.azure.com                   xfs   RWO-after-flip

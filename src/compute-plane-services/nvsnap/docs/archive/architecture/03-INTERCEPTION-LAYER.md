@@ -6,7 +6,7 @@ The interception layer (`libnvsnap.so`) is the core technology that enables tran
 
 ## How Library Interposition Works
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    LIBRARY INTERPOSITION MECHANISM                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -138,7 +138,7 @@ COPY libnvsnap.so /lib/
 
 ## Implementation Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      LIBNVSNAP INTERNAL ARCHITECTURE                         │
 ├─────────────────────────────────────────────────────────────────────────────┤

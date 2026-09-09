@@ -29,7 +29,7 @@ NVSNAP is a GPU checkpoint/restore system for Kubernetes that enables:
 
 ## System Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              NVSNAP SYSTEM                                   │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -173,7 +173,7 @@ make deploy-dev
 
 ### Project Structure
 
-```
+```text
 nvsnap/
 ├── api/                    # Protobuf and OpenAPI definitions
 ├── cmd/

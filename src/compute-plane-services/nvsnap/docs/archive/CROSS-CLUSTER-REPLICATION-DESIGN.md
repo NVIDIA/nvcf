@@ -40,7 +40,7 @@ Non-goals:
 
 ## 2. Architecture
 
-```
+```text
                 ┌─────────────────────────────────────────────┐
                 │  Cluster A (capture)                         │
                 │  nvsnap-agent → nvsnap-blobstore-A               │
@@ -118,7 +118,7 @@ only, not chunk writes. This avoids N+1 events per capture.
 
 The replicator in each cluster's blobstore decides per event:
 
-```
+```text
 on SNS notification:
   HEAD s3://nvsnap-checkpoints-prod/<hash>/manifest.json
   GET  s3://nvsnap-checkpoints-prod/<hash>/manifest.json   # small JSON

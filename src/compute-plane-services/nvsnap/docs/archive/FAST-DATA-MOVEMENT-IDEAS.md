@@ -24,7 +24,7 @@ help different legs of the pipeline.
 
 ## Legs of the pipeline (where the cost actually lives)
 
-```
+```text
 [Node A]           [NvSnap blobstore]         [S3]              [Cluster B]
    |                     |                    |                    |
    |  L1                 |  L2                |  L3                |
@@ -48,7 +48,7 @@ universal answer is forcing a compromise.
 
 ### 1. tar + zstd-3 in a streaming pipe (no disk staging)
 
-```
+```text
 Source:       tar -cf - dump-dir/ | zstd -T0 -3 | <uploader>
 Destination:  <downloader> | zstd -T0 -d | tar -xf - -C dump-dir/
 ```
@@ -65,7 +65,7 @@ recommendation for any leg that isn't RDMA-eligible.
 
 ### 2. EROFS (read-only compressed FS image)
 
-```
+```text
 Source:       mkfs.erofs -zlz4hc,9 <dumpdir> <id>.erofs
 Receive:      mount -t erofs -o ro,loop <id>.erofs <mountpoint>
               criu restore --images-dir=<mountpoint> ...

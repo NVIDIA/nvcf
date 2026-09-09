@@ -25,7 +25,7 @@ Three storage tiers per cluster, queried in priority order on restore. A
 fourth tier (cross-cluster S3) is **layered transparently below the
 in-cluster blob service** — the agent never knows about it.
 
-```
+```text
 PER-CLUSTER VIEW (what the agent sees):
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -104,7 +104,7 @@ Rust HTTP service for blob serving, not S3-compat.
 
 ### Protocol
 
-```
+```text
 # Content-addressed blobs (sha256-keyed, dedup across captures)
 PUT  /v1/blob/{sha256}             body: file stream → 201 Created (or 200 if exists)
 GET  /v1/blob/{sha256}             → 200 + body (file stream)

@@ -88,7 +88,7 @@ sock->replay_after_restore = 1;     // Mark as already replayed
 
 The fix implements **phased initialization in the correct order**:
 
-```
+```text
 Phase 1: Create Context with IO Threads
 ┌─────────────────────────────────────┐
 │ new_ctx = zmq_ctx_new()             │
@@ -178,7 +178,7 @@ export NVSNAP_ZMQ_SKIP_OLD_CLOSE=1
 
 ### Expected Log Output
 
-```
+```text
 ZMQ reinit ctx pid=297 ctx=0x... old_real=0x... new_real=0x... force_term=0
 ZMQ reinit ctx set io_threads=1
 ZMQ reinit socket pid=297 sock=0x... real=0x... ops_connect=2 ops_bind=1

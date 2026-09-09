@@ -108,7 +108,7 @@ Commit and pull request messages must adhere to the [conventional commit v1.0.0 
 
 Examples:
 
-```
+```text
 fix(docs): remove dead hyperlink
 refactor(docs): use java 8 streams
 perf(workspace): improve workspace mount speed
@@ -155,7 +155,7 @@ git commit -s -m "Add cool feature."
 
 This will append the following to your commit message:
 
-```
+```text
 Signed-off-by: Your Name <your@email.com>
 ```
 

@@ -79,7 +79,7 @@ Identify the environment from `environments/<name>.yaml` and
 
 Understanding value precedence prevents the most common configuration mistakes.
 
-```
+```text
 environments/base.yaml          (defaults)
     -> merged with
 environments/<env>.yaml         (your overrides)

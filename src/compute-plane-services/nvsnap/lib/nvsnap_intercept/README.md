@@ -41,7 +41,7 @@ LD_PRELOAD=/path/to/libnvsnap_intercept.so your_application
 
 ### io_uring Interception
 
-```
+```text
 Application → io_uring_setup() syscall
                     ↓
          Our intercept (via syscall hook)
@@ -54,7 +54,7 @@ Application → io_uring_setup() syscall
 
 ### libuv Interception
 
-```
+```text
 Application (uvloop) → uv_loop_init()
                             ↓
                     Our intercept (via dlsym)
@@ -99,7 +99,7 @@ This library is bundled in the NVSNAP agent image and injected into containers v
 
 ## Files
 
-```
+```text
 lib/nvsnap_intercept/
 ├── include/
 │   └── nvsnap_intercept.h    # Public API

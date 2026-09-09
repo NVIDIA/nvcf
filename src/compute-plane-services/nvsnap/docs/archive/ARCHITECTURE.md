@@ -631,7 +631,7 @@ Definitions: `Cold start` = `kubectl apply` to readinessProbe pass.
 
 ## 12. Project layout
 
-```
+```text
 gpucr/
 ├── cmd/                            # Go binaries
 │   ├── agent/                      # nvsnap-agent DaemonSet

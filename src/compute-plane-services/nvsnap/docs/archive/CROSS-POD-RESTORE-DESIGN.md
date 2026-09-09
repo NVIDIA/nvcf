@@ -60,7 +60,7 @@ upperdir.**
 
 Both layers are visible in `/proc/<pid>/mountinfo` for the source container:
 
-```
+```text
 17554 14398 0:1070 / / rw,nodev,relatime - overlay overlay rw,
   lowerdir=…/l/SIUEV4…:…/l/WGAFZV…:…,
   upperdir=/var/lib/containers/storage/overlay/132e4d9f…/diff,
@@ -76,7 +76,7 @@ runtime can read/write it.
 **At checkpoint time**, alongside the CRIU dump, persist the source
 container's overlay upperdir as part of the checkpoint artefact:
 
-```
+```text
 /var/lib/nvsnap/checkpoints/<id>/
   ├── *.img             # CRIU dump
   ├── pages-*.img
@@ -160,7 +160,7 @@ if err == nil && upper != "" {
 
 `mirrorUpperdir` is a single rsync invocation:
 
-```
+```bash
 rsync -aHAX --numeric-ids --sparse --delete <upper>/ <dst>/
 ```
 

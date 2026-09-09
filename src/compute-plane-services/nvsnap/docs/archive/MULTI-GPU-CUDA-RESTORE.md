@@ -20,7 +20,7 @@ Instead, checkpoint GPU data by copying device memory to host during
 checkpoint, then restore by recreating GPU allocations and copying the
 saved data back to device memory.
 
-```
+```text
 checkpoint: GPU memory  --D2H-->  checkpoint image
 restore:    checkpoint image  --H2D-->  recreated GPU memory
 ```
@@ -82,7 +82,7 @@ always enough to repair every reference to those allocations.
 
 A common restore failure is:
 
-```
+```text
 cudaErrorInvalidResourceHandle = 400
 ```
 
@@ -108,7 +108,7 @@ cudaMemcpyAsync(dst_on_gpu1, src, size, cudaMemcpyHostToDevice, stream_gpu1);
 
 Every CUDA object must be recreated after the correct device is current:
 
-```
+```text
 cudaSetDevice(gpu)
   cudaMalloc(...)
   cudaStreamCreate(...)
@@ -151,7 +151,7 @@ gymnastics.
 
 Allocate new device memory and maintain a remap table:
 
-```
+```text
 old_device_ptr_range -> new_device_ptr_range
 ```
 
@@ -251,7 +251,7 @@ Recreating them generally means rerunning the warmup/capture path.
 
 Operational impact:
 
-```
+```text
 CUDA Graph restore = rebuild + warmup cost
 ```
 
@@ -330,7 +330,7 @@ address, **restore must abort**.
 
 **Policy:**
 
-```
+```text
 same-VA success for all tracked allocations:
   continue restore
 
@@ -415,7 +415,7 @@ per-node. `nvsnap-server` is the natural cluster-wide coordinator.)
 
 **Required policy:**
 
-```
+```text
 all ranks reach rendezvous before timeout:
   exchange ncclUniqueId
   recreate communicators
@@ -431,7 +431,7 @@ Do not allow partial groups to block indefinitely.
 
 **State machine:**
 
-```
+```text
 RESTORE_PREPARE
   -> WAIT_FOR_ALL_RANKS
   -> EXCHANGE_NCCL_UNIQUE_ID
@@ -560,13 +560,13 @@ Therefore, rollout should be phased.
 
 All interposed allocations default to:
 
-```
+```text
 NVSNAP_KIND_OPAQUE
 ```
 
 Policy:
 
-```
+```text
 unknown allocation kind = opaque
 opaque allocation       = same-VA required
 same-VA failure         = restore abort / cold start
@@ -623,7 +623,7 @@ multi-rank restore.
 
 The split should be:
 
-```
+```text
 nvsnap-server:
   central restore orchestrator
 
@@ -646,7 +646,7 @@ nvsnap-agent:
 
 State machine:
 
-```
+```text
 RESTORE_PREPARE
   -> WAIT_FOR_ALL_RANKS
   -> EXCHANGE_NCCL_UNIQUE_ID
@@ -657,7 +657,7 @@ RESTORE_PREPARE
 
 Failure path:
 
-```
+```text
 timeout / rank failure / placement mismatch
   -> RESTORE_ABORT
   -> COLD_START_OR_RETRY
@@ -686,7 +686,7 @@ primitive is process termination.
 
 **Operational policy:**
 
-```
+```text
 NCCL restore timeout       = kill affected worker processes
 partial rank restore       = kill the whole rank set
 corrupted NCCL state       = kill workers, do not attempt in-process cleanup
@@ -694,7 +694,7 @@ corrupted NCCL state       = kill workers, do not attempt in-process cleanup
 
 The actual abort path:
 
-```
+```text
 nvsnap-server detects timeout/failure
   -> nvsnap-server sends abort to all relevant nvsnap-agents
   -> nvsnap-agents SIGKILL worker processes
@@ -704,7 +704,7 @@ nvsnap-server detects timeout/failure
 
 So the failure state machine:
 
-```
+```text
 RESTORE_ABORT:
   terminate workers via nvsnap-agent SIGKILL
   do not depend on ncclCommAbort

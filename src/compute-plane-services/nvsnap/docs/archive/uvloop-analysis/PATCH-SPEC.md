@@ -18,7 +18,7 @@ All source files are in: `docs/uvloop-analysis/`
 
 ## Class Hierarchy
 
-```
+```text
 UVHandle (handle.pyx)
     └── UVProcess (process.pyx)
             └── UVProcessTransport (process.pyx)

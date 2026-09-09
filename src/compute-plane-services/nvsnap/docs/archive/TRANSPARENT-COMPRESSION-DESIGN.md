@@ -31,7 +31,7 @@ CRIU's `--stream` mode communicates via a Unix socket. The protocol has two chan
 
 Messages are protobuf with a 4-byte little-endian length prefix:
 
-```
+```text
 [4-byte LE length] [protobuf bytes]
 ```
 
@@ -67,7 +67,7 @@ Raw bytes, no framing. One pipe per file. CRIU uses `vmsplice()` for zero-copy w
 
 ### Socket Paths
 
-```
+```text
 {imagesDir}/streamer-capture.sock   # Dump mode
 {imagesDir}/streamer-serve.sock     # Restore mode
 ```
@@ -76,7 +76,7 @@ Raw bytes, no framing. One pipe per file. CRIU uses `vmsplice()` for zero-copy w
 
 ### Checkpoint (Dump) Path
 
-```
+```text
 CRIU --stream → Unix socket → Go streamer goroutine
                                   ├── reads filename from control channel
                                   ├── receives pipe FD via SCM_RIGHTS
@@ -101,7 +101,7 @@ The agent sets `criuOpts.Stream = true` and starts the streamer goroutine before
 
 ### Restore Path
 
-```
+```text
 Go streamer goroutine → Unix socket → CRIU --stream
     ├── reads filename request from CRIU
     ├── checks if file exists (in compressed checkpoint dir)
@@ -503,7 +503,7 @@ if err := <-serveDone; err != nil {
 
 ### Configuration
 
-```
+```text
 NVSNAP_COMPRESS_CHECKPOINT=1    # Enable compression (default: 0 initially, 1 later)
 ```
 

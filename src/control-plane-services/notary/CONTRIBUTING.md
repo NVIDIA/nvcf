@@ -27,7 +27,7 @@ contributors to certify that they wrote or otherwise have the right to submit
 the contribution under the project's open-source license. The full text of
 the DCO is available at <https://developercertificate.org/>:
 
-```
+```text
 Developer Certificate of Origin
 Version 1.1
 
@@ -67,7 +67,7 @@ By making a contribution to this project, I certify that:
 
 Add a `Signed-off-by` line to each of your commit messages:
 
-```
+```text
 Signed-off-by: Your Name <your.email@example.com>
 ```
 

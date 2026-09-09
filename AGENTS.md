@@ -126,7 +126,7 @@ on the ticket, or temporary runbooks instead.
 
 Each skill is a directory named to match its `name` frontmatter field, containing at minimum a `SKILL.md`. Names must be lowercase with hyphens only, no leading/trailing/consecutive hyphens.
 
-```
+```text
 skill-name/
     SKILL.md              # Required (under 500 lines)
     README.md             # Optional: overview and usage
@@ -250,7 +250,7 @@ Use Conventional Commits v1.0.0. Include issue references in the footer when req
 
 Format:
 
-```
+```text
 <type>(<scope>): <short description>
 
 [optional body]
@@ -288,7 +288,7 @@ motivation without doing detective work. Always include:
 - tests run, skipped tests, and whether QA is needed
 - dependency changes, license review status, and NOTICE impact
 
-```
+```text
 ## Why
 <context and motivation for the change>
 

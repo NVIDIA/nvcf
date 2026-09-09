@@ -262,7 +262,7 @@ static void uv__iou_delete(struct uv__iou* iou) {
 
 ### Submission Queue Layout
 
-```
+```text
 mmap'ed region (ringfd, offset 0, maxlen bytes):
   [SQ headers: sqhead, sqtail, ring_mask, ring_entries, flags, dropped]
   [SQ array: indices 0 to entries-1, each pointing to an SQE slot]
@@ -408,7 +408,7 @@ Current state (BROKEN):
 
 ## 9. The io_uring Ring Lifecycle Summary
 
-```
+```text
 INITIALIZATION:
   uv__io_uring_setup(entries, &params)
   │

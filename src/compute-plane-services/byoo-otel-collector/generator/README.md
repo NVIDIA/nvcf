@@ -8,7 +8,7 @@ uv
 
 run uv sync to download the dependency
 
-```
+```bash
 uv sync
 ```
 
