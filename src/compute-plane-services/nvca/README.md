@@ -78,7 +78,7 @@ helm upgrade -i csi-driver-smb csi-driver-smb/csi-driver-smb --namespace kube-sy
 
 1. Register the cluster at [NVCF Settings](https://nvcf.ngc.nvidia.com/settings) and install with the provided command, adding:
 
-```
+```text
 --set 'nodeSelector.key=nodeGroup' --set 'nodeSelector.value=monitoring'
 ```
 

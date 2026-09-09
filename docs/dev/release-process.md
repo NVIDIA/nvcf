@@ -29,7 +29,7 @@ No human `git tag` step. Steps 3-5 are automatic once the MR merges.
 Each service has its own version line. The git tag format is the
 repo-relative service path plus `v<X.Y.Z>`:
 
-```
+```text
 <service-path>/v<X.Y.Z>
 ```
 

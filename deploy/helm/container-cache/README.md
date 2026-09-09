@@ -70,7 +70,7 @@ Caches container image layers and manifests pulled by containerd or CRI-O. Routi
 
 ![Container Cache Architecture](docs/container-cache-architecture.png)
 
-```
+```text
                      +---------------------------+
                      |  Upstream Registries       |
                      |  (nvcr.io, docker.io, etc) |
@@ -122,7 +122,7 @@ Caches S3 objects, NGC assets, and HuggingFace models. Uses DNS-based MITM via n
 
 ![Proxy Cache Architecture](docs/proxy-cache-architecture.png)
 
-```
+```text
                      +---------------------------------------+
                      |         Upstream Endpoints             |
                      |  AWS S3 | NGC Files | HuggingFace CDN |
@@ -184,7 +184,7 @@ The S3 proxy cache validates access on every request using `lua-access.lua`. The
 
 ![S3 Proxy Cache Auth Flow](docs/s3-proxy-auth-flow.png)
 
-```
+```text
                    +-- Cache disabled? (no-cache header) --YES--> Bypass, proxy direct to S3
                    |
   S3 request ----->+

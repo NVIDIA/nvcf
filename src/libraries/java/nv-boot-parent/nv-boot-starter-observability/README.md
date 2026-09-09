@@ -250,7 +250,7 @@ management:
 
 If the collector rejects spans with a gRPC error such as:
 
-```
+```text
 grpc: received message after decompression larger than max
 ```
 

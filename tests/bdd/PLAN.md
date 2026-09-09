@@ -386,7 +386,7 @@ old `tests/bdd` tree.
 
 ### Package layout
 
-```
+```text
 tests/bdd/
   features/                      (Gherkin, already committed)
   fixtures/                      (sample env + CLI config, already committed)

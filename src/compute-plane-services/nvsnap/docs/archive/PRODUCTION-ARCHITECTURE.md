@@ -18,7 +18,7 @@ What are we actually trying to achieve?
 
 ### Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           nvsnap-agent (Go)                                   │
 │                                                                              │
@@ -252,7 +252,7 @@ Combine the best of both:
 
 ### Final Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              nvsnap-agent                                     │
 │                                                                              │
@@ -328,7 +328,7 @@ Combine the best of both:
 
 ## Key Files to Create/Modify
 
-```
+```text
 internal/
 ├── containerd/
 │   └── client.go       # containerd Go client wrapper

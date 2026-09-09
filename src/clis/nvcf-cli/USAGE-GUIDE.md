@@ -466,7 +466,7 @@ The NVCF CLI uses a **unified configuration system** that seamlessly integrates 
 
 The CLI loads tokens and configuration using this priority order:
 
-```
+```text
 Priority 1: Environment variables (NVCF_TOKEN, NVCF_API_KEY) - Highest
 Priority 2: State file (.nvcf-cli.state) - Auto-generated, fresh tokens
 Priority 3: Config file (.nvcf-cli.yaml) - Static configuration
@@ -499,7 +499,7 @@ Enable debug mode to see exactly where tokens are loaded from:
 
 **Example outputs:**
 
-```
+```text
 # Both tokens from config file
 DEBUG: NVCF_API_KEY loaded from: config_file
 DEBUG: NVCF_TOKEN loaded from: config_file

@@ -12,7 +12,7 @@ When adding or editing a skill, keep the external skill spec fields at the top l
 
 Source skills live under `user/skills/` or `dev/skills/`. Each skill must be in its own subdirectory containing a `SKILL.md` file. The directory name must match the `name` field in the frontmatter.
 
-```
+```text
 user/skills/
 - user-skill-name/
   - SKILL.md

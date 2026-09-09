@@ -492,7 +492,7 @@ CUresult cuWaitExternalSemaphoresAsync(const CUexternalSemaphore *extSemArray, c
 
 On restore, all handles will be different:
 
-```
+```text
 CHECKPOINT                          RESTORE
 ───────────────────────────────────────────────────────────
 cudaMalloc → 0x7f1234560000        cudaMalloc → 0x7f9876540000
@@ -622,7 +622,7 @@ CUresult restore_memory_allocation(MemoryAllocation* alloc) {
 
 ## Checkpoint Procedure
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        CHECKPOINT PROCEDURE                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -661,7 +661,7 @@ CUresult restore_memory_allocation(MemoryAllocation* alloc) {
 
 ## Restore Procedure
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         RESTORE PROCEDURE                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -704,7 +704,7 @@ CUresult restore_memory_allocation(MemoryAllocation* alloc) {
 
 ### 1. Library Version Compatibility
 
-```
+```text
 Problem: Application checkpointed with cuBLAS 11.0, restore on cuBLAS 12.0
          Internal handle layouts may differ
 
@@ -716,7 +716,7 @@ Solution:
 
 ### 2. Driver Version Compatibility
 
-```
+```text
 Problem: NVIDIA driver 525 → 535 may change internal structures
 
 Solution:
@@ -727,7 +727,7 @@ Solution:
 
 ### 3. GPU Generation Differences
 
-```
+```text
 Problem: Checkpoint on A100, restore on H100
          Memory layout, compute capabilities differ
 
@@ -739,7 +739,7 @@ Solution:
 
 ### 4. Multi-Process Atomicity
 
-```
+```text
 Problem: 4 processes with NCCL, must checkpoint atomically
 
 Solution:
@@ -751,7 +751,7 @@ Solution:
 
 ### 5. In-Flight Operations
 
-```
+```text
 Problem: Operations queued on stream not yet executed
 
 Solution:

@@ -46,7 +46,7 @@ The server gracefully handles missing or empty secret files by:
 
 If a secret file is not found or empty, you'll see log entries like:
 
-```
+```text
 ERROR:http_server:Secret file not found at /var/secrets/accounts-secrets.json
 ```
 

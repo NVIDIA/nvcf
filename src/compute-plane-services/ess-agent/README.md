@@ -208,7 +208,7 @@ Default labels:
 
 Metrics can be scrapped on the below endpoint
 
-```
+```bash
 $ curl http://<ip>:port/metrics
 ...
 # HELP ess_configured_templates_total The number of templates configured.

@@ -37,7 +37,7 @@ This runbook walks you through a **near zero-downtime upgrade** of OpenBao in Ku
 
 We deploy a 3-node OpenBao cluster locally using Colima (Kubernetes on macOS):
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                      OpenBao HA Cluster                         │
 │                                                                 │
@@ -56,7 +56,7 @@ We deploy a 3-node OpenBao cluster locally using Colima (Kubernetes on macOS):
 
 To accurately measure the impact of a rolling upgrade with HA enabled, we stand up a **LoadBalancer** in front of the cluster:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  Test Traffic → LoadBalancer (MetalLB IP) → Healthy Pods        │
 └─────────────────────────────────────────────────────────────────┘
@@ -165,7 +165,7 @@ kubectl get pods -n vault-system
 
 ✅ **Expected output**:
 
-```
+```text
 NAME                                            READY   STATUS      RESTARTS   AGE
 openbao-server-0                                2/2     Running     0          2m
 openbao-server-1                                2/2     Running     0          2m
@@ -226,7 +226,7 @@ Without a LoadBalancer, you'd connect directly to a specific pod. When that pod 
 
 The LoadBalancer routes to healthy pods, giving you an accurate picture of client-side impact:
 
-```
+```text
 Direct pod:  Client → Pod-0 (restarting) → ❌ Connection Failed (pod down, but cluster OK)
 Via LB:      Client → LoadBalancer → Pod-1 (healthy) → ✅ Request Succeeds (cluster available)
 ```
@@ -367,7 +367,7 @@ kubectl get pods -n vault-system -w
 
 **What you'll see**:
 
-```
+```text
 NAME               READY   STATUS        RESTARTS   AGE
 openbao-server-2   2/2     Terminating   0          10m    ← Pod 2 shutting down
 openbao-server-2   0/2     Pending       0          0s     ← New pod creating
@@ -381,7 +381,7 @@ openbao-server-1   2/2     Terminating   0          10m    ← Pod 1 next
 
 ### What's Happening Behind the Scenes
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │  Pod-2 Terminating                                               │
 │  ┌─────────────────────────────────────────────────────────┐     │
@@ -453,7 +453,7 @@ Go back to Terminals 1 and 2. Stop the tests with `Ctrl+C`.
 
 The agent injector injects a sidecar container into your application pods. If the agent version doesn't match the server, you'll see warnings:
 
-```
+```text
 OpenBao Agent version does not match OpenBao server version. 
 Agent: 2.2.2, Server: 2.4.4
 ```

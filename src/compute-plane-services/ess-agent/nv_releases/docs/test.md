@@ -107,7 +107,7 @@ Pre-requisite: Please start the Mockoon server as shown above.
 
 Note: some tests may require `kubectl` and a local Kubernetes cluster. If using Colima, do the following:
 
-```
+```text
 # Start (or restart) Colima with the --kubernetes argument
 colima start --kubernetes
 
@@ -119,20 +119,20 @@ For more information on initial Colima setup, see the [deployment docs](deploy.m
 
 #### Build and run all tests
 
-```
+```bash
 make integration-test
 ```
 
 #### Run specific test by number
 
-```
+```bash
 make integration-test TEST=01  # Run timing drift test
 make integration-test TEST=02  # Run SIGTERM handling test
 ```
 
 #### Skip build and run tests
 
-```
+```bash
 make integration-test SKIP_BUILD=true              # Run all tests without rebuild
 make integration-test SKIP_BUILD=true TEST=02      # Run specific test without rebuild
 ```

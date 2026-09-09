@@ -270,7 +270,7 @@ helm install my-release ./deploy \
 
 The chart will fail with helpful error messages for invalid configurations:
 
-```
+```text
 Error: When database.provider is 'postgres', either postgres.existingSecret must be set OR both postgres.username and postgres.password must be provided
 
 Error: Unsupported database provider 'mysql'. Supported providers are: postgres, postgresql, sqlite, sqlite3

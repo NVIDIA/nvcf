@@ -21,7 +21,7 @@ It exports them to local debug logs and [Lightstep](https://docs.lightstep.com/)
 
 2. Create NVCA pod and service monitors if not already created.
 
-```
+```bash
 kubectl apply -f nvca-operator-pod-monitor.yaml
 kubectl apply -f nvca-service-monitor.yaml
 ```

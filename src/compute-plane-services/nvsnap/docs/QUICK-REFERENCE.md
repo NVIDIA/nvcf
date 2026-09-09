@@ -20,7 +20,7 @@
 
 ## Implementation Timeline
 
-```
+```text
 Phase 0: Foundation         [Weeks 1-4]    ← START HERE
 Phase 1: Simple CUDA        [Weeks 5-10]   
 Phase 2: PyTorch            [Weeks 11-18]  
@@ -77,7 +77,7 @@ Phase 5: Production         [Weeks 41-52]
 
 ## Component Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                      NVSNAP COMPONENTS                        │
 ├─────────────────────────────────────────────────────────────┤

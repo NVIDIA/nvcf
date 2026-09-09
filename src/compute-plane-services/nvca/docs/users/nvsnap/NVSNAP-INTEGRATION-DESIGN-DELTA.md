@@ -51,7 +51,7 @@ same algorithm nvsnap's `internal/rootfsonly/composer.go` uses (or a
 thin Go wrapper that produces an identical hash). Inputs that
 affect checkpoint validity:
 
-```
+```text
 canonicalHash = sha256(
   imageDigest                  // immutable digest, not :tag
   + literalEnvVars             // only env[].value entries; skip valueFrom (per-pod metadata)

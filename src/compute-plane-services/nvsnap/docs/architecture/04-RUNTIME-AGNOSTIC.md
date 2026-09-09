@@ -21,7 +21,7 @@ NVSNAP must work with any CRI-compliant container runtime:
 
 ## Linux Primitives We Use
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                   LINUX PRIMITIVES (Runtime Agnostic)                       │
 ├─────────────────────────────────────────────────────────────────────────────┤

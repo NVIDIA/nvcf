@@ -16,7 +16,7 @@ NVSNAP is a production-ready GPU checkpoint/restore system for Kubernetes that e
 
 GPU checkpoint/restore is fundamentally difficult because:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          WHY GPU C/R IS HARD                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -49,7 +49,7 @@ GPU checkpoint/restore is fundamentally difficult because:
 
 Since we cannot modify applications and cannot rely on NVIDIA providing C/R support, we use a **library interposition** approach combined with **coordinated process checkpointing**:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        NVSNAP INTERPOSITION LAYER                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -109,7 +109,7 @@ Since we cannot modify applications and cannot rely on NVIDIA providing C/R supp
 
 ## High-Level Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           NVSNAP SYSTEM ARCHITECTURE                         │
 ├─────────────────────────────────────────────────────────────────────────────┤

@@ -15,7 +15,7 @@ CRIU's `dump_io_uring()` groups VMAs by inode, assuming each io_uring has a uniq
 
 ## Current Behavior (Bug)
 
-```
+```text
 fd 4: io_uring with 64 entries, inode 15288
 fd 5: io_uring with 256 entries, inode 15288  ← SAME INODE!
 

@@ -26,7 +26,7 @@ A GPU hypervisor solves all five.
 
 ## Architecture
 
-```
+```text
 Application (PyTorch, vLLM, TensorFlow, etc.)
     |
     |  (unchanged — no application modifications)
@@ -103,7 +103,7 @@ What we already have for single-GPU, and are building for multi-GPU (#25):
 
 Checkpoint on node A, restore on node B, on a different physical GPU.
 
-```
+```text
 Node A (H100 #3)                    Node B (H100 #7)
 +------------------+                +------------------+
 | vLLM serving     |                | empty GPU        |
@@ -141,7 +141,7 @@ Node A (H100 #3)                    Node B (H100 #7)
 
 Run workloads that need more GPU memory than physically available by transparently paging cold GPU memory to host RAM.
 
-```
+```text
 Application thinks it has 80GB GPU memory
                 |
 +----------------------------------+
@@ -187,7 +187,7 @@ Application thinks it has 80GB GPU memory
 
 True GPU scheduling: pause a workload mid-execution, run another, resume the first.
 
-```
+```text
 Time →
 
 GPU without hypervisor:
@@ -266,7 +266,7 @@ The hypervisor gives production-grade, per-process, zero-instrumentation GPU obs
 
 Test GPU failure handling in training and serving frameworks.
 
-```
+```text
 Hypervisor fault injection modes:
   - Drop N% of kernel launches (return cudaSuccess but don't launch)
   - Corrupt random memory regions (bit flips in GPU tensors)

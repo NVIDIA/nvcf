@@ -269,7 +269,7 @@ export GRAFANA_CLOUD_PROMETHEUS_PASSWORD="xxx"
 
 Validate the metrics
 
-```
+```bash
 docker run \
   -t \
   -e GRAFANA_CLOUD_PROMETHEUS_URL="$GRAFANA_CLOUD_PROMETHEUS_URL" \
@@ -284,7 +284,7 @@ docker run \
 
 Use the config file locally
 
-```
+```bash
 docker run \
   -t \
   --mount type=bind,src="<file_path>",dst=/app/validator-config.yaml,readonly \

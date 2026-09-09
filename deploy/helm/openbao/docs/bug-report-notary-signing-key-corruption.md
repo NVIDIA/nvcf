@@ -57,7 +57,7 @@ The `sed 's/^00*//'` command removes leading zeros from the hex representation o
 
 **Example:**
 
-```
+```text
 Original hex:    00a1b2c3d4...  (64 chars, starts with 00)
 After sed:       a1b2c3d4...    (62 chars, leading 00 removed)
 ```
@@ -85,7 +85,7 @@ The `xxd -r -p` command silently ignores the invalid space characters, producing
 
 ### 3.5 The Chain of Failure
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. OpenSSL generates EC private key with leading zero byte (1/256 chance) │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -133,7 +133,7 @@ The observed rate is higher because `sed 's/^00*//'` strips **any** leading zero
 
 ### 4.3 Base64URL Encoding Math
 
-```
+```text
 32 bytes = 256 bits
 256 bits ÷ 6 bits/char = 42.67 → 43 base64url characters
 
@@ -147,7 +147,7 @@ The observed rate is higher because `sed 's/^00*//'` strips **any** leading zero
 
 ### 5.1 Call Chain
 
-```
+```text
 05_setup_notary-service.sh
     └── generate_asymmetric_signing_key()     # encryption_setup.sh:87
             └── D_VALUE extraction            # Line 112-115 (BUG)
@@ -158,7 +158,7 @@ The observed rate is higher because `sed 's/^00*//'` strips **any** leading zero
 
 ### 5.2 Where the Key is Stored
 
-```
+```text
 OpenBao Path: services/nvcf-notary/kv/keys/signing-key
 Fields:
   - keys: Base64-encoded JWKS containing the signing key
@@ -253,7 +253,7 @@ A Go-based test harness was developed to statistically validate the bug and fix.
 
 **Critical Finding**: The bug only manifests on **Linux**, not macOS.
 
-```
+```text
 === Testing xxd behavior with spaces (the bug) ===
 Padded: |                                                          abc123|
 After xxd round-trip: |abc123|
@@ -269,7 +269,7 @@ Linux `xxd -r -p` silently drops space characters (invalid hex). macOS `xxd` han
 
 ### 8.2 Test Results - Buggy Code (Linux Container)
 
-```
+```text
 ╔══════════════════════════════════════════════════════════════╗
 ║          JWT Signing Key Test Harness (Go)                   ║
 ╠══════════════════════════════════════════════════════════════╣
@@ -305,7 +305,7 @@ Linux `xxd -r -p` silently drops space characters (invalid hex). macOS `xxd` han
 
 ### 8.3 Test Results - Fixed Code (Linux Container)
 
-```
+```text
 ╔══════════════════════════════════════════════════════════════╗
 ║          JWT Signing Key Test Harness (Go)                   ║
 ╠══════════════════════════════════════════════════════════════╣

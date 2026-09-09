@@ -11,7 +11,7 @@ CRIU's `dump_io_uring()` groups VMAs by inode, but Linux uses a **shared anon_in
 
 ## Evidence from Logs
 
-```
+```text
 Pre-scan: fd=4 sq_entries=1 expected_sqe_size=64
 Pre-scan: fd=5 sq_entries=1 expected_sqe_size=64
 SQE VMA size=16384 -> NO MATCH FOUND

@@ -319,7 +319,7 @@ right move.
 
 ### Combined tiering
 
-```
+```text
        L1 hot         L2 warm           L3 cold
    peer hostPath  →  shared PVC    →   object store
    (local NVMe)     (Lustre/etc)      (S3/GCS)

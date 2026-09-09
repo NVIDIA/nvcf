@@ -19,7 +19,7 @@ requiring GPU 0. Result: deadlock.
 
 ### Evidence from dump.log
 
-```
+```text
 (106s)  cuda_plugin: Checkpointing CUDA devices on pid 1327918 (GPU 0)
 (111s)  cuda_plugin: cuda-checkpoint output ===> <=== (success, ~5s)
 (114s)  cuda_plugin: Checkpointing CUDA devices on pid 1328379 (GPU 1)
@@ -32,7 +32,7 @@ now-locked GPU 0.
 
 ### Code Path
 
-```
+```text
 cr-dump.c:2257  checkpoint_devices()
   seize.c:1145    for_each_pstree_item → run_plugins(CHECKPOINT_DEVICES, pid)
     cuda_plugin.c:541   cuda_process_checkpoint_action(pid, "lock", timeout)
@@ -76,7 +76,7 @@ cross-GPU deadlocks. Recreate communicators on restore.
 
 vLLM creates NCCL communicators via PyTorch's distributed module:
 
-```
+```text
 torch.distributed.init_process_group("nccl")  → ncclCommInitRank()
   ├── Tensor-parallel group (TP ranks)
   ├── Pipeline-parallel group (PP ranks)

@@ -46,7 +46,7 @@ in the nvsnap repo for the bench table):
 
 ## Architecture
 
-```
+```text
                        ┌───────────────────────────────────────────┐
                        │  Function-version object (NGC catalog)    │
                        │    + nvsnap_checkpoint_hash (new field)     │
@@ -144,7 +144,7 @@ Failure modes (fail-open):
 
 ## NvSnap APIs NVCA consumes
 
-```
+```text
 POST /api/v1/checkpoint/pod
   body: {"namespace": "nvcf-backend", "pod": "0-sr-...", "container": "inference"}
   → 202 Accepted {"checkpoint_id": "...", "status_url": "/api/v1/checkpoints/..."}

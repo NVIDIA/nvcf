@@ -19,7 +19,7 @@ paths — DeepSeek-V4-Flash captures 355 — this fails in production:
 
 Observed 2026-06-06 on GCP-H100-a, restoring DeepSeek-V4-Flash:
 
-```
+```text
 04:13:44  pod applied
 04:14:55  webhook computed 363 patches (71 s wall)
 04:14:55  error: encode AdmissionReview response: write tcp ...: i/o timeout
@@ -43,7 +43,7 @@ Move mount work out of the admission webhook and into a per-pod
 
 ### Sequence (new)
 
-```
+```text
 T+0      apiserver --AdmissionReview-->  webhook
                                           |
                                           | (<100ms: read manifest,
@@ -82,7 +82,7 @@ in-memory manifest only.
 
 New HTTP endpoints on the agent's existing `:8081` server:
 
-```
+```text
 POST /v1/restore/prep
   body: { podUID: string, hash: string, captureNode: string }
   semantics:

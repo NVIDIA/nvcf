@@ -111,7 +111,7 @@ With that constraint dropped, we can:
 
 ## Architecture
 
-```
+```text
                                                                   restore pods (any node)
                                                                         │
                                                                         ▼
@@ -420,7 +420,7 @@ where every capture path (NVCA Hook B, CLI, webhook) meets the L2
 storage layer. The catalog row is both the lock state and the
 durable record of the artifact:
 
-```
+```text
   Backend.Put(hash, sources):
     lease, err := acquireHashLease(ctx, hash)         // K8s Lease named "nvsnap-promote-<short_hash>"
     if alreadyHeld:
