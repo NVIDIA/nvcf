@@ -88,9 +88,11 @@ type WorkerConnection struct {
 	// exists to remove. First writer wins for the same reason: the moment the
 	// tunnel stopped being useful is what matters, not the last step of the
 	// cascade that follows it.
-	closedAt        atomic.Pointer[time.Time]
-	connSetOnce     sync.Once
-	connPopulated   chan struct{}
+	closedAt      atomic.Pointer[time.Time]
+	connSetOnce   sync.Once
+	connPopulated chan struct{}
+	// Set only where a worker actually attaches. See EverConnected.
+	everConnected   atomic.Bool
 	handler         atomic.Pointer[httputil.ReverseProxy]
 	closeWorkerConn io.Closer
 	onActive        func() // call this function to indicate the connection is active
@@ -143,6 +145,20 @@ func (w *WorkerConnection) WaitForConnection(ctx context.Context) (http.Handler,
 	return handler, handler != nil
 }
 
+// EverConnected reports whether a worker ever attached to this connection.
+//
+// Distinct from WorkerClosed, which answers whether an attached worker has
+// since gone away. Callers deciding whether queued work was ever delivered
+// need "did anyone take it", not "is it still here".
+//
+// Deliberately not derived from connPopulated. Close also closes that channel,
+// so a tunnel nobody ever took would report as connected once closed, and any
+// caller running after Close, or a reordering of one running before it, would
+// silently stop treating that work as undelivered.
+func (w *WorkerConnection) EverConnected() bool {
+	return w.everConnected.Load()
+}
+
 func (w *WorkerConnection) WorkerClosed() bool {
 	select {
 	case <-w.connPopulated:
@@ -155,6 +171,7 @@ func (w *WorkerConnection) WorkerClosed() bool {
 func (w *WorkerConnection) SetConnection(conn net.Conn) error {
 	var err error
 	set := false
+	w.everConnected.Store(true)
 	w.connSetOnce.Do(func() {
 		wrapped := &CloseFuncConn{Conn: conn}
 		wrapped.onClose = func() {

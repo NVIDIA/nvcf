@@ -36,22 +36,26 @@ Phase 5: Production         [Weeks 41-52]
 ## Core Design Decisions
 
 ### 1. No Application Modification
+
 - All interception via `LD_PRELOAD`
 - Transparent to application
 - Works with unmodified binaries
 
 ### 2. Runtime Agnostic
+
 - Works with containerd, CRI-O
 - Uses CRI interface, not runtime-specific APIs
 - Kubernetes version agnostic (1.24+)
 
 ### 3. GPU Strategy
+
 - Quiesce GPU before checkpoint (cudaDeviceSynchronize)
 - Dump GPU memory via cuMemcpy
 - Reconstruct CUDA context on restore
 - NCCL reinitialization (not checkpointed)
 
 ### 4. Multi-Process
+
 - Checkpoint entire process tree
 - Coordinated freeze via cgroup
 - IPC state captured and restored
@@ -99,6 +103,7 @@ Phase 5: Production         [Weeks 41-52]
 ## CRD Quick Reference
 
 ### Checkpoint
+
 ```yaml
 apiVersion: nvsnap.io/v1alpha1
 kind: Checkpoint
@@ -118,6 +123,7 @@ spec:
 ```
 
 ### Restore
+
 ```yaml
 apiVersion: nvsnap.io/v1alpha1
 kind: Restore
@@ -172,6 +178,7 @@ make deploy-dev
 ## Validation Checkpoints
 
 ### Phase 0 Complete When:
+
 - [ ] All binaries build
 - [ ] Tests pass (>80% coverage)
 - [ ] Helm installs on kind
@@ -179,11 +186,13 @@ make deploy-dev
 - [ ] CI is green
 
 ### Phase 1 Complete When:
+
 - [ ] Simple CUDA app checkpoints
 - [ ] Restore succeeds
 - [ ] Works on real GPU
 
 ### Phase 4 Complete When:
+
 - [ ] vLLM TP=4 checkpoints
 - [ ] NCCL reinitializes
 - [ ] Responses identical

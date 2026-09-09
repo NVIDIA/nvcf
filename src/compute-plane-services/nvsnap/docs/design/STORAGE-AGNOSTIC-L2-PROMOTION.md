@@ -184,6 +184,7 @@ SC is configured separately and defaults to a ROX-capable class, never `nvcf-sc`
 
 Why a profile map and not pure SC introspection: `.provisioner` gives the driver,
 but two things it can't tell us must live in the profile —
+
 - **snapshotClass** is a cluster-specific object name, not derivable from the
   driver (discover by listing VolumeSnapshotClasses for the driver as a fallback,
   but prefer the explicit value);

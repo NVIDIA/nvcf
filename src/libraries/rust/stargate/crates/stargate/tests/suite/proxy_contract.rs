@@ -239,7 +239,7 @@ fn observe_connecting_request(
     request_id: String,
     input_tokens: u64,
 ) {
-    runtime.observe_request(RequestObservation {
+    runtime.observe_request_for_test(RequestObservation {
         endpoint: RequestObservationEndpoint::ChatCompletions,
         request_id,
         routing_key: None,

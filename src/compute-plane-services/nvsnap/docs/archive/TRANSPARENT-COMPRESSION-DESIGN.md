@@ -5,6 +5,7 @@
 Checkpoint data is large (28GB-88GB for single GPU, 200GB+ for multi-GPU). The current streaming approach (`criu-image-streamer`) buffers the entire decompressed checkpoint in RAM before serving it to CRIU during restore. This doesn't scale past ~28GB.
 
 We need compression that:
+
 1. Reduces checkpoint size on disk (~8x with lz4)
 2. Doesn't require full checkpoint in RAM during restore
 3. Is completely transparent to CRIU — no CRIU modifications
@@ -35,14 +36,17 @@ Messages are protobuf with a 4-byte little-endian length prefix:
 ```
 
 **Dump (CRIU → Streamer):**
+
 ```protobuf
 message ImgStreamerRequestEntry {
     required string filename = 1;  // e.g., "pages-1.img"
 }
 ```
+
 CRIU sends a filename request, then sends a pipe FD via `SCM_RIGHTS`. CRIU writes file data to the pipe. EOF signals file complete. Next request follows.
 
 **Restore (CRIU → Streamer → CRIU):**
+
 ```protobuf
 // CRIU sends:
 message ImgStreamerRequestEntry {
@@ -54,6 +58,7 @@ message ImgStreamerReplyEntry {
     required bool exists = 1;
 }
 ```
+
 If file exists, streamer sends a pipe FD via `SCM_RIGHTS`. Streamer writes decompressed file data to the pipe. CRIU reads from it.
 
 ### Data Channel (pipe via SCM_RIGHTS)
@@ -81,6 +86,7 @@ CRIU --stream → Unix socket → Go streamer goroutine
 ```
 
 The Go streamer runs as a goroutine inside the agent process. It:
+
 1. Creates `streamer-capture.sock` in the images directory
 2. Accepts CRIU's connection
 3. For each file request:
@@ -107,6 +113,7 @@ Go streamer goroutine → Unix socket → CRIU --stream
 ```
 
 The Go streamer runs as a goroutine inside restore-entrypoint. It:
+
 1. Creates `streamer-serve.sock` in the images directory
 2. Accepts CRIU's connection
 3. For each file request:
@@ -143,12 +150,14 @@ The Go streamer runs as a goroutine inside restore-entrypoint. It:
 A single package implementing CRIU's stream protocol for both dump and restore.
 
 **`streamer.go`** — Protocol primitives:
+
 - `pbWrite(conn, msg)` — write protobuf with 4-byte LE length prefix
 - `pbRead(conn)` — read protobuf with 4-byte LE length prefix
 - `sendFD(conn, fd)` — send file descriptor via `SCM_RIGHTS` (`unix.SendmsgN`)
 - `recvFD(conn)` — receive file descriptor via `SCM_RIGHTS` (`unix.ParseUnixRights`)
 
 **`capture.go`** — Dump-side streamer:
+
 ```go
 // StartCapture listens on streamer-capture.sock in imagesDir.
 // For each file CRIU sends, compresses with lz4 and writes to disk.
@@ -162,6 +171,7 @@ type CaptureResult struct {
 ```
 
 **`serve.go`** — Restore-side streamer:
+
 ```go
 // StartServe listens on streamer-serve.sock in imagesDir.
 // For each file CRIU requests, decompresses from disk and streams via pipe.

@@ -140,6 +140,14 @@ const (
 	contextFieldResourceID         = "resource_id"
 )
 
+// Query parameters for the optional generic attribute filter on GetEventsV3.
+// They let callers correlate events by any producer-supplied details attribute
+// (e.g. a request id) without the ledger exposing resource-specific concepts.
+const (
+	queryParamAttributeKey   = "attribute_key"
+	queryParamAttributeValue = "attribute_value"
+)
+
 // ContextV3 represents the context components that identify the scope of an event
 // This is the internal representation, not tied to any wire format
 type ContextV3 struct {
@@ -968,7 +976,13 @@ func (s *Server) GetStatsV3(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetEventsV3 handles GET requests to /v3/ledger/namespace/{namespace}/context/{context}/events
-// Returns all events for a specific namespace and context, ordered by timestamp descending
+// Returns all events for a specific namespace and context, ordered by timestamp descending.
+//
+// An optional generic attribute filter (attribute_key + attribute_value) narrows
+// the result to events whose details.attributes[attribute_key] equals
+// attribute_value. This lets callers correlate events by any producer-supplied
+// attribute (e.g. a request id) using the existing event types, without the
+// ledger exposing resource-specific concepts.
 func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 	traceCtx := r.Context()
 	logger := logging.GetLogger(traceCtx)
@@ -999,6 +1013,23 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 		ResourceID:         queryParams.Get(contextFieldResourceID),
 	}
 
+	// Optional generic attribute filter. When set, only events whose
+	// details.attributes[attributeKey] equals attributeValue are returned.
+	// Both parameters must be supplied together: the only valid states are
+	// "both empty" (filter disabled) and "both set" (filter applied). A
+	// value-only request would otherwise silently disable the filter and
+	// return every event, so it is rejected.
+	attributeKey := queryParams.Get(queryParamAttributeKey)
+	attributeValue := queryParams.Get(queryParamAttributeValue)
+	if (attributeKey == "") != (attributeValue == "") {
+		logger.WarnContext(traceCtx, "Incomplete attribute filter query parameters",
+			zap.Bool("has_attribute_key", attributeKey != ""),
+			zap.Bool("has_attribute_value", attributeValue != ""))
+		sendProblemDetail(w, http.StatusBadRequest, "Bad Request",
+			fmt.Sprintf("%s and %s must be provided together", queryParamAttributeKey, queryParamAttributeValue))
+		return
+	}
+
 	// Convert ContextV3 to canonical string
 	eventContext, err := eventContextToCanonical(contextV3)
 	if err != nil {
@@ -1010,10 +1041,15 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Context is optional - allow empty string to query events with no context
+	// Log the attribute key for troubleshooting, but not the raw attribute value:
+	// the value is arbitrary caller-supplied input, so we record only its presence
+	// to avoid writing potentially sensitive data to logs (CWE-532).
 	logger.InfoContext(traceCtx, "Retrieving events for namespace and context",
 		zap.String("namespace", namespace),
 		zap.String("context", eventContext),
-		zap.Any("context_components", contextV3))
+		zap.Any("context_components", contextV3),
+		zap.String("attribute_key", attributeKey),
+		zap.Bool("has_attribute_value", attributeValue != ""))
 
 	// Retrieve all events for this namespace+context
 	records, err := s.conns.DbHandlerV2.GetEventsV3(traceCtx, namespace, eventContext)
@@ -1056,6 +1092,11 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Apply the optional generic attribute filter.
+		if !attributeMatches(details, attributeKey, attributeValue) {
+			continue
+		}
+
 		response.Events = append(response.Events, EventV3Item{
 			EventName: record.EventName,
 			Source:    record.Source,
@@ -1072,6 +1113,20 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 		zap.Int("event_count", len(response.Events)))
 
 	sendJSONResponse(w, http.StatusOK, response)
+}
+
+// attributeMatches reports whether an event's details satisfy the optional
+// generic attribute filter. An empty key disables the filter (matches all).
+// Otherwise the attribute must be present and its string form must equal value.
+func attributeMatches(details EventDetails, key, value string) bool {
+	if key == "" {
+		return true
+	}
+	raw, ok := details.Attributes[key]
+	if !ok {
+		return false
+	}
+	return fmt.Sprintf("%v", raw) == value
 }
 
 // sendProblemDetail sends an RFC 9457 problem details response

@@ -544,21 +544,14 @@ func TestMiniserviceOperatorWebhook_PodSpecCreateThenUpdate_IsIdempotentOrderPre
 				},
 			},
 		},
+		// The NVLink clique requirement narrows the pre-existing term instead of
+		// being ORed alongside it as a term of its own.
 		NodeAffinity: &corev1.NodeAffinity{
 			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 				NodeSelectorTerms: []corev1.NodeSelectorTerm{
 					{
 						MatchExpressions: []corev1.NodeSelectorRequirement{
 							{Key: "baz", Operator: corev1.NodeSelectorOpIn, Values: []string{"buf"}},
-							{
-								Key:      "nvca.nvcf.nvidia.io/instance-type",
-								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{"ON-PREM.GPU.A100"},
-							},
-						},
-					},
-					{
-						MatchExpressions: []corev1.NodeSelectorRequirement{
 							{
 								Key:      nvcfdra.GPUCliqueNodeLabel,
 								Operator: corev1.NodeSelectorOpExists,

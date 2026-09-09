@@ -23,6 +23,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -211,6 +212,11 @@ func (in *WorkloadConfig) DeepCopyInto(out *WorkloadConfig) {
 		for key, val := range *in {
 			(*out)[key] = val
 		}
+	}
+	if in.BYOOResources != nil {
+		in, out := &in.BYOOResources, &out.BYOOResources
+		*out = new(corev1.ResourceRequirements)
+		(*in).DeepCopyInto(*out)
 	}
 	return
 }

@@ -164,12 +164,14 @@ The `-w-` and `-r-` naming reflects K8s lifecycle constraints:
 - **`nvsnap-capture-r-<shortHash>`** — reader PVC. The PV underneath is the same content but bound through a reader-side claim; access mode depends on backend (see below). This is what restore pods mount.
 
 The split exists because most cloud disks (GCP PD, AWS EBS) are RWO. To fan out to N readers, you need either:
+
 - Multiple readers on the same node (RWO works fine for that).
 - A backend that supports multiple readers cross-node (RWX / ROX), which means Filestore / EFS / a custom NFS / Longhorn / etc.
 
 Today's deployed cluster uses `standard-rwo` for nvsnap-blobstore-data — which is fine because the blobstore is a single Deployment, not an N-way fan-out. The per-capture PVCs would need a different storage class to support cross-node ROX.
 
 The `RootfsCapture.Backend` configuration selects:
+
 - `Local` — per-node hostPath, no PVC. `CapturedOnNodes` is exactly one node.
 - `GPDRox` — GCP PD reader PVC. ROX after writer detach; cross-node read works once.
 - `Filestore` — RWX. Implicit cross-node; manifest leaves `CapturedOnNodes` empty (any node OK).

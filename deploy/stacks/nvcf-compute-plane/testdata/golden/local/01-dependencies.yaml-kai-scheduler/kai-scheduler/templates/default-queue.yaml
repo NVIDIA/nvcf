@@ -8,6 +8,7 @@ metadata:
     name: default-parent-queue
     annotations:
         helm.sh/resource-policy: keep
+        argocd.argoproj.io/sync-options: Prune=false
 spec:
     resources:
         cpu:
@@ -30,6 +31,7 @@ metadata:
     name: default-queue
     annotations:
         helm.sh/resource-policy: keep
+        argocd.argoproj.io/sync-options: Prune=false
 spec:
     parentQueue: default-parent-queue
     resources:

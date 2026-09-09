@@ -50,21 +50,21 @@ You can access these tabs by navigating to your function in the NGC UI. Each tab
 The Overview tab provides access to your function's current status and performance metrics, offering real-time insights into your function's operation and health.
 
 1. **Basic Function or Task Metrics**
-   
+
    1. Current function or task status (Running, Stopped, Error)
    1. Last updated timestamp
    1. Function or task version
    1. Runtime environment details
 
 1. **Instance Counts**
-   
+
    1. Active instances
    1. Pending instances
    1. Failed instances
    1. Historical instance trends
 
 1. **Request Statistics**
-   
+
    1. Total requests processed
    1. Current request rate
    1. Success/failure ratios
@@ -89,15 +89,15 @@ The Logs tab enables monitoring through detailed log access.
 
 NVCF displays logs related to:
 
-* Deployment stages
+- Deployment stages
 
-  * Function or Task Creation
-  * Function or Task Deployment
+  - Function or Task Creation
+  - Function or Task Deployment
 
-* Function or task invocation logs
+- Function or task invocation logs
 
-* Real-time logs (listed in the UI under the Live Tail tab)
-  * For detailed information about real-time logging capabilities, see the NGC UI Logs tab described above.
+- Real-time logs (listed in the UI under the Live Tail tab)
+  - For detailed information about real-time logging capabilities, see the NGC UI Logs tab described above.
 
 ### Viewing Metrics
 
@@ -109,17 +109,17 @@ The Metrics view displays:
 
 **Summary Statistics**
 
-* Total Invocations - Number of function calls in the selected time period
-* Average Inference Time - Mean processing time for function calls
-* Total Instance Count - Current number of running instances
-* Failures - Count of failed executions
+- Total Invocations - Number of function calls in the selected time period
+- Average Inference Time - Mean processing time for function calls
+- Total Instance Count - Current number of running instances
+- Failures - Count of failed executions
 
 **Time Series Graphs**
 
-* Invocation Activity and Queue Depth - Shows request patterns and queued requests
-* Average Inference Time - Processing duration trends
-* Instances Over Time - Shows scaling behavior
-* Success Rate - Function reliability metrics
+- Invocation Activity and Queue Depth - Shows request patterns and queued requests
+- Average Inference Time - Processing duration trends
+- Instances Over Time - Shows scaling behavior
+- Success Rate - Function reliability metrics
 
 Use the time range selector (e.g., Past 1 Hour) in the top right to adjust the view period.
 
@@ -145,18 +145,18 @@ To export function or task telemetry through external observability platforms, y
 
 The OpenTelemetry collector uses the following ports:
 
-* OTLP (OpenTelemetry Protocol)
+- OTLP (OpenTelemetry Protocol)
 
-  * OTLP gRPC: Port 14357
-  * OTLP HTTP: Port 14358
+  - OTLP gRPC: Port 14357
+  - OTLP HTTP: Port 14358
 
-* Metrics
+- Metrics
 
-  * Port 18888 - Used for collector metrics
+  - Port 18888 - Used for collector metrics
 
-* Health Check
+- Health Check
 
-  * Port 13133 - Used for health check endpoint
+  - Port 13133 - Used for health check endpoint
 
 <Note>
 These ports are reserved for the OpenTelemetry collector and should not be used by your functions or tasks.
@@ -177,16 +177,16 @@ Remember that to collect custom metrics, logs, and traces from your function's o
    You can configure telemetry endpoints using either the web UI or the NGC CLI:
 
    Web UI Method:
-   
-   - Navigate to your NGC organization settings
-   - Select "Settings" in your Cloud Functions NGC organization
-   - Scroll to the bottom of the page
-   - Click "Add Telemetry Endpoint"
+
+- Navigate to your NGC organization settings
+- Select "Settings" in your Cloud Functions NGC organization
+- Scroll to the bottom of the page
+- Click "Add Telemetry Endpoint"
 
 ![nvcf_add_telemetry_endpoint.png](images/nvcf_add_telemetry_endpoint.png)
 
-   - Select your desired endpoint type (Grafana Cloud or Datadog)
-   - Configure the endpoint with the required credentials
+- Select your desired endpoint type (Grafana Cloud or Datadog)
+- Configure the endpoint with the required credentials
 
 <details>
 <summary>Grafana Cloud</summary>
@@ -214,7 +214,6 @@ Web UI Method:
 
 ![grafana_cloud_portal.png](images/grafana_cloud_portal.png)
 
-
 1. **Access OpenTelemetry Settings**
 
 1. In your Grafana Cloud stack, locate the OpenTelemetry card
@@ -226,7 +225,6 @@ Web UI Method:
 1. Traces
 
 ![grafana_cloud_stack.png](images/grafana_cloud_stack.png)
-
 
 1. **Locate OTLP Configuration Details**
 
@@ -250,7 +248,6 @@ ngc cloud-function telemetry-endpoint create --name grafana-cloud-metrics \
 --endpoint https://otlp-gateway-prod-us-west-0.grafana.net/otlp \
 --key your-grafana-api-token
 ```
-
 
 <Warning>
 Keep your API Token secure and never share it publicly. If your token is compromised, you can generate a new one and update your configuration.
@@ -306,7 +303,6 @@ Web UI Method:
 
 ![nvcf_datadog_endpoint.png](images/nvcf_datadog_endpoint.png)
 
-
 **Alternative: Create Datadog Telemetry Endpoint via CLI**
 
 As an alternative to the web UI, you can create the Datadog telemetry endpoint using the NGC CLI:
@@ -320,7 +316,6 @@ ngc cloud-function telemetry-endpoint create --name datadog-metrics \
 --endpoint datadoghq.com \
 --key your-datadog-api-key
 ```
-
 
 <Note>
 Make sure to keep your API key secure and never share it publicly. If your key is compromised, you can generate a new one and update your configuration.
@@ -396,7 +391,6 @@ If you don't see your custom metrics, logs, or traces in your observability plat
 
 ![grafana_verify_metrics.png](images/grafana_verify_metrics.png)
 
-
 </details>
 
 <details>
@@ -413,7 +407,6 @@ If you don't see your custom metrics, logs, or traces in your observability plat
 1. Resource usage
 
 ![datadog_metrics.png](images/datadog_metrics.png)
-
 
 <Note>
 The OpenTelemetry collector version, image and configuration are managed entirely by NVCF and cannot be modified by users.
@@ -468,11 +461,11 @@ Make sure to export any necessary telemetry data before removing endpoints.
 </Warning>
 
 When you select a telemetry endpoint, NVCF:
-   
-* Deploys a dedicated OpenTelemetry collector with your function or task
-* Automatically configures authentication and endpoint connections
-* Enables collection of metrics, logs, and traces from your function or task
-* Directs telemetry data to your organization's observability platform
+
+- Deploys a dedicated OpenTelemetry collector with your function or task
+- Automatically configures authentication and endpoint connections
+- Enables collection of metrics, logs, and traces from your function or task
+- Directs telemetry data to your organization's observability platform
 
 ### Resource Management
 
@@ -498,16 +491,16 @@ NVCF ensures secure telemetry handling by storing credentials securely in the NG
 
 If issues occur with telemetry collection:
 
-* Your function or task continues to run normally
-* Error messages are logged for troubleshooting
-* Health status is monitored and reported
-* Automatic retry logic handles temporary failures
+- Your function or task continues to run normally
+- Error messages are logged for troubleshooting
+- Health status is monitored and reported
+- Automatic retry logic handles temporary failures
 
 The collector's health can be monitored through:
 
-* Status checks in the NGC UI
-* Metrics in your observability platform
-* Built-in health endpoints
+- Status checks in the NGC UI
+- Metrics in your observability platform
+- Built-in health endpoints
 
 ## Appendix A: Terminology
 
@@ -526,9 +519,9 @@ The following metrics are collected through the OpenTelemetry collector deployed
 
 Key metrics include:
 
-* Function or task invocation metrics
-* Resource utilization metrics
-* Platform metrics related to the function or task
+- Function or task invocation metrics
+- Resource utilization metrics
+- Platform metrics related to the function or task
 
 <Note>
 Metrics are filtered based on deployment type and configuration. Not all metrics may be available for all deployment scenarios.

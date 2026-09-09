@@ -123,6 +123,58 @@ run_with_fake_helm() {  # run_with_fake_helm -> sets $out and $rc
     rm -rf "${stub_dir}"
 }
 
+# A rendered document whose apiVersion was swallowed into a comment must fail
+# the chart, naming the file line. helm itself accepts this output, which is
+# how the container-cache Service shipped without an apiVersion in 0.29.0.
+make_fake_glued_helm() {  # make_fake_glued_helm -> directory holding a helm stub, printed to stdout
+    local dir; dir="$(mktemp -d)"
+    cat >"${dir}/helm" <<'STUB'
+#!/usr/bin/env bash
+# Stub helm: template emits one good document and one whose apiVersion was
+# trimmed onto the preceding comment line.
+if [ "${1:-}" = "template" ]; then
+    printf -- '---\n# Source: x/templates/a.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: good\n'
+    printf -- '---\n# Source: x/templates/b.yaml\n# limitations under the License.apiVersion: v1\nkind: Service\nmetadata:\n  name: glued\n'
+fi
+exit 0
+STUB
+    chmod +x "${dir}/helm"
+    printf '%s' "${dir}"
+}
+
+make_fake_headless_helm() {  # make_fake_headless_helm -> stub whose template emits a document with no apiVersion at all
+    local dir; dir="$(mktemp -d)"
+    cat >"${dir}/helm" <<'STUB'
+#!/usr/bin/env bash
+if [ "${1:-}" = "template" ]; then
+    printf -- '---\n# Source: x/templates/a.yaml\nkind: Service\nmetadata:\n  name: headless\nspec: {}\n'
+fi
+exit 0
+STUB
+    chmod +x "${dir}/helm"
+    printf '%s' "${dir}"
+}
+
+make_fake_tree
+stub_dir="$(make_fake_glued_helm)"
+set +e
+out="$(PATH="${stub_dir}:${PATH}" bash "${script}" --values-dir "${fake_values_dir}" --chart-root "${fake_chart_root}" 2>&1)"
+rc=$?
+set -e
+rm -rf "${stub_dir}"
+expect "apiVersion glued onto a comment fails" 1 "rendered onto a comment line"
+rm -rf "${fake_values_dir}" "${fake_chart_root}"
+
+make_fake_tree
+stub_dir="$(make_fake_headless_helm)"
+set +e
+out="$(PATH="${stub_dir}:${PATH}" bash "${script}" --values-dir "${fake_values_dir}" --chart-root "${fake_chart_root}" 2>&1)"
+rc=$?
+set -e
+rm -rf "${stub_dir}"
+expect "document without apiVersion fails" 1 "has no top-level apiVersion"
+rm -rf "${fake_values_dir}" "${fake_chart_root}"
+
 # A charts/ directory created by the run is removed entirely.
 make_fake_tree
 printf 'dependencies:\n  - name: openbao\n' >>"${fake_chart_root}/openbao/helm/Chart.yaml"

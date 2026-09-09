@@ -203,12 +203,6 @@ func SetPreferredNVLinkDomainSchedulingParameters(keyToHash string, objs ...clie
 		},
 		TopologyKey: GPUCliqueNodeLabel,
 	}
-	cliqueNodeSelTerm := corev1.NodeSelectorTerm{
-		MatchExpressions: []corev1.NodeSelectorRequirement{{
-			Key:      GPUCliqueNodeLabel,
-			Operator: corev1.NodeSelectorOpExists,
-		}},
-	}
 
 	itrf := func(pts *corev1.PodTemplateSpec) {
 		ps := &pts.Spec
@@ -229,16 +223,7 @@ func SetPreferredNVLinkDomainSchedulingParameters(keyToHash string, objs ...clie
 				PodAffinityTerm: podAffinityTerm,
 			},
 		)
-		if ps.Affinity.NodeAffinity == nil {
-			ps.Affinity.NodeAffinity = &corev1.NodeAffinity{}
-		}
-		if ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-			ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
-		}
-		ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(
-			ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
-			cliqueNodeSelTerm,
-		)
+		requireGPUCliqueNode(ps.Affinity)
 	}
 	iterPodSpecs(itrf, objs...)
 }
@@ -265,12 +250,6 @@ func SetRequiredNVLinkDomainSchedulingParameters(
 		},
 		TopologyKey: GPUCliqueNodeLabel,
 	}
-	cliqueNodeSelTerm := corev1.NodeSelectorTerm{
-		MatchExpressions: []corev1.NodeSelectorRequirement{{
-			Key:      GPUCliqueNodeLabel,
-			Operator: corev1.NodeSelectorOpExists,
-		}},
-	}
 
 	itrf := func(pts *corev1.PodTemplateSpec) {
 		ps := &pts.Spec
@@ -288,19 +267,56 @@ func SetRequiredNVLinkDomainSchedulingParameters(
 			ps.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution,
 			podAffinityTerm,
 		)
-		if ps.Affinity.NodeAffinity == nil {
-			ps.Affinity.NodeAffinity = &corev1.NodeAffinity{}
-		}
-		if ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-			ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
-		}
-		ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = append(
-			ps.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms,
-			cliqueNodeSelTerm,
-		)
+		requireGPUCliqueNode(ps.Affinity)
 	}
 
 	iterPodSpecs(itrf, objs...)
+}
+
+var gpuCliqueNodeSelectorRequirement = corev1.NodeSelectorRequirement{
+	Key:      GPUCliqueNodeLabel,
+	Operator: corev1.NodeSelectorOpExists,
+}
+
+// requireGPUCliqueNode narrows the required node affinity of a Pod so that it
+// only admits nodes carrying a GPU clique label.
+//
+// Kubernetes ORs NodeSelectorTerms, so the requirement is ANDed into every
+// existing term instead of being appended as a term of its own. An appended
+// clique-only term would give the Pod an alternative way to satisfy required
+// node affinity and let it bypass constraints it already carries, such as a
+// hostname restriction. The merge is idempotent so that repeated admission
+// does not accumulate duplicate requirements.
+func requireGPUCliqueNode(a *corev1.Affinity) {
+	if a.NodeAffinity == nil {
+		a.NodeAffinity = &corev1.NodeAffinity{}
+	}
+	if a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
+	}
+	ns := a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if len(ns.NodeSelectorTerms) == 0 {
+		ns.NodeSelectorTerms = []corev1.NodeSelectorTerm{{
+			MatchExpressions: []corev1.NodeSelectorRequirement{gpuCliqueNodeSelectorRequirement},
+		}}
+		return
+	}
+	for i := range ns.NodeSelectorTerms {
+		term := &ns.NodeSelectorTerms[i]
+		if hasGPUCliqueRequirement(term.MatchExpressions) {
+			continue
+		}
+		term.MatchExpressions = append(term.MatchExpressions, gpuCliqueNodeSelectorRequirement)
+	}
+}
+
+func hasGPUCliqueRequirement(reqs []corev1.NodeSelectorRequirement) bool {
+	for _, req := range reqs {
+		if req.Key == GPUCliqueNodeLabel && req.Operator == corev1.NodeSelectorOpExists {
+			return true
+		}
+	}
+	return false
 }
 
 type iterPodTemplateSpecFunc func(*corev1.PodTemplateSpec)

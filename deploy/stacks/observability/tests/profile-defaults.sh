@@ -55,7 +55,7 @@ profile_releases_csv() {
 
   profile_release_json "$profile" "$@" |
     yq -p=json -o=yaml -r '.[].name' |
-    sort -u |
+    sort |
     paste -sd, -
 }
 
@@ -84,7 +84,7 @@ monitor_targets_csv() {
         'select(.kind == "ServiceMonitor" or .kind == "PodMonitor") | .kind + "/" + .metadata.name' \
         "$file"
     done < <(find "$output_dir" -type f -name '*.yaml' -print | sort)
-  } | sort -u | paste -sd, -
+  } | sort | paste -sd, -
 }
 
 write_release_values() {
@@ -304,6 +304,12 @@ for row in "${mode_cases[@]}"; do
   fi
 done
 
+# VictoriaMetrics must wait only for CRDs owned by this stack.
+assert_release_needs crds-installed control victoria-metrics \
+  'monitoring/prometheus-operator-crds'
+assert_release_needs crds-existing control victoria-metrics none \
+  --state-values-set=observability.components.prometheusOperatorCrds.mode=existing
+
 control_monitors="$(awk -F'|' '$1 == "control" {print $3}' "$golden_file")"
 compute_monitors="$(awk -F'|' '$1 == "compute" {print $3}' "$golden_file")"
 compute_without_worker="${compute_monitors/,PodMonitor\/nvcf-default-monitors-worker/}"
@@ -335,6 +341,18 @@ assert_equal "$(monitor_targets_csv "$work_dir/chart-control")" \
   "$control_monitors" "chart control monitor defaults"
 assert_equal "$(monitor_targets_csv "$work_dir/chart-compute")" \
   "$compute_monitors" "chart compute monitor defaults"
+
+worker_monitor_manifest="$work_dir/worker-podmonitor.yaml"
+yq 'select(.kind == "PodMonitor" and .metadata.name == "nvcf-default-monitors-worker")' \
+  "$work_dir/chart-compute/manifests.yaml" >"$worker_monitor_manifest"
+assert_yaml_value "$worker_monitor_manifest" \
+  '.spec.namespaceSelector.any' true 'worker all-namespaces selector'
+assert_yaml_value "$worker_monitor_manifest" \
+  '.spec.selector.matchExpressions[0].key' icms-request-id \
+  'worker NVCA-managed pod label expression'
+assert_yaml_value "$worker_monitor_manifest" \
+  '.spec.selector.matchExpressions[0].operator' Exists \
+  'worker pod label expression operator'
 
 # The application chart owns its Service labels. Compare them with the shared
 # ServiceMonitor selector so an application label change cannot silently break
@@ -370,6 +388,22 @@ assert_equal "$autoscaler_monitor_name_label" \
 assert_equal "$autoscaler_monitor_instance_label" \
   "$autoscaler_service_instance_label" \
   'function autoscaler ServiceMonitor application instance selector'
+
+autoscaler_monitor_manifest="$work_dir/function-autoscaler-servicemonitor.yaml"
+yq 'select(.kind == "ServiceMonitor" and .metadata.name == "nvcf-default-monitors-function-autoscaler")' \
+  "$work_dir/chart-control/manifests.yaml" >"$autoscaler_monitor_manifest"
+assert_yaml_value "$autoscaler_monitor_manifest" \
+  '.metadata.labels."nvcf.nvidia.com/observability-target"' true \
+  'function autoscaler Target Allocator discovery label'
+assert_yaml_value "$autoscaler_monitor_manifest" \
+  '.spec.namespaceSelector.matchNames | join(",")' nvcf \
+  'function autoscaler discovery namespace'
+assert_yaml_value "$autoscaler_monitor_manifest" \
+  '.spec.endpoints[0].port' metrics 'function autoscaler metrics port'
+assert_yaml_value "$autoscaler_monitor_manifest" \
+  '.spec.endpoints[0].path' /metrics 'function autoscaler metrics path'
+assert_yaml_value "$autoscaler_monitor_manifest" \
+  '.spec.endpoints[0].interval' 30s 'function autoscaler scrape interval'
 
 helm template otel-collector "$stack_dir/charts/nvcf-otel-collector" \
   >"$work_dir/collector-manifests.yaml"
@@ -438,6 +472,9 @@ assert_release_needs observability-namespace all otel-collector \
 assert_release_needs observability-namespace all opentelemetry-operator \
   'telemetry/prometheus-operator-crds' \
   "${observability_namespace_args[@]}"
+assert_release_needs observability-namespace all victoria-metrics \
+  'telemetry/prometheus-operator-crds' \
+  "${observability_namespace_args[@]}"
 assert_release_needs observability-namespace all default-monitors \
   'telemetry/prometheus-operator-crds' \
   "${observability_namespace_args[@]}"
@@ -480,6 +517,8 @@ assert_release_needs custom-namespaces all otel-collector \
   'metrics-store/victoria-metrics,telemetry/opentelemetry-operator,telemetry/prometheus-operator-crds' \
   "${namespace_args[@]}"
 assert_release_needs custom-namespaces all opentelemetry-operator \
+  'telemetry/prometheus-operator-crds' "${namespace_args[@]}"
+assert_release_needs custom-namespaces all victoria-metrics \
   'telemetry/prometheus-operator-crds' "${namespace_args[@]}"
 assert_release_needs custom-namespaces all default-monitors \
   'telemetry/prometheus-operator-crds' "${namespace_args[@]}"

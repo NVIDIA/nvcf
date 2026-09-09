@@ -42,20 +42,19 @@ const NODE_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project_name = env!("CARGO_PKG_NAME");
+    let (_cli_args, config) = settings::parse_settings();
+
     let node_id = gethostname::gethostname()
         .into_string()
         .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-    let region: String = std::env::var("AWS_REGION").unwrap_or_default();
     tracing::info!("Node ID: {}", node_id);
-    let node_id = if !region.is_empty() {
-        format!("{}.{}", node_id, region)
+    let node_id = if !config.region.is_empty() {
+        format!("{}.{}", node_id, config.region)
     } else {
         node_id
     };
     // Initialize shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
-
-    let (_cli_args, config) = settings::parse_settings();
 
     let secrets_path = config
         .secrets_path
@@ -63,7 +62,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("secrets_path is required but not provided in configuration")?;
 
     let metrics_settings = &config.server.metrics;
-    metrics::init_metrics(metrics_settings).expect("failed initializing metrics");
+    if metrics_settings.is_enabled() {
+        metrics::init_metrics(metrics_settings).expect("failed initializing metrics");
+    }
 
     let secrets_file_watcher = Arc::new(SecretFileWatcher::new(secrets_path).await?);
 
@@ -250,6 +251,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timeseries_db_env_discover = config.timeseries_db.env.clone();
     let timeseries_db_ignore_env = config.timeseries_db.ignore_env;
     let lock_manager_discover = Arc::clone(&lock_manager);
+    let discovery_recently_invoked_lookback = Duration::from_secs(
+        config
+            .scaling
+            .discovery_recently_invoked_lookback_minutes
+            .checked_mul(60)
+            .ok_or("scaling.discovery_recently_invoked_lookback_minutes is too large")?,
+    );
     let discovery_task = tokio::spawn(async move {
         let jitter_millis = rand::rng().random_range(0..5000);
         let discovery_interval =
@@ -268,6 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &timeseries_db_env_discover,
                 timeseries_db_ignore_env,
                 config.scaling.discovery_lock_duration.as_secs() as i32,
+                discovery_recently_invoked_lookback,
             )
             .await
             {
@@ -327,14 +336,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Main app on 8080
+    // Main app
     let app = Router::new()
         .route("/health", get(routes::get_health))
         .route("/admin/health/liveness", get(routes::get_liveness))
         .route("/admin/health/readiness", get(routes::get_readiness))
         .with_state(health.clone())
         .fallback(handler_404);
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let addr = config
+        .server
+        .listen_addr()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
 
     let shutdown_clone = shutdown.clone();
     let shutdown_signal = async move {

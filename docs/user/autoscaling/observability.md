@@ -3,8 +3,9 @@
 The Function Autoscaler emits structured logs, Prometheus metrics, and
 OpenTelemetry spans. The chart exposes its Prometheus exporter through the
 `function-autoscaler` service on the `metrics` port, which defaults to `41338`.
-The shared stack's default monitors do not include this service. Add a monitor
-or scrape target for it to collect these metrics.
+The shared stack creates a ServiceMonitor for this endpoint when
+`observability.profile` is `control` or `all`. The `compute` and
+`disabled` profiles do not create it.
 
 These service metrics describe the autoscaler itself. They are separate from
 the function metrics that the autoscaler reads from VictoriaMetrics or an
@@ -52,8 +53,6 @@ The function autoscaler writes structured logs to stdout. Set log filter directi
 server:
   envfilter_directive: "server=info,rs_autoscaler=debug,rs_autoscaler::cassandra=warn,info"
 ```
-
-The same syntax applies to `server.tracing.logging_envfilter_directive` if you separate logging and tracing filters.
 
 Useful target prefixes:
 

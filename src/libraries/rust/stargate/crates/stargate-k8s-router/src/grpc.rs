@@ -79,10 +79,15 @@ pub struct RouterControlPlane {
     watch_heartbeat_interval: Duration,
     hostname_matcher: Option<HostnameMatcher>,
     targets: watch::Receiver<TargetSnapshot>,
+    shutdown: CancellationToken,
 }
 
 impl RouterControlPlane {
-    pub fn new(config: GrpcRouterConfig, targets: watch::Receiver<TargetSnapshot>) -> Self {
+    pub fn new(
+        config: GrpcRouterConfig,
+        targets: watch::Receiver<TargetSnapshot>,
+        shutdown: CancellationToken,
+    ) -> Self {
         let hostname_matcher = HostnameMatcher::new(
             &config.advertised_hostname_template,
             &config.target_namespace,
@@ -102,6 +107,7 @@ impl RouterControlPlane {
             watch_heartbeat_interval: config.watch_heartbeat_interval,
             hostname_matcher,
             targets,
+            shutdown,
         }
     }
 
@@ -113,7 +119,12 @@ impl RouterControlPlane {
         let remote_watch_urls = self.remote_watch_urls.clone();
         let target_namespace = self.target_namespace.clone();
         let watch_heartbeat_interval = self.watch_heartbeat_interval;
-        Box::pin(async_stream::try_stream! {
+        let shutdown = self.shutdown.clone();
+        Box::pin(async_stream::stream! {
+            if shutdown.is_cancelled() {
+                yield Err(router_shutdown_status());
+                return;
+            }
             let mut heartbeat = tokio::time::interval(watch_heartbeat_interval);
             heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_snapshot = None;
@@ -122,17 +133,22 @@ impl RouterControlPlane {
                 if snapshot.is_initialized() {
                     last_snapshot = Some(snapshot.clone());
                     heartbeat.reset();
-                    yield watch_response_from_snapshot(
+                    yield Ok(watch_response_from_snapshot(
                         &snapshot,
                         &advertised_hostname_template,
                         advertised_grpc_port,
                         &grpc_pylon_dial_addr,
                         &target_namespace,
                         &remote_watch_urls,
-                    );
+                    ));
                 }
                 loop {
                     tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => {
+                            yield Err(router_shutdown_status());
+                            return;
+                        }
                         changed = targets.changed() => {
                             if changed.is_err() {
                                 return;
@@ -144,14 +160,14 @@ impl RouterControlPlane {
                                 .as_ref()
                                 .expect("heartbeat branch requires an initialized snapshot");
                             heartbeat.reset();
-                            yield watch_response_from_snapshot(
+                            yield Ok(watch_response_from_snapshot(
                                 snapshot,
                                 &advertised_hostname_template,
                                 advertised_grpc_port,
                                 &grpc_pylon_dial_addr,
                                 &target_namespace,
                                 &remote_watch_urls,
-                            );
+                            ));
                         }
                     }
                 }
@@ -212,6 +228,9 @@ impl StargateControlPlane for RouterControlPlane {
         &self,
         _request: Request<WatchStargatesRequest>,
     ) -> Result<Response<Self::WatchStargatesStream>, Status> {
+        if self.shutdown.is_cancelled() {
+            return Err(router_shutdown_status());
+        }
         Ok(Response::new(self.watch_stargates_stream()))
     }
 
@@ -219,6 +238,9 @@ impl StargateControlPlane for RouterControlPlane {
         &self,
         request: Request<tonic::Streaming<InferenceServerRegistration>>,
     ) -> Result<Response<Self::RegisterInferenceServerStream>, Status> {
+        if self.shutdown.is_cancelled() {
+            return Err(router_shutdown_status());
+        }
         let target = {
             let snapshot = self.targets.borrow();
             GrpcTarget::from(self.target_for_registration(&request, &snapshot)?)
@@ -234,12 +256,27 @@ impl StargateControlPlane for RouterControlPlane {
             warn!(%error, "registration stream read error, forwarding stream error");
         });
         let forwarded = Request::from_parts(metadata, extensions, inbound);
-        let mut peer_client = self.connect_target_addr(&target.grpc_addr).await?;
-        let resp = peer_client.register_inference_server(forwarded).await?;
+        let Some(resp) = self
+            .shutdown
+            .run_until_cancelled(async {
+                let mut peer_client = self.connect_target_addr(&target.grpc_addr).await?;
+                peer_client.register_inference_server(forwarded).await
+            })
+            .await
+        else {
+            return Err(router_shutdown_status());
+        };
+        let resp = resp?;
         let (metadata, mut inner, extensions) = resp.into_parts();
+        let shutdown = self.shutdown.clone();
         let stream = async_stream::stream! {
             loop {
                 tokio::select! {
+                    biased;
+                    _ = shutdown.cancelled() => {
+                        yield Err(router_shutdown_status());
+                        break;
+                    }
                     Some(error) = stream_error_rx.recv() => {
                         yield Err(error);
                         break;
@@ -264,6 +301,10 @@ impl StargateControlPlane for RouterControlPlane {
         };
         Ok(Response::from_parts(metadata, Box::pin(stream), extensions))
     }
+}
+
+fn router_shutdown_status() -> Status {
+    Status::unavailable("router is shutting down")
 }
 
 fn watch_response_from_snapshot(
@@ -305,7 +346,7 @@ pub async fn serve_grpc_router(
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     let incoming = TcpListenerStream::new(listener);
-    let service = RouterControlPlane::new(config, targets);
+    let service = RouterControlPlane::new(config, targets, shutdown.clone());
     Server::builder()
         .layer(MapRequestLayer::new(|mut req: http::Request<_>| {
             if let Some(authority) = req.uri().authority().cloned() {
@@ -336,7 +377,7 @@ mod tests {
     use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
     use stargate_proto::pb::stargate_control_plane_server::StargateControlPlaneServer;
     use stargate_proto::pb::{InferenceServerAck, StargateInfo};
-    use tokio_stream::wrappers::TcpListenerStream;
+    use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 
     use super::*;
 
@@ -359,6 +400,7 @@ mod tests {
     struct RunningServer {
         addr: SocketAddr,
         task: tokio::task::JoinHandle<()>,
+        shutdown: CancellationToken,
     }
 
     impl Drop for RunningServer {
@@ -455,11 +497,11 @@ mod tests {
             let recorder = self.recorder.clone();
             let mut inbound = request.into_inner();
             let stream = async_stream::stream! {
-                if let Some(message) = inbound.next().await {
+                while let Some(message) = inbound.next().await {
                     match message {
                         Ok(_registration) => {
                             yield Ok(InferenceServerAck {
-                                reverse_tunnel_target: stargate_id,
+                                reverse_tunnel_target: stargate_id.clone(),
                                 reverse_tunnel_pylon_dial_addr: String::new(),
                             });
                         }
@@ -493,6 +535,7 @@ mod tests {
             stargate_id: stargate_id.to_string(),
             recorder,
         };
+        let shutdown = CancellationToken::new();
         let handle = tokio::spawn(async move {
             Server::builder()
                 .add_service(StargateControlPlaneServer::new(service))
@@ -500,7 +543,11 @@ mod tests {
                 .await
                 .expect("fake stargate failed");
         });
-        RunningServer { addr, task: handle }
+        RunningServer {
+            addr,
+            task: handle,
+            shutdown,
+        }
     }
 
     async fn start_router(snapshot: TargetSnapshot) -> RunningServer {
@@ -530,7 +577,11 @@ mod tests {
                     .expect("router failed");
             }
         });
-        RunningServer { addr, task: handle }
+        RunningServer {
+            addr,
+            task: handle,
+            shutdown,
+        }
     }
 
     fn snapshot(targets: &[(&str, SocketAddr)]) -> TargetSnapshot {
@@ -589,7 +640,7 @@ mod tests {
         const BASELINE_NS_PER_OP: f64 = 276.71;
 
         let (_tx, rx) = watch::channel(synthetic_snapshot(128));
-        let router = RouterControlPlane::new(router_config(), rx);
+        let router = RouterControlPlane::new(router_config(), rx, CancellationToken::new());
         let request = request_with_authority("stargate-64.stargate.external");
         let iterations = 1_000_000usize;
         let started = Instant::now();
@@ -836,5 +887,61 @@ mod tests {
         let snapshot = first_message(response).await;
 
         assert!(snapshot.stargates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn shutdown_ends_long_lived_rpc_streams_and_server_task() {
+        let fake = start_fake_stargate("stargate-1", Recorder::default()).await;
+        let (targets_tx, targets_rx) = watch::channel(snapshot(&[("stargate-1", fake.addr)]));
+        let mut router = start_router_with_receiver(targets_rx, router_config()).await;
+        let mut client = router.client("stargate-1.stargate.external");
+
+        let mut watch_stream = watch_once(&mut client).await.into_inner();
+        watch_stream
+            .message()
+            .await
+            .expect("initial WatchStargates read should succeed")
+            .expect("WatchStargates should publish an initial snapshot");
+
+        let (registration_tx, registration_rx) = tokio::sync::mpsc::channel(1);
+        registration_tx
+            .send(registration())
+            .await
+            .expect("initial registration should enqueue");
+        let mut registration_stream = client
+            .register_inference_server(Request::new(ReceiverStream::new(registration_rx)))
+            .await
+            .expect("registration should route")
+            .into_inner();
+        registration_stream
+            .message()
+            .await
+            .expect("initial registration acknowledgement should succeed")
+            .expect("registration should remain open after its first acknowledgement");
+
+        router.shutdown.cancel();
+
+        let watch_error = watch_stream
+            .message()
+            .await
+            .expect_err("shutdown should end WatchStargates with a status");
+        let registration_error = registration_stream
+            .message()
+            .await
+            .expect_err("shutdown should end RegisterInferenceServer with a status");
+        assert_eq!(watch_error.code(), tonic::Code::Unavailable);
+        assert_eq!(registration_error.code(), tonic::Code::Unavailable);
+        assert_eq!(watch_error.message(), "router is shutting down");
+        assert_eq!(registration_error.message(), "router is shutting down");
+
+        drop(watch_stream);
+        drop(registration_stream);
+        drop(client);
+        drop(registration_tx);
+        tokio::time::timeout(Duration::from_secs(1), &mut router.task)
+            .await
+            .expect("gRPC server should stop after its long-lived streams end")
+            .expect("gRPC server task should not panic");
+        drop(targets_tx);
     }
 }

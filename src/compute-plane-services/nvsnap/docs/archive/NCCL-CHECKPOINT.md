@@ -84,6 +84,7 @@ torch.distributed.init_process_group("nccl")  → ncclCommInitRank()
 ```
 
 Each communicator holds:
+
 - Rank in group and world size
 - ncclUniqueId (128-byte opaque blob, same across all ranks)
 - GPU-GPU connection state (NVLink rings, PCIe topology, shared memory)

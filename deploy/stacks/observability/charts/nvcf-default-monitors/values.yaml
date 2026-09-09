@@ -33,6 +33,8 @@ controlPlane:
       selector:
         app.kubernetes.io/instance: state-metrics
         app.kubernetes.io/name: helm-nvcf-state-metrics
+    # The shared stack owns this ServiceMonitor. The application chart owns
+    # the metrics port and service labels.
     - name: function-autoscaler
       enabled: true
       selector:

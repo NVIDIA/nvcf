@@ -69,15 +69,17 @@ impl StargateState {
         self.registrations.begin_registration(identity)
     }
 
-    pub(crate) async fn end_registration(&self, running: RunningRegistration) {
+    /// Ends `running` and removes its routes. Returns the model ids that were
+    /// routable through this registration so callers can report routing impact.
+    pub(crate) async fn end_registration(&self, running: RunningRegistration) -> BTreeSet<String> {
         let Some(ended) = self.registrations.end_registration(running) else {
-            return;
+            return BTreeSet::new();
         };
 
         let registration = ended.registration;
         let model_ids = ended.cleanup_model_ids;
         let targets: HashSet<RoutingTargetKey> = model_ids
-            .into_iter()
+            .iter()
             .map(|model_id| {
                 RoutingTargetKey::new(registration.identity.routing_key.clone(), model_id)
             })
@@ -85,6 +87,7 @@ impl StargateState {
         self.routing
             .remove_inference_server_targets(&registration, &targets)
             .await;
+        model_ids
     }
 
     pub(crate) async fn apply_registration_update(

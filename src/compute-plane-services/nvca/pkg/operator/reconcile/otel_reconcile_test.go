@@ -210,11 +210,16 @@ func assertPodLaneTransforms(t *testing.T, config string) {
 		tagByKey[m["key"].(string)] = m["tag_name"].(string)
 	}
 	assert.Equal(t, "task_id", tagByKey["task-id"], "task-id label must map to task_id")
+	assert.Equal(t, "icms_request_id", tagByKey["icms-request-id"],
+		"icms-request-id label must map to icms_request_id so Pod events carry it")
 
 	var stmts []string
 	for _, s := range processors["transform"].(map[string]any)["log_statements"].([]any) {
 		stmts = append(stmts, s.(string))
 	}
+	assert.GreaterOrEqual(t, indexOfContaining(stmts,
+		`set(log.attributes["icms_request_id"], resource.attributes["icms_request_id"])`), 0,
+		"Pod lane must lift icms_request_id into event attributes")
 	fvIdx := indexOfContaining(stmts, `"namespace"], resource.attributes["function_version_id"]`)
 	taskIdx := indexOfContaining(stmts, `"namespace"], resource.attributes["task_id"]`)
 	require.GreaterOrEqual(t, fvIdx, 0, "function_version_id namespace statement missing")
@@ -244,12 +249,12 @@ func assertICMSLane(t *testing.T, config string) {
 	require.Len(t, records, 2, "filter/icms-events must have kind and reason drop conditions")
 	// First condition must drop non-ICMSRequest kinds (exclusion, not inclusion).
 	assert.Contains(t, records[0].(string), `!= "ICMSRequest"`, "filter/icms-events kind condition must drop non-ICMSRequest events")
-	// Second condition must allowlist the three supported reasons via not(...in[...]).
-	assert.Contains(t, records[1].(string), "not(", "filter/icms-events reason condition must use not() to drop unsupported reasons")
-	for _, reason := range []string{"InstanceCreation", "InstanceStatusUpdate", "InstanceTermination"} {
-		assert.Contains(t, records[1].(string), reason, "filter/icms-events allowlist must include reason %q", reason)
-	}
-	assert.NotContains(t, records[1].(string), "ModelCaching", "filter/icms-events must exclude ModelCaching")
+	// Second condition must drop records outside the three supported reasons.
+	expectedReasonFilter := `log.attributes["k8s.event.reason"] != "InstanceCreation" and ` +
+		`log.attributes["k8s.event.reason"] != "InstanceStatusUpdate" and ` +
+		`log.attributes["k8s.event.reason"] != "InstanceTermination"`
+	assert.Equal(t, expectedReasonFilter, records[1].(string),
+		"filter/icms-events reason condition must exactly retain the supported reasons")
 
 	liftProc, ok := processors["transform/lift-icms-annotations"].(map[string]any)
 	require.True(t, ok, "transform/lift-icms-annotations processor must be declared")
@@ -287,6 +292,12 @@ func assertICMSLane(t *testing.T, config string) {
 	statusIdx := indexOfContaining(liftStmts, `"nvcf.nvidia.io/status"`)
 	if assert.GreaterOrEqual(t, statusIdx, 0, "status lift statement missing") {
 		assert.Contains(t, liftStmts[statusIdx], `set(log.attributes["icms_status"]`)
+	}
+	// resource_id keys the ICMS (resource) lane in the ledger context; it must be
+	// set from the icms-request-id annotation.
+	resourceIdx := indexOfContaining(liftStmts, `set(log.attributes["resource_id"]`)
+	if assert.GreaterOrEqual(t, resourceIdx, 0, "resource_id lift statement missing") {
+		assert.Contains(t, liftStmts[resourceIdx], `"nvcf.nvidia.io/icms-request-id"`)
 	}
 
 	synthProc, ok := processors["transform/synth-icms-event-name"].(map[string]any)

@@ -21,20 +21,21 @@
 # overwriting, and other errors fail fast.
 #
 # Requires Docker. The OpenBao version is read from the migrations image
-# Dockerfile so the test tracks the shipped server version. Set UTILS_DIR
-# to point the test at a different copy of the helper functions (useful to
-# demonstrate the failure against an older revision).
+# Dockerfile so the test tracks the shipped server version. Set BAO_TEST_IMAGE
+# to exercise an already-built migrations image, or UTILS_DIR to point at a
+# different copy of the helper functions.
 
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 utils_dir="${UTILS_DIR:-${script_dir}/../migrations/utils}"
 
-bao_version="$(sed -n 's|^FROM openbao/openbao:||p' "${script_dir}/../Dockerfile" | head -1)"
+bao_version="$(sed -n 's|^ARG BAO_VERSION=||p' "${script_dir}/../Dockerfile" | head -1)"
 if [ -z "${bao_version}" ]; then
   echo "could not read the OpenBao version from ${script_dir}/../Dockerfile" >&2
   exit 1
 fi
+bao_image="${BAO_TEST_IMAGE:-openbao/openbao:${bao_version}}"
 
 container="nvcf-openbao-kv-test-$$"
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/nvcf-openbao-kv-test.XXXXXX")"
@@ -66,12 +67,12 @@ cluster_addr = "http://127.0.0.1:8201"
 api_addr     = "http://127.0.0.1:8200"
 EOF
 
-echo "Starting OpenBao ${bao_version} (container ${container})..."
+echo "Starting OpenBao ${bao_version} from ${bao_image} (container ${container})..."
 docker run -d --name "${container}" -u root --entrypoint /bin/sh \
   -v "${tmpdir}/config.hcl":/test/config.hcl:ro \
   -v "${script_dir}/inner-kv-write-retry.sh":/test/inner.sh:ro \
   -v "${utils_dir}":/test/utils:ro \
-  "openbao/openbao:${bao_version}" \
+  "${bao_image}" \
   -c 'mkdir -p /openbao/data && exec bao server -config=/test/config.hcl' >/dev/null
 
 export_addr=(-e BAO_ADDR=http://127.0.0.1:8200)

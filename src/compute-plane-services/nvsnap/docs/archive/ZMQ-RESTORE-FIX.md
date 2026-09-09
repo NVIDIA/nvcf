@@ -8,6 +8,7 @@
 After CRIU restore, ZMQ contexts exhibited two failure modes:
 
 ### Mode 1: IO_THREADS=0 (Stable but Broken)
+
 - Restore succeeds without crash
 - Pod stays up, `/v1/models` endpoint works
 - Completions timeout
@@ -15,6 +16,7 @@ After CRIU restore, ZMQ contexts exhibited two failure modes:
 - Binds were being deferred until first I/O operation, but without IO threads, ZMQ cannot complete bind operations
 
 ### Mode 2: IO_THREADS=1 (Functional but Crashes)
+
 - Bind/connect operations work initially
 - APIServer segfaults after a few minutes
 - **Root cause:** Threads spawned before binds, leading to stale pointers and race conditions
@@ -32,6 +34,7 @@ nvsnap_zmq_replay_ops_ex(sock, 1);  // allow_bind=1, binds executed
 ```
 
 **Why this failed:**
+
 1. With `IO_THREADS=0`: No threads available when binds are replayed → `EAGAIN`
 2. With `IO_THREADS=1`: Threads may not be fully initialized when binds are replayed → timing issues and crashes
 3. Threads spawned during context creation had stale pointers to old context state
@@ -76,6 +79,7 @@ sock->replay_after_restore = 1;     // Mark as already replayed
 ```
 
 **Impact:** Binds happen IMMEDIATELY during reinit when:
+
 - Context is fresh (no stale state)
 - IO threads are properly initialized
 - No race conditions or timing issues
@@ -106,6 +110,7 @@ Phase 3: Replay Operations IMMEDIATELY
 ```
 
 **Key points:**
+
 1. **IO threads exist** before any bind/connect attempts
 2. **No deferred operations** - everything happens in one atomic reinit
 3. **Fresh kernel state** - threads have correct context pointers
@@ -130,6 +135,7 @@ export NVSNAP_ZMQ_SKIP_OLD_CLOSE=1
 ### Test Steps
 
 1. **Build the library:**
+
    ```bash
    cd lib/nvsnap_intercept
    make clean
@@ -137,6 +143,7 @@ export NVSNAP_ZMQ_SKIP_OLD_CLOSE=1
    ```
 
 2. **Deploy with updated library:**
+
    ```bash
    # Copy library to your container or node
    # Then run vLLM with LD_PRELOAD
@@ -144,11 +151,13 @@ export NVSNAP_ZMQ_SKIP_OLD_CLOSE=1
    ```
 
 3. **Perform checkpoint:**
+
    ```bash
    # Trigger checkpoint via your usual method
    ```
 
 4. **Verify restore:**
+
    ```bash
    # Check logs for:
    # - "ZMQ reinit ctx set io_threads=1"
@@ -182,16 +191,19 @@ ZMQ reinit completed
 ### Troubleshooting
 
 **If completions still timeout:**
+
 - Check `NVSNAP_LOG_LEVEL=5` for detailed trace
 - Verify all endpoints are being replayed
 - Ensure marker file exists: `/var/run/nvsnap/.restored`
 
 **If segfaults occur:**
+
 - Enable `NVSNAP_ZMQ_SKIP_OLD_CLOSE=1` to avoid closing old contexts
 - Check if multiple processes are interfering (each needs separate reinit)
 - Verify ZMQ version compatibility
 
 **If binds fail:**
+
 - Check that IO threads are actually being set (look for "set io_threads=1" log)
 - Verify ZMQ library is being loaded (not statically linked)
 - Check for IPC file conflicts in `/tmp`
@@ -207,23 +219,29 @@ ZMQ reinit completed
 ## Comparison with Previous Attempts
 
 ### Attempt 1: IO_THREADS=0 + Deferred Bind
+
 ❌ Failed: No threads available for bind
 
 ### Attempt 2: IO_THREADS=1 + Deferred Bind
+
 ❌ Failed: Threads not ready, timing-dependent crashes
 
 ### Attempt 3 (This Fix): IO_THREADS=1 + Immediate Bind
+
 ✅ **Works:** Threads ready before binds, atomic reinit
 
 ## Alternative Approaches Considered
 
 ### Hybrid: Start with 0, set to 1 later
+
 ❌ Rejected: Changing IO_THREADS after socket creation is undefined behavior in ZMQ
 
 ### Thread Delay: Sleep before binds
+
 ❌ Rejected: Race condition still possible, adds latency
 
 ### Full Application Restart
+
 ❌ Rejected: Defeats purpose of checkpoint/restore
 
 ## Related Files

@@ -42,6 +42,10 @@ func healthManager(nvcfApiHost string, llmGatewayEndpoint string, transport http
 		if err != nil {
 			return nil, err
 		}
+		// /health is wired to both probes, so a gating check here would restart
+		// every pod and drop invocation-service routing when only the LLM
+		// Gateway is down. SkipOnErr reports the failure without the 503.
+		llmCheck.SkipOnErr = true
 		options = append(options, health.WithChecks(llmCheck))
 	}
 

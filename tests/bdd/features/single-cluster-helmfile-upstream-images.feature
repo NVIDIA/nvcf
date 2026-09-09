@@ -32,13 +32,13 @@ Feature: Install a local single-cluster stack with upstream supporting images
           image:
             registry: {{ .Values.global.image.registry }}
             repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
-            tag: "0.23.0"
+            tag: "0.24.0"
       ---
         reloader:
           image:
             registry: docker.io
             repository: natsio/nats-server-config-reloader
-            tag: "0.23.0"
+            tag: "0.24.0"
       """
     And I substitute a block in file "deploy/stacks/self-managed/global.yaml.gotmpl":
       """
@@ -46,14 +46,14 @@ Feature: Install a local single-cluster stack with upstream supporting images
           image:
             registry: {{ .Values.global.image.registry }}
             repository: {{ .Values.global.image.repository }}/alpine-k8s
-            tag: 1.36.1
+            tag: 1.37.0
             pullPolicy: IfNotPresent
       ---
         accountBootstrap:
           image:
             registry: docker.io
             repository: alpine/k8s
-            tag: "1.36.1"
+            tag: "1.37.0"
             pullPolicy: IfNotPresent
       """
     And a single-cluster ncp-local cluster is running
@@ -78,7 +78,7 @@ Feature: Install a local single-cluster stack with upstream supporting images
     # the same rendered release.
     Then the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-nats" should contain:
       | text                                                               |
-      | docker.io/natsio/nats-server-config-reloader:0.23.0                |
+      | docker.io/natsio/nats-server-config-reloader:0.24.0                |
       | # Source: helm-nvcf-nats/templates/nkey-secret.yaml                |
 
     # Cassandra initialization currently uses its migrations image. Selecting
@@ -89,7 +89,7 @@ Feature: Install a local single-cluster stack with upstream supporting images
 
     And the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-api" should contain:
       | text                             |
-      | docker.io/alpine/k8s:1.36.1      |
+      | docker.io/alpine/k8s:1.37.0      |
 
     # Keep this focused on the releases that own or exercise the overrides.
     # A full local stack install also starts unrelated service images that may
@@ -120,4 +120,4 @@ Feature: Install a local single-cluster stack with upstream supporting images
       kubectl get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'
       """
     Then the command exit code should be 0
-    And the command output should contain "docker.io/natsio/nats-server-config-reloader:0.23.0"
+    And the command output should contain "docker.io/natsio/nats-server-config-reloader:0.24.0"

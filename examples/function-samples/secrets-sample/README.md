@@ -1,12 +1,17 @@
 # Secrets Sample
+
 ## Build the sample container
+
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t secrets-sample .
 ```
+
 Push the image to an OCI registry your self-hosted NVCF cluster can access and register pull credentials with `nvcf-cli registry add`. See [examples/README.md](../../README.md#publishing-container-images) for the full flow.
 
 ## Invoke the sample locally
+
 Run the container:
+
 ```bash
 docker run -it -p 8000:8000 -v ${PWD}/secret-sample:/var/secrets secrets-sample
 ```
@@ -32,12 +37,15 @@ curl --request POST \
 ```
 
 ### Error Handling
+
 The server gracefully handles missing or empty secret files by:
+
 - Returning an empty dictionary for missing/empty files
 - Logging errors to help with debugging
 - Continuing to serve requests without crashing
 
 If a secret file is not found or empty, you'll see log entries like:
+
 ```
 ERROR:http_server:Secret file not found at /var/secrets/accounts-secrets.json
 ```
@@ -45,6 +53,7 @@ ERROR:http_server:Secret file not found at /var/secrets/accounts-secrets.json
 The API will still return a 200 OK response with empty dictionaries for any missing secrets.
 
 ## Invoke the sample on self-hosted NVCF
+
 Resolve the cluster gateway and generate an invocation API key via `nvcf-cli`:
 
 ```bash

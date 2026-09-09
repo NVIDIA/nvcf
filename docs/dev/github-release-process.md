@@ -1,27 +1,29 @@
 # GitHub Release Automation
 
-The public GitHub workflow in `.github/workflows/release-tags.yml`
-prepares NVCF release automation before the GitHub cutover. It is
-configured to run in dry-run mode by default, so the workflow can be
-validated without creating GitHub tags or releases.
+The public GitHub workflow in `.github/workflows/release-tags.yml` runs
+NVCF release automation. The cutover is complete: this repository is
+the sole tag and release authority, publishing is live, and a merge to
+`main` cuts real tags and GitHub Releases for every registered service.
 
-## Dry-run gate
+## Publish gate
 
 The workflow reads these repository variables:
 
-- `NVCF_GITHUB_AUTO_TAGGING_ENABLED`: defaults to `false`. When
-  `false`, the workflow always runs in dry-run mode even if another
-  variable is misconfigured.
-- `NVCF_GITHUB_RELEASE_DRY_RUN`: defaults to `true`. When `true`,
-  branch pushes compute proposed service tags and tag pushes validate
-  release tags, but nothing is written to GitHub. Set this to `false`
-  only after `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true`.
-- `NVCF_GITHUB_RELEASE_DRAFT`: defaults to `false`. When release
-  creation is enabled, `true` creates draft GitHub releases.
+- `NVCF_GITHUB_AUTO_TAGGING_ENABLED`: set to `true`. When `false`, the
+  workflow forces dry-run mode even if another variable says otherwise.
+- `NVCF_GITHUB_RELEASE_DRY_RUN`: set to `false`. When `true`, branch
+  pushes compute proposed service tags and tag pushes validate release
+  tags, but nothing is written to GitHub.
+- `NVCF_GITHUB_RELEASE_DRAFT`: unset, so `false`. When `true`, releases
+  are created as drafts.
 
-Do not set `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` or
-`NVCF_GITHUB_RELEASE_DRY_RUN=false` until the GitHub commit graph has
-release anchors for each service being cut over.
+The literal fallbacks in the workflow's `env:` block are `false` and
+`true` respectively, which reads as dry-run. **Those are not the
+behavior here.** They are the safe default for a context with neither
+variable set -- a fork, or a re-created repository -- so a misconfigured
+checkout cannot cut real releases. The values above are what runs; they
+live in repository settings rather than in source, so confirm them there
+rather than inferring the mode from the workflow file.
 
 Publish mode also requires the `NV_GITHUB_TOKEN` repository
 secret. It must be a GitHub token that can push tags and create
@@ -29,18 +31,10 @@ releases. Tags pushed with the default `GITHUB_TOKEN` do not start the
 follow-up tag workflow, so the workflow fails publish mode when this
 secret is missing.
 
-## Cutover order
+## Release path
 
-1. Keep GitHub release automation dry-run-only while the repository is
-   still being anchored.
-2. Recreate any missing GitHub anchors with path-format tags and
-   `refs/notes/semantic-release` notes on the GitHub commit graph.
-3. Enable GitHub auto-tagging and publish by setting
-   `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` and
-   `NVCF_GITHUB_RELEASE_DRY_RUN=false`.
-
-After step 3, GitHub is the sole tag and release authority. The active
-release path is:
+GitHub is the sole tag and release authority. The active release path
+is:
 
 ```text
 NVIDIA/nvcf -> GitLab mirror -> scheduled internal release dispatcher -> image release pipeline
@@ -314,16 +308,23 @@ Anchoring at the start would hand semantic-release every commit the
 service ever had, where a single historical breaking change could force
 a major.
 
-## Cutover anchors
+## Anchors
 
 GitHub release publishing needs both the latest service tag and the
 matching `refs/notes/semantic-release` entry on the GitHub commit
 graph. `.oss-allowlist` mirrors files, not Git refs, tags, or notes.
 
-If the GitHub mirror is a snapshot with different commit SHAs from the
-prior release source, do not copy old refs verbatim. Recreate the
-latest service tags and semantic-release notes on the GitHub commits
-that represent the released content, then enable publish mode.
+This came up first during the cutover, when the mirror was a snapshot
+with different commit SHAs from the prior release source: old refs could
+not be copied verbatim, so the latest service tags and semantic-release
+notes were recreated on the GitHub commits representing the released
+content. That work is done.
+
+It still applies to any release line arriving without usable history --
+most often a newly registered service or chart, which is covered in
+detail under "Seeding and pinning service or chart versions" below. Do not copy refs from another
+source; create the anchor on the GitHub commit that represents the
+released content.
 
 Use the helper below to create one path-format anchor locally. The
 version may be a dev prerelease, release candidate, or stable release:
@@ -491,8 +492,8 @@ exactly the version tags under that service path.
 
 Seeding tags only establishes the version floor. Nothing publishes a
 GitHub Release until `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` and
-`NVCF_GITHUB_RELEASE_DRY_RUN=false`, as described in the dry-run gate
+`NVCF_GITHUB_RELEASE_DRY_RUN=false`, as described in the Publish gate
 above. A tag pushed with the `NV_GITHUB_TOKEN` secret, or another
 workflow-capable token, starts the tag workflow, but it stays inert
-while the dry-run gate is on. Tags pushed with the default
-`GITHUB_TOKEN` do not trigger the follow-up workflow.
+if either variable is unset, falling back to dry-run. Tags pushed
+with the default `GITHUB_TOKEN` do not trigger the follow-up workflow.
