@@ -101,7 +101,7 @@ returns the current function IDs grouped by category, plus the `nca_id` it
 uses on CP-plane series. Tests use this so they do not have to predict
 randomized UUIDs.
 
-```json
+```text
 {
   "nca_id": "mock-nca",
   "worker_with_invocations":      [{function_id, function_version_id}, ...],
