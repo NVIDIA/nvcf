@@ -36,10 +36,12 @@ const (
 	// SharedOwner is the internal owner value for prerequisites shared by all planes.
 	SharedOwner = "shared"
 
-	// MaxIDLength leaves enough room for the longest legacy Cassandra keyspace.
-	MaxIDLength = 32
 	// CassandraIdentifierMaxLength is Cassandra's limit for unquoted keyspace and role identifiers.
-	CassandraIdentifierMaxLength = 48
+	CassandraIdentifierMaxLength   = 48
+	longestLegacyCassandraKeyspace = "schema_migrations"
+	// MaxIDLength leaves enough room for the longest legacy Cassandra keyspace
+	// plus the separator used by CassandraKeyspaceName.
+	MaxIDLength = CassandraIdentifierMaxLength - len(longestLegacyCassandraKeyspace) - 1
 
 	nameHashLength = 8
 )
@@ -126,6 +128,30 @@ func AddOwnerLabel(labels map[string]string, identity Identity) (map[string]stri
 	}
 	out[OwnerLabel] = identity.id
 	return out, nil
+}
+
+// SharedOwnerLabels returns the metadata labels for cluster prerequisites shared by all planes.
+func SharedOwnerLabels() map[string]string {
+	return map[string]string{OwnerLabel: SharedOwner}
+}
+
+// AddSharedOwnerLabel returns labels with the shared-prerequisite owner label added.
+func AddSharedOwnerLabel(labels map[string]string) map[string]string {
+	out := make(map[string]string, len(labels)+1)
+	for key, value := range labels {
+		out[key] = value
+	}
+	out[OwnerLabel] = SharedOwner
+	return out
+}
+
+// Owner returns the raw owner-label value and whether the label is present.
+func Owner(labels map[string]string) (string, bool) {
+	if labels == nil {
+		return "", false
+	}
+	value, ok := labels[OwnerLabel]
+	return value, ok
 }
 
 // IsOwnedBy returns true only when labels explicitly name this identity.

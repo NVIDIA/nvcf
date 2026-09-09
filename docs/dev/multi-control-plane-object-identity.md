@@ -29,6 +29,18 @@ control-plane services. Those callers should all use the same validation and
 naming package so the control-plane ID has one meaning across install, runtime,
 and teardown paths.
 
+## ID Budget
+
+User control-plane IDs are capped at 30 characters even though Kubernetes DNS
+labels allow 63 characters. Cassandra keyspace names are the tighter downstream
+consumer.
+
+| Consumer | Constraint | Result |
+|---|---|---|
+| Kubernetes names | DNS-1123 label, up to 63 characters | IDs must be lowercase DNS labels. |
+| Cassandra keyspaces and roles | Unquoted CQL identifiers allow letters, digits, and underscores, up to 48 characters | IDs are transformed from hyphenated DNS labels to underscore-safe Cassandra prefixes. The longest known legacy keyspace is `schema_migrations`, so `48 - 1 - len("schema_migrations") = 30`. |
+| OpenBao mount paths and NATS accounts/subjects | Exact legacy layout still to confirm before those phases change behavior | These consumers must not loosen the 30-character limit unless this table and the control-plane identity tests are updated together. |
+
 ## Kubernetes Object Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Owner | Phase 0 Evidence |
@@ -54,11 +66,11 @@ and teardown paths.
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |
 |---|---|---|---|
-| Cassandra keyspaces | Existing unprefixed keyspaces | `<id_>_<legacy-keyspace>` | Hyphen-to-underscore transform; keep final keyspace within Cassandra's 48-character unquoted identifier limit. |
-| Cassandra role | Shared application role | `<id_>_app` or equivalent derived role | Role and migrations must use the same helper. |
-| OpenBao auth mounts | Legacy JWT/service mounts | Paths under the plane identity prefix | No named plane may read or write another plane's mounts. |
-| OpenBao PKI | `services/all/pki/...` | Plane-prefixed issuer material | ClusterIssuer must point at the derived path. |
-| NATS accounts | Shared account and subjects | Account and subjects scoped by control-plane ID | Invocation, API, NVCA, and auth-callout must derive from one helper. |
+| Cassandra keyspaces | `nvcf_api`, `api_keys_api`, `ess_api`, `sis_api`, `nvct_api`, `nvcf_autoscaler`, `event_ledger`, `schema_migrations`, `nvcf_api_keys` | `<id_>_<legacy-keyspace>` | Hyphen-to-underscore transform; keep final keyspace within Cassandra's 48-character unquoted identifier limit. `schema_migrations` leaves a 30-character ID budget. |
+| Cassandra role | Shared application role; exact legacy role name still to confirm before Phase 5 | `<id_>_app` or equivalent derived role | Role and migrations must use the same helper. |
+| OpenBao auth mounts | Legacy JWT/service mounts; exact path inventory still to confirm before Phase 5 | Paths under the plane identity prefix | No named plane may read or write another plane's mounts. |
+| OpenBao PKI | `services/all/pki/...`; full legacy layout still to confirm before Phase 5 | Plane-prefixed issuer material | ClusterIssuer must point at the derived path. |
+| NATS accounts | Shared account and subjects; exact account inventory still to confirm before Phase 5 | Account and subjects scoped by control-plane ID | Invocation, API, NVCA, and auth-callout must derive from one helper. |
 | CLI profile artifacts | Default profile paths | Profile paths include the control-plane ID | Legacy paths stay unchanged for default mode. |
 
 ## Shared Prerequisite Inventory
@@ -77,7 +89,7 @@ cluster-scoped objects Helm does not manage after install.
 | cert-manager | CustomResourceDefinition | `issuers.cert-manager.io` | `shared` |
 | cert-manager | CustomResourceDefinition | `orders.acme.cert-manager.io` | `shared` |
 | NVCA operator | CustomResourceDefinition | `nvcfbackends.nvcf.nvidia.com` | `shared` |
-| Gateway API | CustomResourceDefinition | To be filled from the managed Gateway API prerequisite source | `shared` |
+| Gateway API | CustomResourceDefinition | External prerequisite in this repo snapshot; the self-managed stack renders Gateway routes but does not install a managed Gateway API CRD inventory here | `shared` |
 
 ## Phase 0 Verification
 

@@ -66,12 +66,14 @@ jobs:
       # v1.2.0+ processes helmfile.d/ in parallel and breaks the ordering the
       # self-managed stack relies on, so stay on v1.1.x. deploy/stacks
       # requires helm v3.x.
-      - name: Install helm and helmfile (pinned, checksum-verified)
+      - name: Install helm, helmfile, and yq (pinned, checksum-verified)
         env:
           HELM_VERSION: "3.21.4"
           HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
           HELMFILE_VERSION: "1.1.9"
           HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
+          YQ_VERSION: "4.47.2"
+          YQ_SHA256: "1bb99e1019e23de33c7e6afc23e93dad72aad6cf2cb03c797f068ea79814ddb0"
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"
@@ -85,8 +87,13 @@ jobs:
           echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
           tar xzf helmfile.tar.gz helmfile
 
+          curl -sSL --retry 3 -o yq \
+            "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  yq" | sha256sum -c -
+          chmod +x yq
+
           mkdir -p "${RUNNER_TEMP}/bin"
-          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          mv linux-amd64/helm helmfile yq "${RUNNER_TEMP}/bin/"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Check tool versions
@@ -94,6 +101,7 @@ jobs:
           set -euo pipefail
           helm version --short
           helmfile --version
+          yq --version
 
       - name: Test the chart mapping guard
         run: bash tools/ci/test-check-helm-charts
@@ -116,7 +124,7 @@ jobs:
             make check-vendor-chart
 
       - name: Run self-managed Helmfile render tests
-        run: make -C deploy/stacks/self-managed test
+        run: make -C deploy/stacks/self-managed test test-local
 
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test

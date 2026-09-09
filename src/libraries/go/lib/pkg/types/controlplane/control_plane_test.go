@@ -26,6 +26,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
+var legacyCassandraKeyspaces = []string{
+	"api_keys_api",
+	"ess_api",
+	"event_ledger",
+	"nvcf_api",
+	"nvcf_api_keys",
+	"nvcf_autoscaler",
+	"nvct_api",
+	"schema_migrations",
+	"sis_api",
+}
+
 func TestValidateID(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -144,6 +156,39 @@ func TestOwnerLabels(t *testing.T) {
 
 	_, err = AddOwnerLabel(nil, zero)
 	require.Error(t, err)
+}
+
+func TestSharedOwnerLabels(t *testing.T) {
+	labels := SharedOwnerLabels()
+	assert.Equal(t, map[string]string{OwnerLabel: SharedOwner}, labels)
+
+	existing := map[string]string{"app": "cert-manager"}
+	withOwner := AddSharedOwnerLabel(existing)
+	assert.Equal(t, map[string]string{
+		"app":      "cert-manager",
+		OwnerLabel: SharedOwner,
+	}, withOwner)
+
+	existing["app"] = "mutated"
+	assert.Equal(t, "cert-manager", withOwner["app"])
+}
+
+func TestOwner(t *testing.T) {
+	value, ok := Owner(map[string]string{OwnerLabel: "plane-a"})
+	assert.True(t, ok)
+	assert.Equal(t, "plane-a", value)
+
+	value, ok = Owner(map[string]string{OwnerLabel: ""})
+	assert.True(t, ok)
+	assert.Empty(t, value)
+
+	value, ok = Owner(map[string]string{"app": "api"})
+	assert.False(t, ok)
+	assert.Empty(t, value)
+
+	value, ok = Owner(nil)
+	assert.False(t, ok)
+	assert.Empty(t, value)
 }
 
 func TestIsOwnedBy(t *testing.T) {
@@ -267,7 +312,7 @@ func TestCassandraKeyspaceName(t *testing.T) {
 
 	maxID, err := NewIdentity(strings.Repeat("a", MaxIDLength))
 	require.NoError(t, err)
-	keyspace, err = CassandraKeyspaceName(maxID, "nvcf_autoscaler")
+	keyspace, err = CassandraKeyspaceName(maxID, longestLegacyCassandraKeyspace)
 	require.NoError(t, err)
 	assert.Len(t, keyspace, CassandraIdentifierMaxLength)
 	assert.Empty(t, ValidateCassandraIdentifier(keyspace))
@@ -290,6 +335,27 @@ func TestCassandraKeyspaceName(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = CassandraKeyspaceName(Identity{}, "nvcf_api")
+	require.Error(t, err)
+}
+
+func TestCassandraKeyspaceNameLegacyInventoryFitsMaxID(t *testing.T) {
+	maxID, err := NewIdentity(strings.Repeat("a", MaxIDLength))
+	require.NoError(t, err)
+
+	longest := ""
+	for _, legacyKeyspace := range legacyCassandraKeyspaces {
+		if len(legacyKeyspace) > len(longest) {
+			longest = legacyKeyspace
+		}
+		keyspace, err := CassandraKeyspaceName(maxID, legacyKeyspace)
+		require.NoError(t, err, "legacy keyspace %q should fit the configured ID budget", legacyKeyspace)
+		assert.LessOrEqual(t, len(keyspace), CassandraIdentifierMaxLength)
+	}
+
+	assert.Equal(t, longestLegacyCassandraKeyspace, longest)
+	assert.Equal(t, 30, MaxIDLength)
+
+	_, err = NewIdentity(strings.Repeat("a", MaxIDLength+1))
 	require.Error(t, err)
 }
 
