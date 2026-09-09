@@ -9,7 +9,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
 from types import SimpleNamespace
+from unittest import mock
 
 import yaml
 
@@ -117,6 +119,22 @@ class CanonicalSuiteTests(unittest.TestCase):
             self.assertNotIn("--stargate-load-balancing-algorithm", wait)
             override = power.index("--stargate-load-balancing-algorithm")
             self.assertEqual(power[override + 1], "powerOfN")
+
+    def test_regional_health_waits_for_backend_registration(self) -> None:
+        campaign = object.__new__(LOADTEST.Campaign)
+        campaign.args = SimpleNamespace(region="us-west-2")
+        attempts = [
+            CompletedProcess([], 1, "three backends"),
+            CompletedProcess([], 0, "verified"),
+        ]
+        with (
+            mock.patch.object(campaign, "command", side_effect=attempts) as command,
+            mock.patch.object(LOADTEST.time, "sleep") as sleep,
+        ):
+            campaign.verify_region()
+
+        self.assertEqual(command.call_count, 2)
+        sleep.assert_called_once_with(5)
 
 
 if __name__ == "__main__":

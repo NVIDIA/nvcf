@@ -293,17 +293,21 @@ class Campaign:
         ).stdout
 
     def verify_region(self) -> None:
-        self.command(
-            [
-                "python3",
-                str(VERIFY_SCRIPT),
-                "--region",
-                self.args.region,
-                "--phase",
-                "regional",
-            ],
-            timeout=360,
-        )
+        command = [
+            "python3",
+            str(VERIFY_SCRIPT),
+            "--region",
+            self.args.region,
+            "--phase",
+            "regional",
+        ]
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            result = self.command(command, timeout=360, check=False)
+            if result.returncode == 0:
+                return
+            time.sleep(5)
+        raise LoadTestError(f"regional health did not converge:\n{result.stdout}")
 
     def initialize(self) -> None:
         missing = [name for name in ("docker", "kubectl") if not shutil.which(name)]
