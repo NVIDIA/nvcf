@@ -10,6 +10,7 @@ fail() {
   exit 1
 }
 
+# List enabled releases for the selected observability profile.
 profile_releases() {
   local profile="$1"
   HELMFILE_ENV=local helmfile \
@@ -22,6 +23,53 @@ profile_releases() {
     sort
 }
 
+# Render the evaluated Helmfile state without downloading charts, then recover
+# its YAML documents in "$work_dir/<output_name>.yaml". `show-dag` cannot be
+# used here because it eagerly prepares the placeholder OCI charts.
+render_release_state() {
+  local output_name="$1"
+  shift
+  local log_file="$work_dir/$output_name.log"
+  local state_file="$work_dir/$output_name.yaml"
+
+  if ! HELMFILE_ENV=local HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile \
+      --file "$stack_dir/helmfile.d" \
+      --log-level debug \
+      --environment default \
+      "$@" \
+      list --skip-charts --output json >"$log_file" 2>&1; then
+    cat "$log_file" >&2
+    fail "could not render the $output_name Helmfile state"
+  fi
+
+  awk '
+    /^rendering result of ".*":$/ { print "---"; capture = 1; next }
+    capture && /^[[:space:]]*[0-9]+: / {
+      sub(/^[[:space:]]*[0-9]+: ?/, "")
+      print
+      next
+    }
+    capture { capture = 0 }
+  ' "$log_file" >"$state_file"
+
+  test -s "$state_file" || fail "could not recover the $output_name Helmfile state"
+}
+
+# Print the `needs` entries for a named release from a rendered Helmfile state.
+release_needs() {
+  local state_file="$1"
+  local release_name="$2"
+
+  NVCF_RELEASE_NAME="$release_name" yq ea -r '
+    select(.releases != null) |
+    .releases[] |
+    select(.name == strenv(NVCF_RELEASE_NAME)) |
+    .needs[]?
+  ' "$state_file"
+}
+
+# Render default monitor manifests for the selected observability profile.
 render_monitors() {
   local profile="$1"
   local output_dir="$work_dir/$profile"
@@ -98,6 +146,18 @@ for profile in control compute all; do
   test "$(profile_releases "$profile")" = "$enabled_releases" ||
     fail "$profile profile did not render the enabled release set exactly once"
 done
+
+render_release_state crds-installed \
+  --state-values-set observability.profile=control
+test "$(release_needs "$work_dir/crds-installed.yaml" victoria-metrics)" = \
+  "monitoring/prometheus-operator-crds" ||
+  fail "victoria-metrics must wait for stack-installed Prometheus Operator CRDs"
+
+render_release_state crds-existing \
+  --state-values-set observability.profile=control \
+  --state-values-set observability.components.prometheusOperatorCrds.mode=existing
+test -z "$(release_needs "$work_dir/crds-existing.yaml" victoria-metrics)" ||
+  fail "victoria-metrics must not depend on a CRD release the stack does not install"
 
 for profile in control compute all; do
   render_monitors "$profile"
