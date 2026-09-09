@@ -385,6 +385,10 @@
                                     "items": {
                                         "type": "string"
                                     }
+                                },
+                                "storageCapacity": {
+                                    "type": "string",
+                                    "default": ""
                                 }
                             }
                         }

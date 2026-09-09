@@ -168,6 +168,9 @@ transition.
 {{- with .mountOptions }}
 {{- $_ := set $sharedStorageTaskData "pvMountOptions" . -}}
 {{- end -}}
+{{- with .storageCapacity }}
+{{- $_ := set $sharedStorageTaskData "storageCapacity" . -}}
+{{- end -}}
 {{- end -}}
 {{- $sharedStorageEffective := dict -}}
 {{- if $sharedStorageServer }}
@@ -254,6 +257,10 @@ transition.
 {{- fail (printf "agentConfig.mergeConfig contains invalid YAML: %s" $parsedMergeConfig.Error) -}}
 {{- end -}}
 {{- $config = mergeOverwrite $config ($parsedMergeConfig | default dict) -}}
+{{- end -}}
+{{- $finalAgent := $config.agent | default dict -}}
+{{- if and $finalAgent.skipSelfDestruct $finalAgent.forceSelfDestruct -}}
+{{- fail "worker.skipSelfDestruct and worker.forceSelfDestruct cannot both be true (including via agentConfig.mergeConfig); NVCA rejects this combination at startup" -}}
 {{- end -}}
 {{- $config | toYaml -}}
 {{- end -}}

@@ -122,6 +122,7 @@ utils:
 ## @param storage.sharedStorage.server.resources Resource requests and limits for the shared-storage pod's SMB container. Leave unset to keep the agent's built-in defaults.
 ## @param storage.sharedStorage.taskData.storageClassName Storage class for task data. Falls back to ephemeral storage if unset.
 ## @param storage.sharedStorage.taskData.mountOptions Mount options for the provisioned task data PV.
+## @param storage.sharedStorage.taskData.storageCapacity Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.
 ## @param storage.internalPersistentStorage.storageClassName Storage class for the Internal Persistent Storage (IPS) PVC.
 ## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).
 storage:
@@ -132,6 +133,7 @@ storage:
     taskData:
       storageClassName: ""
       mountOptions: []
+      storageCapacity: ""
   internalPersistentStorage:
     storageClassName: ""
     hardResourceQuota: {}

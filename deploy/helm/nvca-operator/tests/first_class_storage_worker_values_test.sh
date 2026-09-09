@@ -118,6 +118,7 @@ storage:
       storageClassName: fast-ssd
       mountOptions:
         - noatime
+      storageCapacity: 200Gi
   internalPersistentStorage:
     storageClassName: standard
     hardResourceQuota:
@@ -144,6 +145,7 @@ assert_equal "nvcr.io/nvidia/smb:1.0" "$(agent_config_value "${explicit_manifest
 assert_equal "500m" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.server.containerResources.limits.cpu')" "unexpected shared-storage server CPU limit"
 assert_equal "fast-ssd" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.taskData.storageClassName')" "unexpected shared-storage task data storage class"
 assert_equal "noatime" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.taskData.pvMountOptions[0]')" "unexpected shared-storage task data mount options"
+assert_equal "200Gi" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.taskData.storageCapacity')" "unexpected shared-storage task data storage capacity"
 assert_equal "standard" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.storageClassName')" "unexpected IPS storage class"
 assert_equal "50Gi" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.hardResourceQuota.storage')" "unexpected IPS hard resource quota"
 assert_equal "30s" "$(agent_config_value "${explicit_manifest}" '.agent.minHealthcheckRefreshWait')" "unexpected healthcheck refresh wait"
@@ -176,3 +178,32 @@ assert_equal "legacy-backend" "$(agent_config_value "${legacy_manifest}" '.agent
 assert_equal "legacy-image" "$(agent_config_value "${legacy_manifest}" '.agent.sharedStorage.server.image')" "legacy sharedStorage did not override the chart default"
 assert_equal "dynamographdeployments" "$(agent_config_value "${legacy_manifest}" '.cluster.validationPolicy.allowedExtraKubernetesTypes[0].resource')" "legacy validation policy was dropped"
 assert_equal "true" "$(yq -er 'select(.kind == "ConfigMap" and .metadata.name == "agent-config-merge") | .metadata.annotations."nvcf.nvidia.com/legacy-first-class-config"' "${legacy_manifest}")" "legacy storage/worker config was not annotated"
+
+# worker.skipSelfDestruct and worker.forceSelfDestruct are mutually exclusive:
+# NVCA rejects both being true at startup, so the chart must fail to render
+# rather than produce a non-starting agent. This must hold whether both come
+# from chart values, or one comes from the legacy agentConfig.mergeConfig
+# overlay.
+assert_render_fails() {
+  local message="$1"
+  shift
+
+  if render "${tmp_dir}/self-destruct-manifest.yaml" "$@" 2>"${tmp_dir}/self-destruct-error.log"; then
+    echo "${message}: expected helm template to fail, but it succeeded" >&2
+    exit 1
+  fi
+  if ! grep -q "skipSelfDestruct and worker.forceSelfDestruct cannot both be true" "${tmp_dir}/self-destruct-error.log"; then
+    echo "${message}: helm template failed for an unexpected reason:" >&2
+    cat "${tmp_dir}/self-destruct-error.log" >&2
+    exit 1
+  fi
+}
+
+assert_render_fails "both self-destruct flags set via chart values" \
+  --set worker.skipSelfDestruct=true \
+  --set worker.forceSelfDestruct=true
+
+assert_render_fails "self-destruct flags split across chart values and legacy mergeConfig" \
+  --set worker.skipSelfDestruct=true \
+  --set-string agentConfig.mergeConfig="agent:
+  forceSelfDestruct: true"
