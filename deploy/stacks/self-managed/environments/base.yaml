@@ -714,3 +714,81 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# =============================================================================
+# Control-plane high availability
+# =============================================================================
+# Resilience settings are exposed as a single highAvailability: block in
+# self-managed Helmfile environment values.
+# deploy/stacks/self-managed/global.yaml.gotmpl maps highAvailability.* onto
+# chart values (replicaCount, affinity, PDB, update strategy).
+#
+# deploy/stacks/self-managed/
+# ├── environments/<env>.yaml     # highAvailability: configuration
+# └── global.yaml.gotmpl          # value mapping to charts
+#
+# mode: none         (default) — keep existing env/chart replica and PDB values
+#                                (local / CI / BDD).
+#       ha-preferred           — HA sizing below; hostname anti-affinity is
+#                                preferred (still schedule if a second node/AZ
+#                                has no capacity). Requires ≥3 schedulable nodes.
+#       ha-enforced            — same HA sizing; hostname anti-affinity is
+#                                required (second replica stays Pending rather
+#                                than packing). Requires ≥3 schedulable nodes.
+#
+# In-scope charts MUST expose the required value hooks. Leave mode: none
+# for single-node installs.
+# =============================================================================
+highAvailability:
+  mode: none
+
+  # Stateless control-plane Deployments: nvcf-api, invocation-service,
+  # grpc-proxy, admin-token-issuer-proxy, and llm-api-gateway (when the LLM
+  # addon is enabled). Active-active; no application leader election.
+  stateless:
+    replicaCount: 2
+    podAntiAffinity:
+      enabled: true
+    # Spread replicas across availability zones. Nodes MUST be labelled
+    # topology.kubernetes.io/zone=<az>. whenUnsatisfiable follows mode:
+    # ha-preferred → ScheduleAnyway, ha-enforced → DoNotSchedule.
+    topologySpread:
+      enabled: true
+      maxSkew: 1
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  # Hot-path helper Deployments raised to 2 replicas under HA so a single pod
+  # loss does not immediately hurt request/auth traffic: rateLimiter,
+  # nats-auth-callout. Reuse stateless.podAntiAffinity (hostname spread) and
+  # stateless.topologySpread (zone spread).
+  hotPath:
+    replicaCount: 2
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+
+  nats:
+    replicas: 3
+    podDisruptionBudget:
+      enabled: true
+      merge:
+        spec:
+          minAvailable: 2
+
+  openbao:
+    ha:
+      enabled: true
+      replicas: 3
+    injector:
+      replicas: 2
+
+  cassandra:
+    replicaCount: 3
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 2
