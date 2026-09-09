@@ -208,6 +208,13 @@ processors:
     attributes:
       - action: delete
         key: metric_subset_enabled
+  transform/drop_empty_labels:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          - delete_key(attributes, "server.port") where attributes["server.port"] == ""
+          - delete_key(attributes, "url.scheme") where attributes["url.scheme"] == ""
 extensions:
   cgroup_runtime:
     gomaxprocs:
@@ -273,6 +280,7 @@ service:
         - memory_limiter
         - filter/metrics
         - resource
+        - transform/drop_empty_labels
         - resource/workload_metrics_drop_labels
         - metrics_transform
         - batch
@@ -285,6 +293,7 @@ service:
         - memory_limiter
         - filter/metric_subset
         - resource
+        - transform/drop_empty_labels
         - resource/workload_metrics_drop_labels
         - metrics_transform
         - batch/metric_subset

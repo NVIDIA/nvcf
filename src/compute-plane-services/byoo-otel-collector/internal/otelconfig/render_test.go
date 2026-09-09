@@ -159,6 +159,7 @@ func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		dropEmptyLabelsProcessorID,
 		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
@@ -751,7 +752,7 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 		"fail_closed":         samplingFailClosed,
 	}, otelConfig.Processors["probabilistic_sampler/traces"])
 	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
-	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
+	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", dropEmptyLabelsProcessorID, "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/traces", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }
 
@@ -878,6 +879,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		"filter/metrics",
 		"resource",
+		dropEmptyLabelsProcessorID,
 		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		"batch",
@@ -903,6 +905,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		dropEmptyLabelsProcessorID,
 		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
@@ -1050,4 +1053,80 @@ func Test_exporterMetrics_Datadog_ProtocolAgnostic(t *testing.T) {
 			assert.Equal(t, "keep", sumsBlock["initial_cumulative_monotonic_value"])
 		})
 	}
+}
+
+// TestMetricsPipelineDropsEmptyResourceAttrs pins the invariant that motivated
+// the processor: a Prometheus-compatible receiver rejects an entire write
+// request when any series carries a label with an empty value, so every
+// attribute the Prometheus receiver can leave empty must be removed before the
+// metrics reach the exporter.
+func TestMetricsPipelineDropsEmptyResourceAttrs(t *testing.T) {
+	t.Setenv("ESS_SECRETS_PATH", "")
+
+	for _, provider := range []string{string(ProviderThanos), string(ProviderPrometheus)} {
+		t.Run(provider, func(t *testing.T) {
+			telemetries := fmt.Sprintf(
+				`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": %q, "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "m"}}}`,
+				provider,
+			)
+			raw, err := RenderOtelConfigFromBytes([]byte(telemetries), TemplateConfig{
+				BackendType:  K8s,
+				WorkloadType: Container,
+				Namespace:    "sr-fake-namespace",
+			})
+			if err != nil {
+				t.Fatalf("render failed: %v", err)
+			}
+
+			var cfg struct {
+				Processors map[string]struct {
+					MetricStatements []struct {
+						Context    string   `yaml:"context"`
+						Statements []string `yaml:"statements"`
+					} `yaml:"metric_statements"`
+				} `yaml:"processors"`
+				Service struct {
+					Pipelines map[string]struct {
+						Processors []string `yaml:"processors"`
+					} `yaml:"pipelines"`
+				} `yaml:"service"`
+			}
+			if err := yaml.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+
+			proc, ok := cfg.Processors[dropEmptyLabelsProcessorID]
+			if !ok {
+				t.Fatalf("%s is not defined", dropEmptyLabelsProcessorID)
+			}
+			if len(proc.MetricStatements) != 1 || proc.MetricStatements[0].Context != "resource" {
+				t.Fatalf("expected a single resource-context block, got %+v", proc.MetricStatements)
+			}
+
+			// Every attribute that CreateResource can write empty must be covered.
+			for _, attr := range emptyCapableResourceAttrs {
+				want := fmt.Sprintf(`delete_key(attributes, %q) where attributes[%q] == ""`, attr, attr)
+				assert.Contains(t, proc.MetricStatements[0].Statements, want,
+					"missing a delete statement for %q", attr)
+			}
+
+			// It must run in the metrics pipeline, after the resource processor
+			// (which deletes service.instance.id) and before batching/export.
+			procs := cfg.Service.Pipelines["metrics"].Processors
+			assert.Contains(t, procs, dropEmptyLabelsProcessorID)
+			assert.Greater(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "resource"),
+				"must run after the resource processor")
+			assert.Less(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "batch"),
+				"must run before batching")
+		})
+	}
+}
+
+func indexOf(haystack []string, needle string) int {
+	for i, v := range haystack {
+		if v == needle {
+			return i
+		}
+	}
+	return -1
 }

@@ -30,6 +30,44 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 )
 
+const dropEmptyLabelsProcessorID = "transform/drop_empty_labels"
+
+// emptyCapableResourceAttrs are the resource attributes the Prometheus receiver
+// can write with an empty value. CreateResource guards server.address behind
+// isDiscernibleHost and populates service.name/service.instance.id from labels
+// that are required to be non-empty, but writes these two unconditionally: a
+// scrape target whose instance label carries no port yields server.port="", and
+// a target with no scheme label yields url.scheme="".
+//
+// A Prometheus-compatible receiver rejects the whole write request when any
+// series carries a label with an empty value, so one such attribute drops every
+// unrelated metric batched with it.
+var emptyCapableResourceAttrs = []string{
+	"server.port",
+	"url.scheme",
+}
+
+// addDropEmptyLabelsProcessor removes resource attributes that carry an empty
+// value before the metrics reach the exporter, so they never become an empty
+// Prometheus label.
+func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
+	statements := make([]string, 0, len(emptyCapableResourceAttrs))
+	for _, attr := range emptyCapableResourceAttrs {
+		statements = append(statements,
+			fmt.Sprintf(`delete_key(attributes, %q) where attributes[%q] == ""`, attr, attr))
+	}
+	otelConfig.Processors[dropEmptyLabelsProcessorID] = map[string]interface{}{
+		"error_mode": "ignore",
+		"metric_statements": []map[string]interface{}{
+			{
+				"context":    "resource",
+				"statements": statements,
+			},
+		},
+	}
+	return dropEmptyLabelsProcessorID
+}
+
 type Telemetry struct {
 	Protocol Protocol `json:"protocol"`
 	Provider Provider `json:"provider"`
@@ -489,7 +527,14 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline := otelConfig.Service.Pipelines["metrics"]
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
-		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource", "metricstransform", "batch"}
+		metricPipeline.Processors = []string{
+			"memory_limiter",
+			"filter/metrics",
+			"resource",
+			addDropEmptyLabelsProcessor(otelConfig),
+			"metricstransform",
+			"batch",
+		}
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline
 	}
 

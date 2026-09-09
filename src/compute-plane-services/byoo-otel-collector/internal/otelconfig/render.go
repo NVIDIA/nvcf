@@ -78,8 +78,24 @@ const (
 	metricSubsetFilterProcessorID        = "filter/metric_subset"
 	metricSubsetBatchProcessorID         = "batch/metric_subset"
 	workloadMetricsDropLabelsProcessorID = "resource/workload_metrics_drop_labels"
+	dropEmptyLabelsProcessorID           = "transform/drop_empty_labels"
 	defaultMetricSubsetPort              = 19091
 )
+
+// emptyCapableResourceAttrs are the resource attributes the Prometheus receiver
+// can write with an empty value. CreateResource guards server.address behind
+// isDiscernibleHost and populates service.name/service.instance.id from labels
+// that are required to be non-empty, but writes these two unconditionally: a
+// scrape target whose instance label carries no port yields server.port="", and
+// a target with no scheme label yields url.scheme="".
+//
+// A Prometheus-compatible receiver rejects the whole write request when any
+// series carries a label with an empty value, so one such attribute drops every
+// unrelated metric batched with it.
+var emptyCapableResourceAttrs = []string{
+	"server.port",
+	"url.scheme",
+}
 
 var defaultWorkloadMetricsDropLabels = []string{
 	"metric_subset_enabled",
@@ -546,6 +562,27 @@ func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labe
 	return workloadMetricsDropLabelsProcessorID
 }
 
+// addDropEmptyLabelsProcessor removes resource attributes that carry an empty
+// value before the metrics reach the exporter, so they never become an empty
+// Prometheus label. See emptyCapableResourceAttrs for why these keys.
+func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
+	statements := make([]string, 0, len(emptyCapableResourceAttrs))
+	for _, attr := range emptyCapableResourceAttrs {
+		statements = append(statements,
+			fmt.Sprintf(`delete_key(attributes, %q) where attributes[%q] == ""`, attr, attr))
+	}
+	otelConfig.Processors[dropEmptyLabelsProcessorID] = map[string]interface{}{
+		"error_mode": "ignore",
+		"metric_statements": []map[string]interface{}{
+			{
+				"context":    "resource",
+				"statements": statements,
+			},
+		},
+	}
+	return dropEmptyLabelsProcessorID
+}
+
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
 	otelConfig.Exporters[metricSubsetExporterID] = map[string]interface{}{
 		"endpoint":            fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
@@ -610,6 +647,7 @@ func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubse
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		addDropEmptyLabelsProcessor(otelConfig),
 	}
 	if workloadMetricsDropLabelsProcessor != "" {
 		metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors, workloadMetricsDropLabelsProcessor)
@@ -898,7 +936,12 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline := otelConfig.Service.Pipelines["metrics"]
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
-		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
+		metricPipeline.Processors = []string{
+			"memory_limiter",
+			"filter/metrics",
+			"resource",
+			addDropEmptyLabelsProcessor(otelConfig),
+		}
 		workloadMetricsDropLabelsProcessor := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels)
 		if workloadMetricsDropLabelsProcessor != "" {
 			metricPipeline.Processors = append(metricPipeline.Processors, workloadMetricsDropLabelsProcessor)

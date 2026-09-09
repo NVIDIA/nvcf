@@ -231,3 +231,73 @@ func Test_generateExportersAndService(t *testing.T) {
 		})
 	}
 }
+
+// TestMetricsPipelineDropsEmptyResourceAttrs pins the invariant that motivated
+// the processor: a Prometheus-compatible receiver rejects an entire write
+// request when any series carries a label with an empty value, so every
+// attribute the Prometheus receiver can leave empty must be removed before the
+// metrics reach the exporter.
+func TestMetricsPipelineDropsEmptyResourceAttrs(t *testing.T) {
+	for _, provider := range []Provider{ProviderThanos, ProviderPrometheus} {
+		t.Run(string(provider), func(t *testing.T) {
+			input := fmt.Sprintf(
+				`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": %q, "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "m"}}}`,
+				provider,
+			)
+			raw, err := RenderOtelConfigFromBytes([]byte(input), backendconfig.TemplateConfig{
+				BackendType:  backendconfig.K8s,
+				WorkloadType: backendconfig.Container,
+			})
+			if err != nil {
+				t.Fatalf("render failed: %v", err)
+			}
+
+			var cfg struct {
+				Processors map[string]struct {
+					MetricStatements []struct {
+						Context    string   `yaml:"context"`
+						Statements []string `yaml:"statements"`
+					} `yaml:"metric_statements"`
+				} `yaml:"processors"`
+				Service struct {
+					Pipelines map[string]struct {
+						Processors []string `yaml:"processors"`
+					} `yaml:"pipelines"`
+				} `yaml:"service"`
+			}
+			if err := yaml.Unmarshal(raw, &cfg); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+
+			proc, ok := cfg.Processors[dropEmptyLabelsProcessorID]
+			if !ok {
+				t.Fatalf("%s is not defined", dropEmptyLabelsProcessorID)
+			}
+			if len(proc.MetricStatements) != 1 || proc.MetricStatements[0].Context != "resource" {
+				t.Fatalf("expected a single resource-context block, got %+v", proc.MetricStatements)
+			}
+
+			for _, attr := range emptyCapableResourceAttrs {
+				want := fmt.Sprintf(`delete_key(attributes, %q) where attributes[%q] == ""`, attr, attr)
+				assert.Contains(t, proc.MetricStatements[0].Statements, want,
+					"missing a delete statement for %q", attr)
+			}
+
+			procs := cfg.Service.Pipelines["metrics"].Processors
+			assert.Contains(t, procs, dropEmptyLabelsProcessorID)
+			assert.Greater(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "resource"),
+				"must run after the resource processor")
+			assert.Less(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "batch"),
+				"must run before batching")
+		})
+	}
+}
+
+func indexOf(haystack []string, needle string) int {
+	for i, v := range haystack {
+		if v == needle {
+			return i
+		}
+	}
+	return -1
+}

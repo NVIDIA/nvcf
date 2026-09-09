@@ -242,6 +242,13 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+  transform/drop_empty_labels:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          - delete_key(attributes, "server.port") where attributes["server.port"] == ""
+          - delete_key(attributes, "url.scheme") where attributes["url.scheme"] == ""
 extensions:
   cgroup_runtime:
     gomaxprocs:
@@ -305,6 +312,7 @@ service:
         - memory_limiter
         - filter/metrics
         - resource
+        - transform/drop_empty_labels
         - metrics_transform
         - batch
     traces:
