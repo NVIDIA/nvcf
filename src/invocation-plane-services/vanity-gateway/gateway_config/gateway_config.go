@@ -42,28 +42,44 @@ type ShadowConfig struct {
 	Percentage               *int                 `json:"percentage,omitempty" yaml:"percentage,omitempty"`
 	SamplingMethod           ShadowSamplingMethod `json:"samplingMethod,omitempty" yaml:"samplingMethod,omitempty"`
 	CancelOnClientDisconnect bool                 `json:"cancelOnClientDisconnect,omitempty" yaml:"cancelOnClientDisconnect,omitempty"`
+	// Recorded while decoding and reported by validation, which knows the route
+	// and list index the decoder does not.
+	unknownFields []string
+	nullFields    []string
 }
 
 func (s *ShadowConfig) UnmarshalJSON(data []byte) error {
 	fields := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
+		return fmt.Errorf("shadow config must be a mapping: %w", err)
 	}
-	for field := range fields {
+	var unknownFields, nullFields []string
+	for field, raw := range fields {
 		switch field {
 		case "modelName", "percentage", "samplingMethod", "cancelOnClientDisconnect":
+			if isJSONNull(raw) {
+				nullFields = append(nullFields, field)
+			}
 		default:
-			return fmt.Errorf("unknown shadow config field %q", field)
+			unknownFields = append(unknownFields, field)
 		}
 	}
+	slices.Sort(unknownFields)
+	slices.Sort(nullFields)
 
 	type shadowConfigAlias ShadowConfig
 	var alias shadowConfigAlias
 	if err := json.Unmarshal(data, &alias); err != nil {
-		return err
+		return fmt.Errorf("decode shadow config: %w", err)
 	}
 	*s = ShadowConfig(alias)
+	s.unknownFields = unknownFields
+	s.nullFields = nullFields
 	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
 }
 
 type CustomHeaders map[string]string
@@ -110,6 +126,7 @@ type ModelFunctionDetails struct {
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty" yaml:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadows on client cancellation or primary proxy failure; default false
 	FunctionType                   FunctionType          `json:"functionType,omitempty"`
 	shadowsPresent                 bool
+	shadowsNull                    bool
 	legacyShadowFieldsPresent      bool
 }
 
@@ -127,14 +144,17 @@ func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 
 	var alias modelFunctionDetailsAlias
 	if err := json.Unmarshal(data, &alias); err != nil {
-		return err
+		return fmt.Errorf("decode model %q: %w", rawModelName(fields), err)
 	}
 
 	*m = ModelFunctionDetails(alias)
-	for field := range fields {
+	for field, raw := range fields {
 		switch {
 		case strings.EqualFold(field, "shadows"):
 			m.shadowsPresent = true
+			if isJSONNull(raw) {
+				m.shadowsNull = true
+			}
 		case strings.EqualFold(field, "shadowModelName"),
 			strings.EqualFold(field, "shadowModelNames"),
 			strings.EqualFold(field, "shadowPercentage"),
@@ -144,6 +164,21 @@ func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// rawModelName gives decode errors a handle on the entry before validation
+// knows its route key.
+func rawModelName(fields map[string]json.RawMessage) string {
+	for field, raw := range fields {
+		if !strings.EqualFold(field, "modelName") {
+			continue
+		}
+		var name string
+		if err := json.Unmarshal(raw, &name); err == nil {
+			return name
+		}
+	}
+	return ""
 }
 
 func (m ModelFunctionDetails) EffectiveShadows() []ShadowConfig {
@@ -327,6 +362,9 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		return nil, fmt.Errorf("%s: shadows cannot be combined with legacy shadow fields", location)
 	}
 	if entry.hasShadowsField() {
+		if entry.shadowsNull {
+			return nil, fmt.Errorf("%s: shadows must be a list", location)
+		}
 		if err := validatePerTargetShadowConfigs(location, entry.Shadows); err != nil {
 			return nil, err
 		}
@@ -368,6 +406,12 @@ func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) err
 	seen := make(map[string]struct{}, len(shadows))
 	for i, shadow := range shadows {
 		shadowLocation := fmt.Sprintf("%s.shadows[%d]", location, i)
+		if len(shadow.unknownFields) > 0 {
+			return fmt.Errorf("%s: unknown shadow config field %q", shadowLocation, shadow.unknownFields[0])
+		}
+		if len(shadow.nullFields) > 0 {
+			return fmt.Errorf("%s: %s must not be null", shadowLocation, shadow.nullFields[0])
+		}
 		if shadow.ModelName == "" {
 			return fmt.Errorf("%s: modelName is required", shadowLocation)
 		}
@@ -398,7 +442,10 @@ func validateSamplingMethod(location string, fieldName string, method ShadowSamp
 	case "", ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
 		return nil
 	default:
-		return fmt.Errorf("%s: %s must be %q or %q", location, fieldName, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey)
+		return fmt.Errorf(
+			"%s: %s must be %q or %q",
+			location, fieldName, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey,
+		)
 	}
 }
 
@@ -469,6 +516,9 @@ func validateMultipartOpenAISection(sectionName string, entries map[string]Model
 	for modelKey, entry := range entries {
 		if entry.hasMixedShadowFields() {
 			return fmt.Errorf("openai.%s.%s: shadows cannot be combined with legacy shadow fields", sectionName, modelKey)
+		}
+		if entry.shadowsNull {
+			return fmt.Errorf("openai.%s.%s: shadows must be a list", sectionName, modelKey)
 		}
 		if len(entry.Shadows) > 0 || entry.hasLegacyShadowConfig() {
 			return fmt.Errorf("openai.%s.%s: shadow config is unsupported for multipart image endpoints", sectionName, modelKey)

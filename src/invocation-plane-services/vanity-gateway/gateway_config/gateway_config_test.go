@@ -241,6 +241,16 @@ func TestModelFunctionDetailsEffectiveShadowsLegacyAndPerTargetEquivalent(t *tes
 	assert.Equal(t, perTarget.EffectiveShadows(), legacy.EffectiveShadows())
 }
 
+func TestModelFunctionDetailsEffectiveShadowsLegacyAndPerTargetDefaultsEquivalent(t *testing.T) {
+	legacy := ModelFunctionDetails{ShadowModelNames: []string{"shadow-a", "shadow-b"}}
+	perTarget := ModelFunctionDetails{Shadows: []ShadowConfig{
+		{ModelName: "shadow-a"},
+		{ModelName: "shadow-b"},
+	}}
+
+	assert.Equal(t, perTarget.EffectiveShadows(), legacy.EffectiveShadows())
+}
+
 func TestGatewayConfigLoadAcceptsLegacyAndPluralShadowModelNames(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	err := os.WriteFile(configPath, []byte(`
@@ -366,9 +376,102 @@ v2config:
 
 			_, err = SetupConfigWithConfigPath(configPath)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "unknown shadow config field")
+			assert.ErrorContains(t, err, "openai.chatCompletions.primary.shadows[0]: unknown shadow config field")
 		})
 	}
+}
+
+func TestGatewayConfigLoadRejectsNullPerTargetShadowValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		shadows  string
+		expected string
+	}{
+		{
+			name:     "null list",
+			shadows:  `        shadows: null`,
+			expected: "openai.chatCompletions.primary: shadows must be a list",
+		},
+		{
+			name: "null model name",
+			shadows: `        shadows:
+          - modelName: null
+            percentage: 10`,
+			expected: "openai.chatCompletions.primary.shadows[0]: modelName must not be null",
+		},
+		{
+			name: "null percentage",
+			shadows: `        shadows:
+          - modelName: private/facebook/opt-125m-shadow
+            percentage: null`,
+			expected: "openai.chatCompletions.primary.shadows[0]: percentage must not be null",
+		},
+		{
+			name: "null sampling method",
+			shadows: `        shadows:
+          - modelName: private/facebook/opt-125m-shadow
+            samplingMethod: null`,
+			expected: "openai.chatCompletions.primary.shadows[0]: samplingMethod must not be null",
+		},
+		{
+			name: "null cancellation policy",
+			shadows: `        shadows:
+          - modelName: private/facebook/opt-125m-shadow
+            cancelOnClientDisconnect: null`,
+			expected: "openai.chatCompletions.primary.shadows[0]: cancelOnClientDisconnect must not be null",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.yaml")
+			contents := fmt.Sprintf(`
+v2config:
+  openai:
+    chatCompletions:
+      primary:
+        modelName: facebook/opt-125m
+        functionID: func-id
+%s
+      shadow:
+        modelName: private/facebook/opt-125m-shadow
+        functionID: shadow-func-id
+`, tc.shadows)
+			err := os.WriteFile(configPath, []byte(contents), 0600)
+			require.NoError(t, err)
+
+			_, err = SetupConfigWithConfigPath(configPath)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.expected)
+		})
+	}
+}
+
+func TestGatewayConfigLoadAcceptsCaseInsensitiveShadowsKey(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    chatCompletions:
+      primary:
+        modelName: facebook/opt-125m
+        functionID: func-id
+        Shadows:
+          - modelName: private/facebook/opt-125m-shadow
+            percentage: 10
+      shadow:
+        modelName: private/facebook/opt-125m-shadow
+        functionID: shadow-func-id
+`), 0600)
+	require.NoError(t, err)
+
+	reloadable, err := SetupConfigWithConfigPath(configPath)
+	require.NoError(t, err)
+
+	shadows := reloadable.Get().OpenAI.ChatCompletions["primary"].EffectiveShadows()
+	require.Len(t, shadows, 1)
+	assert.Equal(t, "private/facebook/opt-125m-shadow", shadows[0].ModelName)
+	assert.Equal(t, 10, *shadows[0].Percentage)
 }
 
 func TestGatewayConfigLoadRejectsMixedShadowFieldPresence(t *testing.T) {
@@ -406,6 +509,12 @@ func TestGatewayConfigLoadRejectsMixedShadowFieldPresence(t *testing.T) {
 			fields: `        shadows:
           - modelName: private/facebook/opt-125m-shadow
         shadowCancelOnClientDisconnect: false`,
+		},
+		{
+			name: "lowercase legacy cancellation key",
+			fields: `        shadows:
+          - modelName: private/facebook/opt-125m-shadow
+        shadowcancelonclientdisconnect: false`,
 		},
 		{
 			name: "empty per-target list",
@@ -1165,24 +1274,48 @@ func TestGatewayConfigValidateRejectsSelfReference(t *testing.T) {
 }
 
 func TestGatewayConfigValidateRejectsCrossSectionReference(t *testing.T) {
-	cfg := &GatewayConfig{}
-	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{
-		"primary": {
-			ModelName:       "facebook/opt-125m",
-			FunctionID:      "func-id",
-			ShadowModelName: "microsoft/phi-2-shadow",
+	tests := []struct {
+		name     string
+		primary  ModelFunctionDetails
+		expected string
+	}{
+		{
+			name: "legacy target",
+			primary: ModelFunctionDetails{
+				ModelName:       "facebook/opt-125m",
+				FunctionID:      "func-id",
+				ShadowModelName: "microsoft/phi-2-shadow",
+			},
+			expected: "openai.chatCompletions.primary: shadow target must reference another model in openai.chatCompletions",
 		},
-	}
-	cfg.OpenAI.Completions = map[string]ModelFunctionDetails{
-		"shadow": {
-			ModelName:  "microsoft/phi-2-shadow",
-			FunctionID: "shadow-func-id",
+		{
+			name: "per-target list",
+			primary: ModelFunctionDetails{
+				ModelName:  "facebook/opt-125m",
+				FunctionID: "func-id",
+				Shadows:    []ShadowConfig{{ModelName: "microsoft/phi-2-shadow"}},
+			},
+			expected: "openai.chatCompletions.primary.shadows[0]: " +
+				"shadow target must reference another model in openai.chatCompletions",
 		},
 	}
 
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "shadow target must reference another model in openai.chatCompletions")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &GatewayConfig{}
+			cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{"primary": tc.primary}
+			cfg.OpenAI.Completions = map[string]ModelFunctionDetails{
+				"shadow": {
+					ModelName:  "microsoft/phi-2-shadow",
+					FunctionID: "shadow-func-id",
+				},
+			}
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.expected)
+		})
+	}
 }
 
 func TestGatewayConfigValidateAcceptsImageSections(t *testing.T) {
