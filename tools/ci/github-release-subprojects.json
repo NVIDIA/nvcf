@@ -215,6 +215,11 @@
       "legacy_tag_prefix": "helm-nvcf-cassandra-v"
     },
     {
+      "id": "cassandra-image",
+      "path": "infra/cassandra",
+      "service_name": "nvcf-cassandra"
+    },
+    {
       "id": "api-keys-colocated",
       "path": "deploy/helm/api-keys-colocated",
       "service_name": "helm-nvcf-api-keys",
@@ -225,6 +230,11 @@
       "path": "deploy/helm/openbao",
       "service_name": "helm-nvcf-openbao-server",
       "legacy_tag_prefix": "helm-nvcf-openbao-server-v"
+    },
+    {
+      "id": "openbao-image",
+      "path": "infra/openbao",
+      "service_name": "nvcf-openbao"
     },
     {
       "id": "cert-manager",
