@@ -72,7 +72,7 @@ sis:
     pullPolicy: IfNotPresent
     # Pin the runtime image tag because the chart release pipeline rewrites
     # Chart.appVersion to the chart version.
-    tag: "1.2.2"
+    tag: "0.5.0"
     # Optional immutable manifest digest. When set, this takes precedence over
     # `tag` and `Chart.AppVersion`.
     digest: ""
