@@ -701,3 +701,15 @@ func decodeMetadata(t *testing.T, body string) *Metadata {
 	}
 	return m
 }
+
+func TestEmptyStringDeployEntryIsRejected(t *testing.T) {
+	// json.Unmarshal happily decodes "" (and null) into a Go string without
+	// error, so the string-form branch must reject it explicitly. Otherwise a
+	// typo'd `"deploys": [""]` silently becomes a Deploy with no service id:
+	// ChartsDeploying then finds no match for anything and the run reports
+	// "nothing to do" with exit 0 instead of failing on the bad metadata.
+	f := newFixture(t, `{"services":[{"id":"c","path":"deploy/helm/c","deploys":[""]}]}`)
+	if _, err := LoadMetadata(f.root); err == nil {
+		t.Fatal("an empty string-form deploys entry must fail to decode")
+	}
+}

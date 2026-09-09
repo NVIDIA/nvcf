@@ -45,6 +45,9 @@ type Deploy struct {
 func (d *Deploy) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
+		if s == "" {
+			return fmt.Errorf("deploys entry: empty service id")
+		}
 		*d = Deploy{Service: s}
 		return nil
 	}
