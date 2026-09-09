@@ -11,7 +11,6 @@ stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
 published_manifest="$work_dir/gateway-routes.yaml"
 published_release="$work_dir/gateway-routes-release.json"
-published_version=1.18.0
 gateway_namespace=gateway
 trap 'rm -rf "$work_dir"' EXIT
 
@@ -19,6 +18,13 @@ fail() {
   echo "gateway-routes-published-chart: $*" >&2
   exit 1
 }
+
+published_version="$(awk '
+  $1 == "-" && $2 == "name:" { release = $3 }
+  release == "ingress" && $1 == "version:" { print $2; exit }
+' "$stack_dir/helmfile.d/02-core.yaml.gotmpl")"
+test -n "$published_version" ||
+  fail "could not derive the published Gateway Routes version from the stack Helmfile"
 
 source_args=(
   --state-values-set-string "global.helm.sources.registry=$NVCF_PUBLISHED_CHART_REGISTRY"
