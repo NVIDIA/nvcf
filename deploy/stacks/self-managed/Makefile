@@ -27,6 +27,7 @@ test:
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
 	@tests/notary-image-repository.sh
+	@tests/ha-value-wiring.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"

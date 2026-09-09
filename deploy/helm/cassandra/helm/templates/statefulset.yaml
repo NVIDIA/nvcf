@@ -41,6 +41,9 @@ spec:
       {{- with .Values.cassandra.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.cassandra.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.cassandra.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
