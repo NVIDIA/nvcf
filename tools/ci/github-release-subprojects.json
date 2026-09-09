@@ -267,7 +267,16 @@
       "service_name": "helm-nvca-operator",
       "legacy_tag_prefix": "helm-nvca-operator-v",
       "deploys": [
-        "nvca"
+        "nvca",
+        {
+          "service": "byoo-otel-collector",
+          "values_paths": [
+            "otelCollector.imageTag",
+            "agent.byooOtelCollector.imageTag",
+            "helmManaged.otelCollector.imageTag",
+            "selfManaged.otelCollector.imageTag"
+          ]
+        }
       ]
     },
     {
