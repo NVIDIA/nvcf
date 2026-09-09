@@ -30,12 +30,20 @@ default_result="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
 
 default_chart="$(jq -r '.[0].chart // ""' <<<"$default_result")"
 default_version="$(jq -r '.[0].version // ""' <<<"$default_result")"
+expected_default_version="$(awk '
+  $1 == "-" && $2 == "name:" { release = $3 }
+  release == "ingress" && $1 == "version:" { print $2; exit }
+' "$stack_dir/helmfile.d/02-core.yaml.gotmpl")"
+test -n "$expected_default_version" || {
+  echo "gateway-routes-local-chart: could not derive the default version from the stack Helmfile" >&2
+  exit 1
+}
 test "$default_chart" = 'nvcf/nvcf-gateway-routes' || {
   echo "gateway-routes-local-chart: expected default chart, got ${default_chart:-missing}" >&2
   exit 1
 }
-test "$default_version" = '1.18.0' || {
-  echo "gateway-routes-local-chart: expected default version 1.18.0, got ${default_version:-missing}" >&2
+test "$default_version" = "$expected_default_version" || {
+  echo "gateway-routes-local-chart: expected default version $expected_default_version, got ${default_version:-missing}" >&2
   exit 1
 }
 

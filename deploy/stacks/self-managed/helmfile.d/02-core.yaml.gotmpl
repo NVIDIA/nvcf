@@ -80,7 +80,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.7.2
+    version: 1.7.3
     namespace: nvcf
     inherit:
       - template: service
@@ -193,7 +193,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.4.1
+    version: 0.4.3
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
@@ -218,7 +218,7 @@ releases:
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.18.0
+    version: 1.18.1
     {{- end }}
     needs:
       - nvcf/notary-service
