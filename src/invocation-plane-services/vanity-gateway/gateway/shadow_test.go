@@ -438,6 +438,36 @@ func TestAdmittedShadowsAppliesEachPolicyWithSharedRequestBuckets(t *testing.T) 
 	assert.Equal(t, 1, randomCalls)
 }
 
+func TestAdmittedShadowsAdmitsFullPercentagePerBearerKeyWithoutAuthorization(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+
+	admitted := admittedShadows(req, []shadowConfig{
+		{modelName: "always", percentage: 100, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
+		{modelName: "sampled", percentage: 99, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
+	}, fixedRandomBucket(0))
+
+	assert.Equal(t, []string{"always"}, shadowModelNames(admitted))
+}
+
+func TestAdmittedShadowsMembershipIsIndependentOfTargetOrder(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+
+	shadows := []shadowConfig{
+		{modelName: "key-in", percentage: 47, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
+		{modelName: "key-out", percentage: 46, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
+		{modelName: "random-in", percentage: 40, samplingMethod: config.ShadowSamplingMethodRandom},
+		{modelName: "random-out", percentage: 39, samplingMethod: config.ShadowSamplingMethodRandom},
+	}
+	reversed := []shadowConfig{shadows[3], shadows[2], shadows[1], shadows[0]}
+
+	forward := shadowModelNames(admittedShadows(req, shadows, fixedRandomBucket(39)))
+	backward := shadowModelNames(admittedShadows(req, reversed, fixedRandomBucket(39)))
+
+	assert.ElementsMatch(t, []string{"key-in", "random-in"}, forward)
+	assert.ElementsMatch(t, forward, backward)
+}
+
 func TestShadowBucketForBearerCredentialFixedVector(t *testing.T) {
 	assert.Equal(t, 46, shadowBucketForBearerCredential([]byte("test-key")))
 }
