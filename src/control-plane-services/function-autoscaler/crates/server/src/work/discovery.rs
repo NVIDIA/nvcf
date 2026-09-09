@@ -34,9 +34,9 @@ use super::MetricEnvironments;
 
 pub const LOCK_NAME_FUNCTION_DISCOVERY: &str = "function_discovery";
 
-/// Lookback window (minutes) for "recently invoked" in discovery. Functions with no invocations
+/// Lookback window for "recently invoked" in discovery. Functions with no invocations
 /// in this window are moved from recently_invoked to running_functions.
-pub const DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES: i64 = 5;
+pub const DISCOVERY_RECENTLY_INVOKED_LOOKBACK: StdDuration = StdDuration::from_secs(5 * 60);
 const DISCOVERY_QUERY_CONCURRENCY: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,21 +112,21 @@ struct RecentInvocationQuery {
 const QUERY_INVOCATION_SERVICE: &str = r#"(
     sum by (function_id, function_version_id, nca_id) (function_request{env_filter} > 0)
     and
-    sum by (function_id, function_version_id, nca_id) (function_request{env_filter} unless function_request{env_filter} offset 5m)
+    sum by (function_id, function_version_id, nca_id) (function_request{env_filter} unless function_request{env_filter} offset {lookback_seconds}s)
     )
     or
     (
-    sum by (function_id, function_version_id, nca_id) (increase(function_request{env_filter}[5m]) > 0)
+    sum by (function_id, function_version_id, nca_id) (increase(function_request{env_filter}[{lookback_seconds}s]) > 0)
 )"#;
 
 const QUERY_GRPC_PROXY: &str = r#"(
     sum by (function_id, function_version_id, nca_id) (function_request_total{env_filter} > 0)
     and
-    sum by (function_id, function_version_id, nca_id) (function_request_total{env_filter} unless function_request_total{env_filter} offset 5m)
+    sum by (function_id, function_version_id, nca_id) (function_request_total{env_filter} unless function_request_total{env_filter} offset {lookback_seconds}s)
     )
     or
     (
-    sum by (function_id, function_version_id, nca_id) (increase(function_request_total{env_filter}[5m]) > 0)
+    sum by (function_id, function_version_id, nca_id) (increase(function_request_total{env_filter}[{lookback_seconds}s]) > 0)
 )"#;
 
 #[derive(Debug)]
@@ -165,6 +165,7 @@ fn get_timeseries_db_query(
     ignore_env: bool,
     function_version_filter: Option<Uuid>,
     shard: Option<DiscoveryShard>,
+    lookback: StdDuration,
 ) -> String {
     let mut matchers = Vec::new();
     if !ignore_env {
@@ -183,10 +184,17 @@ fn get_timeseries_db_query(
     } else {
         format!("{{{}}}", matchers.join(", "))
     };
-    template.replace("{env_filter}", &selector)
+    template
+        .replace("{env_filter}", &selector)
+        .replace("{lookback_seconds}", &lookback.as_secs().max(1).to_string())
 }
 
-fn llm_gateway_discovery_query(env: &str, ignore_env: bool, shard: DiscoveryShard) -> String {
+fn llm_gateway_discovery_query(
+    env: &str,
+    ignore_env: bool,
+    shard: DiscoveryShard,
+    lookback: StdDuration,
+) -> String {
     let function_id_regex = shard.function_id_regex();
     let env_matcher = if ignore_env {
         String::new()
@@ -197,12 +205,13 @@ fn llm_gateway_discovery_query(env: &str, ignore_env: bool, shard: DiscoveryShar
     // A group list copies labels from the left side, which has no version metadata.
     format!(
         r#"(sum by(function_id) (
-            increase(llm_api_gateway_http_requests_total{{function_id=~"{function_id_regex}", function_id!="none"{env_matcher}}}[5m])
+            increase(llm_api_gateway_http_requests_total{{function_id=~"{function_id_regex}", function_id!="none"{env_matcher}}}[{lookback_seconds}s])
         ) > 0)
         * on(function_id) group_right()
         max by(function_id, function_version_id, nca_id) (
             nvcf_function_info{{function_id=~"{function_id_regex}"{env_matcher}}}
-        )"#
+        )"#,
+        lookback_seconds = lookback.as_secs().max(1),
     )
 }
 
@@ -210,6 +219,7 @@ fn recent_invocation_queries(
     env: &str,
     ignore_env: bool,
     function_version_filter: Option<Uuid>,
+    lookback: StdDuration,
 ) -> Vec<RecentInvocationQuery> {
     let shards: Vec<Option<DiscoveryShard>> = if function_version_filter.is_some() {
         vec![None]
@@ -228,6 +238,7 @@ fn recent_invocation_queries(
                 ignore_env,
                 function_version_filter,
                 shard,
+                lookback,
             ),
         });
         queries.push(RecentInvocationQuery {
@@ -239,6 +250,7 @@ fn recent_invocation_queries(
                 ignore_env,
                 function_version_filter,
                 shard,
+                lookback,
             ),
         });
         if function_version_filter.is_none() {
@@ -246,7 +258,7 @@ fn recent_invocation_queries(
             queries.push(RecentInvocationQuery {
                 source: InvocationMetricSource::LlmGateway,
                 shard: Some(shard),
-                query: llm_gateway_discovery_query(env, ignore_env, shard),
+                query: llm_gateway_discovery_query(env, ignore_env, shard, lookback),
             });
         }
     }
@@ -271,6 +283,7 @@ async fn fetch_function_state(
     timeseries_db_client: &TimeseriesDbClient,
     env: &str,
     timeseries_db_ignore_env: bool,
+    recently_invoked_lookback: StdDuration,
 ) -> Result<(FunctionState, Vec<ActiveFunctionDetails>)> {
     let range = [i64::MIN, i64::MAX];
     let page_size = 2000;
@@ -280,8 +293,13 @@ async fn fetch_function_state(
         .await?;
 
     let timeseries_db_active_functions =
-        fetch_timeseries_db_active_functions(timeseries_db_client, env, timeseries_db_ignore_env)
-            .await?;
+        fetch_timeseries_db_active_functions(
+            timeseries_db_client,
+            env,
+            timeseries_db_ignore_env,
+            recently_invoked_lookback,
+        )
+        .await?;
 
     let state = FunctionState {
         db_recently_invoked: db_recently_invoked
@@ -300,6 +318,7 @@ async fn fetch_timeseries_db_active_functions(
     timeseries_db_client: &TimeseriesDbClient,
     env: &str,
     timeseries_db_ignore_env: bool,
+    recently_invoked_lookback: StdDuration,
 ) -> Result<Vec<ActiveFunctionDetails>> {
     tracing::info!("Getting recently invoked and running functions...");
     let query_semaphore = Arc::new(Semaphore::new(DISCOVERY_QUERY_CONCURRENCY));
@@ -308,7 +327,7 @@ async fn fetch_timeseries_db_active_functions(
         get_recently_invoked_functions_with_semaphore(
             timeseries_db_client,
             None,
-            DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES,
+            recently_invoked_lookback,
             env,
             timeseries_db_ignore_env,
             Some(query_semaphore),
@@ -445,6 +464,7 @@ pub async fn discover_new_functions(
     env: &str,
     timeseries_db_ignore_env: bool,
     lock_duration_seconds: i32,
+    recently_invoked_lookback: StdDuration,
 ) -> Result<(), FunctionDiscoveryError> {
     // Step 1: Acquire or renew discovery lock (persistent leader pattern)
     let function_discovery_start_time = Instant::now();
@@ -483,6 +503,7 @@ pub async fn discover_new_functions(
         timeseries_db_client,
         env,
         timeseries_db_ignore_env,
+        recently_invoked_lookback,
     )
     .await
     .map_err(FunctionDiscoveryError::from)?;
@@ -522,14 +543,14 @@ pub async fn discover_new_functions(
 pub async fn get_recently_invoked_functions(
     timeseries_db_client: &TimeseriesDbClient,
     function_version_id_filter: Option<Uuid>,
-    lookback_period_minutes: i64,
+    lookback: StdDuration,
     env: &str,
     timeseries_db_ignore_env: bool,
 ) -> Result<Vec<ActiveFunctionDetails>> {
     get_recently_invoked_functions_with_semaphore(
         timeseries_db_client,
         function_version_id_filter,
-        lookback_period_minutes,
+        lookback,
         env,
         timeseries_db_ignore_env,
         None,
@@ -540,17 +561,21 @@ pub async fn get_recently_invoked_functions(
 async fn get_recently_invoked_functions_with_semaphore(
     timeseries_db_client: &TimeseriesDbClient,
     function_version_id_filter: Option<Uuid>,
-    lookback_period_minutes: i64,
+    lookback: StdDuration,
     env: &str,
     timeseries_db_ignore_env: bool,
     query_semaphore: Option<Arc<Semaphore>>,
 ) -> Result<Vec<ActiveFunctionDetails>> {
     let end_time = Utc::now();
-    let start_time = end_time - Duration::minutes(lookback_period_minutes);
+    let start_time = end_time;
     let step = StdDuration::from_secs(60); // 1 minute step
 
-    let queries =
-        recent_invocation_queries(env, timeseries_db_ignore_env, function_version_id_filter);
+    let queries = recent_invocation_queries(
+        env,
+        timeseries_db_ignore_env,
+        function_version_id_filter,
+        lookback,
+    );
     let query_count = queries.len();
     tracing::info!(
         query_count,
@@ -981,7 +1006,12 @@ mod tests {
 
     #[test]
     fn discovery_queries_cover_four_fixed_shards_for_all_sources() {
-        let queries = recent_invocation_queries("prod", false, None);
+        let queries = recent_invocation_queries(
+            "prod",
+            false,
+            None,
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
+        );
         assert_eq!(queries.len(), 12);
 
         for shard in DiscoveryShard::ALL {
@@ -1008,7 +1038,12 @@ mod tests {
 
     #[test]
     fn gateway_discovery_omits_environment_when_configured() {
-        let queries = recent_invocation_queries("stg", true, None);
+        let queries = recent_invocation_queries(
+            "stg",
+            true,
+            None,
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
+        );
         for query in queries
             .iter()
             .filter(|query| matches!(query.source, InvocationMetricSource::LlmGateway))
@@ -1020,12 +1055,19 @@ mod tests {
     #[test]
     fn per_function_recent_invocation_queries_are_not_sharded() {
         let function_version_id = Uuid::new_v4();
-        let queries = recent_invocation_queries("stg", true, Some(function_version_id));
+        let queries = recent_invocation_queries(
+            "stg",
+            true,
+            Some(function_version_id),
+            StdDuration::from_secs(90),
+        );
 
         assert_eq!(queries.len(), 2);
         for query in queries {
             assert!(query.shard.is_none());
             assert!(!query.query.contains("function_id=~"));
+            assert!(query.query.contains("offset 90s"));
+            assert!(query.query.contains("[90s]"));
             assert_eq!(
                 query
                     .query
@@ -1098,7 +1140,7 @@ mod tests {
         let functions = get_recently_invoked_functions(
             &ts_client(server.url()),
             None,
-            DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES,
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
             "stg",
             true,
         )
@@ -1144,7 +1186,7 @@ mod tests {
         let result = get_recently_invoked_functions(
             &ts_client(server.url()),
             Some(function_version_id),
-            DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES,
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
             "stg",
             true,
         )
@@ -1186,9 +1228,14 @@ mod tests {
             .create_async()
             .await;
 
-        let functions = fetch_timeseries_db_active_functions(&ts_client(server.url()), "stg", true)
-            .await
-            .expect("worker results should survive invocation discovery failure");
+        let functions = fetch_timeseries_db_active_functions(
+            &ts_client(server.url()),
+            "stg",
+            true,
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK,
+        )
+        .await
+        .expect("worker results should survive invocation discovery failure");
 
         assert_eq!(functions.len(), 1);
         assert_eq!(functions[0].function_id, function_id);

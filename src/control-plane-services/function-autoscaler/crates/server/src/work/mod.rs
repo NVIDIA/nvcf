@@ -130,11 +130,11 @@ async fn get_function_utilization_history(
     env: &str,
     metric_source: MetricSource,
     ignore_env: bool,
-    lookback_minutes: i64,
+    lookback: StdDuration,
     utilization_window_seconds: u64,
 ) -> Result<Vec<(i64, String)>> {
     let end_time = Utc::now();
-    let start_time = end_time - Duration::minutes(lookback_minutes);
+    let start_time = end_time - Duration::from_std(lookback)?;
     let step = TIMESERIES_DB_QUERY_STEP;
 
     let metric_env = MetricEnvironments::from_config(env);
@@ -477,12 +477,12 @@ async fn get_gateway_target(
 async fn llm_gateway_recently_invoked(
     timeseries_db_client: &TimeseriesDbClient,
     function_id: &Uuid,
-    lookback_seconds: u64,
+    lookback: StdDuration,
     env: &str,
     ignore_env: bool,
 ) -> Result<bool> {
     let end_time = Utc::now();
-    let lookback_seconds = lookback_seconds.max(1);
+    let lookback_seconds = lookback.as_secs().max(1);
     let env_suffix = if ignore_env {
         String::new()
     } else {
@@ -495,7 +495,7 @@ async fn llm_gateway_recently_invoked(
     let response = timeseries_db_client
         .query_range(
             &query,
-            end_time - Duration::minutes(1),
+            end_time,
             end_time,
             TIMESERIES_DB_QUERY_STEP,
         )
@@ -675,7 +675,7 @@ async fn gather_scaling_inputs(
         env,
         metric_source,
         ignore_env,
-        scaling_settings.lookback.as_secs() as i64 / 60,
+        scaling_settings.lookback,
         scaling_settings.utilization_window_seconds,
     )
     .await?;
@@ -685,7 +685,7 @@ async fn gather_scaling_inputs(
         llm_gateway_recently_invoked(
             timeseries_db_client,
             function_id,
-            scaling_settings.scale_to_zero_idle_timeout.as_secs(),
+            scaling_settings.scale_to_zero_idle_timeout,
             env,
             ignore_env,
         )
@@ -694,7 +694,7 @@ async fn gather_scaling_inputs(
         !get_recently_invoked_functions(
             timeseries_db_client,
             Some(*function_version_id),
-            scaling_settings.scale_to_zero_idle_timeout.as_secs() as i64 / 60,
+            scaling_settings.scale_to_zero_idle_timeout,
             env,
             ignore_env,
         )
@@ -1277,7 +1277,7 @@ mod tests {
             "stg",
             MetricSource::ControlPlane,
             true,
-            5,
+            StdDuration::from_secs(5 * 60),
             60,
         )
         .await
@@ -1319,7 +1319,7 @@ mod tests {
                 configured_env,
                 MetricSource::ControlPlane,
                 false,
-                5,
+                StdDuration::from_secs(5 * 60),
                 60,
             )
             .await
@@ -1473,7 +1473,7 @@ mod tests {
                 "prod",
                 MetricSource::LlmGateway,
                 false,
-                5,
+                StdDuration::from_secs(5 * 60),
                 70,
             )
             .await
@@ -1493,7 +1493,13 @@ mod tests {
             .create_async()
             .await;
         assert!(
-            llm_gateway_recently_invoked(&ts_client(server.url()), &fid, 0, "prod", false)
+            llm_gateway_recently_invoked(
+                &ts_client(server.url()),
+                &fid,
+                StdDuration::ZERO,
+                "prod",
+                false,
+            )
                 .await
                 .expect("gateway recent invocation query")
         );
