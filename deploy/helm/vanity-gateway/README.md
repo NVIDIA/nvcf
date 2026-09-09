@@ -135,6 +135,10 @@ not put credentials in `customHeaders` on any route. Caller `Authorization`
 headers are forwarded to the upstream untouched, so a static credential is not
 needed for authenticated routes.
 
+Roll the release to an image that understands `shadows` before adding
+`shadows` to `mappingConfig`. An older gateway ignores the key when it loads the
+mapping, so the route silently stops shadowing with no error and no log line.
+
 Use `shadows` to set policy for each shadow target:
 
 ```yaml

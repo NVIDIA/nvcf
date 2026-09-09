@@ -190,7 +190,7 @@ v2config:
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
 | `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. |
-| `shadows` | No | List of per-target shadow configs. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
+| `shadows` | No | List of per-target shadow configs. It must be a list; `null` is rejected, and so is `null` for any field inside an entry. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
 | `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
 | `shadows[].samplingMethod` | No | Admission method for this target. Allowed values are `random` and `perBearerKey`. Defaults to `random`. |
@@ -221,6 +221,12 @@ top-level `shadowPercentage`, `shadowSamplingMethod`, and
 `shadowCancelOnClientDisconnect` policy to every target. A model entry cannot
 combine `shadows` with any legacy top-level shadow field. Config validation
 rejects the mixed form.
+
+Roll out `shadows` in this order: upgrade every gateway that reads a mapping,
+then update any CI validator that gates the mapping, then convert routes. A
+gateway built before this field existed ignores the `shadows` key when it loads
+the mapping, so a converted route silently stops shadowing there. Nothing fails
+and nothing is logged.
 
 The default sampling method, `random`, draws one request-local bucket from `0`
 to `99` for each primary request. Every `random` shadow on that request uses the
