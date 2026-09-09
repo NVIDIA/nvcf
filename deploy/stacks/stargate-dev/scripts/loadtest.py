@@ -430,6 +430,14 @@ class Campaign:
                 time.sleep(1)
         raise LoadTestError("timed out waiting for Stargate port-forward")
 
+    def stop_port_forward(self) -> None:
+        if self.port_forward is not None:
+            self.stop_processes([self.port_forward])
+            self.port_forward = None
+        if self.port_forward_log is not None:
+            self.port_forward_log.close()
+            self.port_forward_log = None
+
     def prepare_workloads(self) -> None:
         for name in self.scenarios:
             scenario = self.suite["scenarios"][name]
@@ -747,6 +755,9 @@ class Campaign:
             timeout=330,
         )
         self.verify_region()
+        if not self.args.endpoint:
+            self.stop_port_forward()
+            self.start_port_forward()
         stats = self.cache_stats()
         if any(
             value.get("kv_cache_entries") or value.get("kv_cache_used_tokens")
@@ -997,10 +1008,7 @@ class Campaign:
 
     def close(self) -> None:
         self.stop_processes(self.children)
-        if self.port_forward is not None:
-            self.stop_processes([self.port_forward])
-        if self.port_forward_log is not None:
-            self.port_forward_log.close()
+        self.stop_port_forward()
 
 
 def measured_minutes(suite: dict, suite_name: str) -> float:

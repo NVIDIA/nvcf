@@ -141,6 +141,7 @@ class CanonicalSuiteTests(unittest.TestCase):
             campaign = object.__new__(LOADTEST.Campaign)
             campaign.output = Path(directory)
             campaign.stargate_context = "stargate"
+            campaign.args = SimpleNamespace(endpoint=None)
             empty = {
                 "backend-0": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
                 "backend-1": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
@@ -154,6 +155,8 @@ class CanonicalSuiteTests(unittest.TestCase):
                 mock.patch.object(campaign, "cache_stats", side_effect=[empty, empty]),
                 mock.patch.object(campaign, "kubectl", return_value="") as kubectl,
                 mock.patch.object(campaign, "verify_region") as verify,
+                mock.patch.object(campaign, "stop_port_forward") as stop_forward,
+                mock.patch.object(campaign, "start_port_forward") as start_forward,
                 mock.patch.object(campaign, "log"),
             ):
                 campaign.reset_caches("test")
@@ -165,6 +168,8 @@ class CanonicalSuiteTests(unittest.TestCase):
             kubectl.call_args_list,
         )
         verify.assert_called_once_with()
+        stop_forward.assert_called_once_with()
+        start_forward.assert_called_once_with()
 
 
 if __name__ == "__main__":
