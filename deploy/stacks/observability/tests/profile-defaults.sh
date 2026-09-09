@@ -382,6 +382,13 @@ autoscaler_monitor_instance_label="$(
     'select(.kind == "ServiceMonitor" and .metadata.name == "nvcf-default-monitors-function-autoscaler") | .spec.selector.matchLabels."app.kubernetes.io/instance"' \
     "$work_dir/chart-control/manifests.yaml"
 )"
+for label_value in "$autoscaler_service_name_label" \
+  "$autoscaler_service_instance_label" \
+  "$autoscaler_monitor_name_label" \
+  "$autoscaler_monitor_instance_label"; do
+  [[ -n "$label_value" && "$label_value" != "null" ]] ||
+    fail 'function autoscaler Service or ServiceMonitor selector labels are missing'
+done
 assert_equal "$autoscaler_monitor_name_label" \
   "$autoscaler_service_name_label" \
   'function autoscaler ServiceMonitor application name selector'
@@ -407,7 +414,11 @@ assert_yaml_value "$autoscaler_monitor_manifest" \
 
 helm template otel-collector "$stack_dir/charts/nvcf-otel-collector" \
   >"$work_dir/collector-manifests.yaml"
-grep -q '^      - secrets$' "$work_dir/collector-manifests.yaml" ||
+collector_name="$(yq -r '.collectorName' "$stack_dir/charts/nvcf-otel-collector/values.yaml")"
+NVCF_TARGET_ALLOCATOR_ROLE="$collector_name-otel" yq -e '
+  select(.kind == "ClusterRole" and .metadata.name == strenv(NVCF_TARGET_ALLOCATOR_ROLE)) |
+  .rules[] | select(.apiGroups[] == "") | .resources[] | select(. == "secrets")
+' "$work_dir/collector-manifests.yaml" >/dev/null ||
   fail "Target Allocator RBAC must allow referenced Secret discovery"
 
 # Every supported external authentication mode must pass validation and retain
