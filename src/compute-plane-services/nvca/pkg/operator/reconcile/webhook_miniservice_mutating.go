@@ -28,8 +28,17 @@ import (
 func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) []admissionregistrationv1.MutatingWebhook {
+) ([]admissionregistrationv1.MutatingWebhook, error) {
 	const whPath = "/mutate-miniservice"
+	createWebhookName, err := bc.controlPlaneWebhookName("miniservice-mutate-create")
+	if err != nil {
+		return nil, err
+	}
+	updateWebhookName, err := bc.controlPlaneWebhookName("miniservice-mutate-update")
+	if err != nil {
+		return nil, err
+	}
+
 	rulePodsNamespaced := admissionregistrationv1.Rule{
 		APIGroups:   []string{""},
 		APIVersions: []string{"v1"},
@@ -51,7 +60,7 @@ func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	}
 
 	whCreate := admissionregistrationv1.MutatingWebhook{
-		Name:                    bc.controlPlaneWebhookName("miniservice-mutate-create"),
+		Name:                    createWebhookName,
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
 		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
@@ -70,7 +79,7 @@ func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	}
 
 	whUpdate := admissionregistrationv1.MutatingWebhook{
-		Name:                    bc.controlPlaneWebhookName("miniservice-mutate-update"),
+		Name:                    updateWebhookName,
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           ptr.To(admissionregistrationv1.Ignore),
 		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
@@ -91,5 +100,5 @@ func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	return []admissionregistrationv1.MutatingWebhook{
 		whCreate,
 		whUpdate,
-	}
+	}, nil
 }

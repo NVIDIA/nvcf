@@ -26,15 +26,19 @@ import (
 func (bc *BackendK8sCache) makeHelmPersistentStorageWebhook(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) admissionregistrationv1.MutatingWebhook {
+) (admissionregistrationv1.MutatingWebhook, error) {
 	sec := admissionregistrationv1.SideEffectClassNone
 	fpt := admissionregistrationv1.Fail
 	mp := admissionregistrationv1.Equivalent
 	st := admissionregistrationv1.NamespacedScope
 	whPath := "/mutate-helm-persistent-storage"
+	webhookName, err := bc.controlPlaneWebhookName("mutate-helm-persistent-storage")
+	if err != nil {
+		return admissionregistrationv1.MutatingWebhook{}, err
+	}
 
 	return admissionregistrationv1.MutatingWebhook{
-		Name:                    bc.controlPlaneWebhookName("mutate-helm-persistent-storage"),
+		Name:                    webhookName,
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           &fpt,
 		SideEffects:             &sec,
@@ -67,5 +71,5 @@ func (bc *BackendK8sCache) makeHelmPersistentStorageWebhook(
 				},
 			},
 		},
-	}
+	}, nil
 }

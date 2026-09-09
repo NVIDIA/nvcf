@@ -26,10 +26,14 @@ import (
 func (bc *BackendK8sCache) makeHelmStorageMutatingWebhook(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) admissionregistrationv1.MutatingWebhook {
+) (admissionregistrationv1.MutatingWebhook, error) {
 	st := admissionregistrationv1.NamespacedScope
+	webhookName, err := bc.controlPlaneWebhookName("mutate-helm-storage")
+	if err != nil {
+		return admissionregistrationv1.MutatingWebhook{}, err
+	}
 	return makeMutatingWebhook(
-		bc.controlPlaneWebhookName("mutate-helm-storage"),
+		webhookName,
 		"/mutate-helm-storage",
 		bc.workloadNamespaceSelector(WorkloadInstanceTypeValueMiniService),
 		[]admissionregistrationv1.RuleWithOperations{
@@ -47,5 +51,5 @@ func (bc *BackendK8sCache) makeHelmStorageMutatingWebhook(
 			},
 		},
 		nb,
-		webhookCert)
+		webhookCert), nil
 }

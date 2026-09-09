@@ -33,16 +33,20 @@ const (
 func (bc *BackendK8sCache) makePodEnforcementMutatingWebhooks(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) []admissionregistrationv1.MutatingWebhook {
-	newBaseWebhook := func(shortName string) admissionregistrationv1.MutatingWebhook {
+) ([]admissionregistrationv1.MutatingWebhook, error) {
+	newBaseWebhook := func(shortName string) (admissionregistrationv1.MutatingWebhook, error) {
 		sec := admissionregistrationv1.SideEffectClassNone
 		fpt := admissionregistrationv1.Fail
 		mp := admissionregistrationv1.Equivalent
 		st := admissionregistrationv1.NamespacedScope
 		whPath := "/mutate-pod-enforcement"
+		webhookName, err := bc.controlPlaneWebhookName(shortName)
+		if err != nil {
+			return admissionregistrationv1.MutatingWebhook{}, err
+		}
 
 		return admissionregistrationv1.MutatingWebhook{
-			Name:                    bc.controlPlaneWebhookName(shortName),
+			Name:                    webhookName,
 			AdmissionReviewVersions: []string{"v1"},
 			FailurePolicy:           &fpt,
 			SideEffects:             &sec,
@@ -62,17 +66,23 @@ func (bc *BackendK8sCache) makePodEnforcementMutatingWebhooks(
 					},
 				},
 			},
-		}
+		}, nil
 	}
 
-	mwMiniService := newBaseWebhook("mutate-miniservice-pod-enforcement")
+	mwMiniService, err := newBaseWebhook("mutate-miniservice-pod-enforcement")
+	if err != nil {
+		return nil, err
+	}
 	targetLabelSels := bc.workloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
 	targetLabelSels[needsEnforceLabel] = []string{"true"}
 	mwMiniService.NamespaceSelector = &metav1.LabelSelector{
 		MatchExpressions: makeLabelSelectorRequirements(targetLabelSels),
 	}
 
-	mwPod := newBaseWebhook("mutate-pod-enforcement")
+	mwPod, err := newBaseWebhook("mutate-pod-enforcement")
+	if err != nil {
+		return nil, err
+	}
 	podSpecTargetLabels := bc.workloadNamespaceLabelSelectors(WorkloadInstanceTypeValuePodSpec)
 	mwPod.NamespaceSelector = &metav1.LabelSelector{
 		MatchExpressions: makeLabelSelectorRequirements(podSpecTargetLabels),
@@ -90,5 +100,5 @@ func (bc *BackendK8sCache) makePodEnforcementMutatingWebhooks(
 	return []admissionregistrationv1.MutatingWebhook{
 		mwMiniService,
 		mwPod,
-	}
+	}, nil
 }

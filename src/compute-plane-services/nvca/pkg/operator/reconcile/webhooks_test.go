@@ -100,7 +100,24 @@ func TestWebhookConfigurationsAreScopedByControlPlane(t *testing.T) {
 	require.NoError(t, err)
 
 	clientset := k8sfake.NewSimpleClientset()
-	nb := &nvcfv1.NVCFBackend{}
+	nbA := &nvcfv1.NVCFBackend{
+		Spec: nvcfv1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvcfv1.NVCFBackendSpecT{
+				ClusterConfig: nvcfv1.ClusterConfig{
+					SystemNamespace: "plane-a-nvca-system",
+				},
+			},
+		},
+	}
+	nbB := &nvcfv1.NVCFBackend{
+		Spec: nvcfv1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvcfv1.NVCFBackendSpecT{
+				ClusterConfig: nvcfv1.ClusterConfig{
+					SystemNamespace: "plane-b-nvca-system",
+				},
+			},
+		},
+	}
 	cert := WebhookCert{CACertBytes: []byte("ca")}
 	bcA := &BackendK8sCache{
 		clients:              &kubeclients.KubeClients{K8s: clientset},
@@ -111,10 +128,10 @@ func TestWebhookConfigurationsAreScopedByControlPlane(t *testing.T) {
 		controlPlaneIdentity: planeB,
 	}
 
-	require.NoError(t, bcA.setupNVCAMutatingWebhookConfiguration(ctx, nb, cert))
-	require.NoError(t, bcA.setupMiniServiceValidatingWebhook(ctx, nb, cert))
-	require.NoError(t, bcB.setupNVCAMutatingWebhookConfiguration(ctx, nb, cert))
-	require.NoError(t, bcB.setupMiniServiceValidatingWebhook(ctx, nb, cert))
+	require.NoError(t, bcA.setupNVCAMutatingWebhookConfiguration(ctx, nbA, cert))
+	require.NoError(t, bcA.setupMiniServiceValidatingWebhook(ctx, nbA, cert))
+	require.NoError(t, bcB.setupNVCAMutatingWebhookConfiguration(ctx, nbB, cert))
+	require.NoError(t, bcB.setupMiniServiceValidatingWebhook(ctx, nbB, cert))
 
 	aMutating, err := clientset.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, planeAName, metav1.GetOptions{})
 	require.NoError(t, err)
@@ -130,6 +147,10 @@ func TestWebhookConfigurationsAreScopedByControlPlane(t *testing.T) {
 	require.Equal(t, planeA.String(), aValidating.Labels[controlplane.OwnerLabel])
 	require.Equal(t, planeB.String(), bValidating.Labels[controlplane.OwnerLabel])
 	require.NotEqual(t, webhookNames(aMutating.Webhooks), webhookNames(bMutating.Webhooks))
+	assertWebhookServiceTargetsNamespace(t, aMutating.Webhooks, "plane-a-nvca-system")
+	assertWebhookServiceTargetsNamespace(t, bMutating.Webhooks, "plane-b-nvca-system")
+	assertValidatingWebhookServiceTargetsNamespace(t, aValidating.Webhooks, "plane-a-nvca-system")
+	assertValidatingWebhookServiceTargetsNamespace(t, bValidating.Webhooks, "plane-b-nvca-system")
 	assertMutatingWebhooksScopedToPlane(t, aMutating.Webhooks, planeA)
 	assertMutatingWebhooksScopedToPlane(t, bMutating.Webhooks, planeB)
 	assertValidatingWebhooksScopedToPlane(t, aValidating.Webhooks, planeA)
@@ -211,6 +232,32 @@ func webhookNames(webhooks []admissionregistrationv1.MutatingWebhook) []string {
 		names = append(names, webhook.Name)
 	}
 	return names
+}
+
+func assertWebhookServiceTargetsNamespace(
+	t *testing.T,
+	webhooks []admissionregistrationv1.MutatingWebhook,
+	namespace string,
+) {
+	t.Helper()
+	for _, webhook := range webhooks {
+		require.NotNil(t, webhook.ClientConfig.Service)
+		require.Equal(t, nvcaoptypes.NVCAModuleName, webhook.ClientConfig.Service.Name)
+		require.Equal(t, namespace, webhook.ClientConfig.Service.Namespace)
+	}
+}
+
+func assertValidatingWebhookServiceTargetsNamespace(
+	t *testing.T,
+	webhooks []admissionregistrationv1.ValidatingWebhook,
+	namespace string,
+) {
+	t.Helper()
+	for _, webhook := range webhooks {
+		require.NotNil(t, webhook.ClientConfig.Service)
+		require.Equal(t, nvcaoptypes.NVCAModuleName, webhook.ClientConfig.Service.Name)
+		require.Equal(t, namespace, webhook.ClientConfig.Service.Namespace)
+	}
 }
 
 func TestWorkloadNamespaceSelectorRequiresTypeAndOwner(t *testing.T) {

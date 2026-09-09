@@ -26,9 +26,13 @@ import (
 func (bc *BackendK8sCache) makeNVCAMutatingWebhook(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) admissionregistrationv1.MutatingWebhook {
+) (admissionregistrationv1.MutatingWebhook, error) {
 	st := admissionregistrationv1.NamespacedScope
-	return makeMutatingWebhook(bc.controlPlaneWebhookName("nvca-mutating-webhook"),
+	webhookName, err := bc.controlPlaneWebhookName("nvca-mutating-webhook")
+	if err != nil {
+		return admissionregistrationv1.MutatingWebhook{}, err
+	}
+	return makeMutatingWebhook(webhookName,
 		"/nvca-mutating-webhook",
 		bc.workloadNamespaceSelector(WorkloadInstanceTypeValueMiniService, WorkloadInstanceTypeValuePodSpec),
 		[]admissionregistrationv1.RuleWithOperations{
@@ -52,5 +56,5 @@ func (bc *BackendK8sCache) makeNVCAMutatingWebhook(
 			},
 		},
 		nb,
-		webhookCert)
+		webhookCert), nil
 }

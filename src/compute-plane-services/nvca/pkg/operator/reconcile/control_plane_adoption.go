@@ -109,7 +109,10 @@ func (bc *BackendK8sCache) adoptLegacyControlPlaneObjects(
 		return nil, err
 	}
 
-	clusterScopedName := bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName)
+	clusterScopedName, err := bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build legacy control-plane resource name: %w", err)
+	}
 	if err := adoptLegacyServiceAccount(ctx, k8sClient, identity, DefaultNVCASystemNamespace,
 		nvcaoptypes.NVCAModuleName, dryRun, result); err != nil {
 		return nil, err

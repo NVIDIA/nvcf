@@ -57,13 +57,17 @@ func (bc *BackendK8sCache) setupMiniServiceRBACConfigmap(ctx context.Context, nb
 	if err != nil {
 		return err
 	}
+	labels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build mini service RBAC configmap labels: %w", err)
+	}
 
 	ec := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        MiniServiceRBACConfigmapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      bc.controlPlaneAppLabels(),
+			Labels:      labels,
 		},
 		Data: rbacData,
 	}
@@ -81,15 +85,27 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 
 	targetLabelSels := bc.workloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
 	nsLabelSelReqs := makeLabelSelectorRequirements(targetLabelSels)
+	webhookConfigName, err := bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName)
+	if err != nil {
+		return fmt.Errorf("failed to build mini service validating webhook name: %w", err)
+	}
+	webhookLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build mini service validating webhook labels: %w", err)
+	}
+	validateWebhookName, err := bc.controlPlaneWebhookName("validate-helm-charts")
+	if err != nil {
+		return fmt.Errorf("failed to build mini service validating webhook entry name: %w", err)
+	}
 
 	vw := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName),
-			Labels: bc.controlPlaneAppLabels(),
+			Name:   webhookConfigName,
+			Labels: webhookLabels,
 		},
 		Webhooks: []admissionregistrationv1.ValidatingWebhook{
 			{
-				Name:                    bc.controlPlaneWebhookName("validate-helm-charts"),
+				Name:                    validateWebhookName,
 				AdmissionReviewVersions: []string{"v1"},
 				FailurePolicy:           &fpt,
 				SideEffects:             &sec,
