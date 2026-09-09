@@ -20,6 +20,7 @@ environments:
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
 {{- $controlPlaneNamespacePrefix := "" }}
+{{- $nvcaOperatorName := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 {{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 
 {{- /*
@@ -231,6 +232,7 @@ releases:
                from, so the chart's generated pull secret is disabled here. The
                chart default stays enabled for ngc-managed installs, which rely
                on it being generated from ngcConfig.serviceKey. */}}
+        fullnameOverride: {{ $nvcaOperatorName | quote }}
         generateImagePullSecret: false
         ngcConfig:
           clusterSource: self-managed
