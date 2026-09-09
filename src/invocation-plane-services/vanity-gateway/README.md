@@ -188,7 +188,7 @@ v2config:
 | `customHeaders` | No | Map of static request headers to set on the upstream request. Configured values overwrite caller-provided values for the same header. Reserved routing, protocol, auth, proxy, and `NVCF-*` headers are rejected. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
-| `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. |
+| `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. Recognizes an OpenAI error object, an RFC 7807 problem document, and a bare `{"message": "..."}`. Any other body is returned unchanged. |
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadowModelNames` for new config. |
 | `shadowModelNames` | No | Additional model names in the same OpenAI section that receive shadow traffic. Not supported for multipart image edit or variation endpoints. |
 | `shadowPercentage` | No | Percentage of primary requests to shadow, from `1` to `100`. Defaults to `100` when shadow targets exist. |
