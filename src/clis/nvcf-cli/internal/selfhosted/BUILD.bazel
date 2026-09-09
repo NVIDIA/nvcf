@@ -19,6 +19,7 @@ go_library(
     name = "selfhosted",
     srcs = [
         "clustervalidator.go",
+        "control_plane_identity.go",
         "helm_runtime.go",
         "inotify_probe.go",
         "mixed_mode_install.go",

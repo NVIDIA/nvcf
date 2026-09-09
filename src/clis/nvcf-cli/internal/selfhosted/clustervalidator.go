@@ -38,8 +38,6 @@ const (
 	clusterValidatorName         = "nvcf-preflight-validator"
 	clusterValidatorContainer    = "validator"
 	clusterValidatorAppLabel     = "nvcf-cluster-validator"
-	controlPlaneOwnerLabel       = "nvcf.nvidia.com/control-plane-owner"
-	controlPlaneDefaultOwner     = "default"
 	clusterValidatorPollInterval = 2 * time.Second
 	clusterValidatorTTLSeconds   = int32(600)
 	clusterValidatorHintURL      = "https://docs.nvidia.com/nvcf/self-managed-clusters#cluster-validator"

@@ -28,11 +28,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-const (
-	mixedModeOwnerLabel   = "nvcf.nvidia.com/control-plane-owner"
-	mixedModeDefaultOwner = "default"
-)
-
 var legacyControlPlaneNamespaces = []string{
 	"api-keys",
 	"cassandra-system",

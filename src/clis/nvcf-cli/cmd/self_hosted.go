@@ -91,9 +91,13 @@ const (
 	localInClusterNATSURL           = "nats://nats.nats-system.svc.cluster.local:4222"
 	selfHostedDefaultControlPlaneID = "default"
 	selfHostedSharedControlPlaneID  = "shared"
-	selfHostedMaxControlPlaneIDLen  = 32
-	selfHostedControlPlaneOwnerEnv  = "NVCF_CONTROL_PLANE_OWNER"
-	selfHostedHelmfileOwnerLabel    = "control-plane-owner"
+	// Named installs derive keyspaces as <id>_<legacyKeyspace>;
+	// schema_migrations is the longest legacy name.
+	selfHostedMaxCassandraNameLen  = 48
+	selfHostedSchemaMigrationsName = "schema_migrations"
+	selfHostedMaxControlPlaneIDLen = selfHostedMaxCassandraNameLen - len(selfHostedSchemaMigrationsName) - 1
+	selfHostedControlPlaneOwnerEnv = "NVCF_CONTROL_PLANE_OWNER"
+	selfHostedHelmfileOwnerLabel   = "control-plane-owner"
 )
 
 func init() {

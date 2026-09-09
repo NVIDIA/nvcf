@@ -19,8 +19,10 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -72,6 +74,28 @@ func TestSelfHostedControlPlaneIdentity_RejectsReservedID(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid --control-plane-id")
 	assert.Contains(t, err.Error(), "reserved")
+}
+
+func TestSelfHostedControlPlaneIdentity_RejectsIDsThatExceedCassandraBudget(t *testing.T) {
+	assert.Equal(t, 30, selfHostedMaxControlPlaneIDLen)
+
+	prev := selfHostedControlPlaneID
+	t.Cleanup(func() { selfHostedControlPlaneID = prev })
+
+	selfHostedControlPlaneID = strings.Repeat("a", selfHostedMaxControlPlaneIDLen)
+	identity, err := selfHostedControlPlaneOwner()
+	require.NoError(t, err)
+	assert.Equal(t, selfHostedControlPlaneID, identity)
+
+	for _, length := range []int{selfHostedMaxControlPlaneIDLen + 1, 32} {
+		t.Run(fmt.Sprintf("length %d", length), func(t *testing.T) {
+			selfHostedControlPlaneID = strings.Repeat("a", length)
+			_, err = selfHostedControlPlaneOwner()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid --control-plane-id")
+			assert.Contains(t, err.Error(), fmt.Sprintf("exceeds %d characters", selfHostedMaxControlPlaneIDLen))
+		})
+	}
 }
 
 func TestSelfHostedControlPlaneEnv(t *testing.T) {
