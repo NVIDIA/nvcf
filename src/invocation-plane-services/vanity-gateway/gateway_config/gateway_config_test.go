@@ -381,7 +381,7 @@ v2config:
 	}
 }
 
-func TestGatewayConfigLoadRejectsNullPerTargetShadowValues(t *testing.T) {
+func TestGatewayConfigLoadRejectsMalformedPerTargetShadowValues(t *testing.T) {
 	tests := []struct {
 		name     string
 		shadows  string
@@ -391,6 +391,24 @@ func TestGatewayConfigLoadRejectsNullPerTargetShadowValues(t *testing.T) {
 			name:     "null list",
 			shadows:  `        shadows: null`,
 			expected: "openai.chatCompletions.primary: shadows must be a list",
+		},
+		{
+			name:     "mapping instead of list",
+			shadows:  `        shadows: {}`,
+			expected: "openai.chatCompletions.primary: shadows must be a list",
+		},
+		{
+			name: "percentage of the wrong type",
+			shadows: `        shadows:
+          - modelName: private/facebook/opt-125m-shadow
+            percentage: ten`,
+			expected: `decode model "facebook/opt-125m": shadows[0]: decode shadow config:`,
+		},
+		{
+			name: "entry that is not a mapping",
+			shadows: `        shadows:
+          - private/facebook/opt-125m-shadow`,
+			expected: `decode model "facebook/opt-125m": shadows[0]: shadow config must be a mapping`,
 		},
 		{
 			name: "null model name",

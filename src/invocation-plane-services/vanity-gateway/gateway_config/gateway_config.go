@@ -126,7 +126,7 @@ type ModelFunctionDetails struct {
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty" yaml:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadows on client cancellation or primary proxy failure; default false
 	FunctionType                   FunctionType          `json:"functionType,omitempty"`
 	shadowsPresent                 bool
-	shadowsNull                    bool
+	shadowsNotList                 bool
 	legacyShadowFieldsPresent      bool
 }
 
@@ -139,31 +139,71 @@ func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 
 	fields := map[string]json.RawMessage{}
 	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
+		return fmt.Errorf("decode model: %w", err)
 	}
+	modelName := rawModelName(fields)
 
-	var alias modelFunctionDetailsAlias
-	if err := json.Unmarshal(data, &alias); err != nil {
-		return fmt.Errorf("decode model %q: %w", rawModelName(fields), err)
-	}
-
-	*m = ModelFunctionDetails(alias)
+	// shadows is decoded separately so its errors can name the list index; the
+	// key is removed here so the alias decode below does not see it twice.
+	var shadowsRaw json.RawMessage
+	shadowsPresent := false
+	legacyShadowFieldsPresent := false
 	for field, raw := range fields {
 		switch {
 		case strings.EqualFold(field, "shadows"):
-			m.shadowsPresent = true
-			if isJSONNull(raw) {
-				m.shadowsNull = true
-			}
+			shadowsPresent = true
+			shadowsRaw = raw
+			delete(fields, field)
 		case strings.EqualFold(field, "shadowModelName"),
 			strings.EqualFold(field, "shadowModelNames"),
 			strings.EqualFold(field, "shadowPercentage"),
 			strings.EqualFold(field, "shadowSamplingMethod"),
 			strings.EqualFold(field, "shadowCancelOnClientDisconnect"):
-			m.legacyShadowFieldsPresent = true
+			legacyShadowFieldsPresent = true
 		}
 	}
+
+	remaining, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("decode model %q: %w", modelName, err)
+	}
+	var alias modelFunctionDetailsAlias
+	if err := json.Unmarshal(remaining, &alias); err != nil {
+		return fmt.Errorf("decode model %q: %w", modelName, err)
+	}
+
+	*m = ModelFunctionDetails(alias)
+	m.shadowsPresent = shadowsPresent
+	m.legacyShadowFieldsPresent = legacyShadowFieldsPresent
+	if !shadowsPresent {
+		return nil
+	}
+	shadows, isList, err := decodeShadowList(shadowsRaw)
+	if err != nil {
+		return fmt.Errorf("decode model %q: %w", modelName, err)
+	}
+	m.shadowsNotList = !isList
+	m.Shadows = shadows
 	return nil
+}
+
+// decodeShadowList reports isList false for null and non-array values so
+// validation can reject them with the route location it knows.
+func decodeShadowList(raw json.RawMessage) (shadows []ShadowConfig, isList bool, err error) {
+	if !strings.HasPrefix(strings.TrimSpace(string(raw)), "[") {
+		return nil, false, nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, true, fmt.Errorf("decode shadows: %w", err)
+	}
+	shadows = make([]ShadowConfig, len(items))
+	for i, item := range items {
+		if err := json.Unmarshal(item, &shadows[i]); err != nil {
+			return nil, true, fmt.Errorf("shadows[%d]: %w", i, err)
+		}
+	}
+	return shadows, true, nil
 }
 
 // rawModelName gives decode errors a handle on the entry before validation
@@ -362,7 +402,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		return nil, fmt.Errorf("%s: shadows cannot be combined with legacy shadow fields", location)
 	}
 	if entry.hasShadowsField() {
-		if entry.shadowsNull {
+		if entry.shadowsNotList {
 			return nil, fmt.Errorf("%s: shadows must be a list", location)
 		}
 		if err := validatePerTargetShadowConfigs(location, entry.Shadows); err != nil {
@@ -517,7 +557,7 @@ func validateMultipartOpenAISection(sectionName string, entries map[string]Model
 		if entry.hasMixedShadowFields() {
 			return fmt.Errorf("openai.%s.%s: shadows cannot be combined with legacy shadow fields", sectionName, modelKey)
 		}
-		if entry.shadowsNull {
+		if entry.shadowsNotList {
 			return fmt.Errorf("openai.%s.%s: shadows must be a list", sectionName, modelKey)
 		}
 		if len(entry.Shadows) > 0 || entry.hasLegacyShadowConfig() {
@@ -534,14 +574,23 @@ func validateOpenAIShadowTargets(sectionName string, entries map[string]ModelFun
 		if err != nil {
 			return err
 		}
-		if err := validateShadowTargetNames(location, sectionName, entry.ModelName, shadowTargets, modelNames, len(entry.Shadows) > 0); err != nil {
+		perTarget := len(entry.Shadows) > 0
+		err = validateShadowTargetNames(location, sectionName, entry.ModelName, shadowTargets, modelNames, perTarget)
+		if err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateShadowTargetNames(location string, sectionName string, modelName string, shadows []ShadowConfig, modelNames map[string]struct{}, perTarget bool) error {
+func validateShadowTargetNames(
+	location string,
+	sectionName string,
+	modelName string,
+	shadows []ShadowConfig,
+	modelNames map[string]struct{},
+	perTarget bool,
+) error {
 	for i, shadow := range shadows {
 		shadowLocation := location
 		if perTarget {
