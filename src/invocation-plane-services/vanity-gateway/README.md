@@ -194,12 +194,12 @@ v2config:
 | `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
 | `shadows[].samplingMethod` | No | Admission method for this target. Allowed values are `random` and `perBearerKey`. Defaults to `random`. |
-| `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the client disconnects or cancels the request, or if the primary proxy encounters a transport or response-write failure or panics before normal completion. Defaults to `false`. |
+| `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the primary request context is canceled. Defaults to `false`. |
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
 | `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
 | `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
 | `shadowSamplingMethod` | No | Legacy admission method applied to every legacy target. Allowed values are `random` and `perBearerKey`. Missing, empty, or `null` defaults to `random`. |
-| `shadowCancelOnClientDisconnect` | No | Legacy cancellation policy applied to every legacy target. It uses the same disconnect, client cancellation, transport failure, response-write failure, and panic behavior. Defaults to `false`. |
+| `shadowCancelOnClientDisconnect` | No | Legacy cancellation policy applied to every legacy target. When `true`, cancels shadow work if the primary request context is canceled. Defaults to `false`. |
 
 ### Shadow Traffic Support
 
@@ -251,10 +251,8 @@ as no-ops.
 Admitted shadow requests are bounded by `SHADOW_MAX_CONCURRENT` and the gateway
 shadow timeout. Normal primary response completion does not cancel shadow work.
 When a target's `cancelOnClientDisconnect` is `true`, the gateway cancels only
-that target if the client disconnects or cancels the request, or if the primary
-proxy encounters a transport or response-write failure or panics before normal
-completion. Other targets continue under their own policies. An HTTP error
-status alone does not trigger cancellation.
+that target if the client disconnects or cancels the primary request before the
+primary response completes. Other targets continue under their own policies.
 
 ### Vanity Mapping Fields
 
