@@ -22,6 +22,50 @@ profile_releases() {
     sort
 }
 
+# `show-dag` eagerly prepares the placeholder OCI charts. Debug rendering of
+# `list --skip-charts` keeps this test offline while preserving `needs` edges.
+render_release_state() {
+  local output_name="$1"
+  shift
+  local log_file="$work_dir/$output_name.log"
+  local state_file="$work_dir/$output_name.yaml"
+
+  if ! HELMFILE_ENV=local HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile \
+      --file "$stack_dir/helmfile.d" \
+      --log-level debug \
+      --environment default \
+      "$@" \
+      list --skip-charts --output json >"$log_file" 2>&1; then
+    cat "$log_file" >&2
+    fail "could not render the $output_name Helmfile state"
+  fi
+
+  awk '
+    /^rendering result of ".*":$/ { print "---"; capture = 1; next }
+    capture && /^[[:space:]]*[0-9]+: / {
+      sub(/^[[:space:]]*[0-9]+: ?/, "")
+      print
+      next
+    }
+    capture { capture = 0 }
+  ' "$log_file" >"$state_file"
+
+  test -s "$state_file" || fail "could not recover the $output_name Helmfile state"
+}
+
+release_needs() {
+  local state_file="$1"
+  local release_name="$2"
+
+  NVCF_RELEASE_NAME="$release_name" yq ea -r '
+    select(.releases != null) |
+    .releases[] |
+    select(.name == strenv(NVCF_RELEASE_NAME)) |
+    .needs[]?
+  ' "$state_file"
+}
+
 render_monitors() {
   local profile="$1"
   local output_dir="$work_dir/$profile"
@@ -98,6 +142,18 @@ for profile in control compute all; do
   test "$(profile_releases "$profile")" = "$enabled_releases" ||
     fail "$profile profile did not render the enabled release set exactly once"
 done
+
+render_release_state crds-installed \
+  --state-values-set observability.profile=control
+test "$(release_needs "$work_dir/crds-installed.yaml" victoria-metrics)" = \
+  "monitoring/prometheus-operator-crds" ||
+  fail "victoria-metrics must wait for stack-installed Prometheus Operator CRDs"
+
+render_release_state crds-existing \
+  --state-values-set observability.profile=control \
+  --state-values-set observability.components.prometheusOperatorCrds.mode=existing
+test -z "$(release_needs "$work_dir/crds-existing.yaml" victoria-metrics)" ||
+  fail "victoria-metrics must not depend on a CRD release the stack does not install"
 
 for profile in control compute all; do
   render_monitors "$profile"
