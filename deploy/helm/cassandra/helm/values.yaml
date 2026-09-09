@@ -156,6 +156,11 @@ cassandra:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Pod topology spread constraints. Empty by default; the self-managed Helmfile
+  # sets these (zone spread across topology.kubernetes.io/zone) via
+  # highAvailability.tier2.topologySpread when HA is on. Requires a
+  # WaitForFirstConsumer StorageClass so each zonal PV binds in the pod's zone.
+  topologySpreadConstraints: []
 
   hooks:
     initializeCluster:

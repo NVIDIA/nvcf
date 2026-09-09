@@ -65,7 +65,24 @@ If the label is absent, zone topology spread has nothing to spread across. In
 
 For predictable placement and isolation, give the stateful quorum services their
 own node pools and label them with `nvcf.nvidia.com/workload`. Configure the
-selectors under `global.nodeSelectors` in your environment file:
+selectors under `global.nodeSelectors` and **set `enabled: true`** — the
+selectors ship disabled (`global.nodeSelectors.enabled: false`) and are a no-op
+until you turn them on:
+
+```yaml
+global:
+  nodeSelectors:
+    enabled: true                 # required; selectors are ignored when false
+    controlplane:
+      key: nvcf.nvidia.com/workload
+      value: control-plane
+    cassandra:
+      key: nvcf.nvidia.com/workload
+      value: cassandra
+    vault:
+      key: nvcf.nvidia.com/workload
+      value: vault
+```
 
 | Pool | Selector value | Hosts |
 | --- | --- | --- |
@@ -73,10 +90,14 @@ selectors under `global.nodeSelectors` in your environment file:
 | `cassandra` | `cassandra` | Cassandra StatefulSet |
 | `vault` | `vault` | OpenBao StatefulSet |
 
-Each dedicated pool must itself have **capacity in each AZ** — a 3-node
-Cassandra pool concentrated in one AZ cannot spread across zones no matter what
-the stack requests. If you run a single shared pool, use `global.nodeSelectors.all`
-instead and size it to hold every replica on distinct nodes/AZs.
+Each dedicated pool must span the availability zones — that is, have **capacity
+in every AZ you want to spread across** (both zones in a 2-AZ cluster, all three
+in a 3-AZ cluster). A 3-node Cassandra pool concentrated in one AZ cannot spread
+across zones no matter what the stack requests, and with `enabled: false` the
+pods fall back to default scheduling regardless of your labels. If you run a
+single shared pool instead, set `global.nodeSelectors.enabled: true` with
+`global.nodeSelectors.all` and size it to hold every replica on distinct
+nodes/AZs.
 
 ## Enabling HA
 
@@ -135,6 +156,54 @@ anti-affinity and zone spread.
   OpenBao's upstream chart ships a hard anti-affinity that the stack disables for
   single-node installs and re-enables (soft/hard by mode) under HA.
 - **PodDisruptionBudgets** sized to preserve quorum (`minAvailable: 2`).
+
+#### Zone spread for the quorum pods (opt-in)
+
+By default the quorum peers are only guaranteed distinct **nodes**, not distinct
+**zones** — three nodes can all be in one AZ, so a single-AZ loss could still
+break quorum. To spread the three peers across `topology.kubernetes.io/zone`,
+enable:
+
+```yaml
+highAvailability:
+  tier2:
+    topologySpread:
+      enabled: true      # off by default
+      maxSkew: 1
+      strict: false      # ScheduleAnyway (soft). Set true only on >= 3 AZs.
+```
+
+This is **opt-in** because, unlike the stateless tier, it depends on
+infrastructure you must provide:
+
+- **StorageClass `volumeBindingMode: WaitForFirstConsumer`.** Each quorum pod has
+  a zonal PersistentVolume, and a zonal disk can only attach to a node in its own
+  AZ. With `WaitForFirstConsumer`, the scheduler places the pod first (honoring
+  the spread constraint) and the PV is then created in that pod's zone. With
+  `Immediate` binding the PV's zone is chosen up front and the pod is pinned to
+  it, which fights the spread constraint and can leave pods `Pending`. The stack
+  cannot set this for you — it is a property of the StorageClass you supply.
+- **Capacity in at least 3 AZs.** A 3-member quorum only survives an AZ loss if
+  no single AZ holds a majority. With only 2 AZs one zone inevitably holds 2 of
+  3 members, and losing that zone breaks quorum. On a 2-AZ cluster leave zone
+  spread off (or keep `strict: false`).
+
+`whenUnsatisfiable` defaults to `ScheduleAnyway` (soft) so a temporarily short
+AZ never leaves a peer `Pending`. Only set `strict: true` — which makes it
+`DoNotSchedule` (hard) — on clusters you know have capacity in ≥3 AZs.
+
+**Cassandra needs one more thing: rack = AZ.** Spreading the *pods* across zones
+does not by itself make the *data* zone-diverse. `NetworkTopologyStrategy`
+replicates by **rack**, and Cassandra's rack is assigned by the image entrypoint,
+not by the pod's Kubernetes zone. Unless each pod's Cassandra rack is set to its
+AZ, RF=3 can still place all three data replicas in one rack. Map rack to AZ on
+the Cassandra nodes to get true cross-AZ data placement; NATS and OpenBao (Raft)
+replicate per member and need only the pod spread.
+
+Once a quorum pod's PV is created in a zone it is pinned there for the life of
+that StatefulSet ordinal — steady-state placement stays spread, but a pod whose
+AZ is lost cannot reschedule elsewhere until the AZ returns (its two peers carry
+quorum in the meantime).
 
 Beyond placement, HA also raises the data-durability settings:
 

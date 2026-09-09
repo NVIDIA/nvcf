@@ -161,6 +161,35 @@ podAntiAffinity:
 {{- end -}}
 {{- end -}}
 
+{{/* Zone topology spread for a Tier-2 quorum release (Cassandra, NATS,
+     OpenBao) so the 3 quorum peers land in distinct availability zones. Matches
+     app.kubernetes.io/instance = release name on topology.kubernetes.io/zone.
+     OPT-IN: gated by highAvailability.tier2.topologySpread.enabled (default
+     false) because correct behaviour depends on operator infrastructure — a
+     StorageClass with volumeBindingMode: WaitForFirstConsumer (so each zonal PV
+     is created in the zone the scheduler picks) and capacity in >= 3 AZs.
+     whenUnsatisfiable defaults to ScheduleAnyway (soft) so a short AZ never
+     leaves a peer Pending; set topologySpread.strict: true (>= 3-AZ clusters
+     only) for DoNotSchedule (hard). Emits only the constraint list items (no
+     topologySpreadConstraints: key) so callers can nest it as a list (Cassandra
+     value, NATS podTemplate.merge.spec) or a string (OpenBao
+     server.topologySpreadConstraints). Context: dict "Values" $.Values
+     "instance" "<release-instance>" */}}
+{{- define "nvcf.ha.tier2TopologySpread" -}}
+{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
+{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
+{{- $ts := dig "highAvailability" "tier2" "topologySpread" dict .Values -}}
+{{- if dig "enabled" false $ts -}}
+- maxSkew: {{ dig "maxSkew" 1 $ts }}
+  topologyKey: topology.kubernetes.io/zone
+  whenUnsatisfiable: {{ if dig "strict" false $ts }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
+  labelSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .instance | quote }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString }}
 {{- if not (has $haMode (list "none" "ha-preferred" "ha-enforced")) }}
 {{- fail (printf "highAvailability.mode must be none, ha-preferred, or ha-enforced, got %q" $haMode) }}
@@ -203,6 +232,10 @@ cassandra:
   {{- if $haEnabled }}
   {{- with include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "cassandra") }}
   affinity:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.tier2TopologySpread" (dict "Values" .Values "instance" "cassandra") }}
+  topologySpreadConstraints:
     {{- . | nindent 4 }}
   {{- end }}
   {{- end }}
@@ -339,6 +372,12 @@ openbao:
     affinity: |
       {{- . | nindent 6 }}
     {{- end }}
+    {{- with include "nvcf.ha.tier2TopologySpread" (dict "Values" .Values "instance" "openbao-server") }}
+    # String form: the OpenBao chart tpl-renders server.topologySpreadConstraints
+    # under a topologySpreadConstraints: key. Opt-in via tier2.topologySpread.
+    topologySpreadConstraints: |
+      {{- . | nindent 6 }}
+    {{- end }}
     {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
@@ -404,10 +443,12 @@ nats:
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
   {{- $natsAffinity := "" -}}
+  {{- $natsTopoSpread := "" -}}
   {{- if $haEnabled -}}
   {{- $natsAffinity = include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "nats") -}}
+  {{- $natsTopoSpread = include "nvcf.ha.tier2TopologySpread" (dict "Values" .Values "instance" "nats") -}}
   {{- end -}}
-  {{- if or $natsNs $natsTol $natsAffinity }}
+  {{- if or $natsNs $natsTol $natsAffinity $natsTopoSpread }}
   podTemplate:
     merge:
       spec:
@@ -419,6 +460,10 @@ nats:
         {{- end }}
         {{- with $natsAffinity }}
         affinity:
+          {{- . | nindent 10 }}
+        {{- end }}
+        {{- with $natsTopoSpread }}
+        topologySpreadConstraints:
           {{- . | nindent 10 }}
         {{- end }}
   {{- end }}

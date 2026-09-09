@@ -127,6 +127,13 @@ grep -q "podAntiAffinity:" "$work_dir/cassandra-on.yaml" ||
   fail "cassandra: expected Tier-2 anti-affinity when highAvailability.mode=ha-preferred"
 grep -q "preferredDuringSchedulingIgnoredDuringExecution:" "$work_dir/cassandra-on.yaml" ||
   fail "cassandra: expected preferred Tier-2 anti-affinity when highAvailability.mode=ha-preferred"
+# Zone topology spread is opt-in: no zone constraint in the cassandra block
+# unless tier2.topologySpread.enabled (the chart ships an empty default list).
+# NOTE: the write-values file holds every release's values, so scope to the
+# cassandra: block — stateless releases carry their own (expected) zone spread.
+if awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-on.yaml" | grep -q "topology.kubernetes.io/zone"; then
+  fail "cassandra: Tier-2 zone spread leaked without tier2.topologySpread.enabled"
+fi
 
 render_chart_values openbao-server "$work_dir/openbao-on.yaml" "$deps" || fail "render openbao (ha-preferred)"
 grep -A5 "^[[:space:]]*ha:" "$work_dir/openbao-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||
@@ -160,6 +167,43 @@ render_chart_values llm-api-gateway "$work_dir/llmgw-on.yaml" "$core" --state-va
   fail "render llm-api-gateway (ha-preferred)"
 awk '/^llmApiGateway:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/llmgw-on.yaml" | grep -q "preferredDuringSchedulingIgnoredDuringExecution:" ||
   fail "llm-api-gateway: expected preferred anti-affinity when highAvailability.mode=ha-preferred"
+
+echo "== highAvailability tier-2 zone topology spread (opt-in) =="
+write_env <<'EOF'
+highAvailability:
+  mode: ha-preferred
+  tier2:
+    topologySpread:
+      enabled: true
+EOF
+
+# Scope assertions to each release's own block (the write-values file holds all).
+render_chart_values cassandra "$work_dir/cassandra-spread.yaml" "$deps" || fail "render cassandra (zone spread)"
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-spread.yaml" | grep -q "topology.kubernetes.io/zone" ||
+  fail "cassandra: expected Tier-2 zone spread when tier2.topologySpread.enabled=true"
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-spread.yaml" | grep -q "whenUnsatisfiable: ScheduleAnyway" ||
+  fail "cassandra: expected soft (ScheduleAnyway) Tier-2 spread by default"
+
+render_chart_values openbao-server "$work_dir/openbao-spread.yaml" "$deps" || fail "render openbao (zone spread)"
+awk '/^openbao:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/openbao-spread.yaml" | grep -q "topology.kubernetes.io/zone" ||
+  fail "openbao: expected Tier-2 zone spread when tier2.topologySpread.enabled=true"
+
+render_chart_values nats "$work_dir/nats-spread.yaml" "$deps" || fail "render nats (zone spread)"
+awk '/^nats:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/nats-spread.yaml" | grep -q "topology.kubernetes.io/zone" ||
+  fail "nats: expected Tier-2 zone spread when tier2.topologySpread.enabled=true"
+
+# strict: true -> hard (DoNotSchedule), for >= 3-AZ clusters.
+write_env <<'EOF'
+highAvailability:
+  mode: ha-enforced
+  tier2:
+    topologySpread:
+      enabled: true
+      strict: true
+EOF
+render_chart_values cassandra "$work_dir/cassandra-spread-strict.yaml" "$deps" || fail "render cassandra (strict spread)"
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-spread-strict.yaml" | grep -q "whenUnsatisfiable: DoNotSchedule" ||
+  fail "cassandra: expected hard (DoNotSchedule) Tier-2 spread when strict=true"
 
 echo "== highAvailability ha-enforced: required anti-affinity =="
 write_env <<'EOF'
