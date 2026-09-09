@@ -44,6 +44,10 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.reactive.function.client.WebClient;
 
 /**
@@ -70,6 +74,7 @@ class FunctionDeploymentStagesClientIntegrationTest {
 
     @AfterEach
     void stopServer() {
+        RequestContextHolder.resetRequestAttributes();
         if (httpResources != null) {
             httpResources.close();
         }
@@ -95,16 +100,27 @@ class FunctionDeploymentStagesClientIntegrationTest {
                 .withHeader("Authorization", equalTo("Bearer " + staticToken)));
     }
 
-    // The OAuth2 client-credentials fallback (ServletOAuth2AuthorizedClientExchangeFilterFunction)
-    // is pre-existing, already-shipped behavior, not new in this change, and it expects a
-    // servlet/request-scoped context that a bare async client like this one doesn't have. So this
-    // deliberately doesn't assert on the OAuth2 token exchange itself (out of scope here). It proves
-    // the new Optional<StaticClientFndsProperties> branch falls through to something other than
-    // FixedBearerExchangeFilterFunction by asserting no Authorization header is attached at all -
-    // FixedBearerExchangeFilterFunction unconditionally sets one whenever it's the active filter, so
-    // its absence here is a genuine (non-tautological) proof that filter wasn't selected.
+    // ServletOAuth2AuthorizedClientExchangeFilterFunction only attempts a token exchange if it can
+    // resolve the current HttpServletRequest/HttpServletResponse (via Spring Security's global
+    // Reactor-context hook, wired through RequestContextHolder). Registering mock servlet
+    // attributes here reproduces that request-scoped context so the OAuth2 client-credentials
+    // fallback actually runs, letting us stub /oauth/token and assert the returned bearer token is
+    // attached - while still proving the static token is not used.
     @Test
-    void noStaticTokenConfigured_doesNotAttachStaticBearerToken() {
+    void noStaticTokenConfigured_fallsBackToOAuth2BearerToken() {
+        RequestContextHolder.setRequestAttributes(
+                new ServletRequestAttributes(new MockHttpServletRequest(), new MockHttpServletResponse()));
+
+        String oauthToken = "test-oauth2-access-token";
+        fndsServer.stubFor(post(urlPathEqualTo("/oauth/token"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{"
+                                + "\"access_token\":\"" + oauthToken + "\","
+                                + "\"token_type\":\"Bearer\","
+                                + "\"expires_in\":3600"
+                                + "}")));
         fndsServer.stubFor(post(urlPathEqualTo("/v3/ledger/cloudevents"))
                 .willReturn(aResponse().withStatus(202)));
 
@@ -114,7 +130,7 @@ class FunctionDeploymentStagesClientIntegrationTest {
 
         assertEquals(202, responseCode);
         fndsServer.verify(postRequestedFor(urlPathEqualTo("/v3/ledger/cloudevents"))
-                .withoutHeader("Authorization"));
+                .withHeader("Authorization", equalTo("Bearer " + oauthToken)));
     }
 
     private FunctionDeploymentStagesClient buildClient(
