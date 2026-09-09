@@ -669,3 +669,27 @@ func TestOpenAIDirector_LLMModelForwardsNonRoutingHeaders(t *testing.T) {
 	assert.Equal(t, "5", received.headers.Get("X-Priority"),
 		"the gateway does not strip X-Priority; the LLM Gateway rejects it upstream")
 }
+
+// The LLM Gateway renders its 429 through echo as a bare message object, which
+// is neither of the two shapes the append helper originally recognized.
+func TestOpenAIDirector_LLMModelSurfacesTooManyRequestsMessage(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"message":"rate limit exceeded"}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	entry := llmModelEntry()
+	entry.TooManyRequestsMessage = "Slow down please"
+	mux := openAIMux(t, llmMappings(entry), "http://nvcf.invalid", backend.URL)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`))
+
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Slow down please",
+		"the configured message must reach the caller on the LLM Gateway path")
+	assert.Contains(t, rec.Body.String(), "rate limit exceeded",
+		"the upstream message must be preserved")
+}
