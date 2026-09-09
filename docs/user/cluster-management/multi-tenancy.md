@@ -55,7 +55,6 @@ The table below summarizes the isolation available at each layer and how to enab
 `HostIsolation` and `AccountIsolation` are mutually exclusive. Enabling both on the same cluster is not supported. Choose one based on your isolation boundary: function-level (`HostIsolation`) or account-level (`AccountIsolation`).
 </Warning>
 
-
 ## Hardware Isolation — Not Supported
 
 NVCF does not provide hardware-level GPU isolation between tenants. Specifically:

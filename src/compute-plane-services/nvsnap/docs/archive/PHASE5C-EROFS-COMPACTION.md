@@ -6,6 +6,7 @@ approach attempted in Phase 5b (v0.18.0–v0.18.5) which regressed on
 without a longer debugging cycle.
 
 **Related docs:**
+
 - `docs/PHASE5B-CRIU-IN-WRITER-JOB.md` — the design we attempted; phase 5c keeps
   the per-capture PVC + PV-flip plumbing it landed but reverts the
   writer-Job-runs-CRIU half.
@@ -94,6 +95,7 @@ mount -t erofs /tmp/test.erofs /tmp/erofs-test/<id>
 
 **If pass:** commit to the design.
 **If fail:** the failure mode tells us how to proceed:
+
 - O_DIRECT issue → bind-mount pages-*.img separately on tmpfs as a copy.
 - fstatfs rejection → patch CRIU to whitelist EROFS magic (`0xE0F5E1E2`).
 - Other → fall back to **zstd-tarball** as compaction format (CRIU restore-from-extracted-tar always works since it produces a normal directory).
@@ -103,6 +105,7 @@ mount -t erofs /tmp/test.erofs /tmp/erofs-test/<id>
 ### Code changes
 
 **Revert from v0.18.5:**
+
 - `internal/agent/checkpoint.go` — remove `runPhase5bDump`, `stagePhase5bMetadata`, `phase5bMetadataInputs`, `phase5bDumpResult`. Restore the legacy `a.criu.DumpRPC(ctx, rpcOpts)` direct call. Keep `promoteCheckpointToBackend` as the post-dump promote path.
 - `internal/checkpointstore/store.go` — remove `CRIURPCOptionsJSON` from `CaptureSource` (no longer needed since CRIU runs in agent).
 - `cmd/agent/capture_write.go` — remove the `Kind=criu` branch from `runCRIUDump`. The writer Job goes back to being purely a rootfs/erofs-builder.
@@ -112,6 +115,7 @@ mount -t erofs /tmp/test.erofs /tmp/erofs-test/<id>
 - `internal/checkpointstore/gpdrox/gpdrox_test.go` — drop `TestPut_RejectsCRIUWithoutRPCOptions`, keep the rest.
 
 **Add for 5c:**
+
 - `cmd/agent/capture_write.go` — new `Kind=erofs` source. Reads from `SrcPath` (host hostPath dir), runs `mkfs.erofs -zlz4 -Enoinline_data` to produce a compact `.erofs` image at `<DstSubpath>/checkpoint.erofs` on the PVC.
 - `docker/agent/Dockerfile` — `apt install -y erofs-utils` (or equivalent for our base image). Verify `mkfs.erofs --version` works in the image.
 - `internal/agent/checkpoint.go` — at promote time, build the source list with one `Kind=erofs` source pointing at the local hostPath checkpoint dir. The legacy `Kind=rootfs` user-data sources stay as-is.
@@ -137,6 +141,7 @@ Writer Job's `runCaptureWrite` dispatches `Kind=erofs` → `mkfs.erofs <srcdir> 
 Two options for restore-pod mount:
 
 **Option A: init container loop-mounts EROFS** (preferred)
+
 ```yaml
 initContainers:
   - name: erofs-mount
@@ -178,6 +183,7 @@ Total time to portable artifact: ~6 min. Source-pod frozen window:
 min, then resumes. Cross-node restore available a few minutes later.
 
 For the demo, the user can either:
+
 - Show "checkpoint" as the 2.5 min freeze (matching legacy timing).
 - Block on PV-flip if they want to demo cross-node restore in the same
   click — that's ~6 min total.

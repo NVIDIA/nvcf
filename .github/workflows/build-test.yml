@@ -109,6 +109,7 @@ jobs:
           NVCA_VERSION="$(yq '.selfManaged.nvcaVersion' nvca-operator/values.yaml)" \
           NVCA_OPERATOR_VERSION="$(yq '.appVersion' nvca-operator/Chart.yaml)" \
           NVCA_SHARED_STORAGE_IMAGE_TAG="$(yq '.selfManaged.sharedStorage.imageTag' nvca-operator/values.yaml)" \
+          NVCA_OTEL_COLLECTOR_IMAGE_TAG="$(yq '.otelCollector.imageTag' nvca-operator/values.yaml)" \
             make check-vendor-chart
 
       - name: Run self-managed Helmfile render tests

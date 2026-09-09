@@ -18,6 +18,7 @@ This document maps all stateful components within libzmq that must be serialized
 ### Key Finding
 
 ZeroMQ's architecture separates state into well-defined layers, making checkpoint/restore **architecturally feasible** but requiring careful handling of:
+
 1. I/O thread synchronization
 2. Message queue draining
 3. Socket state machine consistency
@@ -47,6 +48,7 @@ The context is the top-level container holding all ZMQ global state for a proces
 | `_thread_name_prefix` | `std::string` | Thread name prefix | LOW |
 
 **Serialization Strategy:**
+
 ```c
 struct zmq_ctx_checkpoint {
     uint32_t version;           // Checkpoint format version
@@ -71,6 +73,7 @@ This maps inproc:// endpoint names to socket pointers.
 **Challenge:** Socket pointers are invalid after restore.
 
 **Solution:**
+
 - Serialize endpoint name → socket ID mapping
 - Reconstruct pointer references during restore using socket ID registry
 
@@ -87,6 +90,7 @@ struct zmq_inproc_endpoint {
 **Component:** `std::vector<socket_base_t *> _sockets`
 
 **Serialization:**
+
 - Count of sockets
 - Array of socket checkpoints (see Section 2)
 
@@ -169,6 +173,7 @@ Sockets are the primary user-facing objects. Each socket type (PAIR, PUB, SUB, R
 **Total:** ~40 socket options
 
 **Serialization Strategy:**
+
 - Use Protocol Buffers or similar schema
 - Only serialize non-default values to reduce size
 - Version the schema for backward compatibility
@@ -178,6 +183,7 @@ Sockets are the primary user-facing objects. Each socket type (PAIR, PUB, SUB, R
 **Component:** Bound endpoints (where socket is listening)
 
 **Data Structure:**
+
 ```c
 struct zmq_bound_endpoint {
     char protocol[16];      // "tcp", "ipc", "inproc", "pgm", etc.
@@ -188,6 +194,7 @@ struct zmq_bound_endpoint {
 ```
 
 **Examples:**
+
 - `tcp://0.0.0.0:5555`
 - `ipc:///tmp/feeds/0`
 - `inproc://my-endpoint`
@@ -197,6 +204,7 @@ struct zmq_bound_endpoint {
 **Component:** Connected endpoints (where socket is connected to)
 
 **Data Structure:**
+
 ```c
 struct zmq_connected_endpoint {
     char protocol[16];
@@ -232,6 +240,7 @@ Pipes are bidirectional message queues between sockets.
 **Challenge:** The `ypipe_t` is a lock-free queue with complex internal state.
 
 **Solution:**
+
 - Drain all pending messages during checkpoint
 - Serialize messages as array
 - Reconstruct queue on restore and re-enqueue messages
@@ -243,10 +252,12 @@ Pipes are bidirectional message queues between sockets.
 Each socket has a mailbox for inter-thread commands.
 
 **Components:**
+
 - `cpipe_t _cpipe` - Command pipe (ypipe)
 - `signaler_t _signaler` - File descriptor pair for signaling
 
 **Serialization Strategy:**
+
 - Drain all pending commands before checkpoint
 - Serialize command array
 - Recreate empty mailbox on restore
@@ -257,15 +268,19 @@ Each socket has a mailbox for inter-thread commands.
 Different socket types have additional state:
 
 **ROUTER Socket:**
+
 - Routing table mapping peer IDs to pipes
 
 **SUB Socket:**
+
 - Subscription filters (prefix matching)
 
 **XPUB Socket:**
+
 - Subscription tracking for each peer
 
 **REQ/REP Sockets:**
+
 - Request/reply state machine position
 
 **Strategy:** Use virtual method `socket_base_t::checkpoint_state()` that each socket type implements.
@@ -279,6 +294,7 @@ Different socket types have additional state:
 **File:** `src/tcp_connecter.cpp`, `src/tcp_listener.cpp`
 
 **State:**
+
 - Remote address/port
 - Local address/port
 - Connection state (connected, connecting, failed)
@@ -286,6 +302,7 @@ Different socket types have additional state:
 - TCP socket options (keepalive, etc.)
 
 **File Descriptors:**
+
 - CRIU can handle established TCP connections with `--tcp-established` flag
 - ZMQ plugin should mark TCP FDs as "CRIU-managed" not "plugin-managed"
 
@@ -294,14 +311,17 @@ Different socket types have additional state:
 **File:** `src/ipc_connecter.cpp`, `src/ipc_listener.cpp`
 
 **State:**
+
 - Socket file path
 - File descriptor (reconstruct)
 
 **Challenge:**
+
 - CRIU has [known limitations with Unix domain sockets](https://criu.org/What_cannot_be_checkpointed)
 - May require CR_PLUGIN_HOOK__DUMP_EXT_FILE
 
 **Solutions:**
+
 1. Close IPC sockets during checkpoint
 2. Recreate them during restore
 3. Alternatively: use CR_PLUGIN_HOOK__DUMP_UNIX_SK if both endpoints are checkpointed
@@ -311,6 +331,7 @@ Different socket types have additional state:
 **File:** Handled at context level
 
 **State:**
+
 - Endpoint name
 - Pipe connections
 
@@ -327,11 +348,13 @@ Different socket types have additional state:
 Each I/O thread has a poller (epoll/kqueue/select) tracking file descriptors.
 
 **Components:**
+
 - Array of monitored file descriptors
 - Events registered for each FD (POLLIN, POLLOUT)
 - Timers
 
 **Serialization Strategy:**
+
 - Stop I/O threads during checkpoint
 - Don't serialize poller internal state
 - Reconstruct pollers on restore
@@ -340,11 +363,13 @@ Each I/O thread has a poller (epoll/kqueue/select) tracking file descriptors.
 ### 4.2 Thread State
 
 **Transient (Reconstruct):**
+
 - Thread handle
 - Mailbox
 - Active connections
 
 **Persistent (Serialize):**
+
 - Thread ID
 - CPU affinity
 - Priority
@@ -368,6 +393,7 @@ Messages in-flight must be serialized.
 | Free function | `void(*)(void*)` | Deallocator |
 
 **Serialization:**
+
 ```c
 struct zmq_msg_checkpoint {
     uint32_t size;
@@ -379,6 +405,7 @@ struct zmq_msg_checkpoint {
 **Challenge:** Shared messages with reference counting
 
 **Solution:**
+
 - Snapshot message data (copy)
 - Discard reference counting (reconstruct on restore)
 - Serialize free function as enum (standard deallocators only)
@@ -418,6 +445,7 @@ Context
 ```
 
 **Critical Ordering for Restore:**
+
 1. Create context (with options)
 2. Create I/O threads (stopped)
 3. Create sockets (with options, type)
@@ -528,6 +556,7 @@ int zmq_ctx_restore(zmq_checkpoint_data_t *data, void **out_ctx) {
 **Example:** REQ socket expects a reply after sending a request. If checkpointed mid-request, how do we restore "waiting for reply" state?
 
 **Possible Solutions:**
+
 1. Only checkpoint in "idle" state (no pending operations)
 2. Serialize state machine position explicitly
 3. Force state machine reset (may lose in-flight requests)
@@ -545,12 +574,14 @@ int zmq_ctx_restore(zmq_checkpoint_data_t *data, void **out_ctx) {
 **Problem:** ZMQ creates many file descriptors (TCP sockets, IPC sockets, signaler pipes).
 
 **CRIU Support:**
+
 - TCP: ✅ (with --tcp-established)
 - Unix sockets: ⚠️ (limited support)
 - Pipes: ✅
 - Eventfd/signaler: ⚠️ (may need plugin)
 
 **Recommendation:**
+
 - Let CRIU handle TCP sockets
 - Plugin handles IPC sockets (close and recreate)
 - Plugin handles signaler FDs (recreate)
@@ -617,12 +648,14 @@ message ZmqInprocEndpoint {
 ```
 
 **Advantages:**
+
 - Schema evolution (add fields without breaking compatibility)
 - Compact binary format
 - Language-neutral (can debug with protoc)
 - Used by CRIU internally for some images
 
 **Size Estimate:**
+
 - Context: ~100 bytes
 - Socket: ~500 bytes + messages
 - Message: ~(size + 10) bytes
@@ -633,6 +666,7 @@ message ZmqInprocEndpoint {
 ## 11. Implementation Phases
 
 ### Phase 1: Minimal Viable Checkpoint (MVP)
+
 **Target:** Single-socket, no messages
 
 - ✅ Serialize context options
@@ -644,6 +678,7 @@ message ZmqInprocEndpoint {
 **Use Case:** Checkpoint idle PUB/SUB sockets
 
 ### Phase 2: Message Queue Support
+
 **Target:** Handle in-flight messages
 
 - ✅ Drain and serialize pending messages
@@ -653,6 +688,7 @@ message ZmqInprocEndpoint {
 **Use Case:** Checkpoint sockets with buffered messages
 
 ### Phase 3: Complex Socket Types
+
 **Target:** ROUTER, DEALER, REQ, REP
 
 - ✅ Serialize routing tables (ROUTER)
@@ -662,6 +698,7 @@ message ZmqInprocEndpoint {
 **Use Case:** Checkpoint vLLM API server ↔ Engine communication
 
 ### Phase 4: Production Hardening
+
 **Target:** Edge cases and reliability
 
 - ✅ Handle socket creation during checkpoint
@@ -760,6 +797,7 @@ curl localhost:8000/v1/completions -d '...'
 5. ⏭️ **Integration** - Test with vLLM
 
 **Estimated Effort:**
+
 - Task #2: 3-5 days (API design + review)
 - Task #3: 2-3 weeks (libzmq implementation)
 - Task #4-5: 1-2 weeks (CRIU plugin)
@@ -772,4 +810,3 @@ curl localhost:8000/v1/completions -d '...'
 **Document Status:** ✅ Complete
 **Review Status:** Pending
 **Author:** Claude + Balaji
-

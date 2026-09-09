@@ -17,7 +17,7 @@ The `servicePort` defined within the helm chart should be used as the `inference
 
 </Warning>
 
-3. Ensure you have pushed your helm chart to your OCI container registry.
+1. Ensure you have pushed your helm chart to your OCI container registry.
 
 ## Pull Secret Management
 
@@ -68,7 +68,7 @@ For gRPC-based functions, set `"inferenceURL" : "/gRPC"`. This signals to Cloud 
 
 </Note>
 
-3. Proceed with function deployment and invocation normally.
+1. Proceed with function deployment and invocation normally.
 
 ## Multi-node Helm deployment
 

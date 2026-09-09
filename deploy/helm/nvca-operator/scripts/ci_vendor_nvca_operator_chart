@@ -275,6 +275,15 @@ main() {
     # regardless of which NVCA Operator the chart is actually wired to.
     update_yaml_key ".appVersion = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/Chart.yaml"
     update_yaml_key ".selfManaged.sharedStorage.imageTag = \"${NVCA_SHARED_STORAGE_IMAGE_TAG:?"NVCA_SHARED_STORAGE_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    # The BYOO otel collector sidecar's image tag moves independently of the
+    # monorepo source, driven by tools/chart-version-bumper against this
+    # vendored copy directly when byoo-otel-collector releases. Without this
+    # override the plain source copy above would carry it back to whatever
+    # the source chart still has, discarding that bump on the next vendor run.
+    update_yaml_key ".otelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.byooOtelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".helmManaged.otelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".selfManaged.otelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".nameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".fullnameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
     

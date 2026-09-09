@@ -139,6 +139,7 @@ Agent                         Worker Processes (rank 0-3)
 ### Phase 2: Restore-side NCCL Recreation
 
 Not in this change. After checkpoint + restore:
+
 - Workers have aborted communicators
 - Need to recreate with new ncclUniqueId
 - Requires intercepting NCCL collective calls to lazy-recreate

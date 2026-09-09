@@ -54,7 +54,7 @@ The `ngcConfig.clusterSource` parameter decides the cluster management mode.
     --set helmManaged.nvcaVersion="<NVCA-VERSION>"
 ```
 
-4. Click *"Switch Management Mode"* and see the management mode switched to *"Helm Chart"* successfully.
+1. Click *"Switch Management Mode"* and see the management mode switched to *"Helm Chart"* successfully.
 ![3-helm-managed-success.png](../images/3-helm-managed-success.png)
 
 ## Configuration Parameters
@@ -149,7 +149,7 @@ The following is an example command. Always use the command generated in the NGC
     --set ngcConfig.clusterSource="ngc-managed"
 ```
 
-4. Click *"Switch Management Mode"* and see the management mode switched to *"NGC"* successfully.
+1. Click *"Switch Management Mode"* and see the management mode switched to *"NGC"* successfully.
 ![3-ngc-managed-success.png](../images/3-ngc-managed-success.png)
 
 <Note>

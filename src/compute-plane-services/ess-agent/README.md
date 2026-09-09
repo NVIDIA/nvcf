@@ -84,7 +84,6 @@ bazel mod tidy
 |----|----|
 | `ESS_AGENT_INIT=true` | Indicates to the ess-agent that it is running under an init container. It will render the secrets to the template destination and exit the process/container immediately after. |
 
-
 ## Configuration
 
 1. Sample ess-agent config with no telemetry support
@@ -114,7 +113,7 @@ template {
 }
 ```
 
-2. Sample ess-agent config with telemetry w/o TLS enabled
+1. Sample ess-agent config with telemetry w/o TLS enabled
 
 The default port defined for ess-agent metrics is `9103` which is also exposed in the container by default.  If overriding both the agent config and the container startup must have the same port defined.
 
@@ -150,7 +149,8 @@ telemetry {
 }
 ```
 
-3. Sample config with telemetry with TLS enabled (optional)
+1. Sample config with telemetry with TLS enabled (optional)
+
 ```toml
 ess {
 
@@ -198,7 +198,6 @@ The following metrics are reported in addition to the default go prometheus metr
 | ess_templates_request_total | A counter for each secret path referenced in a template using id=templateID and status=(success\|fail). This metric will increment on every API failure or success on initial template refresh. Retries due to 50x server responses will not increment fail counter. | Counter |
 | ess_templates_stopped_total | The current number of templates stopped due to client errors (40x responses). Templates are stopped when `stop_processing_on_client_error=true` and the destination file doesn't exist. | Gauge |
 
-
 Note: Each `ess_templates_*` metric is labeled with an internal id of the template generated on startup which can change on each launch.
 
 Default labels:
@@ -207,9 +206,8 @@ Default labels:
 | -------- | ------- | ------- |
 | ess_agent_id | unique agent id generated on startup | `45852a0cd7b290d5b804a07e3d16d5e4`
 
-
-
 Metrics can be scrapped on the below endpoint
+
 ```
 $ curl http://<ip>:port/metrics
 ...
@@ -245,6 +243,7 @@ target_info{otel_scope_name="ess-agent",otel_scope_version="v0.1.0",ess_agent_id
 $ curl https://<ip>:<port>/metrics \
     --cacert <absolutePathToTheCertPem>
 ```
+
 ----
 
 <br/>
@@ -256,6 +255,7 @@ $ curl https://<ip>:<port>/metrics \
 When environment variable `ESS_AGENT_INIT=true` is passed to the container the ess-agent will run in the init mode which aligns with Kubernetes Init containers which are expected to start, run a process, and exit allowing dependent containers to start.
 
 Init containers will:
+
 1. load the JWT ESS Auth Token from disk
 2. render any secrets found in the configured template(s) to configured destination(s)
 3. exit service with code 0
@@ -263,25 +263,29 @@ Init containers will:
 Note: The init container instance does not expose metrics as a successful init containers lifespan is a few seconds.
 
 ### Failures
+
 There are four failure scenarios that can occur in the init container which result in different outcomes:
 
 #### 1. Invalid Template
+
 Will occur when a template contains incorract usage of `with secret` and cannot be processed. The agent will exit with code 1.
 
 #### 2. 40x client error returned by ESS API
+
 Will occur when a bad/invalid JWT token used (401), token does not have access to read secrets (403), secret path used in template
  does not exist (404) or secret does not contain an expected key found in template.
 
 When encountered the agent will exit with code 1 as there is no recovery without outside changes applied.
 
 #### 3. 429 Rate-limited
+
 Too many requests to ESS API have occurred from the same IP address.
  The agent will exponentially retry for up to 10 minutes and exit is time limit is reached.
 
 #### 4. 50x Server Error
+
 ESS API is not correctly functioning and returning a server error.
  The agent will exponentially retry for up to 10 minutes and exit is time limit is reached.
-
 
 ## Sidecar
 
@@ -305,7 +309,6 @@ All ESS API errors regardless of status code will increment the metric `ess_temp
 
 Any 40x client error response from ESS API will have the agent stop attempting to render the template and reset the refresh secret cadence (15m).
 
-
 #### 2. 429 Rate-Limited
 
 Similar to 40x errors, the agent will stop rendering the template and reset the refresh secret cadence.
@@ -318,7 +321,6 @@ If the 10 minute max duration is reached, retries will be stopped and the refres
 
 Note: Exponential retries do not increment the `ess_templates_request_total` metric with `status="fail"` only the first API call failure will be tracked.
 
-
 <br/>
 
 # Development
@@ -328,4 +330,5 @@ Note: Exponential retries do not increment the `ess_templates_request_total` met
 Refer [Building & Release](nv_releases/docs/deploy.md) on how to generate a ess-agent build.
 
 ## Testing
+
 Refer [link](nv_releases/docs/test.md) for local testing.

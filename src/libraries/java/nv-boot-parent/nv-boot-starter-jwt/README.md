@@ -1,10 +1,10 @@
 # NV Boot Starter JWT
 
 This is a library that allows operations on JWT:
-* Signing
-* Verifying signature
-* Encrypt JWE
-* Decrypt JWE
+- Signing
+- Verifying signature
+- Encrypt JWE
+- Decrypt JWE
 
 ## Adding as a Dependency
 
@@ -91,16 +91,17 @@ When `PrivateJwksString` and `JweKeysMapping` are present, the library registers
 | `genericEncryptedJsonMapper` | `JsonMapper`              | JsonMapper configured for encrypted model conversion. Only created if no bean with this name exists.                           |
 | `encryptedModelConverter` | `EncryptedModelConverter` | Converts between model and value object types with support for encrypted fields. Only created when an `EncryptedModelConverterProperties` bean is present. |
 
-
 ## Usage
+
 ### Generating keys
-* [generate EC (private key)](./src/test/java/com/nvidia/boot/jwt/services/JwtServiceTest.java#L201)
-* [generate AES (symmetric key)](../src/test/java/com/nvidia/boot/jwt/services/JwtServiceTest.java#L220)
+- [generate EC (private key)](./src/test/java/com/nvidia/boot/jwt/services/JwtServiceTest.java#L201)
+- [generate AES (symmetric key)](../src/test/java/com/nvidia/boot/jwt/services/JwtServiceTest.java#L220)
 
 ### Getting JwtService
+
 `JwtService` has two dependencies:
-* key-set of private keys
-* key type to id mapping
+- key-set of private keys
+- key type to id mapping
 
 The key mapping is needed for your services to be able to rotate encryption keys. Consumer service
 will use key type and JwtService will resolve kid using the mapping. This way your app services

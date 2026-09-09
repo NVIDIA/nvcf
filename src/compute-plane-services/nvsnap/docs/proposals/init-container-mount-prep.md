@@ -170,6 +170,7 @@ Resource footprint: <10 MB binary, ~5 MB RAM at runtime, runs for
 ## Alternatives considered
 
 ### A. Just bump K8s webhook timeout to 30s (status quo + tuning)
+
 - Already tried. Even with parallel prep, 355 mounts × cross-node peer
   HTTP overhead exceeded 30 s in observed runs.
 - More fundamentally: a webhook that takes 30 s is an SLO landmine.
@@ -177,6 +178,7 @@ Resource footprint: <10 MB binary, ~5 MB RAM at runtime, runs for
   cascades into pod-admission failures across the cluster.
 
 ### B. Collapse mounts (mount /root/.cache once instead of 5 leaves)
+
 - Reduces 355 → ~20 mounts. Webhook work drops to <1 s.
 - BUT: masks base-image content under the mount path. For
   `/root/.cache` that's fine; for `/usr/local/lib/python3.12/dist-packages`
@@ -188,6 +190,7 @@ Resource footprint: <10 MB binary, ~5 MB RAM at runtime, runs for
   not a substitute for moving the work out of admission.
 
 ### C. CSI driver for lazy mount on first access
+
 - Most K8s-idiomatic for "expensive volume setup": ship a CSI driver
   that does the overlay mount lazily.
 - Multi-week implementation; CSI is a heavyweight contract.
@@ -195,6 +198,7 @@ Resource footprint: <10 MB binary, ~5 MB RAM at runtime, runs for
 - Defer to v2 if NVCA outgrows the init-container model.
 
 ### D. Pre-mount at agent startup, not at restore time
+
 - Agent watches manifest CMs; pre-mounts overlay LOWER once per hash.
 - Per-pod UPPER is still per-pod-at-restore (can't pre-allocate).
 - Saves the lower-side mount cost (small, ~5%); doesn't solve the

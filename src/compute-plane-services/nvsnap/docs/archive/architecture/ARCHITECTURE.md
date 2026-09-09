@@ -5,6 +5,7 @@
 NVSNAP is a production-grade GPU checkpoint/restore system for Kubernetes that enables live migration of GPU workloads without application modification. This document outlines the architecture, technical challenges, and phased implementation plan.
 
 **Key Constraints:**
+
 - ❌ Cannot modify applications (PyTorch, vLLM, etc.)
 - ❌ Cannot depend on specific container runtimes (containerd, CRI-O)
 - ❌ Cannot depend on specific Kubernetes versions
@@ -60,12 +61,14 @@ Unlike CPU applications where all state lives in process memory (checkpointable 
 ### Problem 2: NVIDIA Doesn't Provide Checkpoint APIs
 
 NVIDIA does not provide public APIs for:
+
 - Dumping GPU memory contents
 - Saving CUDA context state
 - Serializing stream/event state
 - Restoring any of the above
 
 **Our Approach:** We must work around this limitation using:
+
 1. **CUDA Driver API** - Low-level access to GPU memory
 2. **Library Interposition** - Track CUDA calls without modifying apps
 3. **Process Introspection** - Understand GPU state from /proc and nvidia-smi
@@ -73,6 +76,7 @@ NVIDIA does not provide public APIs for:
 ### Problem 3: Multi-Process Coordination (vLLM/DeepSpeed)
 
 vLLM and similar frameworks use:
+
 - Multiple worker processes
 - NCCL for GPU-to-GPU communication
 - Shared memory for IPC
@@ -120,6 +124,7 @@ vLLM and similar frameworks use:
 ### Problem 4: Container Runtime Independence
 
 We cannot use containerd or CRI-O checkpoint APIs because:
+
 1. Not all runtimes support checkpoint
 2. Runtime versions vary across clusters
 3. Checkpoint implementations differ
@@ -332,6 +337,7 @@ We use CRIU for CPU state but with custom handling for GPU:
 ## Multi-Process GPU Workloads (vLLM)
 
 This is the hardest part. vLLM uses:
+
 - Ray or multiprocessing for worker management
 - NCCL for GPU collective operations
 - Shared memory for tensor passing
@@ -593,6 +599,7 @@ def restore_nccl_workload(checkpoint_data, target_gpus):
 ```
 
 **Cluster Test Plan:**
+
 ```bash
 # Deploy test workload
 kubectl apply -f test/workloads/simple-python.yaml
@@ -677,6 +684,7 @@ kubectl logs <restored-pod> | grep "resumed"
 ```
 
 **Test Program:**
+
 ```cuda
 // test_cuda_checkpoint.cu
 // Performs iterative computation, checkpointable at any iteration

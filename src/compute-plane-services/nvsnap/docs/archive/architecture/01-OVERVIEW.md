@@ -82,12 +82,14 @@ Since we cannot modify applications and cannot rely on NVIDIA providing C/R supp
 ### How It Works
 
 **During Normal Execution:**
+
 1. Interception layer tracks all CUDA API calls (allocations, contexts, streams)
 2. Tracks NCCL communicator setup and operations
 3. Maintains shadow state that mirrors GPU state
 4. Zero overhead for most operations (just pointer forwarding)
 
 **During Checkpoint:**
+
 1. Coordinate all processes in the workload (barrier)
 2. Drain in-flight NCCL operations
 3. Synchronize all CUDA streams
@@ -97,6 +99,7 @@ Since we cannot modify applications and cannot rely on NVIDIA providing C/R supp
 7. Package everything together
 
 **During Restore:**
+
 1. Restore CPU state with CRIU (process frozen)
 2. Reinitialize CUDA contexts using tracked state
 3. Reallocate GPU memory at same virtual addresses (or remap)
@@ -170,6 +173,7 @@ We don't use containerd or CRI-O APIs. Instead:
 ### Application Transparency
 
 The interception layer is injected via environment variable:
+
 ```yaml
 env:
   - name: LD_PRELOAD
@@ -188,6 +192,7 @@ For multi-process workloads:
    - NCCL communicator membership (tracked by interception layer)
 
 2. **Coordinated Checkpoint**:
+
    ```
    Process 1 ──┐
    Process 2 ──┼──► Barrier ──► Drain NCCL ──► Sync CUDA ──► Checkpoint All
@@ -202,6 +207,7 @@ For multi-process workloads:
 ## Next Steps
 
 See the following documents for detailed information:
+
 - [03-INTERCEPTION-LAYER.md](03-INTERCEPTION-LAYER.md) - Deep dive on CUDA/NCCL interception
 - [04-CHECKPOINT-ENGINE.md](04-CHECKPOINT-ENGINE.md) - Checkpoint/restore engine design
 - [05-MULTI-PROCESS.md](05-MULTI-PROCESS.md) - Multi-process coordination for vLLM
