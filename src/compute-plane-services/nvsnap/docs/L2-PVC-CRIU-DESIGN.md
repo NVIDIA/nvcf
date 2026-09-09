@@ -1,10 +1,10 @@
 # L2 per-capture PVC for the CRIU path (nvsnap#63)
 
->  **Status:** The per-capture PVC fan-out described here is current and
->  shipping. This document is framed around the CRIU dump path; the same L2
->  mechanism now also serves the rootfs/cachedir capture paths (the primary
->  paths today). See [ROOTFS-EVERYWHERE](design/ROOTFS-EVERYWHERE.md) and
->  [STORAGE-AGNOSTIC-L2-PROMOTION](design/STORAGE-AGNOSTIC-L2-PROMOTION.md).
+> **Status:** The per-capture PVC fan-out described here is current and
+> shipping. This document is framed around the CRIU dump path; the same L2
+> mechanism now also serves the rootfs/cachedir capture paths (the primary
+> paths today). See [ROOTFS-EVERYWHERE](design/ROOTFS-EVERYWHERE.md) and
+> [STORAGE-AGNOSTIC-L2-PROMOTION](design/STORAGE-AGNOSTIC-L2-PROMOTION.md).
 
 **Issue**: nvsnap#63 · **Last updated**: 2026-05-31
 
@@ -383,17 +383,18 @@ workload class that needs more headroom and bump the multiplier
 per-namespace / per-fvID later.
 
 ## Open questions
+
 2. **Job-vs-direct-write**: writer Job is cleaner (separate failure
    domain, easier to time-limit). Agent-direct-write would skip the
    Job pod startup overhead (~10s on cold pull) but mixes concerns.
    Stick with writer Job per existing pattern.
-3. **Concurrent restores during writer Job**: if a restored pod's
+2. **Concurrent restores during writer Job**: if a restored pod's
    webhook fires before the writer finishes, the PVC exists but is
    empty. Mitigation: the webhook checks the Job's `Succeeded`
    condition (or the manifest.json at PVC root) before stamping the
    PVC volume mount. If still in progress, fall back to peer cascade
    for the first restore; subsequent restores get the PVC.
-4. **NVCA `lookupByHash` shape**: extend the response to include
+3. **NVCA `lookupByHash` shape**: extend the response to include
    `pvc_name`, or have Hook A do a separate Get? Tightest coupling =
    include it in `lookup` response, single round trip.
 

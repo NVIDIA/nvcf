@@ -406,7 +406,7 @@ For troubleshooting common observability issues:
 
 NVCF self-hosted control-plane observability is compatible with:
 
-- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions). 
+- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions).
 - Any Prometheus-compatible metrics collection system
 - Any log aggregation system that can collect from Kubernetes stdout/stderr or read
   from the filesystem (depending on K8s cluster configuration)

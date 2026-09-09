@@ -391,21 +391,25 @@ GXCache logs include:
 ### Common Issues
 
 **Webhook Not Working**
+
 - Verify webhook is running and healthy
 - Check webhook configuration and secrets
 - Ensure proper RBAC permissions
 
 **Cache Not Storing Shaders**
+
 - Verify GXCache service is running
 - Check storage configuration and persistent volumes
 - Review application logs for shader compilation errors
 
 **Low Cache Hit Ratio**
+
 - Review cache size configuration
 - Check cache eviction policies
 - Monitor storage performance
 
 **Storage Issues**
+
 - Verify storage class availability
 - Check persistent volume claims
 - Monitor disk space usage

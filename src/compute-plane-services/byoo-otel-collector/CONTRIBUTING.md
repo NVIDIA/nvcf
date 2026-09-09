@@ -2,6 +2,7 @@
 
 If you are interested in contributing to byoo-otel-collector, your contributions will fall
 into three categories:
+
 1. You want to report a bug, feature request, or documentation issue
     - File an [issue](https://github.com/NVIDIA/nvcf-byoo-otel-collector/issues/new)
     describing what you encountered or what you want to see changed.
@@ -91,20 +92,23 @@ Do not add or update a `VERSION` file.
 
 ### Signing Your Work
 
-* We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
+- We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
 
-  * Any contribution which contains commits that are not Signed-Off will not be accepted.
+  - Any contribution which contains commits that are not Signed-Off will not be accepted.
 
-* To sign off on a commit you simply use the `--signoff` (or `-s`) option when committing your changes:
+- To sign off on a commit you simply use the `--signoff` (or `-s`) option when committing your changes:
+
   ```bash
   $ git commit -s -m "Add cool feature."
   ```
+
   This will append the following to your commit message:
+
   ```
   Signed-off-by: Your Name <your@email.com>
   ```
 
-* Full text of the DCO:
+- Full text of the DCO:
 
   ```
     Developer Certificate of Origin
@@ -136,6 +140,7 @@ Do not add or update a `VERSION` file.
 
 - Follow the [instruction](https://pre-commit.com/#quick-start) to install the pre-commit.
 - Install the pre-commit hook
+
     ``` shell
     pre-commit install --hook-type commit-msg
     ```

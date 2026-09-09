@@ -203,6 +203,7 @@ cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
 
 The following example shows a typical configuration for Amazon EKS:
 </Accordion>
+
 ```yaml title="environments/eks-example.yaml"
 global:
 
@@ -325,7 +326,6 @@ ingress:
         namespace: "envoy-gateway" # must be set by the environment
         listenerName: tcp
 ```
-
 
 #### `domain` and `ingress` Configuration
 
@@ -540,6 +540,7 @@ HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra template
 # Apply changes to just that release
 HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
 ```
+
 </Accordion>
 
 #### Worker Image Version Overrides
@@ -600,18 +601,28 @@ cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 ```yaml title="secrets/example-secrets.yaml"
 
 # Required structure for any environment secrets.
+
 # This is the minimal set of values to provide.
 
 # Notes:
+
 # Cassandra:
-#   The password should match the value set in the cassandra keyspace migrations
+
+# The password should match the value set in the cassandra keyspace migrations
+
 #
+
 # API:
-#   The value for the registry will be used in three places, as it is
-#   expected the same registry is used as a single source for all images.
-#     openbao.migrations.env[1].value
-#     api.accountBootstrap.registryCredentials[0].secret.value
-#     api.accountBootstrap.registryCredentials[1].secret.value
+
+# The value for the registry will be used in three places, as it is
+
+# expected the same registry is used as a single source for all images.
+
+# openbao.migrations.env[1].value
+
+# api.accountBootstrap.registryCredentials[0].secret.value
+
+# api.accountBootstrap.registryCredentials[1].secret.value
 
 openbao:
   migrations:
@@ -642,6 +653,7 @@ api:
         artifactTypes: ["HELM"]
         tags: []
         description: "NGC Helm registry"
+
 ```
 
 
@@ -754,7 +766,7 @@ done
 
 For registries other than NGC, replace `--docker-server`, `--docker-username`, and `--docker-password` with your registry credentials.
 
-2. Reference the secret in your Helmfile environment. The Helmfile propagates
+1. Reference the secret in your Helmfile environment. The Helmfile propagates
    `imagePullSecrets` to all NVCF charts automatically. Add the secret name to
    your environment YAML (e.g. `environments/<your-env>.yaml`):
 
@@ -934,7 +946,7 @@ In a separate terminal, watch events in the nvcf namespace:
 kubectl get events -n nvcf -w
 ```
 
-2. Check the account bootstrap logs if it failed:
+1. Check the account bootstrap logs if it failed:
 
 ```bash
 kubectl logs job/nvcf-api-account-bootstrap -n nvcf
@@ -945,16 +957,16 @@ The bootstrap job auto-deletes after ~5 minutes. Monitor events to catch failure
 
 </Note>
 
-3. Check the NVCF API logs for detailed error messages:
+1. Check the NVCF API logs for detailed error messages:
 
 ```bash
 kubectl logs -n nvcf -l app.kubernetes.io/name=nvcf-api --tail=100
 ```
 
-4. Fix the root cause, for example correct your
+1. Fix the root cause, for example correct your
    `secrets/<environment-name>-secrets.yaml` file.
 
-5. Destroy the services and downstream releases:
+2. Destroy the services and downstream releases:
 
 ```bash
 # Destroy services release group
@@ -965,13 +977,13 @@ HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress destro
 HELMFILE_ENV=<environment-name> helmfile --selector name=admin-issuer-proxy destroy
 ```
 
-6. Clean up the service namespaces:
+1. Clean up the service namespaces:
 
 ```bash
 kubectl delete namespace nvcf api-keys ess sis --ignore-not-found
 ```
 
-7. Recreate namespaces and labels. Gateway API routing requires these labels:
+1. Recreate namespaces and labels. Gateway API routing requires these labels:
 
 ```bash
 kubectl create namespace api-keys && \
@@ -985,13 +997,13 @@ kubectl label namespace ess nvcf/platform=true && \
 kubectl label namespace nvcf nvcf/platform=true
 ```
 
-8. Re-sync services. This triggers fresh post-install hooks:
+1. Re-sync services. This triggers fresh post-install hooks:
 
 ```bash
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=services sync
 ```
 
-9. Sync remaining releases after services succeed:
+1. Sync remaining releases after services succeed:
 
 ```bash
 HELMFILE_ENV=<environment-name> helmfile --selector name=admin-issuer-proxy sync
@@ -1058,7 +1070,7 @@ GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.
 echo "$GATEWAY_ADDR"
 ```
 
-2. Update your environment file with the new address:
+1. Update your environment file with the new address:
 
 ```bash
 # Edit environments/<environment-name>.yaml
@@ -1066,7 +1078,7 @@ echo "$GATEWAY_ADDR"
 # To:     domain: "NEW_GATEWAY_ADDR"
 ```
 
-3. Re-sync ingress and services that depend on the domain:
+1. Re-sync ingress and services that depend on the domain:
 
 ```bash
 # Re-sync gateway routes (picks up new domain)
@@ -1077,7 +1089,7 @@ HELMFILE_ENV=<environment-name> helmfile --selector release-group=services sync
 HELMFILE_ENV=<environment-name> helmfile --selector name=admin-issuer-proxy sync
 ```
 
-4. Verify routes are using the new address:
+1. Verify routes are using the new address:
 
 ```bash
 kubectl get httproutes -A
@@ -1113,7 +1125,7 @@ export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonp
 echo "Gateway Address: $GATEWAY_ADDR"
 ```
 
-2. Generate an admin token:
+1. Generate an admin token:
 
 ```bash
 # Generate an admin API token
@@ -1124,7 +1136,7 @@ export NVCF_TOKEN=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/admin/keys" \
 echo "Token generated: ${NVCF_TOKEN:0:20}..."
 ```
 
-3. List functions. The list should be empty initially:
+1. List functions. The list should be empty initially:
 
 ```bash
 # List all functions

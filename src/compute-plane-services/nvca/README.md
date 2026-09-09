@@ -61,7 +61,7 @@ The typical cluster layout is 2 GPU worker nodes, 1 control-plane node, and a mo
 kind create cluster --image kindest/node:"${K8S_VERSION:-"v1.32.8"}" --config test/kind-env/r750x2-h100x8/kind-config.yaml
 ```
 
-2. Install fake-gpu-operator
+1. Install fake-gpu-operator
 
 ```bash
 helm repo add fake-gpu-operator https://runai.jfrog.io/artifactory/api/helm/fake-gpu-operator-charts-prod --force-update
@@ -69,20 +69,20 @@ helm repo update
 helm upgrade -i gpu-operator fake-gpu-operator/fake-gpu-operator --namespace gpu-operator --create-namespace --values test/kind-env/r750x2-h100x8/fake-gpu-values.yaml
 ```
 
-3. Install SMB CSI Driver
+1. Install SMB CSI Driver
 
 ```bash
 helm repo add csi-driver-smb https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/master/charts
 helm upgrade -i csi-driver-smb csi-driver-smb/csi-driver-smb --namespace kube-system --version v1.17.0 --set 'controller.nodeSelector.nodeGroup=monitoring'
 ```
 
-4. Register the cluster at [NVCF Settings](https://nvcf.ngc.nvidia.com/settings) and install with the provided command, adding:
+1. Register the cluster at [NVCF Settings](https://nvcf.ngc.nvidia.com/settings) and install with the provided command, adding:
 
 ```
 --set 'nodeSelector.key=nodeGroup' --set 'nodeSelector.value=monitoring'
 ```
 
-5. Run E2E tests
+1. Run E2E tests
 
 ```bash
 make dev-shell
@@ -198,9 +198,9 @@ ensure the `KUBEBUILDER_ASSETS` environment variable is set to the output of the
 For example, in VSCode `settings.json` add:
 
 ```json
-	"go.testEnvVars": {
-		"KUBEBUILDER_ASSETS": "/home/myuser/.local/share/kubebuilder-envtest/k8s/current"
-	}
+ "go.testEnvVars": {
+  "KUBEBUILDER_ASSETS": "/home/myuser/.local/share/kubebuilder-envtest/k8s/current"
+ }
 ```
 
 When running under Bazel, the `storage_test` and `miniservice_test`

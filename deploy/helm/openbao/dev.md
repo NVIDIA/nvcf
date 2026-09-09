@@ -1,21 +1,23 @@
 ## Commands
 
 ### Deployment
-* `deploy.sh`:
+- `deploy.sh`:
 
-* `cleanup.sh`:
+- `cleanup.sh`:
 
 ### Admin Setup
-* `admin/setup.sh`:
+- `admin/setup.sh`:
 
-* `admin/setup.sh --cleanup`:
+- `admin/setup.sh --cleanup`:
 
 ### Tool
+
 `tool/` directory contains useful wrappers to interact with OpenBao via kubectl
 
-* `tool/raft-list-peers.sh`
+- `tool/raft-list-peers.sh`
 
 ### Tests
+
 `test/` directory contains various test scripts written in Bash
 
 ### Useful Debug Commands

@@ -116,6 +116,7 @@ sha256(
 
 `engine_compat_flags` is per-engine — flags that affect what's in the
 cache:
+
 - vLLM: `--tensor-parallel-size`, `--dtype`, `--max-model-len`,
   `--gpu-memory-utilization`, `--quantization`
 - SGLang: `--tp-size`, `--mem-fraction-static`, `--dtype`

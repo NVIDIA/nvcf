@@ -94,6 +94,7 @@ The BYOO collector container handles receiving OTLP telemetry (logs, metrics, tr
 ### byoo-otel-collector Image
 
 The `byoo-otel-collector` image is deployed as a single container image that contains:
+
 - **byoo-otel-collector binary** - The main orchestrator that:
   - Generates OpenTelemetry Collector configuration YAML using the nvcf-otelconfig library ([./internal/otelconfig](./internal/otelconfig))
   - Extracts and parses secrets from ESS (Encrypted Secret Store) into individual files ([./internal/secrets](./internal/secrets))
@@ -101,11 +102,13 @@ The `byoo-otel-collector` image is deployed as a single container image that con
 - **otel-collector-contrib binary** - Custom-built OpenTelemetry Collector with healthcheck v2 extension support from upstream [OpenTelemetry Collector Contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib), executed and managed by the byoo-otel-collector binary
 
 Supported Deployment Types:
+
 - **Kubernetes Deployments** → Container and Helm chart workloads
 - **VM Deployments** → Container and Helm chart workloads
 - **Multiple Backends** → Grafana Cloud, Datadog, Azure Monitor, Splunk, Kratos, and more
 
 Exposed Ports:
+
 - 18888: `/metrics` endpoint for the otel-collector-contrib metrics
 - 14357: OTLP gRPC receiver
 - 14358: OTLP HTTP receiver
@@ -118,6 +121,7 @@ Exposed Ports:
 The `nvcf-otel-collector` image contains **only** the custom `otelcol` binary without the BYOO functionalities. This is used as a sidecar container in NVCA pods to collect and forward Kubernetes events for observability.
 
 Exposed Ports:
+
 - 13133: Health check endpoint
 - 8888: Metrics endpoint
 
@@ -166,6 +170,7 @@ Secrets-extractor handles ESS (Encrypted Secret Store) secrets, flattening them 
 ESS Secret File Pattern: `<provider>-<endpoint_name>-<credential_type>`
 
 Examples:
+
 - GRAFANA-Grafana_prd-username
 - GRAFANA-Grafana_prd-password
 - THANOS-kratos-cds-client_cert
@@ -189,6 +194,7 @@ Platform Metrics Attributes:
 - nvcf worker: error_code
 
 Attribute Notes:
+
 - [1] `job` attribute is available in Grafana Cloud
 - [2] `service` is used in Datadog instead of attribute `job`
 - [3] `container` is not present in Azure Monitor
@@ -203,6 +209,7 @@ The `generator/` directory contains a Python script that runs at build or develo
 Comprehensive validation tools ensure generated configurations are valid and functional.
 
 **Validation Features:**
+
 - YAML syntax validation
 - OpenTelemetry Collector binary validation
 - End-to-end testing with real collector instances
@@ -326,6 +333,7 @@ make update-examples
 See the [complete metrics list](generator/doc/README.md) for detailed information.
 
 Platform Metric Sources:
+
 - cadvisor: Container resource usage metrics
 - Kube state metrics: Kubernetes resource state metrics ([complete list](https://github.com/kubernetes/kube-state-metrics/tree/main/docs/metrics))
 - GPU/DCGM: GPU telemetry from NVIDIA Data Center GPU Manager ([DCGM exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html))

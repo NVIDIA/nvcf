@@ -48,6 +48,7 @@ io_uring is Linux's high-performance async I/O interface. It presents several ch
 ```
 
 **CRIU cannot checkpoint when:**
+
 - SQ has pending submissions (`sq_head != sq_tail`)
 - CQ has unreaped completions (`cq_head != cq_tail`)
 - SQPOLL thread is actively polling
@@ -382,6 +383,7 @@ class UVProcess:
 ```
 
 After CRIU restore:
+
 - The `uv_process_t` structure exists in memory (restored by CRIU)
 - The handle's loop pointer is valid
 - But the kernel-side state the handle references may need revalidation

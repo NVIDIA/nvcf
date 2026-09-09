@@ -62,7 +62,7 @@ You must have access to the NGC `nvcf-onprem` organization to begin.
   <img src="images/apipersonalkey.png" alt="Personal API key creation for nvcf-onprem organization" />
 </Frame>
 
-3. Set the NGC API key as an environment variable for use in any subsequent commands:
+1. Set the NGC API key as an environment variable for use in any subsequent commands:
 
 ```bash
 export NGC_API_KEY="nvapi-xxxxxxxxxxxxx"  # Replace with your NGC API key

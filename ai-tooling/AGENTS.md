@@ -112,10 +112,12 @@ Skills are invoked on-demand, not automatically applied like rules.
 ## Description Best Practices
 
 Include:
+
 1. What the skill does (actions it enables)
 2. When to use it (trigger phrases, keywords)
 
 Example:
+
 ```yaml
 description: Manage NVCF clusters via NGC CLI. Register, list, and delete clusters for function and task deployments. Use when registering clusters, managing cluster configurations, or when the user mentions ngc cf cluster, NVCF clusters, or cluster registration.
 ```

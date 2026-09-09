@@ -11,15 +11,17 @@ This sample supports three networking environments for multi-node GPU testing:
 Before running the test scripts, you need to configure your NVCF credentials:
 
 1. Copy the sample configuration file:
+
 ```bash
 cp config.env.sample config.env
 ```
 
-2. Edit `config.env` and replace the placeholder values with your actual credentials:
+1. Edit `config.env` and replace the placeholder values with your actual credentials:
    - `KEY`: Your NVIDIA Cloud Functions API key (get it from https://org.ngc.nvidia.com/setup/api-keys)
    - `FUNCTION_ID`: Your deployed function ID (single-node or multi-node)
 
 Example `config.env`:
+
 ```bash
 KEY="nvapi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 FUNCTION_ID="ce460ed1-6f17-4bdc-ad6b-00a569fc780d"
@@ -32,6 +34,7 @@ FUNCTION_ID="ce460ed1-6f17-4bdc-ad6b-00a569fc780d"
 The container base image is configurable via the `BASE_IMAGE` build argument. Each environment requires a base image with the appropriate networking stack pre-installed.
 
 **AWS GB200 / EFA** (default):
+
 ```bash
 docker build -t multi-node-test container/
 ```
@@ -39,6 +42,7 @@ docker build -t multi-node-test container/
 The default base image includes the AWS EFA libraries and NCCL aws-ofi plugin needed for EFA communication.
 
 **NCP / Mellanox mlx5**:
+
 ```bash
 docker build \
   --build-arg BASE_IMAGE=ghcr.io/coreweave/nccl-tests:13.0.2-devel-ubuntu22.04-nccl2.29.2-1-d73ec07 \
@@ -96,16 +100,19 @@ ngc cf function deploy create --org <org> --deployment-specification <cluster>:<
 The repository includes test scripts that automatically use your configured credentials from `config.env`:
 
 **NCCL Test:**
+
 ```bash
 ./test_nccl.sh
 ```
 
 **Bandwidth Test:**
+
 ```bash
 ./test_bandwidth.sh
 ```
 
 These scripts will:
+
 - Automatically load your API key and function ID from `config.env`
 - Validate that the configuration is set correctly
 - Run the tests against your deployed NVCF function

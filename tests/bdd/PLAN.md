@@ -244,31 +244,42 @@ Reference argv shapes used by the CLI features (matches the current CLI
 contract verified in `src/clis/nvcf-cli/cmd/`):
 
 - `self-hosted up`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain up --cluster-name <name> --region us-west-1 --nca-id nvcf-default
   ```
+
 - `self-hosted install --control-plane` (multi-cluster):
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain --control-plane-context k3d-<cp> --compute-plane-context k3d-<compute> install --control-plane --cluster-name <cp> --region us-west-1 --nca-id nvcf-default
   ```
+
 - `self-hosted control-plane profile validate`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain control-plane profile validate --file <profile-path> --require in-cluster
   ```
+
 - `self-hosted compute-plane register`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
+
 - Helmfile control-plane profile handoff (single cluster):
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
   make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
   ```
+
   The profile export runs after the selected Helmfile environment is installed
   so endpoint and PKI trust data describe that deployment. A single-cluster
   export omits both persistent context flags; the CLI accepts a split-cluster
   pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
   ```
@@ -617,6 +628,7 @@ Each `*_steps.go` file holds a small registrar (`registerFileSteps`,
 ### Phase 1 (MR 1): foundation, no Godog
 
 Files:
+
 - `tests/bdd/harness/config.go`
 - `tests/bdd/harness/runner.go`
 - `tests/bdd/harness/ledger.go`
@@ -628,6 +640,7 @@ Files:
 - Unit tests next to each source file.
 
 Acceptance:
+
 - `go test ./tests/bdd/harness ./tests/bdd/dsl` passes.
 - Ledger snapshot/restore roundtrip is covered including the
   did-not-exist-becomes-deleted case.
@@ -640,6 +653,7 @@ Acceptance:
 ### Phase 2 (MR 2): step handlers
 
 Files:
+
 - `tests/bdd/steps/context.go`
 - `tests/bdd/steps/file_steps.go`
 - `tests/bdd/steps/command_steps.go`
@@ -649,6 +663,7 @@ Files:
   fake CommandRunner and a real Ledger backed by a t.TempDir.
 
 Acceptance:
+
 - `go test ./tests/bdd/steps` passes.
 - Each handler validates argument shape and propagates results into
   ScenarioContext fields. No domain logic; everything routes through
@@ -660,12 +675,14 @@ Acceptance:
 ### Phase 3 (MR 3): suite entry points and first feature
 
 Files:
+
 - `tests/bdd/godog_test.go` adds `TestSingleClusterUp` plus
   `TestSingleClusterUpFeatureFileWiresToSteps`.
 - Wiring test uses a fake CommandRunner that returns canned
   exit-code-0 results so every step resolves.
 
 Acceptance:
+
 - `go test ./tests/bdd -run TestSingleClusterUpFeatureFileWiresToSteps`
   passes.
 - The handler chain resolves every step in
@@ -676,10 +693,12 @@ Acceptance:
 ### Phase 4 (MR 4): remaining features wired
 
 Files:
+
 - `tests/bdd/godog_test.go` gains `TestMultiClusterUp` and
   `TestSingleClusterHelmfile`, plus their wiring tests.
 
 Acceptance:
+
 - Both new wiring tests pass against the same fake CommandRunner shape.
 - Live run of either feature is exercisable; the documented argv path
   matches what `harness/cli.go` produced in the old suite (verified by
@@ -688,6 +707,7 @@ Acceptance:
 ### Phase 5 (MR 5, optional, gated on live verification)
 
 Files:
+
 - Delete `tests/bdd/operator/`, `tests/bdd/stack/`, the now-unused
   `tests/bdd/steps/*.go` handlers, and the feature files that have a
   `bdd` counterpart.
@@ -695,6 +715,7 @@ Files:
 - Update `tests/bdd/AGENTS.md` and any `.gitlab-ci.yml` references.
 
 Acceptance:
+
 - Live `make` invocations in the project root that reference the BDD
   suite still resolve.
 - One green live run of each feature on the contributor's k3d.

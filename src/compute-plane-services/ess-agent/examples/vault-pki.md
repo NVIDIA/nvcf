@@ -16,6 +16,7 @@ limitations under the License.
 -->
 Rendering PKI Certificates from Vault with Consul Template
 ----------------------------------------------------------
+
 [Vault][vault] is a popular open source tool for managing secrets. In addition
 to acting as an encrypted KV store, Vault can also generate dynamic secrets,
 like PKI/TLS certificates.
@@ -26,7 +27,7 @@ software requires these files be placed in separate files on the system.
 
 **Note:** In previous versions of consul-template [`generate_lease`][generate_lease] needed
 to be set to `true` (non-default) on the Vault PKI role.  Without the lease the automatic
-certificate renewal wouldn't work properly based on the expiration date of the certificate alone. 
+certificate renewal wouldn't work properly based on the expiration date of the certificate alone.
 As of v0.22.0 the certificate expiration details are now also used to monitor the renewal time
 without needing an associated lease in Vault.  If you are issuing a very large number of certificates
 there may be a performance advantage to not tracking every lease when leaving the default setting

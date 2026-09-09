@@ -1,4 +1,5 @@
 # Inference-test Sample
+
 This sample is a Helm chart that deploys the `fastapi-echo-sample` container.
 
 ## Prerequisites

@@ -104,7 +104,7 @@ Some supporting components such as the GPU Operator, OpenBao, NATS, Cassandra, e
 
 The following tables list the complete artifact inventory.
 
-{/* docs-version-sync:BEGIN manifest-artifact-registry-paths */}
+{/*docs-version-sync:BEGIN manifest-artifact-registry-paths*/}
 
 ### Control plane Helm charts
 
@@ -196,4 +196,4 @@ The following tables list the complete artifact inventory.
 | `nvcf-compute-plane-stack` | `1.0.6` | Provides the Helmfile bundle for compute-plane deployment. | `nvcr.io/nvidia/nvcf/nvcf-compute-plane-stack:1.0.6` |  |
 | `nvcf-self-managed-stack` | `0.6.1` | Provides the Helmfile bundle for control-plane deployment. | `nvcr.io/nvidia/nvcf/nvcf-self-managed-stack:0.6.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 
-{/* docs-version-sync:END manifest-artifact-registry-paths */}
+{/*docs-version-sync:END manifest-artifact-registry-paths*/}

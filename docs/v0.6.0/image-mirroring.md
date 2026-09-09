@@ -27,7 +27,7 @@ You must have access to the NGC `nvcf-onprem` organization to begin.
   <img src="images/apipersonalkey.png" alt="Personal API key creation for nvcf-onprem organization" />
 </Frame>
 
-3. Set the NGC API key as an environment variable for use in any subsequent commands:
+1. Set the NGC API key as an environment variable for use in any subsequent commands:
 
 ```bash
 export NGC_API_KEY="nvapi-xxxxxxxxxxxxx"  # Replace with your NGC API key
@@ -191,7 +191,7 @@ ECR will properly track both container images and Helm charts under the same rep
 
 First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nvidia.com/setup/installers/cli) using the Personal API key you created.
 
-{/* docs-version-sync:BEGIN image-mirroring-resource-examples */}
+{/*docs-version-sync:BEGIN image-mirroring-resource-examples*/}
 
 ```bash
 # Set stack versions
@@ -207,7 +207,7 @@ ngc registry resource download-version \
   "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 ```
 
-{/* docs-version-sync:END image-mirroring-resource-examples */}
+{/*docs-version-sync:END image-mirroring-resource-examples*/}
 
 ### Downloading `nvcf-self-managed-stack` (control plane)
 
@@ -221,7 +221,7 @@ and its listed artifact versions are QA-qualified together.
 
 **Download and extract:**
 
-{/* docs-version-sync:BEGIN image-mirroring-stack-snippet */}
+{/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
 # Set the version
@@ -233,7 +233,7 @@ ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VE
    rm -rf nvcf-self-managed-stack_v${VERSION}
 ```
 
-{/* docs-version-sync:END image-mirroring-stack-snippet */}
+{/*docs-version-sync:END image-mirroring-stack-snippet*/}
 
 <Note>
 If you don't have access to this repository, contact your NVIDIA representative.
@@ -252,7 +252,7 @@ and its listed artifact versions are QA-qualified together.
 
 Download and extract:
 
-{/* docs-version-sync:BEGIN image-mirroring-compute-stack-snippet */}
+{/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
 # Set the version
@@ -264,7 +264,7 @@ ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${C
    rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
 ```
 
-{/* docs-version-sync:END image-mirroring-compute-stack-snippet */}
+{/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
 
 <Note>
 Use both stack bundles for split-stack local and self-managed installs:
@@ -284,7 +284,7 @@ Use the CLI version shown in the artifact manifest for this stack release.
 
 **Download and extract:**
 
-{/* docs-version-sync:BEGIN image-mirroring-cli-snippet */}
+{/*docs-version-sync:BEGIN image-mirroring-cli-snippet*/}
 
 ```bash
 # Set the version
@@ -300,7 +300,7 @@ mv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli
 chmod +x nvcf-cli/nvcf-cli
 ```
 
-{/* docs-version-sync:END image-mirroring-cli-snippet */}
+{/*docs-version-sync:END image-mirroring-cli-snippet*/}
 
 The extracted directory contains:
 

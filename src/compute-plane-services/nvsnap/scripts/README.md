@@ -9,12 +9,14 @@ commands — they encode setup that's easy to get wrong by hand. Key entry point
 (grouped by purpose):
 
 ## Versions
+
 - [`versions.sh`](versions.sh) — **single source of truth** for image tags,
   registry, and fork repos/refs. Sourced by every build/deploy script.
 - [`sync-versions.sh`](sync-versions.sh) — stamp the current tags into the K8s
   manifests.
 
 ## Build
+
 - [`build-agent.sh`](build-agent.sh) — agent base/app images (`base`, `app`,
   `push-*`, `deploy`).
 - [`build-deps.sh`](build-deps.sh), `build-libzmq-image.sh`,
@@ -22,10 +24,12 @@ commands — they encode setup that's easy to get wrong by hand. Key entry point
 - CI builds every image via [`../ci/build-image.sh`](../ci/build-image.sh).
 
 ## Deploy
+
 - [`install-nvsnap.sh`](install-nvsnap.sh) — one-command cluster bootstrap
   (namespace + pull secret + helm; `--without-webhook` to skip cert-manager).
 
 ## Test / validate
+
 - [`test-e2e.sh`](test-e2e.sh) `<workload>` — deploy → warm → capture → restore →
   verify inference. The merge gate for capture/restore changes (`CLAUDE.md`
   rule 10). `CAPTURE_PATH=rootfs` forces the rootfs/cachedir path.

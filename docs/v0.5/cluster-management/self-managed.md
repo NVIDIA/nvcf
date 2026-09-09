@@ -73,28 +73,38 @@ Create `nvca-operator-values.yaml` ([download template](samples/nvca-operator-va
 # Replace <REGISTRY> and <REPOSITORY> with your container registry settings.
 
 # Operator image
+
 image:
   repository: "<REGISTRY>/<REPOSITORY>/nvca-operator"
   tag: "2.52.1"
 
 # NVCA agent image
+
 nvcaImage:
   repositoryOverride: "<REGISTRY>/<REPOSITORY>/nvca"
   
 generateImagePullSecret: false
+
 # Image pull secret for private registries. Create the secret in the nvca-operator
+
 # namespace, then uncomment the lines below. The chart passes this to both the
+
 # operator and all NVCA agent pods (including samba and image-credential-helper).
+
 # imagePullSecrets:
-#   - name: nvcr-pull-secret
+
+# - name: nvcr-pull-secret
 
 # NGC configuration -- self-managed mode does not use NGC cloud services.
+
 # The serviceKey is not used but the field is required by the chart.
+
 ngcConfig:
   clusterSource: self-managed
   serviceKey: "not-used"
 
 # Self-managed backend configuration
+
 selfManaged:
   nvcaVersion: "2.52.1" # NVCA agent version to deploy
   featureGateValues: ["DynamicGPUDiscovery", "SelfHosted", "KAIScheduler"]
@@ -102,10 +112,15 @@ selfManaged:
     imageRepository: "<REGISTRY>/<REPOSITORY>/nvcf-image-credential-helper"
   sharedStorage:
     imageRepository: "<REGISTRY>/<REPOSITORY>/samba"
+
 # Uncomment for node selectors
+
 # nodeSelector:
-#   key: nvcf.nvidia.com/workload
-#   value: control-plane
+
+# key: nvcf.nvidia.com/workload
+
+# value: control-plane
+
 ```
 
 Replace all `<REGISTRY>` and `<REPOSITORY>` placeholders with your registry settings.

@@ -13,4 +13,3 @@ This guide provides information for deploying and operating NVCF in self-managed
 Decoupled control plane deployments (GPU cluster separate from the control plane cluster) are not available in Early Access. All EA deployments use a co-located architecture where the control plane and GPU workloads run in the same cluster.
 
 </Warning>
-
