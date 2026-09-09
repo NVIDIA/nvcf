@@ -10,6 +10,8 @@ This guide provides information for deploying and operating NVCF in self-managed
   : Connect GPU clusters to the NVCF control plane.
 - [Configuration](./optional-enhancements.md)
   : Configure gateway routing, registries, and optional enhancements.
+- [High Availability](./high-availability.md)
+  : Run the control plane across nodes and availability zones to survive node/AZ loss.
 - [Using Cloud Functions](./api.md)
   : Create and invoke functions using the NVCF API and CLI.
 - [Managed (Legacy)](../ngc-managed/cluster-management/ngc-managed.md)

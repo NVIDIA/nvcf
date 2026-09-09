@@ -714,3 +714,99 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# =============================================================================
+# Control-plane high availability
+# =============================================================================
+# Resilience settings are exposed as a single highAvailability: block in
+# self-managed Helmfile environment values.
+# deploy/stacks/self-managed/global.yaml.gotmpl maps highAvailability.* onto
+# chart values (replicaCount, affinity, PDB, update strategy).
+#
+# deploy/stacks/self-managed/
+# ├── environments/<env>.yaml     # highAvailability: configuration
+# └── global.yaml.gotmpl          # value mapping to charts
+#
+# mode: none         (default) — keep existing env/chart replica and PDB values
+#                                (local / CI / BDD).
+#       ha-preferred           — HA sizing below; hostname anti-affinity is
+#                                preferred (still schedule if a second node/AZ
+#                                has no capacity). Requires ≥3 schedulable nodes.
+#       ha-enforced            — same HA sizing; hostname anti-affinity is
+#                                required (second replica stays Pending rather
+#                                than packing). Requires ≥3 schedulable nodes.
+#
+# In-scope charts MUST expose the required value hooks. Leave mode: none
+# for single-node installs.
+# =============================================================================
+highAvailability:
+  mode: none
+
+  # Stateless control-plane Deployments: nvcf-api, invocation-service,
+  # grpc-proxy, admin-token-issuer-proxy, and llm-api-gateway (when the LLM
+  # addon is enabled). Active-active; no application leader election.
+  stateless:
+    replicaCount: 2
+    podAntiAffinity:
+      enabled: true
+    # Spread replicas across availability zones. Nodes MUST be labelled
+    # topology.kubernetes.io/zone=<az>. whenUnsatisfiable follows mode:
+    # ha-preferred → ScheduleAnyway, ha-enforced → DoNotSchedule.
+    topologySpread:
+      enabled: true
+      maxSkew: 1
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  # Hot-path helper Deployments raised to 2 replicas under HA so a single pod
+  # loss does not immediately hurt request/auth traffic: rateLimiter,
+  # nats-auth-callout. Reuse stateless.podAntiAffinity (hostname spread) and
+  # stateless.topologySpread (zone spread).
+  hotPath:
+    replicaCount: 2
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+
+  # Tier-2 quorum services (Cassandra, NATS, OpenBao). Under HA their peers get
+  # hostname pod anti-affinity (matching app.kubernetes.io/instance per release)
+  # so the 3 quorum members land on distinct nodes. whenUnsatisfiable follows
+  # mode: ha-preferred → preferred/soft (stays schedulable on small pools),
+  # ha-enforced → required/hard. The upstream OpenBao chart ships a hard
+  # anti-affinity by default that the stack disables for single-node installs;
+  # this re-enables it (soft/hard by mode) under HA. Set enabled: false to keep
+  # the chart defaults.
+  tier2:
+    podAntiAffinity:
+      enabled: true
+
+  nats:
+    replicas: 3
+    # JetStream stream replica factor (RF). Applied under HA to the stream
+    # creators — nvcf-api and invocation-service — so the worker/result streams
+    # they declare are replicated across the NATS cluster (survives a node
+    # loss). RF must be <= nats.replicas. Default 2 per the SDD.
+    jetstream:
+      replicaFactor: 2
+    podDisruptionBudget:
+      enabled: true
+      merge:
+        spec:
+          minAvailable: 2
+
+  openbao:
+    ha:
+      enabled: true
+      replicas: 3
+    injector:
+      replicas: 2
+
+  cassandra:
+    replicaCount: 3
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 2
