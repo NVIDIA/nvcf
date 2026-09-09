@@ -36,6 +36,21 @@ Constraints:
 - `minInstances` must be `>= 0`. Setting `minInstances: 0` allows the function to scale to zero when idle. The scale-to-zero idle timeout is set on the platform and is not configurable per function.
 - `maxInstances` must be `> 0` and `>= minInstances`.
 
+The platform default scale-to-zero idle timeout is 1,800 seconds. Self-managed
+operators can override application settings in their environment file. For
+example, set the platform-wide idle timeout to five minutes:
+
+```yaml
+functionAutoscaler:
+  env:
+    SCALING__SCALE_TO_ZERO_IDLE_TIMEOUT_SECONDS: "300"
+```
+
+Environment variable names use `__` between nested settings keys. The timeout
+is evaluated from the last observed invocation; metric scraping and the
+autoscaler reconciliation loop can add a short delay before an instance is
+removed.
+
 With no other configuration, the deployment uses the platform's default scaling policy. The platform adds and removes instances within the `[minInstances, maxInstances]` bounds based on observed utilization.
 
 ## Update Scaling Bounds on an Existing Deployment

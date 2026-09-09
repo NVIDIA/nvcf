@@ -55,7 +55,7 @@ fn default_cassandra_page_size() -> i32 {
 fn default_policy_cache_max_capacity() -> u64 {
     10_000
 }
-fn default_discovery_recently_invoked_lookback_minutes() -> i64 {
+fn default_discovery_recently_invoked_lookback_minutes() -> u64 {
     5
 }
 
@@ -107,7 +107,7 @@ pub struct ScalingSettings {
     #[serde(default = "default_policy_cache_max_capacity")]
     pub policy_cache_max_capacity: u64,
     #[serde(default = "default_discovery_recently_invoked_lookback_minutes")]
-    pub discovery_recently_invoked_lookback_minutes: i64,
+    pub discovery_recently_invoked_lookback_minutes: u64,
     #[serde(skip)]
     pub policy_cache: Option<Arc<policy_cache::PolicyCache>>,
 }

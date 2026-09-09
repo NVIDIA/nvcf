@@ -53,8 +53,6 @@ server:
   envfilter_directive: "server=info,rs_autoscaler=debug,rs_autoscaler::cassandra=warn,info"
 ```
 
-The same syntax applies to `server.tracing.logging_envfilter_directive` if you separate logging and tracing filters.
-
 Useful target prefixes:
 
 | Target | Covers |
