@@ -36,6 +36,20 @@ const (
 	// SharedOwner is the internal owner value for prerequisites shared by all planes.
 	SharedOwner = "shared"
 
+	LegacyAPIKeysNamespace            = "api-keys"
+	LegacyCassandraSystemNamespace    = "cassandra-system"
+	LegacyESSNamespace                = "ess"
+	LegacyNATSSystemNamespace         = "nats-system"
+	LegacyNCPNamespace                = "ncp"
+	LegacyNVCFNamespace               = "nvcf"
+	LegacyNVCFBackendNamespace        = "nvcf-backend"
+	LegacyNVCFUINamespace             = "nvcf-ui"
+	LegacyNVCAModelCacheInitNamespace = "nvca-modelcache-init"
+	LegacyNVCAOperatorNamespace       = "nvca-operator"
+	LegacyNVCASystemNamespace         = "nvca-system"
+	LegacySISNamespace                = "sis"
+	LegacyVaultSystemNamespace        = "vault-system"
+
 	// CassandraIdentifierMaxLength is Cassandra's limit for unquoted keyspace and role identifiers.
 	CassandraIdentifierMaxLength   = 48
 	longestLegacyCassandraKeyspace = "schema_migrations"
@@ -47,6 +61,22 @@ const (
 )
 
 var cassandraIdentifierRE = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+var legacyStackNamespaces = []string{
+	LegacyAPIKeysNamespace,
+	LegacyCassandraSystemNamespace,
+	LegacyESSNamespace,
+	LegacyNATSSystemNamespace,
+	LegacyNCPNamespace,
+	LegacyNVCFNamespace,
+	LegacyNVCFBackendNamespace,
+	LegacyNVCFUINamespace,
+	LegacyNVCAModelCacheInitNamespace,
+	LegacyNVCAOperatorNamespace,
+	LegacyNVCASystemNamespace,
+	LegacySISNamespace,
+	LegacyVaultSystemNamespace,
+}
 
 // Identity is the validated identity of one self-managed control plane.
 type Identity struct {
@@ -165,6 +195,43 @@ func IsOwnedBy(labels map[string]string, identity Identity) bool {
 // IsSharedObject returns true when labels mark an object as shared.
 func IsSharedObject(labels map[string]string) bool {
 	return labels[OwnerLabel] == SharedOwner
+}
+
+// LegacyStackNamespaces returns the fixed namespaces used by legacy installs.
+func LegacyStackNamespaces() []string {
+	out := make([]string, len(legacyStackNamespaces))
+	copy(out, legacyStackNamespaces)
+	return out
+}
+
+// StackNamespaceName derives a Kubernetes namespace name for one plane.
+func StackNamespaceName(identity Identity, legacyNamespace string) (string, error) {
+	return DNSLabelName(identity, legacyNamespace)
+}
+
+// StackNamespaces derives the standard NVCF stack namespaces for one plane.
+func StackNamespaces(identity Identity) ([]string, error) {
+	out := make([]string, 0, len(legacyStackNamespaces))
+	for _, legacyNamespace := range legacyStackNamespaces {
+		namespace, err := StackNamespaceName(identity, legacyNamespace)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, namespace)
+	}
+	return out, nil
+}
+
+// ServiceHostName derives the in-cluster service DNS host for one plane.
+func ServiceHostName(identity Identity, serviceName, legacyNamespace string) (string, error) {
+	if errs := validation.IsDNS1123Label(serviceName); len(errs) > 0 {
+		return "", fmt.Errorf("service name %q must be a DNS label: %s", serviceName, strings.Join(errs, "; "))
+	}
+	namespace, err := StackNamespaceName(identity, legacyNamespace)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, namespace), nil
 }
 
 // DNSLabelName derives a DNS-label Kubernetes name for one plane.

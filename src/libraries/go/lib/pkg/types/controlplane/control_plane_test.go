@@ -258,6 +258,141 @@ func TestIsOwnedBy(t *testing.T) {
 	assert.False(t, IsSharedObject(map[string]string{OwnerLabel: "plane-a"}))
 }
 
+func TestLegacyStackNamespaces(t *testing.T) {
+	namespaces := LegacyStackNamespaces()
+	assert.Equal(t, legacyStackNamespaces, namespaces)
+
+	namespaces[0] = "mutated"
+	assert.Equal(t, LegacyAPIKeysNamespace, LegacyStackNamespaces()[0])
+}
+
+func TestStackNamespaceName(t *testing.T) {
+	legacy := DefaultIdentity()
+	planeA, err := NewIdentity("plane-a")
+	require.NoError(t, err)
+
+	namespace, err := StackNamespaceName(legacy, LegacyNVCFNamespace)
+	require.NoError(t, err)
+	assert.Equal(t, LegacyNVCFNamespace, namespace)
+
+	namespace, err = StackNamespaceName(planeA, LegacyNVCFNamespace)
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a-nvcf", namespace)
+
+	namespace, err = StackNamespaceName(planeA, LegacyNVCAOperatorNamespace)
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a-nvca-operator", namespace)
+
+	_, err = StackNamespaceName(planeA, "not_a_dns_label")
+	require.Error(t, err)
+
+	_, err = StackNamespaceName(Identity{}, LegacyNVCFNamespace)
+	require.Error(t, err)
+}
+
+func TestStackNamespaces(t *testing.T) {
+	legacyNamespaces, err := StackNamespaces(DefaultIdentity())
+	require.NoError(t, err)
+	assert.Equal(t, legacyStackNamespaces, legacyNamespaces)
+
+	planeA, err := NewIdentity("plane-a")
+	require.NoError(t, err)
+	namespaces, err := StackNamespaces(planeA)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"plane-a-api-keys",
+		"plane-a-cassandra-system",
+		"plane-a-ess",
+		"plane-a-nats-system",
+		"plane-a-ncp",
+		"plane-a-nvcf",
+		"plane-a-nvcf-backend",
+		"plane-a-nvcf-ui",
+		"plane-a-nvca-modelcache-init",
+		"plane-a-nvca-operator",
+		"plane-a-nvca-system",
+		"plane-a-sis",
+		"plane-a-vault-system",
+	}, namespaces)
+
+	for _, namespace := range namespaces {
+		assert.Empty(t, validation.IsDNS1123Label(namespace), "namespace %q should be a DNS label", namespace)
+	}
+}
+
+func TestStackNamespacesFitMaxID(t *testing.T) {
+	maxID, err := NewIdentity(strings.Repeat("a", MaxIDLength))
+	require.NoError(t, err)
+
+	namespaces, err := StackNamespaces(maxID)
+	require.NoError(t, err)
+
+	for _, namespace := range namespaces {
+		assert.LessOrEqual(t, len(namespace), validation.DNS1123LabelMaxLength)
+		assert.Empty(t, validation.IsDNS1123Label(namespace), "namespace %q should be a DNS label", namespace)
+	}
+}
+
+func TestServiceHostName(t *testing.T) {
+	legacy := DefaultIdentity()
+	planeA, err := NewIdentity("plane-a")
+	require.NoError(t, err)
+
+	host, err := ServiceHostName(legacy, "api", LegacyNVCFNamespace)
+	require.NoError(t, err)
+	assert.Equal(t, "api.nvcf.svc.cluster.local", host)
+
+	host, err = ServiceHostName(planeA, "api", LegacyNVCFNamespace)
+	require.NoError(t, err)
+	assert.Equal(t, "api.plane-a-nvcf.svc.cluster.local", host)
+
+	host, err = ServiceHostName(planeA, "nats", LegacyNATSSystemNamespace)
+	require.NoError(t, err)
+	assert.Equal(t, "nats.plane-a-nats-system.svc.cluster.local", host)
+
+	_, err = ServiceHostName(planeA, "not_a_service", LegacyNVCFNamespace)
+	require.Error(t, err)
+
+	_, err = ServiceHostName(planeA, "api", "not_a_namespace")
+	require.Error(t, err)
+
+	_, err = ServiceHostName(Identity{}, "api", LegacyNVCFNamespace)
+	require.Error(t, err)
+}
+
+func TestClusterScopedNamesAreDisjointForNamedPlanes(t *testing.T) {
+	planeA, err := NewIdentity("plane-a")
+	require.NoError(t, err)
+	planeB, err := NewIdentity("plane-b")
+	require.NoError(t, err)
+
+	legacyClusterScopedNames := []string{
+		"nvcf-openbao-pki",
+		"nvca",
+		"nvca-mutating",
+		"nvca-pod-node-affinity-mutating",
+		"nvca-sharedstorage",
+		"nvca-persistentstorage",
+		"nvca-pod-enforcement-readiness",
+		"nvca-mini-service-mutation-create",
+		"nvca-mini-service-mutation-update",
+	}
+
+	for _, legacyName := range legacyClusterScopedNames {
+		nameA, err := DNSLabelName(planeA, legacyName)
+		require.NoError(t, err)
+		nameB, err := DNSLabelName(planeB, legacyName)
+		require.NoError(t, err)
+
+		assert.NotEqual(t, legacyName, nameA)
+		assert.NotEqual(t, legacyName, nameB)
+		assert.NotEqual(t, nameA, nameB)
+		assert.Empty(t, validation.IsDNS1123Label(nameA), "name %q should be a DNS label", nameA)
+		assert.Empty(t, validation.IsDNS1123Label(nameB), "name %q should be a DNS label", nameB)
+	}
+}
+
 func TestDNSLabelName(t *testing.T) {
 	legacy := DefaultIdentity()
 	planeA, err := NewIdentity("plane-a")

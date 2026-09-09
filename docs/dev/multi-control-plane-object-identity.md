@@ -94,6 +94,25 @@ Do not enable named control planes broadly until Phase 3 decides whether this
 namespace becomes per-plane or shared and updates creation, cleanup, and webhook
 selectors consistently.
 
+## Phase 3 Namespace Derivation Contract
+
+Phase 3 routes namespace and service DNS identities through the shared helper in
+`src/libraries/go/lib/pkg/types/controlplane`.
+
+The helper contract is intentionally simple:
+
+- The default identity keeps every legacy namespace name unchanged.
+- A named identity prefixes each known stack namespace with the validated
+  control-plane ID.
+- In-cluster service DNS uses the derived namespace while keeping the legacy
+  service name.
+- All derived namespace names must remain valid Kubernetes DNS labels, including
+  when the control-plane ID is at the maximum supported length.
+
+This phase only defines the contract first. Later Phase 3 commits wire Helmfile
+templates and service URLs to this helper's naming rules while preserving the
+legacy render output.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |
