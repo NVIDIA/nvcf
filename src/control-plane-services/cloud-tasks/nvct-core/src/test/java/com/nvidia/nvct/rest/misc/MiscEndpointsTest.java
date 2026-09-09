@@ -96,7 +96,10 @@ class MiscEndpointsTest {
         var requestEntity = RequestEntity.get(URI.create("/info")).build();
         var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
         assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(responseEntity.getBody()).contains("service", "version", "commit");
+        var info = JSON_MAPPER.readTree(responseEntity.getBody());
+        assertThat(info.has("service")).isTrue();
+        assertThat(info.has("version")).isTrue();
+        assertThat(info.has("commit")).isTrue();
     }
 
     @SneakyThrows

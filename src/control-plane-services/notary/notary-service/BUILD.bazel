@@ -50,6 +50,7 @@ nvcf_java_test(
         "//src/control-plane-services/notary/notary-core:notary_core_test_fixtures",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
         "@nv_third_party_deps//:org_springframework_spring_beans",

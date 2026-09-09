@@ -28,6 +28,7 @@ import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRe
 import org.springframework.http.HttpStatus;
 import org.springframework.http.RequestEntity;
 import org.springframework.web.client.RestTemplate;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * OSS executable ({@link App} + {@code notary-core}) smoke test. Boots the real service
@@ -46,6 +47,8 @@ import org.springframework.web.client.RestTemplate;
         properties = "spring.profiles.active=integrationtest")
 @AutoConfigureTestRestTemplate
 class NotaryServiceIntegrationTest {
+
+    private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
 
     @Autowired
     private TestRestTemplate testRestTemplate;
@@ -79,6 +82,9 @@ class NotaryServiceIntegrationTest {
                 String.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody()).contains("service", "version", "commit");
+        var info = JSON_MAPPER.readTree(response.getBody());
+        assertThat(info.has("service")).isTrue();
+        assertThat(info.has("version")).isTrue();
+        assertThat(info.has("commit")).isTrue();
     }
 }
