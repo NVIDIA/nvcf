@@ -995,6 +995,7 @@ async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
                     "require_cache_affinity_key": true,
                     "cache_affinity_virtual_nodes": 8,
                     "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_wait_ms": 100,
                     "n": 3
                 }
             }
@@ -1086,6 +1087,7 @@ async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
     let mut poll = tokio::time::interval(Duration::from_millis(100));
     loop {
         fallback_attempt += 1;
+        let started_at = std::time::Instant::now();
         let resp = chat
             .with_affinity(
                 &format!("req-wait-and-widen-affinity-fallback-{fallback_attempt}"),
@@ -1094,10 +1096,15 @@ async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
             .send()
             .await
             .expect("request failed");
+        let time_to_headers = started_at.elapsed();
         if resp.status() == 200 {
             let chosen = response_header(&resp, "x-inference-server-id").to_string();
             let _ = tokio::time::timeout(Duration::from_secs(15), resp.bytes()).await;
             if chosen != primary {
+                assert!(
+                    time_to_headers >= Duration::from_millis(100),
+                    "public routing must wait for X without requiring a max-wait header"
+                );
                 break;
             }
         }
@@ -1106,6 +1113,31 @@ async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
         }
         poll.tick().await;
     }
+
+    let response = chat
+        .with_affinity("affinity-explicit-short-deadline", affinity_key)
+        .header("x-max-wait-ms", "10")
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(
+        response.status(),
+        503,
+        "an explicit shorter routing deadline must not open public buckets early"
+    );
+
+    let started_at = std::time::Instant::now();
+    let response = chat
+        .with_affinity("affinity-explicit-long-deadline", affinity_key)
+        .header("x-max-wait-ms", "500")
+        .header("x-request-slo-ms", "5000")
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(response.status(), 200);
+    assert_ne!(response_header(&response, "x-inference-server-id"), primary);
+    assert!(started_at.elapsed() >= Duration::from_millis(100));
+    let _ = response.bytes().await;
 
     for (_, backend) in &mut backends {
         backend.stop();

@@ -23,7 +23,8 @@ use axum::response::Response;
 use tracing::Span;
 
 use crate::load_balancer::{
-    LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRequest,
+    LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerDecision,
+    LoadBalancerRequest,
 };
 use crate::metrics::StargateMetrics;
 use crate::routing_state::{
@@ -38,7 +39,7 @@ use super::routing::{
     NoRoutingChoiceAction, NoRoutingChoiceInputs, NoRoutingFinalizationContext,
     classify_no_routing_choice, eligible_cluster_candidate_count, finalize_no_routing_choice,
     input_work_admission_rejection_reason, input_work_admission_rejection_response,
-    routing_retry_deadline, should_retry_routing, sleep_before_routing_retry,
+    routing_retry_deadline, routing_wait_delay, should_retry_routing, sleep_before_routing_retry,
 };
 use super::trace::{RoutingTraceFields, record_routing_to_span};
 
@@ -119,7 +120,7 @@ impl<'a> ProxyRequestRun<'a> {
         let num_candidates = candidates.len();
         let eligible_candidate_count =
             eligible_cluster_candidate_count(candidates, self.excluded_cluster_ids());
-        let selection = {
+        let decision = {
             let lb_request = self.load_balancer_request();
             let lb_config = self.request.lb_resolution.config();
             if eligible_candidate_count > 0
@@ -137,19 +138,32 @@ impl<'a> ProxyRequestRun<'a> {
                     reason,
                 )));
             }
-            target_snapshot.as_ref().and_then(|snapshot| {
-                self.app
-                    .lb_router
-                    .choose_candidate_with_algorithm_resolution(
+            target_snapshot
+                .as_ref()
+                .map_or(LoadBalancerDecision::Unavailable, |snapshot| {
+                    self.app.lb_router.decide_with_algorithm_resolution(
                         snapshot.load_balancers(),
                         &lb_request,
                         candidates,
                         &self.request.lb_resolution,
                     )
-            })
+                })
         };
 
-        let Some(selection) = selection else {
+        if let LoadBalancerDecision::Wait(remaining) = decision
+            && let Some(delay) =
+                routing_wait_delay(remaining, self.routing_retry_deadline, Instant::now())
+        {
+            self.routing_retry_attempts += 1;
+            Span::current().record("routing.retry_attempts", self.routing_retry_attempts);
+            tracing::debug!(
+                remaining_ms = remaining.as_millis() as u64,
+                "waiting for routing bucket eligibility"
+            );
+            tokio::time::sleep(delay).await;
+            return None;
+        }
+        let Some(selection) = decision.selected() else {
             return self
                 .resolve_no_routing_choice(num_candidates, eligible_candidate_count)
                 .await;

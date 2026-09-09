@@ -89,10 +89,14 @@ pub(crate) fn ttft(
 ) -> Ttft {
     let input_tps = input_tps(candidate);
     let queue_ms = queue_delay_ms_with_tps(candidate, priority, input_tps);
-    let prefill_ms = processing_delay_ms(
-        input_tokens.unwrap_or_default() as f64 * input_tokens_scale,
-        input_tps,
-    );
+    let prefill_ms = if input_tokens.is_some_and(|tokens| tokens > 0) && input_tps <= 0.0 {
+        f64::INFINITY
+    } else {
+        processing_delay_ms(
+            input_tokens.unwrap_or_default() as f64 * input_tokens_scale,
+            input_tps,
+        )
+    };
     let ttft_ms = rtt_ms(candidate)
         + if ignore_queue_time { 0.0 } else { queue_ms }
         + if ignore_input_processing_time {

@@ -196,6 +196,9 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub cache_affinity_virtual_nodes: Option<usize>,
     pub cache_affinity_backend_selection_count: Option<usize>,
     pub cache_affinity_input_tokens_scale: Option<f64>,
+    /// Keep public buckets closed for this many milliseconds after request arrival.
+    /// Defaults to zero. Queue and TTFT selection still apply within the affinity group.
+    pub cache_affinity_wait_ms: Option<u64>,
     pub max_queue_time_floor_ms: Option<u64>,
     pub max_queue_time_ceil_ms: Option<u64>,
     pub ttft_bucket_size_ms: Option<u64>,
