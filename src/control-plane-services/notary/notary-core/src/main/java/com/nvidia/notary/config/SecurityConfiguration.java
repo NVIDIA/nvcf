@@ -105,6 +105,9 @@ public class SecurityConfiguration {
                                 // accessible via admin port
                                 // it provides health readiness and liveness probes and metrics
                                 .requestMatchers("/actuator/**").permitAll()
+                                // shared build-info endpoint (nv-boot-starter-core); no
+                                // sensitive data, meant for unauthenticated build identification
+                                .requestMatchers("/info").permitAll()
                                 .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())))

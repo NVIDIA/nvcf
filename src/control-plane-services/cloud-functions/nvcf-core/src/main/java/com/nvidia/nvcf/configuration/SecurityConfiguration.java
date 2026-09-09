@@ -58,6 +58,9 @@ public class SecurityConfiguration {
                                 // via management port.
                                 .requestMatchers("/actuator/**").permitAll()
                                 .requestMatchers("/v2/nvcf/webhook/**").permitAll()
+                                // shared build-info endpoint (nv-boot-starter-core); no
+                                // sensitive data, meant for unauthenticated build identification
+                                .requestMatchers("/info").permitAll()
                                 .anyRequest().authenticated());
         return http.build();
     }

@@ -71,4 +71,14 @@ class NotaryServiceIntegrationTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody()).containsIgnoringCase("status");
     }
+
+    @Test
+    void infoEndpointReturnsOk() {
+        var response = testRestTemplate.exchange(
+                RequestEntity.get(URI.create("/info")).build(),
+                String.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody()).contains("service", "version", "commit");
+    }
 }

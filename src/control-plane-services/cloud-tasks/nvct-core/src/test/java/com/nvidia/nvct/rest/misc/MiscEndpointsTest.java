@@ -92,6 +92,15 @@ class MiscEndpointsTest {
 
     @SneakyThrows
     @Test
+    void testInfo() {
+        var requestEntity = RequestEntity.get(URI.create("/info")).build();
+        var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
+        assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(responseEntity.getBody()).contains("service", "version", "commit");
+    }
+
+    @SneakyThrows
+    @Test
     void testOpenApiDocs() {
         var requestEntity = RequestEntity.get(URI.create("/v3/openapi")).build();
         var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
