@@ -15,6 +15,11 @@ environments:
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
 {{- $sharedControlPlaneOwner := "shared" }}
+{{- $controlPlaneNamespacePrefix := "" }}
+{{- $natsNamespace := printf "%snats-system" $controlPlaneNamespacePrefix }}
+{{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix }}
+{{- $cassandraNamespace := printf "%scassandra-system" $controlPlaneNamespacePrefix }}
+{{- $certManagerNamespace := "cert-manager" }}
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
 {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
 {{- $manageIssuer := false }}
@@ -127,13 +132,13 @@ releases:
   - name: nats
     version: 0.8.1
     condition: nats.enabled # From defaults.yaml or env overrides
-    namespace: nats-system
+    namespace: {{ $natsNamespace }}
     <<: *dependency # Inherits base values from the dependency template
 
   - name: cert-manager
     version: 0.1.0
     condition: certManager.enabled
-    namespace: cert-manager
+    namespace: {{ $certManagerNamespace }}
     <<: *dependency
     postRendererArgs:
       - "--owner"
@@ -145,7 +150,7 @@ releases:
   - name: openbao-server # this name MUST not change
     version: 0.32.4
     condition: openbao.enabled # From defaults.yaml or env overrides
-    namespace: vault-system
+    namespace: {{ $vaultNamespace }}
     <<: *dependency # Inherits base values from the dependency template
     # Secret values own migrations.env. Apply the generated LLM addition last
     # so it preserves that list while adding the addon migration switch.
@@ -154,13 +159,13 @@ releases:
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
       - ../openbao-migrations-llm-env.yaml.gotmpl
     needs:
-      - nats-system/nats
+      - {{ $natsNamespace }}/nats
 
 {{- if $managedIssuer }}
   - name: nvcf-pki
     chart: nvcf/helm-nvcf-pki
     version: 0.1.0
-    namespace: cert-manager
+    namespace: {{ $certManagerNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
@@ -183,14 +188,14 @@ releases:
       release-group: dependencies
       control-plane-owner: {{ $controlPlaneOwner | quote }}
     needs:
-      - vault-system/openbao-server
+      - {{ $vaultNamespace }}/openbao-server
 {{- if dig "certManager" "enabled" true .Values }}
-      - cert-manager/cert-manager
+      - {{ $certManagerNamespace }}/cert-manager
 {{- end }}
 {{- end }}
 
   - name: cassandra
     version: 0.21.0
     condition: cassandra.enabled # From defaults.yaml or env overrides
-    namespace: cassandra-system
+    namespace: {{ $cassandraNamespace }}
     <<: *dependency # Inherits base values from the dependency template

@@ -44,14 +44,25 @@ REQUIRED_HELMFILE_MAJOR := 1
 REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
-# Namespaces created by the NVCF stack (used by destroy target)
-NAMESPACES ?= cassandra-system nats-system vault-system ncp nvcf api-keys ess sis
-SHARED_NAMESPACES ?= cert-manager
+# Namespaces created by the NVCF stack. The prefix is empty until named-mode
+# namespace derivation is enabled, so legacy installs keep the same names.
+CONTROL_PLANE_NAMESPACE_PREFIX :=
+API_KEYS_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)api-keys
+CASSANDRA_SYSTEM_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)cassandra-system
+ESS_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)ess
+NATS_SYSTEM_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)nats-system
+NCP_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)ncp
+NVCF_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)nvcf
+SIS_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)sis
+VAULT_SYSTEM_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)vault-system
+CERT_MANAGER_NAMESPACE := cert-manager
+NAMESPACES ?= $(CASSANDRA_SYSTEM_NAMESPACE) $(NATS_SYSTEM_NAMESPACE) $(VAULT_SYSTEM_NAMESPACE) $(NCP_NAMESPACE) $(NVCF_NAMESPACE) $(API_KEYS_NAMESPACE) $(ESS_NAMESPACE) $(SIS_NAMESPACE)
+SHARED_NAMESPACES ?= $(CERT_MANAGER_NAMESPACE)
 
 # Namespace metadata used by the future plane registry. The chart version is
 # parsed from the primary control-plane API release so it follows helmfile
 # version bumps instead of becoming a second stale constant.
-CONTROL_PLANE_PRIMARY_NAMESPACE ?= nvcf
+CONTROL_PLANE_PRIMARY_NAMESPACE ?= $(NVCF_NAMESPACE)
 CONTROL_PLANE_STACK_NAME ?= self-managed
 CONTROL_PLANE_CHART_VERSION ?= $(shell awk '/^  - name: api$$/ {found=1; next} found && $$1 == "version:" {print $$2; exit}' "$(MAKEFILE_DIR)/helmfile.d/02-core.yaml.gotmpl")
 NVCA_OPERATOR_VERSION ?= not-installed

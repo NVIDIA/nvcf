@@ -16,6 +16,14 @@ environments:
 {{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
+{{- $controlPlaneNamespacePrefix := "" }}
+{{- $apiKeysNamespace := printf "%sapi-keys" $controlPlaneNamespacePrefix }}
+{{- $essNamespace := printf "%sess" $controlPlaneNamespacePrefix }}
+{{- $natsNamespace := printf "%snats-system" $controlPlaneNamespacePrefix }}
+{{- $nvcfNamespace := printf "%snvcf" $controlPlaneNamespacePrefix }}
+{{- $nvcfUiNamespace := printf "%snvcf-ui" $controlPlaneNamespacePrefix }}
+{{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix }}
+{{- $ingressNamespace := .Values.ingress.gatewayApi.controllerNamespace }}
 
 repositories:
   - name: nvcf
@@ -61,52 +69,52 @@ releases:
   # --- NVCF Services ---
   - name: api-keys
     version: 1.8.0
-    namespace: api-keys
+    namespace: {{ $apiKeysNamespace }}
     inherit:
       - template: service
 
   - name: sis
     version: 2.3.0
-    namespace: sis
+    namespace: {{ $sisNamespace }}
     inherit:
       - template: service
     condition: icms.enabled
 
   - name: api
     version: 1.27.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
     needs:
       # not needed to start, but needed for bootstrapping account which is done with a script in the api helm chart
-      - ess/ess-api
+      - {{ $essNamespace }}/ess-api
 
   - name: nvct-api
     version: 1.6.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
 
   - name: invocation-service
     version: 1.6.1
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
 
   - name: grpc-proxy
     version: 1.7.3
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
 
   - name: ratelimiter
     chart: nvcf/helm-nvcf-rate-limiter
     version: 1.2.1
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: rateLimiter.enabled
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
@@ -118,24 +126,24 @@ releases:
       release-group: services
       control-plane-owner: {{ $controlPlaneOwner | quote }}
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
 
   - name: ess-api
     version: 1.8.2
-    namespace: ess
+    namespace: {{ $essNamespace }}
     inherit:
       - template: service
 
   - name: notary-service
     version: 1.6.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: service
 
   - name: admin-issuer-proxy
     chart: nvcf/helm-admin-token-issuer-proxy
     version: 1.5.2
-    namespace: api-keys
+    namespace: {{ $apiKeysNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
@@ -172,7 +180,7 @@ releases:
   - name: reval
     chart: nvcf/helm-reval
     version: 1.4.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
@@ -186,7 +194,7 @@ releases:
   - name: nats-auth-callout-service
     chart: nvcf/helm-nvcf-nats-auth-callout-service
     version: 1.2.0
-    namespace: nats-system
+    namespace: {{ $natsNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
@@ -207,7 +215,7 @@ releases:
     {{- if not $llmRequestRouterChartPath }}
     version: 1.13.3
     {{- end }}
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: addons.llm.enabled
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
@@ -216,7 +224,7 @@ releases:
     values:
       - ../global.yaml.gotmpl
     needs:
-      - nvcf/api
+      - {{ $nvcfNamespace }}/api
     labels:
       release-group: services
       control-plane-owner: {{ $controlPlaneOwner | quote }}
@@ -224,7 +232,7 @@ releases:
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
     version: 1.4.3
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: addons.llm.enabled
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
@@ -233,19 +241,19 @@ releases:
     values:
       - ../global.yaml.gotmpl
     needs:
-      - nvcf/llm-request-router
+      - {{ $nvcfNamespace }}/llm-request-router
     labels:
       release-group: services
       control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   - name: vanity-gateway
     version: 0.4.4
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: addons.vanityGateway.enabled
     inherit:
       - template: service
     needs:
-      - nvcf/invocation-service
+      - {{ $nvcfNamespace }}/invocation-service
     labels:
       release-group: services
       control-plane-owner: {{ $controlPlaneOwner | quote }}
@@ -253,7 +261,7 @@ releases:
   - name: nvcf-ui
     chart: nvcf/helm-nvcf-ui
     version: 1.1.2
-    namespace: nvcf-ui
+    namespace: {{ $nvcfUiNamespace }}
     condition: addons.nvcfUi.enabled
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
@@ -273,12 +281,12 @@ releases:
     version: 1.18.1
     {{- end }}
     needs:
-      - nvcf/notary-service
-      - api-keys/api-keys
+      - {{ $nvcfNamespace }}/notary-service
+      - {{ $apiKeysNamespace }}/api-keys
       {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
-      - nvcf-ui/nvcf-ui
+      - {{ $nvcfUiNamespace }}/nvcf-ui
       {{- end }}
-    namespace: {{ .Values.ingress.gatewayApi.controllerNamespace }}
+    namespace: {{ $ingressNamespace }}
     condition: ingress.gatewayApi.enabled
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:

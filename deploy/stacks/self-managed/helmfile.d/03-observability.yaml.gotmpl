@@ -12,6 +12,8 @@ environments:
 {{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
+{{- $controlPlaneNamespacePrefix := "" }}
+{{- $nvcfNamespace := printf "%snvcf" $controlPlaneNamespacePrefix }}
 {{- if not (has $observabilityProfile (list "disabled" "control" "compute" "all")) }}
 {{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
 {{- end }}
@@ -80,7 +82,7 @@ releases:
   # --- Observability Services ---
   - name: state-metrics
     version: 1.0.2
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     condition: stateMetrics.enabled # From global.yaml.gotmpl or env overrides
     inherit:
       - template: service
@@ -90,9 +92,9 @@ releases:
   {{- if $functionAutoscalerEnabled }}
   - name: function-autoscaler
     version: 0.4.0
-    namespace: nvcf
+    namespace: {{ $nvcfNamespace }}
     inherit:
       - template: functionAutoscaler
     needs:
-      - nvcf/state-metrics
+      - {{ $nvcfNamespace }}/state-metrics
   {{- end }}

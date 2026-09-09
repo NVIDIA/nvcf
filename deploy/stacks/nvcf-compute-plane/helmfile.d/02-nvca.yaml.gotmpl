@@ -19,6 +19,8 @@ environments:
 {{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
+{{- $controlPlaneNamespacePrefix := "" }}
+{{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 
 {{- /*
   nvca-operator.featureGateValues normalizes a selfManaged feature gate list.
@@ -188,7 +190,7 @@ releases:
     # values own the NVCA application version used by this stack.
     chart: nvcf/helm-nvca-operator
     version: 1.24.0
-    namespace: nvca-operator
+    namespace: {{ $nvcaOperatorNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
