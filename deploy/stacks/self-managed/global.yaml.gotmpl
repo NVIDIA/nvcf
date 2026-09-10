@@ -66,6 +66,14 @@ tolerations:
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix -}}
 {{- $certManagerNamespace := "cert-manager" -}}
 {{- $adminIssuerProxyName := include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" "admin-token-issuer-proxy") -}}
+{{- $openBaoServerName := "openbao-server" -}}
+{{- if ne $controlPlaneOwner "default" -}}
+{{- $openBaoServerName = include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" "openbao") -}}
+{{- end -}}
+{{- $openBaoServerImageTag := dig "openbao" "server" "image" "tag" "" .Values | default "2.5.5-nv-1.3.1" -}}
+{{- $openBaoUnsealVolumeName := printf "%s-unseal" $openBaoServerName -}}
+{{- $openBaoInitializeServiceAccountName := printf "%s-initialize-cluster" $openBaoServerName -}}
+{{- $openBaoRootTokenSecretName := printf "%s-root-token" $openBaoServerName -}}
 {{- $apiGrpcServiceAddress := printf "api.%s.svc.cluster.local:9090" $nvcfNamespace -}}
 {{- $apiGrpcServiceURL := printf "http://%s" $apiGrpcServiceAddress -}}
 {{- $apiKeysServiceMetadataURL := printf "http://api-keys.%s.svc.cluster.local:8080/v1/services" $apiKeysNamespace -}}
@@ -78,8 +86,10 @@ tolerations:
 {{- $legacyLlmRequestRouterDefaultDnsNames := list "llm-request-router.nvcf.svc.cluster.local" "*.llm-request-router-headless.nvcf.svc.cluster.local" -}}
 {{- $llmRequestRouterDefaultDnsNames := list $llmRequestRouterServiceHost $llmRequestRouterHeadlessWildcardHost -}}
 {{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace -}}
-{{- $openBaoServerAddress := printf "openbao-server.%s.svc.cluster.local:8200" $vaultNamespace -}}
+{{- $openBaoServerHost := printf "%s.%s.svc.cluster.local" $openBaoServerName $vaultNamespace -}}
+{{- $openBaoServerAddress := printf "%s:8200" $openBaoServerHost -}}
 {{- $openBaoServerURL := printf "http://%s" $openBaoServerAddress -}}
+{{- $openBaoRaftConfig := printf "ui = true\nstorage \"raft\" {\n  path = \"/openbao/data/\"\n  retry_join {\n    leader_api_addr = \"http://%s-0.%s-internal:8200\"\n  }\n  retry_join {\n    leader_api_addr = \"http://%s-1.%s-internal:8200\"\n  }\n  retry_join {\n    leader_api_addr = \"http://%s-2.%s-internal:8200\"\n  }\n}\nlistener \"tcp\" {\n    tls_disable = 1\n    address = \"[::]:8200\"\n    cluster_address = \"[::]:8201\"\n\n    custom_response_headers {\n      \"default\" = {\n        \"X-Custom-Header\" = [\"HOSTNAME\"],\n      },\n    }\n}\nplugin_directory = \"/openbao/plugins/\"\nservice_registration \"kubernetes\" {}\n# Disable standby reads introduced in v2.5.0. Without this, standby\n# nodes serve reads locally with eventual consistency, which causes the\n# JWT secrets plugin to lose lease state after issuance.\ndisable_standby_reads = true\n" $openBaoServerName $openBaoServerName $openBaoServerName $openBaoServerName $openBaoServerName $openBaoServerName -}}
 {{- $rateLimiterServiceURL := printf "http://ratelimiter.%s.svc.cluster.local:7777" $nvcfNamespace -}}
 {{- $rateLimiterJwksURL := printf "%s/v1/services/ratelimiter-api/jwt/jwks" $openBaoServerURL -}}
 {{- $adminIssuerProxyHealthEndpoint := printf "%s.%s.svc.cluster.local:8080/healthz" $adminIssuerProxyName $apiKeysNamespace -}}
@@ -88,7 +98,7 @@ tolerations:
 {{- $natsAuthCalloutHealthEndpoint := printf "nvcf-nats-auth-callout-service.%s.svc.cluster.local:8080/health" $natsNamespace -}}
 {{- $natsHeadlessHealthEndpoint := printf "nats-headless.%s.svc.cluster.local:8222/healthz?js-server-only" $natsNamespace -}}
 {{- $notaryHealthEndpoint := printf "notary.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
-{{- $openBaoHealthEndpoint := printf "openbao-server.%s.svc.cluster.local:8200/v1/sys/health?standbyok=true" $vaultNamespace -}}
+{{- $openBaoHealthEndpoint := printf "%s/v1/sys/health?standbyok=true" $openBaoServerAddress -}}
 {{- $rateLimiterHealthEndpoint := printf "ratelimiter.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
 {{- $revalHealthEndpoint := printf "reval.%s.svc.cluster.local:8082/healthz" $nvcfNamespace -}}
 
@@ -182,6 +192,9 @@ openbao:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
   {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  fullnameOverride: {{ $openBaoServerName }}
+  {{- end }}
   migrations:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -253,6 +266,51 @@ openbao:
     {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
     {{- . | nindent 4 }}
     {{- end }}
+    {{- if ne $controlPlaneOwner "default" }}
+    volumes:
+      - name: {{ $openBaoUnsealVolumeName }}
+        secret:
+          secretName: {{ $openBaoUnsealVolumeName }}
+    volumeMounts:
+      - name: {{ $openBaoUnsealVolumeName }}
+        mountPath: /home/openbao/unseal
+    extraContainers:
+      - name: auto-unseal-sidecar
+        image: "{{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-openbao:{{ $openBaoServerImageTag }}"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        volumeMounts:
+          - name: {{ $openBaoUnsealVolumeName }}
+            mountPath: /vault/userconfig/unseal
+            readOnly: true
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Starting auto-unseal monitor..."
+            echo http://$HOSTNAME:8200
+            export BAO_ADDR=http://$HOSTNAME:8200
+            while true; do
+              if [ -f /vault/userconfig/unseal/unseal_key ]; then
+                UNSEAL_KEY=$(cat /vault/userconfig/unseal/unseal_key)
+                if [ ! -z "$UNSEAL_KEY" ]; then
+                    echo "Unsealing OpenBao..."
+                    bao operator unseal $UNSEAL_KEY
+                    sleep 60
+                    echo "OpenBao unsealed"
+                else
+                  echo "Unseal key is empty, waiting..."
+                fi
+              else
+                echo "Unseal key file not found, waiting..."
+              fi
+              sleep 10
+            done
+    {{- end }}
 
     dataStorage:
       {{- if .Values.global.storageClass }}
@@ -264,6 +322,11 @@ openbao:
       {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      raft:
+        config: |
+          {{- $openBaoRaftConfig | nindent 10 }}
       {{- end }}
 
 nats:
@@ -305,6 +368,7 @@ nats:
   rbac:
     openbao:
       namespace: {{ $vaultNamespace }}
+      serviceAccountName: {{ $openBaoInitializeServiceAccountName }}
   {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
@@ -978,6 +1042,9 @@ sis:
   # LLS/TURN HMAC rotation configuration
   lls:
     enabled: {{ dig "addons" "lls" "enabled" false .Values }}
+    {{- if ne $controlPlaneOwner "default" }}
+    namespace: {{ $vaultNamespace }}
+    {{- end }}
     hmacRotation:
       image:
         registry: {{ .Values.global.image.registry }}
@@ -985,6 +1052,11 @@ sis:
         {{- if dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
         tag: {{ dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
         {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      baoService: {{ $openBaoServerHost | quote }}
+      serviceAccountName: {{ $openBaoInitializeServiceAccountName | quote }}
+      rootTokenSecretName: {{ $openBaoRootTokenSecretName | quote }}
+      {{- end }}
 
   env:
     # Observability
@@ -1475,6 +1547,11 @@ llmRequestRouter:
       repository: {{ dig "addons" "llm" "pki" "image" "repository" (printf "%s/nvcf-openbao-migrations" .Values.global.image.repository) .Values | quote }}
       tag: {{ $pkiImageTag | quote }}
       pullPolicy: {{ dig "addons" "llm" "pki" "image" "pullPolicy" "IfNotPresent" .Values | quote }}
+    {{- if ne $controlPlaneOwner "default" }}
+    baoService: {{ $openBaoServerHost | quote }}
+    serviceAccountName: {{ $openBaoInitializeServiceAccountName | quote }}
+    rootTokenSecretName: {{ $openBaoRootTokenSecretName | quote }}
+    {{- end }}
     {{- if .Values.global.imagePullSecrets }}
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
@@ -1689,12 +1766,12 @@ nvcfUi:
           - {{ $natsHeadlessHealthEndpoint }}
       {{- end }}
       {{- if dig "openbao" "enabled" true .Values }}
-      - name: openbao-server
+      - name: {{ $openBaoServerName }}
         namespace: {{ $vaultNamespace }}
         endpoints:
           - {{ $openBaoHealthEndpoint }}
         k8s_workloads:
-          - name: openbao-server-agent-injector
+          - name: {{ $openBaoServerName }}-agent-injector
             type: deployment
       {{- end }}
       {{- if dig "cassandra" "enabled" true .Values }}

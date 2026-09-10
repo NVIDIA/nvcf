@@ -20,6 +20,7 @@ test:
 	@tests/gateway-routes-named-isolation.sh
 	@tests/admin-nats-named-isolation.sh
 	@tests/service-dns-named-isolation.sh
+	@tests/openbao-injector-named-isolation.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh

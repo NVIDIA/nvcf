@@ -51,7 +51,7 @@ consumer.
 | cert-manager namespace | `cert-manager` | Shared prerequisite namespace | Shared | Golden render and prereq inventory |
 | Service names | Chart defaults such as `api`, `ess-api`, `grpc-proxy` | Derived only where cross-plane collision exists | Plane | Golden render |
 | ClusterIssuer | `nvcf-openbao-pki` | Deferred to Phase 4; derive from validated control-plane ID before named mode is enabled | Plane | Golden render and exact-name cleanup tests |
-| OpenBao injector webhook | Chart-generated static name | Per-plane webhook object and service reference | Plane | Webhook section and future Phase 2 render test |
+| OpenBao injector webhook | Chart-generated static name | Per-plane webhook object and service reference derived from the named OpenBao fullname | Plane | Phase 4G focused OpenBao render test |
 | Admission webhook namespaceSelector | Broad or environment-provided selector | Match workload namespaces plus control-plane owner | Plane | Webhook section and future Phase 2 render test |
 | Helm hook Jobs | Release/chart names | Release names or hook names derived per plane | Plane | Golden render |
 | Hook RBAC | Cluster-scoped, release-derived | Derived per plane; never shared between planes | Plane | Golden render |
@@ -318,7 +318,7 @@ The self-managed stack now derives the common in-cluster service addresses from
 the owner-derived namespaces before passing values into the service charts. For
 a named owner such as `plane-a`, rendered values now point at addresses such as:
 
-- `openbao-server.plane-a-vault-system.svc.cluster.local:8200`;
+- `plane-a-openbao.plane-a-vault-system.svc.cluster.local:8200`;
 - `api.plane-a-nvcf.svc.cluster.local:9090`;
 - `api-keys.plane-a-api-keys.svc.cluster.local:8080`;
 - `nats.plane-a-nats-system.svc.cluster.local:4222`;
@@ -344,6 +344,65 @@ checker in the full named render.
 Named mode intentionally remains fail-closed after this phase. OpenBao injector
 cluster-scoped objects, ClusterIssuer identity, and the final shared-prerequisite
 allowlist still need to pass before the object-level block can be removed.
+
+## Phase 4G OpenBao Injector Identity
+
+Phase 4G removes the OpenBao injector cluster-scoped object collisions for named
+mode.
+
+The upstream OpenBao chart derives the injector names from the same
+`fullnameOverride` used by the server. For the legacy `default` owner, the stack
+continues to rely on the chart default `openbao-server`, preserving objects such
+as `MutatingWebhookConfiguration/openbao-server-agent-injector-cfg`.
+
+For a named owner, the stack now passes a shorter named OpenBao fullname:
+`<owner>-openbao`. The shorter base name is deliberate. A 30-character control
+plane ID plus the upstream `-agent-injector-svc` suffix would exceed the
+63-character Service name limit if the base name stayed `openbao-server`.
+
+With owner `plane-a`, the rendered OpenBao dependency now uses identities such
+as:
+
+- `Service/plane-a-vault-system/plane-a-openbao-agent-injector-svc`;
+- `Deployment/plane-a-vault-system/plane-a-openbao-agent-injector`;
+- `MutatingWebhookConfiguration/plane-a-openbao-agent-injector-cfg`;
+- `ClusterRole/plane-a-openbao-agent-injector-clusterrole`;
+- `ClusterRoleBinding/plane-a-openbao-agent-injector-binding`;
+- `StatefulSet/plane-a-vault-system/plane-a-openbao`.
+
+Because the server fullname changes too, the stack also derives the named-mode
+OpenBao service DNS, unseal secret volume, auto-unseal sidecar mount, UI health
+inventory, migration job service address, and HA raft peer addresses from the
+same fullname. This keeps the server, injector, hooks, and migration job pointed
+at the same named OpenBao installation.
+
+Phase 4G also follows that renamed OpenBao identity through the downstream
+consumers that reference OpenBao-managed objects:
+
+- the NATS nkey RoleBinding subject now points at the named OpenBao initialize
+  ServiceAccount;
+- the LLM request-router PKI migration hook now uses the named OpenBao service,
+  initialize ServiceAccount, and root-token Secret;
+- the LLS/SIS HMAC migration and rotation hooks now use the named OpenBao
+  service, initialize ServiceAccount, root-token Secret, and vault namespace;
+- the managed PKI release now points at the named OpenBao service URL for its
+  backend `server` and service-account-token `audience` values.
+
+The Phase 4C isolation checker now also rejects known stale legacy object
+references, such as `openbao-server-root-token` or
+`admin-token-issuer-proxy.<named-namespace>.svc`, inside named renders. This
+catches same-namespace stale references that are not visible from namespace-only
+or duplicate-identity checks.
+
+A focused `openbao-injector-named-isolation.sh` test temporarily unblocks named
+mode in a copied stack, renders the real OpenBao dependency chart, checks the
+values and rendered manifests, and runs the Phase 4C isolation checker on that
+OpenBao render. The test covers both `plane-a` and a 30-character owner to
+protect the Kubernetes name-length edge.
+
+Named mode intentionally remains fail-closed after this phase. The managed
+ClusterIssuer object's own identity and the final shared-prerequisite allowlist
+still need to pass before the object-level block can be removed.
 
 ## Data And Auth Matrix
 

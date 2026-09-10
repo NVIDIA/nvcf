@@ -21,6 +21,15 @@ SERVICE_DNS_RE = re.compile(
     rf"(?P<service>{DNS_LABEL})\.(?P<namespace>{DNS_LABEL})\.svc"
     r"(\.cluster\.local)?(:[0-9]+)?"
 )
+LEGACY_PLANE_OBJECT_NAME_PATTERNS = {
+    name: re.compile(
+        rf"(?<![a-z0-9-])(?P<name>{re.escape(name)}(?:-[a-z0-9]+)*)(?![a-z0-9-])"
+    )
+    for name in (
+        "admin-token-issuer-proxy",
+        "openbao-server",
+    )
+}
 
 LEGACY_PLANE_NAMESPACES = {
     "api-keys",
@@ -193,14 +202,59 @@ def check_service_dns(obj, field_path, value, errors):
     if not isinstance(value, str):
         return
     for match in SERVICE_DNS_RE.finditer(value):
+        service = match.group("service")
         namespace = match.group("namespace")
-        if namespace not in LEGACY_PLANE_NAMESPACES:
+        if namespace in LEGACY_PLANE_NAMESPACES:
+            errors.append(
+                f"{obj.location} {format_path(field_path)} contains service DNS "
+                f"{match.group(0)} in legacy plane-owned namespace {namespace}; "
+                f"expected namespace {expected_namespace(obj.owner, namespace)}"
+            )
             continue
-        errors.append(
-            f"{obj.location} {format_path(field_path)} contains service DNS "
-            f"{match.group(0)} in legacy plane-owned namespace {namespace}; "
-            f"expected namespace {expected_namespace(obj.owner, namespace)}"
+        if namespace.startswith(f"{obj.owner}-"):
+            for legacy_name, pattern in LEGACY_PLANE_OBJECT_NAME_PATTERNS.items():
+                if pattern.fullmatch(service):
+                    errors.append(
+                        f"{obj.location} {format_path(field_path)} contains service DNS "
+                        f"{match.group(0)} with legacy plane-owned service name "
+                        f"{service}; expected the named control-plane identity "
+                        f"instead of {legacy_name}"
+                    )
+
+
+def check_known_legacy_object_reference(obj, field_path, value, errors):
+    if not isinstance(value, str):
+        return
+    reference_keys = {
+        "configMapName",
+        "rootTokenSecretName",
+        "secretName",
+        "serviceAccountName",
+        "serviceName",
+    }
+    reference_parent_keys = {
+        "backendRefs",
+        "parentRefs",
+        "roleRef",
+        "service",
+        "subjects",
+    }
+    reference_path = field_path == ["metadata", "name"]
+    if field_path:
+        reference_path = (
+            reference_path
+            or field_path[-1] in reference_keys
+            or (field_path[-1] == "name" and any(key in reference_parent_keys for key in field_path[:-1]))
         )
+    if not reference_path:
+        return
+    for legacy_name, pattern in LEGACY_PLANE_OBJECT_NAME_PATTERNS.items():
+        for match in pattern.finditer(value):
+            errors.append(
+                f"{obj.location} {format_path(field_path)} contains legacy "
+                f"plane-owned object reference {match.group('name')}; "
+                f"expected the named control-plane identity instead of {legacy_name}"
+            )
 
 
 def check_owner_label(obj, errors):
@@ -292,6 +346,7 @@ def check_object(obj, allowed_shared_identities, errors):
         if key == "namespace":
             check_legacy_namespace_reference(obj, field_path, value, errors)
         check_service_dns(obj, field_path, value, errors)
+        check_known_legacy_object_reference(obj, field_path, value, errors)
 
 
 def load_render(owner, render_dir, errors):

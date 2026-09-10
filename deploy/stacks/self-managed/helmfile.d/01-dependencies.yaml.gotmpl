@@ -37,7 +37,11 @@ environments:
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix }}
 {{- $cassandraNamespace := printf "%scassandra-system" $controlPlaneNamespacePrefix }}
 {{- $certManagerNamespace := "cert-manager" }}
-{{- $openBaoServerURL := printf "http://openbao-server.%s.svc.cluster.local:8200" $vaultNamespace }}
+{{- $openBaoServerName := "openbao-server" }}
+{{- if ne $controlPlaneOwner "default" }}
+{{- $openBaoServerName = printf "%sopenbao" $controlPlaneNamespacePrefix }}
+{{- end }}
+{{- $openBaoServerURL := printf "http://%s.%s.svc.cluster.local:8200" $openBaoServerName $vaultNamespace }}
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
 {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
 {{- $manageIssuer := false }}

@@ -64,7 +64,7 @@ metadata:
   labels:
     nvcf.nvidia.com/control-plane-owner: ${owner}
 data:
-  openbao: "http://openbao-server.${prefix}vault-system.svc.cluster.local:8200"
+  openbao: "http://${prefix}openbao.${prefix}vault-system.svc.cluster.local:8200"
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -109,21 +109,21 @@ spec: {}
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: ${prefix}openbao-server-agent-injector-cfg
+  name: ${prefix}openbao-agent-injector-cfg
   labels:
     nvcf.nvidia.com/control-plane-owner: ${owner}
 webhooks:
   - name: ${owner}.vault.hashicorp.com
     clientConfig:
       service:
-        name: openbao-server-agent-injector-svc
+        name: ${prefix}openbao-agent-injector-svc
         namespace: ${prefix}vault-system
         path: /mutate
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ${prefix}openbao-server-agent-injector-clusterrole
+  name: ${prefix}openbao-agent-injector-clusterrole
   labels:
     nvcf.nvidia.com/control-plane-owner: ${owner}
 rules: []
@@ -131,16 +131,16 @@ rules: []
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ${prefix}openbao-server-agent-injector-binding
+  name: ${prefix}openbao-agent-injector-binding
   labels:
     nvcf.nvidia.com/control-plane-owner: ${owner}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: ${prefix}openbao-server-agent-injector-clusterrole
+  name: ${prefix}openbao-agent-injector-clusterrole
 subjects:
   - kind: ServiceAccount
-    name: openbao-server-agent-injector
+    name: ${prefix}openbao-agent-injector
     namespace: ${prefix}vault-system
 ---
 apiVersion: apiextensions.k8s.io/v1
@@ -243,6 +243,63 @@ data:
 YAML
 expect_fail "legacy service DNS" "service DNS openbao-server.vault-system.svc.cluster.local:8200" \
   --render "plane-a=$legacy_dns"
+
+legacy_service_name_dns="$work_dir/legacy-service-name-dns"
+mkdir -p "$legacy_service_name_dns"
+cat >"$legacy_service_name_dns/bad.yaml" <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: plane-a-vault-system
+  labels:
+    nvcf.nvidia.com/control-plane-owner: plane-a
+data:
+  issuerServer: "http://openbao-server.plane-a-vault-system.svc.cluster.local:8200"
+YAML
+expect_fail "legacy service name in named namespace DNS" \
+  "legacy plane-owned service name openbao-server" \
+  --render "plane-a=$legacy_service_name_dns"
+
+legacy_object_reference="$work_dir/legacy-object-reference"
+mkdir -p "$legacy_object_reference"
+cat >"$legacy_object_reference/bad.yaml" <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: plane-a-vault-system
+  labels:
+    nvcf.nvidia.com/control-plane-owner: plane-a
+data:
+  rootTokenSecretName: openbao-server-root-token
+YAML
+expect_fail "legacy object reference in named namespace" \
+  "legacy plane-owned object reference openbao-server-root-token" \
+  --render "plane-a=$legacy_object_reference"
+
+legacy_subject_name="$work_dir/legacy-subject-name"
+mkdir -p "$legacy_subject_name"
+cat >"$legacy_subject_name/bad.yaml" <<'YAML'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nkey-bao-access
+  namespace: plane-a-nats-system
+  labels:
+    nvcf.nvidia.com/control-plane-owner: plane-a
+subjects:
+  - kind: ServiceAccount
+    name: openbao-server-initialize-cluster
+    namespace: plane-a-vault-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nkey-reader
+YAML
+expect_fail "legacy subject name in named namespace" \
+  "legacy plane-owned object reference openbao-server-initialize-cluster" \
+  --render "plane-a=$legacy_subject_name"
 
 legacy_route_name="$work_dir/legacy-route-name"
 mkdir -p "$legacy_route_name"

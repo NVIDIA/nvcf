@@ -12,8 +12,12 @@ test_stack_dir="$work_dir/self-managed"
 values_dir="$work_dir/values"
 manifest_dir="$work_dir/manifests"
 owner="plane-a"
-openbao_url="http://openbao-server.${owner}-vault-system.svc.cluster.local:8200"
-openbao_addr="openbao-server.${owner}-vault-system.svc.cluster.local:8200"
+openbao_name="${owner}-openbao"
+openbao_url="http://${openbao_name}.${owner}-vault-system.svc.cluster.local:8200"
+openbao_addr="${openbao_name}.${owner}-vault-system.svc.cluster.local:8200"
+openbao_host="${openbao_name}.${owner}-vault-system.svc.cluster.local"
+openbao_initialize_service_account="${openbao_name}-initialize-cluster"
+openbao_root_token_secret="${openbao_name}-root-token"
 api_grpc_url="http://api.${owner}-nvcf.svc.cluster.local:9090"
 api_grpc_addr="api.${owner}-nvcf.svc.cluster.local:9090"
 nats_url="nats://nats.${owner}-nats-system.svc.cluster.local:4222"
@@ -56,6 +60,10 @@ run_helmfile() {
       --state-values-set ingress.gatewayApi.gateways.grpc.name=grpc-gateway \
       --state-values-set ingress.gatewayApi.gateways.grpc.namespace=gateway \
       --state-values-set addons.llm.enabled=true \
+      --state-values-set addons.llm.pki.enabled=true \
+      --state-values-set addons.llm.pki.allowedDomains=cluster.local \
+      --state-values-set addons.lls.enabled=true \
+      --state-values-set addons.lls.hmacRotation.image.tag=0.16.3 \
       --state-values-set observability.profile=control \
       --state-values-set stateMetrics.enabled=true \
       "$@"
@@ -144,6 +152,10 @@ assert_render_contains "$manifest_dir/api.yaml" \
   'select(.kind == "ConfigMap" and .metadata.name == "nvcf-api-account-bootstrap-script") | .data."account-bootstrap.sh"' \
   "OPENBAO_SERVICE_ADDR=\"$openbao_addr\""
 
+render_release_values "01-dependencies.yaml.gotmpl" "nvcf-pki" "$values_dir/nvcf-pki-values.yaml"
+assert_value "$values_dir/nvcf-pki-values.yaml" '.clusterIssuer.server' "$openbao_url"
+assert_value "$values_dir/nvcf-pki-values.yaml" '.clusterIssuer.auth.serviceAccount.audience' "$openbao_url"
+
 assert_value "$values_dir/admin-issuer-proxy-values.yaml" '.adminIssuerProxy.config.vaultAddr' "$openbao_url"
 assert_value "$values_dir/admin-issuer-proxy-values.yaml" '.adminIssuerProxy.config.vaultAudience' "$openbao_url"
 assert_value "$values_dir/admin-issuer-proxy-values.yaml" '.adminIssuerProxy.config.serviceMetadataURL' "$api_keys_metadata_url"
@@ -156,8 +168,25 @@ assert_value "$values_dir/ratelimiter-values.yaml" '.rateLimiter.env.OAUTH2_JWKS
 assert_value "$values_dir/llm-api-gateway-values.yaml" '.llmApiGateway.config.requestRouterUrl' "http://llm-request-router.${owner}-nvcf.svc.cluster.local:8000"
 assert_value "$values_dir/llm-api-gateway-values.yaml" '.llmApiGateway.config.nvcfGrpcAddr' "$api_grpc_addr"
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.auth.workerAuthEndpoint' "$api_grpc_url"
+assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.pki.baoService' "$openbao_host"
+assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.pki.serviceAccountName' "$openbao_initialize_service_account"
+assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.pki.rootTokenSecretName' "$openbao_root_token_secret"
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.certificate.dnsNames[0]' "llm-request-router.${owner}-nvcf.svc.cluster.local"
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.certificate.dnsNames[1]' "*.llm-request-router-headless.${owner}-nvcf.svc.cluster.local"
+assert_value "$manifest_dir/llm-request-router.yaml" 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.serviceAccountName' "$openbao_initialize_service_account"
+assert_value "$manifest_dir/llm-request-router.yaml" 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "BAO_SERVICE") | .value' "$openbao_host"
+assert_value "$manifest_dir/llm-request-router.yaml" 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.volumes[] | select(.name == "root-token") | .secret.secretName' "$openbao_root_token_secret"
+assert_value "$values_dir/sis-values.yaml" '.sis.lls.namespace' "${owner}-vault-system"
+assert_value "$values_dir/sis-values.yaml" '.sis.lls.hmacRotation.baoService' "$openbao_host"
+assert_value "$values_dir/sis-values.yaml" '.sis.lls.hmacRotation.serviceAccountName' "$openbao_initialize_service_account"
+assert_value "$values_dir/sis-values.yaml" '.sis.lls.hmacRotation.rootTokenSecretName' "$openbao_root_token_secret"
+assert_value "$manifest_dir/sis.yaml" 'select(.kind == "Job" and .metadata.name == "addons-lls-migrations") | .metadata.namespace' "${owner}-vault-system"
+assert_value "$manifest_dir/sis.yaml" 'select(.kind == "Job" and .metadata.name == "addons-lls-migrations") | .spec.template.spec.serviceAccountName' "$openbao_initialize_service_account"
+assert_value "$manifest_dir/sis.yaml" 'select(.kind == "Job" and .metadata.name == "addons-lls-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "BAO_SERVICE") | .value' "$openbao_host"
+assert_value "$manifest_dir/sis.yaml" 'select(.kind == "Job" and .metadata.name == "addons-lls-migrations") | .spec.template.spec.volumes[] | select(.name == "root-token") | .secret.secretName' "$openbao_root_token_secret"
+assert_value "$manifest_dir/sis.yaml" 'select(.kind == "CronJob" and .metadata.name == "addons-lls-turn-hmac-rotation") | .spec.jobTemplate.spec.template.spec.serviceAccountName' "$openbao_initialize_service_account"
+assert_value "$manifest_dir/sis.yaml" 'select(.kind == "CronJob" and .metadata.name == "addons-lls-turn-hmac-rotation") | .spec.jobTemplate.spec.template.spec.containers[0].env[] | select(.name == "BAO_SERVICE") | .value' "$openbao_host"
+assert_value "$manifest_dir/sis.yaml" 'select(.kind == "CronJob" and .metadata.name == "addons-lls-turn-hmac-rotation") | .spec.jobTemplate.spec.template.spec.volumes[] | select(.name == "root-token") | .secret.secretName' "$openbao_root_token_secret"
 assert_value "$values_dir/function-autoscaler-values.yaml" '.functionautoscaler.volumes[0].projected.sources[0].serviceAccountToken.audience' "$openbao_url"
 
 python3 "$repo_root/deploy/stacks/tests/verify-named-control-plane-render-isolation.py" \

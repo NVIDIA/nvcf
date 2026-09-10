@@ -110,5 +110,6 @@ assert_render_value "$admin_render_file" ReferenceGrant plane-a-admin-token-issu
 
 render_release_values "01-dependencies.yaml.gotmpl" "nats" "$nats_values_file"
 assert_value "$nats_values_file" '.nats.rbac.openbao.namespace' plane-a-vault-system
+assert_value "$nats_values_file" '.nats.rbac.openbao.serviceAccountName' plane-a-openbao-initialize-cluster
 
 echo "admin-nats-named-isolation: all checks passed"

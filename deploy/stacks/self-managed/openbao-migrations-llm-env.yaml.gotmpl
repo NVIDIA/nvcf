@@ -1,11 +1,29 @@
 {{- $secretPath := printf "secrets/%s-secrets.yaml" (requiredEnv "HELMFILE_ENV") -}}
 {{- $secretValues := readFile $secretPath | fromYaml -}}
 {{- $migrationEnv := dig "openbao" "migrations" "env" (list) $secretValues -}}
+{{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" -}}
+{{- $controlPlaneNamespacePrefix := "" -}}
+{{- if ne $controlPlaneOwner "default" -}}
+{{- $controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner -}}
+{{- end -}}
+{{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix -}}
+{{- $openBaoServerName := "openbao-server" -}}
+{{- if ne $controlPlaneOwner "default" -}}
+{{- $openBaoServerName = printf "%sopenbao" $controlPlaneNamespacePrefix -}}
+{{- end -}}
+{{- $openBaoServerHost := printf "%s.%s.svc.cluster.local" $openBaoServerName $vaultNamespace -}}
+{{- $openBaoServerURL := printf "http://%s:8200" $openBaoServerHost -}}
 openbao:
   migrations:
     env:
 {{- with $migrationEnv }}
 {{ toYaml . | nindent 6 }}
+{{- end }}
+{{- if ne $controlPlaneOwner "default" }}
+      - name: BAO_SERVICE
+        value: {{ $openBaoServerHost | quote }}
+      - name: OPENBAO_SERVER_INTERNAL_URL
+        value: {{ $openBaoServerURL | quote }}
 {{- end }}
       - name: ADDONS_LLM_ENABLED
         value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
