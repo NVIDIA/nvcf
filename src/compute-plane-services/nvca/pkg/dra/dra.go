@@ -98,71 +98,69 @@ func ComputeDomainForIndex(rawIndex string) *nvresourcev1beta1.ComputeDomain {
 	)
 }
 
-// podTemplateAnnotation returns the value of annotation key for obj, and whether it was present.
+// podTemplateAnnotationValues returns every distinct value of annotation key that obj declares
+// across its pod templates.
 //
-// For built-in workload kinds it reads the pod template, the only location Kubernetes copies
-// down onto created Pods. Objects of a kind NVCA does not have a Go type for -- Grove
-// PodCliqueSet, DynamoGraphDeployment and anything else in allowedExtraKubernetesTypes -- decode
-// to *unstructured.Unstructured and carry their pod templates at operator-defined paths, so they
-// are searched for any nested annotations map instead. Skipping them would leave the operator's
-// realized Pods with the annotation the webhook acts on but no ComputeDomain to claim.
-func podTemplateAnnotation(obj client.Object, key string) (string, bool) {
+// For built-in workload kinds this is at most one value, read from the pod template -- the only
+// location Kubernetes copies down onto created Pods. Objects of a kind NVCA has no Go type for
+// (Grove PodCliqueSet, DynamoGraphDeployment, anything else in allowedExtraKubernetesTypes)
+// decode to *unstructured.Unstructured and may carry several templates at operator-defined
+// paths, each declaring a different domain. Every one of them needs its own ComputeDomain: the
+// webhook derives a Pod's claim from that Pod's own annotation, so a value discovered here but
+// not provisioned leaves those Pods claiming a ResourceClaimTemplate nobody created.
+func podTemplateAnnotationValues(obj client.Object, key string) []string {
 	if u, isUnstructured := obj.(*unstructured.Unstructured); isUnstructured {
-		return nestedAnnotation(u.Object, key)
+		return nestedAnnotationValues(u.Object, key)
 	}
-	var val string
-	var ok bool
+	var vals []string
 	itrf := func(pts *corev1.PodTemplateSpec) {
 		if v, found := pts.Annotations[key]; found {
-			val, ok = v, true
+			vals = append(vals, v)
 		}
 	}
 	iterPodSpecs(itrf, obj)
-	return val, ok
+	return vals
 }
 
-// nestedAnnotation searches obj for an "annotations" map containing key, below the object's own
-// top-level metadata. A custom resource's own metadata.annotations is not a pod template and is
-// not copied onto its Pods, so it is excluded; every deeper annotations map belongs to some
-// template the operator stamps out.
-func nestedAnnotation(obj map[string]any, key string) (string, bool) {
+// nestedAnnotationValues collects key from every "annotations" map below obj's own top-level
+// metadata. A custom resource's own metadata.annotations is not a pod template and is not copied
+// onto its Pods, so it is excluded; every deeper annotations map belongs to some template the
+// operator stamps out.
+func nestedAnnotationValues(obj map[string]any, key string) []string {
 	spec, ok := obj["spec"].(map[string]any)
 	if !ok {
-		return "", false
+		return nil
 	}
-	return searchAnnotations(spec, key)
+	var out []string
+	collectAnnotations(spec, key, &out)
+	return out
 }
 
-func searchAnnotations(node any, key string) (string, bool) {
+func collectAnnotations(node any, key string, out *[]string) {
 	switch n := node.(type) {
 	case map[string]any:
 		if annos, ok := n["annotations"].(map[string]any); ok {
 			if v, found := annos[key]; found {
-				if s, isStr := v.(string); isStr {
-					return s, true
+				if str, isStr := v.(string); isStr {
+					*out = append(*out, str)
 				}
 			}
 		}
-		// Iterate deterministically: a template may appear under any key, and two
-		// different values must not resolve differently run to run.
+		// Walk deterministically: a template may sit under any key, and the set of
+		// discovered values must not depend on Go's map iteration order.
 		keys := make([]string, 0, len(n))
 		for k := range n {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			if v, found := searchAnnotations(n[k], key); found {
-				return v, true
-			}
+			collectAnnotations(n[k], key, out)
 		}
 	case []any:
 		for _, item := range n {
-			if v, found := searchAnnotations(item, key); found {
-				return v, true
-			}
+			collectAnnotations(item, key, out)
 		}
 	}
-	return "", false
 }
 
 // ComputeDomainsForWorkload returns every ComputeDomain a MiniService needs: the default domain,
@@ -175,8 +173,10 @@ func ComputeDomainsForWorkload(objs ...client.Object) []*nvresourcev1beta1.Compu
 	seen := sets.New[string](defaultComputeDomainName)
 	raws := sets.New[string]()
 	for _, obj := range objs {
-		if raw, ok := podTemplateAnnotation(obj, RequiredNVLinkDomainIndexAnnotation); ok && raw != "" {
-			raws.Insert(raw)
+		for _, raw := range podTemplateAnnotationValues(obj, RequiredNVLinkDomainIndexAnnotation) {
+			if raw != "" {
+				raws.Insert(raw)
+			}
 		}
 	}
 	for _, raw := range sets.List(raws) {

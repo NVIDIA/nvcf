@@ -395,3 +395,36 @@ func TestComputeDomainsForWorkload(t *testing.T) {
 		assert.Equal(t, []string{defaultComputeDomainName}, names(ComputeDomainsForWorkload(u)))
 	})
 }
+
+// TestComputeDomainsForWorkload_MultiTemplateUnstructured guards the disaggregated shape: one
+// operator CRD carrying several pod templates with different domain indices. Returning only the
+// first would leave the other groups' Pods claiming a ResourceClaimTemplate nobody created,
+// which strands them Pending with no diagnostic.
+func TestComputeDomainsForWorkload_MultiTemplateUnstructured(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "grove.io/v1alpha1",
+		"kind":       "PodCliqueSet",
+		"metadata":   map[string]any{"name": "disagg"},
+		"spec": map[string]any{
+			"template": map[string]any{
+				"cliques": []any{
+					map[string]any{"spec": map[string]any{
+						"annotations": map[string]any{RequiredNVLinkDomainIndexAnnotation: "0"},
+					}},
+					map[string]any{"spec": map[string]any{
+						"annotations": map[string]any{RequiredNVLinkDomainIndexAnnotation: "1"},
+					}},
+				},
+			},
+		},
+	}}
+	got := make([]string, 0)
+	for _, cd := range ComputeDomainsForWorkload(u) {
+		got = append(got, cd.Name)
+	}
+	assert.ElementsMatch(t, []string{
+		defaultComputeDomainName,
+		ComputeDomainForIndex("0").Name,
+		ComputeDomainForIndex("1").Name,
+	}, got)
+}
