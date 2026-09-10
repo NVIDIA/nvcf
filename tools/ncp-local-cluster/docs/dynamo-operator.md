@@ -318,7 +318,6 @@ curl -s -X POST \
   }'
 ```
 
-
 ### Monitor instance status
 
 ```bash

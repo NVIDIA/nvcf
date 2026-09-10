@@ -117,14 +117,14 @@ $ cd ~/nvct-shared-dir/result
 $ mkdir <result-name>
 ```
 
-2. Generate a random file of a certain size in that folder.
+1. Generate a random file of a certain size in that folder.
 
 ```bash
 $ cd ~/nvct-shared-dir/result/<result-name>
 $ dd if=/dev/urandom of=result_file bs=1M count=100
 ```
 
-3. Create (or update) the progress file `~/nvct-shared-dir/result/progress`:
+1. Create (or update) the progress file `~/nvct-shared-dir/result/progress`:
 
 ```json
 {

@@ -44,7 +44,7 @@ tree and freely write into the same paths at runtime, while:
 
 Per-restore-pod overlay union, mounted on the host by the agent.
 
-```
+```text
 +-------------------------- Pod's view ------------------------------+
 | /root/.cache/vllm/    <-- bind mount of /var/lib/nvsnap/overlays/    |
 |                           <pod-uid>/<captured-path>                |

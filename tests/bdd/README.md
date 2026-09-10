@@ -9,7 +9,7 @@ in `AGENTS.md`.
 
 ## Directory layout
 
-```
+```text
 features/   Gherkin feature files: single-cluster CLI, multi-cluster CLI,
             single/multi-cluster Helmfile (k3d), and single/multi-cluster
             EKS Helmfile (non-local).

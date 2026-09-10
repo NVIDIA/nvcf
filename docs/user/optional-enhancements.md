@@ -38,7 +38,7 @@ verification details.
 
 ## NVCF UI
 
-NVCF UI is an optional addon that deploys a customer-facing NVCF admin-panel UI. 
+NVCF UI is an optional addon that deploys a customer-facing NVCF admin-panel UI.
 It is available only in stack packages that include the
 NVCF UI addon. Older packages do not contain the `nvcf-ui` release
 or route values.

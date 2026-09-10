@@ -53,6 +53,13 @@ The upstream part comes from `otel-collector-build.yaml`; do not add a `VERSION`
 file or a CI gate that requires one. `RELEASE_SERIES_START` anchors the first
 wrapper release and must remain in the repository.
 
+Commit a collector version bump as `fix(byoo-otel-collector):`, not
+`chore(byoo-otel-collector):`. `chore` commits are not release-worthy (see
+`RELEASE_RULES` in `tools/ci/github-release`), so a `chore` bump only
+synthesizes a compatibility tag anchor and never triggers the image build and
+push. Because the upstream version is embedded directly in the published tag
+and image, every bump must ship a real image, not just update the pin in git.
+
 ## Local Gotchas
 
 - Generated templates and examples are committed. Regenerate and commit them

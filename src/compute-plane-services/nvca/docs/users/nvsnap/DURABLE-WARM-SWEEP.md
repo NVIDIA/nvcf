@@ -6,7 +6,7 @@ The `NvSnapFunctionState.status.localCacheState = Warm` flip is produced by
 exactly one in-process reconcile goroutine that must survive the entire
 Hook B flow:
 
-```
+```text
 pod-ready event → warmup buffer → POST /checkpoints
   → pollCheckpointTerminal (≤30 min)
   → pollPVCPromoteTerminal (≤15 min, Hyperdisk-ML snap+clone)
@@ -38,7 +38,7 @@ Add a **periodic CFS reconcile sweep** to the controller, independent of pod
 events. The catalog (nvsnap-server) is the source of truth for "does a usable
 capture exist"; the sweep reconciles every `NvSnapFunctionState` against it.
 
-```
+```text
 every SweepInterval (default 60s):
   list NvSnapFunctionState
   for each cfs where state != Warm && !optOut && spec.workloadLookup.imageRef != "":

@@ -58,10 +58,12 @@ cuda-checkpoint doesn't support multi-GPU (`distinctGPUs >= 2` returns "multi-GP
 ### What's open — two distinct scenarios
 
 **Scenario A: single-pod restore (sustained serving)** — customer running 70B, traffic spike or rolling restart, want quick spin-up.
+
 - **Warm pool serving platform** is the right architectural pattern. Pre-loaded vLLM instances on reserved nodes; restore = route to a matching instance + apply customer config / LoRA / KV cache delta. Target ~95% wall-clock reduction (233 s → seconds). **3–6 months** of work; mostly Kubernetes + Go controller + small per-model-family diff extractor.
 - **GDS bulk transfer** (NVMe → GPU direct) addresses the 30 s host→GPU stage. Hardware-gated to A3-Ultra-class. 2–4 weeks if hardware available.
 
 **Scenario B: cold-cluster scale-out (bursty demand)** — empty cluster + one checkpoint, scale to N pods. Bottleneck is data fan-out, not compute bringup. See `SCALE-OUT-DESIGN.md` for the math (13.3 TiB / 100 nodes → ~3 hours naive vs ~110 s torrent-style).
+
 - Cross-cutting wins below dominate this scenario.
 - **EROFS-as-shared-mount** finally wins here: single artifact per node, mounted once per node, shared RO across pods, tmpfs overlay for writable scratch. The "multi-receiver fanout" revisit trigger from `EROFS-VALIDATION.md` fires.
 
@@ -76,6 +78,7 @@ These are the levers worth building **first** because the work benefits both CRI
 Spike 3 measured: single-stream upload caps at ~1.4 Gbit/s on a wire that does 36 Gbit/s. 8-way parallel: 10 Gbit/s. Same shape applies to GET / cascade fetch on the receiver side.
 
 Today's `cascade_fetch.go` fetches sequentially from the first peer found. **Change** to chunk-parallel multi-source pull. Benefits:
+
 - Faster cross-node restores in the single-pod CRIU case (lazy-pages over network gets faster too)
 - Massive at-scale benefit for fan-out (receiver bound by collective bandwidth, not single peer)
 - Symmetric improvement to PUT path on the capture side
@@ -113,6 +116,7 @@ The user's call: **finish single-GPU work first, then move to multi-GPU.** Combi
 | **W7+** | Warm pool serving platform (MVP) | multi-GPU rootfs | sustained-serving specific |
 
 The first 5 weeks deliver real, measurable wins across both workload classes without committing to any heavy multi-GPU-specific architecture. After that, EROFS-fan-out and warm-pool-serving are independent investments that can be parallelized or sequenced based on customer access patterns:
+
 - **Bursty cold-start traffic** → EROFS-fan-out wins
 - **Sustained serving traffic** → warm-pool wins
 - Both are buildable; not mutually exclusive

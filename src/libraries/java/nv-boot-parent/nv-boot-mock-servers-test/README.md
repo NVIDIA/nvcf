@@ -34,7 +34,7 @@ Add this library as a `test` scope dependency to your application's or test modu
 This library does not autoconfigure and register any beans in the Spring application
 context.
 
-This module provides **mock server utilities and test fixtures** for use in `@SpringBootTest` 
+This module provides **mock server utilities and test fixtures** for use in `@SpringBootTest`
 or JUnit tests. It does not auto-configure beans. Use the mock classes from
 package `com.nvidia.boot.mock.*` (e.g. `com.nvidia.boot.mock.docker`, `com.nvidia.boot.mock.azure`,
 `com.nvidia.boot.mock.ngc`) to set up WireMock stubs for registry endpoints.

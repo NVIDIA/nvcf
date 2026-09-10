@@ -7,7 +7,6 @@ set -euo pipefail
 chart_root="$(cd "$(dirname "$0")/.." && pwd)"
 workspace_root="$(cd "${chart_root}/../../.." && pwd)"
 config_template="${workspace_root}/src/compute-plane-services/nvca/pkg/operator/reconcile/manifests/otel_collector_config.yaml"
-compatible_tag="0.157.0-nv-0.2.1"
 tmp_dir="$(mktemp -d)"
 
 # Remove rendered test inputs even when image validation fails.
@@ -54,6 +53,13 @@ if [[ "${operator_repository}" != "${expected_repository}" ]]; then
   exit 1
 fi
 
+# The source of truth for the compatible tag is the chart itself, not a
+# literal here: otelCollector.imageTag, agent.byooOtelCollector.imageTag,
+# helmManaged.otelCollector.imageTag, and selfManaged.otelCollector.imageTag
+# move together on every collector release (tools/chart-version-bumper
+# refuses rather than bump them if they ever disagree), so any one of them is
+# the value every path below must resolve to.
+compatible_tag="$(yq -r '.otelCollector.imageTag' "${chart_root}/nvca-operator/values.yaml")"
 for selected_tag in "${operator_tag}" "${backend_tag}" "${helm_managed_tag}"; do
   if [[ "${selected_tag}" != "${compatible_tag}" ]]; then
     echo "expected every collector path to select ${compatible_tag}, got ${selected_tag}" >&2

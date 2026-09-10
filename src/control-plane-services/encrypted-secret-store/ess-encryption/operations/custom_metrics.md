@@ -15,6 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 # List of custom metrics by ESS Encryption
+
 | Metric name                         | Type    | Additional dimensions                  | Description                                                                                                                                                                                                                                                                                         |
 |-------------------------------------|---------|----------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | rotation_mek_delta                  | gauge   | kid                                    | Time delta (millis) since MEK was rotated, tracked by `kid`. This should be used to alert if MEK is not rotated at expected cadence                                                                                                                                                                 |
@@ -50,9 +51,9 @@ Any alerts coming from a cronjob can be of `warning` severity and can be communi
 
 In general, these are the metrics to alert on:
 
-* `nek_{cronjob}_errors_total` - warning
-* `nek_validation_errors_total` - warning. If API, check against 5xx on LB -> escalate
-* `nek_v2_{en|de}cryption_get_errors_total` - warning. If API, notify dev team even if no 5XX on LB
+- `nek_{cronjob}_errors_total` - warning
+- `nek_validation_errors_total` - warning. If API, check against 5xx on LB -> escalate
+- `nek_v2_{en|de}cryption_get_errors_total` - warning. If API, notify dev team even if no 5XX on LB
 
 # Cache sets
 

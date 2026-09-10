@@ -121,13 +121,16 @@ Reject transport trust settings that explicitly disable QUIC verification.
 {{- end -}}
 
 {{/*
-Render the effective chart-owned agent configuration. Top-level byoo values
-provide the supported API. agentConfig.mergeConfig remains a legacy override
-and takes precedence for one minor-version transition.
+Render the effective chart-owned agent configuration. Top-level byoo/utils/
+storage/worker values provide the supported API. agentConfig.mergeConfig
+remains a legacy override and takes precedence for one minor-version
+transition.
 */}}
 {{- define "nvcaop.effectiveAgentConfig" -}}
 {{- $byoo := .Values.byoo | default dict -}}
 {{- $utils := .Values.utils | default dict -}}
+{{- $storage := .Values.storage | default dict -}}
+{{- $worker := .Values.worker | default dict -}}
 {{- $agent := dict -}}
 {{- with $byoo.resources }}
 {{- $_ := set $agent "BYOOResources" . -}}
@@ -147,6 +150,101 @@ and takes precedence for one minor-version transition.
 {{- with $utils.resources }}
 {{- $_ := set $agent "UtilsResources" . -}}
 {{- end -}}
+{{- $sharedStorage := $storage.sharedStorage | default dict -}}
+{{- $sharedStorageServer := dict -}}
+{{- with $sharedStorage.server }}
+{{- with .image }}
+{{- $_ := set $sharedStorageServer "image" . -}}
+{{- end -}}
+{{- with .resources }}
+{{- $_ := set $sharedStorageServer "containerResources" . -}}
+{{- end -}}
+{{- end -}}
+{{- $sharedStorageTaskData := dict -}}
+{{- with $sharedStorage.taskData }}
+{{- with .storageClassName }}
+{{- $_ := set $sharedStorageTaskData "storageClassName" . -}}
+{{- end -}}
+{{- with .mountOptions }}
+{{- $_ := set $sharedStorageTaskData "pvMountOptions" . -}}
+{{- end -}}
+{{- with .storageCapacity }}
+{{- $_ := set $sharedStorageTaskData "storageCapacity" . -}}
+{{- end -}}
+{{- end -}}
+{{- $sharedStorageEffective := dict -}}
+{{- if $sharedStorageServer }}
+{{- $_ := set $sharedStorageEffective "server" $sharedStorageServer -}}
+{{- end -}}
+{{- if $sharedStorageTaskData }}
+{{- $_ := set $sharedStorageEffective "taskData" $sharedStorageTaskData -}}
+{{- end -}}
+{{- if $sharedStorageEffective }}
+{{- $_ := set $agent "sharedStorage" $sharedStorageEffective -}}
+{{- end -}}
+{{- $internalPersistentStorage := $storage.internalPersistentStorage | default dict -}}
+{{- $ipsEffective := dict -}}
+{{- with $internalPersistentStorage.storageClassName }}
+{{- $_ := set $ipsEffective "storageClassName" . -}}
+{{- end -}}
+{{- with $internalPersistentStorage.hardResourceQuota }}
+{{- $_ := set $ipsEffective "hardResourceQuota" . -}}
+{{- end -}}
+{{- if $ipsEffective }}
+{{- $_ := set $agent "internalPersistentStorage" $ipsEffective -}}
+{{- end -}}
+{{- with $worker.minHealthcheckRefreshWait }}
+{{- $_ := set $agent "minHealthcheckRefreshWait" . -}}
+{{- end -}}
+{{- with $worker.staticGPUCapacity }}
+{{- $_ := set $agent "staticGPUCapacity" . -}}
+{{- end -}}
+{{- with $worker.computeBackend }}
+{{- $_ := set $agent "computeBackend" . -}}
+{{- end -}}
+{{- with $worker.requestsNamespace }}
+{{- $_ := set $agent "requestsNamespace" . -}}
+{{- end -}}
+{{- with $worker.namespaceLabels }}
+{{- $_ := set $agent "namespaceLabels" . -}}
+{{- end -}}
+{{- with $worker.featureFlags }}
+{{- $_ := set $agent "featureFlags" . -}}
+{{- end -}}
+{{- with $worker.skipSelfDestruct }}
+{{- $_ := set $agent "skipSelfDestruct" . -}}
+{{- end -}}
+{{- with $worker.forceSelfDestruct }}
+{{- $_ := set $agent "forceSelfDestruct" . -}}
+{{- end -}}
+{{- with $worker.csiVolumeMountOptions }}
+{{- $_ := set $agent "csiVolumeMountOptions" . -}}
+{{- end -}}
+{{- $timeouts := $worker.timeouts | default dict -}}
+{{- with $timeouts.credRenewInterval }}
+{{- $_ := set $agent "credRenewInterval" . -}}
+{{- end -}}
+{{- with $timeouts.heartbeatInterval }}
+{{- $_ := set $agent "heartbeatInterval" . -}}
+{{- end -}}
+{{- with $timeouts.syncQueueInterval }}
+{{- $_ := set $agent "syncQueueInterval" . -}}
+{{- end -}}
+{{- with $timeouts.syncRequestStatusInterval }}
+{{- $_ := set $agent "syncRequestStatusInterval" . -}}
+{{- end -}}
+{{- with $timeouts.syncAcknowledgeRequestInterval }}
+{{- $_ := set $agent "syncAcknowledgeRequestInterval" . -}}
+{{- end -}}
+{{- with $timeouts.periodicInstanceStatusInterval }}
+{{- $_ := set $agent "periodicInstanceStatusInterval" . -}}
+{{- end -}}
+{{- with $timeouts.icmsRequestAckInterval }}
+{{- $_ := set $agent "icmsRequestAckInterval" . -}}
+{{- end -}}
+{{- with $timeouts.icmsRequestAckRetryTimeout }}
+{{- $_ := set $agent "icmsRequestAckRetryTimeout" . -}}
+{{- end -}}
 {{- $config := dict -}}
 {{- if $agent }}
 {{- $_ := set $config "agent" $agent -}}
@@ -160,27 +258,42 @@ and takes precedence for one minor-version transition.
 {{- end -}}
 {{- $config = mergeOverwrite $config ($parsedMergeConfig | default dict) -}}
 {{- end -}}
+{{- $finalAgent := $config.agent | default dict -}}
+{{- if and $finalAgent.skipSelfDestruct $finalAgent.forceSelfDestruct -}}
+{{- fail "worker.skipSelfDestruct and worker.forceSelfDestruct cannot both be true (including via agentConfig.mergeConfig); NVCA rejects this combination at startup" -}}
+{{- end -}}
 {{- $config | toYaml -}}
 {{- end -}}
 
 {{/*
-Return true when legacy agentConfig.mergeConfig configures BYOO fields. The
-ConfigMap annotation lets the operator emit a source-aware migration warning.
+Keys under agentConfig.mergeConfig's "agent" map that now have first-class
+chart values. Used to detect legacy overrides so the operator can emit a
+source-aware migration warning.
 */}}
-{{- define "nvcaop.usesLegacyBYOOConfig" -}}
+{{- define "nvcaop.firstClassAgentConfigKeys" -}}
+{{- list "additionalResourceOverhead" "UtilsResources" "sharedStorage" "internalPersistentStorage" "minHealthcheckRefreshWait" "staticGPUCapacity" "computeBackend" "requestsNamespace" "namespaceLabels" "featureFlags" "skipSelfDestruct" "forceSelfDestruct" "csiVolumeMountOptions" "credRenewInterval" "heartbeatInterval" "syncQueueInterval" "syncRequestStatusInterval" "syncAcknowledgeRequestInterval" "periodicInstanceStatusInterval" "icmsRequestAckInterval" "icmsRequestAckRetryTimeout" | toYaml -}}
+{{- end -}}
+
+{{/*
+Return true when legacy agentConfig.mergeConfig configures any field that now
+has a first-class chart value (BYOO, utils, storage, or worker). The ConfigMap
+annotation lets the operator emit a source-aware migration warning.
+*/}}
+{{- define "nvcaop.usesLegacyFirstClassConfig" -}}
 {{- $agentConfig := .Values.agentConfig | default dict -}}
 {{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
-{{- $legacyBYOO := false -}}
+{{- $legacyFirstClass := false -}}
 {{- if $mergeConfigData }}
+{{- $firstClassKeys := include "nvcaop.firstClassAgentConfigKeys" . | fromYamlArray -}}
 {{- $config := $mergeConfigData | fromYaml | default dict -}}
 {{- $agent := $config.agent | default dict -}}
 {{- range $key, $_ := $agent }}
-{{- if or (hasPrefix "byoo" (lower $key)) (eq $key "additionalResourceOverhead") (eq $key "UtilsResources") }}
-{{- $legacyBYOO = true -}}
+{{- if or (hasPrefix "byoo" (lower $key)) (has $key $firstClassKeys) }}
+{{- $legacyFirstClass = true -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- $legacyBYOO -}}
+{{- $legacyFirstClass -}}
 {{- end -}}
 
 {{/*

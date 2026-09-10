@@ -46,7 +46,7 @@ in the nvsnap repo for the bench table):
 
 ## Architecture
 
-```
+```text
                        ┌───────────────────────────────────────────┐
                        │  Function-version object (NGC catalog)    │
                        │    + nvsnap_checkpoint_hash (new field)     │
@@ -98,7 +98,7 @@ That's the entirety of the restore path NVCA needs. NvSnap's
 reads the annotation, resolves the manifest from
 `nvsnap-capture-<shortHash>` ConfigMap, injects nodeAffinity +
 hostPath volume mounts on the inference container. Customer image
-+ args unchanged.
+- args unchanged.
 
 ### Hook B — checkpoint-after-warm (post-health-OK)
 
@@ -117,6 +117,7 @@ ready to serve real requests). Then the loop:
 4. Removes the `checkpoint-on-warm` annotation so the loop is idempotent.
 
 Health-check details:
+
 - NVCA reads the health endpoint URL from the function-version's
   inference spec (already there for traffic routing). Default
   contract: `GET <host>:<port>/v1/health/ready` returns 200 when the
@@ -143,7 +144,7 @@ Failure modes (fail-open):
 
 ## NvSnap APIs NVCA consumes
 
-```
+```text
 POST /api/v1/checkpoint/pod
   body: {"namespace": "nvcf-backend", "pod": "0-sr-...", "container": "inference"}
   → 202 Accepted {"checkpoint_id": "...", "status_url": "/api/v1/checkpoints/..."}
