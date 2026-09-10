@@ -33,7 +33,13 @@ class CanonicalSuiteTests(unittest.TestCase):
 
         self.assertEqual(
             suite["suites"]["canonical"],
-            ["smoke", "saturation", "session-affinity", "mixed-sessions"],
+            [
+                "smoke",
+                "saturation",
+                "session-affinity",
+                "long-context-affinity",
+                "mixed-sessions",
+            ],
         )
         self.assertLess(LOADTEST.measured_minutes(suite, "canonical"), 120)
 
@@ -48,6 +54,17 @@ class CanonicalSuiteTests(unittest.TestCase):
         self.assertNotEqual(sessions[0][:256], sessions[1][:256])
         self.assertTrue(sessions[2].startswith(sessions[0]))
         self.assertTrue(sessions[4].startswith(sessions[2]))
+
+        long_context = list(
+            LOADTEST.long_context_prompts(2, [80_000, 100_000, 120_000])
+        )
+        self.assertEqual(
+            [5 + len(prompt) // 4 for prompt in long_context],
+            [80_000, 80_000, 100_000, 100_000, 120_000, 120_000],
+        )
+        self.assertEqual(long_context[0][:256], long_context[2][:256])
+        self.assertEqual(long_context[2][:256], long_context[4][:256])
+        self.assertNotEqual(long_context[0][:256], long_context[1][:256])
 
         hot = list(LOADTEST.mixed_hot_prompts(4, 512, 1024))
         self.assertEqual(len({prompt[:256] for prompt in hot}), 1)

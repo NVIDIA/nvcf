@@ -25,11 +25,16 @@ suites:
   cache-affinity:
     - smoke
     - session-affinity
+    - long-context-affinity
     - mixed-sessions
+  long-context:
+    - smoke
+    - long-context-affinity
   canonical:
     - smoke
     - saturation
     - session-affinity
+    - long-context-affinity
     - mixed-sessions
 
 scenarios:
@@ -57,6 +62,14 @@ scenarios:
     workers: 48
     stablePrefixBytes: 3584
     turnBytes: 512
+
+  long-context-affinity:
+    kind: long-context-affinity
+    sessions: 16
+    inputTokensByTurn: [80000, 100000, 120000]
+    repeats: 3
+    rate: 1
+    workers: 16
 
   mixed-sessions:
     kind: mixed-sessions

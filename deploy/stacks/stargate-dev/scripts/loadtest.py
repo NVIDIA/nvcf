@@ -67,7 +67,13 @@ def load_suite(path: Path = SUITE_PATH) -> dict:
     for key in ("defaults", "algorithms", "suites", "scenarios"):
         if not isinstance(suite.get(key), dict) or not suite[key]:
             raise LoadTestError(f"suite must define {key}")
-    valid_kinds = {"requests", "sweep", "session-affinity", "mixed-sessions"}
+    valid_kinds = {
+        "requests",
+        "sweep",
+        "session-affinity",
+        "long-context-affinity",
+        "mixed-sessions",
+    }
     for name, scenario in suite["scenarios"].items():
         if not isinstance(scenario, dict) or scenario.get("kind") not in valid_kinds:
             raise LoadTestError(f"scenario {name} has an invalid kind")
@@ -125,6 +131,28 @@ def session_prompts(
                 f" turn={turn:04d}; ",
                 "New information appended during this turn. ",
                 turn_bytes,
+            )
+            yield histories[session]
+
+
+def long_context_prompts(
+    sessions: int, input_tokens_by_turn: list[int]
+) -> Iterable[str]:
+    histories = [
+        fixed_size_text(
+            f"canonical-long-context-session={session:08d}; ",
+            "Stable repository and coding context. ",
+            256,
+        )
+        for session in range(sessions)
+    ]
+    for input_tokens in input_tokens_by_turn:
+        content_bytes = (input_tokens - 5) * 4
+        for session, history in enumerate(histories):
+            histories[session] = fixed_size_text(
+                history,
+                " Additional source code, build output, and conversation context. ",
+                content_bytes,
             )
             yield histories[session]
 
@@ -468,6 +496,16 @@ class Campaign:
                         scenario["turnsPerSession"],
                         scenario["stablePrefixBytes"],
                         scenario["turnBytes"],
+                    ),
+                    kind,
+                )
+                self.workloads[name] = {"main": path}
+            elif kind == "long-context-affinity":
+                path = self.workload_dir / f"{name}.yaml"
+                write_workload(
+                    path,
+                    long_context_prompts(
+                        scenario["sessions"], scenario["inputTokensByTurn"]
                     ),
                     kind,
                 )
@@ -870,27 +908,28 @@ class Campaign:
                 root / "power-of-n" / "spark.json",
             )
 
-    def run_session_affinity(self, scenario: dict) -> None:
-        requests = scenario["sessions"] * scenario["turnsPerSession"]
+    def run_affinity(self, name: str, scenario: dict) -> None:
+        turns = scenario.get(
+            "turnsPerSession", len(scenario.get("inputTokensByTurn", []))
+        )
+        requests = scenario["sessions"] * turns
         for repeat in range(1, scenario["repeats"] + 1):
-            root = self.runs / "session-affinity" / f"repeat-{repeat:02d}"
+            root = self.runs / name / f"repeat-{repeat:02d}"
             for algorithm in self.algorithm_order(reverse=repeat % 2 == 0):
                 run = self.spark_run(
                     root.relative_to(self.runs) / algorithm,
                     algorithm,
-                    scenario="session-affinity",
+                    scenario=name,
                     rate=scenario["rate"],
                     workers=scenario["workers"],
-                    workload=self.workloads["session-affinity"]["main"],
+                    workload=self.workloads[name]["main"],
                     requests=requests,
                 )
                 delta = root / algorithm / "cache-stats.delta.json"
                 if self.completed_report(run) is not None and delta.is_file():
                     self.log(f"reusing clean-cache arm {run.directory}")
                     continue
-                before = self.reset_caches(
-                    f"session-affinity-repeat-{repeat:02d}-{algorithm}"
-                )
+                before = self.reset_caches(f"{name}-repeat-{repeat:02d}-{algorithm}")
                 self.execute([run], reuse=False)
                 self.record_cache_delta(root / algorithm, before)
             self.compare(
@@ -991,13 +1030,15 @@ class Campaign:
         runners = {
             "requests": self.run_smoke,
             "sweep": self.run_saturation,
-            "session-affinity": self.run_session_affinity,
             "mixed-sessions": self.run_mixed_sessions,
         }
         for name in self.scenarios:
             self.log(f"starting canonical scenario {name}")
             scenario = self.suite["scenarios"][name]
-            runners[scenario["kind"]](scenario)
+            if scenario["kind"] in ("session-affinity", "long-context-affinity"):
+                self.run_affinity(name, scenario)
+            else:
+                runners[scenario["kind"]](scenario)
         self.write_summary()
         self.verify_region()
         self.state["status"] = "complete"
@@ -1019,12 +1060,12 @@ def measured_minutes(suite: dict, suite_name: str) -> float:
             seconds += scenario["requests"] / scenario["rate"]
         elif scenario["kind"] == "sweep":
             seconds += len(scenario["rates"]) * scenario["durationSeconds"]
-        elif scenario["kind"] == "session-affinity":
+        elif scenario["kind"] in ("session-affinity", "long-context-affinity"):
+            turns = scenario.get(
+                "turnsPerSession", len(scenario.get("inputTokensByTurn", []))
+            )
             seconds += (
-                scenario["sessions"]
-                * scenario["turnsPerSession"]
-                * scenario["repeats"]
-                / scenario["rate"]
+                scenario["sessions"] * turns * scenario["repeats"] / scenario["rate"]
             )
         else:
             seconds += scenario["durationSeconds"] * scenario["repeats"]
