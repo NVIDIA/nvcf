@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -584,6 +585,91 @@ def create_release(tag, title, notes, draft, dry_run):
     return True
 
 
+def release_asset_service(metadata, tag, root):
+    matches = []
+    for service in metadata.get("services", []):
+        asset_name = str(service.get("resolved_inventory_asset") or "").strip()
+        if asset_name and Path(asset_name).name != asset_name:
+            raise SystemExit(f"{service.get('id', 'service')}: resolved_inventory_asset must be a file name")
+        if asset_name and version_from_tag(service, tag, root):
+            matches.append(service)
+    if len(matches) > 1:
+        raise SystemExit(f"release tag {tag} matches more than one resolved inventory publisher")
+    return matches[0] if matches else None
+
+
+def validate_resolved_stack_inventory(path, tag, version, commit):
+    try:
+        with Path(path).open() as source:
+            inventory = json.load(source)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"resolved stack inventory is not valid JSON: {exc}") from exc
+    if not isinstance(inventory, dict) or inventory.get("schema_version") != 1:
+        raise SystemExit("resolved stack inventory must use schema_version 1")
+    expected_source = {"version": version, "tag": tag, "commit": commit}
+    if inventory.get("source") != expected_source:
+        raise SystemExit(
+            f"resolved stack inventory source is {inventory.get('source')!r}, want {expected_source!r}"
+        )
+    if not inventory.get("releases") or not inventory.get("artifacts"):
+        raise SystemExit("resolved stack inventory must contain releases and artifacts")
+
+
+def generate_resolved_stack_inventory(root, tag, version, commit, output_path):
+    run(
+        [
+            "go",
+            "run",
+            ".",
+            "--generate-stack-inventory",
+            str(output_path),
+            "--stack-version",
+            version,
+            "--stack-source-tag",
+            tag,
+            "--stack-source-commit",
+            commit,
+        ],
+        cwd=root / "tools" / "docs-version-sync",
+    )
+    validate_resolved_stack_inventory(output_path, tag, version, commit)
+
+
+def publish_resolved_stack_inventory(tag, asset_path):
+    asset_path = Path(asset_path)
+    existing = set(
+        run(
+            ["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
+            capture=True,
+        ).splitlines()
+    )
+    if asset_path.name not in existing:
+        run(["gh", "release", "upload", tag, str(asset_path)])
+        print(f"[github-release] uploaded {asset_path.name} to {tag}")
+        return
+
+    with tempfile.TemporaryDirectory(prefix="nvcf-existing-release-asset-") as tmp:
+        run(
+            [
+                "gh",
+                "release",
+                "download",
+                tag,
+                "--pattern",
+                asset_path.name,
+                "--dir",
+                tmp,
+            ]
+        )
+        published_path = Path(tmp) / asset_path.name
+        if published_path.read_bytes() != asset_path.read_bytes():
+            raise SystemExit(
+                f"GitHub release {tag} already has a different {asset_path.name}; "
+                "refusing to replace an immutable inventory"
+            )
+    print(f"[github-release] GitHub release {tag} already has the identical {asset_path.name}")
+
+
 def repo_slug():
     slug = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if slug:
@@ -1141,7 +1227,23 @@ def tag_release(args):
         f"version={parsed['version']} release_branch={branch} "
         f"auto_tagging_enabled={str(auto_tagging_enabled).lower()}"
     )
-    create_release(tag, tag, notes, draft=draft, dry_run=dry_run)
+    asset_service = release_asset_service(metadata, tag, root)
+    if not asset_service:
+        create_release(tag, tag, notes, draft=draft, dry_run=dry_run)
+        return
+
+    asset_name = asset_service["resolved_inventory_asset"]
+    if dry_run:
+        print(f"[github-release] dry-run: would generate and upload {asset_name} for {tag}")
+        create_release(tag, tag, notes, draft=draft, dry_run=True)
+        return
+
+    commit = tag_sha(root, tag)
+    with tempfile.TemporaryDirectory(prefix="nvcf-resolved-stack-inventory-") as tmp:
+        asset_path = Path(tmp) / asset_name
+        generate_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path)
+        create_release(tag, tag, notes, draft=draft, dry_run=False)
+        publish_resolved_stack_inventory(tag, asset_path)
 
 
 def fetch_semantic_release_notes(root):

@@ -3,6 +3,8 @@
 
 global:
   helm:
+    # Set url to use an HTTP Helm repository. Otherwise, set registry and
+    # repository to use OCI.
     sources:
       registry: nvcr.io
       repository: YOUR_ORG/YOUR_TEAM

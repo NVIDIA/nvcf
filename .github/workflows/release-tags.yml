@@ -116,5 +116,36 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - uses: actions/setup-go@v5
+        if: startsWith(github.ref_name, 'deploy/stacks/self-managed/v')
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Install inventory rendering tools
+        if: startsWith(github.ref_name, 'deploy/stacks/self-managed/v')
+        env:
+          HELM_VERSION: "3.21.4"
+          HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+          HELMFILE_VERSION: "1.1.9"
+          HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
       - name: Validate tag and create release notes
+        env:
+          NVCF_RELEASE_NGC_API_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
         run: ./tools/ci/github-release tag "$GITHUB_REF_NAME"
