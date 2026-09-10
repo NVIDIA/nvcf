@@ -290,10 +290,6 @@ main() {
     # Set default validation policy to Unrestricted for self-managed clusters
     yq eval -i '.agentConfig.mergeConfig = "cluster:\n  validationPolicy:\n    name: Unrestricted" | .agentConfig.mergeConfig style="literal"' "${TARGET_DIR}/values.yaml"
 
-    # OSS scrub: clear the upstream's hardcoded image.repository so OSS
-    # consumers must supply it via an override values file at install time.
-    update_yaml_key ".image.repository = \"\"" "${TARGET_DIR}/values.yaml"
-
     # Apply Apache-2.0 / NVIDIA copyright headers to all yaml files in the
     # vendored chart. Skip files that already carry an SPDX marker so this
     # step stays idempotent and does not duplicate headers.
