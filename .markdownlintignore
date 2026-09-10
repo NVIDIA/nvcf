@@ -41,3 +41,8 @@ docs/dev/http-load-testing.md
 docs/user/grpc-load-test-sli-guide.md
 docs/user/http-load-test-sli-guide.md
 docs/user/http-load-testing.md
+
+# Generated file. tools/collect-dependencies writes dependencies.md and CI
+# fails if it differs from the generator's output, so it cannot be edited to
+# satisfy a lint rule. Fix the generator if its markdown needs to change.
+dependencies.md

@@ -23,7 +23,7 @@ guide][mesh] and, like it, reviews a simple example you can run locally. Please
 see the [mesh][mesh] introductory guide for more details as this guide will
 just run through the basics to get the example running.
 
-## Security/Techincal Note
+## Security/Technical Note
 
 This guide is only meant to demonstrate features and many things have been
 simplified, it is not a production ready or secure deployment.
@@ -121,7 +121,7 @@ cat > ca.crt.tmpl << EOF
 EOF
 ```
 
-#### certs.pem
+### certs.pem
 
 ```liquid
 cat > certs.pem.tmpl << EOF
@@ -133,7 +133,7 @@ With all the certificate templates in place, you now just need the
 configuration file template for the HAProxy proxy, it uses the `connect`
 template function to get all the "webserver" connect enabled services.
 
-#### haproxy.conf.tmpl
+### haproxy.conf.tmpl
 
 ```haproxy
 cat > haproxy.conf.tmpl << EOF

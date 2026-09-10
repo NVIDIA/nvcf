@@ -23,7 +23,7 @@ All traces, logs and metrics have the following attributes added to their metada
 - container_cpu_cfs_throttled_seconds_total (Only present if container was throttled)
 - container_cpu_usage_seconds_total
 
-##### Memory
+#### Memory
 
 - container_memory_cache
 - container_memory_rss
@@ -31,7 +31,7 @@ All traces, logs and metrics have the following attributes added to their metada
 - container_memory_usage_bytes
 - container_memory_working_set_bytes
 
-##### Filesystem
+#### Filesystem
 
 only present if the container is performing IO operations
 
@@ -42,7 +42,7 @@ only present if the container is performing IO operations
 - container_fs_writes_bytes_total
 - container_fs_reads_bytes_total
 
-##### Network
+#### Network
 
 only present if the container is performing network operations
 
@@ -69,21 +69,21 @@ Only present if helm-based function has a deployment k8s object
 - kube_deployment_status_replicas_updated
 - kube_service_created
 
-##### replicaset
+#### replicaset
 
 Only present if helm-based function has a replicaset k8s object. Please notice that metrics are only available if replicaset had the status in the target metric.
 
 - kube_replicaset_status_replicas
 - kube_replicaset_status_ready_replicas
 
-##### statefulset
+#### statefulset
 
 Only present if helm-based function has a stateful k8s object
 
 - kube_statefulset_status_replicas
 - kube_statefulset_status_replicas_ready
 
-##### job/cronjob
+#### job/cronjob
 
 Only present if the helm-based function has a job/cronjob k8s object. For NVCT only
 
@@ -92,19 +92,19 @@ Only present if the helm-based function has a job/cronjob k8s object. For NVCT o
 - kube_job_status_succeeded
 - kube_cronjob_status_active
 
-##### configmap
+#### configmap
 
 Only present if function has a configmap k8s object
 
 - kube_configmap_created
 
-##### secret
+#### secret
 
 Only present if function has a secret k8s object
 
 - kube_secret_created
 
-##### pod_container
+#### pod_container
 
 Only present if function has a pod k8s object, NVCF and NVCT. Please notice that metrics are only available if container had the status in the target metric.
 
@@ -121,14 +121,14 @@ Only present if function has a pod k8s object, NVCF and NVCT. Please notice that
 - kube_pod_container_status_waiting_reason (Only present if pod is waiting)
 - kube_pod_container_status_ready
 
-##### pod_general
+#### pod_general
 
 Only present if function/task helm deployments, NVCF and NVCT
 
 - kube_pod_info
 - kube_pod_status_reason
 
-##### init_container
+#### init_container
 
 Only present if function/task helm defined an init container. Please notice that metrics are only available if init container had the status in the target metric.
 
@@ -177,7 +177,7 @@ Always present for container and helm, NVCF and NVCT. The final list of metrics 
 - container_cpu_cfs_throttled_seconds_total
 - container_cpu_usage_seconds_total
 
-##### Memory
+#### Memory
 
 - container_memory_cache
 - container_memory_rss
@@ -185,7 +185,7 @@ Always present for container and helm, NVCF and NVCT. The final list of metrics 
 - container_memory_usage_bytes
 - container_memory_working_set_bytes
 
-##### Filesystem
+#### Filesystem
 
 only present if the container is performing IO operations
 
@@ -196,7 +196,7 @@ only present if the container is performing IO operations
 - container_fs_writes_bytes_total
 - container_fs_writes_total
 
-##### Network
+#### Network
 
 only present if the container is performing network operations
 

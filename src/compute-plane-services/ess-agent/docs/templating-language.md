@@ -1604,7 +1604,7 @@ renders
 {"admin":{"port":"1234"},"maxconns":"5","minconns":"2", "queryparams": "a?b=c&d=e"}
 ```
 
-##### `toUnescapedJSONPretty`
+#### `toUnescapedJSONPretty`
 
 Takes the result from a [`tree`](#tree) or [`ls`](#ls) call and converts it into a
 pretty-printed JSON object without HTML escaping, indented by two spaces.
