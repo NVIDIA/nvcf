@@ -132,11 +132,16 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 }
 
 func retainIndependentResourceArtifacts(catalog *Catalog) {
+	denylist := catalog.DenylistMap()
 	resources := catalog.SupplementalArtifacts[:0]
 	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type == ArtifactTypeResource {
-			resources = append(resources, artifact)
+		if artifact.Type != ArtifactTypeResource {
+			continue
 		}
+		if _, denied := denylist[artifact.Name]; denied {
+			continue
+		}
+		resources = append(resources, artifact)
 	}
 	catalog.SupplementalArtifacts = resources
 }
