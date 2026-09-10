@@ -11,11 +11,21 @@ environments:
 {{- $llmPkiActive := and $llmEnabled $pkiEnabled }}
 {{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
 {{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
+{{- $alphaNamedControlPlane := env "NVCF_ALPHA_NAMED_CONTROL_PLANE" | default "false" }}
 {{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 30) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 30 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
+{{- if not (has $alphaNamedControlPlane (list "true" "false")) }}
+{{- fail (printf "NVCF_ALPHA_NAMED_CONTROL_PLANE must be true or false, got %q" $alphaNamedControlPlane) }}
+{{- end }}
+{{- if and (ne $controlPlaneOwner "default") (ne $alphaNamedControlPlane "true") }}
+{{- fail "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required when NVCF_CONTROL_PLANE_OWNER is a named control plane" }}
+{{- end }}
 {{- $sharedControlPlaneOwner := "shared" }}
 {{- $controlPlaneNamespacePrefix := "" }}
+{{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") }}
+{{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" }}
+{{- end }}
 {{- $natsNamespace := printf "%snats-system" $controlPlaneNamespacePrefix }}
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix }}
 {{- $cassandraNamespace := printf "%scassandra-system" $controlPlaneNamespacePrefix }}

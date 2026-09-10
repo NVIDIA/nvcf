@@ -47,6 +47,7 @@ func resetInstallFlags(t *testing.T) {
 	selfHostedEnv = "local"
 	selfHostedNoApply = false
 	selfHostedToken = ""
+	selfHostedAlphaNamedPlane = false
 	selfHostedControlPlaneContext = ""
 	selfHostedComputePlaneContext = ""
 	selfHostedControlPlaneID = ""
@@ -68,6 +69,7 @@ func resetInstallFlags(t *testing.T) {
 		selfHostedEnv = "local"
 		selfHostedNoApply = false
 		selfHostedToken = ""
+		selfHostedAlphaNamedPlane = false
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
 		selfHostedControlPlaneID = ""
@@ -102,9 +104,10 @@ func TestSelfHostedInstall_ControlPlane_NoApply(t *testing.T) {
 	assert.Contains(t, stdout.String(), "kind: ConfigMap")
 }
 
-func TestSelfHostedInstall_ControlPlanePassesControlPlaneOwnerEnv(t *testing.T) {
+func TestSelfHostedInstall_ControlPlanePassesDefaultControlPlaneEnv(t *testing.T) {
 	resetInstallFlags(t)
 	t.Setenv("NVCF_CONTROL_PLANE_OWNER", "from-parent")
+	t.Setenv("NVCF_ALPHA_NAMED_CONTROL_PLANE", "true")
 
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
@@ -112,7 +115,7 @@ func TestSelfHostedInstall_ControlPlanePassesControlPlaneOwnerEnv(t *testing.T) 
 
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	require.NoError(t, os.WriteFile(fakeBin,
-		[]byte("#!/bin/sh\nprintf 'owner=%s\\n' \"$NVCF_CONTROL_PLANE_OWNER\"\n"),
+		[]byte("#!/bin/sh\nprintf 'owner=%s alpha=%s\\n' \"$NVCF_CONTROL_PLANE_OWNER\" \"$NVCF_ALPHA_NAMED_CONTROL_PLANE\"\n"),
 		0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
 
@@ -121,17 +124,17 @@ func TestSelfHostedInstall_ControlPlanePassesControlPlaneOwnerEnv(t *testing.T) 
 	rootCmd.SetArgs([]string{
 		"self-hosted", "install", "--control-plane",
 		"--control-plane-stack", stackDir,
-		"--control-plane-id", "plane-a",
 		"--no-apply",
 	})
 	require.NoError(t, rootCmd.Execute())
 
-	assert.Contains(t, stdout.String(), "owner=plane-a")
+	assert.Contains(t, stdout.String(), "owner=default alpha=false")
 }
 
-func TestSelfHostedInstall_ControlPlaneNoApplySkipsMixedModeGuard(t *testing.T) {
+func TestSelfHostedInstall_ControlPlaneNamedNoApplyStopsBeforeMixedModeGuard(t *testing.T) {
 	resetInstallFlags(t)
 	selfHostedControlPlaneID = "plane-a"
+	selfHostedAlphaNamedPlane = true
 
 	called := false
 	buildKubeClientForSelfHostedInstallGuard = func(string) (kubernetes.Interface, error) {
@@ -154,13 +157,16 @@ func TestSelfHostedInstall_ControlPlaneNoApplySkipsMixedModeGuard(t *testing.T) 
 		"self-hosted", "install", "--control-plane",
 		"--control-plane-stack", stackDir,
 		"--control-plane-id", "plane-a",
+		"--alpha-named-control-plane",
 		"--no-apply",
 	})
-	require.NoError(t, rootCmd.Execute())
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "namespace derivation")
 	assert.False(t, called)
 }
 
-func TestSelfHostedInstall_ControlPlaneNamedModeBlocksUnadoptedLegacyObjects(t *testing.T) {
+func TestSelfHostedInstall_ControlPlaneNamedModeStopsBeforeLegacyAdoptionGate(t *testing.T) {
 	resetInstallFlags(t)
 	selfHostedToken = "test-token"
 
@@ -168,8 +174,9 @@ func TestSelfHostedInstall_ControlPlaneNamedModeBlocksUnadoptedLegacyObjects(t *
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
 
+	called := false
 	buildKubeClientForSelfHostedInstallGuard = func(kubeContext string) (kubernetes.Interface, error) {
-		assert.Equal(t, "admin@cp", kubeContext)
+		called = true
 		return fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}}), nil
 	}
 
@@ -180,12 +187,13 @@ func TestSelfHostedInstall_ControlPlaneNamedModeBlocksUnadoptedLegacyObjects(t *
 		"install", "--control-plane",
 		"--control-plane-stack", stackDir,
 		"--control-plane-id", "plane-a",
+		"--alpha-named-control-plane",
 	})
 	err := rootCmd.Execute()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot install named control plane \"plane-a\"")
-	assert.Contains(t, err.Error(), "namespace/nvcf")
+	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.False(t, called)
 }
 
 func TestSelfHostedInstall_ControlPlane_Helm4AppliesStateFilesSequentially(t *testing.T) {
@@ -386,7 +394,7 @@ func TestSelfHostedInstall_ComputePlane_RegistersAndRenders(t *testing.T) {
 	assert.Contains(t, string(registerValues), "natsURL: nats://nats.nats-system.svc.cluster.local:4222")
 }
 
-func TestSelfHostedInstall_ComputePlaneNamedModeBlocksBeforeRegister(t *testing.T) {
+func TestSelfHostedInstall_ComputePlaneNamedModeStopsBeforeRegister(t *testing.T) {
 	resetInstallFlags(t)
 	fakeCC := &fakeClusterClient{resp: &selfhosted.RegisterResponse{ClusterID: "id-A", ClusterGroupID: "grp-A"}}
 	prevClientFactory := newClusterClientForSelfHosted
@@ -396,8 +404,9 @@ func TestSelfHostedInstall_ComputePlaneNamedModeBlocksBeforeRegister(t *testing.
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
 
+	guardCalled := false
 	buildKubeClientForSelfHostedInstallGuard = func(kubeContext string) (kubernetes.Interface, error) {
-		assert.Equal(t, "admin@gpu1", kubeContext)
+		guardCalled = true
 		return fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvca-operator"}}), nil
 	}
 
@@ -408,12 +417,14 @@ func TestSelfHostedInstall_ComputePlaneNamedModeBlocksBeforeRegister(t *testing.
 		"install", "--compute-plane", "--cluster-name=ncp-A",
 		"--compute-plane-stack", stackDir,
 		"--control-plane-id", "plane-a",
+		"--alpha-named-control-plane",
 		"--icms-url=http://sis.localhost:8080",
 	})
 	err := rootCmd.Execute()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "namespace/nvca-operator")
+	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.False(t, guardCalled)
 	assert.Equal(t, 0, fakeCC.registerCalls)
 }
 

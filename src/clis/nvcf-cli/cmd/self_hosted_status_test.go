@@ -33,6 +33,7 @@ import (
 // resetStatusFlags restores status command flag vars between tests.
 func resetStatusFlags(t *testing.T) {
 	t.Helper()
+	selfHostedAlphaNamedPlane = false
 	t.Cleanup(func() {
 		statusWatch = false
 		statusWatchInterval = 5 * time.Second
@@ -43,6 +44,7 @@ func resetStatusFlags(t *testing.T) {
 		selfHostedJSON = false
 		selfHostedPlain = false
 		selfHostedAccessible = false
+		selfHostedAlphaNamedPlane = false
 		selfHostedControlPlaneID = ""
 	})
 }
@@ -189,7 +191,7 @@ func TestStatusCmd_RendererSelection(t *testing.T) {
 	assert.Contains(t, output, `"components"`, "composed snapshot should include components array")
 }
 
-func TestStatusCmd_PassesControlPlaneOwnerToCollector(t *testing.T) {
+func TestStatusCmd_NamedControlPlaneStopsBeforeCollector(t *testing.T) {
 	resetStatusFlags(t)
 	fc := &fakeCollector{}
 	prev := newStatusCollector
@@ -206,10 +208,13 @@ func TestStatusCmd_PassesControlPlaneOwnerToCollector(t *testing.T) {
 	rootCmd.SetArgs([]string{
 		"self-hosted",
 		"--control-plane-id", "plane-a",
+		"--alpha-named-control-plane",
 		"status",
 		"--json",
 	})
 
-	require.NoError(t, rootCmd.Execute())
-	assert.Equal(t, "plane-a", gotOwner)
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.Empty(t, gotOwner)
 }

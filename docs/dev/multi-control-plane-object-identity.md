@@ -161,6 +161,30 @@ compute-plane render still belongs to local or credentialed test runs because
 that stack resolves published chart dependencies from external repositories and
 registries.
 
+## Phase 4A Alpha Named-Mode Gate
+
+Phase 4A adds an explicit alpha opt-in before any named control plane can be
+requested. It also keeps named mode fail-closed until namespace derivation is
+wired.
+
+Legacy/default mode does not need this opt-in and must keep rendering exactly as
+before. A user-provided `--control-plane-id` now requires
+`--alpha-named-control-plane` in the CLI, but the CLI still refuses named IDs in
+Phase 4A because the stack namespace prefix is not active yet. Direct stack
+users must set `NVCF_ALPHA_NAMED_CONTROL_PLANE=true` when they set
+`NVCF_CONTROL_PLANE_OWNER` to any value other than `default`, and the stack must
+still fail if that named owner would render into legacy namespaces.
+
+This guard is present in every stack file that declares the namespace prefix,
+including self-managed `global.yaml.gotmpl` and the compute-plane dependencies
+state. That keeps direct single-file Helmfile invocations from bypassing the
+fail-closed rule.
+
+This gate deliberately does not derive named namespaces, service DNS names,
+ClusterIssuer names, or auth/data identities yet. It prevents both accidental
+use and unsafe direct use of the unfinished named mode while the remaining Phase
+4 subphases make those identities safe.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |

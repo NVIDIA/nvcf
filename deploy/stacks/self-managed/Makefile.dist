@@ -19,6 +19,7 @@ HELMFILE_ENV  ?= default
 # Control-plane owner label value used by Helmfile post-renderers. The default
 # preserves the legacy unnamed control plane.
 NVCF_CONTROL_PLANE_OWNER ?= default
+NVCF_ALPHA_NAMED_CONTROL_PLANE ?= false
 comma := ,
 HELMFILE_CONTROL_PLANE_OWNER_SELECTOR = control-plane-owner=$(NVCF_CONTROL_PLANE_OWNER)
 HELMFILE_DESTROY_SELECTOR = $(HELMFILE_CONTROL_PLANE_OWNER_SELECTOR)$(if $(HELMFILE_SELECTOR),$(comma)$(HELMFILE_SELECTOR),)
@@ -177,6 +178,7 @@ template: clean check-versions
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	@echo "    Output Directory: $(OUTPUT_DIR)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 
@@ -184,6 +186,7 @@ template: clean check-versions
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	OUTPUT_DIR="$(OUTPUT_DIR)" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template --output-dir "$(OUTPUT_DIR)" \
 		$(if $(OUTPUT_DIR_TEMPLATE),--output-dir-template '$(OUTPUT_DIR_TEMPLATE)')
@@ -197,11 +200,13 @@ install: check-versions $(INSTALL_PRE_HOOKS)
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
 
 	@$(MAKEFILE_DIR)/renderers/mark-control-plane-namespaces.sh \
@@ -215,11 +220,13 @@ apply: check-versions $(APPLY_PRE_HOOKS)
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
 
 	@$(MAKEFILE_DIR)/renderers/mark-control-plane-namespaces.sh \
@@ -231,12 +238,14 @@ destroy: check-versions
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	@echo "    Destroy Selector: $(HELMFILE_DESTROY_SELECTOR)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) --selector "$(HELMFILE_DESTROY_SELECTOR)" destroy
 
 	@echo ">>> Helmfile destroy complete."
@@ -283,6 +292,7 @@ help:
 	@echo "                     Must match a file: environments/<env>.yaml"
 	@echo "  HELMFILE_SELECTOR  Optional release selector (e.g., name=api-keys)"
 	@echo "  NVCF_CONTROL_PLANE_OWNER Owner label value (default: $(NVCF_CONTROL_PLANE_OWNER))"
+	@echo "  NVCF_ALPHA_NAMED_CONTROL_PLANE Set true to enable alpha named control-plane mode"
 	@echo "  KUBECONFIG_FILE    Optional path to kubeconfig file"
 	@echo "  OUTPUT_DIR         Output directory for template (default: ./out)"
 	@echo ""
