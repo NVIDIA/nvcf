@@ -719,11 +719,14 @@ func TestBumpLevel(t *testing.T) {
 		{"1.0.0", "1.0.1", "patch"},
 		{"1.0.0", "1.1.0", "minor"},
 		{"1.9.9", "2.0.0", "major"},
-		{"v1.0.0", "1.1.0-rc.1", "minor"}, // v prefix and pre-release suffix are tolerated
-		{"1.0.0", "1.0.0", ""},            // no move
-		{"1.1.0", "1.0.5", ""},            // downgrade is not a level
-		{"latest", "1.0.1", ""},           // floating tag has no level
-		{"1.0", "1.0.1", ""},              // not MAJOR.MINOR.PATCH
+		{"v1.0.0", "1.1.0-rc.1", "minor"},   // v prefix and pre-release suffix are tolerated
+		{"1.0.0", "1.0.0", ""},              // no move
+		{"1.1.0", "1.0.5", ""},              // downgrade is not a level
+		{"latest", "1.0.1", ""},             // floating tag has no level
+		{"1.0", "1.0.1", ""},                // not MAJOR.MINOR.PATCH
+		{"1.0.0", "1.0.1-", ""},             // dangling pre-release separator is not a version
+		{"1.0.0", "1.0.1-rc..1", ""},        // empty pre-release identifier
+		{"1.0.0", "1.0.1+build.7", "patch"}, // build metadata is fine
 	}
 	for _, c := range cases {
 		if got := BumpLevel(c.from, c.to); got != c.want {

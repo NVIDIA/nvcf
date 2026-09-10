@@ -4,9 +4,16 @@
 package main
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+// semverRE is the full SemVer 2.0.0 grammar with an optional leading v:
+// MAJOR.MINOR.PATCH, an optional pre-release of dot-separated non-empty
+// identifiers, and an optional build suffix. A trailing "-" or an empty
+// identifier is not a version and yields no level.
+var semverRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
 
 // BumpLevel names the semver step from one version to a higher one: "major",
 // "minor" or "patch". It is "" when either side is not MAJOR.MINOR.PATCH or
@@ -50,17 +57,13 @@ func HigherLevel(a, b string) string {
 
 func parseCore(v string) ([3]int, bool) {
 	var out [3]int
-	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	if i := strings.IndexAny(v, "-+"); i >= 0 {
-		v = v[:i]
-	}
-	parts := strings.Split(v, ".")
-	if len(parts) != 3 {
+	m := semverRE.FindStringSubmatch(strings.TrimSpace(v))
+	if m == nil {
 		return out, false
 	}
-	for i, p := range parts {
+	for i, p := range m[1:4] {
 		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 || p != strconv.Itoa(n) {
+		if err != nil {
 			return out, false
 		}
 		out[i] = n
