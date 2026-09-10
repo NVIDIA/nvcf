@@ -31,6 +31,10 @@ invalid_owners=(
 
 for state in "${states[@]}"; do
   state_file="$stack_dir/helmfile.d/$state"
+  if ! grep -Fq '$controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner' "$state_file"; then
+    fail "$state does not derive namespace prefix from the control-plane owner"
+  fi
+
   default_log="$work_dir/$state.default.log"
   if ! HELMFILE_ENV=base \
     NVCF_CONTROL_PLANE_OWNER=default \
@@ -47,10 +51,10 @@ for state in "${states[@]}"; do
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
     >"$work_dir/$state.named-blocked.json" 2>"$named_blocked_log"; then
-    fail "$state rendered named owner before namespace derivation was wired"
+    fail "$state rendered named owner before object-level identity derivation was wired"
   fi
-  if ! grep -q "namespace derivation is not wired" "$named_blocked_log"; then
-    fail "$state rejected named owner without the namespace-derivation message"
+  if ! grep -q "object-level identity derivation is not wired" "$named_blocked_log"; then
+    fail "$state rejected named owner without the object-level identity message"
   fi
 
   max_valid_log="$work_dir/$state.max-valid.log"
@@ -60,10 +64,10 @@ for state in "${states[@]}"; do
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
     >"$work_dir/$state.max-valid.json" 2>"$max_valid_log"; then
-    fail "$state rendered a 30-character named owner before namespace derivation was wired"
+    fail "$state rendered a 30-character named owner before object-level identity derivation was wired"
   fi
-  if ! grep -q "namespace derivation is not wired" "$max_valid_log"; then
-    fail "$state rejected 30-character owner before reaching namespace-derivation validation"
+  if ! grep -q "object-level identity derivation is not wired" "$max_valid_log"; then
+    fail "$state rejected 30-character owner before reaching object-level identity validation"
   fi
 
   for owner in "${invalid_owners[@]}"; do
@@ -109,6 +113,9 @@ done
 global_chart_dir="$work_dir/global-guard-chart"
 global_state_file="$work_dir/global-guard.yaml.gotmpl"
 mkdir -p "$global_chart_dir/templates"
+if ! grep -Fq '$controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner' "$stack_dir/global.yaml.gotmpl"; then
+  fail "global.yaml.gotmpl does not derive namespace prefix from the control-plane owner"
+fi
 cat >"$global_chart_dir/Chart.yaml" <<'YAML'
 apiVersion: v2
 name: global-guard
@@ -123,6 +130,14 @@ data:
   ok: "true"
 YAML
 cat >"$global_state_file" <<YAML
+environments:
+  default:
+    values:
+      - $stack_dir/environments/base.yaml
+      - $stack_dir/testdata/environments/local.yaml
+
+---
+
 releases:
   - name: global-guard
     chart: $global_chart_dir
@@ -149,12 +164,11 @@ if HELMFILE_ENV=base \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
   helmfile --file "$global_state_file" template \
   >"$work_dir/global.named-blocked.yaml" 2>"$global_named_blocked_log"; then
-  fail "global.yaml.gotmpl rendered named owner before namespace derivation was wired"
+  fail "global.yaml.gotmpl rendered named owner before object-level identity derivation was wired"
 fi
-if ! grep -q "namespace derivation is not wired" "$global_named_blocked_log"; then
-  fail "global.yaml.gotmpl rejected named owner without the namespace-derivation message"
+if ! grep -q "object-level identity derivation is not wired" "$global_named_blocked_log"; then
+  fail "global.yaml.gotmpl rejected named owner without the object-level identity message"
 fi
-
 owner_dependencies="$work_dir/dependencies.owner.json"
 HELMFILE_ENV=base \
   NVCF_CONTROL_PLANE_OWNER=default \
@@ -208,6 +222,20 @@ if ! grep -Fq -- '--shared-namespace "cert-manager"' "$install_plan"; then
   fail "make install did not include the shared cert-manager namespace"
 fi
 
+named_install_plan="$work_dir/make-install-named.txt"
+make -n -C "$stack_dir" install \
+  DEV_MODE=1 \
+  HELMFILE_ENV=base \
+  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+  >"$named_install_plan" 2>&1
+if ! grep -Fq -- '--primary-namespace "plane-a-nvcf"' "$named_install_plan"; then
+  fail "make install did not identify plane-a-nvcf as the named primary namespace"
+fi
+if ! grep -Fq -- '--namespace "plane-a-cassandra-system"' "$named_install_plan"; then
+  fail "make install did not include the named Cassandra namespace"
+fi
+
 apply_plan="$work_dir/make-apply.txt"
 make -n -C "$stack_dir" apply \
   DEV_MODE=1 \
@@ -231,14 +259,18 @@ if ! grep -Fq 'renderers/delete-owned-namespace.sh' "$destroy_plan"; then
   fail "make destroy did not use owner-aware namespace cleanup"
 fi
 
-default_destroy_plan="$work_dir/make-destroy-default.txt"
+named_destroy_plan="$work_dir/make-destroy-named.txt"
 make -n -C "$stack_dir" destroy \
   DEV_MODE=1 \
   HELMFILE_ENV=base \
-  NVCF_CONTROL_PLANE_OWNER=default \
-  >"$default_destroy_plan" 2>&1
-if ! grep -Fq 'renderers/delete-owned-namespace.sh' "$default_destroy_plan"; then
-  fail "make destroy did not use owner-aware namespace cleanup"
+  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+  >"$named_destroy_plan" 2>&1
+if ! grep -Fq -- '--selector "control-plane-owner=plane-a" destroy' "$named_destroy_plan"; then
+  fail "make destroy did not pass the named owner selector"
+fi
+if ! grep -Fq 'Skipping named namespace cleanup until shared prerequisite lifecycle is wired' "$named_destroy_plan"; then
+  fail "make destroy did not defer named namespace cleanup"
 fi
 
 echo "verify-control-plane-owner-helmfile-validation: all checks passed"

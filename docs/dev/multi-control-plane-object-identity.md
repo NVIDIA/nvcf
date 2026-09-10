@@ -113,9 +113,9 @@ The helper contract is intentionally simple:
   when the control-plane ID is at the maximum supported length.
 
 Phase 3 wires Helmfile templates and service URLs to that naming rule while
-preserving the legacy render output. The Helmfile namespace prefix is still an
-empty literal in this phase; Phase 4 must plumb the validated control-plane ID
-into those templates before named mode can install.
+preserving the legacy render output. Phase 4B then plumbs the validated
+control-plane owner into the Helmfile namespace prefix so named renders use the
+same rule that the Go helper already tests.
 
 ClusterIssuer naming is intentionally still legacy-fixed in Phase 3. Phase 4
 must derive the default issuer name and update the managed-issuer detection
@@ -164,26 +164,66 @@ registries.
 ## Phase 4A Alpha Named-Mode Gate
 
 Phase 4A adds an explicit alpha opt-in before any named control plane can be
-requested. It also keeps named mode fail-closed until namespace derivation is
-wired.
+requested. It also keeps named mode fail-closed while the remaining named-mode
+identity work is wired.
 
 Legacy/default mode does not need this opt-in and must keep rendering exactly as
-before. A user-provided `--control-plane-id` now requires
-`--alpha-named-control-plane` in the CLI, but the CLI still refuses named IDs in
-Phase 4A because the stack namespace prefix is not active yet. Direct stack
-users must set `NVCF_ALPHA_NAMED_CONTROL_PLANE=true` when they set
-`NVCF_CONTROL_PLANE_OWNER` to any value other than `default`, and the stack must
-still fail if that named owner would render into legacy namespaces.
+before. A user-provided `--control-plane-id` requires
+`--alpha-named-control-plane` in the CLI. Direct stack users must set
+`NVCF_ALPHA_NAMED_CONTROL_PLANE=true` when they set `NVCF_CONTROL_PLANE_OWNER`
+to any value other than `default`, and the stack must still fail if a named
+owner would render before all required identity derivation is complete.
 
 This guard is present in every stack file that declares the namespace prefix,
 including self-managed `global.yaml.gotmpl` and the compute-plane dependencies
 state. That keeps direct single-file Helmfile invocations from bypassing the
 fail-closed rule.
 
-This gate deliberately does not derive named namespaces, service DNS names,
-ClusterIssuer names, or auth/data identities yet. It prevents both accidental
-use and unsafe direct use of the unfinished named mode while the remaining Phase
-4 subphases make those identities safe.
+This gate deliberately does not make named mode usable yet. It prevents both
+accidental use and unsafe direct use while the remaining Phase 4 subphases make
+object namespaces, service DNS names, ClusterIssuer names, gateway routes,
+OpenBao injector objects, and auth/data identities safe.
+
+## Phase 4B Named Namespace Derivation
+
+Phase 4B wires the stack namespace prefix to the validated control-plane owner,
+but keeps named mode fail-closed at the object-render layer.
+
+The legacy `default` owner still uses an empty prefix, so default renders keep
+their historical namespace names. A named owner such as `plane-a`, with
+`NVCF_ALPHA_NAMED_CONTROL_PLANE=true`, computes the prefix `plane-a-`.
+
+Examples:
+
+- self-managed `nvcf` becomes `plane-a-nvcf`;
+- self-managed `api-keys` becomes `plane-a-api-keys`;
+- self-managed `cassandra-system` becomes `plane-a-cassandra-system`;
+- compute-plane `nvca-operator` becomes `plane-a-nvca-operator`.
+
+Shared prerequisite namespaces stay unprefixed. Examples include
+`cert-manager`, `kai-scheduler`, `grove-system`, and `dynamo-system`.
+
+The namespace-derivation fail-closed guard remains in every prefix-declaring
+template as a tripwire. For a valid named owner it no longer fires because the
+prefix is non-empty. If a later refactor accidentally clears that prefix while
+named mode is requested, the render fails before it can write objects into
+legacy namespaces.
+
+Phase 4B also adds a second fail-closed guard for object-level identity
+derivation. That guard blocks named renders until gateway routes,
+ReferenceGrants, service DNS defaults, OpenBao injector cluster-scoped objects,
+and ClusterIssuer naming are all isolated. This is required because a Helmfile
+release namespace alone does not guarantee that every Kubernetes object rendered
+by that release stays out of legacy namespaces.
+
+The CLI validates `--control-plane-id` and the alpha opt-in, but still refuses
+named IDs with the same object-level identity message until the later Phase 4
+subphases remove this temporary block.
+
+Named namespace cleanup remains conservative in this phase. The Makefile
+teardown path still destroys Helm releases with the named owner selector, but it
+does not delete named namespaces until the shared prerequisite lifecycle is wired
+later in Phase 4.
 
 ## Data And Auth Matrix
 

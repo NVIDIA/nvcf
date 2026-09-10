@@ -101,7 +101,7 @@ const (
 	selfHostedControlPlaneOwnerEnv      = "NVCF_CONTROL_PLANE_OWNER"
 	selfHostedAlphaNamedControlPlaneEnv = "NVCF_ALPHA_NAMED_CONTROL_PLANE"
 	selfHostedHelmfileOwnerLabel        = "control-plane-owner"
-	selfHostedNamedControlPlaneBlocked  = "named self-hosted control planes are not enabled yet; namespace derivation must be wired before using --control-plane-id"
+	selfHostedNamedControlPlaneBlocked  = "named self-hosted control planes are not enabled yet; object-level identity derivation must be wired before using --control-plane-id"
 )
 
 func init() {

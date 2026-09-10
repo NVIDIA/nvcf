@@ -45,9 +45,9 @@ REQUIRED_HELMFILE_MAJOR := 1
 REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
-# Namespaces created by the NVCF stack. The prefix is empty until named-mode
-# namespace derivation is enabled, so legacy installs keep the same names.
-CONTROL_PLANE_NAMESPACE_PREFIX :=
+# Namespaces created by the NVCF stack. The default owner keeps legacy names;
+# named owners use <owner>-prefixed namespaces.
+CONTROL_PLANE_NAMESPACE_PREFIX := $(if $(filter-out default,$(NVCF_CONTROL_PLANE_OWNER)),$(NVCF_CONTROL_PLANE_OWNER)-,)
 API_KEYS_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)api-keys
 CASSANDRA_SYSTEM_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)cassandra-system
 ESS_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)ess
@@ -264,7 +264,7 @@ else
 	@echo ">>> Skipping namespace cleanup (selector was used)"
 endif
 else
-	@echo ">>> Skipping fixed namespace cleanup for named control-plane owner $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo ">>> Skipping named namespace cleanup until shared prerequisite lifecycle is wired for owner $(NVCF_CONTROL_PLANE_OWNER)"
 endif
 
 clean:

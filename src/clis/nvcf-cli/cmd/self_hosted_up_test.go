@@ -204,7 +204,7 @@ func TestSelfHostedUp_NamedModeStopsBeforePreflight(t *testing.T) {
 	err := rootCmd.Execute()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.Contains(t, err.Error(), "object-level identity derivation")
 	assert.False(t, preflightCalled)
 	assert.False(t, guardCalled)
 	assert.NotContains(t, stderr.String(), "[01/8] preflight")

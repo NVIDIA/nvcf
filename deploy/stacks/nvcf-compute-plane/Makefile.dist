@@ -43,11 +43,11 @@ REQUIRED_HELMFILE_MAJOR := 1
 REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
-# Namespaces owned by the plane-specific compute-plane stack. The prefix is
-# empty until named-mode namespace derivation is enabled, so legacy installs
-# keep the same names. Scheduler and topology add-ons are shared prerequisites
-# and are not removed by ordinary plane teardown.
-CONTROL_PLANE_NAMESPACE_PREFIX :=
+# Namespaces owned by the plane-specific compute-plane stack. The default owner
+# keeps legacy names; named owners use <owner>-prefixed namespaces. Scheduler
+# and topology add-ons are shared prerequisites and are not removed by ordinary
+# plane teardown.
+CONTROL_PLANE_NAMESPACE_PREFIX := $(if $(filter-out default,$(NVCF_CONTROL_PLANE_OWNER)),$(NVCF_CONTROL_PLANE_OWNER)-,)
 NVCA_OPERATOR_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)nvca-operator
 KAI_SCHEDULER_NAMESPACE := kai-scheduler
 GROVE_SYSTEM_NAMESPACE := grove-system
@@ -311,7 +311,7 @@ else
 	@echo ">>> Skipping namespace cleanup (selector was used)"
 endif
 else
-	@echo ">>> Skipping fixed namespace cleanup for named control-plane owner $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo ">>> Skipping named namespace cleanup until shared prerequisite lifecycle is wired for owner $(NVCF_CONTROL_PLANE_OWNER)"
 endif
 
 clean:

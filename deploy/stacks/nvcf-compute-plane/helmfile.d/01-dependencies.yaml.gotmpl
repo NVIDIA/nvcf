@@ -34,8 +34,15 @@ environments:
 {{- end }}
 {{- $sharedControlPlaneOwner := "shared" }}
 {{- $controlPlaneNamespacePrefix := "" }}
+{{- if ne $controlPlaneOwner "default" }}
+{{- $controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner }}
+{{- end }}
 {{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") }}
 {{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" }}
+{{- end }}
+{{- $namedControlPlaneObjectIdentitiesReady := false }}
+{{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) }}
+{{- fail "named control planes are not enabled yet because object-level identity derivation is not wired; refusing to render until gateway routes, service DNS, OpenBao injector, and ClusterIssuer names are isolated" }}
 {{- end }}
 {{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 {{- $kaiSchedulerNamespace := "kai-scheduler" }}

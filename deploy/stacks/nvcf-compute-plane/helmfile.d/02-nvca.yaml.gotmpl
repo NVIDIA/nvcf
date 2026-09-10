@@ -27,8 +27,15 @@ environments:
 {{- fail "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required when NVCF_CONTROL_PLANE_OWNER is a named control plane" }}
 {{- end }}
 {{- $controlPlaneNamespacePrefix := "" }}
+{{- if ne $controlPlaneOwner "default" }}
+{{- $controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner }}
+{{- end }}
 {{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") }}
 {{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" }}
+{{- end }}
+{{- $namedControlPlaneObjectIdentitiesReady := false }}
+{{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) }}
+{{- fail "named control planes are not enabled yet because object-level identity derivation is not wired; refusing to render until gateway routes, service DNS, OpenBao injector, and ClusterIssuer names are isolated" }}
 {{- end }}
 {{- $nvcaOperatorName := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 {{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}

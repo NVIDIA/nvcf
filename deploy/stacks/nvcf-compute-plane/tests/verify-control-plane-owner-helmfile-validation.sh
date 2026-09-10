@@ -47,6 +47,12 @@ cp "$source_stack_dir/testdata/registration/ncp-local-register-values.yaml" \
 nvca_state="02-nvca.yaml.gotmpl"
 dependencies_state="01-dependencies.yaml.gotmpl"
 
+for state in "$dependencies_state" "$nvca_state"; do
+  if ! grep -Fq '$controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner' "$helmfile_dir/$state"; then
+    fail "$state does not derive namespace prefix from the control-plane owner"
+  fi
+done
+
 dependencies_alpha_log="$work_dir/dependencies.alpha-missing.log"
 if NVCF_CONTROL_PLANE_OWNER=plane-a helmfile_env \
   helmfile --file "$dependencies_state" list --skip-charts --output json \
@@ -61,10 +67,10 @@ dependencies_named_blocked_log="$work_dir/dependencies.named-blocked.log"
 if NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
   helmfile --file "$dependencies_state" list --skip-charts --output json \
   >"$work_dir/dependencies.named-blocked.json" 2>"$dependencies_named_blocked_log"; then
-  fail "01-dependencies rendered named owner before namespace derivation was wired"
+  fail "01-dependencies rendered named owner before object-level identity derivation was wired"
 fi
-if ! grep -q "namespace derivation is not wired" "$dependencies_named_blocked_log"; then
-  fail "01-dependencies rejected named owner without the namespace-derivation message"
+if ! grep -q "object-level identity derivation is not wired" "$dependencies_named_blocked_log"; then
+  fail "01-dependencies rejected named owner without the object-level identity message"
 fi
 
 dependencies_invalid_log="$work_dir/dependencies.invalid-owner.log"
@@ -92,10 +98,10 @@ named_blocked_log="$work_dir/nvca.named-blocked.log"
 if NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
   helmfile --file "$nvca_state" list --skip-charts --output json \
   >"$work_dir/nvca.named-blocked.json" 2>"$named_blocked_log"; then
-  fail "02-nvca rendered named owner before namespace derivation was wired"
+  fail "02-nvca rendered named owner before object-level identity derivation was wired"
 fi
-if ! grep -q "namespace derivation is not wired" "$named_blocked_log"; then
-  fail "02-nvca rejected named owner without the namespace-derivation message"
+if ! grep -q "object-level identity derivation is not wired" "$named_blocked_log"; then
+  fail "02-nvca rejected named owner without the object-level identity message"
 fi
 
 max_valid_log="$work_dir/nvca.max-valid.log"
@@ -103,10 +109,10 @@ if NVCF_CONTROL_PLANE_OWNER="$max_owner" NVCF_ALPHA_NAMED_CONTROL_PLANE=true hel
   helmfile --file "$nvca_state" list --skip-charts \
   --selector control-plane-owner="$max_owner" --output json \
   >"$work_dir/nvca.max-valid.json" 2>"$max_valid_log"; then
-  fail "02-nvca rendered a 30-character named owner before namespace derivation was wired"
+  fail "02-nvca rendered a 30-character named owner before object-level identity derivation was wired"
 fi
-if ! grep -q "namespace derivation is not wired" "$max_valid_log"; then
-  fail "02-nvca rejected 30-character owner before reaching namespace-derivation validation"
+if ! grep -q "object-level identity derivation is not wired" "$max_valid_log"; then
+  fail "02-nvca rejected 30-character owner before reaching object-level identity validation"
 fi
 
 invalid_owners=(
@@ -202,6 +208,21 @@ if ! grep -Fq -- '--shared-namespace "kai-scheduler"' "$install_plan"; then
   fail "make install did not include the shared KAI namespace"
 fi
 
+named_install_plan="$work_dir/make-install-named.txt"
+make -n -C "$source_stack_dir" install \
+  DEV_MODE=1 \
+  CLUSTER_NAME=ncp-local \
+  HELMFILE_ENV=local \
+  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+  >"$named_install_plan" 2>&1
+if ! grep -Fq -- '--primary-namespace "plane-a-nvca-operator"' "$named_install_plan"; then
+  fail "make install did not identify plane-a-nvca-operator as the named primary namespace"
+fi
+if ! grep -Fq -- '--namespace "plane-a-nvca-operator"' "$named_install_plan"; then
+  fail "make install did not include the named NVCA namespace"
+fi
+
 apply_plan="$work_dir/make-apply.txt"
 make -n -C "$source_stack_dir" apply \
   DEV_MODE=1 \
@@ -227,15 +248,19 @@ if ! grep -Fq 'renderers/delete-owned-namespace.sh' "$destroy_plan"; then
   fail "make destroy did not use owner-aware namespace cleanup"
 fi
 
-default_destroy_plan="$work_dir/make-destroy-default.txt"
+named_destroy_plan="$work_dir/make-destroy-named.txt"
 make -n -C "$source_stack_dir" destroy \
   DEV_MODE=1 \
   CLUSTER_NAME=ncp-local \
   HELMFILE_ENV=local \
-  NVCF_CONTROL_PLANE_OWNER=default \
-  >"$default_destroy_plan" 2>&1
-if ! grep -Fq 'renderers/delete-owned-namespace.sh' "$default_destroy_plan"; then
-  fail "make destroy did not use owner-aware namespace cleanup"
+  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+  >"$named_destroy_plan" 2>&1
+if ! grep -Fq -- '--selector "control-plane-owner=plane-a" destroy' "$named_destroy_plan"; then
+  fail "make destroy did not pass the named owner selector"
+fi
+if ! grep -Fq 'Skipping named namespace cleanup until shared prerequisite lifecycle is wired' "$named_destroy_plan"; then
+  fail "make destroy did not defer named namespace cleanup"
 fi
 
 echo "verify-control-plane-owner-helmfile-validation: all checks passed"

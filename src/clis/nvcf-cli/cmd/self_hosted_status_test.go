@@ -215,6 +215,6 @@ func TestStatusCmd_NamedControlPlaneStopsBeforeCollector(t *testing.T) {
 
 	err := rootCmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.Contains(t, err.Error(), "object-level identity derivation")
 	assert.Empty(t, gotOwner)
 }

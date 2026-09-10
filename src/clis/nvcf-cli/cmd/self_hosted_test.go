@@ -60,7 +60,7 @@ func TestSelfHostedControlPlaneIdentity_DefaultsToLegacy(t *testing.T) {
 	assert.Equal(t, "default", identity)
 }
 
-func TestSelfHostedControlPlaneIdentity_BlocksNamedIDUntilNamespaceDerivation(t *testing.T) {
+func TestSelfHostedControlPlaneIdentity_BlocksNamedIDUntilObjectIdentityDerivation(t *testing.T) {
 	prev := selfHostedControlPlaneID
 	prevAlpha := selfHostedAlphaNamedPlane
 	t.Cleanup(func() {
@@ -72,7 +72,7 @@ func TestSelfHostedControlPlaneIdentity_BlocksNamedIDUntilNamespaceDerivation(t 
 
 	_, err := selfHostedControlPlaneOwner()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.Contains(t, err.Error(), "object-level identity derivation")
 }
 
 func TestSelfHostedControlPlaneIdentity_RejectsNamedIDWithoutAlphaFlag(t *testing.T) {
@@ -120,7 +120,7 @@ func TestSelfHostedControlPlaneIdentity_RejectsIDsThatExceedCassandraBudget(t *t
 	selfHostedControlPlaneID = strings.Repeat("a", selfHostedMaxControlPlaneIDLen)
 	_, err := selfHostedControlPlaneOwner()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.Contains(t, err.Error(), "object-level identity derivation")
 	assert.NotContains(t, err.Error(), "invalid --control-plane-id")
 
 	for _, length := range []int{selfHostedMaxControlPlaneIDLen + 1, 32} {
@@ -195,7 +195,7 @@ func TestSelfHostedFlags_NamedControlPlaneRequiresAlphaFlag(t *testing.T) {
 	assert.Contains(t, err.Error(), "--alpha-named-control-plane")
 }
 
-func TestSelfHostedFlags_NamedControlPlaneAlphaRequiresNamespaceDerivation(t *testing.T) {
+func TestSelfHostedFlags_NamedControlPlaneAlphaRequiresObjectIdentityDerivation(t *testing.T) {
 	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--local-only", "--control-plane-id=plane-a", "--alpha-named-control-plane"})
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
@@ -207,7 +207,7 @@ func TestSelfHostedFlags_NamedControlPlaneAlphaRequiresNamespaceDerivation(t *te
 
 	err := rootCmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.Contains(t, err.Error(), "object-level identity derivation")
 }
 
 func TestSelfHostedFlags_OnlyOneContextErrors(t *testing.T) {

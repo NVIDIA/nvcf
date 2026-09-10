@@ -194,7 +194,7 @@ func TestUninstall_NamedControlPlaneStopsBeforeHelmfile(t *testing.T) {
 
 	err := rootCmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "namespace derivation")
+	assert.Contains(t, err.Error(), "object-level identity derivation")
 
 	body, err := os.ReadFile(helmfileLog)
 	if err == nil {
