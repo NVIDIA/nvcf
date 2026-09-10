@@ -33,6 +33,9 @@ spec:
     {{- end }}
     spec:
       {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.cassandra.podSecurityContext }}
+      securityContext: {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.cassandra.hooks.migrations.schedulingGates }}
       schedulingGates:
         {{- toYaml . | nindent 8 }}
@@ -44,9 +47,16 @@ spec:
           {{- if .Values.cassandra.migrations.image.pullPolicy }}
           imagePullPolicy: {{ .Values.cassandra.migrations.image.pullPolicy | title }}
           {{- end }}
+          {{- with .Values.cassandra.containerSecurityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: CASSANDRA_HOSTS
-              value: "{{ $fullname }}.{{ include "cassandra.namespace" . }}.svc.cluster.local"
+              value: {{ include "cassandra.firstReplicaHost" . | quote }}
+            - name: CASSANDRA_READY_HOSTS
+              value: {{ include "cassandra.replicaHosts" . | quote }}
+            - name: CASSANDRA_PORT
+              value: "9042"
             - name: CASSANDRA_USER
               value: {{ .Values.cassandra.dbUser.user | quote }}
             - name: CASSANDRA_PASSWORD

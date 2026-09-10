@@ -100,3 +100,5 @@ ENV JVM_EXTRA_OPTS="${EXPORTER_JAVAAGENT} --add-opens=java.management/com.sun.jm
 
 # Add 9500 to defaults for metrics exposure
 EXPOSE 7000 9042 9500
+
+USER 999:999

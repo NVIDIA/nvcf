@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.cassandra.hooks.cleanupLegacyInitializeClusterRbac.enabled }}
+{{- $fullname := include "cassandra.fullname" . }}
+{{- $namespace := include "cassandra.namespace" . }}
+{{- $cleanupName := printf "%s-legacy-rbac-cleanup" $fullname }}
+{{- $legacyName := printf "%s-initialize-cluster" $fullname }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $cleanupName }}
+  namespace: {{ $namespace }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-20"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $cleanupName }}
+  namespace: {{ $namespace }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-19"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: [{{ $legacyName | quote }}]
+    verbs: ["delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    resourceNames: [{{ $legacyName | quote }}]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $cleanupName }}
+  namespace: {{ $namespace }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-18"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+subjects:
+  - kind: ServiceAccount
+    namespace: {{ $namespace }}
+    name: {{ $cleanupName }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $cleanupName }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $cleanupName }}
+  namespace: {{ $namespace }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-17"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.cassandra.podSecurityContext }}
+      securityContext: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ $cleanupName }}
+      restartPolicy: Never
+      containers:
+        - name: cleanup
+          image: "{{ .Values.cassandra.migrations.image.registry }}/{{ .Values.cassandra.migrations.image.repository }}:{{ .Values.cassandra.migrations.image.tag }}"
+          {{- if .Values.cassandra.migrations.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.cassandra.migrations.image.pullPolicy | title }}
+          {{- end }}
+          {{- with .Values.cassandra.containerSecurityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["/usr/bin/python3", "-c"]
+          args:
+            - |
+              import os
+              import ssl
+              import sys
+              import urllib.error
+              import urllib.request
+
+              namespace = os.environ["POD_NAMESPACE"]
+              legacy_name = os.environ["LEGACY_RBAC_NAME"]
+              api_host = os.environ["KUBERNETES_SERVICE_HOST"]
+              api_port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
+              api_server = f"https://{api_host}:{api_port}"
+              token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+              ca_path = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+              with open(token_path, encoding="utf-8") as token_file:
+                  token = token_file.read().strip()
+
+              headers = {
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/json",
+              }
+              tls_context = ssl.create_default_context(cafile=ca_path)
+              resources = [
+                  (
+                      "rolebinding",
+                      f"/apis/rbac.authorization.k8s.io/v1/namespaces/{namespace}/rolebindings/{legacy_name}",
+                  ),
+                  (
+                      "role",
+                      f"/apis/rbac.authorization.k8s.io/v1/namespaces/{namespace}/roles/{legacy_name}",
+                  ),
+                  (
+                      "serviceaccount",
+                      f"/api/v1/namespaces/{namespace}/serviceaccounts/{legacy_name}",
+                  ),
+              ]
+
+              success = True
+              for kind, path in resources:
+                  request = urllib.request.Request(
+                      f"{api_server}{path}",
+                      headers=headers,
+                      method="DELETE",
+                  )
+                  try:
+                      with urllib.request.urlopen(request, context=tls_context, timeout=20) as response:
+                          print(f"{kind}/{legacy_name}: delete requested ({response.status})")
+                  except urllib.error.HTTPError as error:
+                      if error.code == 404:
+                          print(f"{kind}/{legacy_name}: absent")
+                          continue
+                      print(f"{kind}/{legacy_name}: delete failed ({error.code})")
+                      print(error.read().decode("utf-8", "replace")[:1000])
+                      success = False
+                  except Exception as error:
+                      print(f"{kind}/{legacy_name}: delete failed ({error})")
+                      success = False
+
+              if not success:
+                  sys.exit(1)
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: LEGACY_RBAC_NAME
+              value: {{ $legacyName | quote }}
+{{- end }}
