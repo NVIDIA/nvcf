@@ -231,3 +231,69 @@ func Test_generateExportersAndService(t *testing.T) {
 		})
 	}
 }
+
+// TestResourceProcessorInsertsInstanceID pins the attribute that keeps
+// target_info unique per instance.
+//
+// target_info is built by the exporter from resource attributes only, so it
+// never receives the datapoint labels metricstransform adds. Without a
+// per-instance resource attribute every collector federating the same upstream
+// on a node emits an identical target_info series, and those writes conflict on
+// ingest. Inserting instance_id makes the series distinct while leaving the
+// rest of target_info, including caller-supplied OTLP resource attributes,
+// intact.
+func TestResourceProcessorInsertsInstanceID(t *testing.T) {
+	for _, backend := range []backendconfig.BackendType{backendconfig.K8s, backendconfig.VM} {
+		for _, workload := range []backendconfig.WorkloadType{backendconfig.Container, backendconfig.Helm} {
+			t.Run(string(backend)+"/"+string(workload), func(t *testing.T) {
+				raw, err := RenderOtelConfigFromBytes(
+					[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "KRATOS_THANOS", "endpoint": "https://m.example.invalid/api/v1/write", "name": "m"}}}`),
+					backendconfig.TemplateConfig{BackendType: backend, WorkloadType: workload},
+				)
+				if err != nil {
+					t.Fatalf("render failed: %v", err)
+				}
+
+				var cfg struct {
+					Processors struct {
+						Resource struct {
+							Attributes []struct {
+								Key    string `yaml:"key"`
+								Action string `yaml:"action"`
+								Value  string `yaml:"value"`
+							} `yaml:"attributes"`
+						} `yaml:"resource"`
+					} `yaml:"processors"`
+				}
+				if err := yaml.Unmarshal(raw, &cfg); err != nil {
+					t.Fatalf("unmarshal failed: %v", err)
+				}
+
+				var deletesInstanceID, insertsInstanceID bool
+				deleted := map[string]bool{}
+				for _, attr := range cfg.Processors.Resource.Attributes {
+					if attr.Action == "delete" {
+						deleted[attr.Key] = true
+					}
+					if attr.Key == "service.instance.id" && attr.Action == "delete" {
+						deletesInstanceID = true
+					}
+					if attr.Key == "instance_id" && attr.Action == "insert" {
+						insertsInstanceID = true
+						assert.Equal(t, "${env:NVCF_INSTANCE_ID:-unknown}", attr.Value)
+					}
+				}
+				assert.True(t, deletesInstanceID, "resource processor must still delete service.instance.id")
+				assert.True(t, insertsInstanceID, "resource processor must insert instance_id so target_info is unique")
+
+				// This renderer has no empty-value filter, so the attributes the
+				// Prometheus receiver can leave empty must be deleted outright or
+				// target_info exports an empty label and the write is rejected.
+				for _, key := range []string{"server.port", "url.scheme"} {
+					assert.True(t, deleted[key],
+						"resource processor must delete %q, which CreateResource can write empty", key)
+				}
+			})
+		}
+	}
+}

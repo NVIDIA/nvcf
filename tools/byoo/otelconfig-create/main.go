@@ -27,9 +27,15 @@ import (
 	otelconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config"
 )
 
+// spdxHeader is prepended to every generated config. The committed examples are
+// OSS-allowlisted files and must carry it; emitting it here keeps that true for
+// any consumer rather than relying on each caller to re-add it.
+const spdxHeader = "# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n" +
+	"# SPDX-License-Identifier: Apache-2.0\n\n"
+
 func writeConfig(data []byte, outputPath string) error {
 	// Write the rendered OpenTelemetry configuration to a file
-	err := os.WriteFile(outputPath, data, 0644)
+	err := os.WriteFile(outputPath, append([]byte(spdxHeader), data...), 0644)
 	if err != nil {
 		return err
 	}
