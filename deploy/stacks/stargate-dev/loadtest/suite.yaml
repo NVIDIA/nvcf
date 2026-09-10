@@ -65,9 +65,9 @@ scenarios:
 
   long-context-affinity:
     kind: long-context-affinity
-    sessions: 8
+    sessions: 32
     inputTokensByTurn: [80000, 100000, 120000]
-    repeats: 3
+    repeats: 1
     rate: 1
     workers: 1
     requestSloMs: 60000

@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 import shlex
 import shutil
@@ -138,23 +139,22 @@ def session_prompts(
 def long_context_prompts(
     sessions: int, input_tokens_by_turn: list[int]
 ) -> Iterable[str]:
-    histories = [
-        fixed_size_text(
-            f"canonical-long-context-session={session:08d}; ",
+    random_source = random.Random(0)
+    session_ids = [f"{random_source.getrandbits(128):032x}" for _ in range(sessions)]
+    for session_id in session_ids:
+        history = fixed_size_text(
+            f"canonical-long-context-session={session_id}; ",
             "Stable repository and coding context. ",
             256,
         )
-        for session in range(sessions)
-    ]
-    for input_tokens in input_tokens_by_turn:
-        content_bytes = (input_tokens - 5) * 4
-        for session, history in enumerate(histories):
-            histories[session] = fixed_size_text(
+        for input_tokens in input_tokens_by_turn:
+            content_bytes = (input_tokens - 5) * 4
+            history = fixed_size_text(
                 history,
                 " Additional source code, build output, and conversation context. ",
                 content_bytes,
             )
-            yield histories[session]
+            yield history
 
 
 def mixed_hot_prompts(count: int, minimum: int, maximum: int) -> Iterable[str]:

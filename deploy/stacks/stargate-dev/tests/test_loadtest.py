@@ -46,9 +46,9 @@ class CanonicalSuiteTests(unittest.TestCase):
             suite["scenarios"]["long-context-affinity"],
             {
                 "kind": "long-context-affinity",
-                "sessions": 8,
+                "sessions": 32,
                 "inputTokensByTurn": [80_000, 100_000, 120_000],
-                "repeats": 3,
+                "repeats": 1,
                 "rate": 1,
                 "workers": 1,
                 "requestSloMs": 60_000,
@@ -74,11 +74,11 @@ class CanonicalSuiteTests(unittest.TestCase):
         )
         self.assertEqual(
             [5 + len(prompt) // 4 for prompt in long_context],
-            [80_000, 80_000, 100_000, 100_000, 120_000, 120_000],
+            [80_000, 100_000, 120_000, 80_000, 100_000, 120_000],
         )
-        self.assertEqual(long_context[0][:256], long_context[2][:256])
-        self.assertEqual(long_context[2][:256], long_context[4][:256])
-        self.assertNotEqual(long_context[0][:256], long_context[1][:256])
+        self.assertEqual(long_context[0][:256], long_context[1][:256])
+        self.assertEqual(long_context[1][:256], long_context[2][:256])
+        self.assertNotEqual(long_context[0][:256], long_context[3][:256])
 
         hot = list(LOADTEST.mixed_hot_prompts(4, 512, 1024))
         self.assertEqual(len({prompt[:256] for prompt in hot}), 1)
