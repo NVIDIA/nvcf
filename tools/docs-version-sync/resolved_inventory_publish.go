@@ -274,6 +274,15 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 	if err != nil {
 		return resolvedStackInventory{}, err
 	}
+	if err := runner.PrepareRepositories(env, map[string]helmfileRepository{
+		"nvcf": {
+			Name: "nvcf",
+			URL:  renderSource.reference(),
+			OCI:  true,
+		},
+	}, ngcAPIKey); err != nil {
+		return resolvedStackInventory{}, fmt.Errorf("authenticate release chart registry: %w", err)
+	}
 
 	planes := make(map[string]*resolvedInventoryPlaneInput, len(resolvedStackPlanes))
 	for _, name := range resolvedStackPlanes {
@@ -565,8 +574,16 @@ func collectResolvedInventoryState(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := runner.PrepareRepositories(env, repositories, ngcAPIKey); err != nil {
-		return nil, nil, err
+	publicRepositories := make(map[string]helmfileRepository, len(repositories))
+	for name, repository := range repositories {
+		if name != "nvcf" {
+			publicRepositories[name] = repository
+		}
+	}
+	if len(publicRepositories) != 0 {
+		if err := runner.PrepareRepositories(env, publicRepositories, ngcAPIKey); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	if err := os.MkdirAll(renderDir, 0o755); err != nil {
