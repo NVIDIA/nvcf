@@ -31,7 +31,8 @@ import (
 )
 
 const (
-	UtilsHealthPort  int32 = 8080
+	UtilsHealthPort int32 = 8080
+	// UtilsMetricsPort is the TCP port exposed by worker-utils for Prometheus metrics.
 	UtilsMetricsPort int32 = 8010
 
 	UtilsContainerName = "utils"
