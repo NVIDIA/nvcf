@@ -163,10 +163,33 @@ When `cache_affinity_backend_selection_count` is enabled and the request has
 `x-cache-affinity-key`, a consistent hash ring first limits selection to a
 stable subset. Normal TTFT selection runs within that subset. The seed, routing
 key, model ID, affinity key, cluster ID, and virtual-node index contribute to
-the hash. If the subset has no usable candidate, selection falls back to the
-complete candidate set.
+the hash. Retry exclusions remove failed members from selection without
+replacing them in the affinity group. A cold successor therefore stays in the
+public group and does not receive the affinity discount.
 
-Minimal configuration:
+`cache_affinity_wait_ms` sets X, the minimum time from request arrival before
+public candidates become eligible. Until X, requests can select only from the
+affinity group. If no affine candidate is usable, the proxy waits and rechecks
+capacity. After X, the first public TTFT bucket opens. Later public buckets use
+only elapsed time after X. An available affine candidate remains preferred.
+
+```text
+request arrival              X                   X + bucket delay
+      |--- affine only ------|--- public 0 -------|--- public 1 ...
+```
+
+X defaults to `0`. Neither `x-request-slo-ms` nor `x-max-wait-ms` is required
+for a configured affinity wait. The SLO header controls queue-admission
+interpolation; it does not shorten X. An explicit `x-max-wait-ms` can end the
+routing wait before X, with HTTP `503` if no affine candidate is available.
+
+`cache_affinity_input_tokens_scale` multiplies only the current request's
+prefill input for affine candidates. It defaults to `1.0` and accepts values
+from `0.0` through `1.0`. Queued work and public candidates retain full cost.
+A scale of `0.0` does not make invalid input throughput usable for nonzero
+request input.
+
+Example with a 200 ms affinity wait and a 10 percent prefill estimate:
 
 ```json
 {
@@ -175,7 +198,9 @@ Minimal configuration:
     "model-a": {
       "algorithm": "wait-and-widen",
       "require_cache_affinity_key": true,
-      "cache_affinity_backend_selection_count": 2
+      "cache_affinity_backend_selection_count": 2,
+      "cache_affinity_wait_ms": 200,
+      "cache_affinity_input_tokens_scale": 0.1
     }
   }
 }
@@ -273,9 +298,14 @@ that algorithm's detailed configuration prevents startup.
 | --- | --- | --- | --- |
 | `cache_affinity_virtual_nodes` | unsigned integer | `150` | Virtual nodes per cluster. `0` is normalized to `1`. |
 | `cache_affinity_backend_selection_count` | unsigned integer | unset | Enables the affinity subset. `0` disables it. Values above the candidate count select all candidates. |
+| `cache_affinity_wait_ms` | unsigned integer | `0` | Minimum elapsed time before public fallback. Public bucket widening starts at this time. |
+| `cache_affinity_input_tokens_scale` | number | `1.0` | Affine request-prefill multiplier, from `0.0` through `1.0`. Does not discount queued work or public candidates. |
 
-These fields are accepted in `pulsar-wait-and-widen` JSON but do not affect its
-selection. Pulsar ranking supplies that algorithm's affinity.
+The virtual-node and backend-selection-count fields are accepted in
+`pulsar-wait-and-widen` JSON but do not affect its selection. Pulsar ranking
+supplies that algorithm's affinity. A non-default
+`cache_affinity_input_tokens_scale` or `cache_affinity_wait_ms` is rejected at
+startup for `pulsar-wait-and-widen`; omitted values and the defaults are accepted.
 
 `wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
 
@@ -307,8 +337,9 @@ bounds, so set the floor less than or equal to the ceiling.
 | `seed` | string | empty | Changes the rendezvous ranking. Keep it stable across replicas. |
 | `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
 
-`pulsar-wait-and-widen` supports the wait-and-widen fields except `comparator`,
-plus `consider_kv_free_tokens`.
+`pulsar-wait-and-widen` supports the shared wait-and-widen fields in the table
+above, plus `consider_kv_free_tokens`. It rejects `comparator` and non-default
+affinity wait or prefill-scale settings.
 
 ## Request algorithm overrides
 
@@ -364,8 +395,8 @@ These proxy headers affect load-balancer behavior:
 | `x-cache-affinity-key` | optional or config-required | Opaque stable prefix or session identity. Blank means absent. |
 | `x-input-tokens` | required `u64` | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
 | `x-priority` | optional `u32`, default `0` | Chooses the nearest published queue estimate at or below this priority. |
-| `x-request-slo-ms` | optional `u64` | Request SLO used to interpolate queue bounds. |
-| `x-max-wait-ms` | optional `u64` | Wait budget for temporarily infeasible routing, capped at 60 seconds. |
+| `x-request-slo-ms` | optional `u64` | Interpolates queue bounds. Does not set or shorten the affinity wait. |
+| `x-max-wait-ms` | optional `u64` | Routing wait limit from request arrival, capped at 60 seconds. Can expire before public buckets open. |
 
 Invalid required or numeric values return HTTP `400`. `x-routing-method` is
 consumed by Stargate and is not forwarded upstream. See the
@@ -376,7 +407,9 @@ contract.
 
 Algorithm fallback is part of load-balancer selection:
 
-- WaitAndWiden later-bucket fallback depends on elapsed request time.
+- WaitAndWiden public fallback starts at X. Later public buckets use elapsed
+  time after X; affine candidates remain preferred. Without an affinity group,
+  later buckets use elapsed request time and the existing explicit retry budget.
 - Pulsar fallback walks the stable ranking after exclusions or optional KV
   filtering.
 - Pulsar wait-and-widen fallback widens ranking bands and runs WaitAndWiden selection
@@ -396,6 +429,11 @@ is configurable with `--metrics-prefix`. See the
 for metric names, labels, and descriptions.
 
 The proxy request span records the effective comparator in `routing.comparator`.
+WaitAndWiden records affine-group selections with `rank_depth` 1 and public
+fallback with a higher rank. An affine backup is still an affine-group
+selection. The existing fallback selection series therefore records public
+escalation; deployments that previously saw only primary selections can see
+new fallback counts. Metric names and label sets are unchanged.
 
 ## Validation checklist
 

@@ -68,6 +68,17 @@ development-only CLI option and must not be used in production. Use
 [`stargate-k8s-router`](docs/operations/deployment-shape.md) or a supported
 load-balancer topology for production backend traffic.
 
+## Load balancing
+
+Use `wait-and-widen` with `cache_affinity_wait_ms` to keep requests in their
+cache-affinity group before opening public TTFT buckets. The setting defaults
+to `0`. A positive value works without a request SLO header. Optional
+`cache_affinity_input_tokens_scale` discounts cached request prefill while
+leaving queued work and public candidates at full cost.
+
+See [Load balancer configuration](docs/load-balancer-configuration.md) for
+examples, defaults, routing deadlines, and retry behavior.
+
 ## Read First
 
 | Need | Read |

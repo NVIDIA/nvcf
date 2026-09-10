@@ -69,6 +69,7 @@ pub enum LoadBalancerDecision {
 }
 
 impl LoadBalancerDecision {
+    /// Extract an immediate choice; timed waits and unavailable capacity return None.
     pub fn selected(self) -> Option<LoadBalancerCandidateChoice> {
         match self {
             Self::Selected(choice) => Some(choice),

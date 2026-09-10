@@ -197,6 +197,7 @@ impl LoadBalancerRouter {
             .map(|choice| resolution.selection(choice))
     }
 
+    /// Evaluate the resolved algorithm and preserve timed waits for the caller.
     pub fn decide_with_algorithm_resolution(
         &self,
         target_state: &LoadBalancerTargetState,

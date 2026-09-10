@@ -363,7 +363,8 @@ type AffinityRetryFixture = (
 );
 
 fn affinity_retry_fixture(excluded_ids: &[&str]) -> AffinityRetryFixture {
-    let config = wait_and_widen_affinity_config(32, 1, None);
+    let mut config = wait_and_widen_affinity_config(32, 1, None);
+    config.cache_affinity_input_tokens_scale = 0.1;
     let target = target();
     let mut candidates = excluded_ids
         .iter()
@@ -384,13 +385,15 @@ fn affinity_retry_fixture(excluded_ids: &[&str]) -> AffinityRetryFixture {
         if candidates[primary[0]].cluster_id != excluded_ids[0] {
             continue;
         }
-        let retry_request = LoadBalancerRequest {
-            excluded_cluster_ids: Some(&excluded),
-            ..base_request
-        };
-        let retry = cache_affinity_candidate_indices(&config, &retry_request, &candidates)
-            .expect("retry should select an affinity successor");
-        if candidates[retry[0]].cluster_id != "affinity-successor" {
+        let mut full_ring_config = config.clone();
+        full_ring_config.cache_affinity_backend_selection_count = Some(candidates.len());
+        let ring = cache_affinity_candidate_indices(&full_ring_config, &base_request, &candidates)
+            .unwrap();
+        let first_unexcluded = ring
+            .iter()
+            .find(|index| !excluded.contains(&candidates[**index].cluster_id))
+            .unwrap();
+        if candidates[*first_unexcluded].cluster_id != "affinity-successor" {
             continue;
         }
         return (config, target, candidates, excluded, key);
@@ -409,12 +412,14 @@ fn assert_cache_affinity_retry(excluded_ids: &[&str]) {
         ..request
     };
     let chosen = choose(&load_balancer, &retry_request, &candidates);
-    assert_eq!(chosen.candidate.cluster_id, "affinity-successor");
+    assert_eq!(chosen.candidate.cluster_id, "global-fast");
     let cached_key_bytes = load_balancer.cached_affinity_key_bytes();
-    assert!(cached_key_bytes >= key.len() * 2 + excluded.iter().map(String::len).sum::<usize>());
+    assert_eq!(cached_key_bytes, key.len());
+    assert_eq!(chosen.rank_depth, 2);
 
     let chosen_again = choose(&load_balancer, &retry_request, &candidates);
-    assert_eq!(chosen_again.candidate.cluster_id, "affinity-successor");
+    assert_eq!(chosen_again.candidate.cluster_id, "global-fast");
+    assert_eq!(chosen_again.rank_depth, 2);
     assert_eq!(load_balancer.cached_affinity_key_bytes(), cached_key_bytes);
 }
 
@@ -1152,6 +1157,9 @@ fn wait_and_widen_validates_cache_affinity_input_tokens_scale() {
             );
         }
         for scale in [0.0, 1.0] {
+            if algorithm == LoadBalancerAlgorithm::PulsarWaitAndWiden && scale != 1.0 {
+                continue;
+            }
             let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
                 r#"{{"algorithm":"{algorithm}","cache_affinity_input_tokens_scale":{scale}}}"#
             ));
@@ -1174,6 +1182,30 @@ fn wait_and_widen_validates_cache_affinity_input_tokens_scale() {
             );
             assert!(WaitAndWidenConfig::from_algorithm_config(&config).is_err());
         }
+    }
+}
+
+#[test]
+fn pulsar_wait_and_widen_rejects_unsupported_affinity_settings() {
+    for (field, value) in [
+        ("cache_affinity_input_tokens_scale", "0.0"),
+        ("cache_affinity_input_tokens_scale", "0.1"),
+        ("cache_affinity_wait_ms", "1"),
+    ] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"pulsar-wait-and-widen","{field}":{value}}}"#
+        ));
+        let error = create_load_balancer_with_config(&config)
+            .err()
+            .expect("unsupported affinity settings must fail");
+        assert!(error.to_string().contains(field));
+    }
+    for raw in [
+        r#"{"algorithm":"pulsar-wait-and-widen"}"#,
+        r#"{"algorithm":"pulsar-wait-and-widen","cache_affinity_input_tokens_scale":1.0,"cache_affinity_wait_ms":0}"#,
+    ] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(raw);
+        assert!(create_load_balancer_with_config(&config).is_ok());
     }
 }
 
@@ -1882,23 +1914,89 @@ fn wait_and_widen_cache_affinity_retry_skips_excluded_primary() {
 }
 
 #[test]
-fn wait_and_widen_cache_affinity_retry_returns_candidate_slice_indices() {
+fn wait_and_widen_retry_keeps_affinity_group_and_returns_public_slice_index() {
     let (config, target, candidates, excluded, key) = affinity_retry_fixture(&["excluded-primary"]);
     let request = request(&target, Some(&key), Some(1));
-    let primary = cache_affinity_candidate_indices(&config, &request, &candidates)
-        .expect("cache affinity should select a backend");
+    let primary = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
     assert_eq!(candidates[primary[0]].cluster_id, "excluded-primary");
+    let retry = LoadBalancerRequest {
+        excluded_cluster_ids: Some(&excluded),
+        ..request
+    };
     assert_eq!(
-        cache_affinity_candidate_indices(
-            &config,
-            &LoadBalancerRequest {
-                excluded_cluster_ids: Some(&excluded),
-                ..request
-            },
-            &candidates,
-        ),
-        Some(vec![1]),
+        cache_affinity_candidate_indices(&config, &retry, &candidates),
+        Some(primary)
     );
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let choice = lb.choose_candidate(&retry, &candidates).unwrap();
+    assert_eq!(choice.candidate_index, 2);
+    assert_eq!(choice.rank_depth, 2);
+}
+
+#[test]
+fn wait_and_widen_retry_preserves_the_affinity_deadline() {
+    let (mut config, target, candidates, excluded, key) =
+        affinity_retry_fixture(&["excluded-primary"]);
+    config.cache_affinity_wait = Duration::from_millis(100);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let request = LoadBalancerRequest {
+        excluded_cluster_ids: Some(&excluded),
+        ..request(&target, Some(&key), Some(1))
+    };
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(99)),
+        LoadBalancerDecision::Wait(Duration::from_millis(1))
+    );
+    let choice = lb
+        .decide_at(&request, &candidates, Duration::from_millis(100))
+        .selected()
+        .unwrap();
+    assert_eq!(candidates[choice.candidate_index].cluster_id, "global-fast");
+    assert_eq!(choice.rank_depth, 2);
+}
+
+#[test]
+fn wait_and_widen_keeps_an_unexcluded_affine_backup() {
+    let config = wait_and_widen_affinity_config(8, 2, Some(2));
+    let target = target();
+    let request = request(&target, Some("prefix"), Some(1));
+    let candidates = candidates(&["a", "b", "c"]);
+    let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+    let excluded = HashSet::from([candidates[affine[0]].cluster_id.clone()]);
+    let retry = LoadBalancerRequest {
+        excluded_cluster_ids: Some(&excluded),
+        ..request
+    };
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let choice = lb.choose_candidate(&retry, &candidates).unwrap();
+    assert_eq!(choice.candidate_index, affine[1]);
+    assert_eq!(choice.rank_depth, 1);
+}
+
+#[test]
+fn wait_and_widen_affine_primary_must_meet_interpolated_queue_limit() {
+    let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+        settings.cache_affinity_backend_selection_count = Some(2);
+        settings.max_queue_time_floor_ms = Some(100);
+        settings.max_queue_time_ceil_ms = Some(300);
+        settings.ignore_queue_time = Some(true);
+    }));
+    let target = target();
+    let request = LoadBalancerRequest {
+        received_at: Instant::now() - Duration::from_secs(30),
+        request_slo: Some(Duration::from_secs(60)),
+        ..request(&target, Some("prefix"), Some(1))
+    };
+    let mut candidates = candidates(&["a", "b", "c"]);
+    let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+    candidates[affine[0]]
+        .stats
+        .queue_time_estimate_ms_by_priority = HashMap::from([(0, 250)]);
+    candidates[affine[1]].rtt = Duration::from_secs(1);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let choice = lb.choose_candidate(&request, &candidates).unwrap();
+    assert_eq!(choice.candidate_index, affine[1]);
+    assert_eq!(choice.rank_depth, 1);
 }
 
 #[test]
