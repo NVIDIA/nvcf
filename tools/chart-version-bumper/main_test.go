@@ -564,7 +564,8 @@ func TestValuesPathBumpsOnlyItsOwnFieldInAMultiImageChart(t *testing.T) {
 		t.Fatalf("plan output did not describe the values-path bump:\n%s", out)
 	}
 	values := f.read(t, "c", "values.yaml")
-	if !strings.Contains(values, "imageTag: \"0.160.0-nv-0.2.4\"") {
+	// The fixture's line is bare, so the bumped line stays bare.
+	if !strings.Contains(values, "imageTag: 0.160.0-nv-0.2.4\n") {
 		t.Fatalf("the declared path did not move:\n%s", values)
 	}
 	if !strings.Contains(values, "tag: \"3.0.0\"") {
@@ -647,7 +648,7 @@ func TestValuesPathDistinguishesRepeatedLeafKeysByFullAncestry(t *testing.T) {
 	if !strings.Contains(values, "otelCollector:\n  imageTag: 0.157.0-nv-0.2.1") {
 		t.Fatalf("the top-level field was not declared, so it must be left alone verbatim:\n%s", values)
 	}
-	if !strings.Contains(values, "    imageTag: \"0.160.0-nv-0.2.4\"") {
+	if !strings.Contains(values, "    imageTag: 0.160.0-nv-0.2.4\n") {
 		t.Fatalf("the declared nested field did not move:\n%s", values)
 	}
 }
@@ -758,5 +759,42 @@ func TestRunReportsTheLargestSemverStepTaken(t *testing.T) {
 	_, out, _ := f.run(t, "src/svc/v1.0.0", false)
 	if strings.Contains(out, "bump:") {
 		t.Errorf("no-op run must not report a level:\n%s", out)
+	}
+}
+
+func TestApplyPreservesTheQuotingOfEachLine(t *testing.T) {
+	// nvca-operator vendors its chart and regenerates the tag lines with yq,
+	// which keeps each scalar's existing style. Three of its four otelCollector
+	// tags are bare and one is quoted; the bumper must leave that alone or the
+	// vendor check fails on a quoting-only diff.
+	f := newFixture(t, `{"services":[
+ {"id":"svc","path":"src/svc"},
+ {"id":"mixed","path":"deploy/helm/mixed","deploys":[{"service":"svc","values_paths":["a.imageTag","b.imageTag"]}]},
+ {"id":"bare","path":"deploy/helm/bare","deploys":["svc"]}
+]}`)
+	f.chart(t, "mixed", "1.0.0", "a:\n  imageTag: 1.0.0\nb:\n  imageTag: \"1.0.0\"")
+	// appVersion bare in Chart.yaml, tag bare in values.yaml
+	dir := filepath.Join(f.root, "deploy", "helm", "bare")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: helm-bare\nversion: 0.0.0\nappVersion: 1.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("image:\n  tag: 1.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, errOut := f.run(t, "src/svc/v1.0.1", true); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if got := f.read(t, "mixed", "values.yaml"); got != "a:\n  imageTag: 1.0.1\nb:\n  imageTag: \"1.0.1\"\n" {
+		t.Errorf("values-path quoting not preserved:\n%s", got)
+	}
+	if got := f.read(t, "bare", "Chart.yaml"); !strings.Contains(got, "appVersion: 1.0.1\n") {
+		t.Errorf("bare appVersion was quoted:\n%s", got)
+	}
+	if got := f.read(t, "bare", "values.yaml"); got != "image:\n  tag: 1.0.1\n" {
+		t.Errorf("bare image tag was quoted:\n%s", got)
 	}
 }
