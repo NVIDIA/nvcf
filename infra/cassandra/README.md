@@ -53,6 +53,19 @@ docker build -t <your-registry>/<your-org>/nvcf-cassandra:<version> .
 
 To build with the exporter agent enabled, see the "Exporter agent jar" section above.
 
+Java dependency overlays are downloaded from Maven Central by default. Builders
+can route those checksum-verified downloads through a compatible repository
+manager by setting `MAVEN_REPOSITORY_BASE`:
+
+```bash
+docker build \
+  --build-arg MAVEN_REPOSITORY_BASE=https://repository.example.com/maven2 \
+  -t <your-registry>/<your-org>/nvcf-cassandra:<version> .
+```
+
+The repository must expose Maven-layout paths. Changing the repository base does
+not change the pinned artifact versions or SHA-256 verification.
+
 For multi-arch builds:
 
 ```bash

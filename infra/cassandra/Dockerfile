@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+ARG MAVEN_REPOSITORY_BASE=https://repo.maven.apache.org/maven2
+
 # yq is used by the chart's conf initContainer to deep-merge cassandra.yaml
 # overrides onto the image default. Fetch it in a native build stage (no
 # emulation) and verify it against a pinned checksum.
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS yq-downloader
 ARG TARGETARCH
+ARG MAVEN_REPOSITORY_BASE
 ARG YQ_VERSION=v4.53.6
 ARG YQ_LINUX_AMD64_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
 ARG YQ_LINUX_ARM64_SHA256=88a1016bc1d657375a35864e4f44b6f333df8ff97b559f51bba0adcb2169df09
@@ -24,14 +27,17 @@ RUN apk add --no-cache curl && \
 # checksum-pinned replacement set without adding build tools to the final image.
 COPY java-libraries.lock /tmp/java-libraries.lock
 RUN mkdir /tmp/java-libraries && \
-    while read -r checksum url; do \
+    while read -r checksum artifact_path; do \
       case "${checksum}" in \#*|'') continue ;; esac; \
-      destination="/tmp/java-libraries/${url##*/}"; \
-      curl -fsSLo "${destination}" "${url}" && \
+      destination="/tmp/java-libraries/${artifact_path##*/}"; \
+      curl -fsSLo "${destination}" \
+        --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+        "${MAVEN_REPOSITORY_BASE%/}/${artifact_path#/}" && \
       printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c - || exit 1; \
     done < /tmp/java-libraries.lock
 
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS exporter-repacker
+ARG MAVEN_REPOSITORY_BASE
 RUN apk add --no-cache curl unzip zip
 
 # The release build supplies a compatible exporter agent. Replace the complete

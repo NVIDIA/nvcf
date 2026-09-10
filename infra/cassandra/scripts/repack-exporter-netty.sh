@@ -5,7 +5,7 @@
 set -eu
 
 NETTY_VERSION=4.1.137.Final
-MAVEN_CENTRAL_URL=https://repo1.maven.org/maven2/io/netty
+MAVEN_REPOSITORY_BASE=${MAVEN_REPOSITORY_BASE:-https://repo.maven.apache.org/maven2}
 NETTY_ARTIFACTS='netty-buffer f474b14c7734f15e0540394cb6f39d67777b7581a42919e4ac89d253d4efd929
 netty-codec 9987b6a660b0a6b1f0d791485dae33180b3d1c63687c006fe6d3fd025e9e3798
 netty-codec-http 0535bb5a736472bef5c948d15eb273c4ab9f796656fc7c5d6b982ad92bddbd49
@@ -100,7 +100,8 @@ while read -r artifact checksum; do
     [ -n "${artifact}" ] || continue
     jar=${downloads_dir}/${artifact}-${NETTY_VERSION}.jar
     curl -fsSLo "${jar}" \
-        "${MAVEN_CENTRAL_URL}/${artifact}/${NETTY_VERSION}/${artifact}-${NETTY_VERSION}.jar"
+        --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+        "${MAVEN_REPOSITORY_BASE%/}/io/netty/${artifact}/${NETTY_VERSION}/${artifact}-${NETTY_VERSION}.jar"
     printf '%s  %s\n' "${checksum}" "${jar}" | sha256sum -c -
 
     # Only copy Netty-owned entries. This keeps the exporter implementation,
