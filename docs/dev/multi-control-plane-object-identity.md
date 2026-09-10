@@ -286,6 +286,29 @@ identity is one leak class; service DNS, OpenBao injector cluster-scoped
 objects, and ClusterIssuer identity still need to pass the Phase 4C checker
 before the block can be removed.
 
+## Phase 4E Admin And NATS Identity References
+
+Phase 4E removes two remaining object-level references that still pointed at
+legacy identities after the gateway-routes chart was fixed.
+
+The admin-token-issuer-proxy chart renders its own HTTPRoute outside the
+gateway-routes chart. For a named owner, the self-managed stack now passes a
+prefixed `fullnameOverride`, so that chart renders objects such as
+`HTTPRoute/gateway/plane-a-admin-token-issuer-proxy` and a backend reference to
+`Service/plane-a-api-keys/plane-a-admin-token-issuer-proxy`. The same derived
+name also feeds the `nvcf-ui` control-plane health endpoint so the health check
+does not point at the old service name inside the named namespace.
+
+The NATS chart already had a value for the OpenBao migration ServiceAccount
+namespace. For a named owner, the self-managed stack now passes the derived
+vault namespace, so the `nkey-bao-access` RoleBinding subject points at
+`plane-a-vault-system` instead of `vault-system`.
+
+Named mode intentionally remains fail-closed after this phase. Service DNS,
+OpenBao injector cluster-scoped objects, ClusterIssuer identity, and the final
+shared-prerequisite allowlist still need to pass before the object-level block
+can be removed.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |

@@ -65,6 +65,7 @@ tolerations:
 {{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix -}}
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix -}}
 {{- $certManagerNamespace := "cert-manager" -}}
+{{- $adminIssuerProxyName := include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" "admin-token-issuer-proxy") -}}
 {{- $apiGrpcServiceURL := printf "http://api.%s.svc.cluster.local:9090" $nvcfNamespace -}}
 {{- $cassandraContactPoints := printf "cassandra.%s.svc.cluster.local" $cassandraNamespace -}}
 {{- $invocationServiceURL := printf "http://invocation.%s.svc.cluster.local:8080" $nvcfNamespace -}}
@@ -75,7 +76,7 @@ tolerations:
 {{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace -}}
 {{- $openBaoServerURL := printf "http://openbao-server.%s.svc.cluster.local:8200" $vaultNamespace -}}
 {{- $rateLimiterServiceURL := printf "http://ratelimiter.%s.svc.cluster.local:7777" $nvcfNamespace -}}
-{{- $adminIssuerProxyHealthEndpoint := printf "admin-token-issuer-proxy.%s.svc.cluster.local:8080/healthz" $apiKeysNamespace -}}
+{{- $adminIssuerProxyHealthEndpoint := printf "%s.%s.svc.cluster.local:8080/healthz" $adminIssuerProxyName $apiKeysNamespace -}}
 {{- $llmRequestRouterHealthzEndpoint := printf "%s:8000/healthz" $llmRequestRouterServiceHost -}}
 {{- $llmRequestRouterReadyzEndpoint := printf "%s:8000/readyz" $llmRequestRouterServiceHost -}}
 {{- $natsAuthCalloutHealthEndpoint := printf "nvcf-nats-auth-callout-service.%s.svc.cluster.local:8080/health" $natsNamespace -}}
@@ -294,6 +295,11 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
+  {{- if ne $controlPlaneOwner "default" }}
+  rbac:
+    openbao:
+      namespace: {{ $vaultNamespace }}
+  {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
   {{- if or $natsNs $natsTol }}
@@ -897,7 +903,7 @@ sis:
     {{- end }}
 
 adminIssuerProxy:
-  fullnameOverride: admin-token-issuer-proxy
+  fullnameOverride: {{ $adminIssuerProxyName }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
