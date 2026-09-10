@@ -334,7 +334,7 @@ func AddNVIDIAGPUNoScheduleToleration(podSpec *corev1.PodSpec) (added bool) {
 	})
 }
 
-// MutateUtilsContainer exposes the worker metrics endpoint and configures the health probes.
+// MutateUtilsContainer declares the worker metrics port and configures the health probes.
 func MutateUtilsContainer(containerSpec *corev1.Container) {
 	containerSpec.Ports = append(containerSpec.Ports, corev1.ContainerPort{
 		Name:          WorkerMetricsPortName,

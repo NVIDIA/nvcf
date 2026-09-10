@@ -68,6 +68,8 @@ func TestTranslateContainer_AppliesConfiguredTolerations(t *testing.T) {
 	)
 }
 
+// TestTranslateContainerUtilsDeploy_AppliesConfiguredTolerations verifies
+// tolerations and metrics in split deployment mode.
 func TestTranslateContainerUtilsDeploy_AppliesConfiguredTolerations(t *testing.T) {
 	customToleration := corev1.Toleration{
 		Key:      "workload-type",
@@ -109,6 +111,8 @@ func TestTranslateContainerUtilsDeploy_AppliesConfiguredTolerations(t *testing.T
 	))
 }
 
+// TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations verifies Helm
+// tolerations and worker metrics.
 func TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations(t *testing.T) {
 	customToleration := corev1.Toleration{
 		Key:      "workload-type",
@@ -140,6 +144,8 @@ func TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations(t *testing.T
 	))
 }
 
+// TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers verifies the Helm
+// LLM sidecars and metrics port.
 func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	msg := newHelmFunctionMessage()
 	msg.Details.FunctionType = FunctionTypeLLM
@@ -201,6 +207,8 @@ func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	require.NotNil(t, findVolumeByName(t, utilsPod.Spec.Volumes, "llm").EmptyDir)
 }
 
+// TestTranslateContainerLLM_AddsRouterAndCredentialContainers verifies the
+// container LLM sidecars and metrics port.
 func TestTranslateContainerLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	msg := newContainerFunctionMessage()
 	msg.Details.FunctionType = FunctionTypeLLM
@@ -358,6 +366,8 @@ func TestTranslateNonLLMFunctionsDoNotAddCredentialManager(t *testing.T) {
 	}
 }
 
+// TestTranslateContainerWithCacheAndSecrets verifies cache, secret, and
+// worker-utils resources for container functions.
 func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	msg := newContainerFunctionMessage()
 	msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
@@ -393,6 +403,8 @@ func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	assert.NotNil(t, findObjectByName(t, objs, "writer-job-function-cache"))
 }
 
+// TestTranslateHelmChartWithCacheAndSecrets verifies cache, secret, and
+// worker-utils resources for Helm functions.
 func TestTranslateHelmChartWithCacheAndSecrets(t *testing.T) {
 	msg := newHelmFunctionMessage()
 	msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
@@ -687,6 +699,7 @@ func assertTolerationsMatch(t *testing.T, got []corev1.Toleration, want ...corev
 	assert.ElementsMatch(t, want, got)
 }
 
+// assertUtilsMetricsPort verifies the named worker-utils metrics port.
 func assertUtilsMetricsPort(t *testing.T, container corev1.Container) {
 	t.Helper()
 	assert.Equal(t, []corev1.ContainerPort{{
@@ -696,6 +709,7 @@ func assertUtilsMetricsPort(t *testing.T, container corev1.Container) {
 	}}, container.Ports)
 }
 
+// assertLLMMetricsPort verifies the named Pylon metrics port.
 func assertLLMMetricsPort(t *testing.T, container corev1.Container) {
 	t.Helper()
 	assert.Equal(t, []corev1.ContainerPort{{

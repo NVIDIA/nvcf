@@ -33,6 +33,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 )
 
+// translateContainer converts a container function request into Kubernetes resources.
+//
 //nolint:gocyclo // complex function with many conditional branches
 func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	if err := tcfg.ValidateContainer(); err != nil {

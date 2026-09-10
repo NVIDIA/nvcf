@@ -32,12 +32,8 @@ import (
 	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 )
 
-/*
-Container Functions will be translated as the following set of artifacts
-  - an inference Pod
-  - a utils deployment
-  - a service endpoint for inference
-*/
+// translateContainerUtilsDeploy converts a container function request into an
+// inference pod, a worker-utils deployment, and an inference service.
 func translateContainerUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	if err := tcfg.ValidateContainer(); err != nil {
 		return nil, fmt.Errorf("invalid container translate config: %v", err)
@@ -285,6 +281,7 @@ func translateContainerUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig)
 	return objs, nil
 }
 
+// getUtilsDeploymentAndSecrets builds the worker-utils deployment and registry secrets.
 func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	// Fail if LLS is enabled for utils pod as a separate pod from the inference pod
 	if t.Details.FunctionType == FunctionTypeStreaming {

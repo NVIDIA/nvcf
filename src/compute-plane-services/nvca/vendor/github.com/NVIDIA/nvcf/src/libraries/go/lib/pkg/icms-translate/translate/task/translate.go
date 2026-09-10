@@ -37,6 +37,8 @@ import (
 // TODO: k8s version considerations.
 // For now, all task Pod features are supported by all recent k8s versions
 
+// translateContainer converts a container task request into Kubernetes resources.
+//
 //nolint:gocyclo // complex function with many conditional branches
 func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	tcfg.Default()

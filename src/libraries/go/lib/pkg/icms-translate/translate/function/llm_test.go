@@ -57,6 +57,7 @@ func healthPathArgs(args []string) []string {
 	return healthPaths
 }
 
+// TestNewLLMRouterClientContainer verifies Pylon configuration and validation.
 func TestNewLLMRouterClientContainer(t *testing.T) {
 	type spec struct {
 		name       string

@@ -82,6 +82,7 @@ func upstreamHealthPath(allEnvSet map[string]string) string {
 	return path
 }
 
+// newLLMRouterClientContainer builds the Pylon sidecar for an LLM worker.
 func newLLMRouterClientContainer(
 	ls *LaunchSpecification,
 	allEnvSet map[string]string,

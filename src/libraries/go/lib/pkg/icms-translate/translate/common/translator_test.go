@@ -88,6 +88,7 @@ func TestAddNVIDIAGPUNoScheduleToleration(t *testing.T) {
 	}
 }
 
+// TestMutateUtilsContainer verifies the worker-utils metrics port and health probes.
 func TestMutateUtilsContainer(t *testing.T) {
 	container := corev1.Container{}
 

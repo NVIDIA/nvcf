@@ -33,6 +33,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
+// TestTranslateContainerCreatesTaskPod verifies resources generated for a container task.
 func TestTranslateContainerCreatesTaskPod(t *testing.T) {
 	objs, err := Translate(
 		newTaskMessage(false),
@@ -88,6 +89,7 @@ func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	assert.NotNil(t, findTaskJobByName(t, objs, "writer-job-cache-handle"))
 }
 
+// TestTranslateHelmChartCreatesUtilsPod verifies resources generated for a Helm task.
 func TestTranslateHelmChartCreatesUtilsPod(t *testing.T) {
 	objs, err := Translate(
 		newTaskMessage(true),
@@ -343,6 +345,7 @@ func findTaskContainerByName(t *testing.T, containers []corev1.Container, name s
 	return corev1.Container{}
 }
 
+// assertTaskUtilsMetricsPort verifies the named worker-utils metrics port for tasks.
 func assertTaskUtilsMetricsPort(t *testing.T, container corev1.Container) {
 	t.Helper()
 	assert.Equal(t, []corev1.ContainerPort{{

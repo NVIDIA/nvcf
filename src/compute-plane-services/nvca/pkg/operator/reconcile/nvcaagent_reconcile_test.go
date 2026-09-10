@@ -2473,6 +2473,7 @@ func TestGetInternalPersistentStorageConfig(t *testing.T) {
 	}
 }
 
+// TestGetNetworkPoliciesDataEmptyDDCSIPList verifies generated network policies without DDCS CIDRs.
 func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	expNPNames := []string{
 		EgressNetworkPolicyNameKey,
@@ -2506,6 +2507,7 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols.yaml"))), stripSPDXHeaders(b.String()))
 }
 
+// TestGetNetworkPoliciesDataWithDDCSIPList verifies generated network policies with DDCS CIDRs.
 func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	expNPNames := []string{
 		EgressNetworkPolicyNameKey,

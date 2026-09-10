@@ -5,12 +5,13 @@ stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
+# fail reports an assertion failure and exits the test script.
 fail() {
   echo "profile-defaults: $*" >&2
   exit 1
 }
 
-# List enabled releases for the selected observability profile.
+# profile_releases lists enabled releases for the selected observability profile.
 profile_releases() {
   local profile="$1"
   HELMFILE_ENV=local helmfile \
@@ -23,7 +24,7 @@ profile_releases() {
     sort
 }
 
-# Render the evaluated Helmfile state without downloading charts, then recover
+# render_release_state renders the Helmfile state without downloading charts, then recovers
 # its YAML documents in "$work_dir/<output_name>.yaml". `show-dag` cannot be
 # used here because it eagerly prepares the placeholder OCI charts.
 render_release_state() {
@@ -56,7 +57,7 @@ render_release_state() {
   test -s "$state_file" || fail "could not recover the $output_name Helmfile state"
 }
 
-# Print the `needs` entries for a named release from a rendered Helmfile state.
+# release_needs prints the dependencies for a named release from rendered Helmfile state.
 release_needs() {
   local state_file="$1"
   local release_name="$2"
@@ -69,7 +70,7 @@ release_needs() {
   ' "$state_file"
 }
 
-# Render default monitor manifests for the selected observability profile.
+# render_monitors renders default monitor manifests for the selected observability profile.
 render_monitors() {
   local profile="$1"
   local output_dir="$work_dir/$profile"
@@ -82,6 +83,7 @@ render_monitors() {
     template --output-dir "$output_dir" >/dev/null
 }
 
+# render_monitor_overrides renders monitor manifests with explicit plane-level overrides.
 render_monitor_overrides() {
   local profile="$1"
   local output_name="$2"
@@ -99,6 +101,7 @@ render_monitor_overrides() {
     template --output-dir "$output_dir" >/dev/null
 }
 
+# render_compute_monitor_override renders compute monitors with the worker monitor disabled.
 render_compute_monitor_override() {
   local output_dir="$work_dir/compute-worker-disabled"
 
