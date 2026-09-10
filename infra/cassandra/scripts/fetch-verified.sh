@@ -15,7 +15,9 @@
 #
 # usage: fetch-verified <sha256> <url> <destination>
 #
-# FETCH_RETRIES (default 8) bounds the attempts, FETCH_MAX_TIME (default 120,
+# FETCH_RETRIES (default 8) is the total number of requests allowed, the
+# first one included; curl counts retries after the first, so it is passed one
+# fewer. FETCH_MAX_TIME (default 120,
 # seconds) caps one attempt so a stalled transfer is cut off and retried rather
 # than hanging the build, and FETCH_RETRY_MAX_TIME (default 600, seconds) caps
 # the whole download. FETCH_RETRY_DELAY, when set, replaces the exponential
@@ -30,8 +32,13 @@ checksum=$1
 url=$2
 destination=$3
 
+attempts=${FETCH_RETRIES:-8}
+case "${attempts}" in
+    ''|*[!0-9]*|0) echo "FETCH_RETRIES must be a whole number of at least 1, got '${attempts}'" >&2; exit 2 ;;
+esac
+
 rm -f "${destination}"
-set -- --retry "${FETCH_RETRIES:-8}" \
+set -- --retry "$((attempts - 1))" \
        --max-time "${FETCH_MAX_TIME:-120}" \
        --retry-max-time "${FETCH_RETRY_MAX_TIME:-600}"
 [ -z "${FETCH_RETRY_DELAY:-}" ] || set -- "$@" --retry-delay "${FETCH_RETRY_DELAY}"

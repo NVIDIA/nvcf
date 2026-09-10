@@ -77,6 +77,18 @@ if "${fetch}" "${good_sha}" "${base}/40/slow.jar" "${work_dir}/out3.jar" 2>/dev/
 fi
 [ ! -e "${work_dir}/out3.jar" ] || fail "failed download was left on disk"
 
+# 3b. FETCH_RETRIES is the request budget, first request included: two 429s
+#     need a third request, so a budget of two fails and a budget of three
+#     succeeds against the same server behaviour.
+if FETCH_RETRIES=2 "${fetch}" "${good_sha}" "${base}/2/budget-two.jar" "${work_dir}/out3b.jar" 2>/dev/null; then
+    fail "a budget of two requests must not absorb two 429s"
+fi
+FETCH_RETRIES=3 "${fetch}" "${good_sha}" "${base}/2/budget-three.jar" "${work_dir}/out3c.jar" ||
+    fail "a budget of three requests must absorb two 429s"
+if FETCH_RETRIES=0 "${fetch}" "${good_sha}" "${base}/0/zero.jar" "${work_dir}/out3d.jar" 2>/dev/null; then
+    fail "FETCH_RETRIES=0 must be rejected"
+fi
+
 # 4. Permanent 404: not transient, so it fails at once and leaves nothing behind.
 start=$(date +%s)
 if "${fetch}" "${good_sha}" "${base}/0/missing" "${work_dir}/out4.jar" 2>/dev/null; then
