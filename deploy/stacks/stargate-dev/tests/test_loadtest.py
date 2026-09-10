@@ -30,6 +30,9 @@ class CanonicalSuiteTests(unittest.TestCase):
         self,
     ) -> None:
         suite = LOADTEST.load_suite()
+        self.assertEqual(
+            suite["suites"]["session-affinity"], ["smoke", "session-affinity"]
+        )
 
         self.assertEqual(
             suite["suites"]["canonical"],

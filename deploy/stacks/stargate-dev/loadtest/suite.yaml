@@ -30,6 +30,9 @@ suites:
   long-context:
     - smoke
     - long-context-affinity
+  session-affinity:
+    - smoke
+    - session-affinity
   canonical:
     - smoke
     - saturation
