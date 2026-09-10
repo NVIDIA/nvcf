@@ -419,6 +419,22 @@
         "modelName",
         "functionID"
       ],
+      "propertyNames": {
+        "$comment": "The gateway matches shadow keys case-insensitively, but the exclusivity rule below can only name exact keys, so any other spelling is rejected here.",
+        "if": {
+          "pattern": "^(?i)shadow(s|modelname|modelnames|percentage|samplingmethod|cancelonclientdisconnect)$"
+        },
+        "then": {
+          "enum": [
+            "shadows",
+            "shadowModelName",
+            "shadowModelNames",
+            "shadowPercentage",
+            "shadowSamplingMethod",
+            "shadowCancelOnClientDisconnect"
+          ]
+        }
+      },
       "allOf": [
         {
           "not": {
