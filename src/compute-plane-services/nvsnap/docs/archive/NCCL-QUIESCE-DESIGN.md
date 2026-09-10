@@ -68,7 +68,7 @@ Agent                         Worker Processes (rank 0-3)
 
 #### Worker Side (quiesce thread in nccl_intercept.c)
 
-```
+```text
 1. Quiesce thread polls for /dev/shm/nvsnap-quiesce every 100ms
 2. When trigger file found:
    a. Read nranks from file

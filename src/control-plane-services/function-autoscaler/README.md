@@ -1,6 +1,6 @@
 # NVCF Autoscaler
 
-The Function Autoscaler's documentation is available [here](https://docs.nvidia.com/nvcf/function-autoscaling-overview).
+The Function Autoscaler's documentation is available in the [Function Autoscaling overview](https://docs.nvidia.com/nvcf/function-autoscaling-overview).
 
 The NVCF Function Autoscaler is a distributed Rust service that monitors function utilization and uses it to determine the ideal instance count per function on the NVCF control plane. It runs as a horizontally scaled deployment on the same Kubernetes cluster as the rest of the control plane.
 

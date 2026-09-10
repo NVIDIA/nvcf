@@ -121,7 +121,7 @@ Agent                              Worker Process (per GPU)
   |                                    |
 ```
 
-### Detailed checkpoint sequence (per process):
+### Detailed checkpoint sequence (per process)
 
 ```c
 void nvsnap_gpu_checkpoint(void) {
@@ -200,7 +200,7 @@ CRIU restores process (no GPU state)
   |    | 3. Resume application
 ```
 
-### Detailed restore sequence (per process):
+### Detailed restore sequence (per process)
 
 ```c
 void nvsnap_gpu_restore(void) {

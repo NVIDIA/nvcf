@@ -98,6 +98,7 @@ That's the entirety of the restore path NVCA needs. NvSnap's
 reads the annotation, resolves the manifest from
 `nvsnap-capture-<shortHash>` ConfigMap, injects nodeAffinity +
 hostPath volume mounts on the inference container. Customer image
+
 - args unchanged.
 
 ### Hook B — checkpoint-after-warm (post-health-OK)

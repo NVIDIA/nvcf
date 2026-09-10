@@ -1296,6 +1296,7 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
     summary: High rate of workload translation errors
 ```
 
+```yaml
 # High workload failure rate
 
 - alert: HighWorkloadFailureRate
