@@ -1682,7 +1682,7 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments)
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, nil)
 	})
 	t.Run("required domains", func(t *testing.T) {
 		helmObjs := []client.Object{
@@ -1693,12 +1693,14 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo1",
-					Annotations: map[string]string{
-						nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0",
-					},
 				},
 				Spec: appsv1.DeploymentSpec{
 					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0",
+							},
+						},
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{{
 								Name:    "test",
@@ -1719,12 +1721,14 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo2",
-					Annotations: map[string]string{
-						nvcfdra.RequiredNVLinkDomainIndexAnnotation: "1",
-					},
 				},
 				Spec: appsv1.DeploymentSpec{
 					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								nvcfdra.RequiredNVLinkDomainIndexAnnotation: "1",
+							},
+						},
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{{
 								Name:    "test",
@@ -1741,16 +1745,20 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 		}
 		// Workload objects are bare Helm renders; DRA resource claims, NVLink labels,
 		// affinity, and service account are injected by the webhook at Pod admission.
+		// The required-nvlink-domain-index annotation lives on the pod template, since that
+		// is the only location Kubernetes copies down onto the Pods the webhook admits.
 		expDeployments := []appsv1.Deployment{
 			{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo1",
-					Annotations: map[string]string{
-						nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0",
-					},
 				},
 				Spec: appsv1.DeploymentSpec{
 					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0",
+							},
+						},
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{{
 								Name:    "test",
@@ -1768,12 +1776,14 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 			{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo2",
-					Annotations: map[string]string{
-						nvcfdra.RequiredNVLinkDomainIndexAnnotation: "1",
-					},
 				},
 				Spec: appsv1.DeploymentSpec{
 					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								nvcfdra.RequiredNVLinkDomainIndexAnnotation: "1",
+							},
+						},
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{{
 								Name:    "test",
@@ -1789,11 +1799,16 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments)
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, []string{"nvcf-cd-index-1", "nvcf-cd-index-2"})
 	})
 }
 
-func testReconcileNVLinkOptimizedHelper(t *testing.T, helmObjs []client.Object, expDeployments []appsv1.Deployment) {
+func testReconcileNVLinkOptimizedHelper(
+	t *testing.T,
+	helmObjs []client.Object,
+	expDeployments []appsv1.Deployment,
+	expComputeDomainNames []string,
+) {
 	ctx := newTestContext()
 	testScheme := mgrScheme
 
@@ -2153,6 +2168,19 @@ rules:
 		expDeployment.Spec.Template.Annotations = filterNVCFAnnotations(expDeployment.Spec.Template.Annotations)
 		assert.Equal(t, expDeployment, gotDeployment)
 	}
+
+	// One ComputeDomain must be created per distinct required-nvlink-domain-index value present
+	// in the workload objects, and none at all when nothing declares one, since a ComputeDomain
+	// represents a single IMEX domain.
+	gotComputeDomains := &nvresourcev1beta1.ComputeDomainList{}
+	err = r.Client.List(ctx, gotComputeDomains, client.InNamespace(ms.Spec.Namespace))
+	require.NoError(t, err)
+	gotComputeDomainNames := make([]string, len(gotComputeDomains.Items))
+	for i, cd := range gotComputeDomains.Items {
+		gotComputeDomainNames[i] = cd.Name
+	}
+	sort.Strings(gotComputeDomainNames)
+	assert.ElementsMatch(t, expComputeDomainNames, gotComputeDomainNames)
 
 	err = r.Client.Get(ctx, client.ObjectKeyFromObject(ms), ms)
 	require.NoError(t, err)

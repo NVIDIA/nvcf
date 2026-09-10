@@ -98,10 +98,10 @@ to connect GPU workload Pods through IMEX.
 Each GPU-enabled Pod must request a full node of GPUs.
 </Note>
 
-#### Legacy NVCA NVLink partition annotation
+#### Required NVLink domain index annotation
 
 <Warning>
-NVLink partition placement through these legacy affinity rules is best-effort
+NVLink partition placement through these affinity rules is best-effort
 without KAI Scheduler or Grove topology-aware scheduling. The rules do not
 provide atomic gang placement. Concurrent Pods can initially land in different
 cliques, and distinct logical groups can land in the same clique. Use
@@ -111,8 +111,16 @@ when the workload requires all Pods to fit and start in a specific topology
 domain.
 </Warning>
 
+<Note>
+This annotation is not optional legacy configuration. It is the signal NVCA
+uses to decide whether a Pod needs a `ComputeDomain` and IMEX channel claim
+at all. Set it even for charts that use KAI Scheduler or Grove topology
+constraints for scheduling, if the function needs cross-node NVLink memory
+sharing.
+</Note>
+
 For charts that do not use KAI Scheduler or Grove topology constraints, NVCA
-supports this legacy Pod template annotation:
+supports this Pod template annotation:
 
 ```yaml
 spec:
@@ -136,6 +144,27 @@ rack or clique:
   require the groups to use different GPU cliques.
 - Pods without the annotation share a default logical group.
 
+##### ComputeDomain allocation
+
+NVCA uses this annotation's presence, not just its value, as the signal for
+whether a Pod needs a `ComputeDomain` and IMEX channel resource claim at all:
+
+- A Pod with the annotation set has declared that it needs to be scheduled
+  into a specific NVLink domain, which only makes sense if it does cross-node
+  NVLink memory sharing. NVCA allocates a `ComputeDomain` for that domain and
+  attaches a channel resource claim to the Pod's GPU containers.
+- A Pod without the annotation has no declared NVLink domain requirement. Its
+  GPU peers can already land in different, unrelated NVLink domains, or on
+  nodes with no NVLink domain membership at all. NVCA does not attach a
+  `ComputeDomain` claim to it, since the claim would provide no functional
+  benefit to a Pod that never declared a cross-node NVLink requirement.
+
+NVCA creates one `ComputeDomain` per distinct annotation value present in the
+function, not one shared `ComputeDomain` for the whole function. A
+`ComputeDomain` represents a single IMEX domain, so Pods that set different
+values are meant to join different, independent NVLink domains and each gets
+its own `ComputeDomain` and channel.
+
 On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
 
 - It adds the generated `dra.nvcf.nvidia.io/nvlink-domain-partition` label.
@@ -145,9 +174,10 @@ On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
 - For an unannotated Pod, it adds preferred Pod affinity with weight 100. The
   scheduler can spread these Pods when it cannot satisfy the preference.
 - It requires placement on a node that has the `nvidia.com/gpu.clique` label.
-- It adds the function's `ComputeDomain` resource claim to containers that
-  request `nvidia.com/gpu`, `nvidia.com/pgpu`, `nvidia.com/gpu.shared`, or an
-  `nvidia.com/mig-*` resource.
+- For an annotated Pod, it adds the resource claim for the `ComputeDomain`
+  provisioned for that Pod's annotation value to containers that request
+  `nvidia.com/gpu`, `nvidia.com/pgpu`, `nvidia.com/gpu.shared`, or an
+  `nvidia.com/mig-*` resource. An unannotated Pod never receives this claim.
 
 ## Limitations
 
