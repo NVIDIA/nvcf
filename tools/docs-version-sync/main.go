@@ -99,6 +99,9 @@ func run(args []string) error {
 		catalog = loaded
 	}
 
+	if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
+		return fmt.Errorf("validate stack source snapshot: %w", err)
+	}
 	if err := SyncDocs(repoRoot, catalog, *check); err != nil {
 		return err
 	}
@@ -224,18 +227,31 @@ func findRepoRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := wd
+	return findRepoRootFrom(wd)
+}
+
+func findRepoRootFrom(start string) (string, error) {
+	dir, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
 	for {
-		candidate := filepath.Join(dir, "imports.yaml")
-		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+		catalog := filepath.Join(dir, "docs", "version-catalog", "main.yaml")
+		module := filepath.Join(dir, "tools", "docs-version-sync", "go.mod")
+		if isRegularFile(catalog) && isRegularFile(module) {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("imports.yaml not found (started from %s)", wd)
+			return "", fmt.Errorf("NVCF repository root not found (started from %s)", start)
 		}
 		dir = parent
 	}
+}
+
+func isRegularFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }
 
 func relOrAbs(base, path string) string {

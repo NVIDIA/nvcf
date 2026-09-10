@@ -419,6 +419,10 @@ func markerSyntaxes(marker string) []markerSyntax {
 			End:   fmt.Sprintf("{/* docs-version-sync:END %s */}", marker),
 		},
 		{
+			Begin: fmt.Sprintf("{/*docs-version-sync:BEGIN %s*/}", marker),
+			End:   fmt.Sprintf("{/*docs-version-sync:END %s*/}", marker),
+		},
+		{
 			Begin:  fmt.Sprintf("<!-- docs-version-sync:BEGIN %s -->", marker),
 			End:    fmt.Sprintf("<!-- docs-version-sync:END %s -->", marker),
 			Legacy: true,

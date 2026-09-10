@@ -697,6 +697,55 @@ after
 	}
 }
 
+func TestReplaceMarkedBlockAcceptsCompactMDXMarkers(t *testing.T) {
+	got, changed, err := ReplaceMarkedBlock(`before
+{/*docs-version-sync:BEGIN sample*/}
+stale
+{/*docs-version-sync:END sample*/}
+after
+`, "sample", "fresh")
+	if err != nil {
+		t.Fatalf("ReplaceMarkedBlock failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("ReplaceMarkedBlock reported no change")
+	}
+	for _, want := range []string{
+		"{/*docs-version-sync:BEGIN sample*/}",
+		"fresh",
+		"{/*docs-version-sync:END sample*/}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("updated content missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFindRepoRootFromUsesPublicCheckoutSentinels(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "docs", "version-catalog", "main.yaml"), "version: 1\n")
+	writeFile(t, filepath.Join(repo, "tools", "docs-version-sync", "go.mod"), "module docs-version-sync\n")
+	nested := filepath.Join(repo, "tools", "docs-version-sync")
+
+	got, err := findRepoRootFrom(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != repo {
+		t.Fatalf("findRepoRootFrom(%s) = %s, want %s", nested, got, repo)
+	}
+}
+
+func TestFindRepoRootFromRequiresBothPublicCheckoutSentinels(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "docs", "version-catalog", "main.yaml"), "version: 1\n")
+
+	_, err := findRepoRootFrom(repo)
+	if err == nil || !strings.Contains(err.Error(), "NVCF repository root not found") {
+		t.Fatalf("findRepoRootFrom error = %v, want missing-root error", err)
+	}
+}
+
 func TestSyncDocsRejectsMissingMarker(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "docs/user/manifest.md"), "no generated marker\n")
