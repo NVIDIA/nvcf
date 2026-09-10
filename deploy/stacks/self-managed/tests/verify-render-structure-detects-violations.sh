@@ -5,4 +5,4 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "$script_dir/../../tests/verify-render-structure.py" "$@"
+"$script_dir/../../tests/verify-render-structure-detects-violations.sh"

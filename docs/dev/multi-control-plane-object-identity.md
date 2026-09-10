@@ -109,9 +109,30 @@ The helper contract is intentionally simple:
 - All derived namespace names must remain valid Kubernetes DNS labels, including
   when the control-plane ID is at the maximum supported length.
 
-This phase only defines the contract first. Later Phase 3 commits wire Helmfile
-templates and service URLs to this helper's naming rules while preserving the
-legacy render output.
+Phase 3 wires Helmfile templates and service URLs to this helper's naming rules
+while preserving the legacy render output.
+
+## Render Structure Guard
+
+Both self-managed and compute-plane local render tests run a parser-based
+structure guard before comparing against golden files.
+
+The guard checks rendered Kubernetes manifests for:
+
+- valid YAML documents;
+- glued YAML separators from missing document breaks;
+- `apiVersion`, `kind`, and `metadata.name` on every Kubernetes object;
+- Kubernetes object names over 253 characters;
+- namespace fields that are not valid Kubernetes DNS labels or are over 63
+  characters;
+- Kyverno `Policy` and `ClusterPolicy` rule names over 63 characters.
+
+The compute-plane render output also contains `*-values.yaml` handoff files.
+Those files are values input, not Kubernetes manifests, so the guard skips them.
+
+This Phase 3 guard keeps the legacy render safe while names are being routed
+through derivation helpers. The future two-plane named render check still belongs
+to Phase 4, once the control-plane ID is user-settable through the stack values.
 
 ## Data And Auth Matrix
 
