@@ -54,9 +54,9 @@ type githubRef struct {
 
 // stackSourceRelease identifies an immutable self-managed stack source release.
 type stackSourceRelease struct {
-	Version string
-	Tag     string
-	Commit  string
+	Version string `json:"version"`
+	Tag     string `json:"tag"`
+	Commit  string `json:"commit"`
 }
 
 // stableStackVersion is a stable semantic version used for numeric ordering.
