@@ -158,21 +158,8 @@ shadow-b:
   functionID: shadow-b-function-id
 ```
 
-Each target is routed by its own `functionType`. A route uses either `shadows`
-or the legacy `shadowModelName`, `shadowModelNames`, `shadowPercentage`,
-`shadowSamplingMethod`, and `shadowCancelOnClientDisconnect` fields, which apply
-one policy to every target and keep their existing checks. For `shadows` the
-schema mirrors the gateway, with keys in any letter case:
-
-- a route with both forms is rejected
+- a route with both legacy form and new form is rejected
 - an entry needs `modelName`; unknown entry keys are rejected
-- a non-empty list is rejected on `imageEdits` and `imageVariations`
-- duplicate targets and targets missing from the endpoint are left to the
-  gateway at startup
-
-`tests/chart-render/verify-shadow-schema.sh` covers these rules.
-`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
-across all routes.
 
 ## Notes
 
