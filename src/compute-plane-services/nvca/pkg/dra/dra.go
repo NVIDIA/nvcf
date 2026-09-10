@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	nvresourcev1beta1 "github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1"
@@ -30,6 +29,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -44,153 +44,72 @@ const (
 	draFQDNprefix = "dra.nvcf.nvidia.io"
 )
 
-func TransformNVLinkOptimizedDRAObjects(
-	sourceObjs []client.Object,
-	keyToHash string,
-) (retObjs, draObjs []client.Object, err error) {
-	if keyToHash == "" {
-		return nil, nil, fmt.Errorf("key to partition NVLink domains is empty")
-	}
-	// Sanitize indices by converting them to integers.
-	reqNVDIndexMap, err := sanitizeIndices(sourceObjs)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	prefNVDObjs := []client.Object{}
-	objsByReqNVDIndex := map[int][]client.Object{}
-	for _, sourceObj := range sourceObjs {
-		idxStr, ok := podTemplateAnnotation(sourceObj, RequiredNVLinkDomainIndexAnnotation)
-		if !ok {
-			prefNVDObjs = append(prefNVDObjs, sourceObj)
-			continue
-		}
-		idx := reqNVDIndexMap[idxStr]
-		objsByReqNVDIndex[idx] = append(objsByReqNVDIndex[idx], sourceObj)
-	}
-
-	SetPreferredNVLinkDomainSchedulingParameters(keyToHash, prefNVDObjs...)
-
-	// Objects with no required-domain-index annotation never join a ComputeDomain: they were
-	// never depending on ComputeDomain-backed placement guarantees, so no claim is attached for
-	// them. Each distinct required index gets its own ComputeDomain, since a ComputeDomain
-	// represents one IMEX domain and objects in different index groups are meant to join
-	// different, independent NVLink domains.
-	indices := make([]int, 0, len(objsByReqNVDIndex))
-	for idx := range objsByReqNVDIndex {
-		indices = append(indices, idx)
-	}
-	sort.Ints(indices)
-
-	cds := make([]client.Object, 0, len(indices))
-	for _, idx := range indices {
-		objs := objsByReqNVDIndex[idx]
-		cd := computeDomainForIndex(idx)
-		SetComputeDomainToGPUPodResourceClaims(cd, objs...)
-		SetRequiredNVLinkDomainSchedulingParameters(keyToHash, fmt.Sprint(idx), objs...)
-		cds = append(cds, cd)
-	}
-
-	return sourceObjs, cds, nil
-}
-
-func sanitizeIndices(objs []client.Object) (map[string]int, error) {
-	const internalIndex = 0
-	// Sanitize indices by converting them to integers.
-	type strIndexTuple struct {
-		i int
-		s string
-	}
-	var indexTuples []strIndexTuple
-	indexSet := sets.New[string]()
-	for _, sourceObj := range objs {
-		idx, ok := podTemplateAnnotation(sourceObj, RequiredNVLinkDomainIndexAnnotation)
-		if !ok {
-			continue
-		}
-		if indexSet.Has(idx) {
-			continue
-		}
-		indexSet.Insert(idx)
-		i, err := strconv.ParseInt(idx, 10, 32)
-		if err != nil {
-			return nil, err
-		}
-		indexTuples = append(indexTuples, strIndexTuple{
-			i: int(i),
-			s: idx,
-		})
-	}
-	if len(indexTuples) == 0 {
-		indexTuples = append(indexTuples, strIndexTuple{
-			i: internalIndex,
-			s: fmt.Sprint(internalIndex),
-		})
-	} else {
-		sort.Slice(indexTuples, func(i, j int) bool {
-			return indexTuples[i].i < indexTuples[j].i
-		})
-		for i := range indexTuples {
-			indexTuples[i].i = i + 1
-		}
-	}
-	indexStringToInt := make(map[string]int, len(indexTuples))
-	for _, tuple := range indexTuples {
-		indexStringToInt[tuple.s] = tuple.i
-	}
-	return indexStringToInt, nil
-}
-
 const (
-	computeDomainNamePrefix        = "nvcf-cd-index"
+	// defaultComputeDomainName / defaultComputeDomainChannelName are the names NVCA has
+	// always used for the single per-MiniService ComputeDomain. They are retained verbatim
+	// as the domain for pods that declare no NVLink domain index, and are always created
+	// while NVLinkOptimized is active, so that rolling the agent back to a build that
+	// unconditionally claims this name still finds it. Renaming or omitting them turns a
+	// rollback into unschedulable pods.
+	defaultComputeDomainName        = "nvcf-cd-index-0"
+	defaultComputeDomainChannelName = "nvcf-cd-channel-0"
+
+	computeDomainNamePrefix        = "nvcf-cd"
 	computeDomainChannelNamePrefix = "nvcf-cd-channel"
 )
 
-// ComputeDomainRef identifies a ComputeDomain and the name of the ResourceClaimTemplate that
-// backs its channel, without requiring callers to hold the full ComputeDomain object. It is the
-// shape persisted into the MiniserviceMetadata ConfigMap so the admission webhook can attach
-// claims to a pod without recomputing or renaming the ComputeDomain itself.
-type ComputeDomainRef struct {
-	ComputeDomainName string `json:"computeDomainName"`
-	ChannelName       string `json:"channelName"`
+// NewSingleChannelComputeDomain returns the default ComputeDomain, used by pods that declare
+// no required-nvlink-domain-index.
+func NewSingleChannelComputeDomain() *nvresourcev1beta1.ComputeDomain {
+	return newComputeDomain(defaultComputeDomainName, defaultComputeDomainChannelName)
 }
 
-// ComputeDomainFromRef builds the ComputeDomain object identified by ref. Used by callers (the
-// admission webhook) that only have a ComputeDomainRef, not the originating object set.
-func ComputeDomainFromRef(ref ComputeDomainRef) *nvresourcev1beta1.ComputeDomain {
+func newComputeDomain(name, channelName string) *nvresourcev1beta1.ComputeDomain {
 	return &nvresourcev1beta1.ComputeDomain{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ref.ComputeDomainName,
-		},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: nvresourcev1beta1.ComputeDomainSpec{
 			Channel: &nvresourcev1beta1.ComputeDomainChannelSpec{
 				ResourceClaimTemplate: nvresourcev1beta1.ComputeDomainResourceClaimTemplate{
-					Name: ref.ChannelName,
+					Name: channelName,
 				},
 			},
 		},
 	}
 }
 
-// computeDomainForIndex builds the ComputeDomain for a single normalized NVLink domain index.
-// Naming is index-suffixed so that objects declaring different required-nvlink-domain-index
-// values are backed by distinct ComputeDomains, matching the one-IMEX-domain-per-ComputeDomain
-// invariant: a ComputeDomain represents one IMEX domain, so objects meant to join different,
-// independent NVLink domains must not share one.
-func computeDomainForIndex(idx int) *nvresourcev1beta1.ComputeDomain {
-	return ComputeDomainFromRef(ComputeDomainRef{
-		ComputeDomainName: fmt.Sprintf("%s-%d", computeDomainNamePrefix, idx),
-		ChannelName:       fmt.Sprintf("%s-%d", computeDomainChannelNamePrefix, idx),
-	})
+// ComputeDomainForIndex returns the ComputeDomain backing a raw required-nvlink-domain-index
+// annotation value.
+//
+// The name is derived from the raw value itself, not from its rank among the values present in
+// a render. A rank changes when another value is added, which would rename an existing domain
+// while running pods still claim the old name. Deriving from the value means the reconciler and
+// the admission webhook independently compute the same name from the same input, with no shared
+// state, no ordering assumption, and nothing to keep in sync across processes.
+//
+// The value is hashed because it is tenant-authored and need not be a legal object name.
+func ComputeDomainForIndex(rawIndex string) *nvresourcev1beta1.ComputeDomain {
+	if rawIndex == "" {
+		return NewSingleChannelComputeDomain()
+	}
+	h := newPartitionKey([]byte(rawIndex))
+	return newComputeDomain(
+		fmt.Sprintf("%s-%s", computeDomainNamePrefix, h),
+		fmt.Sprintf("%s-%s", computeDomainChannelNamePrefix, h),
+	)
 }
 
-// podTemplateAnnotation returns the value of annotation key on obj's pod template (or on obj
-// itself when obj is a bare Pod, since a Pod is its own template), and whether it was present.
-// This is the same location Kubernetes copies onto the Pods a Deployment/StatefulSet/Job/CronJob
-// creates, so it is the only place an annotation set here is guaranteed to reach the admission
-// webhook, which only ever sees realized Pods. A top-level annotation on the controller object
-// itself (e.g. a Deployment's own ObjectMeta) is never copied down and would never reach a Pod.
+// podTemplateAnnotation returns the value of annotation key for obj, and whether it was present.
+//
+// For built-in workload kinds it reads the pod template, the only location Kubernetes copies
+// down onto created Pods. Objects of a kind NVCA does not have a Go type for -- Grove
+// PodCliqueSet, DynamoGraphDeployment and anything else in allowedExtraKubernetesTypes -- decode
+// to *unstructured.Unstructured and carry their pod templates at operator-defined paths, so they
+// are searched for any nested annotations map instead. Skipping them would leave the operator's
+// realized Pods with the annotation the webhook acts on but no ComputeDomain to claim.
 func podTemplateAnnotation(obj client.Object, key string) (string, bool) {
+	if u, isUnstructured := obj.(*unstructured.Unstructured); isUnstructured {
+		return nestedAnnotation(u.Object, key)
+	}
 	var val string
 	var ok bool
 	itrf := func(pts *corev1.PodTemplateSpec) {
@@ -202,53 +121,73 @@ func podTemplateAnnotation(obj client.Object, key string) (string, bool) {
 	return val, ok
 }
 
-// anyPodHasRequiredNVLinkDomainIndex reports whether any pod template among objs carries the
-// RequiredNVLinkDomainIndexAnnotation.
-func anyPodHasRequiredNVLinkDomainIndex(objs ...client.Object) bool {
-	for _, obj := range objs {
-		if _, ok := podTemplateAnnotation(obj, RequiredNVLinkDomainIndexAnnotation); ok {
-			return true
-		}
+// nestedAnnotation searches obj for an "annotations" map containing key, below the object's own
+// top-level metadata. A custom resource's own metadata.annotations is not a pod template and is
+// not copied onto its Pods, so it is excluded; every deeper annotations map belongs to some
+// template the operator stamps out.
+func nestedAnnotation(obj map[string]any, key string) (string, bool) {
+	spec, ok := obj["spec"].(map[string]any)
+	if !ok {
+		return "", false
 	}
-	return false
+	return searchAnnotations(spec, key)
 }
 
-// ComputeDomainsForWorkload scans objs' pod templates for the required-nvlink-domain-index
-// annotation and returns one ComputeDomain per distinct raw index value present, plus a mapping
-// from each raw annotation value to a ComputeDomainRef identifying the ComputeDomain that backs
-// it. If no pod template carries the annotation, it returns (nil, nil, nil): no ComputeDomain is
-// needed if nothing declares an NVLink domain requirement.
-func ComputeDomainsForWorkload(objs ...client.Object) ([]*nvresourcev1beta1.ComputeDomain, map[string]ComputeDomainRef, error) {
-	if !anyPodHasRequiredNVLinkDomainIndex(objs...) {
-		return nil, nil, nil
-	}
-
-	idxMap, err := sanitizeIndices(objs)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cdByIdx := make(map[int]*nvresourcev1beta1.ComputeDomain, len(idxMap))
-	refByRaw := make(map[string]ComputeDomainRef, len(idxMap))
-	for raw, idx := range idxMap {
-		cd, ok := cdByIdx[idx]
-		if !ok {
-			cd = computeDomainForIndex(idx)
-			cdByIdx[idx] = cd
+func searchAnnotations(node any, key string) (string, bool) {
+	switch n := node.(type) {
+	case map[string]any:
+		if annos, ok := n["annotations"].(map[string]any); ok {
+			if v, found := annos[key]; found {
+				if s, isStr := v.(string); isStr {
+					return s, true
+				}
+			}
 		}
-		refByRaw[raw] = ComputeDomainRef{
-			ComputeDomainName: cd.Name,
-			ChannelName:       cd.Spec.Channel.ResourceClaimTemplate.Name,
+		// Iterate deterministically: a template may appear under any key, and two
+		// different values must not resolve differently run to run.
+		keys := make([]string, 0, len(n))
+		for k := range n {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if v, found := searchAnnotations(n[k], key); found {
+				return v, true
+			}
+		}
+	case []any:
+		for _, item := range n {
+			if v, found := searchAnnotations(item, key); found {
+				return v, true
+			}
 		}
 	}
+	return "", false
+}
 
-	cds := make([]*nvresourcev1beta1.ComputeDomain, 0, len(cdByIdx))
-	for _, cd := range cdByIdx {
+// ComputeDomainsForWorkload returns every ComputeDomain a MiniService needs: the default domain,
+// plus one per distinct required-nvlink-domain-index value declared by its workload objects.
+//
+// The default domain is always included. It backs pods that declare no index, and it is the name
+// an older agent claims unconditionally, so creating it keeps a rollback survivable.
+func ComputeDomainsForWorkload(objs ...client.Object) []*nvresourcev1beta1.ComputeDomain {
+	cds := []*nvresourcev1beta1.ComputeDomain{NewSingleChannelComputeDomain()}
+	seen := sets.New[string](defaultComputeDomainName)
+	raws := sets.New[string]()
+	for _, obj := range objs {
+		if raw, ok := podTemplateAnnotation(obj, RequiredNVLinkDomainIndexAnnotation); ok && raw != "" {
+			raws.Insert(raw)
+		}
+	}
+	for _, raw := range sets.List(raws) {
+		cd := ComputeDomainForIndex(raw)
+		if seen.Has(cd.Name) {
+			continue
+		}
+		seen.Insert(cd.Name)
 		cds = append(cds, cd)
 	}
-	sort.Slice(cds, func(i, j int) bool { return cds[i].Name < cds[j].Name })
-
-	return cds, refByRaw, nil
+	return cds
 }
 
 func SetComputeDomainToGPUPodResourceClaims(

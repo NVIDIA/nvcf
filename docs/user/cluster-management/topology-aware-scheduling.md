@@ -26,9 +26,10 @@ Helm functions can also use the
 [`dra.nvcf.nvidia.io` partition annotation](../helm-functions.md#required-nvlink-domain-index-annotation).
 That path uses Kubernetes Pod affinity and is best-effort without KAI Scheduler
 or Grove topology-aware scheduling. Use the KAI or Grove mechanisms on this
-page when clique placement must be coordinated for the complete workload. The
-annotation is still required for NVCA to allocate a `ComputeDomain` for a
-function's Pods, even when using KAI or Grove for placement.
+page when clique placement must be coordinated for the complete workload. Set the
+annotation whenever a group of Pods must share one NVLink domain, including
+when using KAI or Grove for placement: it selects which `ComputeDomain` backs
+that group's IMEX channel.
 
 ## Prerequisites
 

@@ -30,7 +30,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
-	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
@@ -51,7 +50,6 @@ type MetadataInput struct {
 	OTelCollectorEnvVars          []corev1.EnvVar
 	TerminationGracePeriodSeconds *int64
 	ModelCacheInitEnv             map[string]string
-	NVLinkComputeDomains          map[string]nvcfdra.ComputeDomainRef
 }
 
 // buildMiniserviceMetadata constructs a MiniserviceMetadata from the controller's
@@ -88,7 +86,6 @@ func (r *Reconciler) buildMiniserviceMetadata(
 		ImagePullSecretNames:          secretNames,
 		TerminationGracePeriodSeconds: in.TerminationGracePeriodSeconds,
 		ModelCacheInitEnv:             in.ModelCacheInitEnv,
-		NVLinkComputeDomains:          in.NVLinkComputeDomains,
 	}
 
 	meta.Labels, meta.Annotations = newGeneralObjectLabelsAndAnnotations(
