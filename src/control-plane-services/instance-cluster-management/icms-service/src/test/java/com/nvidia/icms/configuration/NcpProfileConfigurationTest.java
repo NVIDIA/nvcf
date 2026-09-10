@@ -19,7 +19,7 @@ package com.nvidia.icms.configuration;
 import static com.nvidia.icms.configuration.YamlEnvironmentTestUtils.loadYamlEnvironment;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.configuration.byoc.ByocConfigurationProperties;
 import java.io.IOException;
 import java.time.Duration;
@@ -44,14 +44,13 @@ class NcpProfileConfigurationTest {
                 .bind("icms.byoc", ByocConfigurationProperties.class)
                 .orElseThrow(IllegalStateException::new);
 
-        assertThat(nats.isNatsEnabled()).isTrue();
+        assertThat(nats.isEnabled()).isTrue();
         assertThat(nats.isCreateNatsStreams()).isTrue();
-        assertThat(nats.isCreateNatsConsumers()).isFalse();
         assertThat(nats.getConnectionTimeout()).isEqualTo(Duration.ofSeconds(10));
         assertThat(nats.getPingInterval()).isEqualTo(Duration.ofSeconds(5));
         assertThat(nats.getReconnectWait()).isEqualTo(Duration.ofMillis(100));
         assertThat(nats.getReconnectJitter()).isEqualTo(Duration.ofSeconds(1));
-        assertThat(nats.isReconnectAllowed()).isFalse();
+        assertThat(nats.isUnlimitedReconnects()).isFalse();
         assertThat(nats.getForceReconnectFlush()).isEqualTo(Duration.ofSeconds(5));
         assertThat(nats.getDelayBetweenMessages()).isEqualTo(Duration.ofMillis(100));
         assertThat(nats.getMessageTtl()).isEqualTo(Duration.ofHours(96));

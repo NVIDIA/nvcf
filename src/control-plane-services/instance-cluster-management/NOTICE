@@ -1,5 +1,5 @@
 
-Lists of 291 third-party dependencies.
+Lists of 288 third-party dependencies.
      (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.11.2 - https://github.com/yawkat/lz4-java)
      (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.38 - http://logback.qos.ch)
      (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.38 - http://logback.qos.ch)
@@ -69,9 +69,6 @@ Lists of 291 third-party dependencies.
      (The Apache Software License, Version 2.0) micrometer-tracing (io.micrometer:micrometer-tracing:1.7.1 - https://github.com/micrometer-metrics/tracing)
      (The Apache Software License, Version 2.0) micrometer-tracing-bridge-otel (io.micrometer:micrometer-tracing-bridge-otel:1.7.1 - https://github.com/micrometer-metrics/tracing)
      (The Apache License, Version 2.0) jnats (io.nats:jnats:2.23.0 - https://github.com/nats-io/nats.java)
-     (The Apache License, Version 2.0) jnats-json (io.nats:jnats-json:2.0.1 - https://github.com/nats-io/nats.java.json)
-     (The Apache License, Version 2.0) jwt-java (io.nats:jwt-java:2.2.0 - https://github.com/nats-io/jwt.java)
-     (The Apache License, Version 2.0) nkeys-java (io.nats:nkeys-java:2.1.1 - https://github.com/nats-io/nkeys.java)
      (Apache License, Version 2.0) Netty/Buffer (io.netty:netty-buffer:4.2.17.Final - https://netty.io/)
      (Apache License, Version 2.0) Netty/Codec (io.netty:netty-codec:4.2.17.Final - https://netty.io/)
      (Apache License, Version 2.0) Netty/Codec/Base (io.netty:netty-codec-base:4.2.17.Final - https://netty.io/)
