@@ -137,7 +137,8 @@ not put credentials in `customHeaders` on any route. Caller `Authorization`
 headers are forwarded to the upstream untouched, so a static credential is not
 needed for authenticated routes.
 
-Use `shadows` to set policy for each shadow target:
+An `openai` route may mirror traffic to other routes in the same endpoint with
+`shadows`, one entry per target:
 
 ```yaml
 primary:
@@ -145,12 +146,10 @@ primary:
   functionID: primary-function-id
   shadows:
     - modelName: private/example/shadow-a
-      percentage: 10
-      samplingMethod: perBearerKey
-      cancelOnClientDisconnect: true
+      percentage: 10                  # 1-100, default 100
+      samplingMethod: perBearerKey    # random (default) or perBearerKey
+      cancelOnClientDisconnect: true  # default false
     - modelName: private/example/shadow-b
-      percentage: 50
-      samplingMethod: random
 shadow-a:
   modelName: private/example/shadow-a
   functionID: shadow-a-function-id
@@ -159,27 +158,14 @@ shadow-b:
   functionID: shadow-b-function-id
 ```
 
-Each shadow model must be another model route in the same OpenAI endpoint.
-`percentage` defaults to `100`, `samplingMethod` defaults to `random`, and
-`cancelOnClientDisconnect` defaults to `false`.
-Each target is routed by its own `functionType`, so a shadow of an LLM model
-reaches the LLM Gateway, and an LLM model may shadow a model served by the
-invocation service.
-Shadowing is not supported for `imageEdits` or `imageVariations` routes.
-
-Legacy `shadowModelName`, `shadowModelNames`, `shadowPercentage`,
-`shadowSamplingMethod`, and `shadowCancelOnClientDisconnect` fields remain
-supported. Their policy applies to every legacy shadow target. Do not combine
-the `shadows` field with legacy shadow fields on the same route.
-
-The schema rejects a route that has both forms, a shadow key spelled with any
-other capitalization, a shadow target key other than the four above, and a
-percentage outside 1 to 100. The gateway accepts other capitalizations of the
-shadow keys, but the schema needs the exact spelling to tell the forms apart.
-`tests/chart-render/verify-shadow-schema.sh` exercises these rules.
-
-`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
-across all routes.
+Each target is routed by its own `functionType`. The legacy `shadowModelName`,
+`shadowModelNames`, `shadowPercentage`, `shadowSamplingMethod`, and
+`shadowCancelOnClientDisconnect` fields still work and apply one policy to every
+target. A route uses one form or the other; the schema rejects a route with
+both, shadow keys in any other spelling, unknown target keys, and shadows on
+`imageEdits` or `imageVariations`. `tests/chart-render/verify-shadow-schema.sh`
+covers these rules. `vanityGateway.config.shadowMaxConcurrent` bounds
+concurrent shadow requests across all routes.
 
 ## Notes
 
