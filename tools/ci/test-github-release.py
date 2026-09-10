@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import types
@@ -1149,6 +1150,272 @@ class GithubReleaseTest(unittest.TestCase):
             existing["seen"] = True
             self.assertFalse(self.github_release.create_release("t", "t", "n", draft=False, dry_run=False))
             self.assertFalse(self.github_release.create_release("t", "t", "n", draft=False, dry_run=True))
+
+    def stack_release_metadata(self, asset_name="inventory.json"):
+        return {
+            "version": 1,
+            "services": [
+                {
+                    "id": "nvcf-self-managed-stack",
+                    "path": "deploy/stacks/self-managed",
+                    "service_name": "nvcf-self-managed-stack",
+                    "tag_format": "deploy/stacks/self-managed/v${version}",
+                    "resolved_inventory_asset": asset_name,
+                }
+            ],
+        }
+
+    def test_publish_release_makes_the_exact_draft_public(self):
+        calls = []
+        self.github_release.run = lambda args, **_kwargs: calls.append(args)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.publish_release(
+                "deploy/stacks/self-managed/v1.2.3", dry_run=False
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "gh",
+                    "release",
+                    "edit",
+                    "deploy/stacks/self-managed/v1.2.3",
+                    "--draft=false",
+                ]
+            ],
+        )
+
+    def test_stack_tag_generates_inventory_before_release_and_uploads_after(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        commit = "a" * 40
+        metadata = self.stack_release_metadata("nvcf-self-managed-stack-inventory.json")
+        calls = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: metadata
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.tag_sha = lambda *_args: commit
+        self.github_release.generate_resolved_stack_inventory = (
+            lambda _root, _tag, _version, _commit, path: calls.append(("generate", Path(path).name))
+        )
+        self.github_release.create_release = (
+            lambda _tag, _title, _notes, draft, dry_run: calls.append(("release", draft, dry_run)) or True
+        )
+        self.github_release.publish_resolved_stack_inventory = (
+            lambda _tag, path: calls.append(("upload", Path(path).name))
+        )
+        self.github_release.publish_release = (
+            lambda _tag, dry_run: calls.append(("publish", dry_run))
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
+
+        self.assertEqual(
+            calls,
+            [
+                ("generate", "nvcf-self-managed-stack-inventory.json"),
+                ("release", True, False),
+                ("upload", "nvcf-self-managed-stack-inventory.json"),
+                ("publish", False),
+            ],
+        )
+
+    def test_stack_tag_preserves_explicit_draft_after_inventory_upload(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        calls = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: self.stack_release_metadata()
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.bool_env = lambda *_args: True
+        self.github_release.tag_sha = lambda *_args: "a" * 40
+        self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
+        self.github_release.create_release = (
+            lambda _tag, _title, _notes, draft, dry_run: calls.append(("release", draft, dry_run)) or True
+        )
+        self.github_release.publish_resolved_stack_inventory = lambda *_args: calls.append("upload")
+        self.github_release.publish_release = lambda *_args: calls.append("publish")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
+
+        self.assertEqual(calls, ["generate", ("release", True, False), "upload"])
+
+    def test_stack_inventory_generation_failure_prevents_partial_release(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        metadata = self.stack_release_metadata()
+        released = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: metadata
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.tag_sha = lambda *_args: "b" * 40
+        self.github_release.generate_resolved_stack_inventory = lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("render failed")
+        )
+        self.github_release.create_release = lambda *_args, **_kwargs: released.append(True)
+
+        with self.assertRaisesRegex(RuntimeError, "render failed"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
+        self.assertEqual(released, [])
+
+    def test_stack_inventory_upload_failure_is_not_suppressed(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        metadata = self.stack_release_metadata()
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: metadata
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.tag_sha = lambda *_args: "c" * 40
+        for created in (False, True):
+            with self.subTest(created=created):
+                calls = []
+                self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
+
+                def create(*_args, **_kwargs):
+                    calls.append("release")
+                    return created
+
+                self.github_release.create_release = create
+                self.github_release.publish_resolved_stack_inventory = lambda *_args: (
+                    _ for _ in ()
+                ).throw(RuntimeError("upload failed"))
+                self.github_release.delete_release_after_inventory_failure = lambda *_args: calls.append(
+                    "delete"
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "upload failed"):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.github_release.tag_release(
+                            types.SimpleNamespace(tag=tag, metadata="metadata.json")
+                        )
+                expected = ["generate", "release"]
+                if created:
+                    expected.append("delete")
+                self.assertEqual(calls, expected)
+
+    def test_resolved_stack_inventory_identity_must_match_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inventory.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "source": {
+                            "version": "1.2.3",
+                            "tag": "deploy/stacks/self-managed/v1.2.3",
+                            "commit": "d" * 40,
+                        },
+                        "releases": [{}],
+                        "artifacts": [{}],
+                    }
+                )
+            )
+            self.github_release.validate_resolved_stack_inventory(
+                path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "d" * 40
+            )
+            with self.assertRaisesRegex(SystemExit, "inventory source"):
+                self.github_release.validate_resolved_stack_inventory(
+                    path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "e" * 40
+                )
+
+    def test_existing_release_inventory_must_be_byte_identical(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "inventory.json"
+            asset.write_text("same\n")
+
+            def fake_run(args, **_kwargs):
+                if args[:3] == ["gh", "release", "view"]:
+                    return "inventory.json\n"
+                if args[:3] == ["gh", "release", "download"]:
+                    destination = Path(args[args.index("--dir") + 1]) / "inventory.json"
+                    destination.write_text("same\n")
+                    return ""
+                raise AssertionError(f"unexpected call: {args}")
+
+            self.github_release.run = fake_run
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+
+            def fake_different_run(args, **_kwargs):
+                if args[:3] == ["gh", "release", "view"]:
+                    return "inventory.json\n"
+                if args[:3] == ["gh", "release", "download"]:
+                    destination = Path(args[args.index("--dir") + 1]) / "inventory.json"
+                    destination.write_text("different\n")
+                    return ""
+                raise AssertionError(f"unexpected call: {args}")
+
+            self.github_release.run = fake_different_run
+            with self.assertRaisesRegex(SystemExit, "refusing to replace"):
+                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+
+    def test_missing_release_inventory_is_uploaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "inventory.json"
+            asset.write_text("inventory\n")
+            calls = []
+
+            def fake_run(args, **_kwargs):
+                calls.append(args)
+                if args[:3] == ["gh", "release", "view"]:
+                    return ""
+                if args[:3] == ["gh", "release", "upload"]:
+                    return ""
+                raise AssertionError(f"unexpected call: {args}")
+
+            self.github_release.run = fake_run
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+
+            self.assertEqual(
+                calls,
+                [
+                    [
+                        "gh",
+                        "release",
+                        "view",
+                        "stack/v1.2.3",
+                        "--json",
+                        "assets",
+                        "--jq",
+                        ".assets[].name",
+                    ],
+                    ["gh", "release", "upload", "stack/v1.2.3", str(asset)],
+                ],
+            )
+
+    def test_incomplete_release_cleanup_uses_exact_tag(self):
+        calls = []
+        self.github_release.run = lambda args, **_kwargs: calls.append(args)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(
+                self.github_release.delete_release_after_inventory_failure(
+                    "deploy/stacks/self-managed/v1.2.3"
+                )
+            )
+        self.assertEqual(
+            calls,
+            [["gh", "release", "delete", "deploy/stacks/self-managed/v1.2.3", "--yes"]],
+        )
+
+    def test_stack_tag_workflow_installs_pinned_inventory_tools(self):
+        workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
+        self.assertIn("actions/setup-go@v5", workflow)
+        self.assertIn('HELMFILE_VERSION: "1.1.9"', workflow)
+        self.assertIn("Install inventory rendering tools", workflow)
+        self.assertLess(
+            workflow.index("Install inventory rendering tools"),
+            workflow.index("Validate tag and create release notes"),
+        )
 
     def publish_and_capture_comments(self, version):
         """Publish a tag for `version` from a release branch, recording any comments.

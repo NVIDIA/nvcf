@@ -40,7 +40,10 @@ func run(args []string) error {
 	catalogPath := flags.String("catalog", "", "version catalog path")
 	check := flags.Bool("check", false, "fail if generated docs differ from checked-in marker blocks")
 	updateCatalog := flags.Bool("update-catalog", false, "fetch the stack artifact list from GitLab and update the catalog")
-	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch when updating the catalog")
+	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
+	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
+	stackSourceTag := flags.String("stack-source-tag", "", "immutable self-managed stack source tag for inventory generation")
+	stackSourceCommit := flags.String("stack-source-commit", "", "immutable self-managed stack source commit for inventory generation")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -55,6 +58,26 @@ func run(args []string) error {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
+	}
+	if *inventoryOutput != "" {
+		if *updateCatalog || *check {
+			return fmt.Errorf("--generate-stack-inventory cannot be combined with --update-catalog or --check")
+		}
+		if *stackVersion == "" || *stackSourceTag == "" || *stackSourceCommit == "" {
+			return fmt.Errorf("--generate-stack-inventory requires --stack-version, --stack-source-tag, and --stack-source-commit")
+		}
+		outputPath := *inventoryOutput
+		if !filepath.IsAbs(outputPath) {
+			outputPath = filepath.Join(repoRoot, outputPath)
+		}
+		return writeResolvedStackInventory(repoRoot, outputPath, stackSourceRelease{
+			Version: *stackVersion,
+			Tag:     *stackSourceTag,
+			Commit:  *stackSourceCommit,
+		})
+	}
+	if *stackSourceTag != "" || *stackSourceCommit != "" {
+		return fmt.Errorf("--stack-source-tag and --stack-source-commit require --generate-stack-inventory")
 	}
 	if *catalogPath == "" {
 		*catalogPath = filepath.Join(repoRoot, "docs", "version-catalog", *target+".yaml")

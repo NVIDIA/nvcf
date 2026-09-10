@@ -41,7 +41,8 @@
       "path": "deploy/stacks/self-managed",
       "service_name": "nvcf-self-managed-stack",
       "tag_format": "deploy/stacks/self-managed/v${version}",
-      "initial_version": "0.8.0"
+      "initial_version": "0.8.0",
+      "resolved_inventory_asset": "nvcf-self-managed-stack-inventory.json"
     },
     {
       "id": "nvcf-observability-stack",
