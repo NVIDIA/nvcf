@@ -107,9 +107,8 @@ ensure_superuser_password() {
   local probe_err alter_err
 
   echo "Checking whether the ${CASSANDRA_USER} superuser password is already set"
-  probe_err=$(run_cqlsh "$host" "$CASSANDRA_USER" "$CASSANDRA_PASSWORD" \
-    -e "SELECT key FROM system.local;" 2>&1 >/dev/null)
-  if [ $? -eq 0 ]; then
+  if probe_err=$(run_cqlsh "$host" "$CASSANDRA_USER" "$CASSANDRA_PASSWORD" \
+    -e "SELECT key FROM system.local;" 2>&1 >/dev/null); then
     echo "Superuser password already matches the desired value, skipping ALTER ROLE"
     return 0
   fi

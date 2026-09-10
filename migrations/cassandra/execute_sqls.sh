@@ -47,6 +47,7 @@ MIGRATE_CONNECT_TIMEOUT=${MIGRATE_CONNECT_TIMEOUT:-30s}
 MIGRATE_DISABLE_HOST_LOOKUP=${MIGRATE_DISABLE_HOST_LOOKUP:-true}
 for retry_setting in CASSANDRA_WAIT_MAX_RETRIES CASSANDRA_WAIT_RETRY_SECONDS CASSANDRA_STABLE_ATTEMPTS MIGRATE_MAX_RETRIES MIGRATE_RETRY_SECONDS; do
   eval "retry_value=\${${retry_setting}}"
+  # shellcheck disable=SC2154 # Assigned dynamically by the validated name above.
   case "$retry_value" in
     ''|*[!0-9]*|0*)
       echo "ERROR: ${retry_setting} must be a positive integer, got: ${retry_value}" >&2
@@ -204,7 +205,7 @@ run_migrations_for_keyspace() {
 #
 # For each of our keyspaces, execute the *.up.sql files in order
 #
-for each in $TEMP_KEYSPACES/*
+for each in "$TEMP_KEYSPACES"/*
 do
   [ -d "${each}" ] || continue
 
