@@ -16,6 +16,11 @@ import (
 // tests below care most about unresolved releases being loud, and about a
 // rewrite landing on exactly one line.
 
+// defaultStackDir is the stack every existing test fixture writes into
+// unless it names another one. Any directory matching StacksGlob would do;
+// this one is just a stand-in for "some stack".
+const defaultStackDir = "deploy/stacks/self-managed/helmfile.d"
+
 type stackFixture struct{ root string }
 
 func newStack(t *testing.T, metadata string, files map[string]string) *stackFixture {
@@ -27,16 +32,23 @@ func newStack(t *testing.T, metadata string, files map[string]string) *stackFixt
 	if err := os.WriteFile(filepath.Join(f.root, MetadataPath), []byte(metadata), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(f.root, HelmfileDir)
+	for name, body := range files {
+		f.fileAt(t, defaultStackDir, name, body)
+	}
+	return f
+}
+
+// fileAt writes a helmfile into an arbitrary stack directory, for tests that
+// need a release to live in a stack other than defaultStackDir.
+func (f *stackFixture) fileAt(t *testing.T, stackDir, name, body string) {
+	t.Helper()
+	dir := filepath.Join(f.root, stackDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	return f
 }
 
 func (f *stackFixture) audit(t *testing.T) (int, string, string) {
@@ -61,7 +73,12 @@ func (f *stackFixture) bump(t *testing.T, tag string, write bool) (int, string, 
 
 func (f *stackFixture) read(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(f.root, HelmfileDir, name))
+	return f.readAt(t, defaultStackDir, name)
+}
+
+func (f *stackFixture) readAt(t *testing.T, stackDir, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(f.root, stackDir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +91,8 @@ const stackMeta = `{"services":[
  {"id":"reval","path":"deploy/helm/reval","service_name":"helm-reval"},
  {"id":"router","path":"deploy/helm/router","service_name":"helm-nvcf-llm-request-router"},
  {"id":"orphan","path":"deploy/helm/orphan","service_name":"helm-nvcf-orphan"},
- {"id":"nameless","path":"deploy/helm/nameless"}
+ {"id":"nameless","path":"deploy/helm/nameless"},
+ {"id":"nvca-operator","path":"deploy/helm/nvca-operator","service_name":"helm-nvca-operator"}
 ]}`
 
 // alpha and beta are both pinned at 1.0.0 on purpose: a rewrite that is merely
@@ -483,5 +501,140 @@ func TestBumpReportsTheSemverStepOfThePin(t *testing.T) {
 	_, out, _ := f.bump(t, "deploy/helm/alpha/v1.0.0", false)
 	if strings.Contains(out, "bump:") {
 		t.Errorf("already-pinned run must not report a level:\n%s", out)
+	}
+}
+
+func TestReleaseInAnotherStackIsFound(t *testing.T) {
+	// nvca-operator's real bug: its pin lives only in
+	// deploy/stacks/nvcf-compute-plane, and a resolver hardcoded to
+	// deploy/stacks/self-managed never saw it, so a real release
+	// ("no stack release pins helm-nvca-operator") reported success on
+	// nothing moving. Scanning every stack is the fix; this pins it down.
+	//
+	// alpha (in the default stack from stackFile) and nvca-operator (only in
+	// the other stack) pin unrelated charts, so bumping nvca-operator must
+	// leave the default stack's file byte-identical: that is the proof both
+	// stacks were scanned independently rather than one masking the other.
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": stackFile})
+	before := f.read(t, "00-stack.yaml.gotmpl")
+	otherStack := "deploy/stacks/nvcf-compute-plane/helmfile.d"
+	f.fileAt(t, otherStack, "02-nvca.yaml.gotmpl", "releases:\n  - name: nvca-operator\n    chart: nvcf/helm-nvca-operator\n    version: 1.22.2\n")
+
+	code, out, errOut := f.bump(t, "deploy/helm/nvca-operator/v1.24.0", true)
+	if code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "nvca-operator: 1.22.2 -> 1.24.0") {
+		t.Fatalf("the release in the other stack should have moved:\n%s", out)
+	}
+	if got := f.readAt(t, otherStack, "02-nvca.yaml.gotmpl"); !strings.Contains(got, "version: 1.24.0") {
+		t.Fatalf("the other stack's file was not rewritten:\n%s", got)
+	}
+	if got := f.read(t, "00-stack.yaml.gotmpl"); got != before {
+		t.Fatalf("the default stack must be untouched:\n%s", got)
+	}
+}
+
+func TestAuditListsReleasesFromEveryStack(t *testing.T) {
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": stackFile})
+	f.fileAt(t, "deploy/stacks/nvcf-compute-plane/helmfile.d", "02-nvca.yaml.gotmpl",
+		"releases:\n  - name: nvca-operator\n    chart: nvcf/helm-nvca-operator\n    version: 1.22.2\n")
+	_, out, _ := f.audit(t)
+	if !strings.Contains(out, "nvca-operator") {
+		t.Fatalf("audit must list releases from every stack, not just the default one:\n%s", out)
+	}
+}
+
+func TestDigDefaultVersionResolvesAndBumps(t *testing.T) {
+	// The observability stack's real shape: version is templated so an
+	// environment file can override it, with a literal default embedded in
+	// the dig(...) call. That default is this chart's actual shipped version
+	// absent an override, and the one an automated bump must move.
+	body := "releases:\n  - name: victoria-metrics\n    chart: nvcf/victoria-metrics-single\n" +
+		"    version: {{ dig \"victoriaMetrics\" \"version\" \"0.45.0\" .Values | quote }}\n"
+	f := newStack(t, `{"services":[{"id":"vm","path":"deploy/helm/victoria-metrics-single","service_name":"victoria-metrics-single"}]}`,
+		map[string]string{"00-stack.yaml.gotmpl": body})
+
+	if code, out, errOut := f.audit(t); code != 0 {
+		t.Fatalf("a dig-default version must resolve, got %d\n%s%s", code, out, errOut)
+	} else if !strings.Contains(out, "0.45.0") {
+		t.Fatalf("audit should report the dig default as the current version:\n%s", out)
+	}
+
+	code, out, errOut := f.bump(t, "deploy/helm/victoria-metrics-single/v0.46.0", true)
+	if code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "victoria-metrics: 0.45.0 -> 0.46.0") {
+		t.Fatalf("plan output did not describe the dig-default bump:\n%s", out)
+	}
+	got := f.read(t, "00-stack.yaml.gotmpl")
+	want := "    version: {{ dig \"victoriaMetrics\" \"version\" \"0.46.0\" .Values | quote }}\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("the dig default should have moved and the template preserved:\n%s", got)
+	}
+}
+
+func TestDigDefaultExtractsTheLastQuotedArgument(t *testing.T) {
+	// dig takes one or more path keys before its default. The capture must
+	// land on the default (the argument immediately before .Values), not an
+	// earlier key that also happens to be quoted.
+	body := "releases:\n  - name: alpha\n    version: {{ dig \"a\" \"b\" \"c\" \"9.9.9\" .Values | quote }}\n"
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+	_, out, errOut := f.audit(t)
+	if !strings.Contains(out, "9.9.9") {
+		t.Fatalf("want the last quoted argument as the resolved version:\n%s%s", out, errOut)
+	}
+}
+
+func TestDigDefaultThatIsNotAVersionIsUnresolved(t *testing.T) {
+	// dig accepts any quoted string as its default, not just a version. A
+	// floating value like "latest", or an empty default, must be reported
+	// unresolved rather than accepted as a legitimate pin, matching what a
+	// plain (non-templated) version line already requires.
+	for _, bad := range []string{`"latest"`, `""`} {
+		body := "releases:\n  - name: alpha\n    version: {{ dig \"x\" \"version\" " + bad + " .Values | quote }}\n"
+		f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+		code, out, errOut := f.audit(t)
+		if code != 1 {
+			t.Errorf("default %s: want unresolved, got exit %d\n%s", bad, code, out)
+		}
+		if !strings.Contains(errOut, "not a recognisable pin") {
+			t.Errorf("default %s: want the unreadable-pin reason, got %q", bad, errOut)
+		}
+	}
+}
+
+func TestWritePinRefusesADigExpressionEditedSinceLoadStack(t *testing.T) {
+	// LoadStack resolves the version from whatever dig(...) expression it
+	// reads. If that line is edited to a different key or default before
+	// WritePin runs, rewriting its new default would silently overwrite a
+	// value this run never saw or reported, only because the edited line
+	// still happens to match the dig-default shape.
+	f := newStack(t, stackMeta, map[string]string{
+		"00-stack.yaml.gotmpl": "releases:\n  - name: alpha\n" +
+			"    version: {{ dig \"x\" \"version\" \"1.0.0\" .Values | quote }}\n",
+	})
+	releases, err := LoadStack(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(releases) != 1 || !releases[0].DigDefault {
+		t.Fatalf("fixture did not resolve as expected: %+v", releases)
+	}
+	r := releases[0]
+
+	// Something else edits the same line to a different key/default between
+	// LoadStack and WritePin.
+	f.fileAt(t, defaultStackDir, "00-stack.yaml.gotmpl",
+		"releases:\n  - name: alpha\n    version: {{ dig \"y\" \"version\" \"9.9.9\" .Values | quote }}\n")
+
+	if err := WritePin(f.root, r, "2.0.0"); err == nil {
+		t.Fatal("WritePin must refuse a dig expression that changed since LoadStack")
+	} else if !strings.Contains(err.Error(), "no longer the dig-default version pin this run resolved") {
+		t.Fatalf("want the changed-expression reason, got: %v", err)
+	}
+	if got := f.read(t, "00-stack.yaml.gotmpl"); !strings.Contains(got, `"9.9.9"`) {
+		t.Fatalf("the edited line must be left alone:\n%s", got)
 	}
 }
