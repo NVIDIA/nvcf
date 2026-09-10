@@ -18,11 +18,13 @@ import (
 )
 
 const (
-	defaultGitHubAPIURL = "https://api.github.com"
-	defaultGitHubOwner  = "NVIDIA"
-	defaultGitHubRepo   = "nvcf"
-	stackTagPrefix      = "deploy/stacks/self-managed/v"
-	stackRefPrefix      = "refs/tags/" + stackTagPrefix
+	defaultGitHubAPIURL             = "https://api.github.com"
+	defaultGitHubOwner              = "NVIDIA"
+	defaultGitHubRepo               = "nvcf"
+	resolvedStackInventoryAssetName = "nvcf-self-managed-stack-inventory.json"
+	resolvedStackInventoryMaxBytes  = 10 << 20
+	stackTagPrefix                  = "deploy/stacks/self-managed/v"
+	stackRefPrefix                  = "refs/tags/" + stackTagPrefix
 )
 
 var (
@@ -50,6 +52,17 @@ type githubRefObject struct {
 type githubRef struct {
 	Ref    string          `json:"ref"`
 	Object githubRefObject `json:"object"`
+}
+
+// githubRelease contains the release identity and downloadable assets needed by the updater.
+type githubRelease struct {
+	TagName string               `json:"tag_name"`
+	Assets  []githubReleaseAsset `json:"assets"`
+}
+
+type githubReleaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
 // stackSourceRelease identifies an immutable self-managed stack source release.
@@ -147,6 +160,53 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 		Tag:     strings.TrimPrefix(refs[selected].Ref, "refs/tags/"),
 		Commit:  commit,
 	}, nil
+}
+
+// resolvedStackInventory downloads and validates the inventory attached to a selected release.
+func (client *githubClient) resolvedStackInventory(source stackSourceRelease) (resolvedStackInventory, error) {
+	if err := validateStackSourceRelease(source); err != nil {
+		return resolvedStackInventory{}, err
+	}
+	path := fmt.Sprintf(
+		"/repos/%s/%s/releases/tags/%s",
+		url.PathEscape(client.owner),
+		url.PathEscape(client.repo),
+		url.PathEscape(source.Tag),
+	)
+	var release githubRelease
+	if _, err := client.getJSON(path, &release); err != nil {
+		return resolvedStackInventory{}, fmt.Errorf("read GitHub release for stack source %s: %w", source.Tag, err)
+	}
+	if release.TagName != source.Tag {
+		return resolvedStackInventory{}, fmt.Errorf("GitHub release tag is %s, want selected stack source %s", release.TagName, source.Tag)
+	}
+
+	assetURL := ""
+	for _, asset := range release.Assets {
+		if asset.Name != resolvedStackInventoryAssetName {
+			continue
+		}
+		if assetURL != "" {
+			return resolvedStackInventory{}, fmt.Errorf("GitHub release %s has more than one %s asset", source.Tag, resolvedStackInventoryAssetName)
+		}
+		assetURL = asset.BrowserDownloadURL
+	}
+	if assetURL == "" {
+		return resolvedStackInventory{}, fmt.Errorf("GitHub release %s has no %s asset", source.Tag, resolvedStackInventoryAssetName)
+	}
+
+	raw, err := client.downloadPublicAsset(assetURL)
+	if err != nil {
+		return resolvedStackInventory{}, fmt.Errorf("download %s from GitHub release %s: %w", resolvedStackInventoryAssetName, source.Tag, err)
+	}
+	inventory, err := parseResolvedStackInventory(raw)
+	if err != nil {
+		return resolvedStackInventory{}, fmt.Errorf("parse %s from GitHub release %s: %w", resolvedStackInventoryAssetName, source.Tag, err)
+	}
+	if inventory.Source != source {
+		return resolvedStackInventory{}, fmt.Errorf("resolved inventory source is %+v, want selected release %+v", inventory.Source, source)
+	}
+	return inventory, nil
 }
 
 // stackRef reads one exact stack source ref from GitHub.
@@ -279,6 +339,69 @@ func (client *githubClient) getJSON(path string, target any) (http.Header, error
 		return nil, fmt.Errorf("decode GitHub response for %s: %w", path, err)
 	}
 	return resp.Header.Clone(), nil
+}
+
+func (client *githubClient) downloadPublicAsset(downloadURL string) ([]byte, error) {
+	parsedURL, err := url.Parse(downloadURL)
+	if err != nil {
+		return nil, err
+	}
+	if !parsedURL.IsAbs() || parsedURL.Host == "" {
+		return nil, fmt.Errorf("asset URL must be absolute")
+	}
+	baseURL, err := url.Parse(client.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse GitHub API base URL: %w", err)
+	}
+	if !strings.EqualFold(parsedURL.Scheme, "https") && !sameURLOrigin(parsedURL, baseURL) {
+		return nil, fmt.Errorf("refuse non-HTTPS GitHub asset URL %s", parsedURL.Redacted())
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, parsedURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	req.Header.Set("User-Agent", "nvcf-docs-version-sync")
+	httpClient := client.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	requestClient := *httpClient
+	checkRedirect := requestClient.CheckRedirect
+	requestClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && strings.EqualFold(via[len(via)-1].URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+			return fmt.Errorf("refuse GitHub asset redirect from HTTPS to %s", req.URL.Scheme)
+		}
+		if checkRedirect != nil {
+			return checkRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	resp, err := requestClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("GitHub asset GET failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, resolvedStackInventoryMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > resolvedStackInventoryMaxBytes {
+		return nil, fmt.Errorf("GitHub asset exceeds %d bytes", resolvedStackInventoryMaxBytes)
+	}
+	return body, nil
+}
+
+func sameURLOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 // normalizeStackSourceRef converts a version, tag, or full ref to a canonical tag ref.
