@@ -384,7 +384,7 @@ per-namespace / per-fvID later.
 
 ## Open questions
 
-2. **Job-vs-direct-write**: writer Job is cleaner (separate failure
+1. **Job-vs-direct-write**: writer Job is cleaner (separate failure
    domain, easier to time-limit). Agent-direct-write would skip the
    Job pod startup overhead (~10s on cold pull) but mixes concerns.
    Stick with writer Job per existing pattern.

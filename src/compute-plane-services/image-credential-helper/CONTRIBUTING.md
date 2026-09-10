@@ -98,18 +98,18 @@ For all development, your changes should be pushed into a branch in your own for
 - To sign off on a commit you simply use the `--signoff` (or `-s`) option when committing your changes:
 
   ```bash
-  $ git commit -s -m "Add cool feature."
+  git commit -s -m "Add cool feature."
   ```
 
   This will append the following to your commit message:
 
-  ```
+  ```text
   Signed-off-by: Your Name <your@email.com>
   ```
 
 - Full text of the DCO:
 
-  ```
+  ```text
     Developer Certificate of Origin
     Version 1.1
     
@@ -121,7 +121,7 @@ For all development, your changes should be pushed into a branch in your own for
     Everyone is permitted to copy and distribute verbatim copies of this license document, but changing it is not allowed.
   ```
 
-  ```
+  ```text
     Developer's Certificate of Origin 1.1
     
     By making a contribution to this project, I certify that:

@@ -23,7 +23,7 @@ mount NS, longer frozen window during PV-flip). Phase 5c keeps the
 known-good legacy v0.17.13 dump path and adds a compaction layer that
 both shrinks the artifact AND makes the second write fast.
 
-```
+```text
 Phase 5c flow:
 
 1. Agent runs CRIU dump → local hostPath          (the proven v0.17.13 path)

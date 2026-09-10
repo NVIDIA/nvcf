@@ -44,7 +44,7 @@ kubectl get queue default-queue -o jsonpath='{.spec.parentQueue}'
 ## 2. Install Grove
 
 Grove is published at `oci://ghcr.io/ai-dynamo/grove/grove-charts` and requires no credentials.
-It installs into the `grove-operator` namespace. Upstream install docs are [here](https://github.com/ai-dynamo/grove/blob/main/docs/installation.md),
+It installs into the `grove-operator` namespace. See the [upstream Grove installation docs](https://github.com/ai-dynamo/grove/blob/main/docs/installation.md),
 for more configuration options.
 
 Save the following as `grove-values.yaml`:
