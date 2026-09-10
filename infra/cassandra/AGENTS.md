@@ -31,6 +31,9 @@ docker build -t nvcf-cassandra:dev infra/cassandra
 # multi-arch
 docker buildx build --platform linux/amd64,linux/arm64 -t <ref> infra/cassandra
 
+# download retry and checksum policy unit test (local server, no network)
+infra/cassandra/scripts/fetch-verified-test.sh
+
 # exporter dependency unit test (downloads checksum-pinned Netty jars)
 infra/cassandra/scripts/repack-exporter-netty-test.sh
 ```

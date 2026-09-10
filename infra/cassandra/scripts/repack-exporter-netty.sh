@@ -30,6 +30,14 @@ for tool in awk basename cp curl dirname find grep mkdir mktemp mv rm sed sha256
         exit 1
     }
 done
+# Sibling of this script both in the repository and under /usr/local/bin in
+# the image, so the download policy lives in one place.
+fetch_verified=$(dirname -- "$0")/fetch-verified
+[ -x "${fetch_verified}" ] || fetch_verified=$(dirname -- "$0")/fetch-verified.sh
+[ -x "${fetch_verified}" ] || {
+    echo "missing required command: fetch-verified" >&2
+    exit 1
+}
 
 [ -f "${input}" ] || {
     echo "exporter input does not exist: ${input}" >&2
@@ -99,9 +107,9 @@ printf '%s\n' "${NETTY_ARTIFACTS}" |
 while read -r artifact checksum; do
     [ -n "${artifact}" ] || continue
     jar=${downloads_dir}/${artifact}-${NETTY_VERSION}.jar
-    curl -fsSLo "${jar}" \
-        "${MAVEN_CENTRAL_URL}/${artifact}/${NETTY_VERSION}/${artifact}-${NETTY_VERSION}.jar"
-    printf '%s  %s\n' "${checksum}" "${jar}" | sha256sum -c -
+    "${fetch_verified}" "${checksum}" \
+        "${MAVEN_CENTRAL_URL}/${artifact}/${NETTY_VERSION}/${artifact}-${NETTY_VERSION}.jar" \
+        "${jar}"
 
     # Only copy Netty-owned entries. This keeps the exporter implementation,
     # manifest, and all unrelated shaded dependencies byte-for-byte intact.
