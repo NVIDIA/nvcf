@@ -381,6 +381,11 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			assert.Equal(t, []corev1.ContainerPort{{
+				Name:          common.WorkerMetricsPortName,
+				ContainerPort: llmMetricsPort,
+				Protocol:      corev1.ProtocolTCP,
+			}}, c.Ports)
 			tt.validate(t, c)
 		})
 	}

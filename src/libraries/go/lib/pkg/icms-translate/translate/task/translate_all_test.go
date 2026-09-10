@@ -346,7 +346,7 @@ func findTaskContainerByName(t *testing.T, containers []corev1.Container, name s
 func assertTaskUtilsMetricsPort(t *testing.T, container corev1.Container) {
 	t.Helper()
 	assert.Equal(t, []corev1.ContainerPort{{
-		Name:          common.UtilsMetricsPortName,
+		Name:          common.WorkerMetricsPortName,
 		ContainerPort: common.UtilsMetricsPort,
 		Protocol:      corev1.ProtocolTCP,
 	}}, container.Ports)

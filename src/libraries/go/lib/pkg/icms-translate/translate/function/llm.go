@@ -29,7 +29,8 @@ import (
 )
 
 const (
-	LLMWorkerContainerName = "llm-worker"
+	LLMWorkerContainerName       = "llm-worker"
+	llmMetricsPort         int32 = 9089
 
 	//nolint:gosec
 	llmCredentialManagerImageEnv = "LLM_CREDENTIAL_MANAGER_IMAGE"
@@ -169,8 +170,13 @@ func newLLMRouterClientContainer(
 		Name:            LLMWorkerContainerName,
 		Image:           llmRouterClientImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Args:            args,
-		Env:             common.SortEnvs(envs),
+		Ports: []corev1.ContainerPort{{
+			Name:          common.WorkerMetricsPortName,
+			ContainerPort: llmMetricsPort,
+			Protocol:      corev1.ProtocolTCP,
+		}},
+		Args: args,
+		Env:  common.SortEnvs(envs),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI),

@@ -34,11 +34,12 @@ const (
 	UtilsHealthPort  int32 = 8080
 	UtilsMetricsPort int32 = 8010
 
-	UtilsContainerName   = "utils"
-	UtilsMetricsPortName = "worker-metrics"
-	UtilsPodName         = "utils"
-	InitContainerName    = "init"
-	ESSContainerName     = "ess"
+	UtilsContainerName = "utils"
+	// WorkerMetricsPortName is the shared named port used by worker PodMonitor targets.
+	WorkerMetricsPortName = "worker-metrics"
+	UtilsPodName          = "utils"
+	InitContainerName     = "init"
+	ESSContainerName      = "ess"
 
 	TermLogPath = "/dev/termination-log"
 	DevShmPath  = "/dev/shm"
@@ -335,7 +336,7 @@ func AddNVIDIAGPUNoScheduleToleration(podSpec *corev1.PodSpec) (added bool) {
 // MutateUtilsContainer exposes the worker metrics endpoint and configures the health probes.
 func MutateUtilsContainer(containerSpec *corev1.Container) {
 	containerSpec.Ports = append(containerSpec.Ports, corev1.ContainerPort{
-		Name:          UtilsMetricsPortName,
+		Name:          WorkerMetricsPortName,
 		ContainerPort: UtilsMetricsPort,
 		Protocol:      corev1.ProtocolTCP,
 	})

@@ -175,6 +175,7 @@ func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	require.Len(t, utilsPod.Spec.Containers, 2)
 
 	router := findContainerByName(t, utilsPod.Spec.Containers, LLMWorkerContainerName)
+	assertLLMMetricsPort(t, router)
 	assert.Equal(t, "nvcr.io/nvidia/router:latest", router.Image)
 	assert.Contains(t, router.Args, "--upstream-http-base-url=http://inference-svc:8080")
 	assert.Contains(t, router.Args, "--stargate-address=llm-router.example.com:443")
@@ -234,6 +235,7 @@ func TestTranslateContainerLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	assert.Equal(t, "nvcr.io/nvidia/function:latest", findContainerByName(t, pod.Spec.Containers, inferenceContainerName).Image)
 
 	router := findContainerByName(t, pod.Spec.Containers, LLMWorkerContainerName)
+	assertLLMMetricsPort(t, router)
 	assert.Equal(t, "nvcr.io/nvidia/router:latest", router.Image)
 	assert.Contains(t, router.Args, "--upstream-http-base-url=http://127.0.0.1:8080")
 	assert.Contains(t, router.Args, "--stargate-address=llm-router.example.com:443")
@@ -688,8 +690,17 @@ func assertTolerationsMatch(t *testing.T, got []corev1.Toleration, want ...corev
 func assertUtilsMetricsPort(t *testing.T, container corev1.Container) {
 	t.Helper()
 	assert.Equal(t, []corev1.ContainerPort{{
-		Name:          common.UtilsMetricsPortName,
+		Name:          common.WorkerMetricsPortName,
 		ContainerPort: common.UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
+}
+
+func assertLLMMetricsPort(t *testing.T, container corev1.Container) {
+	t.Helper()
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          common.WorkerMetricsPortName,
+		ContainerPort: llmMetricsPort,
 		Protocol:      corev1.ProtocolTCP,
 	}}, container.Ports)
 }

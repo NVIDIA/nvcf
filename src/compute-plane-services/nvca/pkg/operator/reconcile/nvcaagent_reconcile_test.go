@@ -2496,6 +2496,7 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
 	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
+	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 9089)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {
@@ -2529,6 +2530,7 @@ func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
 	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
+	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 9089)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {

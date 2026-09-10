@@ -94,7 +94,7 @@ func TestMutateUtilsContainer(t *testing.T) {
 	MutateUtilsContainer(&container)
 
 	assert.Equal(t, []corev1.ContainerPort{{
-		Name:          UtilsMetricsPortName,
+		Name:          WorkerMetricsPortName,
 		ContainerPort: UtilsMetricsPort,
 		Protocol:      corev1.ProtocolTCP,
 	}}, container.Ports)
