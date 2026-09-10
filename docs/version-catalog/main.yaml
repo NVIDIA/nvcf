@@ -719,9 +719,6 @@ stack:
   name: nvcf-self-managed-stack
   version: 0.9.1
   registry: public-resources
-  gitlab_project_id: 182049
-  package_name: ncp-deploy
-  artifacts_file: artifacts-0.9.1.txt
   source_version: 0.9.1
   source_tag: deploy/stacks/self-managed/v0.9.1
   source_commit: 9cf1103b0e9fe90bde6a8147c95d3d423e96c781

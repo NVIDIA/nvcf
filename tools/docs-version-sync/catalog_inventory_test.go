@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventoryWithoutGitLab(t *testing.T) {
+func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 	repo := initTestGitRepo(t)
 	release := commitTestStackSource(t, repo, "1.2.3", testCatalogPinSources())
 	inventory := testCatalogResolvedInventory(t, release)
@@ -45,9 +45,6 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventoryWithoutGitLab(t *tes
 	t.Setenv("DOC_VERSION_SYNC_GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_TOKEN", "")
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", "://must-not-be-read")
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "must-not-be-read")
-
 	catalog, err := updateCatalogFromGitHub(repo, release.Version, testCatalog())
 	if err != nil {
 		t.Fatalf("updateCatalogFromGitHub failed: %v", err)
@@ -63,9 +60,6 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventoryWithoutGitLab(t *tes
 	}
 	if catalog.Stack.SourceVersion != release.Version || catalog.Stack.SourceTag != release.Tag || catalog.Stack.SourceCommit != release.Commit {
 		t.Fatalf("stack source metadata = %#v, want %+v", catalog.Stack, release)
-	}
-	if catalog.Stack.GitLabProjectID != 0 || catalog.Stack.PackageName != "" || catalog.Stack.ArtifactsFile != "" {
-		t.Fatalf("updated stack metadata retains GitLab package fields: %#v", catalog.Stack)
 	}
 	compute, ok := catalog.findArtifact(computeStackResourceName)
 	if !ok || compute.Version != release.Version {

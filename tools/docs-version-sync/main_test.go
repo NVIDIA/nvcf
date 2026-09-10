@@ -17,63 +17,12 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-func TestParseArtifactListAllowsDuplicateArtifactNames(t *testing.T) {
-	artifacts, err := ParseArtifactList(strings.NewReader(`nvcf-openbao:2.2.2-nv-1
-nvcf-openbao:2.5.1-nv-1.2.1
-`), map[string]DenylistEntry{})
-	if err != nil {
-		t.Fatalf("ParseArtifactList failed: %v", err)
-	}
-	if len(artifacts) != 2 {
-		t.Fatalf("got %d artifacts, want 2", len(artifacts))
-	}
-	if artifacts[0].ID != "nvcf-openbao-1" || artifacts[1].ID != "nvcf-openbao-2" {
-		t.Fatalf("duplicate IDs = %q, %q, want ordinal IDs", artifacts[0].ID, artifacts[1].ID)
-	}
-}
-
-func TestParseArtifactListAcceptsShortArtifactRefs(t *testing.T) {
-	artifacts, err := ParseArtifactList(strings.NewReader(`strap:2.242.2
-helm-nvcf-api:1.16.1
-`), map[string]DenylistEntry{})
-	if err != nil {
-		t.Fatalf("ParseArtifactList failed: %v", err)
-	}
-	if artifacts[0].Name != "strap" || artifacts[0].Version != "2.242.2" || artifacts[0].Type != ArtifactTypeImage {
-		t.Fatalf("first artifact = %#v, want strap image", artifacts[0])
-	}
-	if artifacts[1].Name != "helm-nvcf-api" || artifacts[1].Version != "1.16.1" || artifacts[1].Type != ArtifactTypeChart {
-		t.Fatalf("second artifact = %#v, want helm-nvcf-api chart", artifacts[1])
-	}
-}
-
-func TestParseArtifactListFiltersDenylistedArtifacts(t *testing.T) {
-	artifacts, err := ParseArtifactList(strings.NewReader(`nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-base:0.1.4
-nvcr.io/0833294136851237/nvcf-ncp-staging/samba:4.19
-nvcr.io/0833294136851237/nvcf-ncp-staging/strap:2.234.0
-`), map[string]DenylistEntry{
-		"nvcf-base": {Name: "nvcf-base", Reason: "not part of docs catalog"},
-		"samba":     {Name: "samba", Reason: "pulled by nvcf-base"},
-	})
-	if err != nil {
-		t.Fatalf("ParseArtifactList failed: %v", err)
-	}
-	if len(artifacts) != 1 {
-		t.Fatalf("got %d artifacts, want 1", len(artifacts))
-	}
-	if artifacts[0].Name != "strap" {
-		t.Fatalf("remaining artifact = %q, want strap", artifacts[0].Name)
-	}
-}
 
 func TestRenderManifestDeploymentResources(t *testing.T) {
 	catalog := testCatalog()
@@ -877,63 +826,6 @@ func TestValidateTargetRejectsNonMainTargets(t *testing.T) {
 	}
 	if err := ValidateTarget("main"); err != nil {
 		t.Fatalf("ValidateTarget rejected main: %v", err)
-	}
-}
-
-func TestLatestStackVersionPaginatesPackages(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v4/projects/182049/packages" {
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-			return
-		}
-		switch r.URL.Query().Get("page") {
-		case "1":
-			nextURL := serverURL(r) + r.URL.Path + "?page=2"
-			w.Header().Set("Link", fmt.Sprintf("<%s>; rel=\"next\"", nextURL))
-			fmt.Fprint(w, `[{"name":"unrelated","version":"1.0.0"}]`)
-		case "2":
-			fmt.Fprint(w, `[{"name":"ncp-deploy","version":"0.9.2"}]`)
-		default:
-			http.Error(w, fmt.Sprintf("unexpected page %s", r.URL.Query().Get("page")), http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := &GitLabClient{BaseURL: server.URL, HTTPClient: server.Client()}
-	version, err := client.LatestStackVersion(defaultStackProjectID, defaultPackageName)
-	if err != nil {
-		t.Fatalf("LatestStackVersion failed: %v", err)
-	}
-	if version != "0.9.2" {
-		t.Fatalf("version = %q, want 0.9.2", version)
-	}
-}
-
-func TestLatestGenericPackageVersionDoesNotUseReleaseFallback(t *testing.T) {
-	releaseRequested := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v4/projects/268903/packages":
-			fmt.Fprint(w, `[]`)
-		case "/api/v4/projects/268903/releases":
-			releaseRequested = true
-			fmt.Fprint(w, `[{"tag_name":"0.6.0-rc.84"}]`)
-		default:
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	client := &GitLabClient{BaseURL: server.URL, HTTPClient: server.Client()}
-	_, err := client.LatestGenericPackageVersion(defaultComputeProjectID, computeStackResourceName)
-	if err == nil {
-		t.Fatal("LatestGenericPackageVersion succeeded without a package")
-	}
-	if releaseRequested {
-		t.Fatal("LatestGenericPackageVersion requested releases")
-	}
-	if !strings.Contains(err.Error(), "no generic package version found") {
-		t.Fatalf("error = %q, want missing generic package", err)
 	}
 }
 

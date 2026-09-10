@@ -16,33 +16,6 @@ func TestNextPageFromHeaders(t *testing.T) {
 		ok      bool
 	}{
 		{
-			name: "GitLab header takes precedence",
-			headers: http.Header{
-				"X-Next-Page": {"7"},
-				"Link":        {`<https://example.test/items?page=9>; rel="next"`},
-			},
-			page: 7,
-			ok:   true,
-		},
-		{
-			name: "malformed GitLab header falls through to Link",
-			headers: http.Header{
-				"X-Next-Page": {"invalid"},
-				"Link":        {`<https://example.test/items?page=3>; rel="next"`},
-			},
-			page: 3,
-			ok:   true,
-		},
-		{
-			name: "non-positive GitLab header falls through to Link",
-			headers: http.Header{
-				"X-Next-Page": {"0"},
-				"Link":        {`<https://example.test/items?page=4>; rel="next"`},
-			},
-			page: 4,
-			ok:   true,
-		},
-		{
 			name: "multiple Link fields",
 			headers: http.Header{
 				"Link": {

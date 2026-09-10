@@ -28,9 +28,6 @@ import (
 )
 
 const (
-	defaultStackProjectID    = 182049
-	defaultComputeProjectID  = 268903
-	defaultPackageName       = "ncp-deploy"
 	defaultStackResourceName = "nvcf-self-managed-stack"
 	computeStackResourceName = "nvcf-compute-plane-stack"
 	defaultStackRegistry     = "staging"
@@ -132,9 +129,6 @@ type StackMetadata struct {
 	Name               string   `yaml:"name"`
 	PublicationVersion string   `yaml:"version"`
 	Registry           string   `yaml:"registry"`
-	GitLabProjectID    int      `yaml:"gitlab_project_id,omitempty"`
-	PackageName        string   `yaml:"package_name,omitempty"`
-	ArtifactsFile      string   `yaml:"artifacts_file,omitempty"`
 	SourceVersion      string   `yaml:"source_version,omitempty"`
 	SourceTag          string   `yaml:"source_tag,omitempty"`
 	SourceCommit       string   `yaml:"source_commit,omitempty"`
@@ -632,7 +626,7 @@ func (registry Registry) resourceRef(name, version string) string {
 	return fmt.Sprintf("%s/%s:%s", registry.Namespace, name, version)
 }
 
-// BuildCatalogFromArtifacts creates a catalog from a published package inventory.
+// BuildCatalogFromArtifacts creates a catalog from resolved stack artifacts.
 func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) *Catalog {
 	catalog := &Catalog{
 		Version: 1,
@@ -647,9 +641,6 @@ func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) 
 			Name:               defaultStackResourceName,
 			PublicationVersion: publicationVersion,
 			Registry:           defaultStackRegistry,
-			GitLabProjectID:    defaultStackProjectID,
-			PackageName:        defaultPackageName,
-			ArtifactsFile:      fmt.Sprintf("artifacts-%s.txt", publicationVersion),
 		},
 		SupplementalArtifacts: []Artifact{
 			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: defaultCLIRegistry, Version: defaultCLIVersion},

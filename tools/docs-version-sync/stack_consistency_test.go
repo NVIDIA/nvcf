@@ -170,9 +170,6 @@ func TestMainCatalogMatchesDeclaredReleaseStackPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "artifacts-" + catalog.Stack.PublicationVersion + ".txt"; catalog.Stack.ArtifactsFile != want {
-		t.Errorf("stack artifacts_file = %q, want %q for publication version %s", catalog.Stack.ArtifactsFile, want, catalog.Stack.PublicationVersion)
-	}
 	if err := validateStackSourceSnapshot(root, catalog); err != nil {
 		t.Fatal(err)
 	}

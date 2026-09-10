@@ -44,9 +44,6 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		catalog.Stack.Registry = base.Stack.Registry
 		catalog.Registries[base.Stack.Registry] = base.Registries[base.Stack.Registry]
 	}
-	catalog.Stack.GitLabProjectID = 0
-	catalog.Stack.PackageName = ""
-	catalog.Stack.ArtifactsFile = ""
 	catalog.Stack.SourceVersion = inventory.Source.Version
 	catalog.Stack.SourceTag = inventory.Source.Tag
 	catalog.Stack.SourceCommit = inventory.Source.Commit
