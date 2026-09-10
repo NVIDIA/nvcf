@@ -388,16 +388,7 @@ func TestValidateCatalogAcceptsExactPinSourcePaths(t *testing.T) {
 }
 
 func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
-	repo := t.TempDir()
-	if _, err := gitOutput(repo, "init"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := gitOutput(repo, "config", "user.email", "docs-version-sync@example.com"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := gitOutput(repo, "config", "user.name", "Docs Version Sync Test"); err != nil {
-		t.Fatal(err)
-	}
+	repo := initTestGitRepo(t)
 
 	const sourcePath = "stack.yaml"
 	writeFile(t, filepath.Join(repo, sourcePath), "version: 1.2.3\n")
@@ -437,6 +428,103 @@ func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
 	if err := validateStackSourceSnapshotWithPins(repo, catalog, pins); err != nil {
 		t.Fatalf("working-tree mutation changed the recorded release snapshot: %v", err)
 	}
+}
+
+func TestValidateStackSourceSnapshotRequiresTagRef(t *testing.T) {
+	repo := initTestGitRepo(t)
+
+	const sourcePath = "stack.yaml"
+	writeFile(t, filepath.Join(repo, sourcePath), "version: 1.2.3\n")
+	if _, err := gitOutput(repo, "add", sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(repo, "commit", "-m", "test fixture"); err != nil {
+		t.Fatal(err)
+	}
+	commitBytes, err := gitOutput(repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := trimOutput(commitBytes)
+	const sourceTag = "deploy/stacks/self-managed/v1.2.3"
+	if _, err := gitOutput(repo, "branch", sourceTag); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := &Catalog{
+		Stack: StackMetadata{
+			Version:         "1.2.3",
+			SourceTag:       sourceTag,
+			SourceCommit:    commit,
+			PinSources:      []string{sourcePath},
+			PinSourceDigest: "sha256:" + strings.Repeat("0", 64),
+		},
+	}
+	pins := []effectiveStackPin{{artifact: "chart", path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
+
+	err = validateStackSourceSnapshotWithPins(repo, catalog, pins)
+	if err == nil || !strings.Contains(err.Error(), "resolve stack source tag") {
+		t.Fatalf("validation error = %v, want missing tag rejection", err)
+	}
+}
+
+func TestWriteCatalogAfterStackSourceValidationLeavesFileUnchanged(t *testing.T) {
+	repo := initTestGitRepo(t)
+
+	catalogPath := filepath.Join(repo, "catalog.yaml")
+	const original = "original catalog\n"
+	writeFile(t, catalogPath, original)
+	catalog := testCatalog()
+	catalog.Stack.SourceTag = "deploy/stacks/self-managed/v" + catalog.Stack.Version
+	catalog.Stack.SourceCommit = strings.Repeat("1", 40)
+	catalog.Stack.PinSources = []string{"stack.yaml"}
+	catalog.Stack.PinSourceDigest = "sha256:" + strings.Repeat("2", 64)
+
+	err := writeCatalogAfterStackSourceValidation(repo, catalogPath, catalog)
+	if err == nil || !strings.Contains(err.Error(), "validate stack source snapshot") {
+		t.Fatalf("write error = %v, want source validation failure", err)
+	}
+	body, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != original {
+		t.Fatalf("catalog changed after validation failure:\n%s", body)
+	}
+}
+
+func TestWriteCatalogAfterStackSourceValidationRequiresSnapshot(t *testing.T) {
+	repo := initTestGitRepo(t)
+	catalogPath := filepath.Join(repo, "catalog.yaml")
+	const original = "original catalog\n"
+	writeFile(t, catalogPath, original)
+
+	err := writeCatalogAfterStackSourceValidation(repo, catalogPath, testCatalog())
+	if err == nil || !strings.Contains(err.Error(), "without an immutable source snapshot") {
+		t.Fatalf("write error = %v, want missing snapshot rejection", err)
+	}
+	body, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != original {
+		t.Fatalf("catalog changed without a source snapshot:\n%s", body)
+	}
+}
+
+func initTestGitRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	if _, err := gitOutput(repo, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(repo, "config", "user.email", "docs-version-sync@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(repo, "config", "user.name", "Docs Version Sync Test"); err != nil {
+		t.Fatal(err)
+	}
+	return repo
 }
 
 func TestValidateCatalogRejectsPublishedArtifactMarkedPending(t *testing.T) {

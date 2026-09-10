@@ -150,7 +150,8 @@ func validateStackSourceSnapshotWithPins(repoRoot string, catalog *Catalog, pins
 		return nil
 	}
 
-	commit, err := gitOutput(repoRoot, "rev-parse", "--verify", catalog.Stack.SourceTag+"^{commit}")
+	tagRef := "refs/tags/" + catalog.Stack.SourceTag
+	commit, err := gitOutput(repoRoot, "rev-parse", "--verify", tagRef+"^{commit}")
 	if err != nil {
 		return fmt.Errorf("resolve stack source tag %s: %w", catalog.Stack.SourceTag, err)
 	}

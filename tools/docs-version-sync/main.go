@@ -75,6 +75,9 @@ func run(args []string) error {
 		}
 		catalog = updated
 		if *check {
+			if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
+				return fmt.Errorf("validate stack source snapshot: %w", err)
+			}
 			if base == nil {
 				return fmt.Errorf("--update-catalog --check requires an existing catalog at %s", relOrAbs(repoRoot, *catalogPath))
 			}
@@ -86,7 +89,7 @@ func run(args []string) error {
 				return fmt.Errorf("%w: %s does not match latest %s artifact manifest for stack %s", ErrCheckFailed, relOrAbs(repoRoot, *catalogPath), defaultPackageName, updated.Stack.Version)
 			}
 		} else {
-			if err := WriteCatalog(*catalogPath, updated); err != nil {
+			if err := writeCatalogAfterStackSourceValidation(repoRoot, *catalogPath, updated); err != nil {
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "updated %s for stack %s\n", relOrAbs(repoRoot, *catalogPath), updated.Stack.Version)
@@ -97,15 +100,24 @@ func run(args []string) error {
 			return err
 		}
 		catalog = loaded
-	}
-
-	if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
-		return fmt.Errorf("validate stack source snapshot: %w", err)
+		if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
+			return fmt.Errorf("validate stack source snapshot: %w", err)
+		}
 	}
 	if err := SyncDocs(repoRoot, catalog, *check); err != nil {
 		return err
 	}
 	return nil
+}
+
+func writeCatalogAfterStackSourceValidation(repoRoot, catalogPath string, catalog *Catalog) error {
+	if catalog.Stack.SourceCommit == "" {
+		return fmt.Errorf("cannot write updated catalog for stack %s without an immutable source snapshot", catalog.Stack.Version)
+	}
+	if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
+		return fmt.Errorf("validate stack source snapshot: %w", err)
+	}
+	return WriteCatalog(catalogPath, catalog)
 }
 
 func updateCatalogFromGitLab(stackVersion string, base *Catalog) (*Catalog, error) {
