@@ -438,7 +438,10 @@ func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
 			PinSources:         []string{sourcePath},
 			PinSourceDigest:    digest,
 		},
-		Artifacts: []Artifact{{Name: "chart", Type: ArtifactTypeChart, Version: "1.2.3"}},
+		Artifacts: []Artifact{
+			{Name: "chart", Type: ArtifactTypeImage, Version: "9.9.9"},
+			{Name: "chart", Type: ArtifactTypeChart, Version: "1.2.3"},
+		},
 	}
 
 	writeFile(t, filepath.Join(repo, sourcePath), "version: 9.9.9\n")
