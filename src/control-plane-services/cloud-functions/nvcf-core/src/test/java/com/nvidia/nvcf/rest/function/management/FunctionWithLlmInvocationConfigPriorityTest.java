@@ -387,6 +387,85 @@ class FunctionWithLlmInvocationConfigPriorityTest {
     }
 
     @Test
+    void updateWithFractionalDefaultPriorityIsRejectedWithoutChangingPriority() {
+        var created = createLlmFunction(uniqueName("fractional-default"), priorityConfig(7L, null));
+        var updateToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_UPDATE_FUNCTION), 100);
+        var updateEntity = RequestEntity.put(URI.create("/v2/nvcf/functions/" + created.id()
+                                                        + "/versions/" + created.versionId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + updateToken)
+                .body("""
+                        {
+                          "llmInvocationConfig": {
+                            "priority": {
+                              "defaultPriority": 1.5
+                            }
+                          }
+                        }
+                        """);
+
+        var updateResponse = testRestTemplate.exchange(updateEntity, String.class);
+
+        assertThat(updateResponse.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        var getToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                       List.of(SCOPE_LIST_FUNCTIONS), 100);
+        var getEntity = RequestEntity.get(URI.create("/v2/nvcf/functions/" + created.id()
+                                                     + "/versions/" + created.versionId()))
+                .header("Authorization", "Bearer " + getToken)
+                .build();
+        var getResponse = testRestTemplate.exchange(getEntity, FunctionResponse.class);
+
+        assertThat(getResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(getResponse.getBody()).isNotNull();
+        assertThat(getResponse.getBody().function().llmInvocationConfig().priority().defaultPriority())
+                .isEqualTo(7L);
+    }
+
+    @Test
+    void updateWithFractionalPerAccountPriorityIsRejectedWithoutChangingPriority() {
+        var created = createLlmFunction(
+                uniqueName("fractional-per-account"),
+                priorityConfig(7L, Map.of(OVERRIDE_NCA_ID, 3L)));
+        var updateToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_UPDATE_FUNCTION), 100);
+        var updateEntity = RequestEntity.put(URI.create("/v2/nvcf/functions/" + created.id()
+                                                        + "/versions/" + created.versionId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + updateToken)
+                .body("""
+                        {
+                          "llmInvocationConfig": {
+                            "priority": {
+                              "defaultPriority": 7,
+                              "perAccountPriority": {
+                                "nca-override": 1.5
+                              }
+                            }
+                          }
+                        }
+                        """);
+
+        var updateResponse = testRestTemplate.exchange(updateEntity, String.class);
+
+        assertThat(updateResponse.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        var getToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                       List.of(SCOPE_LIST_FUNCTIONS), 100);
+        var getEntity = RequestEntity.get(URI.create("/v2/nvcf/functions/" + created.id()
+                                                     + "/versions/" + created.versionId()))
+                .header("Authorization", "Bearer " + getToken)
+                .build();
+        var getResponse = testRestTemplate.exchange(getEntity, FunctionResponse.class);
+
+        assertThat(getResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(getResponse.getBody()).isNotNull();
+        assertThat(getResponse.getBody().function().llmInvocationConfig().priority())
+                .isEqualTo(new PriorityDto(7L, Map.of(OVERRIDE_NCA_ID, 3L)));
+    }
+
+    @Test
     void updateWithModelUpdatesAndLlmInvocationConfigAppliesBothToAllVersions() {
         var name = uniqueName("update-both");
         var first = createLlmFunction(name, priorityConfig(2L, null));

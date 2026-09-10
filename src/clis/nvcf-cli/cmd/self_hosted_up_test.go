@@ -208,17 +208,22 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 		return "https://k8s.example/.well-known/oidc", `{"keys":[]}`, "psat", nil
 	}
 
-	// Provide a stack tree + a fake helmfile binary that emits a stub
-	// manifest. The helmfile binary is invoked twice: once for control plane
-	// (helmfile.d/ default) and once for compute plane.
-	stackDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "out"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "out", "test-register-values.yaml"), []byte("clusterID: stale-id\n"), 0o644))
+	// Provide separate custom stack trees so the test proves compute-plane
+	// environment values are derived from the resolved compute stack.
+	controlPlaneStackDir := t.TempDir()
+	computePlaneStackDir := t.TempDir()
+	for _, stackDir := range []string{controlPlaneStackDir, computePlaneStackDir} {
+		require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "out"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(computePlaneStackDir, "out", "test-register-values.yaml"), []byte("clusterID: stale-id\n"), 0o644))
+	helmfileLog := filepath.Join(t.TempDir(), "helmfile.log")
+	t.Setenv("NVCF_TEST_HELMFILE_LOG", helmfileLog)
+	t.Setenv("OUTPUT_DIR", "")
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	require.NoError(t, os.WriteFile(fakeBin,
-		[]byte("#!/bin/sh\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: stub\\n'\n"),
+		[]byte("#!/bin/sh\nprintf '%s|%s\\n' \"$*\" \"$OUTPUT_DIR\" >> \"$NVCF_TEST_HELMFILE_LOG\"\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: stub\\n'\n"),
 		0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
 
@@ -238,8 +243,8 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	rootCmd.SetArgs([]string{
 		"self-hosted", "up",
 		"--cluster-name=test",
-		"--control-plane-stack", stackDir,
-		"--compute-plane-stack", stackDir,
+		"--control-plane-stack", controlPlaneStackDir,
+		"--compute-plane-stack", computePlaneStackDir,
 		"--plain",
 	})
 	require.NoError(t, rootCmd.Execute())
@@ -253,7 +258,7 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	assert.Regexp(t, `\[03/8\] render-cp: starting`, out)
 	assert.Regexp(t, `\[04/8\] apply-cp: starting`, out)
 	assert.Regexp(t, `\[04/8\] apply-cp: complete`, out)
-	profilePath := filepath.Join(stackDir, "out", "control-plane-profile.yaml")
+	profilePath := filepath.Join(controlPlaneStackDir, "out", "control-plane-profile.yaml")
 	assert.Contains(t, out, "Wrote control-plane profile: "+profilePath)
 	assert.Regexp(t, `\[05/8\] check-cp: starting`, out)
 	assert.Regexp(t, `\[06/8\] register: starting`, out)
@@ -280,11 +285,19 @@ func TestSelfHostedUp_PlainEmitsPhaseLines(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(profileBody), "kind: ControlPlaneProfile")
 	assert.Contains(t, string(profileBody), "clusterName: test")
-	registerValues, err := os.ReadFile(filepath.Join(stackDir, "out", "test-register-values.yaml"))
+	registerValues, err := os.ReadFile(filepath.Join(computePlaneStackDir, "out", "test-register-values.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(registerValues), "icmsServiceURL: http://api.sis.svc.cluster.local:8080")
 	assert.Contains(t, string(registerValues), "revalServiceURL: http://reval.nvcf.svc.cluster.local:8080")
 	assert.Contains(t, string(registerValues), "natsURL: nats://nats.nats-system.svc.cluster.local:4222")
+	helmfileInvocations, err := os.ReadFile(helmfileLog)
+	require.NoError(t, err)
+	invocations := strings.Split(strings.TrimSpace(string(helmfileInvocations)), "\n")
+	require.Len(t, invocations, 2)
+	assert.Contains(t, invocations[0], controlPlaneStackDir+"/helmfile.d/")
+	assert.True(t, strings.HasSuffix(invocations[0], "|"), "control-plane Helmfile must not receive OUTPUT_DIR: %s", invocations[0])
+	assert.Contains(t, invocations[1], computePlaneStackDir+"/helmfile.d/")
+	assert.True(t, strings.HasSuffix(invocations[1], "|"+filepath.Join(computePlaneStackDir, "out")), "compute-plane Helmfile must receive its stack-local OUTPUT_DIR: %s", invocations[1])
 }
 
 // TestUp_PlanOnly_NoHelmfileInvocation runs the orchestrator with --plan-only

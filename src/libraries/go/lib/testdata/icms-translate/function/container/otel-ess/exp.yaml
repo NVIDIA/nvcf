@@ -423,8 +423,8 @@ spec:
         path: /health
         port: 13133
         scheme: HTTP
-      initialDelaySeconds: 30
-      periodSeconds: 30
+      initialDelaySeconds: 5
+      periodSeconds: 5
       successThreshold: 1
       timeoutSeconds: 1
     resources:

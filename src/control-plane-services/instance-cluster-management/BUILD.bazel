@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_workspace_runfiles")
+load("//rules/java:defs.bzl", "nvcf_workspace_runfiles")
 load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
 
 package(default_visibility = ["//visibility:public"])
@@ -17,7 +17,7 @@ filegroup(
 
 # Tests open local_env paths relative to the runfiles workspace root. Strip the
 # imported package prefix to preserve the standalone repository layout.
-nv_boot_workspace_runfiles(
+nvcf_workspace_runfiles(
     name = "integration_local_env",
     srcs = [":integration_local_env_files"],
     strip_prefix = "src/control-plane-services/instance-cluster-management/",

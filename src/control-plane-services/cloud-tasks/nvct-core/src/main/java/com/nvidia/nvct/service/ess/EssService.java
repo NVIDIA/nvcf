@@ -66,4 +66,15 @@ public class EssService {
         return existingSecrets.isPresent() && !existingSecrets.get().isEmpty();
     }
 
+    public Optional<SecretDto> getRegistryCredentialSecret(String ncaId, UUID registryCredentialId) {
+        return essClient.fetchRegistryCredentialSecret(ncaId, registryCredentialId)
+                .flatMap(secrets -> secrets.entrySet()
+                        .stream()
+                        .findFirst()
+                        .map(entry -> SecretDto.builder()
+                                .name(entry.getKey())
+                                .value(entry.getValue())
+                                .build()));
+    }
+
 }

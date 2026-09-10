@@ -1,15 +1,17 @@
 # Gateway Routing and DNS
 
-This guide explains how NVCF self-hosted deployments route traffic through the Kubernetes Gateway API, and how to configure DNS and HTTPS for production environments.
+This guide explains how NVCF self-hosted deployments route traffic through the
+Kubernetes Gateway API, and how to configure DNS and HTTPS for production
+environments.
 
 ## Overview
 
 The NVCF self-hosted deployment uses the [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) for ingress traffic management. This provides:
 
 - Hostname-based routing for HTTP services (API Keys, NVCF API, Invocation)
-- Port-based routing for gRPC services
-- Single load balancer for all NVCF services
-- Cross-namespace routing via ReferenceGrants
+- Port-based routing for gRPC and optional LLM reverse QUIC traffic
+- One or more load balancers, based on the Gateway and listener layout
+- Cross-namespace routing through `ReferenceGrant`
 
 The Gateway API is a Kubernetes standard with multiple implementations. The
 examples on this page use Envoy Gateway, but you can use any Gateway
@@ -51,11 +53,15 @@ done
 
 ### Install Envoy Gateway
 
-Install Envoy Gateway as the Gateway API controller:
+Install Envoy Gateway as the Gateway API controller. The secure LLM worker
+route requires an Envoy Gateway CRD that exposes
+`BackendTrafficPolicy.spec.timeout.http.requestTimeout`. The pinned v1.5.4
+chart provides this field so the route can disable the default 15-second
+request timeout.
 
 ```bash
 helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
-  --version v1.1.3 \
+  --version v1.5.4 \
   -n envoy-gateway-system
 ```
 
@@ -71,6 +77,60 @@ Create an `EnvoyProxy` resource before you create the `GatewayClass`. The
 `envoyDeployment.replicas` setting controls the Envoy proxy data-plane pods that
 handle ingress traffic. It does not control Envoy Gateway controller pods.
 
+Service annotations on a `Gateway` do not configure the Envoy data-plane
+Service. Set them in `EnvoyProxy.spec.provider.kubernetes.envoyService` so
+Envoy Gateway copies them to the generated Service.
+
+Before applying the `EnvoyProxy` on EKS, determine which Service controller
+owns load balancers. Do not apply the manifest until you have selected the
+matching `envoyService` configuration:
+
+```bash
+export EKS_CLUSTER_NAME="<cluster-name>"
+
+aws eks describe-cluster --name "$EKS_CLUSTER_NAME" \
+  --query 'cluster.kubernetesNetworkConfig.elasticLoadBalancing.enabled' \
+  --output text
+kubectl -n kube-system get deployment aws-load-balancer-controller
+```
+
+An EKS API result of `True` selects
+[EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-nlb.html).
+Otherwise, a successful Deployment lookup selects the AWS Load Balancer
+Controller. If neither is present, confirm that the cluster intentionally uses
+the legacy AWS cloud provider Service controller, or install the AWS Load
+Balancer Controller, before applying the example.
+
+The applied manifest below uses the
+[AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/service/nlb/)
+with instance targets and an internet-facing Network Load Balancer (NLB).
+For EKS Auto Mode, replace its `envoyService` map before applying it with:
+
+```yaml
+envoyService:
+  loadBalancerClass: eks.amazonaws.com/nlb
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+```
+
+For the legacy AWS cloud provider Service controller, replace the map with:
+
+```yaml
+envoyService:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+```
+
+The legacy controller creates an internet-facing load balancer by default. Add
+`service.beta.kubernetes.io/aws-load-balancer-internal: "true"` for an internal
+NLB. Do not combine the legacy `nlb` controller selector with the AWS Load
+Balancer Controller target type and scheme annotations. The legacy controller
+supports an NLB Service whose ports use only TCP or only UDP, but rejects one
+Service that combines TCP and UDP ports. Use the AWS Load Balancer Controller
+when the generated Envoy Service combines protocols. For another cloud
+provider, replace the `envoyService` map with that provider's Service
+configuration before applying it.
+
 Create the `GatewayClass` with a `parametersRef` that points to the
 `EnvoyProxy` resource:
 
@@ -85,6 +145,11 @@ spec:
   provider:
     type: Kubernetes
     kubernetes:
+      envoyService:
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-type: "external"
+          service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "instance"
+          service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
       envoyDeployment:
         replicas: 2
 ---
@@ -107,14 +172,6 @@ EOF
 Create the Gateway resource with an HTTP listener on port 80, a TCP listener on
 port 10081 for gRPC, and a TCP listener on port 4222 for NATS.
 
-<Note>
-The `annotations` section is cloud-provider specific and controls how the
-external load balancer is provisioned. Keep the AWS annotations for EKS. Replace
-them with equivalent annotations for GKE, AKS, or on-prem load balancer
-integrations.
-
-</Note>
-
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
@@ -122,14 +179,6 @@ kind: Gateway
 metadata:
   name: nvcf-gateway
   namespace: envoy-gateway
-  annotations:
-    # AWS (EKS)
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-    # GCP (GKE) example:
-    # cloud.google.com/load-balancer-type: "External"
-    # Azure (AKS) example:
-    # service.beta.kubernetes.io/azure-load-balancer-internal: "false"
 spec:
   gatewayClassName: eg
   listeners:
@@ -191,6 +240,149 @@ grpc-proxy replicas are not supported by this shared TCPRoute.
 
 </Warning>
 
+### LLM worker listeners
+
+LLM workers in another cluster or region need a TLS-terminated HTTP/2 path for
+gRPC registration and watches, plus a UDP path for the reverse QUIC tunnel.
+These paths are separate from the `grpcWorker` callback route.
+
+```mermaid
+flowchart LR
+    Worker["LLM worker sidecar"]
+    subgraph GatewayTls["Gateway TLS termination"]
+        Certificate["TLS Secret<br/>dedicated gRPC certificate"]
+        HttpsListener["Gateway HTTPS listener<br/>llmGrpc"]
+    end
+    GrpcRoute["GRPCRoute<br/>llm-worker-grpc"]
+    UdpListener["Gateway UDP listener<br/>llmQuic"]
+    UdpRoute["UDPRoute<br/>llm-worker-quic"]
+    Service["Service<br/>llm-request-router-backend-router"]
+    Backend["Backend router"]
+    Router["LLM request-router pod"]
+
+    Certificate -.->|"server identity"| HttpsListener
+    Worker -->|"TLS + gRPC registration and watches<br/>public hostname SNI"| HttpsListener
+    HttpsListener --> GrpcRoute
+    GrpcRoute -->|"h2c 50071<br/>Stargate :authority preserved"| Service
+    Worker -->|"QUIC reverse tunnel"| UdpListener
+    UdpListener --> UdpRoute
+    UdpRoute -->|"UDP 50072"| Service
+    Service --> Backend
+    Backend --> Router
+```
+
+The following example uses separate Gateways so the infrastructure can create
+one HTTPS load balancer and one UDP load balancer. A provider that supports
+mixed HTTPS and UDP listeners can use one Gateway for both listeners. In that case,
+set `llmGrpc.name` and `llmQuic.name` to the same Gateway name.
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llm-grpc-gateway
+  namespace: envoy-gateway
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: llm-grpc
+    protocol: HTTPS
+    port: 50071
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: llm-grpc-tls
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            nvcf/platform: "true"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llm-quic-gateway
+  namespace: envoy-gateway
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: llm-quic
+    protocol: UDP
+    port: 50072
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            nvcf/platform: "true"
+EOF
+```
+
+Enable the chart-owned routes and reference the listener names:
+
+```yaml
+ingress:
+  gatewayApi:
+    routes:
+      llmWorker:
+        enabled: true
+        backend:
+          namespace: nvcf
+    gateways:
+      llmGrpc:
+        name: llm-grpc-gateway
+        namespace: envoy-gateway
+        listenerName: llm-grpc
+      llmQuic:
+        name: llm-quic-gateway
+        namespace: envoy-gateway
+        listenerName: llm-quic
+
+addons:
+  llm:
+    pki:
+      # Include the listener suffix when using the stack-managed issuer.
+      allowedDomains: cluster.local,example.com
+    requestRouter:
+      grpcTls:
+        enabled: true
+        mode: certManager
+        secretName: llm-grpc-tls
+        dnsNames:
+          - llm-grpc.example.com
+        issuerRef:
+          kind: ClusterIssuer
+          name: nvcf-openbao-pki
+```
+
+The secure configuration above creates `GRPCRoute/llm-worker-grpc`,
+`UDPRoute/llm-worker-quic`, `ReferenceGrant/allow-llm-worker-routes`, and an
+Envoy `BackendTrafficPolicy` with the gRPC request timeout disabled. In
+`grpcTls.mode=certManager`, it also creates the dedicated gRPC `Certificate`;
+`existingSecret` mode uses the operator-owned Secret instead. Plaintext
+development mode renders a `TCPRoute` and neither the policy nor the
+`Certificate`. Both routes target
+`Service/llm-request-router-backend-router` in the `nvcf` namespace on ports
+`50071` and `50072`. The Service remains `ClusterIP` by design. Do not change it
+to `LoadBalancer` or `NodePort`; the Gateway data-plane Service owns external
+exposure.
+
+The `GRPCRoute` deliberately omits `hostnames`, and its dedicated HTTPS
+listener must omit `hostname`. The listener serves the dedicated certificate
+for external-SNI verification, while Pylon keeps the selected Stargate pod
+identity in HTTP/2 `:authority` so the backend router can forward each stream.
+A listener hostname would constrain both values and reject the internal
+authority. With `grpcTls.mode: existingSecret`, create the named Secret in the
+Gateway namespace yourself; the chart renders no `Certificate`. Plaintext is
+development-only and requires an explicit `http://` dial URI plus
+`grpcTls.allowInsecureHttp: true`.
+
+Configure worker-facing HTTPS and UDP dial addresses as described in
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions).
+
 ### Capture Gateway values
 
 Wait for the Gateway to be programmed and export the values used by the install
@@ -212,8 +404,8 @@ export GATEWAY_ADDR="$(kubectl -n "$HTTP_GATEWAY_NAMESPACE" get "gateway/$HTTP_G
 export GRPC_GATEWAY_ADDR="$(kubectl -n "$GRPC_GATEWAY_NAMESPACE" get "gateway/$GRPC_GATEWAY_NAME" \
   -o jsonpath='{.status.addresses[0].value}')"
 
-test -n "$GATEWAY_ADDR"
-test -n "$GRPC_GATEWAY_ADDR"
+test -n "$GATEWAY_ADDR" || exit 1
+test -n "$GRPC_GATEWAY_ADDR" || exit 1
 ```
 
 Use `GATEWAY_ADDR` as the route hostname suffix for test environments without
@@ -264,7 +456,10 @@ and ports accordingly.
 
 ## Gateway API Implementations
 
-The `nvcf-gateway-routes` chart creates standard Kubernetes Gateway API resources (`HTTPRoute`, `TCPRoute`) that work with any Gateway API-compliant controller. You are not locked into a specific implementation.
+The `nvcf-gateway-routes` chart creates standard Kubernetes Gateway API
+resources, including `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `UDPRoute`, and
+`ReferenceGrant`. Use a controller that supports every route kind enabled in
+your environment.
 
 Popular implementations include [Envoy Gateway](https://gateway.envoyproxy.io/) (used in our examples), [Istio](https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api/), [Traefik](https://doc.traefik.io/traefik/routing/providers/kubernetes-gateway/), [Kong](https://developer.konghq.com/kubernetes-ingress-controller/gateway-api/), [Contour](https://projectcontour.io/docs/main/guides/gateway-api/), and cloud-native options like GKE Gateway Controller.
 
@@ -278,12 +473,18 @@ There is no service mesh requirement. Envoy Gateway is not a service mesh. It is
 Any Gateway API implementation you choose must support:
 
 1. `HTTPRoute` for HTTP/HTTPS routing with hostname matching
-2. `TCPRoute` for gRPC invocation, optional split or multi-cluster gRPC
+2. `GRPCRoute` for HTTPS worker APIs and secure remote LLM registration
+3. `TCPRoute` for gRPC invocation, optional split or multi-cluster gRPC
    invocation, and NATS routing (requires experimental Gateway API CRDs)
-3. Cross-namespace routing for routes in one namespace referencing services in another
+4. `UDPRoute` for remote LLM reverse tunnels when the `llmWorker` route is
+   enabled (requires experimental Gateway API CRDs)
+5. Cross-namespace routing and `ReferenceGrant` for routes that reference
+   Services in another namespace
 
 <Warning>
-TCPRoute is experimental. Some Gateway API implementations may have limited or no TCPRoute support. Verify your chosen implementation supports TCPRoute before deploying. If it doesn't, gRPC invocations and NVCA NATS connections won't work through the gateway.
+`TCPRoute` and `UDPRoute` are experimental. Some Gateway API implementations
+have limited support for them. Verify the controller's supported versions
+before deploying. Secure remote LLM workers require `GRPCRoute` and `UDPRoute`.
 
 </Warning>
 
@@ -299,7 +500,12 @@ To use a different Gateway API implementation instead of Envoy Gateway:
 
 4. Create a `Gateway` with `http` (port 80), `tcp` (port 10081), and `nats`
    (port 4222) listeners. Add `worker-tcp` (port 10086) only when enabling
-   split or multi-cluster gRPC invocation.
+   split or multi-cluster gRPC invocation. When remote LLM workers use the
+   Gateway securely, add `llm-grpc` as an HTTPS listener on port 50071 with a
+   TLS certificate reference, plus `llm-quic` as a UDP listener on port 50072.
+   The rendered `GRPCRoute` attaches to the HTTPS listener. Use a TCP
+   `llm-grpc` listener only for the explicit plaintext development mode with
+   `llmRequestRouter.grpcTls.allowInsecureHttp: true`.
 
 5. Update your install configuration to reference your Gateway:
 
@@ -320,9 +526,18 @@ To use a different Gateway API implementation instead of Envoy Gateway:
            name: your-gateway-name       # Can be same Gateway with different listener
            namespace: your-namespace
            listenerName: nats            # TCP listener name for NATS
+         llmGrpc:
+           name: your-llm-grpc-gateway   # Gateway with the TCP port 50071 listener
+           namespace: your-namespace
+           listenerName: llm-grpc
+         llmQuic:
+           name: your-llm-quic-gateway   # Gateway with the UDP port 50072 listener
+           namespace: your-namespace
+           listenerName: llm-quic
    ```
 
-The `nvcf-gateway-routes` chart will create HTTPRoutes and TCPRoutes that attach to your specified Gateway.
+The `nvcf-gateway-routes` chart creates the enabled routes and attaches them to
+the configured Gateways and listeners.
 
 ### Not Using Gateway API
 
@@ -330,7 +545,7 @@ While technically possible to bypass the Gateway API entirely, this is not recom
 
 - The `nvcf-gateway-routes` chart specifically creates Gateway API resources
 - You would need to manually create and maintain all routing configuration
-- Traditional Kubernetes Ingress does not support TCPRoute (required for gRPC)
+- Traditional Kubernetes Ingress does not provide `TCPRoute` or `UDPRoute`
 - Multiple LoadBalancer services would require multiple external IPs
 
 If you have a specific requirement that prevents using Gateway API, you would need to:
@@ -340,6 +555,10 @@ If you have a specific requirement that prevents using Gateway API, you would ne
 3. Configure hostname routing manually
 4. Set up TCP load balancers for gRPC on port 10081, optional split or
    multi-cluster gRPC invocation on port 10086, and NATS on port 4222
+5. When serving remote LLM workers, terminate verified TLS with ALPN `h2` on
+   port 50071 and forward h2c to `llm-request-router-backend-router`; route UDP
+   port 50072 to the same Service without bypassing its authority and SNI
+   selection
 
 ## Gateway Architecture
 
@@ -358,6 +577,8 @@ These resources must be created manually before deploying the control plane:
   (port 4222) listeners
 - Optional `worker-tcp` (port 10086) listener for split or multi-cluster gRPC
   invocation
+- Optional `llm-grpc` (HTTPS port 50071) and `llm-quic` (UDP port 50072)
+  listeners for remote LLM workers
 
 ### Resources created by nvcf-gateway-routes
 
@@ -371,6 +592,12 @@ When you deploy the control plane via helmfile, the `nvcf-gateway-routes` chart 
 - Optional `TCPRoute` for split or multi-cluster gRPC invocation when the
   `grpcWorker` route is enabled
 - Optional `TCPRoute` for NATS when the `nats` route is enabled
+- Optional `UDPRoute` plus a `GRPCRoute` for secure LLM worker traffic or a
+  `TCPRoute` for plaintext development when the `llmWorker` route is enabled
+- Optional Envoy stream timeout policy when secure LLM worker routing has
+  `grpcTls.enabled=true`
+- Optional gRPC listener `Certificate` when secure LLM worker routing uses
+  `grpcTls.mode=certManager`
 - `ReferenceGrants` for cross-namespace routing permissions
 
 These routes attach to the Gateway you prepared in [Gateway quickstart](./gateway-routing.md#gateway-quickstart).
@@ -388,6 +615,8 @@ These routes attach to the Gateway you prepared in [Gateway quickstart](./gatewa
 | gRPC | N/A (TCP routing, no hostname matching) | 10081 | gRPC function invocations |
 | gRPC worker callback | N/A (TCP routing, no hostname matching) | 10086 | HTTP/1 CONNECT callback from workers to grpc-proxy when the beta `grpcWorker` route is enabled |
 | NATS | N/A (TCP routing, no hostname matching) | 4222 | NVCA messaging when the NATS route is enabled |
+| LLM worker gRPC | External TLS SNI; Stargate identity remains `:authority` | 50071 | TLS-terminated registration and request-router watches through `llm-request-router-backend-router` |
+| LLM worker QUIC | N/A (UDP routing, SNI selects a request-router pod) | 50072 | Reverse inference tunnels through `llm-request-router-backend-router` |
 
 <Note>
 The `<domain>` is your Gateway's load balancer address (e.g., `a1b2c3d4.us-west-2.elb.amazonaws.com`) or your custom domain. The helmfile deployment automatically configures the HTTPRoute hostnames using this value from your environment configuration.
@@ -460,13 +689,19 @@ By default, the route host is `nvcf-ui.<domain>` and the backend is
 
 ### How Routing Works
 
-1. The Gateway's LoadBalancer service exposes ports 80 (HTTP), 10081 (gRPC),
-   and 4222 (NATS) externally.
+1. The main Gateway's LoadBalancer Service exposes ports 80 (HTTP), 10081
+   (gRPC), and 4222 (NATS) externally.
 2. HTTP requests arrive at port 80. The Gateway inspects the `Host` header and matches it against HTTPRoute hostnames.
 3. The matching HTTPRoute forwards the request to the appropriate backend service (e.g., `api-keys` service on port 8080).
 4. gRPC requests arrive at port 10081. The TCPRoute forwards all traffic directly to the `grpc` service. No hostname matching is required.
 5. NATS connections arrive at port 4222. When enabled, the NATS TCPRoute
    forwards traffic directly to the NATS service.
+6. Remote LLM gRPC connections arrive at the configured `llmGrpc` listener.
+   The listener verifies and terminates TLS, then the GRPCRoute forwards h2c to
+   the backend-router Service on port 50071 without changing `:authority`.
+7. Remote LLM reverse tunnels arrive at the configured `llmQuic` listener.
+   The UDPRoute forwards them to the same Service on port 50072. The TCP and
+   UDP listeners can use separate Gateways and load balancers.
 
 <Tip>
 gRPC doesn't need Host headers because it uses a dedicated TCP listener on port 10081. The gateway routes all traffic on that port directly to the gRPC service without hostname matching.
@@ -519,6 +754,52 @@ kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-
   -o jsonpath='{.items[0].spec.ports[*].port}'
 # Expected output includes: 80 10081 4222
 ```
+
+### Verify LLM worker routes
+
+After applying the stack with `llmWorker.enabled: true`, verify both route
+parents and the cross-namespace backend reference:
+
+```bash
+export LLM_GRPC_GATEWAY_NAMESPACE=envoy-gateway
+export LLM_QUIC_GATEWAY_NAMESPACE=envoy-gateway
+
+kubectl -n "$LLM_GRPC_GATEWAY_NAMESPACE" get grpcroute llm-worker-grpc \
+  -o jsonpath='{range .status.parents[*].conditions[*]}{.type}={.status}{" reason="}{.reason}{"\n"}{end}'
+kubectl -n "$LLM_QUIC_GATEWAY_NAMESPACE" get udproute llm-worker-quic \
+  -o jsonpath='{range .status.parents[*].conditions[*]}{.type}={.status}{" reason="}{.reason}{"\n"}{end}'
+kubectl -n nvcf get referencegrant allow-llm-worker-routes -o yaml
+# cert-manager mode only
+kubectl -n "$LLM_GRPC_GATEWAY_NAMESPACE" get certificate llm-grpc-tls
+# secure mode only (grpcTls.enabled: true)
+kubectl -n "$LLM_GRPC_GATEWAY_NAMESPACE" get backendtrafficpolicy \
+  llm-worker-grpc-streams \
+  -o jsonpath='{.spec.timeout.http.requestTimeout}{"\n"}'
+kubectl -n nvcf get service llm-request-router-backend-router \
+  -o jsonpath='{.spec.type}{"\t"}{range .spec.ports[*]}{.port}{"/"}{.protocol}{" "}{end}{"\n"}'
+```
+
+Each route parent must report `Accepted=True` and `ResolvedRefs=True`. The
+Service type must remain `ClusterIP`, with TCP port `50071` and UDP port
+`50072`. In cert-manager mode the dedicated certificate must be Ready. In
+secure mode the request timeout must be `0s`; plaintext mode does not render
+the `BackendTrafficPolicy`. The zero timeout is the Envoy Gateway
+v1.5-compatible setting that disables the default 15-second timeout for
+streaming gRPC calls.
+Also wait for each referenced Gateway to report
+`Programmed=True` and confirm that its status contains an external address.
+Verify the public certificate and ALPN without disabling validation:
+
+```bash
+openssl s_client -connect llm-grpc.example.com:50071 \
+  -servername llm-grpc.example.com -alpn h2 -verify_return_error \
+  -CAfile /path/to/worker-trust-bundle.pem </dev/null
+```
+
+Route status proves that the controller accepted the configuration. It does
+not prove that firewall rules, cross-region routing, DNS, or UDP forwarding
+work from a compute cluster. Test both external endpoints from every worker
+network before deploying production LLM functions.
 
 ### Test Connectivity
 

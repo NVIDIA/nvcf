@@ -134,6 +134,61 @@ func (r *PIDResolver) ResolvePodPID(podUID string) (int, error) {
 	return lowestPID, nil
 }
 
+// ResolveContainerPID returns the lowest non-sandbox PID whose cgroup names
+// containerID, i.e. a PID inside that ONE container rather than anywhere in
+// the pod. containerID is the runtime ID from pod.status with the scheme
+// stripped ("containerd://<id>" -> "<id>").
+//
+// ResolvePodPID is deliberately pod-scoped and documents itself as
+// "sufficient for upperdir resolution" -- true, because every container in a
+// pod resolves the same overlay. It is wrong for anything where the container
+// identity is the question. Recording the entrypoint is exactly that: the
+// pod-scoped PID is whichever container started first, so on an NVCF function
+// pod the `utils` sidecar beat the main container (still pulling its image)
+// and capture recorded the sidecar's argv (nvsnap#788).
+//
+// Returns ErrPodNotRunning when no live PID matches, so callers can fall back.
+func (r *PIDResolver) ResolveContainerPID(containerID string) (int, error) {
+	if containerID == "" {
+		return 0, errors.New("rootfsonly: ResolveContainerPID: empty containerID")
+	}
+
+	entries, err := os.ReadDir(r.ProcRoot)
+	if err != nil {
+		return 0, fmt.Errorf("read proc root %q: %w", r.ProcRoot, err)
+	}
+
+	lowestPID := -1
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue // not a PID directory
+		}
+		match, err := pidMatchesAny(filepath.Join(r.ProcRoot, e.Name(), "cgroup"), []string{containerID})
+		if err != nil {
+			// Same rationale as ResolvePodPID: /proc entries vanish when a
+			// process exits mid-walk; skip rather than fail the resolve.
+			continue
+		}
+		if !match {
+			continue
+		}
+		if isSandboxPID(filepath.Join(r.ProcRoot, e.Name(), "comm")) {
+			continue
+		}
+		if lowestPID == -1 || pid < lowestPID {
+			lowestPID = pid
+		}
+	}
+	if lowestPID == -1 {
+		return 0, ErrPodNotRunning
+	}
+	return lowestPID, nil
+}
+
 // isSandboxPID reads /proc/<pid>/comm and reports whether the comm name
 // matches a known K8s sandbox/runtime process (pause, containerd-shim).
 // Errors (process exited mid-walk, etc.) are treated as "not sandbox" so

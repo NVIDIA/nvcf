@@ -187,6 +187,7 @@ spec:
     - --auth-token-file=/var/run/llm/worker-token
     - --backend-connectivity=reverse
     - --initial-input-tps=100
+    - --upstream-health-path=/v1/health/ready
     - --quic-insecure
     - --model-name=model-gamma
     - --model-name=model-epsilon

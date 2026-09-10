@@ -22,8 +22,13 @@ dist/
 # Output of the go coverage tool
 coverage/
 *.out
-*.html
-!ui/dist/**.html
+# Scoped to the coverage artifact rather than a bare *.html: the broad
+# pattern silently swallowed ui/index.html, Vite's entry point, so
+# nvsnap-server could not be built from a clean checkout. The
+# !ui/dist/**.html negation that used to sit here was a workaround for
+# the same over-broad rule and is no longer needed.
+coverage.html
+*.cover.html
 
 # Go workspace
 go.work

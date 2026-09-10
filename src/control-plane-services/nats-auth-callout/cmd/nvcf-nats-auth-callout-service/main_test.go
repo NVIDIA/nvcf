@@ -17,11 +17,17 @@ limitations under the License.
 
 package main
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
-// TestMainFunction ensures the main function runs without error.
+// TestMainFunction ensures the main function runs without panicking for a known-safe subcommand.
 func TestMainFunction(t *testing.T) {
+	old := os.Args
+	os.Args = []string{"nvcf-nats-auth-callout-service", "version"}
 	defer func() {
+		os.Args = old
 		if r := recover(); r != nil {
 			t.Errorf("main() panicked with error: %v", r)
 		}

@@ -827,6 +827,17 @@ type LLMConfigDto struct {
 	RoutingMethod  *string  `json:"routingMethod,omitempty"`
 }
 
+// LLMInvocationConfigDto represents function-level LLM invocation configuration.
+type LLMInvocationConfigDto struct {
+	Priority *PriorityDto `json:"priority,omitempty"`
+}
+
+// PriorityDto represents the default and per-account request priorities for an LLM function.
+type PriorityDto struct {
+	DefaultPriority    *uint32           `json:"defaultPriority,omitempty"`
+	PerAccountPriority map[string]uint32 `json:"perAccountPriority,omitempty"`
+}
+
 // SecretDto represents a secret configuration
 type SecretDto struct {
 	Name  string      `json:"name"`            // Secret name (required, max 48 chars, pattern: ^[a-z0-9A-Z][a-z0-9A-Z\\_\\.\\-]*$)
@@ -864,6 +875,7 @@ type CreateFunctionRequest struct {
 	APIBodyFormat        string                      `json:"apiBodyFormat,omitempty"`        // Invocation request body format
 	ContainerArgs        string                      `json:"containerArgs,omitempty"`        // Args to be passed when launching container
 	ContainerEnvironment []ContainerEnvironmentEntry `json:"containerEnvironment,omitempty"` // Environment settings for container
+	LLMInvocationConfig  *LLMInvocationConfigDto     `json:"llmInvocationConfig,omitempty"`  // Function-level LLM invocation configuration
 
 	// Helm configuration
 	HelmChart            string `json:"helmChart,omitempty"`            // Optional Helm Chart
@@ -892,14 +904,15 @@ type CreateFunctionResponse struct {
 
 // FunctionData represents function data
 type FunctionData struct {
-	ID             string `json:"id"`
-	VersionID      string `json:"versionId"`
-	Name           string `json:"name"`
-	Status         string `json:"status"`
-	InferenceURL   string `json:"inferenceUrl"`
-	InferencePort  int    `json:"inferencePort"`
-	ContainerImage string `json:"containerImage"`
-	CreationTime   string `json:"creationTime"`
+	ID                  string                  `json:"id"`
+	VersionID           string                  `json:"versionId"`
+	Name                string                  `json:"name"`
+	Status              string                  `json:"status"`
+	InferenceURL        string                  `json:"inferenceUrl"`
+	InferencePort       int                     `json:"inferencePort"`
+	ContainerImage      string                  `json:"containerImage"`
+	CreationTime        string                  `json:"creationTime"`
+	LLMInvocationConfig *LLMInvocationConfigDto `json:"llmInvocationConfig,omitempty"`
 }
 
 // CreateFunction creates a new function
@@ -1006,16 +1019,17 @@ type GetFunctionResponse struct {
 
 // FunctionDetails represents detailed function information
 type FunctionDetails struct {
-	ID              string     `json:"id"`
-	VersionID       string     `json:"versionId"`
-	Name            string     `json:"name"`
-	Status          string     `json:"status"`
-	InferenceURL    string     `json:"inferenceUrl"`
-	InferencePort   int        `json:"inferencePort"`
-	ContainerImage  string     `json:"containerImage"`
-	CreationTime    string     `json:"creationTime"`
-	ActiveInstances []Instance `json:"activeInstances"`
-	Health          HealthInfo `json:"health"`
+	ID                  string                  `json:"id"`
+	VersionID           string                  `json:"versionId"`
+	Name                string                  `json:"name"`
+	Status              string                  `json:"status"`
+	InferenceURL        string                  `json:"inferenceUrl"`
+	InferencePort       int                     `json:"inferencePort"`
+	ContainerImage      string                  `json:"containerImage"`
+	CreationTime        string                  `json:"creationTime"`
+	ActiveInstances     []Instance              `json:"activeInstances"`
+	Health              HealthInfo              `json:"health"`
+	LLMInvocationConfig *LLMInvocationConfigDto `json:"llmInvocationConfig,omitempty"`
 }
 
 // Instance represents a function instance
@@ -1192,9 +1206,10 @@ func (c *Client) DeployFunction(ctx context.Context, functionID, versionID strin
 
 // UpdateFunctionMetadataRequest represents a function update request
 type UpdateFunctionMetadataRequest struct {
-	Description  string           `json:"description,omitempty"`  // Function description
-	Tags         []string         `json:"tags,omitempty"`         // Function tags
-	ModelUpdates []ModelUpdateDto `json:"modelUpdates,omitempty"` // Model-specific updates
+	Description         string                  `json:"description,omitempty"`         // Function description
+	Tags                []string                `json:"tags,omitempty"`                // Function tags
+	ModelUpdates        []ModelUpdateDto        `json:"modelUpdates,omitempty"`        // Model-specific updates
+	LLMInvocationConfig *LLMInvocationConfigDto `json:"llmInvocationConfig,omitempty"` // Function-level LLM invocation configuration
 }
 
 // ModelUpdateDto represents updates for one model.
@@ -1751,6 +1766,7 @@ type FunctionDto struct {
 	Secrets                 []string                    `json:"secrets,omitempty"`
 	RateLimit               *RateLimitDto               `json:"rateLimit,omitempty"`
 	Models                  []ArtifactDto               `json:"models,omitempty"`
+	LLMInvocationConfig     *LLMInvocationConfigDto     `json:"llmInvocationConfig,omitempty"`
 }
 
 // ClusterGroupsResponse represents the response from listing cluster groups

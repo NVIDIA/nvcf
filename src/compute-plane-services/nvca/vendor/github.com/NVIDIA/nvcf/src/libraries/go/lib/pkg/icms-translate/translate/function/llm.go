@@ -19,6 +19,8 @@ package function
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -40,6 +42,9 @@ const (
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
+
+	essAssertionTokenPathEnv = "ESS_ASSERTION_TOKEN_PATH"
+	essAssertionTokenPath    = common.EssConfigDir + "/jwt.token"
 )
 
 func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
@@ -56,6 +61,24 @@ func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
 	if envSet[legacyStargateAddressEnv] == "" {
 		envSet[legacyStargateAddressEnv] = llmRequestRouterAddress
 	}
+}
+
+// pylon probes the upstream over HTTP on the inference port, so the function's
+// declared health endpoint only carries over when the function keeps both
+// aligned. Otherwise pylon falls back to its own candidate paths.
+func upstreamHealthPath(allEnvSet map[string]string) string {
+	path := strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_ENDPOINT"])
+	if path == "" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_PROTOCOL"]), "grpc") {
+		return ""
+	}
+	healthPort, err := strconv.Atoi(strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_PORT"]))
+	if err == nil && healthPort > 0 && strconv.Itoa(healthPort) != strings.TrimSpace(allEnvSet["INFERENCE_PORT"]) {
+		return ""
+	}
+	return path
 }
 
 func newLLMRouterClientContainer(
@@ -127,6 +150,9 @@ func newLLMRouterClientContainer(
 		fmt.Sprintf("--auth-token-file=%s", llmWorkerTokenPath),
 		"--backend-connectivity=reverse",
 		"--initial-input-tps=100",
+	}
+	if healthPath := upstreamHealthPath(allEnvSet); healthPath != "" {
+		args = append(args, fmt.Sprintf("--upstream-health-path=%s", healthPath))
 	}
 	if tcfg.StargateQUICInsecure {
 		args = append(args, "--quic-insecure")
@@ -212,6 +238,28 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 			Value: llmWorkerTokenPath,
 		},
 	)
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "llm",
+			MountPath: llmDirMountPath,
+		},
+		// config-data backs SHARED_CONFIG_DIR. The credential manager
+		// creates and caches the worker token here, so it must be mounted.
+		{
+			Name:      "config-data",
+			MountPath: ConfigDirPath,
+		},
+	}
+	if allEnvSet[common.SecretsAssertionTokenEnv] != "" {
+		envs = append(envs, corev1.EnvVar{
+			Name:  essAssertionTokenPathEnv,
+			Value: essAssertionTokenPath,
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      common.EssDataVolumeName,
+			MountPath: common.EssConfigDir,
+		})
+	}
 
 	c := corev1.Container{
 		Name:            "llm-credential-manager",
@@ -228,18 +276,7 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 				corev1.ResourceMemory: *resource.NewQuantity(128*1<<20, resource.BinarySI),
 			},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "llm",
-				MountPath: llmDirMountPath,
-			},
-			// config-data backs SHARED_CONFIG_DIR. The credential manager
-			// creates and caches the worker token here, so it must be mounted.
-			{
-				Name:      "config-data",
-				MountPath: ConfigDirPath,
-			},
-		},
+		VolumeMounts: volumeMounts,
 	}
 	return c, nil
 }

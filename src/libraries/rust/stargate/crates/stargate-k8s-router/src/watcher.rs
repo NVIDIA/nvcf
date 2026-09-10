@@ -79,9 +79,15 @@ pub async fn run_endpoint_slice_watcher(
 }
 
 struct WatcherState {
-    store: BTreeMap<String, EndpointSlice>,
-    init_store: BTreeMap<String, EndpointSlice>,
+    store: BTreeMap<String, ObservedSlice>,
+    init_store: BTreeMap<String, ObservedSlice>,
+    next_revision: u64,
     build_config: TargetBuildConfig,
+}
+
+struct ObservedSlice {
+    revision: u64,
+    slice: EndpointSlice,
 }
 
 impl WatcherState {
@@ -89,6 +95,7 @@ impl WatcherState {
         Self {
             store: BTreeMap::new(),
             init_store: BTreeMap::new(),
+            next_revision: 0,
             build_config,
         }
     }
@@ -100,20 +107,39 @@ impl WatcherState {
                 return None;
             }
             Event::InitApply(slice) => {
-                self.init_store.insert(slice_key(&slice), slice);
+                let key = slice_key(&slice);
+                let observed = self.observe(slice);
+                self.init_store.insert(key, observed);
                 return None;
             }
             Event::InitDone => {
                 self.store = std::mem::take(&mut self.init_store);
             }
             Event::Apply(slice) => {
-                self.store.insert(slice_key(&slice), slice);
+                let key = slice_key(&slice);
+                let observed = self.observe(slice);
+                self.store.insert(key, observed);
             }
             Event::Delete(slice) => {
                 self.store.remove(&slice_key(&slice));
             }
         }
-        Some(snapshot(self.store.values(), &self.build_config))
+        Some(self.snapshot())
+    }
+
+    fn observe(&mut self, slice: EndpointSlice) -> ObservedSlice {
+        let revision = self.next_revision;
+        self.next_revision = self.next_revision.wrapping_add(1);
+        ObservedSlice { revision, slice }
+    }
+
+    fn snapshot(&self) -> TargetSnapshot {
+        let mut observed = self.store.values().collect::<Vec<_>>();
+        observed.sort_unstable_by_key(|item| item.revision);
+        snapshot(
+            observed.into_iter().map(|item| &item.slice),
+            &self.build_config,
+        )
     }
 }
 
@@ -220,5 +246,84 @@ mod tests {
         assert_eq!(snapshot.ready_count(), 1);
         assert!(snapshot.target_for_pod("stargate-0").is_none());
         assert!(snapshot.target_for_pod("stargate-1").is_some());
+    }
+
+    #[test]
+    fn apply_replaces_rolled_pod_without_leaving_stale_target() {
+        let mut state = WatcherState::new(config());
+        state
+            .apply(Event::Apply(slice(
+                "slice-a",
+                "request-router-old",
+                "10.0.0.10",
+            )))
+            .expect("initial Apply should publish a snapshot");
+
+        let snapshot = state
+            .apply(Event::Apply(slice(
+                "slice-a",
+                "request-router-new",
+                "10.0.0.11",
+            )))
+            .expect("replacement Apply should publish a snapshot");
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert!(snapshot.target_for_pod("request-router-old").is_none());
+        assert_eq!(
+            snapshot
+                .target_for_pod("request-router-new")
+                .map(|target| target.grpc_addr),
+            Some("10.0.0.11:50071".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_and_delete_track_scale_up_and_scale_down() {
+        let mut state = WatcherState::new(config());
+        let first = slice("slice-a", "request-router-a", "10.0.0.10");
+        let second = slice("slice-b", "request-router-b", "10.0.0.11");
+        state
+            .apply(Event::Apply(first.clone()))
+            .expect("first Apply should publish a snapshot");
+        let scaled_up = state
+            .apply(Event::Apply(second.clone()))
+            .expect("second Apply should publish a snapshot");
+
+        assert_eq!(scaled_up.ready_count(), 2);
+
+        let scaled_down = state
+            .apply(Event::Delete(first))
+            .expect("Delete should publish a snapshot");
+        assert_eq!(scaled_down.ready_count(), 1);
+        assert!(scaled_down.target_for_pod("request-router-a").is_none());
+        assert!(scaled_down.target_for_pod("request-router-b").is_some());
+    }
+
+    #[test]
+    fn latest_slice_observation_wins_for_duplicate_pod_identity() {
+        let mut state = WatcherState::new(config());
+        state
+            .apply(Event::Apply(slice(
+                "slice-z",
+                "request-router-0",
+                "10.0.0.10",
+            )))
+            .expect("initial Apply should publish a snapshot");
+
+        let snapshot = state
+            .apply(Event::Apply(slice(
+                "slice-a",
+                "request-router-0",
+                "10.0.0.11",
+            )))
+            .expect("replacement Apply should publish a snapshot");
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert_eq!(
+            snapshot
+                .target_for_pod("request-router-0")
+                .map(|target| target.grpc_addr),
+            Some("10.0.0.11:50071".to_string())
+        );
     }
 }

@@ -32,6 +32,7 @@ mod sse_message_stream;
 mod stats;
 #[cfg(test)]
 mod test_support;
+mod upstream_health;
 mod upstream_url;
 
 pub use bringup::{BringupConfig, BringupError, CalibrationConfig};
@@ -65,3 +66,4 @@ pub use stats::{
     start_stats_collector, start_stats_collector_with_engine_stats,
     stats_aggregator_update_channel,
 };
+pub use upstream_health::{DEFAULT_UPSTREAM_HEALTH_PATHS, UpstreamHealthPaths};

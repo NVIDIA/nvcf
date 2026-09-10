@@ -118,6 +118,8 @@ func (l *Ledger) restoreOne(path string, entry ledgerEntry) error {
 	if err := os.WriteFile(path, entry.body, entry.mode); err != nil {
 		return fmt.Errorf("restore %s: %w", path, err)
 	}
+	if err := os.Chmod(path, entry.mode); err != nil {
+		return fmt.Errorf("restore mode %s: %w", path, err)
+	}
 	return nil
 }
-

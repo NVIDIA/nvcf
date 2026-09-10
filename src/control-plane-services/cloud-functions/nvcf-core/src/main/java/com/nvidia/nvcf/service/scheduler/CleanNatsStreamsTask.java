@@ -40,13 +40,15 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
 @RefreshScope
+@ConditionalOnProperty(
+        name = "nvcf.scheduler.enabled", havingValue = "true", matchIfMissing = true)
 public class CleanNatsStreamsTask {
 
     private static final Set<FunctionStatus> TERMINAL_FUNCTION_STATUSES =
@@ -56,7 +58,6 @@ public class CleanNatsStreamsTask {
     private final FunctionsDeploymentRepository functionsDeploymentRepository;
     private final FunctionsRepository functionsRepository;
     private final NatsResourceService natsResourceService;
-    private final boolean enabled;
 
     private record StreamAndVersion(String streamName, UUID functionVersionId) {
 
@@ -65,22 +66,15 @@ public class CleanNatsStreamsTask {
     public CleanNatsStreamsTask(
             FunctionsDeploymentRepository functionsDeploymentRepository,
             FunctionsRepository functionsRepository,
-            NatsResourceService natsResourceService,
-            @Value("${nvcf.scheduled-tasks.clean-nats-streams-task.enabled:true}")
-            boolean enabled) {
+            NatsResourceService natsResourceService) {
         this.functionsDeploymentRepository = functionsDeploymentRepository;
         this.functionsRepository = functionsRepository;
         this.natsResourceService = natsResourceService;
-        this.enabled = enabled;
     }
 
     @Timed(value = "nvcf.scheduler.clean.nats.streams")
     public void run(Duration timeout)
             throws InterruptedException, JetStreamApiException, IOException {
-        if (!enabled) {
-            return;
-        }
-
         cleanNatsStreams(timeout);
     }
 
@@ -109,7 +103,7 @@ public class CleanNatsStreamsTask {
                 .map(StreamConfiguration::getName)
                 .filter(name -> {
                     // request streams can be cleaned unconditionally when they have no deployment.
-                    // their draining is already handled by the GracefulCleanDeploymentTask.
+                    // their draining is already handled by the GracefulDeploymentCleanupService.
                     return name.startsWith(REQUEST_QUEUE_PREFIX + "_");
                 })
                 .map(streamName -> {

@@ -28,7 +28,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | Command | Purpose | Notes |
 |---|---|---|
 | `cluster register --name=X --nca-id=Y [--region=Z] [--ignore-existing]` | Register a JWKS+OIDC with ICMS | Used by `up` Phase 5 internally; standalone for manual registration |
-| `cluster list` | List registered clusters | Output is YAML by default; `--json` for machine |
+| `cluster list-registered --nca-id=Y [--icms-url=URL]` | List self-hosted cluster registrations from ICMS | Uses the admin token; `--json` for machine-readable output |
 | `cluster rotate --cluster-id=ID` | Re-fetch JWKS from K8s and PUT to ICMS | After K8s API server signing key rotation |
 | `cluster delete --cluster-id=ID` | Remove ICMS row | **DESTRUCTIVE: confirm with user** |
 

@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nv_boot_workspace_runfiles")
+load("//rules/java:defs.bzl", "nvcf_workspace_runfiles")
 load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
 
 package(default_visibility = ["//visibility:public"])
@@ -14,7 +14,7 @@ filegroup(
     srcs = ["local_env/secrets/secrets.json"],
 )
 
-nv_boot_workspace_runfiles(
+nvcf_workspace_runfiles(
     name = "test_local_env",
     srcs = [":local_env_files"],
     strip_prefix = "src/control-plane-services/encrypted-secret-store/",

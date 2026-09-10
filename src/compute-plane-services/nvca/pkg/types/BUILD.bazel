@@ -7,6 +7,7 @@ go_library(
     name = "types",
     srcs = [
         "common_labels.go",
+        "event_annotations.go",
         "gpu.go",
         "miniservice_types.go",
         "modelcache_types.go",
@@ -43,6 +44,7 @@ go_test(
     name = "types_test",
     srcs = [
         "common_labels_test.go",
+        "event_annotations_test.go",
         "gpu_test.go",
         "miniservice_types_test.go",
         "resource_types_test.go",

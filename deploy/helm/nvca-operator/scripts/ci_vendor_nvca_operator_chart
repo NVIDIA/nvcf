@@ -174,7 +174,7 @@ main() {
         source "${root_dir}/.env"
     fi
 
-    byoo_otel_collector_image="${BYOO_OTEL_COLLECTOR_IMAGE:-nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11}"
+    byoo_otel_collector_image="${BYOO_OTEL_COLLECTOR_IMAGE:-}"
 
     TARGET_DIR="${root_dir}/nvca-operator"
     SOURCE_DIR="${root_dir}/../../../src/compute-plane-services/nvca/deployments/nvca-operator"
@@ -203,9 +203,13 @@ main() {
     echo "🔧 [vendor] Defaulting various values so chart works OOTB..."
     update_yaml_key ".ngcConfig.clusterSource = \"ngc-managed\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".ngcConfig.serviceKey = \"dummy-api-key\"" "${TARGET_DIR}/values.yaml"
-    update_yaml_key ".agent.functionEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
-    update_yaml_key ".agent.taskEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
-    update_yaml_key ".image.tag = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
+    if [[ -n "${byoo_otel_collector_image}" ]]; then
+        update_yaml_key ".agent.functionEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
+        update_yaml_key ".agent.taskEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
+    fi
+    # Keep the source chart's empty tag so the templates fall back to the
+    # published chart version. A literal default is retained by Helm
+    # --reuse-values upgrades and pins the operator to an older image.
     update_yaml_key ".selfManaged.nvcaVersion = \"${NVCA_VERSION:?"NVCA_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".selfManaged.icmsServiceURL = \"http://icms.example.invalid:8080\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".selfManaged.revalServiceURL = \"http://reval.example.invalid:8080\"" "${TARGET_DIR}/values.yaml"
@@ -271,15 +275,20 @@ main() {
     # regardless of which NVCA Operator the chart is actually wired to.
     update_yaml_key ".appVersion = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/Chart.yaml"
     update_yaml_key ".selfManaged.sharedStorage.imageTag = \"${NVCA_SHARED_STORAGE_IMAGE_TAG:?"NVCA_SHARED_STORAGE_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    # The BYOO otel collector sidecar's image tag moves independently of the
+    # monorepo source, driven by tools/chart-version-bumper against this
+    # vendored copy directly when byoo-otel-collector releases. Without this
+    # override the plain source copy above would carry it back to whatever
+    # the source chart still has, discarding that bump on the next vendor run.
+    update_yaml_key ".otelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".agent.byooOtelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".helmManaged.otelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".selfManaged.otelCollector.imageTag = \"${NVCA_OTEL_COLLECTOR_IMAGE_TAG:?"NVCA_OTEL_COLLECTOR_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".nameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".fullnameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
     
     # Set default validation policy to Unrestricted for self-managed clusters
     yq eval -i '.agentConfig.mergeConfig = "cluster:\n  validationPolicy:\n    name: Unrestricted" | .agentConfig.mergeConfig style="literal"' "${TARGET_DIR}/values.yaml"
-
-    # OSS scrub: clear the upstream's hardcoded image.repository so OSS
-    # consumers must supply it via an override values file at install time.
-    update_yaml_key ".image.repository = \"\"" "${TARGET_DIR}/values.yaml"
 
     # Apply Apache-2.0 / NVIDIA copyright headers to all yaml files in the
     # vendored chart. Skip files that already carry an SPDX marker so this

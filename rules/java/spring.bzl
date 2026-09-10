@@ -1,3 +1,4 @@
+load("@rules_java//java:defs.bzl", "java_binary")
 load("@rules_spring//springboot:springboot.bzl", "springboot")
 
 def _spring_boot_metadata_impl(ctx):
@@ -161,8 +162,16 @@ def spring_boot_app(
         boot_launcher_class = "org.springframework.boot.loader.launch.JarLauncher",
         include_git_properties_file = False,
         java_library = application,
-        tags = ["manual"],
+        tags = ["manual", "no-ide"],
         visibility = ["//visibility:private"],
+    )
+
+    java_binary(
+        name = name + "_run",
+        main_class = main_class,
+        runtime_deps = [application],
+        tags = ["manual"],
+        visibility = visibility,
     )
 
     _spring_boot_metadata(

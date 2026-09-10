@@ -32,6 +32,8 @@ unbounded request fields as metric labels.
 | `stargate_admission_rejections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Requests rejected by local input-work admission control. |
 | `stargate_quic_connection_evictions_total` | Counter | `llm-request-router:9090/metrics` | `inference_server_id`, `reason` | Total QUIC pool evictions by backend and reason. |
 | `stargate_quic_hot_path_reconnect_total` | Counter | `llm-request-router:9090/metrics` | `inference_server_id`, `result` | Direct QUIC reconnect attempts from the proxy hot path. |
+| `stargate_tls_reloads_total` | Counter | `llm-request-router:9090/metrics` | `material_type`, `result` | Mounted TLS server identity reload attempts by result. |
+| `stargate_tls_certificate_expiry_seconds` | Gauge | `llm-request-router:9090/metrics` | `material_type` | Unix timestamp when the active server identity expires. |
 | `stargate_proxy_replay_buffer_bytes` | Histogram | `llm-request-router:9090/metrics` | `model` | Proxied request replay buffer size in bytes. |
 | `stargate_proxy_duration_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model`, `inference_server_id` | Time to first byte from upstream in seconds. |
 | `stargate_routing_duration_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model` | Load-balancer decision time in seconds. |

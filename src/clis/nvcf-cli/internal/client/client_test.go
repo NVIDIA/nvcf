@@ -40,6 +40,8 @@ import (
 
 func ptrInt(v int) *int { return &v }
 
+func ptrUint32(v uint32) *uint32 { return &v }
+
 type invokeRequestCaptureTransport struct {
 	req *http.Request
 }
@@ -55,21 +57,28 @@ func (t *invokeRequestCaptureTransport) RoundTrip(req *http.Request) (*http.Resp
 }
 
 type updateRequestCaptureTransport struct {
-	req  *http.Request
-	body []byte
+	req          *http.Request
+	body         []byte
+	responseBody string
 }
 
 func (t *updateRequestCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.req = req
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		return nil, err
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		t.body = body
 	}
-	t.body = body
+	responseBody := t.responseBody
+	if responseBody == "" {
+		responseBody = `{"ok":true}`
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
 		Request:    req,
 	}, nil
 }
@@ -570,6 +579,252 @@ func TestUpdateFunctionMetadataSendsModelUpdatesToFunctionEndpoint(t *testing.T)
 	}
 	if got, want := llmConfig["tokenRateLimit"], "1000-M"; got != want {
 		t.Fatalf("tokenRateLimit = %#v, want %q", got, want)
+	}
+}
+
+func TestCreateFunctionSendsLLMInvocationConfig(t *testing.T) {
+	capture := &updateRequestCaptureTransport{
+		responseBody: `{
+			"function": {
+				"id": "func-123",
+				"versionId": "ver-456",
+				"llmInvocationConfig": {
+					"priority": {
+						"defaultPriority": 0,
+						"perAccountPriority": {"account-1": 3}
+					}
+				}
+			}
+		}`,
+	}
+	client := &Client{
+		config:     &Config{Token: "token"},
+		baseURL:    "https://api.example.com",
+		httpClient: &http.Client{Transport: capture},
+	}
+
+	result, err := client.CreateFunction(context.Background(), &CreateFunctionRequest{
+		Name:          "llm-function",
+		InferenceURL:  "/v1/chat/completions",
+		InferencePort: 8000,
+		FunctionType:  "LLM",
+		LLMInvocationConfig: &LLMInvocationConfigDto{
+			Priority: &PriorityDto{
+				DefaultPriority: ptrUint32(0),
+				PerAccountPriority: map[string]uint32{
+					"account-1": 3,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateFunction returned error: %v", err)
+	}
+	if capture.req == nil {
+		t.Fatal("expected create request")
+	}
+	if got, want := capture.req.Method, http.MethodPost; got != want {
+		t.Fatalf("method = %q, want %q", got, want)
+	}
+	if got, want := capture.req.URL.Path, "/v2/nvcf/functions"; got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(capture.body, &payload); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	invocationConfig, ok := payload["llmInvocationConfig"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("llmInvocationConfig = %#v, want object", payload["llmInvocationConfig"])
+	}
+	priority, ok := invocationConfig["priority"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("priority = %#v, want object", invocationConfig["priority"])
+	}
+	if got, want := priority["defaultPriority"], float64(0); got != want {
+		t.Fatalf("defaultPriority = %#v, want %#v", got, want)
+	}
+	perAccountPriority, ok := priority["perAccountPriority"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("perAccountPriority = %#v, want object", priority["perAccountPriority"])
+	}
+	if got, want := perAccountPriority["account-1"], float64(3); got != want {
+		t.Fatalf("perAccountPriority[account-1] = %#v, want %#v", got, want)
+	}
+	assertLLMInvocationConfig(t, result.Function.LLMInvocationConfig, 0, map[string]uint32{"account-1": 3})
+}
+
+func TestUpdateFunctionMetadataSendsAndClearsLLMInvocationConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *LLMInvocationConfigDto
+		assert func(*testing.T, map[string]interface{})
+	}{
+		{
+			name: "configured priority",
+			config: &LLMInvocationConfigDto{
+				Priority: &PriorityDto{
+					DefaultPriority: ptrUint32(7),
+				},
+			},
+			assert: func(t *testing.T, invocationConfig map[string]interface{}) {
+				t.Helper()
+				priority, ok := invocationConfig["priority"].(map[string]interface{})
+				if !ok {
+					t.Fatalf("priority = %#v, want object", invocationConfig["priority"])
+				}
+				if got, want := priority["defaultPriority"], float64(7); got != want {
+					t.Fatalf("defaultPriority = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name:   "cleared configuration",
+			config: &LLMInvocationConfigDto{},
+			assert: func(t *testing.T, invocationConfig map[string]interface{}) {
+				t.Helper()
+				if len(invocationConfig) != 0 {
+					t.Fatalf("llmInvocationConfig = %#v, want empty object", invocationConfig)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &updateRequestCaptureTransport{}
+			client := &Client{
+				config:     &Config{Token: "token"},
+				baseURL:    "https://api.example.com",
+				httpClient: &http.Client{Transport: capture},
+			}
+
+			err := client.UpdateFunctionMetadata(context.Background(), "func-123", "ver-456", &UpdateFunctionMetadataRequest{
+				LLMInvocationConfig: tt.config,
+			})
+			if err != nil {
+				t.Fatalf("UpdateFunctionMetadata returned error: %v", err)
+			}
+			if capture.req == nil {
+				t.Fatal("expected update request")
+			}
+			if got, want := capture.req.Method, http.MethodPut; got != want {
+				t.Fatalf("method = %q, want %q", got, want)
+			}
+			if got, want := capture.req.URL.Path, "/v2/nvcf/functions/func-123/versions/ver-456"; got != want {
+				t.Fatalf("path = %q, want %q", got, want)
+			}
+
+			var payload map[string]interface{}
+			if err := json.Unmarshal(capture.body, &payload); err != nil {
+				t.Fatalf("unmarshal request body: %v", err)
+			}
+			invocationConfig, ok := payload["llmInvocationConfig"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("llmInvocationConfig = %#v, want object", payload["llmInvocationConfig"])
+			}
+			tt.assert(t, invocationConfig)
+		})
+	}
+}
+
+func TestGetFunctionDecodesLLMInvocationConfig(t *testing.T) {
+	capture := &updateRequestCaptureTransport{
+		responseBody: functionResponseWithPriorityJSON,
+	}
+	client := &Client{
+		config:     &Config{Token: "token"},
+		baseURL:    "https://api.example.com",
+		httpClient: &http.Client{Transport: capture},
+	}
+
+	result, err := client.GetFunction(context.Background(), "func-123", "ver-456")
+	if err != nil {
+		t.Fatalf("GetFunction returned error: %v", err)
+	}
+	assertLLMInvocationConfig(t, result.Function.LLMInvocationConfig, 0, map[string]uint32{"account-1": 3})
+}
+
+func TestGetFunctionDetailsDecodesLLMInvocationConfig(t *testing.T) {
+	capture := &updateRequestCaptureTransport{
+		responseBody: functionResponseWithPriorityJSON,
+	}
+	client := &Client{
+		config:     &Config{Token: "token"},
+		baseURL:    "https://api.example.com",
+		httpClient: &http.Client{Transport: capture},
+	}
+
+	result, err := client.GetFunctionDetails(context.Background(), "func-123", "ver-456")
+	if err != nil {
+		t.Fatalf("GetFunctionDetails returned error: %v", err)
+	}
+	assertLLMInvocationConfig(t, result.LLMInvocationConfig, 0, map[string]uint32{"account-1": 3})
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal function details: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"defaultPriority":0`) {
+		t.Fatalf("JSON output %s does not preserve explicit defaultPriority 0", encoded)
+	}
+}
+
+func TestListFunctionsDecodesLLMInvocationConfig(t *testing.T) {
+	capture := &updateRequestCaptureTransport{
+		responseBody: `{"functions":[` + functionWithPriorityJSON + `]}`,
+	}
+	client := &Client{
+		config:     &Config{Token: "token"},
+		baseURL:    "https://api.example.com",
+		httpClient: &http.Client{Transport: capture},
+	}
+
+	result, err := client.ListFunctions(context.Background())
+	if err != nil {
+		t.Fatalf("ListFunctions returned error: %v", err)
+	}
+	if len(result.Functions) != 1 {
+		t.Fatalf("functions length = %d, want 1", len(result.Functions))
+	}
+	assertLLMInvocationConfig(t, result.Functions[0].LLMInvocationConfig, 0, map[string]uint32{"account-1": 3})
+}
+
+const functionWithPriorityJSON = `{
+	"id": "func-123",
+	"versionId": "ver-456",
+	"llmInvocationConfig": {
+		"priority": {
+			"defaultPriority": 0,
+			"perAccountPriority": {"account-1": 3}
+		}
+	}
+}`
+
+const functionResponseWithPriorityJSON = `{"function":` + functionWithPriorityJSON + `}`
+
+func assertLLMInvocationConfig(t *testing.T, config *LLMInvocationConfigDto, defaultPriority uint32, perAccountPriority map[string]uint32) {
+	t.Helper()
+	if config == nil {
+		t.Fatal("llmInvocationConfig is nil")
+	}
+	if config.Priority == nil {
+		t.Fatal("priority is nil")
+	}
+	if config.Priority.DefaultPriority == nil {
+		t.Fatal("defaultPriority is nil")
+	}
+	if got := *config.Priority.DefaultPriority; got != defaultPriority {
+		t.Fatalf("defaultPriority = %d, want %d", got, defaultPriority)
+	}
+	if len(config.Priority.PerAccountPriority) != len(perAccountPriority) {
+		t.Fatalf("perAccountPriority = %#v, want %#v", config.Priority.PerAccountPriority, perAccountPriority)
+	}
+	for account, want := range perAccountPriority {
+		if got := config.Priority.PerAccountPriority[account]; got != want {
+			t.Fatalf("perAccountPriority[%s] = %d, want %d", account, got, want)
+		}
 	}
 }
 

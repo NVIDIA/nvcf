@@ -29,14 +29,6 @@ CREATE TYPE IF NOT EXISTS nvct_api.gpu_spec_udt (
     helm_validation_policy  TEXT
 );
 
-CREATE TYPE IF NOT EXISTS nvct_api.health_udt (
-    sis_request_id UUID,
-    gpu            TEXT,
-    backend        TEXT,
-    instance_type  TEXT,
-    error          TEXT
-);
-
 CREATE TYPE IF NOT EXISTS nvct_api.telemetries_udt (
     logs_telemetry_id    UUID,
     metrics_telemetry_id UUID,
@@ -68,7 +60,7 @@ CREATE TABLE IF NOT EXISTS nvct_api.tasks_v2 (
     results_location               TEXT,
     status                         TEXT,
     telemetries                    FROZEN<telemetries_udt>,
-    health_info                    FROZEN<health_udt>,
+    health                         TEXT,
     percent_complete               INT,
     last_updated_at                TIMESTAMP,
     last_heartbeat_at              TIMESTAMP,

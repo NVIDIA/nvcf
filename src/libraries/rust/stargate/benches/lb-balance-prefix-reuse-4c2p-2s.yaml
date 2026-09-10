@@ -109,9 +109,9 @@ traffic_pattern:
     target_rps: 45
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
+      default: power-of-n
   - name: round-robin
     config:
       default: round-robin
@@ -123,7 +123,7 @@ algorithms:
       default: wait-and-widen
   - name: wait-and-widen-affinity
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: wait-and-widen
@@ -133,7 +133,7 @@ algorithms:
           cache_affinity_backend_selection_count: 1
   - name: pulsar
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar
@@ -142,7 +142,7 @@ algorithms:
           require_input_tokens: true
   - name: pulsar-consider-kv-free-tokens
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar
@@ -151,7 +151,7 @@ algorithms:
           consider_kv_free_tokens: true
   - name: pulsar-wait-and-widen
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar-wait-and-widen
@@ -160,7 +160,7 @@ algorithms:
           require_input_tokens: true
   - name: pulsar-wait-and-widen-consider-kv-free-tokens
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar-wait-and-widen

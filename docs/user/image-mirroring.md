@@ -27,7 +27,7 @@ You must have access to the NGC `nvcf-onprem` organization to begin.
   <img src="images/apipersonalkey.png" alt="Personal API key creation for nvcf-onprem organization" />
 </Frame>
 
-3. Set the NGC API key as an environment variable for use in any subsequent commands:
+1. Set the NGC API key as an environment variable for use in any subsequent commands:
 
 ```bash
 export NGC_API_KEY="nvapi-xxxxxxxxxxxxx"  # Replace with your NGC API key
@@ -119,7 +119,7 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # Pull the chart
-helm pull nvcf/helm-nvca-operator --version 1.12.7
+helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.21.3
 
 # Prerelease charts require --devel when searching
 helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
@@ -191,23 +191,22 @@ ECR will properly track both container images and Helm charts under the same rep
 
 First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nvidia.com/setup/installers/cli) using the Personal API key you created.
 
-{/* docs-version-sync:BEGIN image-mirroring-resource-examples */}
+{/*docs-version-sync:BEGIN image-mirroring-resource-examples*/}
 
 ```bash
 # Set stack versions
-export STACK_VERSION="0.6.0"
+export STACK_VERSION="0.9.1"
 export COMPUTE_STACK_VERSION="1.0.6"
 
 # Download a specific control-plane stack version
-ngc registry resource download-version \
-  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
+# Publication pending: nvcf-self-managed-stack 0.9.1 is not yet available for download.
 
 # Download a specific compute-plane stack version
 ngc registry resource download-version \
   "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 ```
 
-{/* docs-version-sync:END image-mirroring-resource-examples */}
+{/*docs-version-sync:END image-mirroring-resource-examples*/}
 
 ### Downloading `nvcf-self-managed-stack` (control plane)
 
@@ -221,19 +220,13 @@ and its listed artifact versions are QA-qualified together.
 
 **Download and extract:**
 
-{/* docs-version-sync:BEGIN image-mirroring-stack-snippet */}
+{/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
-# Set the version
-export VERSION="0.6.0"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
-   mkdir -p nvcf-self-managed-stack && \
-   tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
-   rm -rf nvcf-self-managed-stack_v${VERSION}
+# Publication pending: nvcf-self-managed-stack 0.9.1 is not yet available for download.
 ```
 
-{/* docs-version-sync:END image-mirroring-stack-snippet */}
+{/*docs-version-sync:END image-mirroring-stack-snippet*/}
 
 <Note>
 If you don't have access to this repository, contact your NVIDIA representative.
@@ -252,7 +245,7 @@ and its listed artifact versions are QA-qualified together.
 
 Download and extract:
 
-{/* docs-version-sync:BEGIN image-mirroring-compute-stack-snippet */}
+{/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
 # Set the version
@@ -264,7 +257,7 @@ ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${C
    rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
 ```
 
-{/* docs-version-sync:END image-mirroring-compute-stack-snippet */}
+{/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
 
 <Note>
 Use both stack bundles for split-stack local and self-managed installs:
@@ -284,30 +277,15 @@ Use the CLI version shown in the artifact manifest for this stack release.
 
 **Download and extract:**
 
-{/* docs-version-sync:BEGIN image-mirroring-cli-snippet */}
+{/*docs-version-sync:BEGIN image-mirroring-cli-snippet*/}
 
 ```bash
-# Set the version
-export VERSION="1.10.3"
-
-# Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)
-export PLATFORM="linux-amd64"
-
-ngc registry resource download-version "nvidia/nvcf/nvcf-cli:${VERSION}"
-
-tar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz
-mv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli
-chmod +x nvcf-cli/nvcf-cli
+# Publication pending: nvcf-cli 1.16.2 is not yet available for download.
 ```
 
-{/* docs-version-sync:END image-mirroring-cli-snippet */}
+Package contents and extraction instructions will be available after publication or mirroring.
 
-The extracted directory contains:
-
-- `nvcf-cli` - The CLI binary
-- `.nvcf-cli.yaml.template` - Configuration template
-- `examples/` - Sample configuration files for different environments
-- `USAGE-GUIDE.md` - Detailed usage documentation
+{/*docs-version-sync:END image-mirroring-cli-snippet*/}
 
 See [self-hosted-cli](./cli.md) for detailed configuration instructions
 
@@ -391,8 +369,8 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull nvcf/helm-nvca-operator --version 1.12.7
-# This creates: helm-nvca-operator-1.12.7.tgz
+helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.21.3
+# This creates: helm-nvca-operator-1.21.3.tgz
 
 # 3. Login to AWS ECR with Helm
 aws ecr get-login-password --region us-east-1 | \
@@ -402,7 +380,7 @@ aws ecr get-login-password --region us-east-1 | \
 aws ecr create-repository --repository-name ${REPO_PREFIX}/helm-nvca-operator --region us-east-1
 
 # 5. Push to ECR as OCI artifact (include repository prefix)
-helm push helm-nvca-operator-1.12.7.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
+helm push helm-nvca-operator-1.21.3.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
 ```
 
 <Note>
@@ -480,8 +458,8 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull nvcf/helm-nvca-operator --version 1.12.7
-# This creates: helm-nvca-operator-1.12.7.tgz
+helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.21.3
+# This creates: helm-nvca-operator-1.21.3.tgz
 
 # 3. Login to Volcano Engine CR with Helm
 helm registry login ${CR_ENDPOINT} \
@@ -489,7 +467,7 @@ helm registry login ${CR_ENDPOINT} \
   --password "${CR_PASSWORD}"
 
 # 4. Push to Volcano Engine CR as OCI artifact
-helm push helm-nvca-operator-1.12.7.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
+helm push helm-nvca-operator-1.21.3.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
 ```
 
 ## Troubleshooting

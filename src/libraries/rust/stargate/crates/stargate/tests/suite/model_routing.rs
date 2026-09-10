@@ -48,7 +48,10 @@ impl GlobalWatchNode {
             make_stargate_runtime_with_shared_discovery_and_remote_watch_urls(
                 id,
                 peers,
-                remote.into_iter().map(|addr| addr.to_string()).collect(),
+                remote
+                    .into_iter()
+                    .map(|addr| format!("http://{addr}"))
+                    .collect(),
             );
         Self {
             grpc_addr,

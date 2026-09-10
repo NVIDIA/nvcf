@@ -15,7 +15,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 # Contents
- - [Testing the ESS agent with Mockoon](#testing-the-ess-agent-container-with-mockoon)
+
+- [Testing the ESS agent with Mockoon](#testing-the-ess-agent-container-with-mockoon)
 
 ## Testing the ESS Agent Container with Mockoon
 
@@ -28,6 +29,7 @@ limitations under the License.
 4. Build Distroless container (follow [deploy.md](deploy.md) for further instructions)
 
 5. Run the following command to run the container against Mockoon (see replacements below):
+
 ```bash
 # Replace <REPO_ROOT_DIR> with the path to the repository's root directory on your local machine
 # Replace <VERSION> with the image tag to run
@@ -40,6 +42,7 @@ docker run --rm -it \
 ess-agent/distroless-go-multi-arch:<VERSION> \
 -config=/ess-agent/file/configs/config-docker.hcl
 ```
+
 The rendered secrets should be found in the [nv_releases/test/secrets](..%2Ftest%2Fsecrets) directory.
 
 ### Commands
@@ -47,6 +50,7 @@ The rendered secrets should be found in the [nv_releases/test/secrets](..%2Ftest
 ### Run local tag against Mockoon:
 
 Init container
+
 ```bash
 docker run --rm -it \
     -e "ESS_AGENT_INIT=true" \
@@ -59,6 +63,7 @@ docker run --rm -it \
 ```
 
 Sidecar container
+
 ```bash
 docker run --rm -it \
     -e "SECRET_PATH=functions/ca713143-76d6-4afe-beba-fb23923446f6/secrets" \
@@ -71,6 +76,7 @@ docker run --rm -it \
 ```
 
 ### Run URM tag against Mockoon:
+
 ```bash
 docker run --rm -it \
     -e "ESS_AGENT_INIT=true" \
@@ -83,6 +89,7 @@ docker run --rm -it \
 ```
 
 ### Run nvcr.io tag against Mockoon:
+
 ```bash
 docker run --rm -it \
     -e "ESS_AGENT_INIT=true" \
@@ -94,39 +101,44 @@ docker run --rm -it \
     -config=/ess-agent/file/configs/config-docker.hcl
 ```
 
-
 ### Run integration tests
 
 Pre-requisite: Please start the Mockoon server as shown above.
 
 Note: some tests may require `kubectl` and a local Kubernetes cluster. If using Colima, do the following:
-```
+
+```text
 # Start (or restart) Colima with the --kubernetes argument
 colima start --kubernetes
 
 # Install kubectl via Homebrew
 brew install kubectl
 ```
+
 For more information on initial Colima setup, see the [deployment docs](deploy.md#prerequisites).
 
 #### Build and run all tests
-```
+
+```bash
 make integration-test
 ```
 
 #### Run specific test by number
-```
+
+```bash
 make integration-test TEST=01  # Run timing drift test
 make integration-test TEST=02  # Run SIGTERM handling test
 ```
 
 #### Skip build and run tests
-```
+
+```bash
 make integration-test SKIP_BUILD=true              # Run all tests without rebuild
 make integration-test SKIP_BUILD=true TEST=02      # Run specific test without rebuild
 ```
 
 #### Available tests
+
 Path: nv_release/test/integration-tests
 
 - `01` - Timing drift test

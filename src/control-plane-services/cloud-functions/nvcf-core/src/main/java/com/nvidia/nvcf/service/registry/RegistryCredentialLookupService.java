@@ -49,6 +49,7 @@ public class RegistryCredentialLookupService {
 
     private final RegistryCredentialsByAccountRepository registryCredentialsByAccountRepository;
     private final RegistryMapperService registryMapperService;
+    private final RegistryFunctionMapperService registryFunctionMapperService;
     private final LoadingCache<String, List<RegistryCredentialByAccountEntity>>
             registryCredentialsByAccountCache = Caffeine.newBuilder()
                 .maximumSize(1024)   // Approximate number of accounts in Prod env.
@@ -96,7 +97,7 @@ public class RegistryCredentialLookupService {
         }
 
         return registryCredentials.stream()
-                .map(RegistryFunctionMapperService::toRegistryCredentialDetailsDto)
+                .map(registryFunctionMapperService::toRegistryCredentialDetailsDto)
                 .toList();
     }
 
@@ -114,7 +115,7 @@ public class RegistryCredentialLookupService {
                 .filter(regCred -> !Sets
                         .intersection(regCred.getArtifactTypes(), artifactTypes)
                         .isEmpty())
-                .map(RegistryFunctionMapperService::toRegistryCredentialDetailsDto)
+                .map(registryFunctionMapperService::toRegistryCredentialDetailsDto)
                 .toList();
     }
 
@@ -137,7 +138,7 @@ public class RegistryCredentialLookupService {
                         .intersection(regCred.getArtifactTypes(), artifactTypes)
                         .isEmpty())
                 .filter(regCred -> provisionedBys.contains(regCred.getProvisionedBy()))
-                .map(RegistryFunctionMapperService::toRegistryCredentialDetailsDto)
+                .map(registryFunctionMapperService::toRegistryCredentialDetailsDto)
                 .toList();
     }
 
@@ -156,7 +157,7 @@ public class RegistryCredentialLookupService {
                 .stream()
                 .filter(rc -> rc.getArtifactTypes().contains(artifactType)
                         && rc.getRegistryHostname().equals(normalizedHostname))
-                .map(RegistryFunctionMapperService::toRegistryCredentialDetailsDto)
+                .map(registryFunctionMapperService::toRegistryCredentialDetailsDto)
                 .toList();
     }
 

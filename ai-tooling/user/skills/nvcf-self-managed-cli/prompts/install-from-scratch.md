@@ -4,12 +4,12 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
 
 ## Steps
 
-1. **Confirm the topology.** Ask the user:
+1. Confirm the topology. Ask the user:
    - "Single-cluster (control plane and compute plane on one cluster, simpler) or split (control plane on cluster A, compute plane on cluster B, production-shaped)?"
    - "What's the cluster name (the `--cluster-name` flag, becomes the ICMS row identifier)? Examples: `ncp-local` for local dev, `prod-us-east-1` for production."
    - For split: "Control-plane kubeconfig context name? Compute-plane context? Public ICMS URL?"
 
-2. **Prepare remote Gateway and CLI config if this is not local k3d.** One-click
+2. Prepare remote Gateway and CLI config if this is not local k3d. One-click
    applies the control plane, then immediately calls API, API Keys, invocation,
    and gRPC endpoints. For remote clusters, the Gateway must be programmed and
    the CLI config must point at the Gateway load balancer before `up` runs.
@@ -32,14 +32,85 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
      --version v1.1.3 \
      -n envoy-gateway-system
+   ```
 
+   Before applying the `EnvoyProxy`, determine which Service controller owns
+   load balancers on EKS. Do not apply the manifest until you have selected the
+   matching `envoyService` configuration. Use the EKS API and the in-cluster
+   controller Deployment instead of guessing from the cluster age or existing
+   Services:
+
+   ```sh
+   export EKS_CLUSTER_NAME="<cluster-name>"
+
+   aws eks describe-cluster --name "$EKS_CLUSTER_NAME" \
+     --query 'cluster.kubernetesNetworkConfig.elasticLoadBalancing.enabled' \
+     --output text
+   kubectl -n kube-system get deployment aws-load-balancer-controller
+   ```
+
+   An EKS API result of `True` selects
+   [EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-nlb.html).
+   Otherwise, a successful Deployment lookup selects the AWS Load Balancer
+   Controller. If neither is present, confirm that the cluster intentionally
+   uses the legacy AWS cloud provider Service controller, or install the AWS
+   Load Balancer Controller, before applying the example.
+
+   The applied manifest below is for the AWS Load Balancer Controller. For EKS
+   Auto Mode, replace its `envoyService` map before applying it with:
+
+   ```yaml
+   envoyService:
+     loadBalancerClass: eks.amazonaws.com/nlb
+     annotations:
+       service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+   ```
+
+   For the legacy AWS cloud provider Service controller, replace the map with:
+
+   ```yaml
+   envoyService:
+     annotations:
+       service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+   ```
+
+   The legacy controller creates an internet-facing load balancer by default.
+   Do not combine the legacy `nlb` selector with the AWS Load Balancer
+   Controller target type and scheme annotations. It supports an NLB Service
+   whose ports use only TCP or only UDP, but rejects one Service that combines
+   TCP and UDP ports. Use the AWS Load Balancer Controller when the generated
+   Envoy Service combines protocols. On non-AWS clusters, replace the map with
+   the provider's Service configuration before applying it.
+
+   ```sh
+   # Non-EKS-Auto-Mode example: use AWS LBC with instance targets.
    kubectl apply -f - <<EOF
+   apiVersion: gateway.envoyproxy.io/v1alpha1
+   kind: EnvoyProxy
+   metadata:
+     name: eg
+     namespace: envoy-gateway-system
+   spec:
+     provider:
+       type: Kubernetes
+       kubernetes:
+         envoyService:
+           annotations:
+             service.beta.kubernetes.io/aws-load-balancer-type: "external"
+             service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "instance"
+             service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+   ---
    apiVersion: gateway.networking.k8s.io/v1
    kind: GatewayClass
    metadata:
      name: eg
    spec:
      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+     parametersRef:
+       group: gateway.envoyproxy.io
+       kind: EnvoyProxy
+       name: eg
+       namespace: envoy-gateway-system
    EOF
 
    kubectl apply -f - <<EOF
@@ -48,9 +119,6 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    metadata:
      name: nvcf-gateway
      namespace: envoy-gateway
-     annotations:
-       service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-       service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
    spec:
      gatewayClassName: eg
      listeners:
@@ -75,6 +143,11 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    EOF
    ```
 
+   Service annotations must be under
+   `EnvoyProxy.spec.provider.kubernetes.envoyService.annotations`. Envoy Gateway
+   copies them to the generated Envoy Service. Do not put Service annotations
+   on the `Gateway` resource.
+
    Capture the Gateway values and write the CLI config:
 
    ```sh
@@ -95,6 +168,8 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
      -o jsonpath='{.status.addresses[0].value}')"
    export GRPC_GATEWAY_ADDR="$(kubectl -n "$GRPC_GATEWAY_NAMESPACE" get "gateway/$GRPC_GATEWAY_NAME" \
      -o jsonpath='{.status.addresses[0].value}')"
+   test -n "$GATEWAY_ADDR" || exit 1
+   test -n "$GRPC_GATEWAY_ADDR" || exit 1
    export STACK_DOMAIN="$GATEWAY_ADDR"
    ```
 
@@ -121,7 +196,7 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    EOF
    ```
 
-3. **Run pre-flight.** Choose the flavor matching the topology:
+3. Run pre-flight. Choose the flavor matching the topology:
 
    ```sh
    # Single-cluster
@@ -142,9 +217,11 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
 
    Parse the JSONL stream. If any check fails (`"passed":false`) with `severity: error`, surface `message` + `hintURL` to the user and stop. Don't proceed to install with broken prereqs.
 
-4. **Mint admin token if needed.** `nvcf-cli init` is idempotent — call it if the user doesn't have a session yet. Init talks to API Keys via the public api gateway, so it works in compute-only mode too.
+4. Mint an admin token if needed. `nvcf-cli init` is idempotent. Call it if the
+   user does not have a session yet. Init talks to API Keys through the public
+   API gateway, so it also works in compute-only mode.
 
-5. **Run `up`.** Use `--json` for the JSONL event stream:
+5. Run `up`. Use `--json` for the JSONL event stream:
 
    ```sh
    nvcf-cli self-hosted up \
@@ -170,19 +247,28 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    ```
 
    Parse events:
-   - `phase_started` / `phase_completed` — log progress
-   - `phase_progress` — sub-progress for the long apply phases (resource counts)
-   - `waiting` — surface to user if it persists (>2 min)
-   - `phase_failed` — STOP. Surface `errMessage` + each `remediation` line. Decide based on `retryClass`: `immediate` → may re-run now with user OK; `backoff` → wait `retryAfterSec` then re-run with user OK; `after_remediation`/`none`/`unknown` → operator must act first, do NOT auto-retry.
-   - `final` — done. Print clusterId, NVCFBackend health.
+   - `phase_started` / `phase_completed`: log progress
+   - `phase_progress`: show progress for the long apply phases (resource counts)
+   - `waiting`: surface to the user if it persists for more than 2 minutes
+   - `phase_failed`: stop and surface `errMessage` plus each `remediation` line.
+     Decide based on `retryClass`: `immediate` -> may re-run now with user
+     approval; `backoff` -> wait `retryAfterSec` and then re-run with user
+     approval; `after_remediation`, `none`, or `unknown` -> the operator must
+     act first, so do not auto-retry.
+   - `final`: done. Print clusterId and NVCFBackend health.
 
-6. **Verify with status.** `nvcf-cli self-hosted status --json | jq` — expect `verdict: "healthy"`. If not, route to [diagnose-failed-install.md](diagnose-failed-install.md).
+6. Verify with status. Run `nvcf-cli self-hosted status --json | jq` and expect
+   `verdict: "healthy"`. Otherwise, use
+   [diagnose-failed-install.md](diagnose-failed-install.md).
 
-7. **(Optional) Smoke a function.** Route to [deploy-and-invoke.md](deploy-and-invoke.md) for the create → deploy → invoke flow.
+7. Optionally smoke test a function. Use
+   [deploy-and-invoke.md](deploy-and-invoke.md) for the create -> deploy ->
+   invoke flow.
 
 ## Notes
 
-- Single-cluster `up` against a fresh cluster takes ~10–13 min depending on chart pull speed and NATS stream-init latency.
-- `up` is idempotent — safe to re-run if the user wants to retry after fixing a prerequisite.
+- Single-cluster `up` against a fresh cluster takes about 10-13 minutes,
+  depending on chart pull speed and NATS stream-init latency.
+- `up` is idempotent. It is safe to re-run after fixing a prerequisite.
 - Never propose `--force` (no command takes one anyway).
 - If the user has CI / `$CI` set, always use `--non-interactive --token=$JWT`; never propose `nvcf-cli init` interactively.

@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "backend",
+    srcs = [
+        "client.go",
+        "registry.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/segment",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":backend",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "backend_test",
+    srcs = ["registry_test.go"],
+    embed = [":backend"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/config"],
+)

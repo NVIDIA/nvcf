@@ -248,7 +248,7 @@ func TestManifestMetadataClassifiesAllArtifacts(t *testing.T) {
 	}
 
 	sort.Strings(eaCVE)
-	wantEACVE := []string{"bitnami-cassandra", "nvcf-cassandra-migrations"}
+	wantEACVE := []string{"nvcf-cassandra-migrations"}
 	if strings.Join(eaCVE, ",") != strings.Join(wantEACVE, ",") {
 		t.Fatalf("EA-CVE entries = %v, want %v", eaCVE, wantEACVE)
 	}

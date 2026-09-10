@@ -1,0 +1,552 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "vanityGateway": {
+      "type": "object",
+      "properties": {
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "registry": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "imagePullSecrets": {
+          "type": "array"
+        },
+        "nameOverride": {
+          "type": "string"
+        },
+        "fullnameOverride": {
+          "type": "string"
+        },
+        "serviceAccount": {
+          "type": "object",
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "annotations": {
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "podAnnotations": {
+          "type": "object"
+        },
+        "podLabels": {
+          "type": "object"
+        },
+        "podSecurityContext": {
+          "type": "object"
+        },
+        "securityContext": {
+          "type": "object"
+        },
+        "shutdown": {
+          "type": "object",
+          "properties": {
+            "terminationGracePeriodSeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "preStopSleepSeconds": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "terminationGracePeriodSeconds",
+            "preStopSleepSeconds"
+          ],
+          "additionalProperties": false
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "httpPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "adminPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "additionalProperties": false
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "mappingPath": {
+              "$ref": "#/definitions/nonEmptyString"
+            },
+            "nvcfApiEndpoint": {
+              "$ref": "#/definitions/nonEmptyString"
+            },
+            "llmGatewayEndpoint": {
+              "type": "string",
+              "pattern": "^$|^https?://[^/]+/?$"
+            },
+            "otelExporterOtlpEndpoint": {
+              "type": "string"
+            },
+            "secretsPath": {
+              "type": "string"
+            },
+            "privateModelNameRegexPattern": {
+              "type": "string"
+            },
+            "awsRegion": {
+              "type": "string"
+            },
+            "shadowMaxConcurrent": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "mappingConfig": {
+          "type": "object",
+          "properties": {
+            "v2config": {
+              "type": "object",
+              "properties": {
+                "openai": {
+                  "$ref": "#/definitions/openAIRoutes"
+                },
+                "vanity": {
+                  "$ref": "#/definitions/vanityRoutes"
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "v2config"
+          ],
+          "additionalProperties": true
+        },
+        "resources": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "$ref": "#/definitions/nonEmptyString"
+            },
+            "labels": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "replicaCount",
+        "image",
+        "service",
+        "config",
+        "mappingConfig"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mappingConfig": {
+                "properties": {
+                  "v2config": {
+                    "properties": {
+                      "openai": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "chatCompletions": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "chatCompletions"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "responses": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "responses"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "embeddings": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "embeddings"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "openai"
+                    ]
+                  }
+                },
+                "required": [
+                  "v2config"
+                ]
+              }
+            },
+            "required": [
+              "mappingConfig"
+            ]
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "properties": {
+                  "llmGatewayEndpoint": {
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "llmGatewayEndpoint"
+                ]
+              }
+            },
+            "required": [
+              "config"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "openAIRoutes": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "chatCompletions": {
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
+        },
+        "completions": {
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
+        },
+        "embeddings": {
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
+        },
+        "responses": {
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
+        },
+        "imageGenerations": {
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
+        },
+        "imageEdits": {
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
+        },
+        "imageVariations": {
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/openAIEndpointRoutes"
+      }
+    },
+    "openAIEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAIModelRoute"
+      }
+    },
+    "openAIModelRoute": {
+      "type": "object",
+      "properties": {
+        "modelName": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionID": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionVersionID": {
+          "type": "string"
+        },
+        "outgoingPathOverride": {
+          "type": "string"
+        },
+        "usePexec": {
+          "type": "boolean"
+        },
+        "eol": {
+          "type": "string"
+        },
+        "offlineMessage": {
+          "type": "string"
+        },
+        "tooManyRequestsMessage": {
+          "type": "string"
+        },
+        "shadowModelName": {
+          "type": "string"
+        },
+        "shadowModelNames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/nonEmptyString"
+          }
+        },
+        "shadowPercentage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "shadowCancelOnClientDisconnect": {
+          "type": "boolean"
+        },
+        "functionType": {
+          "enum": [
+            "LLM"
+          ]
+        }
+      },
+      "required": [
+        "modelName",
+        "functionID"
+      ],
+      "additionalProperties": true
+    },
+    "vanityRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/vanityRoute"
+      }
+    },
+    "vanityRoute": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "paths": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/vanityPathRoute"
+          }
+        }
+      },
+      "required": [
+        "host",
+        "paths"
+      ],
+      "additionalProperties": true
+    },
+    "vanityPathRoute": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionID": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionVersionID": {
+          "type": "string"
+        },
+        "outgoingPathOverride": {
+          "type": "string"
+        },
+        "usePexec": {
+          "type": "boolean"
+        },
+        "eol": {
+          "type": "string"
+        },
+        "offlineMessage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "functionID"
+      ],
+      "additionalProperties": true
+    },
+    "openAILLMModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAIModelRoute"
+        },
+        {
+          "if": {
+            "properties": {
+              "functionType": {
+                "const": "LLM"
+              }
+            },
+            "required": [
+              "functionType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "usePexec": {
+                "enum": [
+                  false
+                ]
+              },
+              "outgoingPathOverride": {
+                "enum": [
+                  ""
+                ]
+              },
+              "sessionTimeout": {
+                "enum": [
+                  0
+                ]
+              },
+              "customHeaders": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "X-Priority"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "x-priority"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "X-priority"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "openAILLMEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAILLMModelRoute"
+      }
+    },
+    "openAINonLLMModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAIModelRoute"
+        },
+        {
+          "not": {
+            "required": [
+              "functionType"
+            ]
+          }
+        }
+      ]
+    },
+    "openAINonLLMEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAINonLLMModelRoute"
+      }
+    }
+  },
+  "additionalProperties": true
+}

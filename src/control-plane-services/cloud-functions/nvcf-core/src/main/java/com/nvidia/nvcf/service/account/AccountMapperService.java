@@ -27,7 +27,7 @@ import com.nvidia.nvcf.rest.account.dto.AccountDetailsDto;
 import com.nvidia.nvcf.rest.account.dto.AccountDto;
 import com.nvidia.nvcf.rest.account.dto.CreateAccountRequest;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
-import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDto;
+import com.nvidia.nvcf.rest.registry.dto.TempRegistryCredentialDetailsDto;
 import com.nvidia.nvcf.service.registry.RegistryFunctionMapperService;
 import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
 import com.nvidia.nvcf.configuration.account.AccountLimitsProperties;
@@ -76,7 +76,7 @@ public class AccountMapperService {
             AccountEntity accountEntity,
             Stream<TelemetryByAccountEntity> telemetryByAccountEntities,
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
-        var registryCredentials = toRegistryCredentialDtos(registryCredentialDetailsDtos);
+        var registryCredentials = toRegistryCredentialDetailsDtos(registryCredentialDetailsDtos);
         var ncaId = accountEntity.getNcaId();
         var telemetryDtos = telemetryMapperService.toTelemetryDtos(telemetryByAccountEntities);
         var currentNumberOfFunctions = (int) functionsRepository.countByNcaId(ncaId);
@@ -141,10 +141,10 @@ public class AccountMapperService {
     }
 
     @Nullable
-    private List<RegistryCredentialDto> toRegistryCredentialDtos(
+    private List<TempRegistryCredentialDetailsDto> toRegistryCredentialDetailsDtos(
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
         var registryCredentials = registryCredentialDetailsDtos.stream()
-                .map(registryFunctionMapperService::toRegistryCredentialDto)
+                .map(registryFunctionMapperService::toTempRegistryCredentialDetailsDto)
                 .filter(Objects::nonNull)
                 .toList();
 

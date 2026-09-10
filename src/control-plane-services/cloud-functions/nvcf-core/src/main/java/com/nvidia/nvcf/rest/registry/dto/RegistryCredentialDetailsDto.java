@@ -57,6 +57,9 @@ public record RegistryCredentialDetailsDto(
         @Schema(description = "Registry credential provisioned by system or user")
         @NotNull ProvisionedByEnum provisionedBy,
 
+        @Schema(description = "Optional registry credential key type")
+        @Nullable String keyType,
+
         @Schema(description = "Timestamp for last registry credential update")
         @NotNull Instant lastUpdatedAt,
 

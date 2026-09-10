@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -119,7 +119,7 @@ ICMS_CORE_DEPS = [
     "@nv_third_party_deps//:tools_jackson_module_jackson_module_blackbird",
 ]
 
-nv_boot_library(
+nvcf_java_library(
     name = "icms_core",
     srcs = ICMS_CORE_SRCS,
     deps = ICMS_CORE_DEPS,
@@ -142,7 +142,7 @@ java_library(
     ],
 )
 
-nv_boot_library(
+nvcf_java_library(
     name = "test_fixtures",
     srcs = ICMS_CORE_TEST_SRCS,
     deps = ICMS_CORE_DEPS + [
@@ -152,32 +152,32 @@ nv_boot_library(
         "@nv_third_party_deps//:org_assertj_assertj_core",
         "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
         "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_params",
+        "@nv_third_party_deps//:org_junit_platform_junit_platform_commons",
         "@nv_third_party_deps//:org_mockito_mockito_core",
         "@nv_third_party_deps//:org_mockito_mockito_junit_jupiter",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
-        "@nv_third_party_deps//:org_springframework_spring_test",
-        "@nv_third_party_deps//:org_junit_platform_junit_platform_commons",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_cassandra",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
-        "@nv_third_party_deps//:org_springframework_boot_spring_boot_webmvc_test",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_restclient",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_test",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_spring_test",
         "@nv_third_party_deps//:org_testcontainers_testcontainers",
         "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
         "@nv_third_party_deps//:org_testcontainers_testcontainers_junit_jupiter",
         "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
     ],
+    ide_visible = False,
     resource_strip_prefix = "src/control-plane-services/instance-cluster-management/icms-core/src/test/resources",
     resources = ICMS_CORE_TEST_RESOURCES,
     runtime_deps = [":integration_local_env_resources"],
     testonly = True,
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":icms_core",
     srcs = ICMS_CORE_TEST_SRCS,
     deps = ICMS_CORE_DEPS + [
         ":icms_core",
@@ -199,10 +199,25 @@ nv_boot_library_test(
     data = ["//src/control-plane-services/instance-cluster-management:integration_local_env"],
     resource_strip_prefix = "src/control-plane-services/instance-cluster-management/icms-core/src/test/resources",
     resources = ICMS_CORE_TEST_RESOURCES,
+    runtime_deps = [":integration_local_env_resources"],
     size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":icms_core",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "long",
 )

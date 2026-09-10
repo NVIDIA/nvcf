@@ -16,6 +16,7 @@ spring:
   application:
     name: nvcf-core-test
     env: test
+    region: test
     version: 0.0.1-test
     host:
       id: local-test-host

@@ -22,6 +22,13 @@ nodeSelector:
 
 replicaCount: 3
 
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string (e.g. 1 or "50%").
+  minAvailable: ""
+  maxUnavailable: ""
+
 images:
   server: nvcr.io/nv-ngc-devops/unbound:1.22.0-nv1.3.1
   logger: nvcr.io/nv-ngc-devops/dns-logger:v2.2.1

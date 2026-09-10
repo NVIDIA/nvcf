@@ -73,3 +73,29 @@ live in `icms-service/src/main/resources/application-{profile}.yaml` and
 `icms-core/src/test/resources`.
 
 See [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md) for deeper architecture and contribution notes.
+
+## Run the app from IntelliJ IDEA
+
+1. Open the monorepo root as a Bazel project.
+2. Open `Settings` > `Build, Execution, Deployment` > `Build Tools` >
+   `Bazel`.
+3. Set `Project View Path` to
+   `<monorepo-root>/tools/intellij/.managed.bazelproject` and sync the
+   project.
+4. Run
+   `@//src/control-plane-services/instance-cluster-management/icms-service:app_run`
+   from the Bazel tool window or the gutter beside `App.main()`.
+5. Open the generated `Bazel` run configuration. Keep `Run with Bazel`
+   selected.
+6. Add these values to `CLI arguments to your application`, replacing the
+   example root with the absolute path to this checkout:
+
+   ```text
+   --jvm_flag=-Dspring.profiles.active=local
+   --jvm_flag=-Dnv-boot.reloadable-properties.file=file:/absolute/path/to/nvcf/src/control-plane-services/instance-cluster-management/local_env/vault/secrets.json
+   ```
+
+Start the local dependencies described above before running the target. Bazel
+runs the application from its runfiles tree, so the secrets file must use an
+absolute path. Do not set `-Duser.dir`; it breaks Bazel's relative Java
+classpath.

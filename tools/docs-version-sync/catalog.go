@@ -38,6 +38,11 @@ const (
 	defaultCLIVersion        = "0.0.30"
 )
 
+var (
+	fullLowercaseCommitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	lowercaseSHA256DigestRe  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+)
+
 type ArtifactType string
 
 const (
@@ -87,6 +92,7 @@ type Catalog struct {
 	Registries            map[string]Registry `yaml:"registries"`
 	Publications          []Publication       `yaml:"publications,omitempty"`
 	VersionOverrides      []VersionOverride   `yaml:"version_overrides,omitempty"`
+	PublicationPending    []string            `yaml:"publication_pending,omitempty"`
 	Manifest              ManifestMetadata    `yaml:"manifest,omitempty"`
 	Stack                 StackMetadata       `yaml:"stack"`
 	Denylist              []DenylistEntry     `yaml:"denylist,omitempty"`
@@ -121,13 +127,19 @@ type VersionOverride struct {
 	Source  string `yaml:"source,omitempty"`
 }
 
+// StackMetadata identifies the independently versioned publication inventory and source release.
 type StackMetadata struct {
-	Name            string `yaml:"name"`
-	Version         string `yaml:"version"`
-	Registry        string `yaml:"registry"`
-	GitLabProjectID int    `yaml:"gitlab_project_id,omitempty"`
-	PackageName     string `yaml:"package_name,omitempty"`
-	ArtifactsFile   string `yaml:"artifacts_file,omitempty"`
+	Name               string   `yaml:"name"`
+	PublicationVersion string   `yaml:"version"`
+	Registry           string   `yaml:"registry"`
+	GitLabProjectID    int      `yaml:"gitlab_project_id,omitempty"`
+	PackageName        string   `yaml:"package_name,omitempty"`
+	ArtifactsFile      string   `yaml:"artifacts_file,omitempty"`
+	SourceVersion      string   `yaml:"source_version,omitempty"`
+	SourceTag          string   `yaml:"source_tag,omitempty"`
+	SourceCommit       string   `yaml:"source_commit,omitempty"`
+	PinSources         []string `yaml:"pin_sources,omitempty"`
+	PinSourceDigest    string   `yaml:"pin_source_digest,omitempty"`
 }
 
 type DenylistEntry struct {
@@ -283,14 +295,55 @@ func ValidateCatalog(catalog *Catalog) error {
 		}
 		seenVersionOverrides[override.Name] = struct{}{}
 	}
+	seenPending := map[string]struct{}{}
+	for _, name := range catalog.PublicationPending {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(name) != name {
+			return fmt.Errorf("publication_pending artifact names must be non-empty and trimmed")
+		}
+		if _, exists := seenPending[name]; exists {
+			return fmt.Errorf("duplicate publication_pending artifact %s", name)
+		}
+		seenPending[name] = struct{}{}
+	}
 	if strings.TrimSpace(catalog.Stack.Name) == "" {
 		return fmt.Errorf("stack name cannot be empty")
 	}
-	if strings.TrimSpace(catalog.Stack.Version) == "" {
-		return fmt.Errorf("stack version cannot be empty")
+	if strings.TrimSpace(catalog.Stack.PublicationVersion) == "" {
+		return fmt.Errorf("stack publication version cannot be empty")
 	}
 	if _, ok := catalog.Registries[catalog.Stack.Registry]; !ok {
 		return fmt.Errorf("stack registry %q is not defined", catalog.Stack.Registry)
+	}
+	hasSourceVersion := strings.TrimSpace(catalog.Stack.SourceVersion) != ""
+	hasSourceTag := strings.TrimSpace(catalog.Stack.SourceTag) != ""
+	hasSourceCommit := strings.TrimSpace(catalog.Stack.SourceCommit) != ""
+	hasPinSources := len(catalog.Stack.PinSources) != 0
+	hasPinSourceDigest := strings.TrimSpace(catalog.Stack.PinSourceDigest) != ""
+	if (hasSourceVersion || hasSourceTag || hasSourceCommit || hasPinSources || hasPinSourceDigest) && (!hasSourceVersion || !hasSourceTag || !hasSourceCommit || !hasPinSources || !hasPinSourceDigest) {
+		return fmt.Errorf("stack source snapshot must set source_version, source_tag, source_commit, pin_sources, and pin_source_digest together")
+	}
+	if hasSourceCommit {
+		wantSourceTag := "deploy/stacks/self-managed/v" + catalog.Stack.SourceVersion
+		if catalog.Stack.SourceTag != wantSourceTag {
+			return fmt.Errorf("stack source_tag must be %s for source version %s", wantSourceTag, catalog.Stack.SourceVersion)
+		}
+		if !fullLowercaseCommitSHARe.MatchString(catalog.Stack.SourceCommit) {
+			return fmt.Errorf("stack source_commit must be a full lowercase commit SHA")
+		}
+		if !lowercaseSHA256DigestRe.MatchString(catalog.Stack.PinSourceDigest) {
+			return fmt.Errorf("stack pin_source_digest must be a lowercase SHA-256 digest")
+		}
+		seenPinSources := map[string]struct{}{}
+		for _, sourcePath := range catalog.Stack.PinSources {
+			trimmed := strings.TrimSpace(sourcePath)
+			if trimmed == "" || trimmed != sourcePath {
+				return fmt.Errorf("stack pin source must be non-empty and trimmed")
+			}
+			if _, exists := seenPinSources[sourcePath]; exists {
+				return fmt.Errorf("duplicate stack pin source %s", sourcePath)
+			}
+			seenPinSources[sourcePath] = struct{}{}
+		}
 	}
 
 	denylist := catalog.DenylistMap()
@@ -310,6 +363,24 @@ func ValidateCatalog(catalog *Catalog) error {
 	}
 	if _, exists := seen[catalog.Stack.Name]; exists {
 		return fmt.Errorf("duplicate artifact id %s", catalog.Stack.Name)
+	}
+	for name := range seenPending {
+		artifact, exists := catalog.findArtifact(name)
+		if !exists {
+			for _, candidate := range append(append([]Artifact{}, catalog.Artifacts...), catalog.SupplementalArtifacts...) {
+				if candidate.catalogKey() == name {
+					artifact = candidate
+					exists = true
+					break
+				}
+			}
+		}
+		if !exists {
+			return fmt.Errorf("publication_pending references unknown artifact %s", name)
+		}
+		if _, published := catalog.publicationFor(artifact); published {
+			return fmt.Errorf("artifact %s:%s cannot be both published and publication_pending", artifact.Name, artifact.Version)
+		}
 	}
 	if err := validateManifestMetadata(catalog.Manifest); err != nil {
 		return err
@@ -488,6 +559,10 @@ func (catalog *Catalog) publicationFor(artifact Artifact) (Publication, bool) {
 }
 
 func (catalog *Catalog) chartPullReference(artifact Artifact) (string, error) {
+	if catalog.publicationIsPending(artifact) {
+		variable := strings.ToUpper(strings.ReplaceAll(artifact.Name, "-", "_")) + "_REFERENCE"
+		return fmt.Sprintf("\"${%s:?set %s to a published or mirrored %s reference}\"", variable, variable, artifact.Name), nil
+	}
 	publication, published := catalog.publicationFor(artifact)
 	if published && publication.ChartFormat == ChartFormatHTTP {
 		registry := catalog.Registries[publication.Registry]
@@ -505,6 +580,22 @@ func (catalog *Catalog) chartPullReference(artifact Artifact) (string, error) {
 		return "", err
 	}
 	return "oci://" + strings.TrimSuffix(path, ":"+artifact.Version), nil
+}
+
+func (catalog *Catalog) artifactDistribution(artifact Artifact) (string, error) {
+	if catalog.publicationIsPending(artifact) {
+		return "Publication pending", nil
+	}
+	return catalog.artifactPath(artifact)
+}
+
+func (catalog *Catalog) publicationIsPending(artifact Artifact) bool {
+	for _, name := range catalog.PublicationPending {
+		if name == artifact.catalogKey() || name == artifact.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func (catalog *Catalog) resourceRef(artifact Artifact) (string, error) {
@@ -527,7 +618,8 @@ func (registry Registry) resourceRef(name, version string) string {
 	return fmt.Sprintf("%s/%s:%s", registry.Namespace, name, version)
 }
 
-func BuildCatalogFromArtifacts(stackVersion string, artifacts []Artifact) *Catalog {
+// BuildCatalogFromArtifacts creates a catalog from a published package inventory.
+func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) *Catalog {
 	catalog := &Catalog{
 		Version: 1,
 		Target:  "main",
@@ -538,12 +630,12 @@ func BuildCatalogFromArtifacts(stackVersion string, artifacts []Artifact) *Catal
 			},
 		},
 		Stack: StackMetadata{
-			Name:            defaultStackResourceName,
-			Version:         stackVersion,
-			Registry:        defaultStackRegistry,
-			GitLabProjectID: defaultStackProjectID,
-			PackageName:     defaultPackageName,
-			ArtifactsFile:   fmt.Sprintf("artifacts-%s.txt", stackVersion),
+			Name:               defaultStackResourceName,
+			PublicationVersion: publicationVersion,
+			Registry:           defaultStackRegistry,
+			GitLabProjectID:    defaultStackProjectID,
+			PackageName:        defaultPackageName,
+			ArtifactsFile:      fmt.Sprintf("artifacts-%s.txt", publicationVersion),
 		},
 		SupplementalArtifacts: []Artifact{
 			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: defaultCLIRegistry, Version: defaultCLIVersion},
@@ -559,11 +651,13 @@ func BuildCatalogFromArtifacts(stackVersion string, artifacts []Artifact) *Catal
 		artifact.Source = ""
 		catalog.Artifacts = append(catalog.Artifacts, artifact)
 	}
+	catalog.reconcilePublicationPending()
 	return catalog
 }
 
-func BuildCatalogFromArtifactsWithBase(stackVersion string, artifacts []Artifact, base *Catalog) *Catalog {
-	catalog := BuildCatalogFromArtifacts(stackVersion, artifacts)
+// BuildCatalogFromArtifactsWithBase refreshes an existing catalog from a published package inventory.
+func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Artifact, base *Catalog) *Catalog {
+	catalog := BuildCatalogFromArtifacts(publicationVersion, artifacts)
 	if base == nil {
 		return catalog
 	}
@@ -575,8 +669,15 @@ func BuildCatalogFromArtifactsWithBase(stackVersion string, artifacts []Artifact
 	}
 	catalog.Publications = append(catalog.Publications, base.Publications...)
 	catalog.VersionOverrides = append(catalog.VersionOverrides, base.VersionOverrides...)
+	catalog.PublicationPending = append(catalog.PublicationPending, base.PublicationPending...)
 	catalog.Denylist = append(catalog.Denylist, base.Denylist...)
 	catalog.Manifest = base.Manifest
+	// A package refresh does not identify a new GitHub source release.
+	catalog.Stack.SourceVersion = base.Stack.SourceVersion
+	catalog.Stack.SourceCommit = base.Stack.SourceCommit
+	catalog.Stack.SourceTag = base.Stack.SourceTag
+	catalog.Stack.PinSources = append(catalog.Stack.PinSources, base.Stack.PinSources...)
+	catalog.Stack.PinSourceDigest = base.Stack.PinSourceDigest
 
 	manifestNames := map[string]struct{}{}
 	for _, artifact := range catalog.Artifacts {
@@ -607,8 +708,52 @@ func BuildCatalogFromArtifactsWithBase(stackVersion string, artifacts []Artifact
 		seenSupplemental[key] = struct{}{}
 	}
 	catalog.applyVersionOverrides()
+	catalog.reconcilePublicationPending()
 	catalog.pruneUnusedRegistries()
 	return catalog
+}
+
+func (catalog *Catalog) reconcilePublicationPending() {
+	artifacts := append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...)
+	artifacts = append(artifacts, catalog.SupplementalArtifacts...)
+	pending := map[string]struct{}{}
+
+	for _, marker := range catalog.PublicationPending {
+		for _, artifact := range artifacts {
+			if marker != artifact.catalogKey() && marker != artifact.Name {
+				continue
+			}
+			if _, published := catalog.publicationFor(artifact); !published {
+				pending[artifact.catalogKey()] = struct{}{}
+			}
+		}
+	}
+	for _, artifact := range artifacts {
+		if !catalog.artifactUsesStagingRegistry(artifact) {
+			continue
+		}
+		if _, published := catalog.publicationFor(artifact); !published {
+			pending[artifact.catalogKey()] = struct{}{}
+		}
+	}
+
+	catalog.PublicationPending = catalog.PublicationPending[:0]
+	for name := range pending {
+		catalog.PublicationPending = append(catalog.PublicationPending, name)
+	}
+	sort.Strings(catalog.PublicationPending)
+}
+
+func (catalog *Catalog) artifactUsesStagingRegistry(artifact Artifact) bool {
+	registry, ok := catalog.Registries[artifact.Registry]
+	if !ok {
+		return false
+	}
+	staging, ok := catalog.Registries[defaultStackRegistry]
+	if !ok {
+		return false
+	}
+	return registry.Host == staging.Host && registry.Namespace == staging.Namespace
 }
 
 func (catalog *Catalog) applyVersionOverrides() {

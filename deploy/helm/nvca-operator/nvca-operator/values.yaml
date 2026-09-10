@@ -15,11 +15,11 @@
 ## @section NVCA Operator parameters
 
 ## @param image.repository NVCA Operator container registry path, without tag
-## @param image.tag NVCA Operator container image tag. This defaults to the chart version
+## @param image.tag NVCA Operator container image tag. This defaults to the chart's appVersion
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
-  repository: ""
-  tag: "3.0.4"
+  repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
+  tag: ""
   pullPolicy: IfNotPresent
 ## @param nvcaImage.repositoryOverride (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config
 ## @param nvcaImage.pullPolicy K8s ImagePullPolicy
@@ -37,7 +37,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.143.2
+  imageTag: 0.160.0-nv-0.2.4
   resources:
     limits:
       cpu: 1000m
@@ -65,6 +65,13 @@ serviceAccount:
   name: ""
 ## @param replicaCount Replica count for the operator deployment
 replicaCount: 1
+## @param podDisruptionBudget PodDisruptionBudget configuration
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string from 0% to 100%.
+  minAvailable: ""
+  maxUnavailable: ""
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator
 ## @param logLevel Logging level for the module
@@ -89,7 +96,86 @@ nvcaHelmRepositoryPrefix: ""
 enableGXCache: true
 ## @param ddcsIPAllowList provides comma separated CIDR ranges to allowList
 ddcsIPAllowList: ""
+## @section BYOO Configuration
+## @param byoo.resources Resource requests and limits for the BYOO OTel collector container. Leave unset to keep the agent's built-in defaults.
+## @param byoo.logChunking.maxPayloadBytes Maximum log chunk payload size in bytes. Zero disables the override.
+## @param byoo.logChunking.dryRun Record chunking metrics without modifying log payloads.
+## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
+## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead. Leave unset to keep the agent's built-in defaults.
+## @param byoo.fluentbit.resources Resource requests and limits for the BYOO FluentBit container. Leave unset to keep the agent's built-in defaults.
+byoo:
+  resources: {}
+  logChunking:
+    maxPayloadBytes: 0
+    dryRun: false
+  otelCollector: {}
+  additionalResourceOverhead: {}
+  fluentbit:
+    resources: {}
+## @param utils.resources Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.
+utils:
+  resources:
+    cpu: "4"
+    memory: 4Gi
+## @section Storage Configuration
+## @param storage.sharedStorage.server.image Image for the shared-storage pod's SMB container. Leave unset to keep the agent's built-in default.
+## @param storage.sharedStorage.server.resources Resource requests and limits for the shared-storage pod's SMB container. Leave unset to keep the agent's built-in defaults.
+## @param storage.sharedStorage.taskData.storageClassName Storage class for task data. Falls back to ephemeral storage if unset.
+## @param storage.sharedStorage.taskData.mountOptions Mount options for the provisioned task data PV.
+## @param storage.sharedStorage.taskData.storageCapacity Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.
+## @param storage.internalPersistentStorage.storageClassName Storage class for the Internal Persistent Storage (IPS) PVC.
+## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).
+storage:
+  sharedStorage:
+    server:
+      image: ""
+      resources: {}
+    taskData:
+      storageClassName: ""
+      mountOptions: []
+      storageCapacity: ""
+  internalPersistentStorage:
+    storageClassName: ""
+    hardResourceQuota: {}
+## @section Worker/Agent Behavior Configuration
+## @param worker.minHealthcheckRefreshWait Minimum wait between internal healthchecker refresh calls. Leave unset to keep the agent's built-in default.
+## @param worker.staticGPUCapacity Static override of GPU capacity used for registration. Zero disables the override.
+## @param worker.computeBackend Selects the compute backend. Leave unset to keep the agent's built-in default.
+## @param worker.requestsNamespace Namespace NVCA creates request-scoped resources in. Leave unset to keep the agent's built-in default.
+## @param worker.namespaceLabels Labels applied to namespaces NVCA creates.
+## @param worker.featureFlags Feature flags enabled on the NVCA agent.
+## @param worker.skipSelfDestruct Skip self-destruct even if ICMS sends SELF_DESTRUCT.
+## @param worker.forceSelfDestruct Force self-destruct mode for testing.
+## @param worker.csiVolumeMountOptions CSI PVC mount options for provisioned volumes.
+## @param worker.timeouts.credRenewInterval Interval between credential renewal attempts. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.heartbeatInterval Interval between agent heartbeats. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.syncQueueInterval Interval between queue sync polls. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.syncRequestStatusInterval Interval between request status syncs. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.syncAcknowledgeRequestInterval Interval between request acknowledgement syncs. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.periodicInstanceStatusInterval Interval between periodic instance status reports. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.icmsRequestAckInterval Interval between ICMS request acknowledgement polls. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.icmsRequestAckRetryTimeout Timeout for retrying ICMS request acknowledgement. Leave unset to keep the agent's built-in default.
+worker:
+  minHealthcheckRefreshWait: ""
+  staticGPUCapacity: 0
+  computeBackend: ""
+  requestsNamespace: ""
+  namespaceLabels: {}
+  featureFlags: []
+  skipSelfDestruct: false
+  forceSelfDestruct: false
+  csiVolumeMountOptions: []
+  timeouts:
+    credRenewInterval: ""
+    heartbeatInterval: ""
+    syncQueueInterval: ""
+    syncRequestStatusInterval: ""
+    syncAcknowledgeRequestInterval: ""
+    periodicInstanceStatusInterval: ""
+    icmsRequestAckInterval: ""
+    icmsRequestAckRetryTimeout: ""
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
+## @description agentConfig.mergeConfig is deprecated for BYOO, storage, and worker settings. Use the top-level byoo/storage/worker values instead.
 agentConfig:
   mergeConfig: |-
     cluster:
@@ -101,7 +187,7 @@ agentConfig:
   #   agent:
   #     logLevel: debug
   #
-  # BYOO metric subset example:
+  # Legacy BYOO example (deprecated):
   #
   # mergeConfig: |
   #   agent:
@@ -171,7 +257,7 @@ resources:
 ## @param agent.taskEnvOverrides Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})
 ## @param agent.overrideEnvironmentVariables Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"}
 ## @param agent.tolerations K8s tolerations for the NVCA agent pod
-## @param agent.llm.requestRouterAddress Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers
+## @param agent.llm.requestRouterAddress Operator default LLM request-router address. Workers read LLM_REQUEST_ROUTER_ADDRESS from the launch environment; not a runtime fallback
 ## @param agent.serviceOAuth OAuth token and JWKS endpoints used by dependent services
 agent:
   cacheMountOptionsEnabled: true
@@ -192,6 +278,11 @@ agent:
     requestRouterAddress: ""
   workload:
     tolerations: []
+  ## @param agent.byooOtelCollector.imageRepository Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.
+  ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
+  byooOtelCollector:
+    imageRepository: ""
+    imageTag: "0.160.0-nv-0.2.4"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -200,8 +291,7 @@ agent:
   ##     INIT_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:2.97.2"
   ##     UTILS_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.94.0"
   ##     ESS_AGENT_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/ess-agent:1.0.5"
-  functionEnvOverrides:
-    BYOO_OTEL_COLLECTOR_CONTAINER: nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11
+  functionEnvOverrides: {}
   ## Environment variable overrides for task workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 ESS_AGENT_CONTAINER, TASK_CONTAINER
@@ -209,8 +299,7 @@ agent:
   ##   taskEnvOverrides:
   ##     INIT_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:2.97.2"
   ##     UTILS_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.94.0"
-  taskEnvOverrides:
-    BYOO_OTEL_COLLECTOR_CONTAINER: nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11
+  taskEnvOverrides: {}
   overrideEnvironmentVariables: {}
   serviceOAuth:
     helmReVal:
@@ -235,17 +324,15 @@ agent:
       cpu: 100m
       memory: 200Mi
 ## @section Webhook Container Resource configuration
-## @param webhook.resources.limits.cpu CPU limit for the nvca webhook container
 ## @param webhook.resources.limits.memory Memory limit for the nvca webhook container
 ## @param webhook.resources.requests.cpu CPU request for the nvca webhook container
 ## @param webhook.resources.requests.memory Memory request for the nvca webhook container
 webhook:
   resources:
     limits:
-      cpu: 200m
       memory: 200Mi
     requests:
-      cpu: 50m
+      cpu: 500m
       memory: 50Mi
 ## @section NGC Configuration
 
@@ -266,9 +353,11 @@ ngcConfig:
   apiURL: https://api.ngc.nvidia.com
   clusterSource: ngc-managed
 ## @section Vault Configuration
+## @param vaultConfig.address Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.
 ## @param vaultConfig.oAuthClientMountPathTemplate Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret"
 ## @param vaultConfig.oAuthClientMountPath (Optional) Full OAuth client mount path. If set, overrides the computed path from template.
 vaultConfig:
+  address: ""
   oAuthClientMountPathTemplate: ""
   oAuthClientMountPath: ""
 ## @section Helm Managed NVCF Backend Configuration
@@ -308,7 +397,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.160.0-nv-0.2.4
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
@@ -332,7 +421,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.160.0-nv-0.2.4
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   icmsServiceURL: "http://icms.example.invalid:8080"
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
@@ -383,6 +472,23 @@ gracefulShutdown:
 networkPolicy:
   clusterNetworkCIDRs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/12"]
   customPolicies: []
+  ## @param networkPolicy.operator.enabled Apply a default-deny NetworkPolicy to the operator pod itself, with explicit allows for kube-dns, nvsnap-server, and the kube-apiserver. Opt-in: false by default so existing deployments are unchanged.
+  ## @param networkPolicy.operator.nvsnapServerNamespace Namespace where nvsnap-server runs (egress target for L2 promote-state polls + audit writes)
+  ## @param networkPolicy.operator.nvsnapServerPodLabel app= label value matched against pods in the nvsnap-server namespace
+  ## @param networkPolicy.operator.nvsnapServerPort nvsnap-server REST port
+  ## @param networkPolicy.operator.apiServerCIDRs CIDR list containing the kube-apiserver. Empty = no apiserver allow (operator loses K8s API access). Pin to your cluster's apiserver range.
+  ## @param networkPolicy.operator.apiServerPort kube-apiserver port
+  ## @param networkPolicy.operator.ingressFrom Optional NetworkPolicyPeer list for ingress (Prometheus, kubelet probes). Empty = allow from anywhere.
+  ## @param networkPolicy.operator.extraEgress Additional egress rule entries appended verbatim (private registries, OTLP collector, …)
+  operator:
+    enabled: false
+    nvsnapServerNamespace: "nvsnap-system"
+    nvsnapServerPodLabel: "nvsnap-server"
+    nvsnapServerPort: 8080
+    apiServerCIDRs: []
+    apiServerPort: 443
+    ingressFrom: []
+    extraEgress: []
 ## @section Cluster Validator Configuration
 
 ## @param clusterValidator.enabled Enable the cluster-validator CronJob and init container
@@ -400,7 +506,7 @@ clusterValidator:
   enabled: false
   image:
     repository: ""
-    tag: "" # defaults to .Chart.Version (same as nvca-operator)
+    tag: "" # defaults to .Chart.AppVersion (same as nvca-operator)
     pullPolicy: IfNotPresent
   schedule: "0 */3 * * *"
   configMapName: "cluster-validator-network-checks"

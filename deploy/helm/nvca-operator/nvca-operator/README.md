@@ -3,6 +3,12 @@
 NVCF Cluster Agent (NVCA) Operator installs and manages reconfiguration, upgrades, and health checks of NVCA
 used in Kubernetes Clusters to run NVCF Workloads.
 
+## Storage capability catalog
+
+The chart installs the versioned `nvcf-storage-capabilities` ConfigMap in the Helm release namespace. For each exact CSI provisioner the catalog records only the PVC access modes qualified end to end in an NVCF cache workflow, plus the mount options for reader volumes NVCA creates. Nothing about the flow is declared: NVCA derives it from those modes. An empty `accessModes` list means nothing is qualified yet, so caching stays off for that driver. Container cache is outside NVCA and is not part of this catalog.
+
+This release does not wire the catalog into backend selection. Runtime use requires a durable cache plan and safe legacy-request migration so retries and agent restarts cannot change backends. Managed deployments will inspect the exact `nvcf-sc` StorageClass when that follow-up is implemented. Editing this ConfigMap does not enable a storage backend today.
+
 ## Parameters
 
 ### NVCA Operator parameters
@@ -10,7 +16,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | Name                           | Description                                                                                                                                                                                           | Value                                    |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | `image.repository`             | NVCA Operator container registry path, without tag                                                                                                                                                    | `nvcr.io/nvidia/nvcf-byoc/nvca-operator` |
-| `image.tag`                    | NVCA Operator container image tag. This defaults to the chart version                                                                                                                                 | `""`                                     |
+| `image.tag`                    | NVCA Operator container image tag. This defaults to the chart's appVersion                                                                                                                            | `""`                                     |
 | `image.pullPolicy`             | K8s ImagePullPolicy                                                                                                                                                                                   | `IfNotPresent`                           |
 | `nvcaImage.repositoryOverride` | (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config | `""`                                     |
 | `nvcaImage.pullPolicy`         | K8s ImagePullPolicy                                                                                                                                                                                   | `IfNotPresent`                           |
@@ -21,7 +27,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
 | `otelCollector.enabled`                   | Enable OTel collector sidecar for K8s event collection                                                                                                                                                | `false`                    |
 | `otelCollector.imageRepository`           | (OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it will be calculated based on image.repository (stg vs prod).                                                      | `""`                       |
-| `otelCollector.imageTag`                  | Image tag of OpenTelemetry Collector sidecar.                                                                                                                                                         | `0.143.2`                  |
+| `otelCollector.imageTag`                  | Image tag of OpenTelemetry Collector sidecar.                                                                                                                                                         | `0.157.0-nv-0.2.1`        |
 | `otelCollector.resources.limits.cpu`      | CPU limit for the OTel collector container                                                                                                                                                            | `1000m`                    |
 | `otelCollector.resources.limits.memory`   | Memory limit for the OTel collector container                                                                                                                                                         | `1Gi`                      |
 | `otelCollector.resources.requests.cpu`    | CPU request for the OTel collector container                                                                                                                                                          | `200m`                     |
@@ -43,7 +49,38 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `nvcaHelmRepositoryPrefix`                | Enables Helm repository restrictions to specific org/teams                                                                                                                                            | `""`                       |
 | `enableGXCache`                           | Enables GXCache Support in NVCA                                                                                                                                                                       | `true`                     |
 | `ddcsIPAllowList`                         | provides comma separated CIDR ranges to allowList                                                                                                                                                     | `""`                       |
-| `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Must be a string.                                                                                                                                        | `""`                       |
+| `byoo.resources`                          | Resource requests and limits for the BYOO OTel collector container. Leave unset to keep the agent's built-in defaults.                                                                              | `{}`                       |
+| `byoo.logChunking.maxPayloadBytes`        | Maximum BYOO log chunk payload size in bytes. Zero disables the override.                                                                                                                             | `0`                        |
+| `byoo.logChunking.dryRun`                 | Record chunking metrics without modifying log payloads.                                                                                                                                               | `false`                    |
+| `byoo.otelCollector`                      | Structured BYOO OTel collector rendering overrides.                                                                                                                                                   | `{}`                       |
+| `byoo.additionalResourceOverhead`         | Cluster capacity reserved for BYOO and related DaemonSet overhead. Leave unset to keep the agent's built-in defaults.                                                                                | `{}`                       |
+| `byoo.fluentbit.resources`                | Resource requests and limits for the BYOO FluentBit container. Leave unset to keep the agent's built-in defaults.                                                                                    | `{}`                       |
+| `utils.resources`                         | Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.                                                                          | See `values.yaml`          |
+| `storage.sharedStorage.server.image`      | Image for the shared-storage pod's SMB container. Leave unset to keep the agent's built-in default.                                                                                                  | `""`                       |
+| `storage.sharedStorage.server.resources`  | Resource requests and limits for the shared-storage pod's SMB container. Leave unset to keep the agent's built-in defaults.                                                                          | `{}`                       |
+| `storage.sharedStorage.taskData.storageClassName` | Storage class for task data. Falls back to ephemeral storage if unset.                                                                                                                        | `""`                       |
+| `storage.sharedStorage.taskData.mountOptions` | Mount options for the provisioned task data PV.                                                                                                                                                   | `[]`                       |
+| `storage.sharedStorage.taskData.storageCapacity` | Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.                                                                                                | `""`                       |
+| `storage.internalPersistentStorage.storageClassName` | Storage class for the Internal Persistent Storage (IPS) PVC.                                                                                                                               | `""`                       |
+| `storage.internalPersistentStorage.hardResourceQuota` | Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).                                                                                                                | `{}`                       |
+| `worker.minHealthcheckRefreshWait`        | Minimum wait between internal healthchecker refresh calls. Leave unset to keep the agent's built-in default.                                                                                         | `""`                       |
+| `worker.staticGPUCapacity`                | Static override of GPU capacity used for registration. Zero disables the override.                                                                                                                   | `0`                        |
+| `worker.computeBackend`                   | Selects the compute backend. Leave unset to keep the agent's built-in default.                                                                                                                        | `""`                       |
+| `worker.requestsNamespace`                | Namespace NVCA creates request-scoped resources in. Leave unset to keep the agent's built-in default.                                                                                                | `""`                       |
+| `worker.namespaceLabels`                  | Labels applied to namespaces NVCA creates.                                                                                                                                                            | `{}`                       |
+| `worker.featureFlags`                     | Feature flags enabled on the NVCA agent.                                                                                                                                                              | `[]`                       |
+| `worker.skipSelfDestruct`                 | Skip self-destruct even if ICMS sends SELF_DESTRUCT.                                                                                                                                                  | `false`                    |
+| `worker.forceSelfDestruct`                | Force self-destruct mode for testing.                                                                                                                                                                 | `false`                    |
+| `worker.csiVolumeMountOptions`            | CSI PVC mount options for provisioned volumes.                                                                                                                                                        | `[]`                       |
+| `worker.timeouts.credRenewInterval`       | Interval between credential renewal attempts. Leave unset to keep the agent's built-in default.                                                                                                      | `""`                       |
+| `worker.timeouts.heartbeatInterval`       | Interval between agent heartbeats. Leave unset to keep the agent's built-in default.                                                                                                                  | `""`                       |
+| `worker.timeouts.syncQueueInterval`       | Interval between queue sync polls. Leave unset to keep the agent's built-in default.                                                                                                                 | `""`                       |
+| `worker.timeouts.syncRequestStatusInterval` | Interval between request status syncs. Leave unset to keep the agent's built-in default.                                                                                                           | `""`                       |
+| `worker.timeouts.syncAcknowledgeRequestInterval` | Interval between request acknowledgement syncs. Leave unset to keep the agent's built-in default.                                                                                             | `""`                       |
+| `worker.timeouts.periodicInstanceStatusInterval` | Interval between periodic instance status reports. Leave unset to keep the agent's built-in default.                                                                                          | `""`                       |
+| `worker.timeouts.icmsRequestAckInterval`  | Interval between ICMS request acknowledgement polls. Leave unset to keep the agent's built-in default.                                                                                               | `""`                       |
+| `worker.timeouts.icmsRequestAckRetryTimeout` | Timeout for retrying ICMS request acknowledgement. Leave unset to keep the agent's built-in default.                                                                                              | `""`                       |
+| `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Deprecated for BYOO, storage, and worker settings; use `byoo`/`storage`/`worker` instead.                                                             | `""`                       |
 | `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name` | Secret containing the workload transport trust bundle; empty disables the source. Example: `nvcf-trust`. | `""` |
 | `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key` | Secret data key containing certificate-only PEM. | `ca.crt` |
 | `operatorConfig.workload.transportTLS.fingerprint` | Optional SHA-256 pin; empty computes the Secret data fingerprint. | `""` |
@@ -57,6 +94,14 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `resources.limits.memory`   | Memory limit for the nvca-operator container   | `500Mi` |
 | `resources.requests.cpu`    | CPU request for the nvca-operator container    | `50m`   |
 | `resources.requests.memory` | Memory request for the nvca-operator container | `50Mi`  |
+
+### PodDisruptionBudget configuration
+
+| Name                                 | Description                                                                                                              | Value   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `podDisruptionBudget.enabled`        | Enable a PodDisruptionBudget for the NVCA Operator.                                                                      | `false` |
+| `podDisruptionBudget.minAvailable`   | Minimum available pods. When enabled, set exactly one of this value or `maxUnavailable`. Supports an integer or 0-100%. | `""`    |
+| `podDisruptionBudget.maxUnavailable` | Maximum unavailable pods. When enabled, set exactly one of this value or `minAvailable`. Supports an integer or 0-100%. | `""`    |
 
 ### Agent Container Resource configuration
 
@@ -75,19 +120,20 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `agent.gpuProfiling.functionIds`     | Comma/space/newline-separated NVCF function IDs (or "*" for all) whose pods NVCA labels for NVIDIA Nsight GPU profiling. Empty disables profiling.                          | `""`                   |
 | `agent.gpuProfiling.labelKey`        | Pod label key NVCA applies to profiled function pods (the label the Nsight Operator watches for). Empty uses the built-in default "nvidia-nsight-profile".                 | `""`                   |
 | `agent.gpuProfiling.labelValue`      | Pod label value NVCA applies to profiled function pods. Empty uses the built-in default "enabled".                                                                         | `""`                   |
+| `agent.byooOtelCollector.imageRepository` | Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.                                                            | `""`                   |
+| `agent.byooOtelCollector.imageTag`   | BYOO OpenTelemetry Collector image tag.                                                                                                                                        | `0.157.0-nv-0.2.1`      |
 | `agent.functionEnvOverrides`         | Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})        | `{}`                   |
 | `agent.taskEnvOverrides`             | Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})          | `{}`                   |
 | `agent.overrideEnvironmentVariables` | Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"} | `{}`                   |
-| `agent.llm.requestRouterAddress`     | Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers                                                                                      | `""`                   |
+| `agent.llm.requestRouterAddress`     | Operator default LLM request-router address. Workers read LLM_REQUEST_ROUTER_ADDRESS from the launch environment; not a runtime fallback                                    | `""`                   |
 | `agent.serviceOAuth`                 | OAuth token and JWKS endpoints used by dependent services                                                                                                                   | See `values.yaml`      |
 
 ### Webhook Container Resource configuration
 
 | Name                                | Description                                   | Value   |
 | ----------------------------------- | --------------------------------------------- | ------- |
-| `webhook.resources.limits.cpu`      | CPU limit for the nvca webhook container      | `200m`  |
 | `webhook.resources.limits.memory`   | Memory limit for the nvca webhook container   | `200Mi` |
-| `webhook.resources.requests.cpu`    | CPU request for the nvca webhook container    | `50m`   |
+| `webhook.resources.requests.cpu`    | CPU request for the nvca webhook container    | `500m`  |
 | `webhook.resources.requests.memory` | Memory request for the nvca webhook container | `50Mi`  |
 
 ### NGC Configuration
@@ -105,6 +151,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 
 | Name                                       | Description                                                                                                                                             | Value |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `vaultConfig.address`                      | Vault server URL for Helm-managed clusters. Required when `helmManaged.oAuthClientID` is set; must be HTTP(S), without credentials, query, or fragment. | `""`  |
 | `vaultConfig.oAuthClientMountPathTemplate` | Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret" | `""`  |
 | `vaultConfig.oAuthClientMountPath`         | (Optional) Full OAuth client mount path. If set, overrides the computed path from template.                                                             | `""`  |
 
@@ -127,7 +174,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `helmManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.10.2`   |
 | `helmManaged.otelCollector.enabled`           | Enable OTel collector sidecar for helm-managed clusters                                                                                                                              | `false`   |
 | `helmManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`      |
-| `helmManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.143.2` |
+| `helmManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.157.0-nv-0.2.1` |
 
 ### Self Managed NVCF Backend Configuration
 
@@ -141,7 +188,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `selfManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.10.2`                                    |
 | `selfManaged.otelCollector.enabled`           | Enable OTel collector sidecar for self-managed clusters                                                                                                                              | `false`                                    |
 | `selfManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`                                       |
-| `selfManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.143.2`                                  |
+| `selfManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.157.0-nv-0.2.1`                        |
 | `selfManaged.icmsServiceURL`                  | URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `http://icms.example.invalid:8080`        |
 | `selfManaged.icmsServiceHostHeaderOverride`                 | Optional Host header override for selfManaged.icmsServiceURL.                                                                                                                       | `""`                                      |
 | `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                | `http://reval.example.invalid:8080`       |

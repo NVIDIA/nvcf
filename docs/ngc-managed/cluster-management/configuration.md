@@ -212,7 +212,7 @@ If you want to update the mount-options to a different value for example: `ro,no
 Supported in Cluster Agent Versions 2.49.0 or higher
 </Note>
 
-Clusters with the `AccountIsolation` attribute have enhanced isolation between workloads, ensuring that function and task instances run on nodes isolated by NCAId. This is particularly important for customers with strict security requirements or those who want to ensure complete separation of workloads at the account level. 
+Clusters with the `AccountIsolation` attribute have enhanced isolation between workloads, ensuring that function and task instances run on nodes isolated by NCAId. This is particularly important for customers with strict security requirements or those who want to ensure complete separation of workloads at the account level.
 
 <Warning>
 In Account Isolated mode, the cluster might be inefficient in GPU utilization if workloads are not designed to utilize the full capacity of the isolated nodes.
@@ -225,6 +225,7 @@ Clusters with [MNNVL](https://docs.nvidia.com/datacenter/cloud-native/gpu-operat
 The Cluster Agent can be directed to configure multi-node workloads with their own [ComputeDomains](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html#computedomains-multi-node-nvlink-simplified) automatically to optimize inter-GPU connections.
 
 Additional prerequisites:
+
 - The [NVIDIA GPU DRA driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html) must be installed.
 - The `NVLinkOptimized` cluster attribute must be added during cluster registration.
 
@@ -242,15 +243,15 @@ Additional cluster restrictions to be aware of:
 
 - Object count limits are configured for resource fairness in these clusters:
 
-   - ConfigMaps: 20
-   - Secrets: 20
-   - Services: 20
-   - Pods: 100
-   - Jobs: 10
-   - CronJobs: 10
-   - Deployments: 10
-   - ReplicaSets: 10
-   - StatefulSets: 10
+  - ConfigMaps: 20
+  - Secrets: 20
+  - Services: 20
+  - Pods: 100
+  - Jobs: 10
+  - CronJobs: 10
+  - Deployments: 10
+  - ReplicaSets: 10
+  - StatefulSets: 10
 
 ## Network Configuration
 
@@ -271,37 +272,37 @@ The NVCA operator requires outbound network connectivity to pull images, charts,
 | Policy Name | Description |
 | --- | --- |
 | allow-egress-gxcache | Allows egress traffic to the GX Cache namespace for caching operations (only relevant for NVIDIA managed clusters) |
-| allow-egress-internet-no- internal-no-api | Allows egress traffic to the public internet (0.0.0.0/0) but blocks traffic to common private IP ranges. Also allows DNS resolution via kube-dns. |
-| allow-egress-intra-namespace | Controls pod-to-pod communication within the same namespace. This policy is only applied to function namespaces and not to shared pod instance namespaces. |
+| allow-egress-internet-no-internal-no-api | Allows egress traffic to the public internet (0.0.0.0/0) but blocks traffic to common private IP ranges. Also allows DNS resolution via kube-dns. |
+| allow-egress-intra-namespace | Allows pod-to-pod communication within the same namespace. Applied only to per-instance function namespaces (for example a MiniService's utils pod reaching its own inference pod), never to the shared `nvcf-backend` namespace. |
 | allow-egress-nvcf-cache | Allows egress traffic to NVCF cache services (only relevant for NVIDIA managed clusters) |
-| allow-egress-prometheus- nvcf-byoo | Allows egress traffic to Prometheus monitoring endpoints (only relevant for NVIDIA managed clusters) |
-| allow-ingress-monitoring | Allows ingress traffic for monitoring services |
+| allow-egress-prometheus-nvcf-byoo | Allows egress traffic to Prometheus monitoring endpoints (only relevant for NVIDIA managed clusters) |
+| allow-ingress-monitoring | Allows ingress from the `monitoring` namespace on supported monitoring ports. In per-instance function namespaces, also allows same-namespace ingress (paired with allow-egress-intra-namespace); same-namespace ingress is not added to the shared `nvcf-backend` namespace. |
 | allow-ingress-monitoring-dcgm | Allows ingress traffic for DCGM monitoring |
-| allow-ingress-monitoring- gxcache | Allows ingress traffic for GX Cache monitoring (only relevant for NVIDIA managed clusters) |
+| allow-ingress-monitoring-gxcache | Allows ingress traffic for GX Cache monitoring (only relevant for NVIDIA managed clusters) |
 
 ## Key Network Requirements
 
 1. **Kubernetes API Access**
 
-  - NVCA requires access to the Kubernetes API
-  - Consult your cloud provider's documentation (e.g., Azure, AWS, GCP) for the Kubernetes API endpoint
+- NVCA requires access to the Kubernetes API
+- Consult your cloud provider's documentation (e.g., Azure, AWS, GCP) for the Kubernetes API endpoint
 
-2. **Container Registry and NVCF Control Plane Access**
+1. **Container Registry and NVCF Control Plane Access**
 
-  - Access to `nvcr.io` and `helm.ngc.nvidia.com` is required to pull container images, resources, and helm charts.
-  - NVCA requires access to NVIDIA control plane services for coordination of functions and task deployments and invocation, this includes:
+- Access to `nvcr.io` and `helm.ngc.nvidia.com` is required to pull container images, resources, and helm charts.
+- NVCA requires access to NVIDIA control plane services for coordination of functions and task deployments and invocation, this includes:
 
-    - `connect.pnats.nvcf.nvidia.com`
-    - `grpc.api.nvcf.nvidia.com`
-    - `*.api.nvcf.nvidia.com`
-    - `sqs.*.amazonaws.com`
-    - `spot.gdn.nvidia.com`
-    - `ess.ngc.nvidia.com`
-    - `api.ngc.nvidia.com`
+  - `connect.pnats.nvcf.nvidia.com`
+  - `grpc.api.nvcf.nvidia.com`
+  - `*.api.nvcf.nvidia.com`
+  - `sqs.*.amazonaws.com`
+  - `spot.gdn.nvidia.com`
+  - `ess.ngc.nvidia.com`
+  - `api.ngc.nvidia.com`
 
-3. **Monitoring and Logging**
+1. **Monitoring and Logging**
 
-  - If your environment requires advanced monitoring or logging (e.g., sending logs to external endpoints), ensure your cluster's NetworkPolicy or firewall rules allow egress to the required monitoring/logging domains
+- If your environment requires advanced monitoring or logging (e.g., sending logs to external endpoints), ensure your cluster's NetworkPolicy or firewall rules allow egress to the required monitoring/logging domains
 
 ## Network Policy Customization via ConfigMap
 
@@ -361,14 +362,14 @@ To customize a network policy:
                        protocol: TCP
 ```
 
-2. Apply the configmap:
+1. Apply the configmap:
 
 ```bash
 
  kubectl apply -f patchcm.yaml
 ```
 
-3. Verify the changes:
+1. Verify the changes:
 
 ```bash
 
@@ -410,7 +411,7 @@ To configure CSI volume mount options:
   nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-2. View current mount options configuration:
+1. View current mount options configuration:
 
 ```bash
 
@@ -424,7 +425,7 @@ To configure CSI volume mount options:
   kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name" --type='json' -p='[{"op": "replace", "path": "/spec/overrides/featureGate/cacheCSIVolumeMountOptionsConfig", "value": {"disabled": false, "mountOptions": "ro,norecovery,nouuid"}}]'
 ```
 
-4. Verify the changes:
+1. Verify the changes:
 
 ```bash
 
@@ -432,6 +433,7 @@ To configure CSI volume mount options:
 ```
 
 The default mount options are:
+
 - `ro`: Read-only mount
 - `norecovery`: Skip journal recovery
 - `nouuid`: Ignore filesystem UUID
@@ -627,14 +629,14 @@ the next Helm upgrade.
   nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-2. View current feature flags:
+1. View current feature flags:
 
 ```bash
 
   kubectl get nvcfbackends -n nvca-operator -o yaml | grep -A 5 "featureGate:"
 ```
 
-3. Patch the feature flags. Note that this will override all feature flags.
+1. Patch the feature flags. Note that this will override all feature flags.
 
 <Warning>
 
@@ -664,7 +666,7 @@ As an alternative to the patch command, you can also modify the feature flags us
         ...
 ```
 
-4. Verify the changes:
+1. Verify the changes:
 
 ```bash
 
@@ -693,21 +695,21 @@ When enabling the Helm shared storage feature flag, you must preserve any existi
   helm install csi-driver-smb csi-driver-smb/csi-driver-smb --namespace kube-system --version v1.16.0
 ```
 
-2. Get the NVCF cluster name:
+1. Get the NVCF cluster name:
 
 ```bash
 
   nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-3. Enable the Helm shared storage feature flag:
+1. Enable the Helm shared storage feature flag:
 
 ```bash
 
   kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name" --type=merge -p '{"spec":{"overrides":{"featureGate":{"values":["LogPosting","HelmSharedStorage", "CachingSupport"]}}}}'
 ```
 
-4. Verify that the feature flag is enabled:
+1. Verify that the feature flag is enabled:
 
 ```bash
 
@@ -788,9 +790,12 @@ BYOO metric subset example:
              - 'metric.name != "BpsInstrument"'
        byooWorkloadMetrics:
          dropLabels:
-           - metric_subset_enabled
            - custom_label
 ```
+
+When `byooMetricSubset.enabled` is true, `dropLabels` extends the default
+`metric_subset_enabled` label. The configured labels are removed from both the
+primary metrics pipeline and the metric subset endpoint on port `19091`.
 
 **Apply via Helm:**
 
@@ -1018,7 +1023,7 @@ After applying the configuration, verify that NVCA is using the static configura
 
    Look for `-DynamicGPUDiscovery` in the feature gates and verify the GPU configuration is present.
 
-2. **Check the nvca-config ConfigMap:**
+1. **Check the nvca-config ConfigMap:**
 
 ```bash
  kubectl get configmap nvca-config -n nvca-system -o yaml
@@ -1026,7 +1031,7 @@ After applying the configuration, verify that NVCA is using the static configura
 
    The `gpus` key should contain your JSON configuration.
 
-3. **Check NVCA logs for registration:**
+1. **Check NVCA logs for registration:**
 
 ```bash
  kubectl logs -n nvca-system -l app=nvca | grep -i "registration\|instance"
@@ -1064,12 +1069,12 @@ Use ``G`` or ``Gi`` for gigabytes, ``T`` or ``Ti`` for terabytes. The ``i`` suff
 
 When using Oracle Container Engine for Kubernetes (OKE), ensure that:
 
-* Your compute nodes and GPU nodes are in the same availability domain
-* This is required for proper network connectivity between the NVIDIA Cluster Agent and GPU nodes
-* Flannel CNI is the current recommended and validated CNI vs OCI native CNI for OKE cluster networking.
+- Your compute nodes and GPU nodes are in the same availability domain
+- This is required for proper network connectivity between the NVIDIA Cluster Agent and GPU nodes
+- Flannel CNI is the current recommended and validated CNI vs OCI native CNI for OKE cluster networking.
 
 ## AWS
 
 When using AWS EKS, note that the following limitations exist:
 
-* Caching is currently not supported
+- Caching is currently not supported

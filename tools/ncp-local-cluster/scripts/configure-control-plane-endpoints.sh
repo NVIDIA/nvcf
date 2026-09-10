@@ -28,6 +28,8 @@ domain="${CONTROL_PLANE_DOMAIN:-nvcf-control-plane.test}"
 http_port="${CONTROL_PLANE_LB_HTTP_PORT:-80}"
 grpc_port="${CONTROL_PLANE_LB_GRPC_PORT:-9090}"
 grpc_worker_port="${CONTROL_PLANE_LB_GRPC_WORKER_PORT:-10086}"
+llm_grpc_port="${CONTROL_PLANE_LB_LLM_GRPC_PORT:-50071}"
+llm_quic_port="${CONTROL_PLANE_LB_LLM_QUIC_PORT:-50072}"
 nats_port="${CONTROL_PLANE_LB_NATS_PORT:-4222}"
 network_name="k3d-${cluster_name}"
 
@@ -53,6 +55,8 @@ echo "Configuring compute aliases for ${domain} via ${control_plane_lb_container
 echo "  HTTP service port 8080 -> control-plane load balancer container port ${http_port}"
 echo "  gRPC service port 9090 -> control-plane load balancer container port ${grpc_port}"
 echo "  gRPC worker service port 10086 -> control-plane load balancer container port ${grpc_worker_port}"
+echo "  LLM registration service port 50071 -> control-plane load balancer container port ${llm_grpc_port}"
+echo "  LLM reverse-tunnel service port 50072/UDP -> control-plane load balancer container port ${llm_quic_port}/UDP"
 echo "  NATS service port 4222 -> control-plane load balancer container port ${nats_port}"
 
 yaml="$(cat <<YAML
@@ -110,6 +114,22 @@ subsets:
       - name: worker-tcp
         port: ${grpc_worker_port}
         protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: llm-request-router
+  namespace: nvcf
+subsets:
+  - addresses:
+      - ip: ${lb_ip}
+    ports:
+      - name: llm-grpc
+        port: ${llm_grpc_port}
+        protocol: TCP
+      - name: llm-quic
+        port: ${llm_quic_port}
+        protocol: UDP
 ---
 apiVersion: v1
 kind: Endpoints

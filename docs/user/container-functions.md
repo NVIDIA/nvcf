@@ -28,6 +28,10 @@ Any server can be implemented within the container, as long as it implements the
 
 These endpoints are expected to be served on the same port, defined as the `inferencePort`.
 
+## Invocation Metadata Headers
+
+Cloud Functions adds `NVCF-INVOCATION-REGION` to HTTP requests sent to a function container. Its value is the configured region of the invocation service that accepted the request. Client-supplied values are replaced. Cloud Functions does not add this header to client responses.
+
 <Warning>
 Cloud Functions reserves the following ports on your container for internal monitoring and metrics:
 

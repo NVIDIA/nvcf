@@ -78,6 +78,23 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Reject a service.type override.
+
+The registry mirror endpoint written into hosts.toml and the CRI-O drop-in is
+${NODE_IP}:${port}, which only resolves when the service publishes that port on
+every node. Any other service type renders no nodePort, leaving the mirror
+pointing at a closed port: pulls then fall back to the upstream registry with no
+error, which is indistinguishable from a working cache until you look at cache
+metrics. Fail the render instead of installing something that silently no-ops.
+*/}}
+{{- define "nvcf-container-cache.validateServiceType" -}}
+{{- $type := (.Values.service | default dict).type -}}
+{{- if and $type (ne $type "NodePort") -}}
+{{- fail (printf "service.type=%s is not supported: container-cache must publish a NodePort so the host container runtime can reach it at ${NODE_IP}:${port}. Remove service.type from your values (the chart always renders NodePort) and set service.port instead." $type) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Compute CRI-O registry port mappings.
 If .Values.crio.registryPorts is set, use it.
 Otherwise, derive ports from targetHost list starting at basePort.

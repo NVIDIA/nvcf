@@ -18,6 +18,7 @@ limitations under the License.
 package startup
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -31,6 +32,24 @@ func TestConfigFilesFromEnvUsesEventLedgerConfig(t *testing.T) {
 	t.Setenv("EVENT_LEDGER_CONFIG", "/config/secrets.json, /config/override.json,, ")
 
 	assert.Equal(t, []string{"/config/secrets.json", "/config/override.json"}, configFilesFromEnv())
+}
+
+func TestConfigDefaultsAuthenticationEnabled(t *testing.T) {
+	v := newConfigViper()
+	var cfg config.Config
+
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.True(t, cfg.Auth.Enabled)
+}
+
+func TestConfigAllowsAuthenticationToBeExplicitlyDisabled(t *testing.T) {
+	v := newConfigViper()
+	v.SetConfigType("json")
+	require.NoError(t, v.ReadConfig(strings.NewReader(`{"auth":{"enabled":false}}`)))
+
+	var cfg config.Config
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.False(t, cfg.Auth.Enabled)
 }
 
 func TestApplyRuntimeFlagOverrides_CloudEventsConfigPreservedWhenDisableFlagOmitted(t *testing.T) {

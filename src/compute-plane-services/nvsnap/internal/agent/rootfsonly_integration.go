@@ -40,7 +40,7 @@ type RootfsCaptureConfig struct {
 	Enabled bool
 
 	// CacheDir is the root the Local Backend writes captured trees into.
-	// Default "/var/lib/nvsnap/cache".
+	// Default "/var/lib/containerd/nvsnap-cache".
 	CacheDir string
 
 	// PodCacheDir, when non-empty (e.g. "/opt/nvsnap"), switches capture to
@@ -85,7 +85,11 @@ func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig)
 		return nil, nil
 	}
 	if cfg.CacheDir == "" {
-		cfg.CacheDir = "/var/lib/nvsnap/cache"
+		// Under the containerd root, not /var/lib directly: on a typical GPU
+		// node the latter is the boot volume while containerd sits on local
+		// NVMe, and captures are large enough that the difference is both a
+		// throughput and a disk-pressure problem.
+		cfg.CacheDir = "/var/lib/containerd/nvsnap-cache"
 	}
 	if cfg.CMNamespace == "" {
 		cfg.CMNamespace = "nvsnap-system"

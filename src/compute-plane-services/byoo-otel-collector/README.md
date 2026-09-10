@@ -94,6 +94,7 @@ The BYOO collector container handles receiving OTLP telemetry (logs, metrics, tr
 ### byoo-otel-collector Image
 
 The `byoo-otel-collector` image is deployed as a single container image that contains:
+
 - **byoo-otel-collector binary** - The main orchestrator that:
   - Generates OpenTelemetry Collector configuration YAML using the nvcf-otelconfig library ([./internal/otelconfig](./internal/otelconfig))
   - Extracts and parses secrets from ESS (Encrypted Secret Store) into individual files ([./internal/secrets](./internal/secrets))
@@ -101,11 +102,13 @@ The `byoo-otel-collector` image is deployed as a single container image that con
 - **otel-collector-contrib binary** - Custom-built OpenTelemetry Collector with healthcheck v2 extension support from upstream [OpenTelemetry Collector Contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib), executed and managed by the byoo-otel-collector binary
 
 Supported Deployment Types:
+
 - **Kubernetes Deployments** → Container and Helm chart workloads
 - **VM Deployments** → Container and Helm chart workloads
 - **Multiple Backends** → Grafana Cloud, Datadog, Azure Monitor, Splunk, Kratos, and more
 
 Exposed Ports:
+
 - 18888: `/metrics` endpoint for the otel-collector-contrib metrics
 - 14357: OTLP gRPC receiver
 - 14358: OTLP HTTP receiver
@@ -118,6 +121,7 @@ Exposed Ports:
 The `nvcf-otel-collector` image contains **only** the custom `otelcol` binary without the BYOO functionalities. This is used as a sidecar container in NVCA pods to collect and forward Kubernetes events for observability.
 
 Exposed Ports:
+
 - 13133: Health check endpoint
 - 8888: Metrics endpoint
 
@@ -141,7 +145,7 @@ Chunking is disabled by default. Configure it with:
 - `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, log batch, and separate log and trace sampler settings. Both samplers support sampling percentage, mode, hash seed, and fail closed. The log sampler also supports attribute source, source attribute, and sampling priority.
 - `BYOO_METRIC_SUBSET_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
 - `BYOO_METRIC_SUBSET_FILTER_CONFIG`: optional YAML filter processor config for the metric subset pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `metric_subset_enabled=false`.
-- `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload `metrics` pipeline. If unset, defaults to `metric_subset_enabled` only when the metric subset pipeline is enabled.
+- `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload metrics pipelines. When the metric subset pipeline is enabled, configured labels extend the default `metric_subset_enabled` label. Labels are removed from both the primary and metric subset pipelines.
 
 When chunking is enabled, each emitted chunk preserves the original log metadata and adds these attributes so chunks can be grouped in the backend:
 
@@ -166,6 +170,7 @@ Secrets-extractor handles ESS (Encrypted Secret Store) secrets, flattening them 
 ESS Secret File Pattern: `<provider>-<endpoint_name>-<credential_type>`
 
 Examples:
+
 - GRAFANA-Grafana_prd-username
 - GRAFANA-Grafana_prd-password
 - THANOS-kratos-cds-client_cert
@@ -189,6 +194,7 @@ Platform Metrics Attributes:
 - nvcf worker: error_code
 
 Attribute Notes:
+
 - [1] `job` attribute is available in Grafana Cloud
 - [2] `service` is used in Datadog instead of attribute `job`
 - [3] `container` is not present in Azure Monitor
@@ -203,6 +209,7 @@ The `generator/` directory contains a Python script that runs at build or develo
 Comprehensive validation tools ensure generated configurations are valid and functional.
 
 **Validation Features:**
+
 - YAML syntax validation
 - OpenTelemetry Collector binary validation
 - End-to-end testing with real collector instances
@@ -224,7 +231,7 @@ Use `make validate-otelconfig` to validate generated configurations against the 
 go build -o bin/byoo-otel-collector ./cmd/byoo-otel-collector
 
 # Build Docker image
-docker build --build-arg OTEL_BUILDER_VERSION=v0.157.0 \
+docker build --build-arg OTEL_BUILDER_VERSION=v0.160.0 \
   -f ./Dockerfile -t byoo-otel-collector:latest .
 
 # Run the collector
@@ -267,7 +274,7 @@ Otel Collector core is built from source to enable healthcheck v2 extension supp
 
 ```bash
 # Install otel collector builder
-go install go.opentelemetry.io/collector/cmd/builder@v0.157.0
+go install go.opentelemetry.io/collector/cmd/builder@v0.160.0
 
 # Build collector
 builder --config=./otel-collector-build.yaml
@@ -282,7 +289,7 @@ The output binary will be generated under the `./output` folder.
 The BYOO otel collector container can be built directly without a GitLab access token.
 
 ```bash
-docker build --build-arg OTEL_BUILDER_VERSION=v0.157.0 \
+docker build --build-arg OTEL_BUILDER_VERSION=v0.160.0 \
   -t YOUR_REGISTRY/byoo-otel-collector:latest .
 ```
 
@@ -326,6 +333,7 @@ make update-examples
 See the [complete metrics list](generator/doc/README.md) for detailed information.
 
 Platform Metric Sources:
+
 - cadvisor: Container resource usage metrics
 - Kube state metrics: Kubernetes resource state metrics ([complete list](https://github.com/kubernetes/kube-state-metrics/tree/main/docs/metrics))
 - GPU/DCGM: GPU telemetry from NVIDIA Data Center GPU Manager ([DCGM exporter](https://docs.nvidia.com/datacenter/dcgm/latest/gpu-telemetry/dcgm-exporter.html))

@@ -41,6 +41,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -421,6 +422,11 @@ func commitBaseFromRepo(repoURL string) string {
 	return u + "/-/commit/"
 }
 
+// gitNetworkTimeout bounds a single network-facing git attempt. Generous enough
+// for a full tag fetch on a large repository, short enough that three attempts
+// plus backoff still finish well inside a CI job.
+const gitNetworkTimeout = 2 * time.Minute
+
 // fetchGitHubTags enumerates the tags on the GitHub mirror at base and fetches
 // them into repoDir's refs/tags so their commits are reachable by tag name.
 // Release tagging moved to GitHub and the GitLab->GitHub mirror is one-way, so
@@ -450,15 +456,47 @@ func fetchGitHubTags(repoDir, base string) (map[string]bool, error) {
 	// Capture (do not live-forward) git's stderr: on auth failure git echoes
 	// the credential-embedded remote URL, which would leak the token into CI
 	// logs. Scrub it before surfacing anything.
+	// Both calls below cross the network to GitHub. A single transient failure
+	// used to drop the entire GitHub tag set, and because the caller only
+	// warned, the site republished with every GitHub-only release missing --
+	// services appeared and disappeared between half-hourly rebuilds. Retry
+	// with a short backoff so a blip does not decide the contents of the site.
+	// Both calls cross the network, so each attempt gets its own deadline.
+	// Without one, a hung connection or a credential prompt blocks until the CI
+	// job timeout an hour later, and the retry loop above never gets to run.
+	// GIT_TERMINAL_PROMPT=0 is set here rather than relied on from the
+	// environment: the publishing job does export it, but this tool is also run
+	// by hand, and a prompt waiting on a closed stdin is the exact stall the
+	// deadline then has to clean up.
 	run := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
-		var stdout, stderr strings.Builder
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("git %s: %w: %s", args[0], err, scrub(stderr.String()))
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			}
+			out, err := func() (string, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), gitNetworkTimeout)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...)
+				cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+				var stdout, stderr strings.Builder
+				cmd.Stdout = &stdout
+				cmd.Stderr = &stderr
+				if err := cmd.Run(); err != nil {
+					if ctx.Err() == context.DeadlineExceeded {
+						return "", fmt.Errorf("git %s: timed out after %s: %s", args[0], gitNetworkTimeout, scrub(stderr.String()))
+					}
+					return "", fmt.Errorf("git %s: %w: %s", args[0], err, scrub(stderr.String()))
+				}
+				return stdout.String(), nil
+			}()
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return out, nil
 		}
-		return stdout.String(), nil
+		return "", lastErr
 	}
 	lsOut, err := run("ls-remote", "--tags", url)
 	if err != nil {
@@ -496,6 +534,8 @@ func main() {
 	commitBase := flag.String("commit-base", "", "umbrella commit URL base, e.g. https://host/group/proj/-/commit/")
 	githubRepo := flag.String("github-repo", envOr("NVCF_GITHUB_REMOTE", "https://github.com/NVIDIA/nvcf.git"),
 		"GitHub mirror to also scan for release tags; empty disables the GitHub source")
+	allowMissingGitHub := flag.Bool("allow-missing-github-tags", false,
+		"publish even if the GitHub tag fetch fails, omitting every GitHub-only release")
 	flag.Parse()
 
 	raw, err := os.ReadFile(*configPath)
@@ -521,7 +561,14 @@ func main() {
 			}
 		}
 		if set, err := fetchGitHubTags(*repo, base); err != nil {
-			// Degrade gracefully: an unreachable mirror must not fail the build.
+			// Fail rather than degrade. Continuing here publishes a site with
+			// every GitHub-only release silently missing, which overwrites a
+			// good deployment with a worse one and reads as data loss rather
+			// than as an outage. Failing leaves the previous deployment served.
+			// Pass --allow-missing-github-tags to opt into the old behavior.
+			if !*allowMissingGitHub {
+				fatal(fmt.Errorf("github tags unavailable: %w (pass --allow-missing-github-tags to publish without them)", err))
+			}
 			fmt.Fprintf(os.Stderr, "changelog-site: github tags unavailable (%v)\n", err)
 		} else {
 			githubTags = set

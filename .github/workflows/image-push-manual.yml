@@ -6,7 +6,7 @@
 # pullable by NVCF clusters for pre-merge testing -- the GitHub-side
 # counterpart to the GitLab "<svc>-image-push-mr-manual" jobs.
 #
-# Manual (workflow_dispatch) only; no image is pushed automatically.
+# Runs on workflow_dispatch, or automatically for PRs carrying the deploy-to-stg label.
 # Requires repo configuration (set in GitHub repo settings, not in source):
 #   - secret  NGC_NCP_DEV_KEY   : NGC key with push to the ncp-dev registry
 #   - secret NCP_DEV_REGISTRY   : the ncp-dev registry base (host/tenant/repo-prefix)
@@ -15,6 +15,14 @@
 name: image-push (manual)
 
 on:
+  # Label a PR with deploy-to-stg and every subsequent push builds and pushes a
+  # dev image automatically. Removing the label stops it. `labeled` covers the
+  # first build, `synchronize` each push after that, `reopened` a revived PR.
+  #
+  # Fork PRs are filtered out in the resolve job below; pull_request (not
+  # pull_request_target) is used, so untrusted code never runs with secrets.
+  pull_request:
+    types: [labeled, synchronize, reopened]
   workflow_dispatch:
     inputs:
       service_path:
@@ -31,13 +39,106 @@ permissions:
   packages: read
 
 concurrency:
-  group: image-push-${{ github.event.inputs.service_path }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: image-push-${{ github.event.inputs.service_path || github.ref }}
+  # A superseded PR build is worthless: the tag it would produce is for a commit
+  # nobody will deploy. Dispatch runs are deliberate, so they still queue.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  push:
-    name: push to ncp-dev
+  resolve:
+    name: resolve subtree
     runs-on: ubuntu-latest
+    # Skip anything not asking for a build, without failing the PR.
+    #
+    # Fork PRs are excluded here rather than left to fail at the push step:
+    # they receive no secrets, so they would burn a runner and end in a
+    # confusing auth error.
+    #
+    # The last clause matters because `labeled` fires for every label. Without
+    # it, adding an unrelated label to a PR that already carries deploy-to-stg
+    # would trigger a full rebuild. On `synchronize` and `reopened` there is no
+    # github.event.label, so the clause is true and the contains() check governs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(github.event.pull_request.labels.*.name, 'deploy-to-stg') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'deploy-to-stg')
+      )
+    outputs:
+      # JSON array of service subtrees to build; the push job fans out over it.
+      service_paths: ${{ steps.pick.outputs.service_paths }}
+      found: ${{ steps.pick.outputs.found }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the subtrees to build
+        id: pick
+        env:
+          INPUT_PATH: ${{ github.event.inputs.service_path }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # The output is always a JSON array so the push job can fan out with
+          # one matrix expression whether one or several subtrees were picked.
+          emit() {
+            printf '%s\n' "$@" | jq -R . | jq -c -s . | sed 's/^/service_paths=/' >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          }
+          if [ -n "${INPUT_PATH}" ]; then
+            emit "${INPUT_PATH}"
+            echo "dispatch: ${INPUT_PATH}"
+            exit 0
+          fi
+
+          # A PR event carries no path input, so derive it from what changed.
+          # Service subtrees are src/<plane>/<service>; take that prefix from
+          # every changed file and build every one that is a Bazel service. A
+          # PR touching two services gets two dev images; it used to get none.
+          # Three dots, not two: compare the merge base of the two commits with
+          # the head, so only this PR's own changes are considered. A two-dot
+          # diff also reports whatever landed on the base branch after this PR
+          # forked, so an unrelated service merging to main would be built too.
+          mapfile -t subtrees < <(
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" \
+              | grep -E '^src/[^/]+/[^/]+/' \
+              | cut -d/ -f1-3 | sort -u
+          )
+          buildable=()
+          for s in "${subtrees[@]}"; do
+            if [ -f "$s/BUILD.bazel" ]; then
+              buildable+=("$s")
+            else
+              echo "::notice::$s has no BUILD.bazel, so it is not a buildable service subtree; skipping it."
+            fi
+          done
+          if [ "${#buildable[@]}" -gt 0 ]; then
+            emit "${buildable[@]}"
+            echo "resolved from changed files: ${buildable[*]}"
+            exit 0
+          fi
+
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          if [ "${#subtrees[@]}" -eq 0 ]; then
+            echo "::notice::No service subtree changed; nothing to push."
+          else
+            echo "::notice::None of the changed subtrees (${subtrees[*]}) is a buildable service; nothing to push."
+          fi
+
+  push:
+    name: push to ncp-dev (${{ matrix.service_path }})
+    needs: resolve
+    if: needs.resolve.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      # One leg per changed service. A failure in one service's build must not
+      # cancel the others; each leg is an independent image.
+      fail-fast: false
+      matrix:
+        service_path: ${{ fromJSON(needs.resolve.outputs.service_paths) }}
     # Same public EC2 Buildbarn cache the matrix build uses. workflow_dispatch
     # is restricted to users with write access, so the secret is available;
     # fork PRs cannot reach this workflow at all.
@@ -55,10 +156,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # actions/checkout runs on the runner host; this job's steps run inside
+      # the bazel-ci container, which mounts that checkout under a different
+      # UID. Since git 2.35.2 (CVE-2022-24765) git refuses to operate on a
+      # repo it does not own ("detected dubious ownership"), which makes
+      # workspace_status.sh's `git rev-parse --short HEAD` fail silently
+      # (stderr redirected) and fall back to the literal "unknown", landing
+      # in the built binary as `mr-unknown` instead of a real short SHA.
+      - name: Trust the checkout inside the container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Resolve service name for cache keys
         id: svc
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ matrix.service_path }}
         run: |
           set -euo pipefail
           echo "name=$(basename "$SVC_PATH")" >> "$GITHUB_OUTPUT"
@@ -163,7 +274,7 @@ jobs:
       - name: Resolve Bazel module layout
         id: layout
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ matrix.service_path }}
         run: |
           set -euo pipefail
           if [ ! -d "$SVC_PATH" ]; then
@@ -185,7 +296,7 @@ jobs:
       - name: Build and push multi-arch image(s)
         working-directory: ${{ steps.layout.outputs.workdir }}
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ matrix.service_path }}
           SCOPE: ${{ steps.layout.outputs.scope }}
           TAG: ${{ steps.meta.outputs.tag }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}

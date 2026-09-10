@@ -20,6 +20,7 @@ uv__iou_init(loop->backend_fd, &lfields->ctl, 256, 0);
 ```
 
 **Two separate rings:**
+
 1. **`lfields->iou`** (64 entries, SQPOLL mode):
    - Flags: `UV__IORING_SETUP_SQPOLL` (kernel thread polls SQ)
    - sq_thread_idle: 10ms (line 530)
@@ -130,16 +131,20 @@ int uv__io_uring_enter(int fd, unsigned to_submit, unsigned min_complete, unsign
 **How it's used:**
 
 1. **Line 838 (submit with wakeup):**
+
    ```c
    if (flags & UV__IORING_SQ_NEED_WAKEUP)
      uv__io_uring_enter(iou->ringfd, 0, 0, UV__IORING_ENTER_SQ_WAKEUP);
    ```
+
    Wakes the kernel SQ polling thread (SQPOLL mode).
 
 2. **Line 1227, 1334 (wait for completions):**
+
    ```c
    rc = uv__io_uring_enter(iou->ringfd, 0, 0, UV__IORING_ENTER_GETEVENTS);
    ```
+
    Enters kernel to wait for completion events.
 
 **The 128 blocked threads:**
@@ -222,6 +227,7 @@ int uv__platform_loop_init(uv_loop_t* loop) {
 ```
 
 **Key comment at line 664:**
+
 ```c
 /* TODO(bnoordhuis) Loses items from the submission and completion rings. */
 ```
@@ -246,6 +252,7 @@ static void uv__iou_delete(struct uv__iou* iou) {
 ```
 
 **Called from:**
+
 1. `uv__platform_loop_delete()` (line 679-680)
 2. Via `uv__io_fork()` during loop fork
 
@@ -255,7 +262,7 @@ static void uv__iou_delete(struct uv__iou* iou) {
 
 ### Submission Queue Layout
 
-```
+```text
 mmap'ed region (ringfd, offset 0, maxlen bytes):
   [SQ headers: sqhead, sqtail, ring_mask, ring_entries, flags, dropped]
   [SQ array: indices 0 to entries-1, each pointing to an SQE slot]
@@ -301,6 +308,7 @@ struct uv__io_uring_cqe {
 ### Entry point: `uv__io_start()` → FD is watched via io_uring or epoll
 
 **Sequence:**
+
 1. Application calls `uv_poll()` or `uv_read()` with a TCP socket
 2. This calls `uv__io_start()` internally
 3. Watcher is queued in `loop->watcher_queue`
@@ -327,6 +335,7 @@ while (!uv__queue_empty(&loop->watcher_queue)) {
 ### Two modes in `uv__epoll_ctl_prep()` (line 1240-1298)
 
 **Mode 1: Direct epoll (if ctl->ringfd == -1):**
+
 ```c
 if (ctl->ringfd == -1) {
   if (!epoll_ctl(epollfd, op, fd, e))
@@ -336,6 +345,7 @@ if (ctl->ringfd == -1) {
 ```
 
 **Mode 2: io_uring EPOLL_CTL (if ctl->ringfd != -1):**
+
 ```c
 else {
   uv__iou_ensure_sqarray(ctl);
@@ -364,6 +374,7 @@ else {
 ### Pointer Invalidation After CRIU Restore
 
 After `CRIU restore`:
+
 1. New process has NEW epoll FD
 2. New process has NEW io_uring ring FDs
 3. OLD mmap'ed regions are from OLD ring FDs (invalid kernel references)
@@ -397,7 +408,7 @@ Current state (BROKEN):
 
 ## 9. The io_uring Ring Lifecycle Summary
 
-```
+```text
 INITIALIZATION:
   uv__io_uring_setup(entries, &params)
   │
@@ -469,14 +480,15 @@ TEARDOWN:
 ## Summary
 
 libuv's io_uring backend uses TWO separate rings:
+
 - **iou ring** (64 entries, SQPOLL): Filesystem operations
 - **ctl ring** (256 entries, normal): Epoll control operations via IORING_OP_EPOLL_CTL
 
 After CRIU restore, `uv_loop_fork()` tears down and reinitializes both rings, but:
+
 1. Old mmap'd regions become invalid (old ring FDs from old PID)
 2. Pointer fields in `struct uv__iou` must be reinitialized
 3. Pending submissions are lost (TODO comment in code)
 4. File descriptor watchers must be re-registered
 
 The 128 blocked threads are stuck in `epoll_pwait()` waiting for events from invalid ring FDs.
-

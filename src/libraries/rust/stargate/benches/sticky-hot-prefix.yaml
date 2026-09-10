@@ -64,15 +64,15 @@ traffic_pattern:
     target_rps: 6
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
+      default: power-of-n
   - name: round-robin
     config:
       default: round-robin
   - name: pulsar
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar

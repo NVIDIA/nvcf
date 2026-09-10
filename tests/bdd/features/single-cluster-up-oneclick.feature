@@ -20,21 +20,33 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
   Rule: self-hosted up installs the control plane and compute plane in one command
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "NGC_API_KEY" is set
       # SAMPLE_NGC_ORG / SAMPLE_NGC_TEAM are consumed by the
       # build-and-deploy-cluster credential-provider validation the
       # `a single-cluster ncp-local cluster is running` step runs.
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
-      # self-hosted up --env local reads operator-authored local secrets
-      # from both split stacks:
-      # deploy/stacks/self-managed/secrets/local-secrets.yaml.
-      # Only secrets.yaml.template is tracked in each stack. Author both
-      # files from the templates; the Ledger restores or removes them at
+      Given these environment variables are set:
+        | name            |
+        | NVCF_CLI        |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
+      # self-hosted up --env local reads operator-authored environment
+      # values from both split stacks. Author both local.yaml files from
+      # the tracked BDD fixtures; the Ledger restores or removes them at
       # suite teardown.
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare Helmfile environment "local" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
+        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
+        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
+        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
+        | observability.profile                         | disabled                                                           |
+      And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
+      # The control-plane stack also requires an operator-authored local
+      # secrets file. Author it from the tracked template; the Ledger gives
+      # it the same restore-or-remove behavior as the environment files.
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
       # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker
       # callback port 10086, overlapping host ports single-cluster
@@ -79,22 +91,23 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
       Then the command exit code should be 0
 
       # Control plane releases are deployed on the single k3d cluster.
-      When I run command "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
-      Then the json output should contain rows:
-        | name           | namespace        | status   |
-        | nats           | nats-system      | deployed |
-        | cassandra      | cassandra-system | deployed |
-        | openbao-server | vault-system     | deployed |
-        | api-keys       | api-keys         | deployed |
-        | sis            | sis              | deployed |
-        | api            | nvcf             | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local":
+        | name           | namespace        |
+        | nats           | nats-system      |
+        | cassandra      | cassandra-system |
+        | openbao-server | vault-system     |
+        | api-keys       | api-keys         |
+        | sis            | sis              |
+        | api            | nvcf             |
+
+      When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command exit code should be 0
+      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
 
       # The compute plane (NVCA operator) is deployed on the same cluster.
-      When I run command "helm list -n nvca-operator --kube-context k3d-ncp-local -o json"
-      Then the json output should contain rows:
-        | name          | namespace     | status   |
-        | nvca-operator | nvca-operator | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local":
+        | name          | namespace     |
+        | nvca-operator | nvca-operator |
 
       # The agent registered by up reports healthy.
-      When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --context k3d-ncp-local --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"

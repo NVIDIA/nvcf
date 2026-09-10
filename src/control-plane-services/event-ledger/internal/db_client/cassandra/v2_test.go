@@ -35,6 +35,41 @@ func TestFilteredStatsTableNameCompatibility(t *testing.T) {
 	assert.Equal(t, "stats_v3_ngc", filteredStatsV3Table)
 }
 
+func TestUpsertFilteredStatsV3KeepsLatestEvent(t *testing.T) {
+	session := getTestSession(t)
+	if session == nil {
+		t.Skip("Cassandra not available for testing")
+	}
+
+	handler := &CassandraHandler{session: session}
+	logger := otelzap.New(zap.NewNop())
+	ctx := logging.AttachLoggerToContext(context.Background(), logger)
+
+	_ = session.Query("TRUNCATE " + filteredStatsV3Table).Exec()
+	t.Cleanup(func() { _ = session.Query("TRUNCATE " + filteredStatsV3Table).Exec() })
+
+	createdAt := time.Now().Add(-2 * time.Minute).Truncate(time.Millisecond)
+	latestTimestamp := createdAt.Add(2 * time.Minute)
+	staleTimestamp := createdAt.Add(time.Minute)
+
+	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.pending", createdAt))
+	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.ready", latestTimestamp))
+	require.NoError(t, handler.UpsertFilteredStatsV3(ctx, "ns-latest", "ctx-1", "pod.starting", staleTimestamp))
+
+	var eventName string
+	var storedTimestamp time.Time
+	var storedCreatedAt time.Time
+	err := session.Query(
+		`SELECT event_name, timestamp, created_at FROM stats_v3_ngc WHERE namespace = ? AND context = ?`,
+		"ns-latest",
+		"ctx-1",
+	).Scan(&eventName, &storedTimestamp, &storedCreatedAt)
+	require.NoError(t, err)
+	assert.Equal(t, "pod.ready", eventName)
+	assert.Equal(t, latestTimestamp.UTC(), storedTimestamp.UTC().Truncate(time.Millisecond))
+	assert.Equal(t, createdAt.UTC(), storedCreatedAt.UTC().Truncate(time.Millisecond))
+}
+
 func TestBulkUpsertEventsV3(t *testing.T) {
 	session := getTestSession(t)
 	if session == nil {

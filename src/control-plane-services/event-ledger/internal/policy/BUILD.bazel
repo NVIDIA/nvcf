@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "policy",
+    srcs = [
+        "api_keys_client.go",
+        "authz_client.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/credentials",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients/pdp_types",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/errors",
+        "@io_opentelemetry_go_otel//:otel",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":policy",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "policy_test",
+    srcs = [
+        "api_keys_client_test.go",
+        "authz_client_test.go",
+    ],
+    embed = [":policy"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/credentials",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients/pdp_types",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/errors",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -16,7 +16,7 @@
  */
 package com.nvidia.nvcf.rest.account.dto;
 
-import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDto;
+import com.nvidia.nvcf.rest.registry.dto.TempRegistryCredentialDetailsDto;
 import com.nvidia.nvcf.rest.telemetry.dto.TelemetryDto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.annotation.Nullable;
@@ -43,7 +43,7 @@ public record AccountDetailsDto(
         @Nullable List<TelemetryDto> telemetries,
 
         @Schema(description = "Registry credentials associated with the account")
-        @Nullable List<RegistryCredentialDto> registryCredentials,
+        @Nullable List<TempRegistryCredentialDetailsDto> registryCredentials,
 
         @Schema(description = "Maximum number of functions allowed for Account")
         @NotNull Integer maxFunctionsAllowed,

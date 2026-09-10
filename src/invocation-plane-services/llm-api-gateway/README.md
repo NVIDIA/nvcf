@@ -65,9 +65,12 @@ the selected function/model and estimated prompt size, including
 `x-routing-key`, `x-model`, `x-input-tokens`, and `x-token-estimate`.
 
 For OpenAI-compatible multi-turn stickiness, chat completions and responses
-return `x-multi-turn-session-id`. Clients should persist that value and send it
-on later requests for the same conversation. The gateway forwards only a hashed
-internal `x-cache-affinity-key` to Stargate.
+accept `prompt_cache_key` and return the selected session value in
+`x-multi-turn-session-id`. Clients can send the same `prompt_cache_key` or
+persist the response header and send it on later requests for the same
+conversation. The gateway preserves the raw body field for the model backend.
+It forwards only a SHA-256-derived value in the internal
+`x-cache-affinity-key` header to Stargate.
 
 When `NVCF_GRPC_ADDR` is configured, the gateway authenticates each request
 through the NVCF LLM gRPC auth service, derives the per-caller rate-limit key

@@ -160,7 +160,7 @@ assert_llm_request_router_grpc_port() {
   test "$actual_port" = "$expected_port"
 }
 
-invalid_worker_address_error='global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535'
+invalid_worker_address_error='global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535'
 
 assert_worker_address_rejected() {
   local case_name="$1"
@@ -257,6 +257,20 @@ assert_remote_config_address "$work_dir/external-api-values.yaml" \
   "$external_worker_address" ||
   fail "enabled LLM did not honor an explicit external worker address"
 
+https_worker_address='https://router.example.com:443'
+write_environment true "$https_worker_address"
+render_api_values "$work_dir/https-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/https-api-values.yaml" \
+  "$https_worker_address" ||
+  fail "enabled LLM did not preserve an explicit HTTPS worker URI"
+
+http_worker_address='http://router.example.com:50071'
+write_environment true "$http_worker_address"
+render_api_values "$work_dir/http-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/http-api-values.yaml" \
+  "$http_worker_address" ||
+  fail "enabled LLM did not preserve an explicit development HTTP worker URI"
+
 ipv4_worker_address='192.0.2.10:50071'
 write_environment true "$ipv4_worker_address"
 render_api_values "$work_dir/ipv4-api-values.yaml" >/dev/null
@@ -310,6 +324,9 @@ invalid_address_cases=(
   'missing-port|router'
   'missing-host|:50071'
   'non-numeric-port|router:not-a-port'
+  'unsupported-scheme|ftp://router.example.com:50071'
+  'userinfo|https://user@router.example.com:50071'
+  'path|https://router.example.com:50071/watch'
   'port-zero|router:0'
   'port-too-large|router:65536'
   'port-too-long|router:99999999999999999999999999999999999999'

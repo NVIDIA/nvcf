@@ -47,6 +47,16 @@ func assertCanonicalPylonBootstrapArgs(t *testing.T, args []string) {
 	assert.Equal(t, []string{"--initial-input-tps=100"}, initialInputTPSArgs)
 }
 
+func healthPathArgs(args []string) []string {
+	var healthPaths []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--upstream-health-path=") {
+			healthPaths = append(healthPaths, arg)
+		}
+	}
+	return healthPaths
+}
+
 func TestNewLLMRouterClientContainer(t *testing.T) {
 	type spec struct {
 		name       string
@@ -296,6 +306,69 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				assert.Equal(t, "/var/run/llm/worker-token", envMap["WORKER_TOKEN_PATH"])
 				assert.Equal(t, "stargate.example.com:443", envMap["LLM_REQUEST_ROUTER_ADDRESS"])
 				assert.Equal(t, "stargate.example.com:443", envMap["STARGATE_ADDRESS"])
+			},
+		},
+		{
+			name: "declared health endpoint is passed to pylon",
+			ls:   &LaunchSpecification{},
+			allEnvSet: map[string]string{
+				"STARGATE_ADDRESS":          "stargate.example.com:443",
+				"INFERENCE_PORT":            "8080",
+				"INFERENCE_HEALTH_ENDPOINT": "/v1/health/ready",
+				"INFERENCE_HEALTH_PORT":     "8080",
+				"INFERENCE_HEALTH_PROTOCOL": "http",
+			},
+			tcfg:       TranslateConfig{},
+			instanceID: "inst-health",
+			isHelm:     false,
+			validate: func(t *testing.T, c corev1.Container) {
+				assert.Equal(t, []string{"--upstream-health-path=/v1/health/ready"}, healthPathArgs(c.Args))
+			},
+		},
+		{
+			name: "health endpoint on a port other than the inference port is skipped",
+			ls:   &LaunchSpecification{},
+			allEnvSet: map[string]string{
+				"STARGATE_ADDRESS":          "stargate.example.com:443",
+				"INFERENCE_PORT":            "8080",
+				"INFERENCE_HEALTH_ENDPOINT": "/custom/ready",
+				"INFERENCE_HEALTH_PORT":     "9090",
+			},
+			tcfg:       TranslateConfig{},
+			instanceID: "inst-health-port",
+			isHelm:     false,
+			validate: func(t *testing.T, c corev1.Container) {
+				assert.Empty(t, healthPathArgs(c.Args))
+			},
+		},
+		{
+			name: "gRPC health protocol is skipped",
+			ls:   &LaunchSpecification{},
+			allEnvSet: map[string]string{
+				"STARGATE_ADDRESS":          "stargate.example.com:443",
+				"INFERENCE_PORT":            "8080",
+				"INFERENCE_HEALTH_ENDPOINT": "/grpc.health.v1.Health/Check",
+				"INFERENCE_HEALTH_PROTOCOL": "gRPC",
+			},
+			tcfg:       TranslateConfig{},
+			instanceID: "inst-health-grpc",
+			isHelm:     false,
+			validate: func(t *testing.T, c corev1.Container) {
+				assert.Empty(t, healthPathArgs(c.Args))
+			},
+		},
+		{
+			name: "no declared health endpoint leaves the pylon defaults in place",
+			ls:   &LaunchSpecification{},
+			allEnvSet: map[string]string{
+				"STARGATE_ADDRESS": "stargate.example.com:443",
+				"INFERENCE_PORT":   "8080",
+			},
+			tcfg:       TranslateConfig{},
+			instanceID: "inst-health-absent",
+			isHelm:     false,
+			validate: func(t *testing.T, c corev1.Container) {
+				assert.Empty(t, healthPathArgs(c.Args))
 			},
 		},
 	}

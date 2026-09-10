@@ -146,23 +146,38 @@ func rateLimitSubjectKey(rateLimitKey string, projectID string, routingKey strin
 	return fmt.Sprintf("nvcf:%s:routing_key:%s", rateLimitKey, routingKey)
 }
 
+// nvcfAuthHTTPError maps an auth gRPC error onto an HTTP response.
+//
+// The messages are deliberately generic. A gRPC error stringifies to something
+// like:
+//
+//	rpc error: code = Unavailable desc = connection error: desc = "transport:
+//	Error while dialing dial tcp 10.0.0.5:9090: connect: connection refused"
+//
+// so returning err.Error() handed every caller the auth service's address, port
+// and dial state. This path is reachable before authentication succeeds, so
+// that was available to anyone who could reach the gateway.
+//
+// The status code still carries what a caller can act on. The detail is not
+// lost: the call site records the original error on the span before calling
+// this, so it stays in traces for debugging.
 func nvcfAuthHTTPError(err error) error {
 	switch status.Code(err) {
 	case codes.OK:
 		return nil
 	case codes.InvalidArgument:
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request")
 	case codes.Unauthenticated:
-		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+		return echo.NewHTTPError(http.StatusUnauthorized, "authentication failed")
 	case codes.PermissionDenied:
-		return echo.NewHTTPError(http.StatusForbidden, err.Error())
+		return echo.NewHTTPError(http.StatusForbidden, "permission denied")
 	case codes.NotFound:
-		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		return echo.NewHTTPError(http.StatusNotFound, "not found")
 	case codes.DeadlineExceeded:
-		return echo.NewHTTPError(http.StatusGatewayTimeout, err.Error())
+		return echo.NewHTTPError(http.StatusGatewayTimeout, "authentication timed out")
 	case codes.Unavailable:
-		return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication service unavailable")
 	default:
-		return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+		return echo.NewHTTPError(http.StatusBadGateway, "authentication failed")
 	}
 }

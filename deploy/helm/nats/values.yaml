@@ -16,6 +16,14 @@
 # NATS Configuration (reference: https://github.com/nats-io/k8s/tree/main/helm/charts/nats)
 nats:
   enabled: true
+
+  # Pod disruption budget. The upstream chart enables this by default.
+  # Set enabled: false to disable, or configure merge/patch for custom spec fields.
+  podDisruptionBudget:
+    enabled: true
+    merge: {}
+    patch: []
+
   global:
     image:
       pullSecretNames: []
@@ -112,6 +120,7 @@ nats:
     merge:
       server_tags:
         - "dc:ncp"
+        - "aws-region:ncp"
       # Auth callout delegates authentication to an external service (nvcf-nats-auth-callout-service).
       # The AUTH account holds the auth callout service's NKey identity.
       # The APP account is the default for authenticated clients (NVCA, workers).

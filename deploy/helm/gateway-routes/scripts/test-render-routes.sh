@@ -21,7 +21,8 @@ default_render="$(mktemp)"
 enabled_render="$(mktemp)"
 annotated_render="$(mktemp)"
 disabled_render="$(mktemp)"
-trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render"' EXIT
+hostname_conflict_error="$(mktemp)"
+trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render" "$hostname_conflict_error"' EXIT
 
 if ! command -v yq >/dev/null 2>&1; then
   echo "yq is required for render tests" >&2
@@ -64,6 +65,22 @@ assert_yq_eq "$repo_root/chart/values.yaml" '.nvcfGatewayRoutes.routes.nats | ha
 
 helm template nvcf-gateway-routes "$repo_root/chart" > "$default_render"
 
+# Admission guard for chart-owned HTTPRoute hostnames.
+assert_yq_eq "$default_render" '[select(.kind == "ValidatingAdmissionPolicy")] | length' 1
+assert_yq_eq "$default_render" '[select(.kind == "ValidatingAdmissionPolicyBinding")] | length' 1
+assert_yq_eq "$default_render" 'select(.kind == "ValidatingAdmissionPolicy") | .spec.failurePolicy' Fail
+assert_yq_eq "$default_render" 'select(.kind == "ValidatingAdmissionPolicy") | .spec.matchConstraints.resourceRules[0].resources[0]' httproutes
+assert_yq_eq "$default_render" 'select(.kind == "ValidatingAdmissionPolicyBinding") | .spec.validationActions[0]' Deny
+
+reserved_hostnames="$(yq ea -r 'select(.kind == "ValidatingAdmissionPolicy") | .spec.variables[] | select(.name == "reservedHostnames") | .expression' "$default_render")"
+case "$reserved_hostnames" in
+  *'"api.localhost": "gateway/nvcf-api"'*'"events.localhost": "gateway/event-ledger"'*) ;;
+  *)
+    echo "admission policy does not reserve every enabled HTTPRoute hostname: $reserved_hostnames" >&2
+    exit 1
+    ;;
+esac
+
 # Default-enabled HTTPRoutes.
 assert_resource_count "$default_render" HTTPRoute nvcf-api gateway 1
 assert_resource_field "$default_render" HTTPRoute nvcf-api gateway '.metadata.labels."app.kubernetes.io/component"' nvcf-api-route
@@ -102,6 +119,10 @@ assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].name' llm-api-gateway
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].port' 8080
+# A request timeout truncates long-lived SSE responses even when the backend
+# terminates them correctly. The zero duration disables the route-level request
+# deadline while still allowing a caller disconnect to close the downstream request.
+assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].timeouts.request' 0s
 
 assert_resource_count "$default_render" HTTPRoute sis gateway 1
 assert_resource_field "$default_render" HTTPRoute sis gateway '.metadata.labels."app.kubernetes.io/component"' sis-route
@@ -109,6 +130,15 @@ assert_resource_field "$default_render" HTTPRoute sis gateway '.spec.hostnames[0
 assert_resource_field "$default_render" HTTPRoute sis gateway '.spec.rules[0].backendRefs[0].name' api
 assert_resource_field "$default_render" HTTPRoute sis gateway '.spec.rules[0].backendRefs[0].namespace' sis
 assert_resource_field "$default_render" HTTPRoute sis gateway '.spec.rules[0].backendRefs[0].port' 8080
+
+assert_resource_count "$default_render" HTTPRoute event-ledger gateway 1
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.metadata.labels."app.kubernetes.io/component"' event-ledger-route
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.hostnames[0]' events.localhost
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].matches[0].path.type' PathPrefix
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].matches[0].path.value' /
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].backendRefs[0].name' event-ledger
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].backendRefs[0].port' 8080
 
 assert_resource_count "$default_render" HTTPRoute reval gateway 1
 assert_resource_field "$default_render" HTTPRoute reval gateway '.metadata.labels."app.kubernetes.io/component"' reval-route
@@ -119,9 +149,22 @@ assert_resource_field "$default_render" HTTPRoute reval gateway '.spec.rules[0].
 
 helm template nvcf-gateway-routes "$repo_root/chart" \
   --set nvcfGatewayRoutes.routes.reval.enabled=false \
+  --set nvcfGatewayRoutes.routes.eventLedger.enabled=false \
+  --set nvcfGatewayRoutes.hostnameConflictPolicy.enabled=false \
   > "$disabled_render"
 
 assert_resource_count "$disabled_render" HTTPRoute reval gateway 0
+assert_resource_count "$disabled_render" HTTPRoute event-ledger gateway 0
+assert_yq_eq "$disabled_render" '[select(.kind == "ValidatingAdmissionPolicy")] | length' 0
+assert_yq_eq "$disabled_render" '[select(.kind == "ValidatingAdmissionPolicyBinding")] | length' 0
+
+if helm template nvcf-gateway-routes "$repo_root/chart" \
+  --set-string 'nvcfGatewayRoutes.routes.eventLedger.hostnames[0]=api.localhost' \
+  >/dev/null 2>"$hostname_conflict_error"; then
+  echo "expected duplicate HTTPRoute hostname render to fail" >&2
+  exit 1
+fi
+grep -Fq 'routes event-ledger and nvcf-api both use hostname "api.localhost"' "$hostname_conflict_error"
 
 # Default-enabled TCPRoute.
 assert_resource_count "$default_render" TCPRoute grpc gateway 1
@@ -160,6 +203,9 @@ assert_resource_count "$default_render" GRPCRoute nvcf-api-grpc gateway 0
 assert_resource_count "$default_render" GRPCRoute nvct-api-grpc gateway 0
 assert_resource_count "$default_render" TCPRoute grpc-worker gateway 0
 assert_resource_count "$default_render" TCPRoute nats gateway 0
+assert_resource_count "$default_render" TCPRoute llm-worker-grpc gateway 0
+assert_resource_count "$default_render" UDPRoute llm-worker-quic gateway 0
+assert_resource_count "$default_render" ReferenceGrant allow-llm-worker-routes nvcf 0
 assert_resource_count "$default_render" ReferenceGrant allow-tcproute-to-nats nats-system 0
 
 helm template nvcf-gateway-routes "$repo_root/chart" \
@@ -168,6 +214,9 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   --set nvcfGatewayRoutes.routes.nvctApi.grpc.enabled=true \
   --set nvcfGatewayRoutes.routes.grpcWorker.enabled=true \
   --set nvcfGatewayRoutes.routes.nats.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmWorker.backend.namespace=nvcf \
+  --set llmRequestRouter.grpcTls.allowInsecureHttp=true \
   --set nvcfGatewayRoutes.gateways.nats.name=nats-gateway \
   --set nvcfGatewayRoutes.gateways.nats.namespace=gateway \
   --set nvcfGatewayRoutes.gateways.nats.listenerName=nats \
@@ -220,6 +269,32 @@ assert_resource_field "$enabled_render" TCPRoute nats gateway '.spec.rules[0].ba
 assert_resource_field "$enabled_render" TCPRoute nats gateway '.spec.rules[0].backendRefs[0].port' 4222
 assert_resource_field "$enabled_render" TCPRoute nats gateway '.spec.hostnames' null
 assert_resource_field "$enabled_render" TCPRoute nats gateway '.metadata.annotations' null
+
+assert_resource_count "$enabled_render" TCPRoute llm-worker-grpc gateway 1
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.metadata.labels."app.kubernetes.io/component"' llm-worker-grpc-route
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].name' llm-grpc-gateway
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].namespace' gateway
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].sectionName' llm-grpc
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.rules[0].backendRefs[0].name' llm-request-router-backend-router
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.rules[0].backendRefs[0].port' 50071
+
+assert_resource_count "$enabled_render" UDPRoute llm-worker-quic gateway 1
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.metadata.labels."app.kubernetes.io/component"' llm-worker-quic-route
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].name' llm-quic-gateway
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].namespace' gateway
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].sectionName' llm-quic
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.rules[0].backendRefs[0].name' llm-request-router-backend-router
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.rules[0].backendRefs[0].port' 50072
+
+assert_resource_count "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf 1
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[0].kind' TCPRoute
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[0].namespace' gateway
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[1].kind' UDPRoute
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[1].namespace' gateway
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.to[0].kind' Service
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.to[0].name' llm-request-router-backend-router
 
 assert_resource_count "$enabled_render" ReferenceGrant allow-tcproute-to-nats nats-system 1
 assert_resource_field "$enabled_render" ReferenceGrant allow-tcproute-to-nats nats-system '.spec.from[0].kind' TCPRoute

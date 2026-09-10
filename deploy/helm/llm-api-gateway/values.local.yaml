@@ -17,4 +17,4 @@ llmApiGateway:
   image:
     repository: ""
   config:
-    requestRouterUrl: http://llm-request-router-headless.nvcf.svc.cluster.local:8000
+    requestRouterUrl: http://llm-request-router.nvcf.svc.cluster.local:8000

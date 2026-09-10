@@ -27,7 +27,7 @@ A single storage abstraction shared by both paths.
 
 The per-capture PVC pattern via `gpdrox` PV-flip stays. Every artifact lands here, keyed by content hash. The StorageClass `nvsnap-capture` is the integration point per cloud:
 
-```
+```text
 GCP    → pd.csi.storage.gke.io       pd-ssd   xfs   ROX-after-flip
 AWS    → ebs.csi.aws.com             gp3      xfs   RWO-after-flip
 Azure  → disk.csi.azure.com                   xfs   RWO-after-flip
@@ -40,8 +40,8 @@ Reader access mode auto-detected from `SC.provisioner` at backend init (already 
 
 Both paths spawn a **per-capture writer Job** pinned to the source node, with the writer PVC mounted at `/dest`. Job runs `nvsnap-agent capture-write --type={criu|rootfs} ...`:
 
-* **CRIU writer** — Job runs `criu dump` against the source pod's PID. Shares host PID + mount namespace via the same privileges the agent has today. CRIU's output stream goes straight to `/dest/criu/`. **One write, not two.**
-* **Rootfs writer** — same as today's `nvsnap-agent capture-copy` flow. Already one-write.
+- **CRIU writer** — Job runs `criu dump` against the source pod's PID. Shares host PID + mount namespace via the same privileges the agent has today. CRIU's output stream goes straight to `/dest/criu/`. **One write, not two.**
+- **Rootfs writer** — same as today's `nvsnap-agent capture-copy` flow. Already one-write.
 
 The agent's existing `/v1/checkpoint` REST endpoint becomes thin: validates the request, derives the hash, calls `gpdrox.Backend.Put([]CaptureSource)` with the right `--type` plan. The backend spawns the Job. Same shape for both paths.
 

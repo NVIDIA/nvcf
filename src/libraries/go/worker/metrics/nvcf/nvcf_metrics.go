@@ -27,6 +27,31 @@ import (
 const (
 	ResponseNamespace     = metrics.NvcfRootNamespace + "_response"
 	WorkerThreadNamespace = metrics.NvcfRootNamespace + "_worker_thread"
+	QuicNamespace         = metrics.NvcfRootNamespace + "_quic"
+)
+
+// Reasons a QUIC dial failed. The label separates the two tunnel failures that
+// share the log message "quic connection attempt failed" and can only be told
+// apart by the error: a network timeout is flow poisoning, a 403 is the
+// saturated backlog wedge. Keep this list short; it is a metric label.
+const (
+	DialFailureTimeout = "timeout"
+	DialFailureAuth    = "auth"
+	DialFailureOther   = "other"
+)
+
+// Reasons a dial result was declined for rotation. Each of these is a silent
+// return in the dial path, and a silent return that reads as "nothing wrong"
+// is what made the original defect hard to find. Counting them separates
+// "rotation never fired" from "rotation fired and did not help".
+//
+// stale_transport covers successful dials as well as failed ones: the
+// staleness guard runs before the error is examined, so a dial that succeeded
+// on a superseded socket lands here too.
+const (
+	DialSkipStaleTransport = "stale_transport"
+	DialSkipCtxCancelled   = "ctx_cancelled"
+	DialSkipNotTimeout     = "not_timeout"
 )
 
 // NVCF metrics shared between utils and niclls containers
@@ -64,6 +89,47 @@ var (
 			Namespace: WorkerThreadNamespace,
 			Name:      "busy_seconds_total",
 			Help:      "total seconds spent being busy by thread",
+		})
+
+	// QuicDialCounter and QuicDialFailureCounter are the denominator and
+	// numerator of the dial failure rate. Failures alone are not actionable:
+	// a routine proxy scale-down produces a large, harmless burst.
+	QuicDialCounter = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: QuicNamespace,
+			Name:      "dial_total",
+			Help:      "total quic dial attempts made by the worker",
+		})
+
+	QuicDialFailureCounter = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: QuicNamespace,
+			Name:      "dial_failure_total",
+			Help:      "total quic dial attempts that failed, by reason",
+		}, []string{"reason"})
+
+	// QuicTransportRotationCounter rising alongside dial failures means the
+	// worker is recovering on its own. Dial failures rising while this stays
+	// flat means it is not, which is the condition that needs an operator.
+	QuicTransportRotationCounter = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: QuicNamespace,
+			Name:      "transport_rotation_total",
+			Help:      "total quic transport rotations after consecutive dial failures",
+		})
+
+	QuicDialSkipCounter = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: QuicNamespace,
+			Name:      "dial_skip_total",
+			Help:      "dial results that did not count toward rotation, by reason",
+		}, []string{"reason"})
+
+	QuicTunnelGauge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: QuicNamespace,
+			Name:      "tunnel_active",
+			Help:      "quic tunnels currently held open by the worker",
 		})
 
 	NatsErrorCounter = promauto.NewCounter(
@@ -129,3 +195,15 @@ var (
 			Help:      "total stateful proxy successes",
 		})
 )
+
+// Pre-initialize the dial failure reasons so every series exists at zero on
+// the first scrape. Without this, absent() alerts misfire and rate() has gaps
+// until the first failure of each kind actually occurs.
+func init() {
+	for _, reason := range []string{DialFailureTimeout, DialFailureAuth, DialFailureOther} {
+		QuicDialFailureCounter.WithLabelValues(reason)
+	}
+	for _, reason := range []string{DialSkipStaleTransport, DialSkipCtxCancelled, DialSkipNotTimeout} {
+		QuicDialSkipCounter.WithLabelValues(reason)
+	}
+}

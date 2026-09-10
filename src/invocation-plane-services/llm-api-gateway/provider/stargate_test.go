@@ -19,6 +19,7 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,9 +135,12 @@ func metricHasFunctionID(data metricdata.Aggregation, want string) bool {
 func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing.T) {
 	t.Parallel()
 
+	promptCacheKey := "chat-prompt-cache-key"
+	cacheAffinityKey := fmt.Sprintf("mt:v1:session:%x", sha256.Sum256([]byte(promptCacheKey)))
 	request := &NormalizedRequest{
 		ChatRequest: &models.ChatCompletionRequest{
-			Model: "upstream-model",
+			Model:          "upstream-model",
+			PromptCacheKey: &promptCacheKey,
 			Messages: &[]models.ChatMessage{
 				{
 					Role:    models.ChatCompletionRoleUser,
@@ -161,7 +165,7 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 		Model:            "upstream-model",
 		RoutingMethod:    "experimental_method",
 		TargetRegion:     "us-west1",
-		CacheAffinityKey: "mt:v1:header:hash",
+		CacheAffinityKey: cacheAffinityKey,
 	}
 
 	wantEstimate := routingTokenEstimate(request)
@@ -182,7 +186,8 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 		require.Equal(t, "fn-abc", r.Header.Get(headerRoutingKey))
 		require.Equal(t, "upstream-model", r.Header.Get(headerModel))
 		require.Equal(t, "experimental_method", r.Header.Get(headerRoutingMethod))
-		require.Equal(t, "mt:v1:header:hash", r.Header.Get(headerCacheAffinityKey))
+		require.Equal(t, cacheAffinityKey, r.Header.Get(headerCacheAffinityKey))
+		require.NotEqual(t, promptCacheKey, r.Header.Get(headerCacheAffinityKey))
 		require.Equal(t, fmt.Sprintf("%d", wantEstimate), r.Header.Get(headerInputTokens))
 		require.Equal(t, fmt.Sprintf("%d", wantEstimate), r.Header.Get(headerTokenEstimate))
 
@@ -193,6 +198,8 @@ func TestStargateProviderCompleteForwardsChatPayloadAndRoutingHeaders(t *testing
 		require.NotNil(t, payload.StreamOptions)
 		require.NotNil(t, payload.StreamOptions.IncludeUsage)
 		require.True(t, ptr.Deref(payload.StreamOptions.IncludeUsage))
+		require.NotNil(t, payload.PromptCacheKey)
+		require.Equal(t, promptCacheKey, ptr.Deref(payload.PromptCacheKey))
 		require.NotNil(t, payload.Messages)
 		require.Len(t, *payload.Messages, 1)
 		require.Equal(t, models.ChatCompletionRoleUser, (*payload.Messages)[0].Role)

@@ -178,10 +178,13 @@ func configureSelfHostedTestConfig(t *testing.T, body string) {
 	viper.AutomaticEnv()
 	t.Setenv("NVCF_ICMS_URL", "")
 	t.Setenv("NVCF_SIS_URL", "")
-	cfgFile = ""
 
 	configPath := filepath.Join(t.TempDir(), "nvcf-cli.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte(body), 0o600))
+	// Cobra's OnInitialize callback reruns initConfig for every Execute call.
+	// Keep it pinned to this fixture instead of letting it rediscover a
+	// developer's ~/.nvcf-cli.yaml during command tests.
+	cfgFile = configPath
 	viper.SetConfigFile(configPath)
 	require.NoError(t, viper.ReadInConfig())
 

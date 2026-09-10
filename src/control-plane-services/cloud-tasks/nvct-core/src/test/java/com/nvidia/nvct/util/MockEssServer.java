@@ -72,6 +72,12 @@ public class MockEssServer {
                                       .willReturn(aResponse().withStatus(200)
                                                           .withHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
                                                           .withTransformers(NAME)));
+        mockEssServer.stubFor(get(urlPathMatching("/v1/accounts/(.+)/registry-credentials/(.+)"))
+                                      .withQueryParam("query_type",
+                                                      new EqualToPattern("fetch_secret"))
+                                      .willReturn(aResponse().withStatus(200)
+                                                          .withHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
+                                                          .withTransformers(NAME)));
         mockEssServer.stubFor(delete(urlPathMatching("/v1/tasks/(.+)?/secrets"))
                                       .willReturn(aResponse().withStatus(204)
                                                           .withTransformers(NAME)));

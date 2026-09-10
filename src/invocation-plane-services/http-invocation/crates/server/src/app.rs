@@ -60,6 +60,7 @@ pub async fn app(
     config: AppConfig,
     secrets: Option<Arc<SecretFileWatcher>>,
 ) -> anyhow::Result<Router> {
+    let baggage_attribute_allowlist = config.server.tracing.baggage_attribute_allowlist.clone();
     let app_state = AppState {
         nvcf_service: NVCFService::new(
             &config.nvcf_api_address,
@@ -93,7 +94,7 @@ pub async fn app(
     };
 
     let trace_layer = TraceLayer::new_for_http()
-        .make_span_with(NVCFMakeSpan::new())
+        .make_span_with(NVCFMakeSpan::new(baggage_attribute_allowlist))
         .on_request(DefaultOnRequest::new().level(Level::DEBUG))
         .on_response(
             |response: &Response<Body>, _latency: Duration, span: &Span| {

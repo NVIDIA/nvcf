@@ -425,3 +425,29 @@ func (s *stubInvocationAuthClient) AuthorizeInvocation(
 	s.authorizeRoutingKey = routingKey
 	return s.authResponse, nil
 }
+
+func TestNVCFAuthHTTPErrorDoesNotLeakTransportDetail(t *testing.T) {
+	t.Parallel()
+
+	// The shape a real dial failure takes. Returned verbatim, it handed callers
+	// the auth service's address and port on a pre-authentication path.
+	transportErr := status.Error(codes.Unavailable,
+		`connection error: desc = "transport: Error while dialing dial tcp 10.0.0.5:9090: connect: connection refused"`)
+
+	for _, err := range []error{
+		transportErr,
+		status.Error(codes.Internal, "panic in authorize: /opt/nvcf/internal/auth.go:412"),
+		status.Error(codes.DeadlineExceeded, "context deadline exceeded talking to auth.nvcf.svc.cluster.local:9090"),
+	} {
+		he, ok := nvcfAuthHTTPError(err).(*echo.HTTPError)
+		if !ok {
+			t.Fatalf("want *echo.HTTPError, got %T", nvcfAuthHTTPError(err))
+		}
+		msg, _ := he.Message.(string)
+		for _, leak := range []string{"10.0.0.5", "9090", "rpc error", "svc.cluster.local", "/opt/nvcf", "dial tcp"} {
+			if strings.Contains(msg, leak) {
+				t.Errorf("response message leaks %q: %s", leak, msg)
+			}
+		}
+	}
+}

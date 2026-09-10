@@ -35,6 +35,8 @@ import (
 func registerCommandSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I run command "([^"]*)"$`, sc.iRunCommandLine)
 	ctx.Step(`^I run command:$`, sc.iRunCommandDoc)
+	ctx.Step(`^I successfully run command "([^"]*)"$`, sc.iSuccessfullyRunCommandLine)
+	ctx.Step(`^I successfully run command:$`, sc.iSuccessfullyRunCommandDoc)
 	ctx.Step(`^I run command with a terminal:$`, sc.iRunCommandWithTTYDoc)
 	ctx.Step(`^command has succeeded:$`, sc.commandHasSucceededDoc)
 	ctx.Step(`^I export command output to environment variable "([^"]*)"$`, sc.iExportCommandOutputToEnv)
@@ -46,6 +48,14 @@ func (sc *ScenarioContext) iRunCommandLine(ctx context.Context, commandText stri
 
 func (sc *ScenarioContext) iRunCommandDoc(ctx context.Context, doc *godog.DocString) error {
 	return sc.runAndRecord(ctx, doc.Content)
+}
+
+func (sc *ScenarioContext) iSuccessfullyRunCommandLine(ctx context.Context, commandText string) error {
+	return sc.runSuccessfully(ctx, commandText)
+}
+
+func (sc *ScenarioContext) iSuccessfullyRunCommandDoc(ctx context.Context, doc *godog.DocString) error {
+	return sc.runSuccessfully(ctx, doc.Content)
 }
 
 // iRunCommandWithTTYDoc runs the docstring command with stdin attached to
@@ -85,6 +95,25 @@ func (sc *ScenarioContext) runAndRecord(ctx context.Context, commandText string)
 	return sc.runAndRecordWith(ctx, commandText, sc.Suite.Runner.Run)
 }
 
+// runSuccessfully records the command result, requires exit code 0, and uses
+// the existing exit-zero assertion path to seed the successful-command cache.
+func (sc *ScenarioContext) runSuccessfully(ctx context.Context, commandText string) error {
+	if err := sc.runAndRecord(ctx, commandText); err != nil {
+		return err
+	}
+	return sc.commandExitCodeShouldBe(0)
+}
+
+// runResolvedSuccessfully is the exit-zero path for commands assembled from
+// individually interpolated and quoted arguments. It avoids interpolating the
+// assembled command a second time.
+func (sc *ScenarioContext) runResolvedSuccessfully(ctx context.Context, resolved string) error {
+	if err := sc.runResolvedAndRecord(ctx, resolved); err != nil {
+		return err
+	}
+	return sc.commandExitCodeShouldBe(0)
+}
+
 // runAndRecordWith interpolates, executes via the supplied runner method
 // (Run or RunWithTTY), and stores the Result on the ScenarioContext so
 // later assertions can read it. The non-zero-exit-is-not-a-failure
@@ -92,6 +121,14 @@ func (sc *ScenarioContext) runAndRecord(ctx context.Context, commandText string)
 // runner method is used.
 func (sc *ScenarioContext) runAndRecordWith(ctx context.Context, commandText string, run func(context.Context, string) (harness.Result, error)) error {
 	resolved := strings.TrimSpace(dsl.Interpolate(commandText))
+	return sc.runResolvedAndRecordWith(ctx, resolved, run)
+}
+
+func (sc *ScenarioContext) runResolvedAndRecord(ctx context.Context, resolved string) error {
+	return sc.runResolvedAndRecordWith(ctx, strings.TrimSpace(resolved), sc.Suite.Runner.Run)
+}
+
+func (sc *ScenarioContext) runResolvedAndRecordWith(ctx context.Context, resolved string, run func(context.Context, string) (harness.Result, error)) error {
 	result, err := run(ctx, resolved)
 	sc.LastResult = result
 	sc.LastErr = err
@@ -112,11 +149,10 @@ func combinedOutput(r harness.Result) string {
 // iExportCommandOutputToEnv records the previous command's trimmed
 // stdout under the named env var. Strict gates:
 //
-//   - LastResult.ExitCode must be 0. A non-zero exit on the prior step
-//     should already have failed an explicit "Then the command exit code
-//     should be 0" assertion, so reaching this step with a non-zero
-//     exit means the feature author forgot to assert success; surface
-//     it rather than exporting garbage.
+//   - LastResult.ExitCode must be 0. A non-zero exit on the prior step should
+//     already have failed an explicit exit-code assertion or a successful-run
+//     step. Reaching this step with a non-zero exit means the feature author
+//     forgot to assert success, so surface it rather than exporting garbage.
 //   - The trimmed stdout must be non-empty. Exporting an empty string
 //     would silently allow downstream "${VAR}" interpolation to expand
 //     to "" and produce malformed kubectl URLs (-n -o instead of

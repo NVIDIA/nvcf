@@ -15,6 +15,7 @@
 spring:
   application:
     env: local
+    region: local
 
 # debug: true
 nv-boot:

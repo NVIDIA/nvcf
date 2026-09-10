@@ -285,6 +285,7 @@ service:
         - memory_limiter
         - filter/metric_subset
         - resource
+        - resource/workload_metrics_drop_labels
         - metrics_transform
         - batch/metric_subset
   extensions:

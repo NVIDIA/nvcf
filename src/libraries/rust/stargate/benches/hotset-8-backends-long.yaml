@@ -107,9 +107,9 @@ traffic_pattern:
     target_rps: 5
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
+      default: power-of-n
   - name: round-robin
     config:
       default: round-robin
@@ -121,7 +121,7 @@ algorithms:
       default: wait-and-widen
   - name: pulsar
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar

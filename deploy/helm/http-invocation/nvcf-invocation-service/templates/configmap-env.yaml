@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- if .Values.invocation.env }}
+{{- if or .Values.invocation.env .Values.invocation.metrics.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,6 +24,18 @@ metadata:
 data:
   {{- range $key, $value := .Values.invocation.env }}
   {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- if .Values.invocation.metrics.enabled }}
+  APP_CONFIG: "/etc/nvcf-invocation/settings.yaml"
+  APP_CONFIG_YAML: |
+    server:
+      metrics:
+        exporters:
+          - exporter: prometheus
+            endpoint: http://{{ .Values.invocation.metrics.bindAddress }}:{{ .Values.invocation.metrics.port }}
+  {{- end }}
+  {{- with .Values.invocation.tracing.baggageAttributeAllowlist }}
+  SERVER__TRACING__BAGGAGE_ATTRIBUTE_ALLOWLIST: {{ join "," . | quote }}
   {{- end }}
   {{- if not (hasKey .Values.invocation.env "WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS") }}
   WORKER_STREAM_PROPERTIES__SERVICE_ADDRESS: "http://invocation.{{ include "nvcf-invocation-service.namespace" . }}.svc.cluster.local:{{ (index .Values.invocation.service.ports 0).port }}"

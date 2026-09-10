@@ -53,11 +53,15 @@ func TestRetryLogger(t *testing.T) {
 	zap.ReplaceGlobals(l)
 
 	rL := newRetryLogger()
-	// assert an error message is logged
+	// the retryable http client reports every failed attempt through Error, so
+	// it is emitted at warn level to keep retried transients out of the error
+	// stream. assert both the payload and the level.
 	rL.Error("error message", "errorKey", "errorValue")
 	output := sink.String()
 	sink.Reset()
 	assert.Contains(t, output, "\"msg\":\"error message\",\"errorKey\":\"errorValue\"")
+	assert.Contains(t, output, "\"level\":\"warn\"")
+	assert.NotContains(t, output, "\"level\":\"error\"")
 
 	// assert an info message is logged
 	rL.Info("info message", "infoKey", "infoValue")

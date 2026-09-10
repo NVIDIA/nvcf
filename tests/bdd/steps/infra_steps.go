@@ -19,6 +19,7 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -27,6 +28,7 @@ import (
 	"github.com/cucumber/godog"
 
 	"nvcf-bdd/dsl"
+	"nvcf-bdd/harness"
 )
 
 const (
@@ -38,15 +40,64 @@ const (
 
 var computeClusterRE = regexp.MustCompile(computeClusterNamePattern)
 
-// registerInfraSteps hooks the three infrastructure-bootstrap Givens
-// spelled out in PLAN.md. Each wraps exactly one Make target or one
-// composite of kubectl calls; the bootstrap make commands are cached
-// per suite so a feature with N scenarios re-runs the cluster build
-// at most once.
+// registerInfraSteps hooks the infrastructure-bootstrap Givens spelled out in
+// PLAN.md. Each wraps one named operator action, Make target, or composite of
+// kubectl calls. Idempotent actions are cached per suite.
 func registerInfraSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^a single-cluster ncp-local cluster is running$`, sc.singleClusterIsRunning)
 	ctx.Step(`^multi-cluster ncp-local compute clusters are running:$`, sc.multiClusterComputeRunning)
+	ctx.Step(`^Helm is authenticated to OCI registry "([^"]*)" using the current NGC API key$`, sc.helmIsAuthenticatedToOCIRegistry)
 	ctx.Step(`^the "([^"]*)" image pull secret exists in namespaces:$`, sc.pullSecretInNamespaces)
+	ctx.Step(`^the "([^"]*)" image pull secret exists in namespaces using context "([^"]*)":$`, sc.pullSecretInNamespacesUsingContext)
+}
+
+func (sc *ScenarioContext) helmIsAuthenticatedToOCIRegistry(ctx context.Context, registry string) error {
+	resolvedRegistry := strings.TrimSpace(dsl.Interpolate(registry))
+	command, err := dsl.HelmRegistryLoginCommand(resolvedRegistry)
+	if err != nil {
+		return err
+	}
+	apiKey := os.Getenv("NGC_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("NGC_API_KEY is not set")
+	}
+	if sc.Suite.Cache.Has(command) {
+		sc.LastResult = harness.Result{ExitCode: 0}
+		sc.LastErr = nil
+		sc.LastCommand = command
+		return nil
+	}
+
+	result, runErr := sc.Suite.Runner.RunWithSensitiveStdin(ctx, command, apiKey)
+	result.Stdout = redactValue(result.Stdout, apiKey)
+	result.Stderr = redactValue(result.Stderr, apiKey)
+	sc.LastResult = result
+	sc.LastCommand = command
+	if runErr != nil {
+		safeRunErr := errors.New(redactValue(runErr.Error(), apiKey))
+		sc.LastErr = safeRunErr
+		diagnostic := strings.TrimSpace(result.Stderr)
+		if diagnostic == "" {
+			diagnostic = safeRunErr.Error()
+		}
+		return fmt.Errorf(
+			"authenticate Helm to OCI registry %q: exit code %d: %s",
+			resolvedRegistry,
+			result.ExitCode,
+			diagnostic,
+		)
+	}
+
+	sc.LastErr = nil
+	sc.Suite.Cache.Record(command)
+	return nil
+}
+
+func redactValue(value, sensitive string) string {
+	if sensitive == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, sensitive, "[REDACTED]")
 }
 
 func (sc *ScenarioContext) singleClusterIsRunning(ctx context.Context) error {
@@ -89,6 +140,27 @@ func (sc *ScenarioContext) multiClusterComputeRunning(ctx context.Context, table
 // versions decompose the resources into argv during processing, which
 // can re-expose the API key.
 func (sc *ScenarioContext) pullSecretInNamespaces(ctx context.Context, secretName string, table *godog.Table) error {
+	return sc.pullSecretInNamespacesAtContext(ctx, secretName, "", table)
+}
+
+func (sc *ScenarioContext) pullSecretInNamespacesUsingContext(
+	ctx context.Context,
+	secretName,
+	kubeContext string,
+	table *godog.Table,
+) error {
+	if strings.TrimSpace(kubeContext) == "" {
+		return fmt.Errorf("kube context is empty")
+	}
+	return sc.pullSecretInNamespacesAtContext(ctx, secretName, kubeContext, table)
+}
+
+func (sc *ScenarioContext) pullSecretInNamespacesAtContext(
+	ctx context.Context,
+	secretName,
+	kubeContext string,
+	table *godog.Table,
+) error {
 	if table == nil || len(table.Rows) == 0 {
 		return fmt.Errorf("namespaces table is empty")
 	}
@@ -105,14 +177,14 @@ func (sc *ScenarioContext) pullSecretInNamespaces(ctx context.Context, secretNam
 		if err != nil {
 			return fmt.Errorf("ensure namespace %s: %w", ns, err)
 		}
-		if err := sc.applyManifest(ctx, nsBody); err != nil {
+		if err := sc.applyManifest(ctx, nsBody, kubeContext); err != nil {
 			return fmt.Errorf("ensure namespace %s: %w", ns, err)
 		}
 		secretBody, err := dsl.DockerConfigJSONSecretManifest(secretName, ns, apiKey)
 		if err != nil {
 			return fmt.Errorf("build pull secret manifest in %s: %w", ns, err)
 		}
-		if err := sc.applyManifest(ctx, secretBody); err != nil {
+		if err := sc.applyManifest(ctx, secretBody, kubeContext); err != nil {
 			return fmt.Errorf("apply pull secret in %s: %w", ns, err)
 		}
 	}
@@ -123,7 +195,7 @@ func (sc *ScenarioContext) pullSecretInNamespaces(ctx context.Context, secretNam
 // runs kubectl apply against it. Routing through OutDir (rather than
 // /tmp) means failed runs leave the artifacts in the run directory
 // alongside command logs for post-mortem inspection.
-func (sc *ScenarioContext) applyManifest(ctx context.Context, body []byte) error {
+func (sc *ScenarioContext) applyManifest(ctx context.Context, body []byte, kubeContext string) error {
 	dir := sc.Suite.Config.OutDir
 	if dir == "" {
 		dir = os.TempDir()
@@ -143,6 +215,10 @@ func (sc *ScenarioContext) applyManifest(ctx context.Context, body []byte) error
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close manifest: %w", err)
 	}
-	_, err = sc.Suite.Runner.Run(ctx, fmt.Sprintf("kubectl apply -f %s", path))
+	command, err := dsl.KubectlApplyCommand(path, kubeContext)
+	if err != nil {
+		return err
+	}
+	_, err = sc.Suite.Runner.Run(ctx, command)
 	return err
 }

@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
 load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
@@ -12,7 +12,7 @@ ESS_SERVICE_TEST_SRCS = glob(["src/test/java/**/*.java"])
 
 ESS_SERVICE_TEST_RESOURCES = glob(["src/test/resources/**"])
 
-nv_boot_library(
+nvcf_java_library(
     name = "app_classes",
     srcs = ESS_SERVICE_SRCS,
     deps = [
@@ -22,7 +22,7 @@ nv_boot_library(
         "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
         "@nv_third_party_deps//:org_springframework_spring_context",
     ],
-    javacopts = ["-parameters", "--release", "25"],
+    javacopts = ["-parameters"],
     resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-service/src/main/resources",
     resources = ESS_SERVICE_RESOURCES,
     runtime_deps = [
@@ -42,10 +42,9 @@ spring_boot_app(
     main_class = "com.nvidia.ess.EssServiceApplication",
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":app_classes",
-    javacopts = ["-parameters", "--release", "25"],
+    javacopts = ["-parameters"],
     data = [
         "//src/control-plane-services/encrypted-secret-store:secrets_json",
         "//src/control-plane-services/encrypted-secret-store:test_local_env",
@@ -59,6 +58,7 @@ nv_boot_library_test(
     srcs = ESS_SERVICE_TEST_SRCS,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     deps = [
@@ -78,6 +78,19 @@ nv_boot_library_test(
         "@nv_third_party_deps//:org_testcontainers_testcontainers",
         "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "long",
 )
 

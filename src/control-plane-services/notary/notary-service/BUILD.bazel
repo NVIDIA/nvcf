@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
 load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
@@ -10,7 +10,7 @@ NOTARY_SERVICE_RESOURCES = glob(["src/main/resources/**"])
 
 NOTARY_SERVICE_TEST_SRCS = glob(["src/test/java/**/*.java"])
 
-nv_boot_library(
+nvcf_java_library(
     name = "app_classes",
     srcs = NOTARY_SERVICE_SRCS,
     deps = [
@@ -41,9 +41,8 @@ spring_boot_app(
     main_class = "com.nvidia.notary.App",
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":app_classes",
     srcs = NOTARY_SERVICE_TEST_SRCS,
     deps = [
         ":app_classes",
@@ -56,6 +55,13 @@ nv_boot_library_test(
         "@nv_third_party_deps//:org_springframework_spring_beans",
         "@nv_third_party_deps//:org_springframework_spring_web",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    test = ":tests",
     timeout = "long",
 )
 

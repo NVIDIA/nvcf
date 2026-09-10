@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,6 +22,7 @@ import (
 	"net"
 	"nvcf-grpc-proxy/proxy/metrics"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -55,6 +56,9 @@ type ConnectionTrackingConn struct {
 	span      trace.Span
 	initSpan  sync.Once
 	closeOnce sync.Once
+	// openedAt is when this client connection was accepted, used to report
+	// how long it stayed open.
+	openedAt time.Time
 
 	// one connection may reach out to multiple workers by invoking different functions
 	workerConnectionLock sync.Mutex
@@ -63,9 +67,10 @@ type ConnectionTrackingConn struct {
 
 func NewConnectionTrackingConn(conn net.Conn) *ConnectionTrackingConn {
 	metrics.ActiveClientConnectionsTotal.Inc()
+	metrics.ClientConnectionOpenedTotal.Inc()
 	tracer := otel.GetTracerProvider().Tracer("connection-tracer")
 	_, span := tracer.Start(context.Background(), TcpSessionSpanName, trace.WithNewRoot(), trace.WithSpanKind(trace.SpanKindServer))
-	return &ConnectionTrackingConn{Conn: conn, span: span}
+	return &ConnectionTrackingConn{Conn: conn, span: span, openedAt: time.Now()}
 }
 
 func (c *ConnectionTrackingConn) InitStatefulSession(ctx context.Context) {
@@ -124,23 +129,36 @@ func (c *ConnectionTrackingConn) InitWorkerConn(functionId, functionVersionId st
 }
 
 func (c *ConnectionTrackingConn) Close() error {
+	c.workerConnectionLock.Lock()
+	activeFunctionConnections := len(c.workerConnections)
+
 	defer c.closeOnce.Do(func() {
 		c.span.End()
 		metrics.ActiveClientConnectionsTotal.Dec()
+		metrics.ClientConnectionDurationSeconds.Observe(time.Since(c.openedAt).Seconds())
+		// How many worker tunnels this client connection was still holding.
+		// Anything above zero means this close tore down live tunnels.
+		metrics.ClientConnectionWorkerTunnelsAtClose.Observe(float64(activeFunctionConnections))
 	})
+	defer c.workerConnectionLock.Unlock()
 
 	zap.L().Debug("closing client connection",
 		zap.String("ptr", fmt.Sprintf("%p", c)),
-		zap.Int("active_function_connections", len(c.workerConnections)))
-
-	c.workerConnectionLock.Lock()
-	defer c.workerConnectionLock.Unlock()
+		zap.Int("active_function_connections", activeFunctionConnections))
 
 	for key, conn := range c.workerConnections {
 		workerConnection, _ := conn.getWorkerConnection(func() (*WorkerConnection, error) {
 			return nil, fmt.Errorf("worker connection force closed due to closing client connection")
 		})
 		if workerConnection != nil {
+			// Record the origin before tearing down, so the eviction handler
+			// reports client_closed rather than a bare deleted. Stamp the
+			// close here too: client_closed is the common case, so without
+			// this the accurate close time would be missing from most
+			// evictions and held_for would fall back to whenever the cache
+			// callback happened to run.
+			workerConnection.SetCloseOrigin(metrics.CloseReasonClientClosed)
+			workerConnection.MarkClosed(time.Now())
 			zap.L().Info("triggering worker connection shutdown from client close",
 				zap.String("function_id", key.functionId),
 				zap.String("function_version_id", key.functionVersionId),

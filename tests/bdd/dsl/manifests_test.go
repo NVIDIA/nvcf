@@ -18,9 +18,60 @@ limitations under the License.
 package dsl
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRenderedManifestsContainResourceRejectsIssuerRefFragments(t *testing.T) {
+	root := t.TempDir()
+	body := `apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llm-router-serving-cert
+spec:
+  issuerRef:
+    kind: ClusterIssuer
+    name: nvcf-openbao-pki
+`
+	if err := os.WriteFile(filepath.Join(root, "certificate.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write rendered Certificate: %v", err)
+	}
+
+	err := RenderedManifestsContainResource(root, KubernetesResource{
+		Kind: "ClusterIssuer",
+		Name: "nvcf-openbao-pki",
+	})
+	if err == nil {
+		t.Fatal("issuerRef fragments were mistaken for a rendered ClusterIssuer resource")
+	}
+}
+
+func TestRenderedManifestsContainResourceFindsTopLevelResource(t *testing.T) {
+	root := t.TempDir()
+	body := `apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llm-router-serving-cert
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: nvcf-openbao-pki
+`
+	if err := os.WriteFile(filepath.Join(root, "pki.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write rendered PKI resources: %v", err)
+	}
+
+	err := RenderedManifestsContainResource(root, KubernetesResource{
+		Kind: "ClusterIssuer",
+		Name: "nvcf-openbao-pki",
+	})
+	if err != nil {
+		t.Fatalf("find rendered ClusterIssuer: %v", err)
+	}
+}
 
 func TestNamespaceManifestShape(t *testing.T) {
 	body, err := NamespaceManifest("nvcf")

@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,7 +27,11 @@ import (
 	"nvcf-grpc-proxy/proxy/internal/echo"
 	"nvcf-grpc-proxy/proxy/internal/test"
 	"nvcf-grpc-proxy/proxy/invocation"
+	"nvcf-grpc-proxy/proxy/metrics"
 	"nvcf-grpc-proxy/proxy/worker"
+	"slices"
+
+	"github.com/jellydator/ttlcache/v3"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,7 +76,7 @@ func TestStreamDirector(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -161,7 +165,6 @@ func TestStreamDirector(t *testing.T) {
 
 	t.Logf("finished, shutting down")
 
-
 }
 
 func TestUnauthenticatedError(t *testing.T) {
@@ -179,7 +182,7 @@ func TestUnauthenticatedError(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -234,7 +237,7 @@ func TestGatewayTimeoutError(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -289,7 +292,7 @@ func TestRequestIdHeader(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -321,7 +324,7 @@ func TestRequestIdHeader(t *testing.T) {
 	}
 	t.Logf("registered connection to inference server with director")
 
-	request, _ := http.NewRequest(http.MethodPost, "http://" + proxyAddr + "/asdf", nil)
+	request, _ := http.NewRequest(http.MethodPost, "http://"+proxyAddr+"/asdf", nil)
 	request.Header.Set("authorization", "Bearer asdf")
 	request.Header.Set("function-id", testFunctionId)
 	response, err := http.DefaultClient.Do(request)
@@ -352,7 +355,7 @@ func TestRequestIdCookie(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -383,7 +386,7 @@ func TestRequestIdCookie(t *testing.T) {
 	}
 	t.Logf("registered connection to inference server with director")
 
-	request, _ := http.NewRequest(http.MethodPost, "http://" + proxyAddr + "/asdf", nil)
+	request, _ := http.NewRequest(http.MethodPost, "http://"+proxyAddr+"/asdf", nil)
 	request.Header.Set("authorization", "Bearer asdf")
 	request.Header.Set("function-id", testFunctionId)
 	response, err := http.DefaultClient.Do(request)
@@ -692,7 +695,7 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -758,7 +761,7 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 		header.Add("Sec-WebSocket-Protocol", fmt.Sprintf("function-id.%s", testFunctionId))
 
 		dialer := websocket.Dialer{}
-		conn, resp, err := dialer.Dial("ws://" + proxyAddr + "/ws", header)
+		conn, resp, err := dialer.Dial("ws://"+proxyAddr+"/ws", header)
 		if err != nil {
 			t.Fatal("failed to create WebSocket client:", err)
 		}
@@ -1082,7 +1085,7 @@ func TestCorsPreflightRequest(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -1161,7 +1164,7 @@ func TestCorsErrorResponses(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -1279,7 +1282,7 @@ func TestCorsWithTimeoutError(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://" + proxyAddr, nil)
+	healthManager, err := healthManager("http://"+proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
@@ -1727,6 +1730,150 @@ func serveHTTP(t *testing.T, srv *http.Server, l net.Listener) func() {
 		_ = srv.Close()
 		if err := <-done; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Errorf("http serve returned unexpected error: %s", err)
+		}
+	}
+}
+
+// TestMapEvictionReason pins the close reasons emitted as the `reason` label
+// on nvcf_grpc_proxy_service_worker_connection_closed_total. Dashboards and
+// alerts key on these strings, and the set is pre-initialised in the metrics
+// package, so the two must stay in agreement.
+func TestMapEvictionReason(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason ttlcache.EvictionReason
+		want   string
+	}{
+		{"expired", ttlcache.EvictionReasonExpired, "ttl_expired"},
+		{"deleted", ttlcache.EvictionReasonDeleted, "deleted"},
+		{"capacity", ttlcache.EvictionReasonCapacityReached, "capacity_reached"},
+		{"unrecognised", ttlcache.EvictionReason(99), "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mapEvictionReason(tt.reason); got != tt.want {
+				t.Errorf("mapEvictionReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWorkerConnectionCloseReasonsCoverMapping guards the pairing between the
+// reasons resolveCloseReason can emit and the pre-initialised label set. A
+// reason that is emitted but not pre-initialised appears only after it first
+// occurs, which leaves gaps in rate() and makes absent() alerts misfire.
+//
+// Note the emitter is resolveCloseReason, not mapEvictionReason: the latter
+// only classifies the raw ttlcache eviction, and the client/worker/shutdown
+// distinction is layered on top of it.
+func TestWorkerConnectionCloseReasonsCoverMapping(t *testing.T) {
+	conn := func(origin string) *worker.WorkerConnection {
+		wc := worker.NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+		if origin != "" {
+			wc.SetCloseOrigin(origin)
+		}
+		return wc
+	}
+
+	// Every reachable combination of raw eviction reason, recorded origin and
+	// drain state.
+	emitted := map[string]bool{}
+	for _, raw := range []ttlcache.EvictionReason{
+		ttlcache.EvictionReasonExpired,
+		ttlcache.EvictionReasonDeleted,
+		ttlcache.EvictionReasonCapacityReached,
+		ttlcache.EvictionReason(99),
+	} {
+		for _, origin := range []string{"", metrics.CloseReasonClientClosed, metrics.CloseReasonWorkerClosed} {
+			for _, draining := range []bool{false, true} {
+				emitted[resolveCloseReason(raw, conn(origin), draining)] = true
+			}
+		}
+	}
+
+	for reason := range emitted {
+		if !slices.Contains(metrics.WorkerConnectionCloseReasons, reason) {
+			t.Errorf("resolveCloseReason can emit %q, but it is not pre-initialised in metrics.WorkerConnectionCloseReasons", reason)
+		}
+	}
+	for _, reason := range metrics.WorkerConnectionCloseReasons {
+		if !emitted[reason] {
+			t.Errorf("metrics.WorkerConnectionCloseReasons contains %q, which resolveCloseReason never emits", reason)
+		}
+	}
+}
+
+// TestResolveCloseReason covers the disambiguation of ttlcache's
+// EvictionReasonDeleted, which on its own cannot tell a client hang-up from a
+// worker hang-up from a proxy drain. Which side went first is normally the
+// question being asked during an incident, so this mapping is load-bearing.
+func TestResolveCloseReason(t *testing.T) {
+	newConn := func(origin string) *worker.WorkerConnection {
+		wc := worker.NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+		if origin != "" {
+			wc.SetCloseOrigin(origin)
+		}
+		return wc
+	}
+
+	tests := []struct {
+		name         string
+		reason       ttlcache.EvictionReason
+		origin       string
+		shuttingDown bool
+		want         string
+	}{
+		{"ttl expiry is never ambiguous", ttlcache.EvictionReasonExpired, "", false, metrics.CloseReasonTTLExpired},
+		{"capacity is never ambiguous", ttlcache.EvictionReasonCapacityReached, "", false, metrics.CloseReasonCapacity},
+		{"deleted during drain is shutdown", ttlcache.EvictionReasonDeleted, "", true, metrics.CloseReasonShutdown},
+		{"drain wins over a recorded origin", ttlcache.EvictionReasonDeleted, metrics.CloseReasonClientClosed, true, metrics.CloseReasonShutdown},
+		{"client origin is reported", ttlcache.EvictionReasonDeleted, metrics.CloseReasonClientClosed, false, metrics.CloseReasonClientClosed},
+		{"worker origin is reported", ttlcache.EvictionReasonDeleted, metrics.CloseReasonWorkerClosed, false, metrics.CloseReasonWorkerClosed},
+		{"no origin stays distinguishable", ttlcache.EvictionReasonDeleted, "", false, metrics.CloseReasonDeleted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveCloseReason(tt.reason, newConn(tt.origin), tt.shuttingDown); got != tt.want {
+				t.Errorf("resolveCloseReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSetCloseOriginFirstWriterWins ensures a cascading teardown cannot
+// overwrite the original cause. A client close triggers a worker close, so
+// without this the origin would always end up reported as worker_closed.
+func TestSetCloseOriginFirstWriterWins(t *testing.T) {
+	wc := worker.NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+	if got := wc.CloseOrigin(); got != "" {
+		t.Errorf("new connection should have no origin, got %q", got)
+	}
+	wc.SetCloseOrigin(metrics.CloseReasonClientClosed)
+	wc.SetCloseOrigin(metrics.CloseReasonWorkerClosed)
+	if got := wc.CloseOrigin(); got != metrics.CloseReasonClientClosed {
+		t.Errorf("first writer should win, got %q", got)
+	}
+}
+
+// TestConnectResultsArePreInitialised guards the pairing between the outcomes
+// HijackHandler can emit and the label set pre-initialised in the metrics
+// package. A result emitted but not pre-initialised appears only after it
+// first occurs, leaving gaps in rate() and misfiring absent() alerts.
+func TestConnectResultsArePreInitialised(t *testing.T) {
+	emitted := []string{
+		metrics.ConnectAccepted, metrics.ConnectNotHijackable, metrics.ConnectMissingAuth,
+		metrics.ConnectMissingRequestID, metrics.ConnectInvalidRequestID,
+		metrics.ConnectTokenExpired, metrics.ConnectTokenUnknown,
+		metrics.ConnectRequestIDMismatch, metrics.ConnectHijackFailed,
+	}
+	for _, r := range emitted {
+		if !slices.Contains(metrics.ConnectResults, r) {
+			t.Errorf("%q can be emitted but is not pre-initialised in metrics.ConnectResults", r)
+		}
+	}
+	for _, r := range metrics.ConnectResults {
+		if !slices.Contains(emitted, r) {
+			t.Errorf("metrics.ConnectResults contains %q which is never emitted", r)
 		}
 	}
 }

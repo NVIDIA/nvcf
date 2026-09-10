@@ -26,11 +26,18 @@ invocation:
 
   replicaCount: 1
 
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
+
   image:
     registry: "" # must be supplied
     repository: "" # must be supplied
     pullPolicy: IfNotPresent
-    tag: "0.8.8"
+    tag: "0.12.0"
 
   podAnnotations: {}
   podLabels: {}
@@ -53,10 +60,18 @@ invocation:
         port: 8080
         targetPort: 8080
         protocol: TCP
-      - name: metrics
-        port: 41337
-        targetPort: 41337
-        protocol: TCP
+
+  # Metrics collection remains active inside the invocation process. This
+  # setting controls whether the Prometheus listener is bound to the pod
+  # network and exposed through the Service.
+  metrics:
+    enabled: false
+    bindAddress: 0.0.0.0
+    port: 41337
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      path: /metrics
 
   resources:
     limits:
@@ -110,9 +125,6 @@ invocation:
     - name: http
       containerPort: 8080
       protocol: TCP
-    - name: metrics
-      containerPort: 41337
-      protocol: TCP
 
   env:
     NVCF_API_ADDRESS: "http://api.nvcf.svc.cluster.local:9090"
@@ -123,3 +135,7 @@ invocation:
     S3_PROPERTIES__ENABLE_LARGE_RESPONSE_URL: "false"
     SECRETS_PATH: "/vault/secrets/secrets.json"
     OAUTH2_BASE_URL: "https://oauth2.example.com"
+
+  tracing:
+    # Comma-delimited W3C baggage keys copied to invocation span attributes.
+    baggageAttributeAllowlist: []

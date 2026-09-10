@@ -5,28 +5,24 @@ Feature: Render local Helmfile stacks with observability disabled
   so that I can verify the profile does not add observability resources.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "REPO_ROOT" is set
-    # Helmfile pulls OCI charts during rendering. Keep $NGC_API_KEY unbraced
-    # so the BDD runner does not expand it into command logs.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
+      | REPO_ROOT       |
+    # Helmfile pulls OCI charts during rendering. Authenticate before render
+    # without exposing the current API key in command arguments or logs.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Create the self-managed stack environment used by the control-plane render.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-disabled.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-disabled.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | disabled                             |
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-observability-disabled-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-observability-disabled-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-disabled-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Create the compute-plane stack environment used by the worker render.
-    And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-disabled.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-disabled.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |

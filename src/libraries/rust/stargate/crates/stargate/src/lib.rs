@@ -41,12 +41,15 @@ pub(crate) mod queue_estimate {
         stats: &ModelStats,
         priority: u32,
     ) -> Option<u64> {
-        stats
-            .queue_time_estimate_ms_by_priority
-            .iter()
-            .filter(|(candidate_priority, _)| **candidate_priority <= priority)
-            .max_by_key(|(candidate_priority, _)| **candidate_priority)
-            .map(|(_, queue_time_ms)| *queue_time_ms)
+        let mut best = None;
+        for (&candidate_priority, &queue_time_ms) in &stats.queue_time_estimate_ms_by_priority {
+            if candidate_priority <= priority
+                && best.is_none_or(|(best_priority, _)| candidate_priority > best_priority)
+            {
+                best = Some((candidate_priority, queue_time_ms));
+            }
+        }
+        best.map(|(_, queue_time_ms)| queue_time_ms)
     }
 
     pub(crate) fn aggregate_queue_time_estimate_ms(stats: &ModelStats) -> Option<u64> {

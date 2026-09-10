@@ -79,7 +79,7 @@ Identify the environment from `environments/<name>.yaml` and
 
 Understanding value precedence prevents the most common configuration mistakes.
 
-```
+```text
 environments/base.yaml          (defaults)
     -> merged with
 environments/<env>.yaml         (your overrides)
@@ -384,12 +384,14 @@ format rule below (two of them fail even with the correct key if the format is w
 > value verbatim and drops it into the `auth` field of the dockerconfig it builds. So the
 > value must be `base64("$oauthtoken:<key>")`, e.g. `printf '$oauthtoken:%s' "$KEY" | openssl base64 -A`,
 > not `base64(<dockerconfigjson>)`.
->  - Wrong account-bootstrap value: `function create` returns
+>
+> - Wrong account-bootstrap value: `function create` returns
 >    `400 "must be base64 encoded username:password format"`.
->  - Wrong sidecar value: every worker's sidecar pull gets a malformed credential and
+> - Wrong sidecar value: every worker's sidecar pull gets a malformed credential and
 >    `403`s, regardless of which key is inside. The symptom looks like a bad or wrong-org
 >    key, but the key is fine and the encoding is the bug. To repair an already-installed
 >    stack without a full re-sync:
+>
 >    ```bash
 >    AUTH=$(printf '$oauthtoken:%s' "$KEY" | openssl base64 -A)
 >    bao kv put services/nvcf-api/kv/sidecars/image-pull-secret secret="$AUTH"

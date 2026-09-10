@@ -30,7 +30,7 @@ use crate::nvcf_api::{
 };
 use crate::request_id::RequestId;
 use crate::routes::app_error::AppError;
-use crate::routes::http_headers::remove_hop_by_hop_headers;
+use crate::routes::http_headers::{inject_invocation_region_header, remove_hop_by_hop_headers};
 use crate::settings::AppConfig;
 use crate::worker_streams::WorkerStreamService;
 use anyhow::Context;
@@ -115,6 +115,10 @@ pub async fn pexec_status(
         }
     };
     let existing_region = existing_request.region;
+    inject_invocation_region_header(
+        headers,
+        nats_service.invocation_region_header_for_region(&existing_region),
+    );
     let existing_request = existing_request.worker_result_tracking;
 
     let function_id: Uuid = existing_request.function_id.parse()?;

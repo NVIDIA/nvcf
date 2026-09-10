@@ -67,14 +67,15 @@ new sessions from targeting that pod but does not reassign an existing session.
 The router preserves CONNECT request headers and propagates a non-success
 upstream CONNECT status to the downstream pylon.
 
-The two TLS hops are independent in WebTransport mode: `--tls-cert-path` and
-`--tls-key-path` identify the router to pylon, while
+The two TLS hops can use independent material in both Raw QUIC and WebTransport
+modes. `--tls-cert-path` and `--tls-key-path` identify the router to pylon, while
 `--upstream-tls-cert-path` (or `STARGATE_UPSTREAM_TLS_CERT_PATH`) is the trust
 anchor used to verify Stargate. `--quic-insecure` disables only upstream
-verification; without it, the upstream trust anchor is required.
-Raw QUIC retains its existing router TLS configuration: its certificate path is
-also its upstream trust source when verification is enabled, and it rejects the
-WebTransport-only `--upstream-tls-cert-path` option.
+verification. Raw QUIC retains the serving certificate as a compatibility
+fallback when no dedicated upstream trust bundle is configured. Configure the
+dedicated bundle so serving-certificate rotation does not also change outbound
+trust. WebTransport requires the dedicated upstream trust bundle when
+verification is enabled.
 
 On GKE internal LoadBalancer Services, expose backend-facing gRPC/TCP and
 Raw QUIC/UDP with separate single-protocol Services. The active-development

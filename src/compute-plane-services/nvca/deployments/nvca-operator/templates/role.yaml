@@ -93,6 +93,19 @@ rules:
 - apiGroups: ["nvca.nvcf.nvidia.io"]
   resources: ["miniservices", "miniservices/status"]
   verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+# NvSnapFunctionState is granted unconditionally, NOT behind the NvSnap
+# feature flag. The operator generates the agent ClusterRole with this rule on
+# every reconcile, and Kubernetes escalation prevention rejects a role that
+# grants permissions the granting account does not itself hold:
+#   clusterroles "nvca" is forbidden: user "system:serviceaccount:
+#   nvca-operator:nvca-operator" is attempting to grant RBAC permissions not
+#   currently held: {APIGroups:["nvsnap.nvcf.nvidia.io"], ...}
+# That check runs at install time on the delegation itself, long before any
+# feature flag is consulted, so a default-off flag does not avoid it and a
+# clean install cannot reconcile its NVCFBackend without this.
+- apiGroups: ["nvsnap.nvcf.nvidia.io"]
+  resources: ["nvsnapfunctionstates", "nvsnapfunctionstates/status"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
 - apiGroups: ["resource.nvidia.com"]
   resources: ["computedomains"]
   verbs: ["get", "list", "watch", "create", "update", "delete", "deletecollection", "patch"]

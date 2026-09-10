@@ -63,7 +63,7 @@ data:
     nodePoolLabelKey: run.ai/simulated-gpu-node-pool
     nodePools:
       default:
-        gpuCount: 128
+        gpuCount: 2
         gpuMemory: 81559
         gpuProduct: NVIDIA-H100-SXM4-80GB
 kind: ConfigMap
@@ -418,7 +418,7 @@ spec:
     metadata:
       
       annotations:
-        checksum/topology: 63a9de7b0d41b449b9a0ba036e23ea7e55eb174d6a822ff9dc2531fe61db971b
+        checksum/topology: d4293b3607dec297d688bfb0dfe5ffa78eb892015c926bf1d5b61500788468c4
       labels:
         app: device-plugin
         component: device-plugin
@@ -496,7 +496,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/topology: 63a9de7b0d41b449b9a0ba036e23ea7e55eb174d6a822ff9dc2531fe61db971b
+        checksum/topology: d4293b3607dec297d688bfb0dfe5ffa78eb892015c926bf1d5b61500788468c4
       labels:
         app: mig-faker
         component: mig-faker
@@ -652,7 +652,7 @@ kind: Deployment
 metadata:
   name: kwok-gpu-device-plugin
   annotations:
-    checksum/topology: 63a9de7b0d41b449b9a0ba036e23ea7e55eb174d6a822ff9dc2531fe61db971b
+    checksum/topology: d4293b3607dec297d688bfb0dfe5ffa78eb892015c926bf1d5b61500788468c4
   labels:
     app: kwok-gpu-device-plugin
 spec:
@@ -664,7 +664,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/topology: 63a9de7b0d41b449b9a0ba036e23ea7e55eb174d6a822ff9dc2531fe61db971b
+        checksum/topology: d4293b3607dec297d688bfb0dfe5ffa78eb892015c926bf1d5b61500788468c4
       labels:
         app: kwok-gpu-device-plugin
         component: kwok-gpu-device-plugin
@@ -770,7 +770,7 @@ kind: Deployment
 metadata:
   name: status-updater
   annotations:
-    checksum/topology: 63a9de7b0d41b449b9a0ba036e23ea7e55eb174d6a822ff9dc2531fe61db971b
+    checksum/topology: d4293b3607dec297d688bfb0dfe5ffa78eb892015c926bf1d5b61500788468c4
   labels:
     app: status-updater
 spec:
@@ -782,7 +782,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/topology: 63a9de7b0d41b449b9a0ba036e23ea7e55eb174d6a822ff9dc2531fe61db971b
+        checksum/topology: d4293b3607dec297d688bfb0dfe5ffa78eb892015c926bf1d5b61500788468c4
       labels:
         app: status-updater
         component: status-updater

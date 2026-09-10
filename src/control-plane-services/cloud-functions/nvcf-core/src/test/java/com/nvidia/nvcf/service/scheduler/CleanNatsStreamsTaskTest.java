@@ -73,7 +73,7 @@ class CleanNatsStreamsTaskTest {
     void setUp() {
         cleanNatsStreamsTask = new CleanNatsStreamsTask(functionsDeploymentRepository,
                                                         functionsRepository,
-                                                        natsResourceService, true);
+                                                        natsResourceService);
     }
 
     @Test

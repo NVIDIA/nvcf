@@ -35,7 +35,12 @@ import (
 // CaptureFormatVersion is bumped whenever the on-disk schema for a capture
 // changes (manifest format, layout, included metadata). Hashes are recomputed
 // across versions, so old captures stop matching.
-const CaptureFormatVersion = 1
+// 2: added EntryRuntimeDirs. A capture taken before this has no recorded
+// runtime directories, so restoring it cannot recreate them and workloads that
+// need one still fail. Without the bump those captures hash identically to new
+// ones and would be reused forever after an upgrade -- silently, since the
+// agent reports the reuse as a successful capture.
+const CaptureFormatVersion = 2
 
 // ErrNotFound is returned by Stat / Get when no capture is stored under the
 // given hash.
@@ -258,6 +263,34 @@ type Manifest struct {
 	// time. The shim chdir()s here before exec so relative paths in the
 	// entrypoint resolve as they did pre-capture. Empty → "/".
 	EntryCwd string `json:"entry_cwd,omitempty"`
+
+	// EntryRuntimeDirs are directories that existed under the source
+	// container's ephemeral runtime roots (/run, /var/run) at capture time.
+	//
+	// EntryArgv is /proc/<pid>/cmdline, which is the process image AFTER any
+	// exec. A container started as `bash -c 'mkdir -p /var/run/vllm; vllm
+	// serve ...'` runs the mkdir as a child and then, via bash's last-command
+	// exec optimization, REPLACES itself with vllm -- so by capture time the
+	// mkdir is no longer anywhere in the process image and cannot be
+	// recovered from argv. Restore then execs into a pristine container where
+	// the directory does not exist, and anything binding a unix socket there
+	// fails with ENOENT (vLLM's ZMQ IPC socket, observed).
+	//
+	// We cannot replay the setup commands (they are gone), and we cannot
+	// prefer the Pod's command/args instead -- ENTRYPOINT-only images carry
+	// only args, or nothing, in the Pod spec. So we record the directories
+	// themselves and recreate them before exec.
+	EntryRuntimeDirs []EntryRuntimeDir `json:"entry_runtime_dirs,omitempty"`
+}
+
+// EntryRuntimeDir is one directory to recreate in the restored container
+// before the entrypoint is exec'd. Mode and ownership are carried so a
+// workload running as a non-root UID can still write inside it.
+type EntryRuntimeDir struct {
+	Path string `json:"path"`
+	Mode uint32 `json:"mode"`
+	UID  uint32 `json:"uid"`
+	GID  uint32 `json:"gid"`
 }
 
 // VolumeMeta is a single captured volume's metadata. Volume.Name == "rootfs"
@@ -277,7 +310,29 @@ type VolumeMeta struct {
 	// Set by the caller (admission webhook) to the consuming pod's
 	// namespace — K8s only lets a pod mount PVCs in its own ns.
 	Namespace string `json:"namespace,omitempty"`
+
+	// Subpath is where this volume's bytes actually live inside the
+	// captured tree, relative to tree/. It is the same value the writer
+	// passed as CaptureSource.DstSubpath, so the artifact describes its
+	// own layout instead of every consumer re-deriving it from Type.
+	//
+	// A pointer because "" is a real location -- the tree root, which is
+	// what cachedir mode writes -- and must be distinguishable from
+	// "field absent" on a manifest written before this existed. Absent
+	// means fall back to inferring from Type; see VolumeSubpath.
+	//
+	// Inference is what broke cachedir: the writer put the bytes at the
+	// tree root while Type said "emptyDir", so consumers looked under
+	// volumes/<name>/ and the restore pod waited on a mount that could
+	// never appear.
+	Subpath *string `json:"subpath,omitempty"`
 }
+
+// SubpathAt builds a VolumeMeta.Subpath. Prefer it over taking the address
+// of a local: the empty string is a real location (the tree root), so the
+// pointer has to be non-nil even when the subpath is empty, and &"" is not
+// valid Go.
+func SubpathAt(subpath string) *string { return &subpath }
 
 // ExtractPath is a single subpath within a captured rootfs upperdir
 // that the webhook will shadow-mount on restored pods. The same Path

@@ -683,7 +683,7 @@ func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClu
 		Stdout:          r.helmfileStdout,
 		Stderr:          r.helmfileStderr,
 		Ctx:             r.ctx,
-		ExtraEnv:        registration.computePlaneEnv(),
+		ExtraEnv:        registration.computePlaneEnv(filepath.Join(stackPath, "out")),
 	})
 	stopWatcher(cancelWatcher, watcherDone)
 	if err != nil {
@@ -1064,7 +1064,7 @@ func (r *selfHostedUpRun) emitFinalFailure() {
 	})
 }
 
-func (r upClusterRegistration) computePlaneEnv() []string {
+func (r upClusterRegistration) computePlaneEnv(outputDir string) []string {
 	return []string{
 		"CLUSTER_NAME=" + upClusterName,
 		"CLUSTER_ID=" + r.ClusterID,
@@ -1072,6 +1072,9 @@ func (r upClusterRegistration) computePlaneEnv() []string {
 		"IDENTITY_SOURCE=" + r.IdentitySource,
 		"NCA_ID=" + r.NCAID,
 		"CLUSTER_REGION=" + r.Region,
+		// The compute-plane Helmfile reads its registration handoff from
+		// $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml.
+		"OUTPUT_DIR=" + outputDir,
 	}
 }
 

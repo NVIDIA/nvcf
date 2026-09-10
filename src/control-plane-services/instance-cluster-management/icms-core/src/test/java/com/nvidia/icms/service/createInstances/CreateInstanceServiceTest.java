@@ -57,10 +57,9 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
-import com.nvidia.icms.outbound.sqs.QueueManager;
 import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import com.nvidia.icms.service.InstanceServiceHelper;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
+import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
@@ -180,9 +179,6 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     AwsConfigurationProperties awsConfigurationProperties;
 
     @Mock
-    QueueManager queueManager;
-
-    @Mock
     ReservationProcessor reservationProcessor;
 
     UnifiedErrorReporter unifiedErrorReporter;
@@ -235,13 +231,12 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 instanceLifecycleService,
                 byocValidationService,
                 icmsConfigurationProperties,
-                instanceValidationService,
                 requestDestinationProvider,
                 clusterTargetingHelper,
-                queueManager,
                 telemetryEventClient,
                 reservationProcessor,
-                computePlatformService);
+                computePlatformService,
+                instanceValidationService);
 
         lenient().when(awsConfigurationProperties.getQueuePerInstanceNameFormat()).thenReturn("sqs_%s.fifo");
     }
@@ -638,7 +633,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     void processInstanceRequest_ncaIdNotProvided_throwsException() {
 
         // Prepare
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         // Act
         IcmsBadRequestException exception = assertThrows(IcmsBadRequestException.class,
@@ -655,7 +650,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                                 exception.getBody().getDetail());
 
         // Verify
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
     }
 
 
@@ -663,7 +658,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     void processInstanceRequest_gpuNotProvided_throwsException() {
 
         // Prepare
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         // Act
         IcmsBadRequestException exception = assertThrows(IcmsBadRequestException.class,
@@ -679,7 +674,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                                 exception.getBody().getDetail());
 
         // Verify
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -690,7 +685,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         // Prepare
         var clusterGroupName = ClusterProviderEnum.GDN.toString();
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_NON_BYOC_NCA_ID)).thenReturn(List.of());
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD)).thenReturn(List.of());
@@ -714,7 +709,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(DUMMY_NON_BYOC_NCA_ID);
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verifyNoMoreInteractions(clusterRepository);
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -724,7 +719,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         // Prepare
         var clusterGroupName = ClusterProviderEnum.AWS.toString();
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
 
         ClustersByAuthorizedAccountsEntity cluster = createClusterForByoc(DUMMY_OCI_NCA_ID, clusterGroupName, PLATFORM_CLUSTER_GROUP_ID, DUMMY_CLUSTER_ID);
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_OCI_NCA_ID)).thenReturn(List.of(cluster));
@@ -757,7 +752,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         verifyNoMoreInteractions(clusterRepository);
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -863,7 +858,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
 
         when(instanceServiceHelper.isNatsEnabled()).thenReturn(false);
         when(instanceServiceHelper.isTaskClusterCreationQueuesAllowed(Boolean.TRUE)).thenReturn(true);
-        doNothing().when(instanceValidationService).validationForNvct(instanceRequest);
+        doNothing().when(instanceValidationService).validateTaskWorkload(instanceRequest);
 
         CloudHealthEntity cloudHealth = createCloudHealthEntity(DUMMY_CLUSTER_ID, DUMMY_GPU_NAME, CloudHealthStatus.HEALTHY, ResourceProvider.BYOC, 10, 0, 10);
 
@@ -1012,7 +1007,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(clusterRepository).getClusterInfoByClusterId(DUMMY_CLUSTER_ID, false);
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
 
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
         verifyNoInteractions(instanceRequestV2Repository);
     }
 
@@ -1026,7 +1021,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 clusterGroupName, DUMMY_GPU_NAME,
                 DUMMY_BYOC_NCA_ID);
 
-        doNothing().when(instanceValidationService).validationForNvct(any());
+        doNothing().when(instanceValidationService).validateTaskWorkload(any());
         // Mocking NVCA call
         when(nvcaClusterRepository.getAllClustersInAuthorizedAccount(DUMMY_BYOC_NCA_ID))
                 .thenReturn(new ArrayList<>());
@@ -1048,7 +1043,7 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(DUMMY_BYOC_NCA_ID);
         verify(nvcaClusterRepository, times(1)).getAllClustersInAuthorizedAccount(ClusterRepository.WILDCARD);
         verify(clusterRepository, times(0)).getAllClustersInAGroup(DUMMY_CLUSTER_GROUP_ID);
-        verify(instanceValidationService).validationForNvct(any());
+        verify(instanceValidationService).validateTaskWorkload(any());
     }
 
     @Test

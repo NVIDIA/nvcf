@@ -45,7 +45,6 @@ import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.configuration.byoc.ByocConfigurationProperties;
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
 import com.nvidia.icms.errors.IcmsInternalServerException;
 import com.nvidia.icms.event.NcaIdAccountNameEvent;
 import com.nvidia.icms.inbound.rest.model.ClientRequestDataModel;
@@ -140,9 +139,6 @@ class InstanceServiceHelperTest {
 
     @Mock
     AwsConfigurationProperties awsConfigurationProperties;
-
-    @Mock
-    InstanceValidationService instanceValidationService;
 
     @Mock
     private LatestInstanceStateEventService latestInstanceStateEventService;

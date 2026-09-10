@@ -53,7 +53,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.143.2"
+                    "default": "0.157.0-nv-0.2.1"
                 },
                 "resources": {
                     "type": "object",
@@ -133,6 +133,57 @@
             "description": "Replica count for the operator deployment",
             "default": 1
         },
+        "podDisruptionBudget": {
+            "type": "object",
+            "description": "PodDisruptionBudget configuration for the NVCA Operator.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable a PodDisruptionBudget for the NVCA Operator.",
+                    "default": false
+                },
+                "minAvailable": {
+                    "description": "Minimum available pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                },
+                "maxUnavailable": {
+                    "description": "Maximum unavailable pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                }
+            }
+        },
         "systemNamespace": {
             "type": "string",
             "description": "Namespace in which NVCFBackend objects are created.",
@@ -201,8 +252,250 @@
             "properties": {
                 "mergeConfig": {
                     "type": "string",
-                    "description": "Merge fields into the generated NVCA config. Must be a string.",
+                    "description": "Merge fields into the generated NVCA config. Must be a string. Deprecated for BYOO settings; use byoo instead.",
                     "default": ""
+                }
+            }
+        },
+        "byoo": {
+            "type": "object",
+            "description": "First-class BYOO OTel collector and capacity configuration.",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "logChunking": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "maxPayloadBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "dryRun": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "otelCollector": {
+                    "type": "object",
+                    "description": "Structured BYOO OTel collector rendering overrides."
+                },
+                "additionalResourceOverhead": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "fluentbit": {
+                    "type": "object",
+                    "properties": {
+                        "resources": {
+                            "type": "object",
+                            "properties": {
+                                "limits": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                },
+                                "requests": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "utils": {
+            "type": "object",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "description": "Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "storage": {
+            "type": "object",
+            "description": "First-class shared-storage and internal persistent storage configuration.",
+            "properties": {
+                "sharedStorage": {
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "object",
+                            "properties": {
+                                "image": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "resources": {
+                                    "type": "object",
+                                    "properties": {
+                                        "limits": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "requests": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "taskData": {
+                            "type": "object",
+                            "properties": {
+                                "storageClassName": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "mountOptions": {
+                                    "type": "array",
+                                    "default": [],
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                },
+                                "storageCapacity": {
+                                    "type": "string",
+                                    "default": ""
+                                }
+                            }
+                        }
+                    }
+                },
+                "internalPersistentStorage": {
+                    "type": "object",
+                    "properties": {
+                        "storageClassName": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "hardResourceQuota": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "worker": {
+            "type": "object",
+            "description": "First-class worker/agent behavior, scheduling, and timeout configuration.",
+            "properties": {
+                "minHealthcheckRefreshWait": {
+                    "type": "string",
+                    "default": ""
+                },
+                "staticGPUCapacity": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0
+                },
+                "computeBackend": {
+                    "type": "string",
+                    "default": ""
+                },
+                "requestsNamespace": {
+                    "type": "string",
+                    "default": ""
+                },
+                "namespaceLabels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "featureFlags": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "skipSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "forceSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "csiVolumeMountOptions": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "timeouts": {
+                    "type": "object",
+                    "properties": {
+                        "credRenewInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "heartbeatInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncQueueInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncRequestStatusInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncAcknowledgeRequestInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "periodicInstanceStatusInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "icmsRequestAckInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "icmsRequestAckRetryTimeout": {
+                            "type": "string",
+                            "default": ""
+                        }
+                    }
                 }
             }
         },
@@ -372,6 +665,22 @@
                             "type": "string",
                             "description": "Pod label value NVCA applies to profiled function pods. Empty uses the built-in default \"enabled\".",
                             "default": ""
+                        }
+                    }
+                },
+                "byooOtelCollector": {
+                    "type": "object",
+                    "description": "Default BYOO OpenTelemetry Collector image. The repository is derived from image.repository when not set.",
+                    "properties": {
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "BYOO OpenTelemetry Collector image tag.",
+                            "default": "0.157.0-nv-0.2.1"
                         }
                     }
                 },
@@ -569,6 +878,11 @@
         "vaultConfig": {
             "type": "object",
             "properties": {
+                "address": {
+                    "type": "string",
+                    "description": "Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.",
+                    "default": ""
+                },
                 "oAuthClientMountPathTemplate": {
                     "type": "string",
                     "description": "Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: \"nvidia/services/oauth/clients/%s/kv/secret\"",
@@ -672,7 +986,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.0-nv-0.2.1"
                         }
                     }
                 }
@@ -738,7 +1052,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.0-nv-0.2.1"
                         }
                     }
                 },

@@ -301,6 +301,41 @@ func TestLicenseFromPlainDirKeepsLicenseLikeFallbackText(t *testing.T) {
 	}
 }
 
+func TestSniffLicenseTextDistinguishesUnlabelledBSDClauses(t *testing.T) {
+	twoClause := `Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the copyright notice.
+2. Redistributions in binary form must reproduce the copyright notice.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS".`
+	if got := sniffLicenseText(twoClause); got != "BSD-2-Clause" {
+		t.Fatalf("sniffLicenseText(twoClause) = %q, want BSD-2-Clause", got)
+	}
+
+	threeClause := twoClause + `
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse products.`
+	if got := sniffLicenseText(threeClause); got != "BSD-3-Clause" {
+		t.Fatalf("sniffLicenseText(threeClause) = %q, want BSD-3-Clause", got)
+	}
+
+	contributorWording := twoClause + `
+3. The names of its contributors may not be used to endorse or promote products derived from this software.`
+	if got := sniffLicenseText(contributorWording); got != "BSD-3-Clause" {
+		t.Fatalf("sniffLicenseText(contributorWording) = %q, want BSD-3-Clause", got)
+	}
+
+	personalNameWording := twoClause + `
+3. Neither my name nor the names of its contributors may be used to endorse products derived from this software.`
+	if got := sniffLicenseText(personalNameWording); got != "BSD-3-Clause" {
+		t.Fatalf("sniffLicenseText(personalNameWording) = %q, want BSD-3-Clause", got)
+	}
+
+	multipleNamesWording := twoClause + `
+3. None of the names of the copyright holders may be used to endorse products derived from this software.`
+	if got := sniffLicenseText(multipleNamesWording); got != "BSD-3-Clause" {
+		t.Fatalf("sniffLicenseText(multipleNamesWording) = %q, want BSD-3-Clause", got)
+	}
+}
+
 func TestImportPathsFromManifestIncludesNativeRoots(t *testing.T) {
 	tmp := t.TempDir()
 	repoRoot = tmp

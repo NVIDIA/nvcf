@@ -111,7 +111,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 	tests := []struct {
 		name                 string
 		cfg                  AuthConfig
-		hasStaticPolicyToken bool
+		selfManaged bool
 		expectedErr          error
 	}{
 		{
@@ -252,9 +252,9 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 			expectedErr: ErrInvalidPolicyCredsRefreshInterval,
 		},
 		{
-			// When a static policy token is available, OAuth2 fields are not required.
-			name:                 "valid config with static policy token - oauth2 fields not required",
-			hasStaticPolicyToken: true,
+			// In self-managed mode, OAuth2 fields are not required.
+			name:                 "valid config in self-managed mode - oauth2 fields not required",
+			selfManaged: true,
 			cfg: AuthConfig{
 				Enabled:   true,
 				Provider:  "policy",
@@ -268,9 +268,9 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			// Even with a static policy token, the always-required fields are still checked.
-			name:                 "static policy token does not bypass namespace check",
-			hasStaticPolicyToken: true,
+			// Even in self-managed mode, always-required fields are still checked.
+			name:                 "self-managed mode does not bypass namespace check",
+			selfManaged: true,
 			cfg: AuthConfig{
 				Enabled:   true,
 				Provider:  "policy",
@@ -286,7 +286,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateAuthConfig(tt.cfg, tt.hasStaticPolicyToken)
+			err := ValidateAuthConfig(tt.cfg, tt.selfManaged)
 			if tt.expectedErr != nil {
 				require.Error(t, err)
 				assert.Equal(t, tt.expectedErr, err)

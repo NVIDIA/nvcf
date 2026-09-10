@@ -31,10 +31,12 @@ import (
 
 const defaultConnectTimeout = 10 * time.Second
 
+// inClusterCAPath is the standard mount path for the API server's CA bundle
+// inside any pod with automountServiceAccountToken: true. Declared as a var
+// (not const) so tests can point it at a fixture file.
+var inClusterCAPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
 const (
-	// inClusterCAPath is the standard mount path for the API server's CA bundle
-	// inside any pod with automountServiceAccountToken: true.
-	inClusterCAPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 	// inClusterAPIURL is the in-cluster ClusterIP DNS name of the Kubernetes
 	// API service. Probing this proves the service-routing layer (kube-proxy,
 	// Cilium eBPF, OVN-Kubernetes, etc.) is working, regardless of which
@@ -220,15 +222,18 @@ func probeInClusterDNS(ctx context.Context) bool {
 // care about the response status; only that the cluster's
 // kube-proxy / eBPF / OVN-Kubernetes / etc. did its job.
 //
-// Uses the standard in-cluster CA bundle when present; falls back to
-// InsecureSkipVerify only when the CA is unreadable (e.g., running outside
-// a pod for dev/testing) — TLS verification of a remote API server is
-// not the goal of this probe, the routing capability is.
+// Requires the standard in-cluster CA bundle to build a verified TLS
+// config; fails closed (reports routing as unproven) when the CA is
+// unreadable rather than skipping certificate/hostname verification.
 func probeKubernetesAPIServiceIP(ctx context.Context) bool {
+	tlsConfig, ok := inClusterTLSConfig()
+	if !ok {
+		return false
+	}
 	client := &http.Client{
 		Timeout: defaultConnectTimeout,
 		Transport: &http.Transport{
-			TLSClientConfig: inClusterTLSConfig(),
+			TLSClientConfig: tlsConfig,
 		},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, inClusterAPIURL, nil)
@@ -247,14 +252,16 @@ func probeKubernetesAPIServiceIP(ctx context.Context) bool {
 	return false
 }
 
-// inClusterTLSConfig returns a *tls.Config that trusts the cluster's CA
-// when the standard SA-mount is present, or skips verification otherwise.
-// Skipping verify is acceptable here because the probe is solely a
-// "routing reaches a TLS-speaking endpoint" capability check.
-func inClusterTLSConfig() *tls.Config {
+// inClusterTLSConfig returns a verified *tls.Config trusting the cluster's
+// CA when the standard SA-mount is present. The second return value is
+// false when the CA bundle can't be read or parsed, signaling the caller
+// to fail closed instead of connecting without certificate/hostname
+// verification.
+func inClusterTLSConfig() (*tls.Config, bool) {
 	pool := x509.NewCertPool()
-	if caBytes, err := os.ReadFile(inClusterCAPath); err == nil && pool.AppendCertsFromPEM(caBytes) {
-		return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	caBytes, err := os.ReadFile(inClusterCAPath)
+	if err != nil || !pool.AppendCertsFromPEM(caBytes) {
+		return nil, false
 	}
-	return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} // #nosec G402 — routing-only probe
+	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, true
 }

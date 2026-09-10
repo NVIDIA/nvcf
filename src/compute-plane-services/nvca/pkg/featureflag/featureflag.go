@@ -34,9 +34,18 @@ var (
 )
 
 var (
-	LogPosting                    = newFeatureFlag("LogPosting", newBool(false))
-	CachingSupport                = newFeatureFlag("CachingSupport", newBool(false))
-	NVMeshEncryption              = newFeatureFlag("NVMeshEncryption", newBool(false))
+	LogPosting     = newFeatureFlag("LogPosting", newBool(false))
+	CachingSupport = newFeatureFlag("CachingSupport", newBool(false))
+	// HelmModelCaching gates model caching for Helm-based workloads. It is a
+	// sub-gate of CachingSupport: both must be on before a backend is selected
+	// in storage.SelectHelmCacheBackend. When off, no ModelCacheRequest is
+	// created and no ephemeral model-cache-init container is injected.
+	HelmModelCaching = newFeatureFlag("HelmModelCaching", newBool(false))
+	NVMeshEncryption = newFeatureFlag("NVMeshEncryption", newBool(false))
+	// ModelCacheEncryption encrypts a durable model cache on any driver whose
+	// catalog entry lists encryptionSupported. NVMeshEncryption remains the
+	// NVMesh-only predecessor.
+	ModelCacheEncryption          = newFeatureFlag("ModelCacheEncryption", newBool(false))
 	PeriodicInstanceStatusUpdate  = newFeatureFlag("PeriodicInstanceStatusUpdate", newBool(true))
 	HelmRBACEnforcement           = newFeatureFlag("HelmRBACEnforcement", newBool(true))
 	DynamicGPUDiscovery           = newFeatureFlag("DynamicGPUDiscovery", newBool(true))
@@ -82,6 +91,14 @@ var (
 
 	// FCO operator-specific feature flags. To be removed once Phase 1 of the FCO SDD is in progress.
 	DynamoOperatorSupport = newFeatureFlag("DynamoOperatorSupport", newBool(false))
+
+	// NvSnapCheckpointRestore is the global kill switch for the NvSnap
+	// integration (see docs/users/nvsnap/NVSNAP-INTEGRATION-DESIGN.md).
+	// When false, NVCA pod creation behaves exactly as before — no
+	// nvsnap.io/restore-from stamping on apply, no post-Ready checkpoint
+	// kick-off. Disabled by default. Per-cluster + per-function-version
+	// overrides land in a follow-up CRD update.
+	NvSnapCheckpointRestore = newFeatureFlag("NvSnapCheckpointRestore", newBool(false))
 )
 
 // Feature flags for migrating resource limits.

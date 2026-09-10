@@ -678,7 +678,7 @@ mod tests {
             ..CacheSummary::default()
         };
 
-        let report = render(&config(), "power-of-two", None, summary);
+        let report = render(&config(), "power-of-n", None, summary);
 
         assert!(report.contains("| Algorithm | Admission Mode | Success |"));
         assert!(report.contains("Successful RPS"));
@@ -753,13 +753,13 @@ mod tests {
         }];
 
         let successful_report = render(&config(), "round-robin", None, successful_summary);
-        let failed_report = render(&config(), "power-of-two", None, failed_summary);
+        let failed_report = render(&config(), "power-of-n", None, failed_summary);
 
         assert!(!successful_report.contains("## Failures"));
         assert!(failed_report.contains("## Failures"));
         assert!(failed_report.contains("| Algorithm | Status | Backend | Count | Error |"));
         assert!(
-            failed_report.contains("| power-of-two | 503 | backend-a | 2 | upstream unavailable |")
+            failed_report.contains("| power-of-n | 503 | backend-a | 2 | upstream unavailable |")
         );
     }
 

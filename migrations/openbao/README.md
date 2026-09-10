@@ -11,9 +11,10 @@ This repository ships:
 - Numbered shell migrations under `migrations/` that run in order against an OpenBao leader
 - Helper utilities under `migrations/utils/`
 - The `jwker` CLI used by the install pipeline to convert Kubernetes JWKS material to PEM
-- Verified `jwker` binary and signed-package `kubectl` copied from downloader stages
+- Reproducible `jwker` and `kubectl` source builds copied from verified build stages
 - Optional addons under `addons/` (e.g., LLS / TURN secret rotation)
 - An example Kubernetes Job manifest (`job.yaml`)
+- A Docker-based integration test for the helper functions (`tests/`)
 
 ## Prerequisites
 
@@ -40,13 +41,12 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 ## Building the container
 
-The `Dockerfile` uses the public upstream OpenBao image (`openbao/openbao:2.5.5`) as the base. To use a different base, edit the `FROM` line directly.
-`kubectl` is installed from Alpine's signed package repository and pinned with `KUBECTL_APK_VERSION`.
+The `Dockerfile` uses the public upstream OpenBao 2.6.2 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.1, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
+
+The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0. It rebuilds Kubernetes v1.36.4 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.6 toolchain and vendored dependencies. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform.
 
 ```bash
-docker build \
-  --build-arg KUBECTL_APK_VERSION=1.34.2-r6 \
-  -t <your-registry>/<your-org>/openbao-migrations:<version> .
+docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
 
 ## Running the migrations
@@ -70,6 +70,7 @@ Environment variables consumed by the entrypoint:
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
 | `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
+| `BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS` | `60` | Total time `enable_secrets_mount` waits for a kv-v2 mount's storage upgrade (HTTP 400 "Upgrading from non-versioned to versioned data") to finish before failing the migration. Errors outside that wait fail immediately. |
 
 ### Example Kubernetes Job
 

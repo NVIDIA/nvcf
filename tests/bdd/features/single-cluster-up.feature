@@ -8,27 +8,45 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
   Rule: install --control-plane installs the CP; compute-plane register/install completes the worker layer
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "NGC_API_KEY" is set
       # SAMPLE_NGC_ORG / SAMPLE_NGC_TEAM are consumed by
       # `make build-and-deploy-cluster` (the credential provider
       # validation step) when the `a single-cluster ncp-local cluster is
       # running` step runs the build target. Without them, that target
       # fails at CREDENTIAL PROVIDER VALIDATION and skips the gateway
       # API setup.
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
-      # self-hosted install --env local reads operator-authored local
-      # secrets files from both split stacks:
-      # deploy/stacks/self-managed/secrets/local-secrets.yaml (control
-      # plane). Only secrets.yaml.template is tracked in each
-      # stack. Author both files from the canonical templates before
-      # running install/register. Ledger snapshots whatever
+      Given these environment variables are set:
+        | name            |
+        | NVCF_CLI        |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
+      # self-hosted install --env local reads the operator-authored
+      # control-plane secrets file. Only secrets.yaml.template is tracked.
+      # Prepare local-secrets.yaml from that template before running
+      # install/register. Ledger snapshots whatever
       # local-secrets.yaml state existed before the first write (its
       # prior contents or absence) and restores or removes it at suite
       # teardown, so the working tree stays clean.
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
+      # --env local also reads operator-authored environment values from
+      # both split stacks: deploy/stacks/<stack>/environments/local.yaml.
+      # Neither file is tracked, so author both from the BDD fixtures.
+      # observability.profile is disabled because this workflow runs
+      # 'helmfile apply', whose diff phase validates rendered manifests
+      # against the live cluster (--dry-run=server); on a fresh cluster
+      # the ServiceMonitor CRDs do not exist yet and the diff fails
+      # before anything installs. The Helmfile workflow (helmfile sync)
+      # has no diff phase and keeps the default profile.
+      And I prepare Helmfile environment "local" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
+      And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
       # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker
       # callback port 10086, overlapping host ports single-cluster
@@ -151,8 +169,8 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
 
       # Subset match (should contain, not should match) because the
       # values file carries non-deterministic IDs alongside the
-      # deterministic block. The IDs are asserted by individual
-      # should-not-be-empty steps below.
+      # deterministic block. The generated values are asserted as
+      # non-empty keys below.
       #
       # The values file uses in-cluster URLs because compute-plane
       # register resolves the URL layer from the kube-context: when
@@ -172,6 +190,8 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
           revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
           natsURL: nats://nats.nats-system.svc.cluster.local:4222
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" key "clusterGroupID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" key "selfManaged.identitySource" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" should have non-empty keys:
+        | key                        |
+        | clusterID                  |
+        | clusterGroupID             |
+        | selfManaged.identitySource |

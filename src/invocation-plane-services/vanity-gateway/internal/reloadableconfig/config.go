@@ -55,6 +55,7 @@ type configData[T any] struct {
 	data    atomic.Pointer[T]
 
 	mu            sync.Mutex
+	loadTimeout   time.Duration
 	initializer   func(*T) error
 	validators    []func(*T) error
 	postLoadHooks []func(*T) error
@@ -63,6 +64,12 @@ type configData[T any] struct {
 func WithPreLoadInitializer[T any](initialize func(*T) error) ConfigOption[T] {
 	return func(cd *configData[T]) {
 		cd.initializer = initialize
+	}
+}
+
+func WithInitialLoadTimeout[T any](timeout time.Duration) ConfigOption[T] {
+	return func(cd *configData[T]) {
+		cd.loadTimeout = timeout
 	}
 }
 
@@ -86,7 +93,11 @@ func SetupConfig[T any](configFilename string, opts ...ConfigOption[T]) (Reloada
 		opt(c)
 	}
 
-	if err := waitForFile(configFilename, defaultConfigLoadTimeout); err != nil {
+	loadTimeout := defaultConfigLoadTimeout
+	if c.loadTimeout > 0 {
+		loadTimeout = c.loadTimeout
+	}
+	if err := waitForFile(configFilename, loadTimeout); err != nil {
 		return nil, err
 	}
 	if err := c.reloadConfig(); err != nil {

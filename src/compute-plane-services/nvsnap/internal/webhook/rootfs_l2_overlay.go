@@ -300,6 +300,7 @@ func (m *Mutator) tryL2RootfsOverlay(ctx context.Context, pod *corev1.Pod, hash 
 		{Name: "NVSNAP_CAPTURED_DIR", Value: capturedMountPath},
 		{Name: "NVSNAP_SCRATCH_DIR", Value: scratchMountPath},
 		{Name: "NVSNAP_ORIG_COMMAND", Value: string(argvJSON)},
+		{Name: envRuntimeDirs, Value: runtimeDirsJSON(manifest.EntryRuntimeDirs)},
 		{Name: "NVSNAP_ORIG_CWD", Value: manifest.EntryCwd},
 		{Name: "NVSNAP_ROOTFS_VOLUMES", Value: string(volsJSON)},
 	} {

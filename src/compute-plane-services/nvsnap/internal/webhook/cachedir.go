@@ -426,6 +426,7 @@ func (m *Mutator) tryL2CacheDir(ctx context.Context, pod *corev1.Pod, hash strin
 		corev1.EnvVar{Name: "NVSNAP_NO_OVERLAY", Value: "1"},
 		corev1.EnvVar{Name: "NVSNAP_PREWARM_DIR", Value: m.CacheDir},
 		corev1.EnvVar{Name: "NVSNAP_ORIG_COMMAND", Value: string(argvJSON)},
+		corev1.EnvVar{Name: envRuntimeDirs, Value: runtimeDirsJSON(manifest.EntryRuntimeDirs)},
 		corev1.EnvVar{Name: "NVSNAP_ORIG_CWD", Value: manifest.EntryCwd},
 		// NOTE: do NOT set HF_HUB_OFFLINE here. It only suppresses benign HF
 		// negative-cache (.no_exist) warnings, but vLLM's arg_utils keys off

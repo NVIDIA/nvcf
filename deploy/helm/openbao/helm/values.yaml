@@ -41,12 +41,22 @@ openbao:
         limits:
           cpu: 250m
           memory: 256Mi
+    refreshJWTPluginCatalog:
+      podAnnotations: {}
+      schedulingGates: []
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
 
   migrations:
     image:
       registry: ""
       repository: ""
-      tag: 0.16.2
+      tag: 0.19.1
       pullPolicy: IfNotPresent
     issuerDiscovery:
       enabled: false
@@ -83,6 +93,14 @@ openbao:
     ha:
       enabled: true
       replicas: 3
+
+      # Pod disruption budget for the HA server StatefulSet.
+      # The upstream chart enables this by default; maxUnavailable defaults to
+      # (replicas/2)-1 when null.
+      disruptionBudget:
+        enabled: true
+        maxUnavailable: null
+
       raft:
         enabled: true
         config: |
@@ -207,10 +225,16 @@ openbao:
               if [ -f /vault/userconfig/unseal/unseal_key ]; then
                 UNSEAL_KEY=$(cat /vault/userconfig/unseal/unseal_key)
                 if [ ! -z "$UNSEAL_KEY" ]; then
-                    echo "Unsealing OpenBao..."
-                    bao operator unseal $UNSEAL_KEY
-                    sleep 60
+                  echo "Unsealing OpenBao..."
+                  if bao operator unseal "$UNSEAL_KEY"; then
                     echo "OpenBao unsealed"
+                    sleep 60
+                    continue
+                  else
+                    echo "OpenBao unseal attempt failed; retrying in 10 seconds..."
+                    sleep 10
+                    continue
+                  fi
                 else
                   echo "Unseal key is empty, waiting..."
                 fi

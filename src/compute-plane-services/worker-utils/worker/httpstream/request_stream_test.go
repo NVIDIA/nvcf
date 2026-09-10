@@ -58,6 +58,7 @@ func TestNewRequestStreamHandler_Success(t *testing.T) {
 			fullRequest := "POST /test/path?query=value HTTP/1.1\r\n" +
 				"Host: example.com\r\n" +
 				"Content-Type: application/json\r\n" +
+				"NVCF-INVOCATION-REGION: invocation-region\r\n" +
 				"Content-Length: 15\r\n" +
 				"\r\n" +
 				`{"test":"data"}`
@@ -129,6 +130,7 @@ func TestNewRequestStreamHandler_Success(t *testing.T) {
 	assert.NotEmpty(t, requestDataWritable.RequestHeaders)
 	assert.Contains(t, requestDataWritable.RequestHeaders, &pb.StringKV{Key: "Content-Type", Value: "application/json"})
 	assert.Contains(t, requestDataWritable.RequestHeaders, &pb.StringKV{Key: "Content-Length", Value: "15"})
+	assert.Contains(t, requestDataWritable.RequestHeaders, &pb.StringKV{Key: "Nvcf-Invocation-Region", Value: "invocation-region"})
 
 	// Verify we can get the request body
 	body, err := handler.GetClientRequestBody()

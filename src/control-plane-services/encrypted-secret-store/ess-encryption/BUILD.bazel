@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -44,11 +44,11 @@ ESS_ENCRYPTION_DEPS = [
     "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
 ]
 
-nv_boot_library(
+nvcf_java_library(
     name = "ess_encryption",
     srcs = ESS_ENCRYPTION_SRCS,
     deps = ESS_ENCRYPTION_DEPS,
-    javacopts = ["-parameters", "--release", "25"],
+    javacopts = ["-parameters"],
 )
 
 ESS_ENCRYPTION_TEST_DEPS = ESS_ENCRYPTION_DEPS + [
@@ -68,28 +68,14 @@ ESS_ENCRYPTION_TEST_RUNTIME_DEPS = [
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webflux",
 ]
 
-nv_boot_library_test(
-    name = "unit_tests",
-    coverage_library = ":ess_encryption",
-    include_classname = ".*(Test|Tests)",
-    javacopts = ["-parameters", "--release", "25", "-Xep:FormatString:OFF"],
-    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-encryption/src/test/resources",
-    resources = ESS_ENCRYPTION_TEST_RESOURCES,
-    runtime_deps = ESS_ENCRYPTION_TEST_RUNTIME_DEPS,
-    srcs = ESS_ENCRYPTION_TEST_SRCS,
-    deps = ESS_ENCRYPTION_TEST_DEPS,
-    timeout = "long",
-)
-
-nv_boot_library_test(
-    name = "base_integration_tests",
-    coverage_library = ":ess_encryption",
+nvcf_java_test(
+    name = "tests",
     data = [
         "//src/control-plane-services/encrypted-secret-store:secrets_json",
         "//src/control-plane-services/encrypted-secret-store:test_local_env",
     ],
-    include_classname = ".*BaseEncryptionKeyServiceIT",
-    javacopts = ["-parameters", "--release", "25", "-Xep:FormatString:OFF"],
+    include_classname = ".*(Test|Tests|IT|IntegrationTest)",
+    javacopts = ["-parameters", "-Xep:FormatString:OFF"],
     jvm_flags = ["-Dspring.aop.proxy-target-class=false"],
     resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-encryption/src/test/resources",
     resources = ESS_ENCRYPTION_TEST_RESOURCES,
@@ -100,21 +86,44 @@ nv_boot_library_test(
     srcs = ESS_ENCRYPTION_TEST_SRCS,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     deps = ESS_ENCRYPTION_TEST_DEPS,
     timeout = "long",
 )
 
-nv_boot_library_test(
-    name = "other_integration_tests",
-    coverage_library = ":ess_encryption",
+nvcf_java_test(
+    name = "unit_tests_runner",
+    include_classname = ".*(Test|Tests)",
+    ide_visible = False,
+    javacopts = ["-parameters", "-Xep:FormatString:OFF"],
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-encryption/src/test/resources",
+    resources = ESS_ENCRYPTION_TEST_RESOURCES,
+    runtime_deps = ESS_ENCRYPTION_TEST_RUNTIME_DEPS,
+    srcs = ESS_ENCRYPTION_TEST_SRCS,
+    deps = ESS_ENCRYPTION_TEST_DEPS,
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "unit_tests",
+    coverage_target = ":ess_encryption",
+    include_classname = ".*(Test|Tests)",
+    test = ":unit_tests_runner",
+    timeout = "long",
+)
+
+nvcf_java_test(
+    name = "base_integration_tests_runner",
     data = [
         "//src/control-plane-services/encrypted-secret-store:secrets_json",
         "//src/control-plane-services/encrypted-secret-store:test_local_env",
     ],
-    include_classname = "^(?!.*BaseEncryptionKeyServiceIT).*IT",
-    javacopts = ["-parameters", "--release", "25", "-Xep:FormatString:OFF"],
+    include_classname = ".*BaseEncryptionKeyServiceIT",
+    ide_visible = False,
+    javacopts = ["-parameters", "-Xep:FormatString:OFF"],
+    jvm_flags = ["-Dspring.aop.proxy-target-class=false"],
     resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-encryption/src/test/resources",
     resources = ESS_ENCRYPTION_TEST_RESOURCES,
     runtime_deps = [
@@ -124,9 +133,63 @@ nv_boot_library_test(
     srcs = ESS_ENCRYPTION_TEST_SRCS,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     deps = ESS_ENCRYPTION_TEST_DEPS,
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "base_integration_tests",
+    coverage_target = ":ess_encryption",
+    include_classname = ".*BaseEncryptionKeyServiceIT",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":base_integration_tests_runner",
+    timeout = "long",
+)
+
+nvcf_java_test(
+    name = "other_integration_tests_runner",
+    data = [
+        "//src/control-plane-services/encrypted-secret-store:secrets_json",
+        "//src/control-plane-services/encrypted-secret-store:test_local_env",
+    ],
+    include_classname = "^(?!.*BaseEncryptionKeyServiceIT).*IT",
+    ide_visible = False,
+    javacopts = ["-parameters", "-Xep:FormatString:OFF"],
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-encryption/src/test/resources",
+    resources = ESS_ENCRYPTION_TEST_RESOURCES,
+    runtime_deps = [
+        "//src/control-plane-services/encrypted-secret-store:local_env_resources",
+    ] + ESS_ENCRYPTION_TEST_RUNTIME_DEPS,
+    size = "large",
+    srcs = ESS_ENCRYPTION_TEST_SRCS,
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    deps = ESS_ENCRYPTION_TEST_DEPS,
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "other_integration_tests",
+    coverage_target = ":ess_encryption",
+    include_classname = "^(?!.*BaseEncryptionKeyServiceIT).*IT",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":other_integration_tests_runner",
     timeout = "long",
 )
 

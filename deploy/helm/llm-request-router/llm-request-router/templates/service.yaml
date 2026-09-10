@@ -25,6 +25,10 @@ spec:
   selector:
     {{- include "llm-request-router.selectorLabels" . | nindent 4 }}
   ports:
+    - name: http
+      port: {{ .Values.llmRequestRouter.service.httpPort }}
+      targetPort: http
+      protocol: TCP
     - name: grpc
       port: {{ .Values.llmRequestRouter.service.grpcPort }}
       targetPort: grpc

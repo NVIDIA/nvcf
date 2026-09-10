@@ -735,9 +735,14 @@ func TestDispatchReconcileCluster(t *testing.T) {
 		expectDispatch     bool
 	}{
 		{
-			name:           "non-helm managed cluster",
+			name:           "ngc managed cluster",
 			clusterSource:  nvcaoptypes.ClusterSourceNGCManaged,
 			expectDispatch: false,
+		},
+		{
+			name:           "self hosted with cache",
+			clusterSource:  nvcaoptypes.ClusterSourceSelfHosted,
+			expectDispatch: true,
 		},
 		{
 			name:               "helm managed but nil cache",

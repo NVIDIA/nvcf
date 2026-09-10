@@ -30,6 +30,7 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use stargate_proto::pb::InferenceServerStatus;
+use stargate_tls::{SERVER_IDENTITY_MATERIAL, TlsIdentityStatus, TlsReloadOutcome};
 
 use crate::queue_admission::{ObservedRequestState, RequestObservationTransition};
 use crate::{CurrentModelStats, RequestObservation, RequestObservationState};
@@ -88,6 +89,7 @@ macro_rules! metrics {
         #[derive(Debug)]
         pub struct PylonMetrics {
             registry: Arc<Registry>,
+            tls_identity: Arc<TlsIdentityStatus>,
             $($($field: metric_type!($kind),)*)*
         }
 
@@ -102,7 +104,17 @@ macro_rules! metrics {
                     $(, $buckets)?
                 )?;
                 registry.register(Box::new($field.clone()))?;)*)*
-                Ok(Arc::new(Self { registry, $($($field,)*)* }))
+                let metrics = Arc::new(Self {
+                    registry,
+                    tls_identity: TlsIdentityStatus::new(),
+                    $($($field,)*)*
+                });
+                for outcome in TlsReloadOutcome::ALL {
+                    metrics.tls_reloads_total
+                        .with_label_values(&[SERVER_IDENTITY_MATERIAL, outcome.as_str()])
+                        .inc_by(0);
+                }
+                Ok(metrics)
             }
         }
     };
@@ -116,6 +128,8 @@ metrics! {
         plain_gauge target_info("target_info", "Target metadata", ["service_version", "service_name", "commit"]);
         gauge registration_stream_connected("registration_stream_connected", "Binary gauge: 1 when a stargate registration stream is connected", ["router"]);
         gauge reverse_tunnel_connected("reverse_tunnel_connected", "Binary gauge: 1 when a reverse QUIC tunnel is connected to a stargate router", ["router"]);
+        counter tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
+        gauge tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
     request {
         gauge inflight("requests_inflight", "Current number of observed requests in flight", ["model"]);
@@ -201,6 +215,31 @@ macro_rules! metric_observer {
 }
 
 impl PylonMetrics {
+    pub fn observe_server_identity_reload(&self, outcome: TlsReloadOutcome) {
+        self.tls_reloads_total
+            .with_label_values(&[SERVER_IDENTITY_MATERIAL, outcome.as_str()])
+            .inc();
+    }
+
+    /// Returns the expiry state the TLS reload task publishes to.
+    pub fn tls_identity(&self) -> Arc<TlsIdentityStatus> {
+        self.tls_identity.clone()
+    }
+
+    /// Republishes the active expiry to the gauge from the shared status.
+    ///
+    /// The reload task publishes to the status before it reports an outcome, so
+    /// calling this from the outcome hook keeps the gauge and readiness aligned.
+    /// A component serving a generated identity has no expiry, so it publishes
+    /// no series rather than a placeholder timestamp.
+    pub fn refresh_tls_certificate_expiry(&self) {
+        if let Some(not_after) = self.tls_identity.active_expiry_unix_seconds() {
+            self.tls_certificate_expiry_seconds
+                .with_label_values(&[SERVER_IDENTITY_MATERIAL])
+                .set(not_after);
+        }
+    }
+
     pub fn registry(&self) -> Arc<Registry> {
         self.registry.clone()
     }
@@ -617,7 +656,7 @@ pub async fn start_metrics_server(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use stargate_proto::pb::InferenceServerStatus;
 
@@ -627,6 +666,47 @@ mod tests {
         CurrentModelStats, PylonMetrics, PylonRuntimeState, RequestObservation,
         RequestObservationEndpoint, RequestObservationState,
     };
+
+    #[test]
+    fn tls_reload_metrics_are_preinitialized() {
+        let metrics = PylonMetrics::new().expect("metrics should initialize");
+        assert!(
+            !metrics
+                .gather_text()
+                .expect("metrics should encode")
+                .contains("pylon_tls_certificate_expiry_seconds"),
+            "a component with no mounted identity publishes no expiry series"
+        );
+        metrics.observe_server_identity_reload(stargate_tls::TlsReloadOutcome::Success);
+
+        let now: i64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after the Unix epoch")
+            .as_secs()
+            .try_into()
+            .expect("current time should fit in i64");
+        let future_expiry = now.saturating_add(60);
+        metrics
+            .tls_identity()
+            .set_validity(Some(stargate_tls::CertificateValidity {
+                not_before_unix_seconds: now.saturating_sub(60),
+                not_after_unix_seconds: future_expiry,
+            }));
+        metrics.refresh_tls_certificate_expiry();
+        let body = metrics.gather_text().expect("metrics should encode");
+
+        assert!(body.contains(
+            r#"pylon_tls_reloads_total{material_type="server_identity",result="success"} 1"#
+        ));
+        assert!(body.contains(
+            r#"pylon_tls_reloads_total{material_type="server_identity",result="rejected"} 0"#
+        ));
+        assert!(body.contains(
+            &format!(
+                r#"pylon_tls_certificate_expiry_seconds{{material_type="server_identity"}} {future_expiry}"#
+            )
+        ));
+    }
 
     fn observation(
         request_id: &str,

@@ -1,10 +1,16 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "configs",
     srcs = ["configs.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-llm-credentials/configs",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "configs_test",
+    srcs = ["configs_test.go"],
+    embed = [":configs"],
 )
 
 alias(

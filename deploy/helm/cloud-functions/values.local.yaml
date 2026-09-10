@@ -1,0 +1,58 @@
+api:
+  image:
+    registry: nvcr.io
+    repository: 0651155215864979/ncp-dev/strap
+    tag: "1.9.0"
+  
+  accountBootstrap:
+    image:
+      registry: nvcr.io
+      repository: 0651155215864979/ncp-dev/alpine-k8s
+      tag: 1.30.12
+      pullPolicy: IfNotPresent
+    
+    # Keep local account bootstrap credential provisioning disabled unless valid
+    # base64 username:password secrets are available. Empty placeholder secrets
+    # are rejected by the API.
+    registryCredentials: []
+    # To provision NGC registry credentials during bootstrap, change the value
+    # above to `registryCredentials:` and uncomment entries like these:
+    #   - registryHostname: "nvcr.io"
+    #     secret:
+    #       name: "nvcf-registry-credentials"
+    #       value: "" # must be base64 encoded username:password format
+    #     artifactTypes:
+    #       - "CONTAINER"
+    #     description: "NVCF Registry Credentials - 0651155215864979/ncp-dev"
+    #   - registryHostname: "helm.ngc.nvidia.com"
+    #     secret:
+    #       name: "nvcf-registry-credentials"
+    #       value: "" # must be base64 encoded username:password format
+    #     artifactTypes:
+    #       - "HELM"
+    #     description: "NVCF Registry Credentials - 0651155215864979/ncp-dev"
+    #   - registryHostname: "api.ngc.nvidia.com"
+    #     secret:
+    #       name: "nvcf-registry-credentials"
+    #       value: "" # must be base64 encoded username:password format
+    #     artifactTypes:
+    #       - "MODEL"
+    #       - "RESOURCE"
+    #     description: "NGC Registry Credentials - 0651155215864979/ncp-dev"
+
+  env:
+    # Ensure stacktraces are expanded
+    LOGGING_EXCEPTION_CONVERSION_WORD: "%wEx"
+
+    NVCF_REVAL_ENABLED: "false"
+    
+    # Matches the NATS config
+    NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
+
+  remoteConfig:
+    configData:
+      nvcf:
+        llm-request-router:
+          # Local worker-facing LLM request router endpoint. Split control/compute-plane
+          # environments should override this with a routable external host:port.
+          worker-address: "llm-request-router.nvcf.svc.cluster.local:50071"

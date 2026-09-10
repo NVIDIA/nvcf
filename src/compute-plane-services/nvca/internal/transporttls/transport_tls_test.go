@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
@@ -181,10 +182,25 @@ func TestValidateConfigRejectsInvalidInstalledBundleMountPaths(t *testing.T) {
 }
 
 func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
+	llmWorkerResources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+	}
 	podSpec := &corev1.PodSpec{
 		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{
-			{Name: function.LLMWorkerContainerName, Image: "nvcr.io/nvcf/llm-worker:test"},
+			{
+				Name:      function.LLMWorkerContainerName,
+				Image:     "nvcr.io/nvcf/llm-worker:test",
+				Args:      []string{"--stargate-address=https://stargate.example.test:50071"},
+				Resources: llmWorkerResources,
+			},
 			{Name: "inference", Image: "nvcr.io/customer/inference:test"},
 			{Name: "smb-server", Image: "nvcr.io/nvcf/smb-server:test"},
 		},
@@ -203,18 +219,128 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 	require.NotNil(t, trustBundleVolume.ConfigMap.Optional)
 	assert.False(t, *trustBundleVolume.ConfigMap.Optional)
 	assert.NotNil(t, findTestVolume(podSpec, MergedCertsVolumeName))
-	assert.NotNil(t, findTestInitContainer(podSpec, InstallContainerName))
+	installContainer := findTestInitContainer(podSpec, InstallContainerName)
+	require.NotNil(t, installContainer)
+	assert.Equal(t, llmWorkerResources, installContainer.Resources)
 
 	llmWorker := findTestContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
 	assert.Equal(t, SystemCertFile, findTestEnvValue(llmWorker, CertPathEnv))
+	assert.Equal(t, SystemCertFile, findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
 	assert.NotNil(t, findTestVolumeMount(llmWorker, MergedCertsVolumeName))
 
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findTestContainer(podSpec, name)
 		require.NotNil(t, container)
 		assert.Empty(t, findTestEnvValue(container, CertPathEnv), name)
+		assert.Empty(t, findTestEnvValue(container, GrpcTLSCACertPathEnv), name)
 		assert.Nil(t, findTestVolumeMount(container, MergedCertsVolumeName), name)
+	}
+}
+
+func TestInjectIntoPodSpecOmitsGrpcCAForPlaintextRouter(t *testing.T) {
+	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
+		Containers: []corev1.Container{{
+			Name:  function.LLMWorkerContainerName,
+			Image: "nvcr.io/nvcf/llm-worker:test",
+			Args:  []string{"--stargate-address=http://stargate.example.test:50071"},
+		}},
+	}
+
+	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+		TrustMode:              nvcaconfig.TrustModeBundle,
+		TrustBundleFingerprint: testRootFingerprint,
+		TrustBundlePEM:         testRootCertPEM,
+	}))
+	require.NoError(t, err)
+
+	llmWorker := findTestContainer(podSpec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	assert.Equal(t, SystemCertFile, findTestEnvValue(llmWorker, CertPathEnv))
+	assert.Empty(t, findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
+}
+
+func TestInjectIntoPodSpecPreservesExplicitGrpcCAForPlaintextRouter(t *testing.T) {
+	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
+		Containers: []corev1.Container{{
+			Name:  function.LLMWorkerContainerName,
+			Image: "nvcr.io/nvcf/llm-worker:test",
+			Args:  []string{"--stargate-address=http://stargate.example.test:50071"},
+			Env: []corev1.EnvVar{{
+				Name:  GrpcTLSCACertPathEnv,
+				Value: "/custom/grpc-ca.pem",
+			}},
+		}},
+	}
+
+	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+		TrustMode:              nvcaconfig.TrustModeBundle,
+		TrustBundleFingerprint: testRootFingerprint,
+		TrustBundlePEM:         testRootCertPEM,
+	}))
+	require.NoError(t, err)
+
+	llmWorker := findTestContainer(podSpec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	assert.Equal(t, "/custom/grpc-ca.pem", findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
+}
+
+func TestLLMWorkerUsesHTTPSRegistration(t *testing.T) {
+	tests := []struct {
+		name      string
+		container corev1.Container
+		want      bool
+	}{
+		{
+			name:      "https argument",
+			container: corev1.Container{Args: []string{"--stargate-address=https://router.example.test:50071"}},
+			want:      true,
+		},
+		{
+			name:      "http argument",
+			container: corev1.Container{Args: []string{"--stargate-address=http://router.example.test:50071"}},
+		},
+		{
+			name: "https current environment",
+			container: corev1.Container{Env: []corev1.EnvVar{{
+				Name:  "LLM_REQUEST_ROUTER_ADDRESS",
+				Value: " https://router.example.test:50071 ",
+			}}},
+			want: true,
+		},
+		{
+			name: "https legacy environment",
+			container: corev1.Container{Env: []corev1.EnvVar{{
+				Name:  "STARGATE_ADDRESS",
+				Value: "https://router.example.test:50071",
+			}}},
+			want: true,
+		},
+		{
+			name: "scheme-less environment",
+			container: corev1.Container{Env: []corev1.EnvVar{{
+				Name:  "LLM_REQUEST_ROUTER_ADDRESS",
+				Value: "router.example.test:50071",
+			}}},
+		},
+		{
+			name: "argument takes precedence over environment",
+			container: corev1.Container{
+				Args: []string{"--stargate-address=http://router.example.test:50071"},
+				Env: []corev1.EnvVar{{
+					Name:  "LLM_REQUEST_ROUTER_ADDRESS",
+					Value: "https://router.example.test:50071",
+				}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, llmWorkerUsesHTTPSRegistration(&tt.container))
+		})
 	}
 }
 
@@ -312,6 +438,7 @@ func TestInjectIntoPodSpecUsesConfiguredInstalledBundleMountPath(t *testing.T) {
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
 	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, CertPathEnv))
+	assert.Empty(t, findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
 
 	installContainer := findTestInitContainer(podSpec, InstallContainerName)
 	require.NotNil(t, installContainer)
@@ -415,6 +542,7 @@ func TestInjectIntoPodSpecCoexistsWithAdmissionCertificateMounts(t *testing.T) {
 	assert.Equal(t, "/webhook/certs", findTestVolumeMount(llmWorker, "webhook-certs").MountPath)
 	assert.Equal(t, "/nvcf/transport-tls", findTestVolumeMount(llmWorker, MergedCertsVolumeName).MountPath)
 	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, CertPathEnv))
+	assert.Empty(t, findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
 	assert.NotNil(t, findTestVolume(&pod.Spec, TrustBundleVolumeName))
 	assert.NotNil(t, findTestVolume(&pod.Spec, MergedCertsVolumeName))
 	assert.NotNil(t, findTestInitContainer(&pod.Spec, InstallContainerName))
@@ -432,6 +560,8 @@ func TestInjectIntoPodSpecSkipsNonLLMWorkloads(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, podSpec.InitContainers)
 	assert.Empty(t, podSpec.Volumes)
+	assert.Empty(t, findTestEnvValue(&podSpec.Containers[0], CertPathEnv))
+	assert.Empty(t, findTestEnvValue(&podSpec.Containers[0], GrpcTLSCACertPathEnv))
 }
 
 func testWorkerInitContainer() corev1.Container {

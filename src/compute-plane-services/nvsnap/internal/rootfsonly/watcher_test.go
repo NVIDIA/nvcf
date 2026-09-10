@@ -341,3 +341,76 @@ func TestGPUInfoFromNodeLabels(t *testing.T) {
 		t.Errorf("empty labels should yield empty: %q %q %q", gt, dv, cc)
 	}
 }
+
+// withContainerID stamps a running container status so mainContainerID has
+// a runtime ID to return.
+func withContainerID(pod *corev1.Pod, id string) *corev1.Pod {
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:        pod.Spec.Containers[0].Name,
+		ContainerID: "containerd://" + id,
+	}}
+	return pod
+}
+
+// runCapture holds a DeepCopy taken before WarmupDelay. If the main container
+// restarts during that wait, the copy names a container ID that no longer
+// exists; ResolveContainerPID then misses and the orchestrator falls back to
+// the pod PID, which on a multi-container pod is the sidecar -- reopening
+// nvsnap#788. The re-read must hand back the ID that is live now.
+func TestRefreshPodForCapture_PicksUpRestartedContainerID(t *testing.T) {
+	env := newWatcherEnv(t)
+	w := env.watcher()
+
+	stale := withContainerID(
+		fakePod("uid-restart", "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true),
+		"oldcontainerid0000")
+	// What the API server holds after the restart: same pod, new runtime ID.
+	live := withContainerID(stale.DeepCopy(), "newcontainerid1111")
+	w.KubeClient = fake.NewSimpleClientset(live)
+
+	got, ok := w.refreshPodForCapture(context.Background(), stale, w.logger().WithField("t", "x"))
+	if !ok {
+		t.Fatal("a live pod with the same UID must be captured, not abandoned")
+	}
+	if id := mainContainerID(got, 0); id != "newcontainerid1111" {
+		t.Errorf("MainContainerID = %q, want the post-restart ID; a stale ID resolves to "+
+			"no cgroup and falls back to the sidecar PID (nvsnap#788)", id)
+	}
+}
+
+// Same name, different UID: the pod we scheduled was deleted and replaced
+// during the delay. Capturing would label the new pod's bytes with the dead
+// pod's identity, so the capture is dropped; the replacement brings its own
+// Ready event.
+func TestRefreshPodForCapture_AbandonsWhenPodReplaced(t *testing.T) {
+	env := newWatcherEnv(t)
+	w := env.watcher()
+
+	stale := fakePod("uid-old", "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true)
+	replacement := fakePod("uid-new", "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true)
+	w.KubeClient = fake.NewSimpleClientset(replacement)
+
+	if _, ok := w.refreshPodForCapture(context.Background(), stale, w.logger().WithField("t", "x")); ok {
+		t.Error("a pod replaced during the warmup delay must not be captured under the old identity")
+	}
+}
+
+// The re-read is an accuracy improvement, not a new dependency: if the API
+// read fails, capture proceeds on the copy we already have rather than
+// dropping the capture entirely.
+func TestRefreshPodForCapture_FallsBackWhenReadFails(t *testing.T) {
+	env := newWatcherEnv(t)
+	w := env.watcher() // empty clientset -> NotFound
+
+	stale := withContainerID(
+		fakePod("uid-1", "vllm-8b", map[string]string{DefaultCaptureLabel: "true"}, true),
+		"onlycontainerid000")
+
+	got, ok := w.refreshPodForCapture(context.Background(), stale, w.logger().WithField("t", "x"))
+	if !ok {
+		t.Fatal("a failed re-read must not abandon the capture")
+	}
+	if got != stale {
+		t.Error("failed re-read should fall back to the pre-warmup copy")
+	}
+}

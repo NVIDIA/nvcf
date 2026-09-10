@@ -10,7 +10,7 @@ load(
 
 # rules_proto_grpc_java does not expose its bundled gRPC plugin as an attribute.
 # Keep its proven compile implementation while replacing only that private tool.
-nvct_java_grpc_compile = rule(
+nvcf_java_grpc_compile = rule(
     implementation = proto_compile_impl,
     attrs = dict(
         proto_compile_attrs,

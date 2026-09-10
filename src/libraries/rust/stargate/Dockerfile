@@ -107,7 +107,7 @@ RUN curl -sSfL -o /usr/local/bin/grpc_health_probe \
 #########################
 ### BASE RUNTIME STAGE ##
 #########################
-FROM nvcr.io/nvidia/distroless/cc:v4.0.8 AS runtime-base
+FROM nvcr.io/nvidia/distroless/cc:v4.1.2 AS runtime-base
 
 ################################
 ### TILT INTEGRATION RUNTIME ###
@@ -129,6 +129,7 @@ ARG TARGETARCH
 # Health probe changes less often than the binary, so copy it first for layer caching.
 COPY --from=health-probe-downloader /usr/local/bin/grpc_health_probe /usr/local/bin/grpc_health_probe
 COPY --from=binary-builder /out/stargate /usr/local/bin/stargate
+COPY --from=binary-builder /out/stargate-k8s-router /usr/local/bin/stargate-k8s-router
 
 ENTRYPOINT ["stargate"]
 CMD []

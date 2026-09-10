@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,11 +27,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
-	nverrors "github.com/NVIDIA/nvcf-go/pkg/nvkit/errors"
+	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/jellydator/ttlcache/v3"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -54,10 +57,56 @@ type workerAuthInfo struct {
 	requestId         uuid.UUID
 	functionId        string
 	functionVersionId string
+	// mintedAt lets a CONNECT report how old the token was when it arrived,
+	// which is the headroom against consts.Timeout.
+	mintedAt time.Time
 }
 
+// issuedTokenInfo is diagnostic only. It outlives the auth entry so a rejected
+// CONNECT can distinguish a token that expired from one this pod never issued.
+// It grants nothing: authentication still reads workerAuth exclusively.
+type issuedTokenInfo struct {
+	mintedAt time.Time
+}
+
+// pendingWorkInfo identifies a stateful work request this pod has issued a
+// worker token for but has not yet seen a CONNECT for. The token lives only in
+// this pod's memory, so if the pod goes away the queued request can never
+// authenticate; the entry is what lets shutdown find it and drop it.
+type pendingWorkInfo struct {
+	functionVersionId string
+}
+
+// pendingWorkPurger removes a queued stateful work request. Implemented by the
+// function invoker and asserted optionally, so an invoker that cannot reach the
+// work queue (tests, alternative implementations) simply skips the purge.
+type pendingWorkPurger interface {
+	PurgePendingWork(ctx context.Context, requestId uuid.UUID, functionVersionId string) error
+}
+
+// departurePurgeConcurrency bounds how many client-departure purges may be in
+// flight at once.
+//
+// One goroutine per abandoned request is unbounded by construction, and the
+// saturation this change exists to fix is exactly when abandonment is highest,
+// so the remedy could itself flood the work queue. Purging is an optimisation:
+// when the budget is exhausted the work is left for the shutdown purge rather
+// than queued behind a semaphore, so a burst sheds load instead of amplifying
+// it.
+const departurePurgeConcurrency = 32
+
+// departurePurgeTimeout is deliberately shorter than consts.Timeout. Nothing is
+// waiting on this call, and holding a slot for thirty seconds against a work
+// queue that is already struggling is the opposite of what it is for.
+const departurePurgeTimeout = 5 * time.Second
+
 type StreamDirector struct {
-	workerAuth      *ttlcache.Cache[string, workerAuthInfo] // auth -> request + function info
+	shuttingDown *atomic.Bool
+	// Bounds in-flight departure purges. See departurePurgeConcurrency.
+	departurePurges chan struct{}
+	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
+	issuedTokens    *ttlcache.Cache[string, issuedTokenInfo] // diagnostic only, see issuedTokenInfo
+	pendingWork     *ttlcache.Cache[uuid.UUID, pendingWorkInfo]
 	workers         *ttlcache.Cache[workerConnectionKey, *worker.WorkerConnection]
 	functionInvoker FunctionInvoker
 	cors            *cors.Cors
@@ -82,6 +131,40 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		ttlcache.WithDisableTouchOnHit[string, workerAuthInfo](),
 	)
 	go workerAuthCache.Start()
+
+	// Diagnostic record of issued tokens, deliberately outliving the auth
+	// entry so a 403 can distinguish expired from never-issued. Bounded in
+	// size so it cannot grow without limit.
+	issuedTokenCache := ttlcache.New(
+		ttlcache.WithTTL[string, issuedTokenInfo](issuedTokenRetention),
+		ttlcache.WithCapacity[string, issuedTokenInfo](issuedTokenCacheCapacity),
+		ttlcache.WithDisableTouchOnHit[string, issuedTokenInfo](),
+	)
+	go issuedTokenCache.Start()
+
+	// Sessions waiting on a worker CONNECT. Retention is deliberately much
+	// longer than the token TTL: the point is to still know about a request
+	// whose token has already aged out, because that request is still sitting
+	// in the work queue. Bounded so it cannot grow without limit.
+	pendingWorkCache := ttlcache.New(
+		// Deliberately reuses the issued-token retention and capacity rather
+		// than introducing its own. This tracks the same population from the
+		// same call site, and the codebase does not need another timeout.
+		ttlcache.WithTTL[uuid.UUID, pendingWorkInfo](issuedTokenRetention),
+		ttlcache.WithCapacity[uuid.UUID, pendingWorkInfo](issuedTokenCacheCapacity),
+		ttlcache.WithDisableTouchOnHit[uuid.UUID, pendingWorkInfo](),
+	)
+	go pendingWorkCache.Start()
+
+	// Set immediately before DeleteAll in Close so the eviction handler can
+	// report shutdown rather than attributing a drain to a client or worker.
+	shuttingDown := &atomic.Bool{}
+
+	// Assigned once the director exists. Eviction is the only place that can
+	// tell queued work is genuinely abandoned: a worker-connection entry is
+	// shared by every RPC on a connection with the same function routing, so
+	// no single request's cancellation means nobody is waiting.
+	var purgeDepartedClientWork func(uuid.UUID, string)
 
 	cache := ttlcache.New(
 		ttlcache.WithTTL[workerConnectionKey, *worker.WorkerConnection](consts.Timeout),
@@ -119,47 +202,359 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 				if connAlreadyExisted {
 					zap.L().Error("worker conn already present in cache, closing new worker conn", zap.Stringer("request id", k.requestId))
 					_ = newWorkerConnection.Close()
+				} else {
+					// Counted here rather than at dial so the open and close
+					// counts balance: eviction fires for every entry that
+					// makes it into the cache.
+					metrics.WorkerConnectionOpenedTotal.Inc()
+					metrics.WorkerConnectionsActive.Inc()
 				}
 				return conn
 			}), nil)),
 	)
 	cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, i *ttlcache.Item[workerConnectionKey, *worker.WorkerConnection]) {
-		reasonStr := mapEvictionReason(reason)
 		wc := i.Value()
-		zap.L().Debug("worker connection cache eviction triggered",
+		reasonStr := resolveCloseReason(reason, wc, shuttingDown.Load())
+		closedAt := wc.ClosedAt()
+		if closedAt.IsZero() {
+			// No transport-level close was stamped, so this eviction is the
+			// first thing that noticed. Attribute it to now rather than
+			// leaving the field empty.
+			closedAt = time.Now()
+		}
+		// held_for is now measured to the close itself rather than to whenever
+		// this callback ran. The callback can lag the close, so the old value
+		// was the tunnel's lifetime plus an unknown amount of cache latency,
+		// which is precisely the error that makes cross-component correlation
+		// hard. Where no close was stamped the fallback above reproduces the
+		// previous behaviour exactly.
+		heldFor := closedAt.Sub(wc.CreatedAt)
+		closeInfo := worker.ClassifyCloseError(wc.CloseError())
+
+		metrics.WorkerConnectionClosedTotal.WithLabelValues(reasonStr).Inc()
+		metrics.WorkerConnectionCloseCodeTotal.WithLabelValues(closeInfo.Code).Inc()
+		metrics.WorkerConnectionsActive.Dec()
+		metrics.WorkerConnectionDurationSeconds.Observe(heldFor.Seconds())
+
+		// Promoted from debug to info: this is the only place the proxy records
+		// WHY it dropped a worker tunnel, and that question is routinely asked
+		// during incidents. At debug it was unavailable in production exactly
+		// when it was needed. The message text is unchanged so existing log
+		// searches keep working.
+		logFields := []zap.Field{
 			zap.Stringer("request_id", i.Key().requestId),
 			zap.String("eviction_reason", reasonStr),
+			zap.String("raw_eviction_reason", mapEvictionReason(reason)),
+			zap.Duration("held_for", heldFor),
+			// Explicit timestamps: the eviction callback can run measurably
+			// after the transport went away, so the log line's own timestamp
+			// cannot be used to correlate against other components.
+			zap.Time("opened_at", wc.CreatedAt),
+			zap.Time("closed_at", closedAt),
+			// What the transport reported, as opposed to which side tore down.
+			zap.String("close_code", closeInfo.Code),
+			zap.String("local_timeout", localTimeoutFor(reasonStr, closeInfo.Code)),
+		}
+		if closeInfo.Detail != "" {
+			logFields = append(logFields, zap.String("close_detail", closeInfo.Detail))
+		}
+		if closeInfo.Remote != nil {
+			// Only QUIC tells us this. Absence means unknown, not local.
+			logFields = append(logFields, zap.Bool("closed_by_peer", *closeInfo.Remote))
+		}
+		logFields = append(logFields,
 			zap.String("function_id", wc.FunctionId),
 			zap.String("function_version_id", wc.FunctionVersionId))
+
+		zap.L().Info("worker connection cache eviction triggered", logFields...)
+
+		// The eviction context is the cache's own, not the session's, so this
+		// span has no parent to attach to. It carries the request id as an
+		// attribute so a dropped session can still be correlated in tracing
+		// without grepping logs. Name follows the service.operation convention
+		// in AGENTS.md and must stay stable so dashboards do not break.
+		_, span := otel.GetTracerProvider().Tracer("proxy-tracer").Start(ctx, "grpc-proxy.worker_connection_cache_eviction",
+			trace.WithAttributes(
+				attribute.Stringer("request_id", i.Key().requestId),
+				attribute.String("eviction_reason", reasonStr),
+				attribute.Float64("held_for_seconds", heldFor.Seconds()),
+				attribute.String("close_code", closeInfo.Code),
+				attribute.String("close_detail", closeInfo.Detail),
+				attribute.String("local_timeout", localTimeoutFor(reasonStr, closeInfo.Code)),
+				attribute.String("closed_at", closedAt.Format(time.RFC3339Nano)),
+				attribute.String("function_id", wc.FunctionId),
+				attribute.String("function_version_id", wc.FunctionVersionId),
+			))
+		span.End()
+
+		// Purge here rather than when a request is cancelled. This fires once
+		// for the shared entry, however many requests shared it.
+		//
+		// Eviction is usually not the TTL. The client connection closing runs
+		// onInactive, which deletes the entry, so in practice this fires the
+		// moment the client goes away, well inside the timeout. That is still
+		// the right moment, since the entry is per connection and routing and
+		// its client is gone, but it means the purge rate tracks client
+		// disconnects rather than the slower TTL, which is what the bound
+		// below exists to contain.
+		//
+		// Scheduled rather than run inline: ttlcache invokes eviction
+		// callbacks synchronously, so doing the queue calls here would stall
+		// eviction of every other entry behind this one, and with it the
+		// connection closes that eviction drives.
+		if !wc.EverConnected() && purgeDepartedClientWork != nil {
+			purgeDepartedClientWork(i.Key().requestId, i.Key().functionVersionId)
+		}
+
 		_ = wc.Close()
 	})
 	go cache.Start()
 
-	return &StreamDirector{
+	director := &StreamDirector{
 		workers:         cache,
+		shuttingDown:    shuttingDown,
+		departurePurges: make(chan struct{}, departurePurgeConcurrency),
+		issuedTokens:    issuedTokenCache,
+		pendingWork:     pendingWorkCache,
 		workerAuth:      workerAuthCache,
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
 	}
+	// Closed over by the eviction handler above, which runs before this
+	// returns only if an entry is evicted during construction, which cannot
+	// happen: the cache is empty until the director serves a request.
+	purgeDepartedClientWork = director.purgeDepartedClientWork
+	return director
+}
+
+// Timer names reported in local_timeout. Only the proxy's own timers can be
+// named here.
+const (
+	localTimeoutNone           = ""
+	localTimeoutWorkerCacheTTL = "worker_cache_ttl"
+	localTimeoutTransportIdle  = "transport_idle"
+	localTimeoutQUICIdle       = "quic_idle"
+)
+
+// localTimeoutFor names which of the proxy's own timers fired, where one did.
+//
+// Deliberately conservative. Timers owned by other components on the path
+// cannot be identified from here, and guessing at them would be worse than
+// saying nothing: close_code still characterises those cases. An empty result
+// means "not one of ours", not "no timer".
+func localTimeoutFor(evictionReason, closeCode string) string {
+	if evictionReason == metrics.CloseReasonTTLExpired {
+		// consts.Timeout on the worker connection cache.
+		return localTimeoutWorkerCacheTTL
+	}
+	switch closeCode {
+	case worker.CloseCodeQUICIdleTimeout:
+		// quic-go's MaxIdleTimeout. Either endpoint can own this, so it is
+		// named but not attributed.
+		return localTimeoutQUICIdle
+	case worker.CloseCodeTimeout:
+		// The HTTP/1 and HTTP/2 transports are configured with consts.Timeout
+		// for idle, read and write. A bare net timeout on this path is one of
+		// those.
+		return localTimeoutTransportIdle
+	}
+	return localTimeoutNone
+}
+
+// resolveCloseReason turns a ttlcache eviction into something actionable.
+// EvictionReasonDeleted on its own is ambiguous: it covers the client hanging
+// up, the worker hanging up, and a proxy drain. Whoever initiated the teardown
+// records an origin on the connection first, so prefer that.
+func resolveCloseReason(reason ttlcache.EvictionReason, wc *worker.WorkerConnection, shuttingDown bool) string {
+	mapped := mapEvictionReason(reason)
+	if mapped != metrics.CloseReasonDeleted {
+		return mapped
+	}
+	if shuttingDown {
+		return metrics.CloseReasonShutdown
+	}
+	if origin := wc.CloseOrigin(); origin != "" {
+		return origin
+	}
+	// A delete with no recorded origin means a teardown path is missing
+	// instrumentation. Left distinguishable on purpose so it is visible.
+	return metrics.CloseReasonDeleted
 }
 
 func mapEvictionReason(reason ttlcache.EvictionReason) string {
 	switch reason {
 	case ttlcache.EvictionReasonExpired:
-		return "ttl_expired"
+		return metrics.CloseReasonTTLExpired
 	case ttlcache.EvictionReasonDeleted:
-		return "deleted"
+		return metrics.CloseReasonDeleted
 	case ttlcache.EvictionReasonCapacityReached:
-		return "capacity_reached"
+		return metrics.CloseReasonCapacity
 	default:
-		return "unknown"
+		return metrics.CloseReasonUnknown
 	}
 }
 
+const (
+	// issuedTokenRetention is how long the diagnostic record of an issued
+	// token is kept. Comfortably longer than consts.Timeout so an expired
+	// token is still recognisable as one we issued.
+	issuedTokenRetention = 15 * time.Minute
+	// issuedTokenCacheCapacity bounds the diagnostic cache.
+	issuedTokenCacheCapacity = 50000
+)
+
+// purgeDepartedClientWork drops the queued work for a request whose client
+// stopped waiting before any worker attached.
+//
+// This is the trigger the evidence points at. A worker auth token is valid for
+// consts.Timeout, the same budget after which the client is sent a gateway
+// timeout, so the two are matched by design. Under load the work sits in the
+// queue well past that: measured token age at CONNECT ran to 30-60s against a
+// 30s budget. Every one of those is fetched, occupies a worker slot, attempts
+// a CONNECT and is correctly rejected, for a client that has already given up.
+//
+// Left queued they are still delivered, and it is that delivery, not the
+// rejection, that keeps a saturated function at zero goodput. Dropping them
+// here removes work that provably cannot be served while leaving every live
+// request untouched, since a session that reaches this point has no client.
+func (s *StreamDirector) purgeDepartedClientWork(requestId uuid.UUID, functionVersionId string) {
+	purger, ok := s.functionInvoker.(pendingWorkPurger)
+	if !ok {
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipUnsupported).Inc()
+		return
+	}
+	// Shutdown runs its own purge over everything still pending, so starting
+	// more work here would duplicate that and race it to the same subjects.
+	if s.shuttingDown.Load() {
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipShuttingDown).Inc()
+		return
+	}
+	// Budget is taken here, on the caller's goroutine, so an exhausted budget
+	// costs nothing and no goroutine is created for work that will not run.
+	select {
+	case s.departurePurges <- struct{}{}:
+	default:
+		// Leave the entry pending so the shutdown purge still knows about it,
+		// and shed rather than pile more calls onto a queue that is evidently
+		// already under strain.
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipBudgetExhausted).Inc()
+		return
+	}
+	go func() {
+		defer func() { <-s.departurePurges }()
+		s.runDeparturePurge(purger, requestId, functionVersionId)
+	}()
+}
+
+// runDeparturePurge performs the queue call. Separated from the scheduling
+// above so the caller, which is the cache eviction path, never blocks on it.
+func (s *StreamDirector) runDeparturePurge(purger pendingWorkPurger, requestId uuid.UUID, functionVersionId string) {
+	ctx, cancel := context.WithTimeout(context.Background(), departurePurgeTimeout)
+	defer cancel()
+
+	if err := purger.PurgePendingWork(ctx, requestId, functionVersionId); err != nil {
+		metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeFailed, metrics.PurgeTriggerClientDeparted).Inc()
+		// The entry is deliberately left in place. Deleting it here would make
+		// a failed purge permanently untracked, so the shutdown purge could
+		// never retry it, and the stale queued work this change exists to
+		// remove would survive.
+		zap.L().Warn("failed to purge work for a client that stopped waiting",
+			zap.Stringer("request_id", requestId),
+			zap.String("function_version_id", functionVersionId),
+			zap.Error(err))
+		return
+	}
+	// Only now that the work is gone. Dropping the entry earlier would lose
+	// the record on any failure path above.
+	s.pendingWork.Delete(requestId)
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeSucceeded, metrics.PurgeTriggerClientDeparted).Inc()
+	zap.L().Debug("purged queued work for a client that stopped waiting",
+		zap.Stringer("request_id", requestId))
+}
+
+// purgePendingWork drops the work requests for sessions that never got a
+// worker CONNECT.
+//
+// Best effort by design. A session records its pending work just before the
+// invocation publishes the work request, so a shutdown landing precisely
+// between those two steps will miss that one request. Closing that window
+// needs an admission gate and a drain timeout, which is more machinery and
+// another tunable than the gap justifies: a missed request is simply left as
+// it is today, and today every one of them is left.
+//
+// Their tokens exist only in this pod's memory, so once it is
+// gone every one of them is guaranteed to be rejected; leaving them queued
+// means each is still pulled, still takes a concurrency slot, and still fails.
+//
+// Sessions with a worker already attached are deliberately not touched. Those
+// can reattach through another pod, and their work request has already left the
+// queue anyway.
+func (s *StreamDirector) purgePendingWork() {
+	purger, ok := s.functionInvoker.(pendingWorkPurger)
+	if !ok {
+		// Silent here would be indistinguishable from a clean shutdown that
+		// had nothing queued, which is the reading that made the last stage
+		// deployment of this change look like a no-op with no way to tell.
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipUnsupported).Inc()
+		zap.L().Info("pending work purge skipped, invoker cannot reach the work queue")
+		return
+	}
+	pending := s.pendingWork.Items()
+	if len(pending) == 0 {
+		metrics.PendingWorkPurgeSkippedTotal.WithLabelValues(metrics.PurgeSkipNothing).Inc()
+		zap.L().Info("pending work purge found nothing queued")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), consts.Timeout)
+	defer cancel()
+
+	var purged, failed int
+	for requestId, item := range pending {
+		if ctx.Err() != nil {
+			// Out of budget. Report what is left rather than trailing off
+			// silently, so a shutdown that could not finish is visible.
+			failed += len(pending) - purged - failed
+			break
+		}
+		if err := purger.PurgePendingWork(ctx, requestId, item.Value().functionVersionId); err != nil {
+			failed++
+			// Expected when this service has no rights on the work queue, so
+			// this stays a warning: the purge is an optimisation and shutdown
+			// is still correct without it.
+			zap.L().Warn("failed to purge pending stateful work request on shutdown",
+				zap.Stringer("request_id", requestId),
+				zap.String("function_version_id", item.Value().functionVersionId),
+				zap.Error(err))
+			continue
+		}
+		purged++
+	}
+
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeSucceeded, metrics.PurgeTriggerShutdown).Add(float64(purged))
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeFailed, metrics.PurgeTriggerShutdown).Add(float64(failed))
+	zap.L().Info("purged pending stateful work requests on shutdown",
+		zap.Int("purged", purged),
+		zap.Int("failed", failed))
+}
+
 func (s *StreamDirector) Close() error {
+	// Mark first: DeleteAll evicts every entry, and without this those
+	// evictions would be misreported as client or worker initiated.
+	s.shuttingDown.Store(true)
+	// Drain the worker cache first. Eviction is what closes tunnels and records
+	// why, and none of that should wait behind queue calls. The departure purge
+	// those evictions would otherwise trigger is skipped while shutting down,
+	// so the work they leave behind is picked up by the purge below.
 	s.workers.DeleteAll()
+	// Then drop the queued work this pod can no longer authenticate. Bounded by
+	// consts.Timeout against a 240s termination grace period, so it reports
+	// what it could not finish rather than running until SIGKILL.
+	s.purgePendingWork()
 	s.workers.Stop()
 	s.workerAuth.Stop()
+	s.issuedTokens.Stop()
+	s.pendingWork.Stop()
 	if s.functionInvoker != nil {
 		if closer, ok := s.functionInvoker.(io.Closer); ok {
 			_ = closer.Close()
@@ -354,11 +749,18 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 
 		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuthToken string, requestId uuid.UUID, apiFunc string, apiFuncVersion string) {
 			// Populate workerAuth cache BEFORE worker is notified (atomicity guarantee)
+			now := time.Now()
 			s.workerAuth.Set(workerAuthToken, workerAuthInfo{
 				requestId:         requestId,
 				functionId:        apiFunc,
 				functionVersionId: apiFuncVersion,
+				mintedAt:          now,
 			}, ttlcache.DefaultTTL)
+			// Diagnostic shadow record, longer lived than the auth entry, so a
+			// later rejection can say "expired N seconds ago" instead of just
+			// "not found". Never consulted when granting access.
+			s.issuedTokens.Set(workerAuthToken, issuedTokenInfo{mintedAt: now}, ttlcache.DefaultTTL)
+			metrics.WorkerTokenIssuedTotal.Inc()
 			// Capture the API response values
 			apiFunctionId = apiFunc
 			apiFunctionVersionId = apiFuncVersion
@@ -366,6 +768,25 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 		if err != nil {
 			zap.L().Warn("failed to open stateful work request", zap.Error(err), zap.String("function id", functionId), zap.Stringer("request id", requestId))
 			return nil, fmt.Errorf("failed to open stateful work request: %w", err)
+		}
+
+		// Remembered until the worker CONNECTs back, so a shutdown can find the
+		// requests whose tokens are about to be lost with this pod and drop
+		// them from the work queue rather than leave them to be pulled and
+		// rejected.
+		//
+		// Only for work that actually reached the rq stream. A streaming
+		// version publishes to llsrq and a session join publishes to
+		// stateful_session.reconnect, neither of which a purge can drop from,
+		// and for a streaming version the rq stream may not exist at all.
+		// Recording those would make every later purge look up a stream that
+		// cannot hold the message: a wasted round trip, reported as a failure
+		// whose metric tells the on-call it is a permissions problem.
+		//
+		// Set here rather than in the callback above, which has to run before
+		// the worker is notified. Nothing reads this before a purge.
+		if invokeResponse.QueuedToWorkStream {
+			s.pendingWork.Set(invokeResponse.RequestId, pendingWorkInfo{functionVersionId: apiFunctionVersionId}, ttlcache.DefaultTTL)
 		}
 
 		workerConnection := s.workers.Get(workerConnectionKey{
@@ -377,6 +798,11 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 		if cancelInvokingWorker != nil {
 			go func() {
 				// once a connection shows up or the context goes away we should stop looking for a worker
+				// Deliberately does not purge on this context ending. It
+				// belongs to one RPC, and this worker request is shared by
+				// every RPC on the connection with the same function routing,
+				// so one cancellation says nothing about whether anyone is
+				// still waiting. The purge is driven from cache eviction.
 				workerConnection.WaitForConnection(ctx)
 				cancelInvokingWorker()
 			}()

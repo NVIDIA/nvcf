@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "interfaces",
+    srcs = ["publisher.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/interfaces",
+    visibility = ["//:__subpackages__"],
+    deps = ["//src/control-plane-services/event-ledger/common/core/types"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":interfaces",
+    visibility = ["//:__subpackages__"],
+)

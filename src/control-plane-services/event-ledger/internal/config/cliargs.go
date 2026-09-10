@@ -49,6 +49,7 @@ func (c *CliArgs) Register(svcName string) {
 	c.SetupPublisher()
 	c.SetupHTTP()
 	c.SetupClientCredentials()
+	c.SetupDeploymentMode()
 }
 
 func (c *CliArgs) SetupLogging(svcName string) {
@@ -96,8 +97,10 @@ func (c *CliArgs) SetupDatabase() {
 	c.int("database.cassandra.num-conns", 2, "Connections per host", true)
 	c.string("database.cassandra.pub-key-b64", "", "Cassandra public key as base64-encoded string", true)
 	c.string("database.cassandra.priv-key-b64", "", "Cassandra private key as base64-encoded string", true)
+	c.string("database.cassandra.ca-cert-b64", "", "Cassandra CA certificate as base64-encoded string", true)
 	c.string("database.cassandra.pub-key-path", "", "Cassandra public key path", true)
 	c.string("database.cassandra.priv-key-path", "", "Cassandra private key path", true)
+	c.string("database.cassandra.ca-cert-path", "", "Cassandra CA certificate path", true)
 	c.bool("database.cassandra.insecure-skip-verify", false, "Insecurely skip certificate verification", true)
 }
 
@@ -165,6 +168,10 @@ func (c *CliArgs) SetupHTTP() {
 func (c *CliArgs) SetupClientCredentials() {
 	c.string("id", "", "OAuth client ID", true)
 	c.string("secret", "", "OAuth client secret", true)
+}
+
+func (c *CliArgs) SetupDeploymentMode() {
+	c.bool("self-managed", false, "Enable self-managed deployment mode (disables OAuth2 requirements)", true)
 }
 
 func (c *CliArgs) string(name string, defaultValue string, usage string, bindToFlag bool) {

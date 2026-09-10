@@ -19,7 +19,7 @@ See below for descriptions of all available configuration options.
 | Priority Class                            | Set appropriate kubernetes priority class name for cluster agent and the operator pod. Additional details: [Priority Class](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#priorityclass)                                                                                                                                                                                                                                                                                                                                               |
 | Model Cache Volume Mount Options          | Configure the model cache volume mount options based on the CSI Driver capabilities on the cluster. Refer to the CSI Driver documentation. Defaults to `Enabled` and `ro,norecovery,nouuid` on an upgrade. Requires cluster reconfiguration after upgrade to prevent disruption.Additional details: [Mount options](https://man7.org/linux/man-pages/man8/mount.8.html)                                                                                                                                                                                                   |
 | Network CIDR Range                        | Quoted & comma separated list of CIDR range for outbound network access for the infrastructure components & workloads on the cluster.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Worker Degradation Period                 | Stabilization time (in minutes) before cluster agent fails to consider a worker as healthy and initiates a purge.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Worker Degradation Period                 | Stabilization time (in minutes) before cluster agent fails to consider a worker as healthy and initiates a purge. This also affects terminal worker failure timing for Helm functions that enable `StatusByWorkerReadiness`. See [Helm Functions](../helm-functions.md#use-worker-readiness-for-function-health).                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## Cluster Features
 
@@ -283,13 +283,13 @@ The NVCA operator requires outbound network connectivity to pull images, charts,
 | Policy Name                               | Description                                                                                                                                                |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | allow-egress-gxcache                      | Allows egress traffic to the GX Cache namespace for caching operations (only relevant for NVIDIA managed clusters)                                         |
-| allow-egress-internet-no- internal-no-api | Allows egress traffic to the public internet (0.0.0.0/0) but blocks traffic to common private IP ranges. Also allows DNS resolution via kube-dns.          |
-| allow-egress-intra-namespace              | Controls pod-to-pod communication within the same namespace. This policy is only applied to function namespaces and not to shared pod instance namespaces. |
+| allow-egress-internet-no-internal-no-api | Allows egress traffic to the public internet (0.0.0.0/0) but blocks traffic to common private IP ranges. Also allows DNS resolution via kube-dns.          |
+| allow-egress-intra-namespace              | Allows pod-to-pod communication within the same namespace. Applied only to per-instance function namespaces (for example a MiniService's utils pod reaching its own inference pod), never to the shared `nvcf-backend` namespace.  |
 | allow-egress-nvcf-cache                   | Allows egress traffic to NVCF cache services (only relevant for NVIDIA managed clusters)                                                                   |
-| allow-egress-prometheus- nvcf-byoo        | Allows egress traffic to Prometheus monitoring endpoints (only relevant for NVIDIA managed clusters)                                                       |
-| allow-ingress-monitoring                  | Allows ingress traffic for monitoring services                                                                                                             |
+| allow-egress-prometheus-nvcf-byoo         | Allows egress traffic to Prometheus monitoring endpoints (only relevant for NVIDIA managed clusters)                                                       |
+| allow-ingress-monitoring                  | Allows ingress from the `monitoring` namespace on supported monitoring ports. In per-instance function namespaces, also allows same-namespace ingress (paired with allow-egress-intra-namespace); same-namespace ingress is not added to the shared `nvcf-backend` namespace. |
 | allow-ingress-monitoring-dcgm             | Allows ingress traffic for DCGM monitoring                                                                                                                 |
-| allow-ingress-monitoring- gxcache         | Allows ingress traffic for GX Cache monitoring (only relevant for NVIDIA managed clusters)                                                                 |
+| allow-ingress-monitoring-gxcache         | Allows ingress traffic for GX Cache monitoring (only relevant for NVIDIA managed clusters)                                                                 |
 
 ## Key Network Requirements
 
@@ -363,6 +363,7 @@ To customize a network policy:
                          protocol: TCP
                        - port: 8889
                          protocol: TCP
+
 ```
 
 2. Apply the configmap:
@@ -372,12 +373,13 @@ To customize a network policy:
    kubectl apply -f patchcm.yaml
 ```
 
-3. Verify the changes:
+1. Verify the changes:
 
    ```bash
 
    kubectl logs -n nvca-operator -l app.kubernetes.io/name=nvca-operator
-```
+
+```text
 
    You should see a message indicating successful patching:
    `configmap patched successfully`
@@ -415,7 +417,7 @@ To configure CSI volume mount options:
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-2. View current mount options configuration:
+1. View current mount options configuration:
 
 ```bash
 kubectl get nvcfbackend -n nvca-operator "$nvcf_cluster_name" -o yaml | grep -A 5 "MountOptions"
@@ -429,7 +431,7 @@ kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name" 
   -p '{"spec":{"overrides":{"agentConfig":{"cacheMountOptionsEnabled":true,"cacheMountOptions":"ro,norecovery,nouuid"}}}}'
 ```
 
-4. Verify the changes:
+1. Verify the changes:
 
 ```bash
 kubectl get nvcfbackend -n nvca-operator "$nvcf_cluster_name" -o yaml | grep -A 5 "MountOptions"
@@ -690,13 +692,13 @@ NVCFBackend will be overwritten on the next Helm upgrade.
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-2. View current feature flags:
+1. View current feature flags:
 
 ```bash
 kubectl get nvcfbackends -n nvca-operator -o yaml | grep -A 5 "featureGate:"
 ```
 
-3. Patch the feature flags. Note that this will override all feature flags.
+1. Patch the feature flags. Note that this will override all feature flags.
 
 <Warning>
 When modifying feature flags, you must preserve any existing feature flags you want to keep. The patch command will override all feature flags, so you need to include all desired feature flags in the value array.
@@ -724,7 +726,7 @@ spec:
       ...
 ```
 
-4. Verify the changes:
+1. Verify the changes:
 
 ```bash
 kubectl get pods -n nvca-system -o yaml | grep -i feature
@@ -807,19 +809,19 @@ helm repo add csi-driver-smb https://raw.githubusercontent.com/kubernetes-csi/cs
 helm install csi-driver-smb csi-driver-smb/csi-driver-smb --namespace kube-system --version v1.16.0
 ```
 
-2. Get the NVCF cluster name:
+1. Get the NVCF cluster name:
 
 ```bash
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-3. Enable the Helm shared storage feature flag:
+1. Enable the Helm shared storage feature flag:
 
 ```bash
 kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name" --type=merge -p '{"spec":{"overrides":{"featureGate":{"values":["LogPosting","HelmSharedStorage", "CachingSupport"]}}}}'
 ```
 
-4. Verify that the feature flag is enabled:
+1. Verify that the feature flag is enabled:
 
 ```bash
 kubectl get pods -n nvca-system -o yaml | grep HelmSharedStorage
@@ -918,9 +920,12 @@ agentConfig:
             - 'metric.name != "BpsInstrument"'
       byooWorkloadMetrics:
         dropLabels:
-          - metric_subset_enabled
           - custom_label
 ```
+
+When `byooMetricSubset.enabled` is true, `dropLabels` extends the default
+`metric_subset_enabled` label. The configured labels are removed from both the
+primary metrics pipeline and the metric subset endpoint on port `19091`.
 
 Apply via Helm:
 

@@ -65,9 +65,9 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 
 	metrics := nvcametrics.FromContext(ctx)
 
-	c.bk8s.eventRecorder.Eventf(req,
+	c.bk8s.EmitICMSEventf(req,
 		corev1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
-		"Creating %d remaining requested instances", int(instCount)-len(activeInstances),
+		"Creating %d remaining requested instances", nil, int(instCount)-len(activeInstances),
 	)
 
 	labelsForReq := types.GetLabelsForRequest(req, c.bk8s.featureFlagFetcher)
@@ -305,9 +305,9 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 		})
 
 		if podCreated {
-			c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
+			c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal,
 				string(types.EventCategoryInstanceCreation), "Created %v Instance %v",
-				nvcav2beta1.InstanceTypePod, instanceID,
+				instanceUpdate(instanceID), nvcav2beta1.InstanceTypePod, instanceID,
 			)
 		}
 	}

@@ -4,7 +4,7 @@
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
-  "apiBodyFormat": "OPENAI_CHAT",
+  "apiBodyFormat": "CUSTOM",
   "health": {
     "protocol": "HTTP",
     "uri": "/health",

@@ -39,12 +39,22 @@ The chart supports two configuration sources:
 | `loadBalancer.configPath` | The chart only passes `--lb-config-path=<path>`. The operator must add and maintain the file mount by another mechanism. |
 
 Inline `config` takes precedence when both values are set. When neither value
-is set, Stargate uses its built-in `power-of-two` default.
+is set, Stargate uses its built-in `power-of-two` default and accepts a
+routing-method override when it is in the allowlist of built-in algorithms.
 
 Stargate reads and validates the file only during process startup. The
-StatefulSet does not include a load-balancer ConfigMap checksum in its pod
-template. After a ConfigMap-only update, restart the StatefulSet so every
-replica loads the same configuration.
+request-router workload does not include a load-balancer ConfigMap checksum in
+its pod template. New installations default to a Deployment; existing
+installations can pin a StatefulSet. After a ConfigMap-only update, restart the
+selected workload so every replica loads the same configuration.
+
+Existing StatefulSet installations must set
+`addons.llm.requestRouter.workload.kind=StatefulSet` before upgrading. Changing
+the workload kind is a controlled migration, not an in-place Kubernetes kind
+mutation. A plain Helm upgrade across workload kinds can temporarily run both
+the Deployment and StatefulSet; use the chart migration procedure to remove or
+rename the old workload and verify that only the selected kind owns the router
+Pods before scaling it.
 
 ## Distinguish router algorithms from nvcf-cli routing methods
 
@@ -57,10 +67,10 @@ Algorithm availability is enforced at separate layers:
 | LLM API Gateway | Nonblank routing method from authenticated model metadata, trimmed and forwarded as `x-routing-method` without algorithm validation. |
 | Stargate `x-routing-method` | Case-insensitive algorithm name with hyphens or underscores. It must match the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
 
-For example, when `power-of-two` is the effective algorithm,
-`wait_and_widen` requires a `wait-and-widen` entry in `request_algorithms`.
-The legacy `groq_multiregion` value remains accepted and resolves to the same
-algorithm.
+For example, when a configuration is set and `power-of-two` is the effective
+algorithm, `wait_and_widen` requires a `wait-and-widen` entry in
+`request_algorithms`. The legacy `groq_multiregion` value remains accepted
+and resolves to the same algorithm.
 
 Use `wait-and-widen` and `pulsar-wait-and-widen` in new function metadata,
 `lb-config.json` files, request-algorithm maps, and deployment manifests.
@@ -120,15 +130,19 @@ filters:
 
 The stock gateway-routes chart does not expose a value for this filter. Use an
 equivalent policy at an external edge or maintain a route override. Preserve
-`x-multi-turn-session-id`; it is the supported client-facing session header.
+`x-multi-turn-session-id`; clients can use it for session affinity. Chat
+Completions and Responses request bodies can also supply `prompt_cache_key`.
 See the
 [Gateway API header modifier guide](https://gateway-api.sigs.k8s.io/guides/user-guides/http-header-modifier/)
 for filter semantics.
 
 The gateway derives `x-cache-affinity-key` for chat-completions and Responses
-requests when affinity applies. It does not derive affinity for embeddings.
-Do not set `require_cache_affinity_key` on a model that serves
-`/v1/embeddings` unless another trusted gateway supplies the key.
+requests when affinity applies. A request body can contain the raw
+`prompt_cache_key`, but only its SHA-256-derived value appears in the internal
+header. The router forwards the request body to the model backend. It does not
+derive affinity for embeddings. Do not set `require_cache_affinity_key` on a
+model that serves `/v1/embeddings` unless another trusted gateway supplies the
+key.
 
 Stargate returns HTTP `400` for a blank, unknown, or configured-but-unavailable
 `x-routing-method`. It also returns HTTP `400` when a required router header is
@@ -144,9 +158,9 @@ helm template llm-request-router \
   --values <request-router-values.yaml>
 ```
 
-Confirm that the rendered StatefulSet has the expected
-`--lb-config-path` argument and that inline JSON creates one ConfigMap with the
-`lb-config.json` key.
+Confirm that the rendered request-router workload (a Deployment by default) has
+the expected `--lb-config-path` argument and that inline JSON creates one
+ConfigMap with the `lb-config.json` key.
 
 If the LLM route accepts untrusted traffic, inspect the rendered or live
 HTTPRoute and confirm that the trusted-header filter is present:
@@ -167,17 +181,23 @@ For an inline configuration, inspect the live file and start argument:
 ```bash
 kubectl get configmap -n nvcf llm-request-router-lb \
   -o jsonpath='{.data.lb-config\.json}'
-kubectl get statefulset -n nvcf llm-request-router \
+kubectl get deployment -n nvcf llm-request-router \
   -o jsonpath='{.spec.template.spec.containers[0].args}'
 ```
+
+Replace `deployment` with `statefulset` in these commands when
+`addons.llm.requestRouter.workload.kind` is pinned to `StatefulSet`.
 
 Restart after a ConfigMap-only change, then wait for all replicas:
 
 ```bash
-kubectl rollout restart statefulset/llm-request-router -n nvcf
-kubectl rollout status statefulset/llm-request-router -n nvcf
+kubectl rollout restart deployment/llm-request-router -n nvcf
+kubectl rollout status deployment/llm-request-router -n nvcf
 kubectl get pods -n nvcf -l app.kubernetes.io/name=llm-request-router
 ```
+
+Use `statefulset/llm-request-router` instead when the StatefulSet workload is
+explicitly selected.
 
 Confirm every listed pod was recreated after the ConfigMap update. For each
 pod, check for the `load balancer config loaded` startup log and compare its
@@ -203,8 +223,8 @@ algorithm or is present in `request_algorithms`.
 3. Try a method accepted by `nvcf-cli` that is neither the configured
    algorithm nor present in `request_algorithms`; confirm that Stargate returns
    HTTP `400`.
-4. For an affinity-aware method, repeat a supported multi-turn request with
-   the returned `x-multi-turn-session-id`.
+4. For an affinity-aware method, repeat a supported multi-turn request with the
+   same `prompt_cache_key` or the returned `x-multi-turn-session-id`.
 5. Exercise a failed or saturated backend and confirm selection and retry
    counters change.
 
@@ -225,15 +245,18 @@ metric names, labels, and scrape configuration.
 | HTTP `400` before backend selection | Compare the function `routingMethod` with the configured algorithm and `request_algorithms`. Check required and numeric gateway headers. |
 | HTTP `400` for affinity-aware routing | Confirm the gateway generated a nonblank affinity key when `require_cache_affinity_key` is enabled. |
 | HTTP `503` with no eligible candidates | Confirm pylons are registered and publish the capacity, queue, and optional KV-cache statistics required by the algorithm. |
-| New ConfigMap value has no effect | Confirm the pod creation time. Restart the StatefulSet because Stargate does not reload the file. |
+| New ConfigMap value has no effect | Confirm the pod creation time. Restart the selected Deployment or StatefulSet because Stargate does not reload the file. |
 | Unexpected fallback or retries | Compare routing selection, proxy attempt, retry, and retry-exhaustion metrics. Check pylon retry reasons. |
 | Affinity differs between replicas | Compare the ConfigMap, pod creation times, startup summaries, seed values, and registered candidate set. |
 
 Use these logs together:
 
 ```bash
-kubectl logs -n nvcf statefulset/llm-request-router \
+kubectl logs -n nvcf deployment/llm-request-router \
   --all-pods=true --tail=100
 kubectl logs -n nvcf deploy/llm-api-gateway --tail=100
 kubectl logs -n nvcf-backend <function-pod> -c llm-worker --tail=100
 ```
+
+Use `statefulset/llm-request-router` for the first command when the StatefulSet
+workload is explicitly selected.

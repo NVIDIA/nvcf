@@ -88,11 +88,36 @@ pub struct ProxyTrafficState {
     pub shutdown: CancellationToken,
 }
 
+/// Startup readiness signal; cancelled once the warmup condition is satisfied.
+#[derive(Clone)]
+pub struct ReadinessState {
+    pub ready: CancellationToken,
+}
+
+impl ReadinessState {
+    /// Returns a `ReadinessState` that is already ready. Used when warmup is disabled.
+    pub fn already_ready() -> Self {
+        let token = CancellationToken::new();
+        token.cancel();
+        Self { ready: token }
+    }
+
+    /// Returns a `ReadinessState` where the replica is not yet ready.
+    pub fn warming_up(ready: CancellationToken) -> Self {
+        Self { ready }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready.is_cancelled()
+    }
+}
+
 #[derive(Clone)]
 pub struct ProxyAppState {
     pub state: Arc<StargateState>,
     pub quic_proxy: Arc<QuicHttpProxy>,
     pub traffic: ProxyTrafficState,
+    pub readiness: ReadinessState,
     pub lb_router: Arc<LoadBalancerRouter>,
     pub metrics: Arc<StargateMetrics>,
     pub retry: ProxyRetryConfig,
@@ -197,7 +222,11 @@ async fn healthz() -> StatusCode {
 }
 
 async fn readyz(State(app): State<ProxyAppState>) -> StatusCode {
-    if app.traffic.shutdown.is_cancelled() {
+    if app.traffic.shutdown.is_cancelled() || !app.metrics.tls_identity_is_ready() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+
+    if !app.readiness.is_ready() {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
@@ -218,7 +247,7 @@ mod test_support {
     use crate::routing_state::StargateState;
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, readyz};
+    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, ReadinessState, readyz};
 
     pub(super) fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -239,6 +268,8 @@ mod test_support {
                         direct_quic_connections: 1,
                         tls_cert_pem: None,
                         server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
+                        server_identity_reloader: None,
+                        tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
                         quic_insecure: true,
                         tunnel_protocol: Default::default(),
                     },
@@ -249,6 +280,7 @@ mod test_support {
             traffic: ProxyTrafficState {
                 shutdown: CancellationToken::new(),
             },
+            readiness: ReadinessState::already_ready(),
             lb_router: Arc::new(
                 LoadBalancerRouter::from_config(&lb_config)
                     .expect("load balancer should initialize"),
@@ -268,5 +300,25 @@ mod test_support {
         app.traffic.shutdown.cancel();
 
         assert_eq!(readyz(State(app)).await, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn readyz_returns_503_during_warmup_window() {
+        let mut app = test_proxy_app_state();
+        let ready_token = CancellationToken::new();
+        app.readiness = ReadinessState::warming_up(ready_token.clone());
+
+        assert_eq!(readyz(State(app.clone())).await, StatusCode::SERVICE_UNAVAILABLE);
+
+        ready_token.cancel();
+
+        assert_eq!(readyz(State(app)).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn readyz_already_ready_bypasses_warmup_check() {
+        let app = test_proxy_app_state();
+        // Default test state has ReadinessState::already_ready(); no warmup token is pending.
+        assert_eq!(readyz(State(app)).await, StatusCode::OK);
     }
 }

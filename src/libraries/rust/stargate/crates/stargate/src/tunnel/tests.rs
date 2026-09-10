@@ -176,6 +176,8 @@ fn test_quic_proxy_with(
         direct_quic_connections: 1,
         tls_cert_pem: None,
         server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
+        server_identity_reloader: None,
+        tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
         quic_insecure: true,
         tunnel_protocol,
     };
@@ -331,10 +333,111 @@ async fn start_tunnel_server(
             tasks.clone(),
             None,
             std::net::UdpSocket::bind("127.0.0.1:0").expect("reverse listener socket should bind"),
+            crate::metrics::StargateMetrics::new().expect("metrics should initialize"),
         )
         .await
         .expect("reverse listener should start");
     (proxy, addr, tasks)
+}
+
+#[cfg(unix)]
+fn install_projected_identity(root: &std::path::Path, generation: &str, cert: &[u8], key: &[u8]) {
+    use std::os::unix::fs::symlink;
+
+    let generation_dir = root.join(generation);
+    std::fs::create_dir(&generation_dir).expect("create projected generation");
+    std::fs::write(generation_dir.join("tls.crt"), cert).expect("write projected cert");
+    std::fs::write(generation_dir.join("tls.key"), key).expect("write projected key");
+
+    let next_data = root.join("..data-next");
+    let _ = std::fs::remove_file(&next_data);
+    symlink(generation, &next_data).expect("create projected data symlink");
+    std::fs::rename(next_data, root.join("..data")).expect("swap projected data symlink");
+
+    if !root.join("tls.crt").exists() {
+        symlink("..data/tls.crt", root.join("tls.crt")).expect("create projected cert symlink");
+        symlink("..data/tls.key", root.join("tls.key")).expect("create projected key symlink");
+    }
+}
+
+#[cfg(unix)]
+async fn reverse_handshake_trusting(addr: SocketAddr, trusted_cert_pem: &[u8]) -> Result<()> {
+    let mut client = Endpoint::client("127.0.0.1:0".parse().expect("client bind address"))?;
+    client.set_default_client_config(build_client_config(
+        Some(trusted_cert_pem),
+        false,
+        TunnelTransportProtocol::RawQuic,
+    )?);
+    let connection = client.connect(addr, "localhost")?.await?;
+    connection.close(0u32.into(), b"test complete");
+    Ok(())
+}
+
+/// Covers the reverse-listener wiring: the reload task is spawned with a builder
+/// that reproduces the listener ALPN, so a rotated generation serves on new
+/// handshakes without restarting the process.
+#[cfg(unix)]
+#[tokio::test]
+async fn reverse_listener_reloads_projected_server_identity() {
+    install_crypto_provider();
+    let root = tempfile::TempDir::new().expect("create TLS test directory");
+    let (first_cert, first_key) =
+        stargate_tls::generate_self_signed_cert().expect("first identity should generate");
+    let (second_cert, second_key) =
+        stargate_tls::generate_self_signed_cert().expect("second identity should generate");
+    install_projected_identity(root.path(), "..2026_01", &first_cert, &first_key);
+
+    let reloader = stargate_tls::ServerIdentityReloader::load(
+        root.path().join("tls.crt"),
+        root.path().join("tls.key"),
+    )
+    .expect("initial identity should load");
+    let proxy = test_quic_proxy_with(TunnelTransportProtocol::RawQuic, |config| {
+        config.server_tls_identity = reloader.current_identity().clone();
+        config.tls_cert_pem = Some(first_cert.clone());
+        config.server_identity_reloader = Some(reloader.clone());
+        config.tls_reload_interval = Duration::from_millis(20);
+        config.quic_insecure = false;
+    });
+    let (tasks, _failures) = CriticalTaskGroup::new("stargate test");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let addr = proxy
+        .start_reverse_listener(
+            Arc::new(StargateState::new()),
+            tasks.clone(),
+            None,
+            std::net::UdpSocket::bind("127.0.0.1:0").expect("reverse listener socket should bind"),
+            metrics.clone(),
+        )
+        .await
+        .expect("reverse listener should start");
+
+    reverse_handshake_trusting(addr, &first_cert)
+        .await
+        .expect("initial identity should serve");
+
+    install_projected_identity(root.path(), "..2026_02", &second_cert, &second_key);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if reverse_handshake_trusting(addr, &second_cert).await.is_ok() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "rotated identity was never served"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        reverse_handshake_trusting(addr, &first_cert).await.is_err(),
+        "the replaced identity must stop being served"
+    );
+    assert!(
+        metrics.tls_identity_is_ready(),
+        "a valid rotated identity keeps the listener ready"
+    );
+
+    tasks.begin_shutdown();
 }
 
 #[tokio::test]
@@ -1687,6 +1790,7 @@ async fn reverse_tunnel_works_with_secure_client_and_provided_cert() {
             runtime.clone(),
             None,
             std::net::UdpSocket::bind("127.0.0.1:0").unwrap(),
+            crate::metrics::StargateMetrics::new().expect("metrics should initialize"),
         )
         .await
         .unwrap();

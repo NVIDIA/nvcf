@@ -296,7 +296,6 @@ fn build_compose_spec(
             "--disable-bringup",
             "--active-canary-interval-ms=0",
             "--initial-input-tps" => pylon.last_mean_input_tps.to_string(),
-            "--benchmark-pin-input-tps",
         ]);
         if let Some(pylon_queue_admission) = &algorithm.pylon_queue_admission {
             client_command.extend(pylon_queue_admission.pylon_args());
@@ -361,7 +360,7 @@ traffic_pattern:
   output_tokens: { distribution: constant, value: 20 }
   arrival: { distribution: constant, interval_ms: 10 }
 algorithms:
-  - { name: power-of-two, config: { default: power-of-two } }
+  - { name: power-of-n, config: { default: power-of-n } }
   - { name: random, config: { default: random } }
 "#,
         )
@@ -429,7 +428,7 @@ algorithms:
         let run = prepared
             .algorithm_runs
             .iter()
-            .find(|run| run.algorithm_name == "power-of-two")
+            .find(|run| run.algorithm_name == "power-of-n")
             .expect("configured run should exist");
         let run_info: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&run.run_info_path).expect("run info should read"),
@@ -448,7 +447,7 @@ algorithms:
         let compose = build_compose_spec(
             &config,
             &config.algorithms[0],
-            Path::new(".bench-out/prepare/run-power-of-two/lb-config.json"),
+            Path::new(".bench-out/prepare/run-power-of-n/lb-config.json"),
             STARGATE_GRPC_PORT,
             STARGATE_HTTP_PORT,
             STARGATE_METRICS_PORT,
@@ -564,12 +563,6 @@ algorithms:
         assert_eq!(
             command_value(&client.command, "--initial-input-tps"),
             Some("100")
-        );
-        assert!(
-            client
-                .command
-                .iter()
-                .any(|candidate| candidate == "--benchmark-pin-input-tps")
         );
     }
 }

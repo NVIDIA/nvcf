@@ -29,5 +29,11 @@ spec:
       protocol: {{ .protocol }}
       name: {{ .name }}
     {{- end }}
+    {{- if .Values.invocation.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.invocation.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "nvcf-invocation-service.selectorLabels" . | nindent 4 }}

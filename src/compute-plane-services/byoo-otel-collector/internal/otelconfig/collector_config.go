@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger"
 )
@@ -84,6 +85,7 @@ func (c *LogSamplingConfig) IsZero() bool {
 }
 
 // ExporterHelperConfig configures common exporterhelper settings for BYOO exporters.
+// Each setting is applied only to exporter types that support it.
 type ExporterHelperConfig struct {
 	Timeout        string               `json:"timeout,omitempty"`
 	RetryOnFailure RetryOnFailureConfig `json:"retryOnFailure,omitempty"`
@@ -361,23 +363,66 @@ func applySamplingProcessor(otelConfig *OpenTelemetryConfig, pipelineID, process
 	otelConfig.Service.Pipelines[pipelineID] = pipeline
 }
 
+type exporterHelperCapabilities struct {
+	timeout        bool
+	retryOnFailure bool
+	sendingQueue   bool
+}
+
+var exporterHelperCapabilitiesByType = map[string]exporterHelperCapabilities{
+	"azuremonitor": {
+		timeout:      true,
+		sendingQueue: true,
+	},
+	"datadog": {
+		timeout:        true,
+		retryOnFailure: true,
+		sendingQueue:   true,
+	},
+	"otlp": {
+		timeout:        true,
+		retryOnFailure: true,
+		sendingQueue:   true,
+	},
+	"otlp_http": {
+		timeout:        true,
+		retryOnFailure: true,
+		sendingQueue:   true,
+	},
+	"prometheus": {
+		sendingQueue: true,
+	},
+	"prometheus_remote_write": {
+		timeout:        true,
+		retryOnFailure: true,
+	},
+	"splunk_hec": {
+		timeout:        true,
+		retryOnFailure: true,
+		sendingQueue:   true,
+	},
+}
+
+func exporterHelperCapabilitiesForID(exporterID string) exporterHelperCapabilities {
+	exporterType, _, _ := strings.Cut(exporterID, "/")
+	return exporterHelperCapabilitiesByType[exporterType]
+}
+
 func applyExporterHelperConfig(otelConfig *OpenTelemetryConfig, cfg ExporterHelperConfig) {
 	if cfg.IsZero() {
 		return
 	}
 	for exporterID, exporter := range otelConfig.Exporters {
-		if exporterID == "debug" {
-			continue
-		}
-		if cfg.Timeout != "" {
+		capabilities := exporterHelperCapabilitiesForID(exporterID)
+		if cfg.Timeout != "" && capabilities.timeout {
 			exporter["timeout"] = cfg.Timeout
 		}
-		if !cfg.RetryOnFailure.IsZero() {
+		if !cfg.RetryOnFailure.IsZero() && capabilities.retryOnFailure {
 			retry := mapFromInterface(exporter["retry_on_failure"])
 			cfg.RetryOnFailure.applyTo(retry)
 			exporter["retry_on_failure"] = retry
 		}
-		if !cfg.SendingQueue.IsZero() {
+		if !cfg.SendingQueue.IsZero() && capabilities.sendingQueue {
 			queue := mapFromInterface(exporter["sending_queue"])
 			cfg.SendingQueue.applyTo(queue)
 			exporter["sending_queue"] = queue

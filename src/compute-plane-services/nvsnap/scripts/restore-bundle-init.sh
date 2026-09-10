@@ -15,33 +15,14 @@
 #                                                  workload's main
 #                                                  container command to
 #                                                  $TOOLS/restore-entrypoint.
-#   $NVSNAP_BUNDLE_LIB_DST    (default /nvsnap-lib)  — libnvsnap_intercept.so +
-#                                                  sitecustomize + uvloop
-#                                                  wheels + libuv.so +
-#                                                  libzmq.so. CRIU restore
-#                                                  re-mmaps libnvsnap from
-#                                                  the path the captured
-#                                                  process was using, so
-#                                                  this MUST stay at the
-#                                                  exact path on every
-#                                                  node.
-#
-# Atomicity: each destination is written to a `.new` sibling, then
-# rename'd into place. Existing kubelet hostPath mounts are pinned to
-# the directory's inode at mount time, so renaming the dir on the host
-# does NOT affect pods that are already using the old version — they
-# keep their inode. Newly-scheduled pods see the new version. This
-# matters during agent rolling-upgrade: function pods restoring on
-# nodes that haven't yet upgraded keep using the old bundle.
-#
-# Idempotent: re-running on the same agent image is a no-op (cp -a
-# rewrites identical content; rename produces the same end state).
-# Caller doesn't need to track whether staging already ran.
+# The intercept payload (libnvsnap_intercept.so, patched uvloop/libuv/
+# libzmq, sitecustomize) is no longer staged: criu-v2 dumps and restores
+# in-namespace, so no userspace interception is injected into workloads.
+# lib/nvsnap_intercept/ stays in-tree for future multi-GPU work.
 
 set -euo pipefail
 
 NVSNAP_DST="${NVSNAP_BUNDLE_TOOLS_DST:-/nvsnap}"
-LIB_DST="${NVSNAP_BUNDLE_LIB_DST:-/nvsnap-lib}"
 
 if [[ ! -d /criu-bundle ]]; then
   echo "restore-bundle-init: /criu-bundle missing in agent image" >&2
@@ -81,39 +62,10 @@ if [[ -x /usr/local/bin/py-spy ]]; then cp /usr/local/bin/py-spy "$TOOLS_TMP/"; 
 if [[ -x /usr/bin/nsenter ]];     then cp /usr/bin/nsenter     "$TOOLS_TMP/"; fi
 atomic_swap "$NVSNAP_DST" "$TOOLS_TMP"
 
-# ─── Phase 2: intercept-lib tree ──────────────────────────────────────
-LIB_TMP="${LIB_DST}.new"
-rm -rf "$LIB_TMP"
-mkdir -p "$LIB_TMP"
-for whl in /criu-bundle/payload/wheels/uvloop-*.whl; do
-  if [[ ! -e "$whl" ]]; then
-    echo "restore-bundle-init: no uvloop wheels at /criu-bundle/payload/wheels/" >&2
-    exit 1
-  fi
-  tag=$(echo "$whl" | grep -oE 'cp3[0-9]+' | head -1)
-  if [[ -z "$tag" ]]; then
-    echo "restore-bundle-init: cannot extract ABI tag from $whl" >&2
-    exit 1
-  fi
-  mkdir -p "$LIB_TMP/site-packages-${tag}"
-  python3 -m zipfile -e "$whl" "$LIB_TMP/site-packages-${tag}/"
-done
-cp /criu-bundle/payload/lib/libuv.so*  "$LIB_TMP/"
-cp /criu-bundle/payload/lib/libzmq.so* "$LIB_TMP/"
-cp /criu-bundle/lib/libnvsnap_intercept.so "$LIB_TMP/"
-cp -r /criu-bundle/sitecustomize "$LIB_TMP/"
-atomic_swap "$LIB_DST" "$LIB_TMP"
-
 # ─── Sanity checks ────────────────────────────────────────────────────
 if [[ ! -x "$NVSNAP_DST/restore-entrypoint" ]]; then
   echo "restore-bundle-init: $NVSNAP_DST/restore-entrypoint missing or not executable" >&2
   ls -la "$NVSNAP_DST" >&2
   exit 1
 fi
-if [[ ! -e "$LIB_DST/libnvsnap_intercept.so" ]]; then
-  echo "restore-bundle-init: $LIB_DST/libnvsnap_intercept.so missing — restore will fail at mmap" >&2
-  ls -la "$LIB_DST" >&2
-  exit 1
-fi
-
-echo "restore-bundle-init: staged into $NVSNAP_DST + $LIB_DST"
+echo "restore-bundle-init: staged into $NVSNAP_DST"

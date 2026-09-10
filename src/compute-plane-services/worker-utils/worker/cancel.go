@@ -44,3 +44,18 @@ func (w *NVCFWorker) handleCancelMessage(msg *nats.Msg) {
 		utils.PublicLogMarker,
 		zap.String("req id", requestId))
 }
+
+// logWorkRequestResult reports the outcome of a completed work request. An
+// upstream cancel aborts the in-flight send by design, and handleCancelMessage
+// already records it at info, so it is kept out of the error stream instead of
+// being reported a second time as a request failure.
+func logWorkRequestResult(err error, requestId string) {
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrUpstreamCancel):
+		zap.L().Debug("request aborted by upstream cancel", zap.String("req id", requestId))
+	default:
+		// failure for a single request, keep trying to consume other requests
+		zap.L().Error("failed to handle request", zap.Error(err), zap.String("req id", requestId))
+	}
+}

@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if and .Values.invocation.metrics.serviceMonitor.enabled (not .Values.invocation.metrics.enabled) }}
+{{- fail "invocation.metrics.enabled must be true when invocation.metrics.serviceMonitor.enabled is true" }}
+{{- end }}
+{{- if .Values.invocation.metrics.enabled }}
+{{- if not .Values.invocation.metrics.bindAddress }}
+{{- fail "invocation.metrics.bindAddress is required when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- $metricsPortText := toString .Values.invocation.metrics.port }}
+{{- if or (not (regexMatch `^[0-9]+$` $metricsPortText)) (lt (int $metricsPortText) 1) (gt (int $metricsPortText) 65535) }}
+{{- fail "invocation.metrics.port must be an integer between 1 and 65535 when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- if hasKey .Values.invocation.env "APP_CONFIG" }}
+{{- fail "invocation.env.APP_CONFIG is reserved when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- if hasKey .Values.invocation.env "APP_CONFIG_YAML" }}
+{{- fail "invocation.env.APP_CONFIG_YAML is reserved when invocation.metrics.enabled is true" }}
+{{- end }}
+{{- end }}

@@ -132,7 +132,7 @@ func runSelfHostedComputePlaneInstall(c *cobra.Command, _ []string) error {
 		Stdout:          c.OutOrStdout(),
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             c.Context(),
-		ExtraEnv:        computePlaneInstallEnv(clusterName, ncaID),
+		ExtraEnv:        computePlaneInstallEnv(clusterName, ncaID, filepath.Dir(valuesPath)),
 	})
 }
 
@@ -159,10 +159,38 @@ func readNVCAValuesMetadata(path string) (nvcaValuesMetadata, error) {
 	if err := decoder.Decode(&values); err != nil {
 		return nvcaValuesMetadata{}, fmt.Errorf("parsing values file: %w", err)
 	}
+	if err := validateNVCAAgentConfig(values.AgentConfig); err != nil {
+		return nvcaValuesMetadata{}, fmt.Errorf("validating values file: %w", err)
+	}
 	return nvcaValuesMetadata{
 		ClusterName: values.ClusterName,
 		NCAID:       firstNonEmpty(values.NCAID, values.NCAIDLower),
 	}, nil
+}
+
+type nvcaAgentConfigValidation struct {
+	Workload struct {
+		StargateQUICInsecure bool `yaml:"stargateQUICInsecure"`
+		TransportTLS         *struct {
+			TrustMode string `yaml:"trustMode"`
+		} `yaml:"transportTLS"`
+	} `yaml:"workload"`
+}
+
+func validateNVCAAgentConfig(agentConfig *nvca.AgentConfigValues) error {
+	if agentConfig == nil || strings.TrimSpace(agentConfig.MergeConfig) == "" {
+		return nil
+	}
+
+	var cfg nvcaAgentConfigValidation
+	if err := yaml.Unmarshal([]byte(agentConfig.MergeConfig), &cfg); err != nil {
+		return fmt.Errorf("parsing agentConfig.mergeConfig: %w", err)
+	}
+	if cfg.Workload.StargateQUICInsecure && cfg.Workload.TransportTLS != nil &&
+		cfg.Workload.TransportTLS.TrustMode == controlplaneprofile.TrustModeBundle {
+		return fmt.Errorf("workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system")
+	}
+	return nil
 }
 
 // nvcaValuesMetadataDoc is the strict-decode shape for the nvca-operator
@@ -206,10 +234,14 @@ func inferClusterNameFromValuesPath(path string) string {
 	return ""
 }
 
-func computePlaneInstallEnv(clusterName, ncaID string) []string {
+func computePlaneInstallEnv(clusterName, ncaID, outputDir string) []string {
 	return []string{
 		"CLUSTER_NAME=" + clusterName,
 		"NCA_ID=" + ncaID,
+		// The worker helmfile resolves the registration values at
+		// $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml via requiredEnv, so
+		// point it at the directory holding the --values file.
+		"OUTPUT_DIR=" + outputDir,
 	}
 }
 
@@ -225,11 +257,13 @@ func runSelfHostedComputePlaneRegister(c *cobra.Command, _ []string) error {
 	registrationICMSURL := computePlaneRegisterICMSURL(validation.Profile, selected)
 	if err := computePlaneRegisterReachabilityCheck(c.Context(), reachability.CheckRequest{
 		TargetClusterName: computePlaneRegisterClusterName,
+		GatewayHTTPURL:    validation.Profile.ControlPlane.Gateway.HTTPURL,
 		ICMSURL:           registrationICMSURL,
 		ReValURL:          selected.Endpoints.ReValURL,
 		NATSURL:           selected.Endpoints.NATSURL,
 		SISHost:           validation.Profile.ControlPlane.Hosts.SIS,
 		ReValHost:         validation.Profile.ControlPlane.Hosts.ReVal,
+		NATSHost:          validation.Profile.ControlPlane.Hosts.NATS,
 		ProbeHTTP:         shouldProbeComputeRegisterHTTP(selected.Name),
 	}); err != nil {
 		return err
