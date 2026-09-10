@@ -160,10 +160,13 @@ shadow-b:
 
 Each target is routed by its own `functionType`. The legacy `shadowModelName`,
 `shadowModelNames`, `shadowPercentage`, `shadowSamplingMethod`, and
-`shadowCancelOnClientDisconnect` fields still work and apply one policy to every
-target. A route uses one form or the other; the schema rejects a route with
-both, shadow keys in any other spelling, unknown target keys, and shadows on
-`imageEdits` or `imageVariations`. `tests/chart-render/verify-shadow-schema.sh`
+`shadowCancelOnClientDisconnect` fields still work, apply one policy to every
+target, and keep the schema checks they had before. A route uses one form or
+the other. The schema validates `shadows` as the gateway does, with keys in any
+letter case: it rejects a route with both forms, an entry without `modelName`
+or with an unknown key, and a non-empty list on `imageEdits` or
+`imageVariations`. Duplicate targets and targets missing from the endpoint are
+still caught by the gateway at startup. `tests/chart-render/verify-shadow-schema.sh`
 covers these rules. `vanityGateway.config.shadowMaxConcurrent` bounds
 concurrent shadow requests across all routes.
 

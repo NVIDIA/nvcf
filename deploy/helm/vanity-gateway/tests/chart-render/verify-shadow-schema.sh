@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Verify that the values schema accepts and rejects shadow configuration the
-# way the gateway does: the per-target shadows list, the legacy fields, their
-# exclusivity, and the multipart image endpoints that support neither.
+# Verify the values schema for the per-target shadows list: the list and its
+# entries are validated the way the gateway validates them, in any letter
+# case; the legacy shadow fields keep the checks they had before the list
+# existed; the two forms never mix; multipart image endpoints take no shadows.
 #
 # Rejection needles are key names or route path fragments, because the Helm
 # version decides the error message format (dotted paths on 3.18, JSON
@@ -116,20 +117,47 @@ assert_renders "a shadows entry with only modelName renders on an LLM model"
 write_values chatCompletions "${SHADOWS_EMPTY}"
 assert_renders "an empty shadows list renders"
 
-# Zero values are what absent legacy keys produce, so the gateway accepts them.
+write_values chatCompletions "            shadows:
+              - modelName: acme/a-model-next
+                samplingMethod: \"\""
+assert_renders "an empty shadows samplingMethod renders"
+
+# The gateway reads the shadows key and entry keys in any letter case.
+write_values chatCompletions "            Shadows:
+              - modelname: acme/a-model-next
+                Percentage: 10
+                SAMPLINGMETHOD: random
+                cancelonclientdisconnect: true"
+assert_renders "shadows and entry keys render in any letter case"
+
+write_values chatCompletions "            Shadows:
+              - modelName: acme/a-model-next
+                percentage: 500"
+assert_rejected "Shadows" "a shadows list is validated in any letter case"
+
+# Legacy fields keep the checks they had before shadows existed: the four
+# typed keys are validated under their exact spelling, everything else about
+# them is left to the gateway.
 write_values chatCompletions "${LEGACY_ZERO}"
 assert_renders "zero-valued legacy shadow fields render"
 
-write_values chatCompletions "            shadowSamplingMethod: null"
-assert_renders "a null shadowSamplingMethod renders"
+write_values chatCompletions "            shadowPercentage: 500"
+assert_rejected "shadowPercentage" "a legacy shadowPercentage of 500 is rejected"
 
-# The forms are exclusive: shadows plus any legacy key, even zero-valued, fails.
+write_values chatCompletions "            shadowpercentage: 500
+            shadowSamplingMethod: Random"
+assert_renders "legacy keys outside the schema's exact spelling and enum render unchanged"
+
+# The forms are exclusive in any spelling: shadows plus any legacy key, even
+# zero-valued, fails.
 LEGACY_KEYS=(
   "shadowModelName: acme/a-model-next"
   "shadowModelNames: []"
   "shadowPercentage: 50"
   "shadowSamplingMethod: \"\""
   "shadowCancelOnClientDisconnect: false"
+  "shadowpercentage: 50"
+  "SHADOWMODELNAMES: []"
 )
 for legacy in "${LEGACY_KEYS[@]}"; do
   write_values chatCompletions "${SHADOWS_EMPTY}
@@ -137,23 +165,21 @@ for legacy in "${LEGACY_KEYS[@]}"; do
   assert_rejected "a_model" "shadows combined with $(first_key "${legacy}") is rejected"
 done
 
-# The gateway reads shadow keys case-insensitively, so a variant spelling would
-# slip past the exclusivity rule; the schema rejects every non-canonical form.
-for variant in "Shadows: []" "shadowpercentage: 50" "ShadowModelNames: []" "shadowcancelonclientdisconnect: true"; do
-  write_values chatCompletions "            ${variant}"
-  assert_rejected "$(first_key "${variant}")" "shadow key spelled $(first_key "${variant}") is rejected"
-done
+write_values chatCompletions "            Shadows: []
+            shadowPercentage: 50"
+assert_rejected "a_model" "Shadows combined with a legacy key is rejected"
 
 # Per-target entry validation.
 write_values chatCompletions "            shadows:
               - percentage: 50"
-assert_rejected "modelName" "a shadows entry without modelName is rejected"
+assert_rejected "shadows" "a shadows entry without modelName is rejected"
 
 write_values chatCompletions "            shadows:
-              - modelname: acme/a-model-next"
-assert_rejected "modelname" "a shadows entry with a non-canonical key is rejected"
+              - modelName: acme/a-model-next
+                modelNamee: typo"
+assert_rejected "modelNamee" "a shadows entry with an unknown key is rejected"
 
-for percentage in 0 101 50.5 '"50"'; do
+for percentage in 0 101 50.5 '"50"' null; do
   write_values chatCompletions "            shadows:
               - modelName: acme/a-model-next
                 percentage: ${percentage}"
@@ -167,42 +193,35 @@ assert_rejected "samplingMethod" "an unknown shadows samplingMethod is rejected"
 
 write_values chatCompletions "            shadows:
               - modelName: acme/a-model-next
-                samplingMethod: \"\""
-assert_rejected "samplingMethod" "an empty shadows samplingMethod is rejected"
-
-write_values chatCompletions "            shadows:
-              - modelName: acme/a-model-next
                 cancelOnClientDisconnect: \"true\""
 assert_rejected "cancelOnClientDisconnect" "a string shadows cancelOnClientDisconnect is rejected"
+
+write_values chatCompletions "            shadows:
+              - modelName: \"\""
+assert_rejected "modelName" "an empty shadows modelName is rejected"
 
 write_values chatCompletions "            shadows:
               acme/a-model-next:
                 percentage: 50"
 assert_rejected "shadows" "a shadows mapping is rejected"
 
-write_values chatCompletions "            shadowSamplingMethod: perUser"
-assert_rejected "shadowSamplingMethod" "an unknown legacy shadowSamplingMethod is rejected"
+write_values chatCompletions "            shadows: null"
+assert_rejected "shadows" "a null shadows value is rejected"
 
-# Multipart image endpoints support neither form. Zero values stay accepted
-# because that is what absent keys produce.
-MULTIPART_SHADOWS=(
-  "${SHADOWS_MINIMAL}"
-  "            shadowModelName: acme/a-model-next"
-  "            shadowModelNames:
-              - acme/a-model-next"
-  "            shadowPercentage: 50"
-  "            shadowSamplingMethod: random"
-  "            shadowCancelOnClientDisconnect: true"
-)
+write_values chatCompletions "            shadows:
+              - null"
+assert_rejected "shadows" "a null shadows entry is rejected"
+
+# Multipart image endpoints take no shadows; an empty list is what an absent
+# key produces, so it stays accepted. Legacy keys there are unchanged from
+# before and left to the gateway.
 for section in imageEdits imageVariations; do
-  for extra in "${MULTIPART_SHADOWS[@]}"; do
-    write_values "${section}" "${extra}"
-    assert_rejected "a_model" "$(first_key "${extra}") is rejected in ${section}"
-  done
+  write_values "${section}" "${SHADOWS_MINIMAL}"
+  assert_rejected "a_model" "shadows is rejected in ${section}"
 
-  write_values "${section}" "${SHADOWS_EMPTY}
-${LEGACY_ZERO}"
-  assert_rejected "a_model" "empty shadows with zero-valued legacy fields is rejected in ${section}"
+  write_values "${section}" "            Shadows:
+              - modelName: acme/a-model-next"
+  assert_rejected "a_model" "Shadows is rejected in ${section}"
 
   write_values "${section}" "${SHADOWS_EMPTY}"
   assert_renders "an empty shadows list renders in ${section}"
