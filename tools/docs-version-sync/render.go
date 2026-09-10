@@ -255,6 +255,15 @@ func (catalog *Catalog) findArtifact(name string) (Artifact, bool) {
 	return Artifact{}, false
 }
 
+func (catalog *Catalog) findArtifactByNameAndType(name string, artifactType ArtifactType) (Artifact, bool) {
+	for _, artifact := range catalog.findArtifacts(name) {
+		if artifact.Type == artifactType {
+			return artifact, true
+		}
+	}
+	return Artifact{}, false
+}
+
 func (catalog *Catalog) findArtifacts(name string) []Artifact {
 	var artifacts []Artifact
 	if catalog.Stack.Name == name {

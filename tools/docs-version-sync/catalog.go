@@ -152,6 +152,7 @@ var defaultDenylist = []DenylistEntry{
 	{Name: "samba", Reason: "retired internal dependency"},
 }
 
+// Artifact identifies one versioned chart, image, or downloadable resource in the catalog.
 type Artifact struct {
 	ID             string       `yaml:"id,omitempty"`
 	Name           string       `yaml:"name"`
@@ -159,6 +160,7 @@ type Artifact struct {
 	Registry       string       `yaml:"registry"`
 	RepositoryName string       `yaml:"repository_name,omitempty"`
 	Version        string       `yaml:"version"`
+	Digest         string       `yaml:"digest,omitempty"`
 	Source         string       `yaml:"source,omitempty"`
 
 	registryHost      string
@@ -490,6 +492,14 @@ func (catalog *Catalog) validateArtifact(artifact Artifact) error {
 	if strings.TrimSpace(artifact.Version) == "" {
 		return fmt.Errorf("artifact %s has empty version", artifact.Name)
 	}
+	if artifact.Digest != "" {
+		if artifact.Type != ArtifactTypeImage {
+			return fmt.Errorf("artifact %s has a digest but is not an image", artifact.Name)
+		}
+		if !imageDigestRe.MatchString(artifact.Digest) {
+			return fmt.Errorf("artifact %s has invalid digest %q", artifact.Name, artifact.Digest)
+		}
+	}
 	if _, ok := catalog.Registries[artifact.Registry]; !ok {
 		return fmt.Errorf("artifact %s registry %q is not defined", artifact.Name, artifact.Registry)
 	}
@@ -546,7 +556,11 @@ func (catalog *Catalog) artifactPath(artifact Artifact) (string, error) {
 	if name == "" {
 		name = artifact.Name
 	}
-	return registry.fullPath(name, version), nil
+	reference := registry.fullPath(name, version)
+	if artifact.Digest != "" && registryName == artifact.Registry && version == artifact.Version {
+		reference += "@" + artifact.Digest
+	}
+	return reference, nil
 }
 
 func (catalog *Catalog) publicationFor(artifact Artifact) (Publication, bool) {
@@ -858,13 +872,4 @@ func defaultOutputs() []OutputFile {
 		{Path: "docs/user/cluster-management/self-managed.md"},
 		{Path: "docs/user/cluster-management/reference.md"},
 	}
-}
-
-func artifactNames(artifacts []Artifact) []string {
-	names := make([]string, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		names = append(names, artifact.Name)
-	}
-	sort.Strings(names)
-	return names
 }

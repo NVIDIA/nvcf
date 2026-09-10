@@ -219,6 +219,54 @@ func TestResolveStackSourceReleaseRejectsOnlyPrereleaseTags(t *testing.T) {
 	}
 }
 
+func TestResolvedStackInventoryRejectsMissingAsset(t *testing.T) {
+	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":"other.json","browser_download_url":"https://example.com/other.json"}]}`, source.Tag)
+	}))
+	defer server.Close()
+
+	_, err := testGitHubClient(server, "").resolvedStackInventory(source)
+	if err == nil || !strings.Contains(err.Error(), "has no "+resolvedStackInventoryAssetName+" asset") {
+		t.Fatalf("resolvedStackInventory error = %v, want missing asset rejection", err)
+	}
+}
+
+func TestResolvedStackInventoryRejectsMismatchedSourceIdentity(t *testing.T) {
+	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
+	other := source
+	other.Commit = strings.Repeat("b", 40)
+	raw, err := marshalResolvedStackInventory(testCatalogResolvedInventory(t, other))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/NVIDIA/nvcf/releases/tags/" + source.Tag:
+			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, source.Tag, resolvedStackInventoryAssetName, server.URL+"/inventory")
+		case "/inventory":
+			_, _ = w.Write(raw)
+		default:
+			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	_, err = testGitHubClient(server, "").resolvedStackInventory(source)
+	if err == nil || !strings.Contains(err.Error(), "want selected release") {
+		t.Fatalf("resolvedStackInventory error = %v, want source identity rejection", err)
+	}
+}
+
+func TestDownloadPublicAssetRejectsExternalHTTP(t *testing.T) {
+	client := &githubClient{baseURL: defaultGitHubAPIURL, httpClient: http.DefaultClient}
+	_, err := client.downloadPublicAsset("http://example.com/inventory.json")
+	if err == nil || !strings.Contains(err.Error(), "refuse non-HTTPS GitHub asset URL") {
+		t.Fatalf("downloadPublicAsset error = %v, want non-HTTPS rejection", err)
+	}
+}
+
 // testGitHubClient creates a GitHub client backed by a local test server.
 func testGitHubClient(server *httptest.Server, token string) *githubClient {
 	return &githubClient{
