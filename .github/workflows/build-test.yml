@@ -135,6 +135,23 @@ jobs:
       - name: Test OpenBao plugin catalog refresh hook
         run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
 
+      - name: Run compute-plane Helmfile static tests
+        run: |
+          set -euo pipefail
+          make -C deploy/stacks/nvcf-compute-plane \
+            test-observability-profile \
+            test-register-cluster \
+            test-kube-context \
+            test-control-plane-owner-label-renderer \
+            test-control-plane-owner-output-dir-env \
+            test-control-plane-owner-helmfile-validation \
+            test-control-plane-owner-namespace-delete \
+            test-control-plane-owner-namespace-marker \
+            test-render-structure-detects-violations \
+            test-nvca-derived-object-names
+          deploy/stacks/nvcf-compute-plane/tests/verify-render-structure.sh \
+            deploy/stacks/nvcf-compute-plane/testdata/golden/local
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail

@@ -455,9 +455,10 @@ addons:
       # authority and QUIC SNI, so a load-balancer hostname or IP does not need
       # to be added here. Add SANs only when advertisedHostnameTemplate changes
       # those identities. In existingSecret mode, only these unchanged
-      # stable-base defaults are tolerated; custom values are rejected. Empty
-      # uses the derived in-cluster request-router DNS names.
-      dnsNames: []
+      # stable-base defaults are tolerated; custom values are rejected.
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
       # REQUIRED for mode existingSecret; the kubernetes.io/tls Secret in the
       # nvcf namespace holding the tls.crt and tls.key entries. Optional for
       # mode certManager, where it names the Secret cert-manager writes.

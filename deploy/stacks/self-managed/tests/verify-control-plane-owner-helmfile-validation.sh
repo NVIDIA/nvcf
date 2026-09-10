@@ -16,6 +16,8 @@ fail() {
 
 command -v helmfile >/dev/null 2>&1 || fail "helmfile is required"
 
+max_owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+too_long_owner="${max_owner}a"
 states=(
   "01-dependencies.yaml.gotmpl"
   "02-core.yaml.gotmpl"
@@ -24,7 +26,7 @@ states=(
 invalid_owners=(
   "shared"
   "PlaneA"
-  "control-plane-id-that-is-too-long"
+  "$too_long_owner"
 )
 
 for state in "${states[@]}"; do
@@ -36,6 +38,15 @@ for state in "${states[@]}"; do
     helmfile --file "$state_file" list --skip-charts --output json \
     >"$work_dir/$state.valid.json" 2>"$valid_log"; then
     fail "$state rejected valid owner plane-a: $(tr '\n' ' ' <"$valid_log")"
+  fi
+
+  max_valid_log="$work_dir/$state.max-valid.log"
+  if ! HELMFILE_ENV=base \
+    NVCF_CONTROL_PLANE_OWNER="$max_owner" \
+    HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile --file "$state_file" list --skip-charts --output json \
+    >"$work_dir/$state.max-valid.json" 2>"$max_valid_log"; then
+    fail "$state rejected 30-character owner: $(tr '\n' ' ' <"$max_valid_log")"
   fi
 
   for owner in "${invalid_owners[@]}"; do

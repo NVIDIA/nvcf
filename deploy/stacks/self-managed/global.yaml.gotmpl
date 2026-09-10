@@ -1263,7 +1263,7 @@ llmRequestRouter:
   {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.enabled is true" }}
   {{- end }}
   {{- if eq (len $dnsNames) 0 }}
-  {{- $dnsNames = $llmRequestRouterDefaultDnsNames }}
+  {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
   {{- end }}
   certificate:
     enabled: true

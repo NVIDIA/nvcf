@@ -45,8 +45,8 @@ done
 [[ -n "$owner" ]] || fail "--owner is required"
 [[ "$owner" =~ ^(default|shared|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$ ]] ||
   fail "--owner must be default, shared, or a lowercase DNS label"
-if [[ "$owner" != "default" && "$owner" != "shared" && "${#owner}" -gt 32 ]]; then
-  fail "--owner control-plane ID must be at most 32 characters"
+if [[ "$owner" != "default" && "$owner" != "shared" && "${#owner}" -gt 30 ]]; then
+  fail "--owner control-plane ID must be at most 30 characters"
 fi
 [[ "$label_key" =~ ^[A-Za-z0-9./_-]+$ ]] ||
   fail "--label-key contains unsupported characters"

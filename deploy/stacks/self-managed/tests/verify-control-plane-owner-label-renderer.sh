@@ -98,8 +98,14 @@ if "$renderer" --owner plane_a <"$input" >/dev/null 2>&1; then
   fail "renderer accepted an owner with an underscore"
 fi
 
-if "$renderer" --owner control-plane-id-that-is-too-long <"$input" >/dev/null 2>&1; then
-  fail "renderer accepted an owner longer than 32 characters"
+max_owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+too_long_owner="${max_owner}a"
+if ! "$renderer" --owner "$max_owner" <"$input" >/dev/null 2>&1; then
+  fail "renderer rejected a 30-character owner"
+fi
+
+if "$renderer" --owner "$too_long_owner" <"$input" >/dev/null 2>&1; then
+  fail "renderer accepted an owner longer than 30 characters"
 fi
 
 echo "verify-control-plane-owner-label-renderer: all checks passed"

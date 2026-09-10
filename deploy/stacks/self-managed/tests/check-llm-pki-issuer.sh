@@ -195,6 +195,33 @@ render_router() {
     >"$manifests_file"
 }
 
+expect_managed_router_failure() {
+  local case_name="$1"
+  local expected_error="$2"
+  shift 2
+  local values_file="$work_dir/$case_name.router-values.yaml"
+  local router_chart="$stack_dir/../../helm/llm-request-router/llm-request-router"
+
+  if HELMFILE_ENV=base HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
+    --file "$stack_dir/helmfile.d/02-core.yaml.gotmpl" \
+    --environment default \
+    --selector name=llm-request-router \
+    --chart "$router_chart" \
+    --skip-deps \
+    "${core_state_values[@]}" \
+    --state-values-set addons.llm.enabled=true \
+    --state-values-set addons.llm.pki.enabled=true \
+    "$@" \
+    write-values \
+    --output-file-template "$values_file" \
+    >"$work_dir/$case_name.router.log" 2>&1; then
+    fail "$case_name rendered successfully"
+  fi
+
+  grep -Fq "$expected_error" "$work_dir/$case_name.router.log" ||
+    fail "$case_name did not return the expected error: $expected_error"
+}
+
 render_default_router() {
   local case_name="$1"
   local values_file="$work_dir/$case_name.router-values.yaml"
@@ -423,6 +450,13 @@ grep -Fq 'name: addons-llm-migrations' "$secure_defaults_manifests" ||
 if grep -Fq -- '--quic-insecure' "$secure_defaults_manifests"; then
   fail "secure defaults enabled insecure request-router transport"
 fi
+
+missing_dns_names_error='addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true'
+expect_managed_router_failure managed-empty-dns-names "$missing_dns_names_error" \
+  --state-values-file "$(pki_override managed-empty-dns-names <<'YAML'
+dnsNames: []
+YAML
+)"
 
 # Case 4: LLM and PKI explicitly enabled with the default managed ClusterIssuer.
 managed_defaults=(
