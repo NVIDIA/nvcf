@@ -2639,7 +2639,7 @@ type mockHealthStatusCache struct {
 	getters []health.ComponentStatusGetter
 }
 
-func (m *mockHealthStatusCache) AddGetter(g health.ComponentStatusGetter) {
+func (m *mockHealthStatusCache) AddGetter(_ context.Context, g health.ComponentStatusGetter) {
 	m.getters = append(m.getters, g)
 }
 

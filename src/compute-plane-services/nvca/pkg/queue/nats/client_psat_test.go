@@ -22,9 +22,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+	natstest "github.com/nats-io/nats-server/v2/test"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,15 +141,29 @@ func TestNewClientWithTokenFetcher_PreFlightRespectsCancelledCtx(t *testing.T) {
 }
 
 func TestNewClientWithTokenFetcher_NatsUnreachable(t *testing.T) {
-	// With a valid fetcher but an unreachable NATS URL, connect must surface
-	// an error rather than panic. Exercises the full constructor path.
+	// An unreachable broker must no longer fail construction. This test
+	// previously asserted the opposite, and that was the crash-loop: the error
+	// propagated out of Agent.Start, the pod restarted, and CrashLoopBackOff
+	// caps at five minutes, so recovery could lag NATS returning by that long.
+	//
+	// With RetryOnFailedConnect the client is created and keeps retrying.
+	// Readiness reports not-ready until a poll succeeds, and liveness stays OK
+	// because a retrying connection is not a closed one. A genuine misconfig is
+	// still caught early on this path by the pre-flight token fetch above.
 	origURL := DefaultNATSURL
 	DefaultNATSURL = "nats://127.0.0.1:1" // unreachable
 	defer func() { DefaultNATSURL = origURL }()
 
-	_, err := NewClientWithTokenFetcher(context.Background(), "cluster",
+	qc, err := NewClientWithTokenFetcher(context.Background(), "cluster",
 		&staticTokenFetcher{token: "my-jwt"})
-	require.Error(t, err)
+	require.NoError(t, err, "an unreachable broker must not fail startup")
+	require.NotNil(t, qc)
+
+	cl := qc.(*client)
+	t.Cleanup(cl.nc.Close)
+
+	assert.False(t, cl.ConnectionClosed(),
+		"the client is retrying, so liveness must not restart the pod")
 }
 
 func TestFetcherHappyPath_ProducesValidEnvelope(t *testing.T) {
@@ -183,4 +204,137 @@ func TestFetcherFailure_SurfacedViaEmptyString(t *testing.T) {
 	jwt, err := fetcher.FetchToken(context.Background())
 	require.Error(t, err)
 	assert.Empty(t, jwt)
+}
+
+// flakyTokenFetcher can be switched between working and failing at runtime, so
+// a test can break the token source underneath a live connection.
+type flakyTokenFetcher struct {
+	mu       sync.Mutex
+	jwt      string
+	err      error
+	failures int
+}
+
+func (f *flakyTokenFetcher) FetchToken(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		f.failures++
+		return "", f.err
+	}
+	return f.jwt, nil
+}
+
+func (f *flakyTokenFetcher) failureCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failures
+}
+
+func (f *flakyTokenFetcher) breakSource(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *flakyTokenFetcher) fixSource() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = nil
+}
+
+// TestPSATTokenFetchFailureDuringReconnectRecovers is Kristina's item 2 on the
+// production auth path rather than a synthetic one.
+//
+// When a token fetch fails the handler returns "", and the server rejects that
+// as an authorization violation, not a network error. processAuthError
+// (nats.go:3955) latches nc.ar when the same auth error repeats on a server and
+// doReconnect (nats.go:3150) then closes the connection regardless of
+// MaxReconnects, and nats.go never reopens a closed connection. So a token
+// source that blips across a reconnect would take the queue down until the pod
+// restarted. IgnoreAuthErrorAbort is what prevents that, and this proves it:
+// the connection survives repeated auth rejections and the same client
+// reconnects once the token source returns.
+//
+// This is the live 53-minute outage in plans/repro-1590 reduced to a unit test;
+// there the auth callout service was down and NVCA logged 96 authorization
+// violations without ever closing the connection.
+func TestPSATTokenFetchFailureDuringReconnectRecovers(t *testing.T) {
+	const jwt = "psat-jwt-under-test"
+	// The server accepts exactly the envelope a working fetcher produces, so a
+	// failed fetch (empty token) is rejected as an auth violation.
+	validToken := buildAuthCalloutToken("APP", "oidc", jwt)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := lis.Addr().(*net.TCPAddr).Port
+	require.NoError(t, lis.Close())
+
+	opts := func() *server.Options {
+		return &server.Options{
+			Port:          port,
+			Host:          "127.0.0.1",
+			JetStream:     true,
+			StoreDir:      t.TempDir(),
+			Authorization: validToken,
+		}
+	}
+
+	srv := natstest.RunServer(opts())
+	require.True(t, srv.ReadyForConnections(10*time.Second))
+
+	origURL := DefaultNATSURL
+	DefaultNATSURL = fmt.Sprintf("nats://127.0.0.1:%d", port)
+	t.Cleanup(func() { DefaultNATSURL = origURL })
+
+	fetcher := &flakyTokenFetcher{jwt: jwt}
+	obs := &recordingObserver{}
+
+	qc, err := NewClientWithTokenFetcher(context.Background(), "cluster", fetcher, obs)
+	require.NoError(t, err)
+	cl := qc.(*client)
+	t.Cleanup(cl.nc.Close)
+	require.True(t, cl.nc.IsConnected(), "must be connected while the token source works")
+
+	// Break the token source, then drop the connection. The broker comes back
+	// immediately so it is auth, not the network, that rejects each reconnect —
+	// which is the case that used to close the connection for good.
+	fetcher.breakSource(errors.New("projected service account token unreadable"))
+	srv.Shutdown()
+	srv2 := natstest.RunServer(opts())
+	require.True(t, srv2.ReadyForConnections(10*time.Second))
+	t.Cleanup(srv2.Shutdown)
+
+	require.Eventually(t, func() bool {
+		return !cl.nc.IsConnected()
+	}, 15*time.Second, 20*time.Millisecond,
+		"the connection must actually drop, or the rest of this proves nothing")
+
+	// The reconnect loop has to actually be rejected on auth, more than once,
+	// since it is the repeat that latches nc.ar. Without asserting this the test
+	// cannot tell a rejected reconnect from a successful one and would pass
+	// against a server that ignored the token entirely.
+	require.Eventually(t, func() bool {
+		return fetcher.failureCount() >= 2
+	}, 20*time.Second, 50*time.Millisecond,
+		"the token handler must be called and fail on each reconnect attempt")
+
+	require.False(t, cl.nc.IsConnected(),
+		"an empty token must not be accepted; if this connects the server is not "+
+			"enforcing auth and the test proves nothing")
+	require.Equal(t, nats.RECONNECTING, cl.nc.Status(),
+		"the client must still be retrying, not closed or connected")
+	require.False(t, cl.ConnectionClosed(),
+		"repeated auth rejections must not close the connection permanently")
+
+	// Token source returns. The same client must recover on its own.
+	fetcher.fixSource()
+
+	assert.Eventually(t, func() bool {
+		return cl.nc.IsConnected()
+	}, 30*time.Second, 50*time.Millisecond,
+		"the same client must reconnect once the token source recovers, with no restart")
+
+	assert.False(t, cl.ConnectionClosed())
+	assert.True(t, obs.seen(ConnStateConnected))
 }

@@ -68,20 +68,23 @@ type client struct {
 }
 
 // NewClient creates a JetStream-backed queue client.
-func NewClient(ctx context.Context, clusterID string, secretsFetcher auth.NATSSecretsFetcher) (queue.Client, error) {
-	return NewClientWithURL(ctx, "", clusterID, secretsFetcher)
+func NewClient(ctx context.Context, clusterID string, secretsFetcher auth.NATSSecretsFetcher, observer ...ConnectionObserver) (queue.Client, error) {
+	return NewClientWithURL(ctx, "", clusterID, secretsFetcher, observer...)
 }
 
 // NewClientWithURL creates a JetStream-backed queue client for a configured NATS URL.
-func NewClientWithURL(ctx context.Context, natsURL, clusterID string, secretsFetcher auth.NATSSecretsFetcher) (queue.Client, error) {
-	return NewClientWithURLAndHostOverride(ctx, natsURL, "", clusterID, secretsFetcher)
+func NewClientWithURL(ctx context.Context, natsURL, clusterID string, secretsFetcher auth.NATSSecretsFetcher, observer ...ConnectionObserver) (queue.Client, error) {
+	return NewClientWithURLAndHostOverride(ctx, natsURL, "", clusterID, secretsFetcher, observer...)
 }
 
 // NewClientWithURLAndHostOverride creates a JetStream-backed queue client for a configured NATS URL and optional TLS SNI host.
+// The optional observer receives connection lifecycle events; it is variadic so
+// the many existing callers that do not care keep working unchanged.
 func NewClientWithURLAndHostOverride(
 	ctx context.Context,
 	natsURL, natsHostOverride, clusterID string,
 	secretsFetcher auth.NATSSecretsFetcher,
+	observer ...ConnectionObserver,
 ) (queue.Client, error) {
 	secrets, err := secretsFetcher.FetchNATSSecrets(ctx)
 	if err != nil {
@@ -97,29 +100,17 @@ func NewClientWithURLAndHostOverride(
 		return nil, fmt.Errorf("create nkey auth option: %w", err)
 	}
 
-	opts := []nats.Option{
-		nkeyAuthOption,
-		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)),
-	}
-	opts = append(opts, natsHostOverrideOptions(natsURL, natsHostOverride)...)
+	return connect(natsURL, natsHostOverride, clusterID, nkeyAuthOption, firstObserver(observer))
+}
 
-	nc, err := nats.Connect(natsURLOrDefault(natsURL), opts...)
-	if err != nil {
-		return nil, fmt.Errorf("connect to NATS: %w", err)
-	}
-
-	js, err := jetstream.New(nc)
-	if err != nil {
-		_ = nc.Drain()
-		return nil, fmt.Errorf("init jetstream: %w", err)
-	}
-
-	return &client{
-		clusterID: clusterID,
-		nc:        nc,
-		js:        js,
-		consumers: map[string]jetstream.Consumer{},
-	}, nil
+// ConnectionClosed reports whether the NATS connection has been closed for
+// good, as opposed to merely disconnected while the client keeps retrying.
+// nats.go only reaches the closed state once it has given up, and it never
+// reopens a closed connection, so this is the one queue condition a process
+// restart actually fixes. It is consumed through an optional interface rather
+// than queue.Client because SQS has no persistent connection to report on.
+func (c *client) ConnectionClosed() bool {
+	return c.nc.IsClosed()
 }
 
 func natsURLOrDefault(natsURL string) string {

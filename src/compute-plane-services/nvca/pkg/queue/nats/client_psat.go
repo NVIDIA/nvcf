@@ -27,7 +27,6 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
 )
@@ -80,20 +79,23 @@ func buildAuthCalloutToken(account, pluginName, jwt string) string {
 // lifetime of the connection, so it uses its own bounded context internally
 // rather than closing over the caller's ctx (which may outlive / be canceled
 // independently of the long-lived NATS session).
-func NewClientWithTokenFetcher(ctx context.Context, clusterID string, fetcher TokenFetcher) (queue.Client, error) {
-	return NewClientWithTokenFetcherURL(ctx, "", clusterID, fetcher)
+func NewClientWithTokenFetcher(ctx context.Context, clusterID string, fetcher TokenFetcher, observer ...ConnectionObserver) (queue.Client, error) {
+	return NewClientWithTokenFetcherURL(ctx, "", clusterID, fetcher, observer...)
 }
 
 // NewClientWithTokenFetcherURL creates a JetStream-backed queue client for a configured NATS URL.
-func NewClientWithTokenFetcherURL(ctx context.Context, natsURL, clusterID string, fetcher TokenFetcher) (queue.Client, error) {
-	return NewClientWithTokenFetcherURLAndHostOverride(ctx, natsURL, "", clusterID, fetcher)
+func NewClientWithTokenFetcherURL(ctx context.Context, natsURL, clusterID string, fetcher TokenFetcher, observer ...ConnectionObserver) (queue.Client, error) {
+	return NewClientWithTokenFetcherURLAndHostOverride(ctx, natsURL, "", clusterID, fetcher, observer...)
 }
 
 // NewClientWithTokenFetcherURLAndHostOverride creates a JetStream-backed queue client for a configured NATS URL and optional TLS SNI host.
+// The optional observer receives connection lifecycle events; it is variadic so
+// the many existing callers that do not care keep working unchanged.
 func NewClientWithTokenFetcherURLAndHostOverride(
 	ctx context.Context,
 	natsURL, natsHostOverride, clusterID string,
 	fetcher TokenFetcher,
+	observer ...ConnectionObserver,
 ) (queue.Client, error) {
 	if fetcher == nil {
 		return nil, fmt.Errorf("token fetcher is required")
@@ -123,27 +125,5 @@ func NewClientWithTokenFetcherURLAndHostOverride(
 		return buildAuthCalloutToken("APP", "oidc", jwt)
 	})
 
-	opts := []nats.Option{
-		tokenHandler,
-		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)),
-	}
-	opts = append(opts, natsHostOverrideOptions(natsURL, natsHostOverride)...)
-
-	nc, err := nats.Connect(natsURLOrDefault(natsURL), opts...)
-	if err != nil {
-		return nil, fmt.Errorf("connect to NATS: %w", err)
-	}
-
-	js, err := jetstream.New(nc)
-	if err != nil {
-		_ = nc.Drain()
-		return nil, fmt.Errorf("init jetstream: %w", err)
-	}
-
-	return &client{
-		clusterID: clusterID,
-		nc:        nc,
-		js:        js,
-		consumers: map[string]jetstream.Consumer{},
-	}, nil
+	return connect(natsURL, natsHostOverride, clusterID, tokenHandler, firstObserver(observer))
 }

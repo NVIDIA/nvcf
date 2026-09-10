@@ -47,7 +47,7 @@ type StatusCache interface {
 	GetStatusForLevel(level nvcatypes.StatusLevel) nvcatypes.AgentHealth
 	// AddGetter registers a component whose construction happens after this
 	// cache is built. See BackendStatusCache.AddGetter.
-	AddGetter(g ComponentStatusGetter)
+	AddGetter(ctx context.Context, g ComponentStatusGetter)
 }
 
 type ComponentStatusGetter interface {
@@ -64,9 +64,19 @@ type BackendStatusCache struct {
 	backendStatus atomic.Value
 
 	// gmu guards getters, which can be appended to after construction via
-	// AddGetter while RefreshStatusForLevel reads it from the refresh loop.
+	// AddGetter while RefreshStatusForLevel reads it from the refresh loop. It
+	// also serialises the two writers of backendStatus against each other; see
+	// storeRefreshed.
 	gmu     sync.RWMutex
 	getters []ComponentStatusGetter
+	// gen counts registrations, so a refresh can tell that the getter set
+	// changed while it was gathering and avoid clobbering the new component.
+	gen uint64
+	// refreshSeq issues an increasing ticket per refresh and lastStoredSeq
+	// records the newest one published, so a slow refresh cannot overwrite a
+	// newer result with its own older one. Both guarded by gmu.
+	refreshSeq    uint64
+	lastStoredSeq uint64
 
 	// If set, wait at least this long before the next refresh.
 	// This prevents chatty component queries.
@@ -101,18 +111,114 @@ func NewBackendStatusCache(
 // until after the startup health gate has already run against this cache, so
 // they cannot be passed to NewBackendStatusCache without deadlocking startup
 // on a component that is not-ready by construction.
-func (c *BackendStatusCache) AddGetter(g ComponentStatusGetter) {
+//
+// The component's current status is folded into the cached aggregate before
+// returning. That fold is load-bearing rather than an optimization:
+// GetStatusForLevel serves readiness out of the cache without refreshing, and
+// the only routine refresh is the one at the top of QueueManager.SyncQueues, so
+// appending to getters alone would leave /healthz answering from an aggregate
+// that predates the component and reporting healthy without it until the next
+// tick.
+func (c *BackendStatusCache) AddGetter(ctx context.Context, g ComponentStatusGetter) {
+	// Queried before taking gmu because getters may block on I/O, and because
+	// RefreshStatusForLevel deliberately calls them outside the lock too.
+	ah, err := g.GetComponentStatus(ctx)
+	if err != nil && !nvcaerrors.IsNotExist(err) {
+		core.GetLogger(ctx).WithError(err).
+			Error("Failed to retrieve status of newly registered component")
+		ah.Status = nvcatypes.HealthStatusUnhealthy
+	}
+
 	c.gmu.Lock()
 	defer c.gmu.Unlock()
 	c.getters = append(c.getters, g)
+	c.gen++
+
+	if len(ah.Components) == 0 {
+		// Nothing nameable to fold. Reached when a getter errors, or returns an
+		// empty payload; the error is logged above. The component is registered
+		// either way, so the next refresh reports it properly — this only leaves
+		// it missing from readiness for one refresh interval, which is the
+		// pre-existing behaviour rather than a new hole.
+		return
+	}
+
+	cur := c.backendStatus.Load().(nvcatypes.AgentHealth)
+	merged := nvcatypes.AgentHealth{
+		Status:     cur.Status,
+		GPUUsage:   cur.GPUUsage,
+		Components: make(map[string]nvcatypes.ComponentHealth, len(cur.Components)+len(ah.Components)),
+	}
+	for ck, cv := range cur.Components {
+		merged.Components[ck] = cv
+	}
+	for ck, cv := range ah.Components {
+		merged.Components[ck] = cv
+		if cv.Status == nvcatypes.HealthStatusUnhealthy {
+			merged.Status = cv.Status
+		}
+	}
+	c.backendStatus.Store(merged)
 }
 
 // snapshotGetters returns a stable copy so a concurrent AddGetter cannot change
 // the set between the fan-out and the result count that terminates the gather.
-func (c *BackendStatusCache) snapshotGetters() []ComponentStatusGetter {
-	c.gmu.RLock()
-	defer c.gmu.RUnlock()
-	return slices.Clone(c.getters)
+// snapshotGetters takes the getter set for one refresh, along with the
+// registration generation and this refresh's ordering ticket.
+func (c *BackendStatusCache) snapshotGetters() ([]ComponentStatusGetter, uint64, uint64) {
+	c.gmu.Lock()
+	defer c.gmu.Unlock()
+	c.refreshSeq++
+	return slices.Clone(c.getters), c.gen, c.refreshSeq
+}
+
+// storeRefreshed publishes a refresh result without discarding a component that
+// was registered while the refresh was in flight.
+//
+// A refresh gathers from the getters it snapshotted and then overwrites the
+// cache wholesale. An AddGetter that lands in that gap has already folded its
+// component in, and the overwrite would drop it again, leaving readiness
+// answering without that component until the next tick — which is the window
+// AddGetter's fold exists to close. Comparing the generation under the same lock
+// AddGetter writes under makes the check and the store atomic with respect to
+// it; a plain read-then-store outside the lock would just move the race.
+// Refreshes are also ordered against each other. Nothing serialises them —
+// SyncQueues and the heartbeat both call RefreshStatus from separate workers —
+// and the getter fan-out means a slow one can finish after a refresh that
+// started later. Without the sequence check that older result overwrites the
+// newer one, so /healthz can go back to 200 after a refresh has already seen the
+// queue broken. Ordering only the store keeps the fan-out concurrent; taking the
+// lock across the gather would let one slow getter block every refresh caller.
+func (c *BackendStatusCache) storeRefreshed(ah nvcatypes.AgentHealth, snapGen, seq uint64) {
+	c.gmu.Lock()
+	defer c.gmu.Unlock()
+
+	if seq < c.lastStoredSeq {
+		// A refresh that started after this one has already published. Its view
+		// is newer, so discard this result rather than reverting to it.
+		return
+	}
+	c.lastStoredSeq = seq
+
+	if c.gen != snapGen {
+		cur, _ := c.backendStatus.Load().(nvcatypes.AgentHealth)
+		for ck, cv := range cur.Components {
+			// Only components this refresh knew nothing about. Anything it did
+			// query is authoritative and must be allowed to go healthy again.
+			if _, queried := ah.Components[ck]; queried {
+				continue
+			}
+			if ah.Components == nil {
+				ah.Components = map[string]nvcatypes.ComponentHealth{}
+			}
+			ah.Components[ck] = cv
+			if cv.Status == nvcatypes.HealthStatusUnhealthy {
+				ah.Status = cv.Status
+			}
+		}
+	}
+
+	c.backendStatus.Store(ah)
 }
 
 // WaitForHealthSuccess blocks the current thread until the AgentHealth is completely healthy
@@ -198,7 +304,7 @@ func (c *BackendStatusCache) RefreshStatusForLevel(ctx context.Context, level nv
 		c.lastRefresh = c.nowFunc()
 	}
 
-	getters := c.snapshotGetters()
+	getters, snapGen, seq := c.snapshotGetters()
 
 	results := make(chan statusResult)
 	for _, getter := range getters {
@@ -245,7 +351,7 @@ func (c *BackendStatusCache) RefreshStatusForLevel(ctx context.Context, level nv
 	close(results)
 
 	// Create a new health status instance and update the cache
-	c.backendStatus.Store(allAH)
+	c.storeRefreshed(allAH, snapGen, seq)
 
 	if err := utilerror.NewAggregate(errs); err != nil {
 		return nvcatypes.AgentHealth{}, err
