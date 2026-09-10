@@ -70,6 +70,13 @@ assert_renders() {
   echo "ok: ${label}"
 }
 
+# first_key <yaml block>: the key on the block's first line, for labels.
+first_key() {
+  local line="${1%%$'\n'*}"
+  line="${line#"${line%%[! ]*}"}"
+  echo "${line%%:*}"
+}
+
 SHADOWS_FULL="            shadows:
               - modelName: acme/a-model-next
                 percentage: 10
@@ -127,14 +134,14 @@ LEGACY_KEYS=(
 for legacy in "${LEGACY_KEYS[@]}"; do
   write_values chatCompletions "${SHADOWS_EMPTY}
             ${legacy}"
-  assert_rejected "a_model" "shadows combined with ${legacy%%:*} is rejected"
+  assert_rejected "a_model" "shadows combined with $(first_key "${legacy}") is rejected"
 done
 
 # The gateway reads shadow keys case-insensitively, so a variant spelling would
 # slip past the exclusivity rule; the schema rejects every non-canonical form.
 for variant in "Shadows: []" "shadowpercentage: 50" "ShadowModelNames: []" "shadowcancelonclientdisconnect: true"; do
   write_values chatCompletions "            ${variant}"
-  assert_rejected "${variant%%:*}" "shadow key spelled ${variant%%:*} is rejected"
+  assert_rejected "$(first_key "${variant}")" "shadow key spelled $(first_key "${variant}") is rejected"
 done
 
 # Per-target entry validation.
@@ -144,7 +151,7 @@ assert_rejected "modelName" "a shadows entry without modelName is rejected"
 
 write_values chatCompletions "            shadows:
               - modelname: acme/a-model-next"
-assert_rejected "modelname" "a shadows entry with an unknown field is rejected"
+assert_rejected "modelname" "a shadows entry with a non-canonical key is rejected"
 
 for percentage in 0 101 50.5 '"50"'; do
   write_values chatCompletions "            shadows:
@@ -190,8 +197,7 @@ MULTIPART_SHADOWS=(
 for section in imageEdits imageVariations; do
   for extra in "${MULTIPART_SHADOWS[@]}"; do
     write_values "${section}" "${extra}"
-    key="$(sed -n '1s/^ *\([A-Za-z]*\):.*/\1/p' <<<"${extra}")"
-    assert_rejected "a_model" "${key} is rejected in ${section}"
+    assert_rejected "a_model" "$(first_key "${extra}") is rejected in ${section}"
   done
 
   write_values "${section}" "${SHADOWS_EMPTY}

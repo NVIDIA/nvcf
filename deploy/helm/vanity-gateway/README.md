@@ -113,6 +113,8 @@ or the pod is killed mid-drain.
 - `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
   path requires `path` and `functionID`.
 
+Both sections are empty by default.
+
 An `openai` model may set `functionType: LLM` to be served by the LLM Gateway
 instead of the invocation service, supported in `chatCompletions`, `responses`,
 and `embeddings`. Callers still send the public `modelName`; the gateway
@@ -171,13 +173,13 @@ supported. Their policy applies to every legacy shadow target. Do not combine
 the `shadows` field with legacy shadow fields on the same route.
 
 The schema rejects a route that has both forms, a shadow key spelled with any
-other capitalization, and a shadow target with an unknown field or a percentage
-outside 1 to 100. The gateway accepts other capitalizations of the route-level
+other capitalization, a shadow target key other than the four above, and a
+percentage outside 1 to 100. The gateway accepts other capitalizations of the
 shadow keys, but the schema needs the exact spelling to tell the forms apart.
 `tests/chart-render/verify-shadow-schema.sh` exercises these rules.
 
-Both sections are empty by default. `vanityGateway.config.shadowMaxConcurrent`
-bounds concurrent shadow requests across all routes.
+`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
+across all routes.
 
 ## Notes
 
