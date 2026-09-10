@@ -190,7 +190,7 @@ func (catalog *Catalog) stackArtifact() Artifact {
 		Name:     catalog.Stack.Name,
 		Type:     ArtifactTypeResource,
 		Registry: catalog.Stack.Registry,
-		Version:  catalog.Stack.Version,
+		Version:  catalog.Stack.PublicationVersion,
 	}
 }
 

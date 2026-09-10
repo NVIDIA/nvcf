@@ -170,8 +170,8 @@ func TestMainCatalogMatchesDeclaredReleaseStackPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "artifacts-" + catalog.Stack.Version + ".txt"; catalog.Stack.ArtifactsFile != want {
-		t.Errorf("stack artifacts_file = %q, want %q for catalog stack version %s", catalog.Stack.ArtifactsFile, want, catalog.Stack.Version)
+	if want := "artifacts-" + catalog.Stack.PublicationVersion + ".txt"; catalog.Stack.ArtifactsFile != want {
+		t.Errorf("stack artifacts_file = %q, want %q for publication version %s", catalog.Stack.ArtifactsFile, want, catalog.Stack.PublicationVersion)
 	}
 	if err := validateStackSourceSnapshot(root, catalog); err != nil {
 		t.Fatal(err)
@@ -270,24 +270,36 @@ func TestCatalogRefreshPreservesPublicationPending(t *testing.T) {
 	}
 }
 
-func TestCatalogRefreshKeepsSnapshotOnlyForSameStackVersion(t *testing.T) {
+func TestCatalogRefreshPreservesSourceSnapshotAcrossPublicationVersion(t *testing.T) {
 	base := testCatalog()
-	base.Stack.SourceTag = "deploy/stacks/self-managed/v" + base.Stack.Version
+	base.Stack.SourceVersion = "0.14.5"
+	base.Stack.SourceTag = "deploy/stacks/self-managed/v" + base.Stack.SourceVersion
 	base.Stack.SourceCommit = "1111111111111111111111111111111111111111"
 	base.Stack.PinSources = []string{"stack.yaml"}
 	base.Stack.PinSourceDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 
-	sameRelease := BuildCatalogFromArtifactsWithBase(base.Stack.Version, nil, base)
+	sameRelease := BuildCatalogFromArtifactsWithBase(base.Stack.PublicationVersion, nil, base)
 	if sameRelease.Stack.SourceTag != base.Stack.SourceTag ||
+		sameRelease.Stack.SourceVersion != base.Stack.SourceVersion ||
 		sameRelease.Stack.SourceCommit != base.Stack.SourceCommit ||
 		strings.Join(sameRelease.Stack.PinSources, ",") != "stack.yaml" ||
 		sameRelease.Stack.PinSourceDigest != base.Stack.PinSourceDigest {
 		t.Fatalf("same-release snapshot was not preserved: %#v", sameRelease.Stack)
 	}
 
-	newRelease := BuildCatalogFromArtifactsWithBase("0.9.2", nil, base)
-	if newRelease.Stack.SourceTag != "" || newRelease.Stack.SourceCommit != "" || len(newRelease.Stack.PinSources) != 0 || newRelease.Stack.PinSourceDigest != "" {
-		t.Fatalf("new release retained stale source snapshot: %#v", newRelease.Stack)
+	newPublication := BuildCatalogFromArtifactsWithBase("0.9.2", nil, base)
+	if newPublication.Stack.PublicationVersion != "0.9.2" {
+		t.Fatalf("publication version = %q, want 0.9.2", newPublication.Stack.PublicationVersion)
+	}
+	if newPublication.Stack.SourceVersion != base.Stack.SourceVersion ||
+		newPublication.Stack.SourceTag != base.Stack.SourceTag ||
+		newPublication.Stack.SourceCommit != base.Stack.SourceCommit ||
+		strings.Join(newPublication.Stack.PinSources, ",") != "stack.yaml" ||
+		newPublication.Stack.PinSourceDigest != base.Stack.PinSourceDigest {
+		t.Fatalf("publication refresh did not preserve source snapshot: %#v", newPublication.Stack)
+	}
+	if err := ValidateCatalog(newPublication); err != nil {
+		t.Fatalf("ValidateCatalog rejected independent source and publication versions: %v", err)
 	}
 }
 
@@ -296,12 +308,14 @@ func TestValidateCatalogRejectsIncompleteStackSourceSnapshot(t *testing.T) {
 	catalog.Stack.SourceCommit = "1111111111111111111111111111111111111111"
 
 	err := ValidateCatalog(catalog)
-	if err == nil || !strings.Contains(err.Error(), "source_tag, source_commit, pin_sources, and pin_source_digest together") {
+	if err == nil || !strings.Contains(err.Error(), "source_version, source_tag, source_commit, pin_sources, and pin_source_digest together") {
 		t.Fatalf("ValidateCatalog error = %v, want incomplete stack source snapshot", err)
 	}
 }
 
 func TestValidateCatalogRejectsInvalidStackSourceSnapshot(t *testing.T) {
+	const sourceVersion = "0.14.5"
+
 	tests := []struct {
 		name   string
 		mutate func(*StackMetadata)
@@ -312,7 +326,7 @@ func TestValidateCatalogRejectsInvalidStackSourceSnapshot(t *testing.T) {
 			mutate: func(stack *StackMetadata) {
 				stack.SourceTag = "deploy/stacks/self-managed/v9.9.9"
 			},
-			want: "source_tag must be deploy/stacks/self-managed/v" + testCatalog().Stack.Version,
+			want: "source_tag must be deploy/stacks/self-managed/v" + sourceVersion,
 		},
 		{
 			name: "non-immutable commit",
@@ -361,7 +375,8 @@ func TestValidateCatalogRejectsInvalidStackSourceSnapshot(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			catalog := testCatalog()
-			catalog.Stack.SourceTag = "deploy/stacks/self-managed/v" + catalog.Stack.Version
+			catalog.Stack.SourceVersion = sourceVersion
+			catalog.Stack.SourceTag = "deploy/stacks/self-managed/v" + catalog.Stack.SourceVersion
 			catalog.Stack.SourceCommit = "1111111111111111111111111111111111111111"
 			catalog.Stack.PinSources = []string{"stack.yaml"}
 			catalog.Stack.PinSourceDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -377,7 +392,8 @@ func TestValidateCatalogRejectsInvalidStackSourceSnapshot(t *testing.T) {
 
 func TestValidateCatalogAcceptsExactPinSourcePaths(t *testing.T) {
 	catalog := testCatalog()
-	catalog.Stack.SourceTag = "deploy/stacks/self-managed/v" + catalog.Stack.Version
+	catalog.Stack.SourceVersion = catalog.Stack.PublicationVersion
+	catalog.Stack.SourceTag = "deploy/stacks/self-managed/v" + catalog.Stack.SourceVersion
 	catalog.Stack.SourceCommit = "1111111111111111111111111111111111111111"
 	catalog.Stack.PinSources = []string{"deploy/stack.yaml", "deploy/env.yaml"}
 	catalog.Stack.PinSourceDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -415,11 +431,12 @@ func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
 	}
 	catalog := &Catalog{
 		Stack: StackMetadata{
-			Version:         "1.2.3",
-			SourceTag:       sourceTag,
-			SourceCommit:    commit,
-			PinSources:      []string{sourcePath},
-			PinSourceDigest: digest,
+			PublicationVersion: "9.9.9",
+			SourceVersion:      "1.2.3",
+			SourceTag:          sourceTag,
+			SourceCommit:       commit,
+			PinSources:         []string{sourcePath},
+			PinSourceDigest:    digest,
 		},
 		Artifacts: []Artifact{{Name: "chart", Version: "1.2.3"}},
 	}
@@ -453,11 +470,12 @@ func TestValidateStackSourceSnapshotRequiresTagRef(t *testing.T) {
 
 	catalog := &Catalog{
 		Stack: StackMetadata{
-			Version:         "1.2.3",
-			SourceTag:       sourceTag,
-			SourceCommit:    commit,
-			PinSources:      []string{sourcePath},
-			PinSourceDigest: "sha256:" + strings.Repeat("0", 64),
+			PublicationVersion: "9.9.9",
+			SourceVersion:      "1.2.3",
+			SourceTag:          sourceTag,
+			SourceCommit:       commit,
+			PinSources:         []string{sourcePath},
+			PinSourceDigest:    "sha256:" + strings.Repeat("0", 64),
 		},
 	}
 	pins := []effectiveStackPin{{artifact: "chart", path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
@@ -475,7 +493,8 @@ func TestWriteCatalogAfterStackSourceValidationLeavesFileUnchanged(t *testing.T)
 	const original = "original catalog\n"
 	writeFile(t, catalogPath, original)
 	catalog := testCatalog()
-	catalog.Stack.SourceTag = "deploy/stacks/self-managed/v" + catalog.Stack.Version
+	catalog.Stack.SourceVersion = catalog.Stack.PublicationVersion
+	catalog.Stack.SourceTag = "deploy/stacks/self-managed/v" + catalog.Stack.SourceVersion
 	catalog.Stack.SourceCommit = strings.Repeat("1", 40)
 	catalog.Stack.PinSources = []string{"stack.yaml"}
 	catalog.Stack.PinSourceDigest = "sha256:" + strings.Repeat("2", 64)
