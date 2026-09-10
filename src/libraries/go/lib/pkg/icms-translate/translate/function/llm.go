@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	LLMWorkerContainerName       = "llm-worker"
-	llmMetricsPort         int32 = 9089
+	LLMWorkerContainerName = "llm-worker"
+	// llmMetricsPort is the TCP port exposed by Pylon for Prometheus metrics.
+	llmMetricsPort int32 = 9089
 
 	//nolint:gosec
 	llmCredentialManagerImageEnv = "LLM_CREDENTIAL_MANAGER_IMAGE"
