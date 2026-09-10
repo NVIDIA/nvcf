@@ -51,7 +51,7 @@ spec:
           - serviceAccountToken:
               path: token
               expirationSeconds: 3600
-              audience: http://openbao-server.vault-system.svc.cluster.local:8200
+              audience: {{ .Values.api.accountBootstrap.openbaoAudience | default (printf "http://%s" .Values.api.accountBootstrap.openbaoServiceAddress) }}
       - name: account-bootstrap-script
         configMap:
           name: {{ include "nvcf-api.fullname" . }}-account-bootstrap-script

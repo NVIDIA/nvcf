@@ -122,6 +122,9 @@ adminIssuerProxy:
     # This is the primary endpoint for JWT signing operations.
     vaultAddr: "http://openbao-server.vault-system.svc.cluster.local:8200"
 
+    # Audience for the projected Kubernetes ServiceAccount token used by Vault Agent auth.
+    vaultAudience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+
     # Path in Vault/OpenBao where the JWT signing endpoint is located.
     # This path should be configured in your Vault/OpenBao instance with appropriate policies.
     signPath: "services/nvcf-api/jwt/sign"

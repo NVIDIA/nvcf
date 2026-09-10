@@ -54,6 +54,10 @@ api:
       periodSeconds: 3
       failureThreshold: 600
 
+    # OpenBao endpoint used by the bootstrap hook and projected token audience.
+    openbaoServiceAddress: "openbao-server.vault-system.svc.cluster.local:8200"
+    openbaoAudience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+
     podAnnotations: {}
     schedulingGates: []
     resources:

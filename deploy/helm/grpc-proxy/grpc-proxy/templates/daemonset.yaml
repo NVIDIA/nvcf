@@ -116,7 +116,7 @@ spec:
             - serviceAccountToken:
                 path: token
                 expirationSeconds: 3600
-                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                audience: {{ required "grpcproxy.vault.audience must be set (the OpenBao JWT audience)" .Values.grpcproxy.vault.audience }}
         - name: vault-config-templates
           configMap:
             name: {{ include "grpc-proxy.fullname" . }}-vault-agent-tpl

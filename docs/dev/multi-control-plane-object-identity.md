@@ -309,6 +309,42 @@ OpenBao injector cluster-scoped objects, ClusterIssuer identity, and the final
 shared-prerequisite allowlist still need to pass before the object-level block
 can be removed.
 
+## Phase 4F Service DNS Identity
+
+Phase 4F removes the rendered service DNS references that still pointed at
+legacy plane-owned namespaces in named mode.
+
+The self-managed stack now derives the common in-cluster service addresses from
+the owner-derived namespaces before passing values into the service charts. For
+a named owner such as `plane-a`, rendered values now point at addresses such as:
+
+- `openbao-server.plane-a-vault-system.svc.cluster.local:8200`;
+- `api.plane-a-nvcf.svc.cluster.local:9090`;
+- `api-keys.plane-a-api-keys.svc.cluster.local:8080`;
+- `nats.plane-a-nats-system.svc.cluster.local:4222`;
+- `llm-request-router.plane-a-nvcf.svc.cluster.local:8000`.
+
+Several charts now expose the OpenBao token audience or bootstrap OpenBao
+address as values instead of hardcoding the legacy namespace. The legacy chart
+defaults remain the same, and the stack only overrides them for named owners, so
+the default golden render stays byte-identical.
+
+The LLM request-router certificate DNS defaults are also translated for named
+owners when the operator has not supplied custom DNS names. This keeps the
+fail-closed PKI check from Phase 3 while preventing the default
+`llm-request-router.nvcf.svc.cluster.local` DNS names from leaking into a named
+render.
+
+A focused `service-dns-named-isolation.sh` test temporarily unblocks named mode
+in a copied stack, renders the affected charts, checks the important derived
+values directly, and then runs the Phase 4C object-level isolation checker over
+the rendered manifests. After this phase, the service-DNS class passes that
+checker in the full named render.
+
+Named mode intentionally remains fail-closed after this phase. OpenBao injector
+cluster-scoped objects, ClusterIssuer identity, and the final shared-prerequisite
+allowlist still need to pass before the object-level block can be removed.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |

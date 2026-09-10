@@ -144,6 +144,9 @@ grpcproxy:
     # Example: "http://otel.tracing-system.svc.cluster.local:8282"
     OTEL_EXPORTER_OTLP_ENDPOINT: ""
 
+  vault:
+    audience: http://openbao-server.vault-system.svc.cluster.local:8200
+
   # Service configuration
   service:
     type: ClusterIP  # Options: ClusterIP, NodePort, LoadBalancer, ExternalName
