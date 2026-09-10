@@ -5,7 +5,10 @@
 set -eu
 
 NETTY_VERSION=4.1.137.Final
-MAVEN_CENTRAL_URL=https://repo1.maven.org/maven2/io/netty
+# MAVEN_REPOSITORY_BASE lets a release build route the downloads through a
+# caching repository manager; the artifact paths and checksums do not change.
+MAVEN_CENTRAL_URL=${MAVEN_REPOSITORY_BASE:-https://repo1.maven.org/maven2}
+MAVEN_CENTRAL_URL=${MAVEN_CENTRAL_URL%/}/io/netty
 NETTY_ARTIFACTS='netty-buffer f474b14c7734f15e0540394cb6f39d67777b7581a42919e4ac89d253d4efd929
 netty-codec 9987b6a660b0a6b1f0d791485dae33180b3d1c63687c006fe6d3fd025e9e3798
 netty-codec-http 0535bb5a736472bef5c948d15eb273c4ab9f796656fc7c5d6b982ad92bddbd49
