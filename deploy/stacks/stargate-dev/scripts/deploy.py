@@ -172,7 +172,9 @@ def validate_deployment_inputs(config: dict, phase: str) -> None:
 
         router = config.get("router", {})
         if not router.get("hostname") or router["hostname"].endswith(".invalid"):
-            raise DeploymentError("router.hostname is still a static-render placeholder")
+            raise DeploymentError(
+                "router.hostname is still a static-render placeholder"
+            )
         if not router.get("tlsSecretName"):
             raise DeploymentError("router.tlsSecretName is required")
         if not router.get("loadBalancerSourceRanges"):
@@ -366,9 +368,7 @@ def verify_chart_secret_values(config: dict, credentials: dict, phase: str) -> N
     namespace = config["namespace"]
     stargate_context = config["clusters"]["stargate"]["kubeContext"]
     if phase == "stargate":
-        auth = get_secret(
-            stargate_context, namespace, "stargate-dev-auth-credentials"
-        )
+        auth = get_secret(stargate_context, namespace, "stargate-dev-auth-credentials")
         if auth is not None:
             actual_config = json.loads(decoded_secret_data(auth, "config.json"))
             expected_config = {
@@ -399,10 +399,7 @@ def verify_chart_secret_values(config: dict, credentials: dict, phase: str) -> N
         worker = get_secret(mockdc["kubeContext"], namespace, name)
         if worker is None:
             continue
-        if (
-            decoded_secret_data(worker, "token").decode()
-            != credentials["workerToken"]
-        ):
+        if decoded_secret_data(worker, "token").decode() != credentials["workerToken"]:
             raise DeploymentError(
                 f"existing {name} Secret does not match the credential bundle"
             )

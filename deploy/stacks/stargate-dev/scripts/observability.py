@@ -56,9 +56,7 @@ def wait_for_amp(region: str, workspace_id: str) -> dict:
 
 
 def ensure_amp(region: str) -> dict:
-    workspaces = aws("amp", "list-workspaces", "--region", region).get(
-        "workspaces", []
-    )
+    workspaces = aws("amp", "list-workspaces", "--region", region).get("workspaces", [])
     matches = [
         workspace for workspace in workspaces if workspace.get("alias") == AMP_ALIAS
     ]
@@ -119,8 +117,7 @@ def writer_trust_policy(config: dict, account: str) -> dict:
                     "StringEquals": {
                         f"{issuer}:aud": "sts.amazonaws.com",
                         f"{issuer}:sub": (
-                            f"system:serviceaccount:{namespace}:"
-                            f"{ALLOY_SERVICE_ACCOUNT}"
+                            f"system:serviceaccount:{namespace}:{ALLOY_SERVICE_ACCOUNT}"
                         ),
                     }
                 },
