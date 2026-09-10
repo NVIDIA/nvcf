@@ -846,14 +846,9 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	infraObjs = append(infraObjs, utilsPod)
 
 	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-		cds, refs, err := nvcfdra.ComputeDomainsForWorkload(workloadObjs...)
-		if err != nil {
-			return reconcile.Result{}, reconcile.TerminalError(fmt.Errorf("compute NVLink ComputeDomains: %w", err))
-		}
-		for _, cd := range cds {
+		for _, cd := range nvcfdra.ComputeDomainsForWorkload(workloadObjs...) {
 			infraObjs = append(infraObjs, cd)
 		}
-		metaInput.NVLinkComputeDomains = refs
 	}
 
 	// Create the miniservice metadata ConfigMap before any objects are created
@@ -1011,6 +1006,23 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 	}
 
 	log.Info("Updating MiniService workload", "revision", ms.Status.Revision)
+
+	// A values update can introduce a required-nvlink-domain-index that did not exist at
+	// install time. The webhook derives the ComputeDomain name from that value and will
+	// attach a claim for it, so the object has to exist or the pod is admitted referencing a
+	// ResourceClaimTemplate that is never created and stays Pending forever. applyInfra is
+	// create-if-absent, so re-applying the unchanged domains is a no-op.
+	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
+		cdObjs := make([]client.Object, 0)
+		for _, cd := range nvcfdra.ComputeDomainsForWorkload(workloadObjs...) {
+			cdObjs = append(cdObjs, cd)
+		}
+		infraMutator := newGenericMutator(r.FeatureFlagFetcher, ms, icmsReq,
+			r.ClusterRegion, r.ClusterName, functionName, taskName, true)
+		if err := r.applyInfra(ctx, ms, nil, infraMutator, cdObjs...); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
 
 	// Update the resources status in the MiniService status.
 	updateResourcesStatus(ms, resources)

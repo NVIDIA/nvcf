@@ -45,23 +45,34 @@ var (
 	// ModelCacheEncryption encrypts a durable model cache on any driver whose
 	// catalog entry lists encryptionSupported. NVMeshEncryption remains the
 	// NVMesh-only predecessor.
-	ModelCacheEncryption          = newFeatureFlag("ModelCacheEncryption", newBool(false))
-	PeriodicInstanceStatusUpdate  = newFeatureFlag("PeriodicInstanceStatusUpdate", newBool(true))
-	HelmRBACEnforcement           = newFeatureFlag("HelmRBACEnforcement", newBool(true))
-	DynamicGPUDiscovery           = newFeatureFlag("DynamicGPUDiscovery", newBool(true))
-	MultipleGPUTypesAllowed       = newFeatureFlag("MultipleGPUTypesAllowed", newBool(true))
-	UniformInstanceLabels         = newFeatureFlag("UniformInstanceLabels", newBool(true))
-	AutoPurgeDegradedWorkers      = newFeatureFlag("AutoPurgeDegradedWorkers", newBool(true))
-	HelmPostRender                = newFeatureFlag("HelmPostRender", newBool(true))
-	HelmSharedStorage             = newHelmSharedStorageFeatureFlag("HelmSharedStorage", true)
-	ClusterTargeting              = newFeatureFlag("ClusterTargeting", newBool(true))
-	HelmResourceConstraints       = newFeatureFlag("HelmResourceConstraints", newBool(true))
-	HelmAllowCPUNodes             = newFeatureFlag("HelmAllowCPUNodes", newBool(false))
-	BinPackTenantWorkloads        = newFeatureFlag("BinPackTenantWorkloads", newBool(false))
-	GXCache                       = newFeatureFlag("GXCache", newBool(false))
-	LowLatencyStreaming           = newFeatureFlag("LowLatencyStreaming", newBool(true))
-	UseFunctionDeploymentStages   = newFeatureFlag("UseFunctionDeploymentStages", newBool(false))
-	PVCRebind                     = newFeatureFlag("PVCRebind", newBool(false))
+	ModelCacheEncryption         = newFeatureFlag("ModelCacheEncryption", newBool(false))
+	PeriodicInstanceStatusUpdate = newFeatureFlag("PeriodicInstanceStatusUpdate", newBool(true))
+	HelmRBACEnforcement          = newFeatureFlag("HelmRBACEnforcement", newBool(true))
+	DynamicGPUDiscovery          = newFeatureFlag("DynamicGPUDiscovery", newBool(true))
+	MultipleGPUTypesAllowed      = newFeatureFlag("MultipleGPUTypesAllowed", newBool(true))
+	UniformInstanceLabels        = newFeatureFlag("UniformInstanceLabels", newBool(true))
+	AutoPurgeDegradedWorkers     = newFeatureFlag("AutoPurgeDegradedWorkers", newBool(true))
+	HelmPostRender               = newFeatureFlag("HelmPostRender", newBool(true))
+	HelmSharedStorage            = newHelmSharedStorageFeatureFlag("HelmSharedStorage", true)
+	ClusterTargeting             = newFeatureFlag("ClusterTargeting", newBool(true))
+	HelmResourceConstraints      = newFeatureFlag("HelmResourceConstraints", newBool(true))
+	HelmAllowCPUNodes            = newFeatureFlag("HelmAllowCPUNodes", newBool(false))
+	BinPackTenantWorkloads       = newFeatureFlag("BinPackTenantWorkloads", newBool(false))
+	GXCache                      = newFeatureFlag("GXCache", newBool(false))
+	LowLatencyStreaming          = newFeatureFlag("LowLatencyStreaming", newBool(true))
+	UseFunctionDeploymentStages  = newFeatureFlag("UseFunctionDeploymentStages", newBool(false))
+	PVCRebind                    = newFeatureFlag("PVCRebind", newBool(false))
+	// NVLinkGateOnDomainIndex makes the required-nvlink-domain-index annotation the
+	// gate for IMEX channel allocation: only pods carrying it receive a channel claim.
+	//
+	// It defaults off because the annotation is not yet a reliable proxy for "needs
+	// multi-node NVLink". Workloads that omit it still receive preferred (weight 100)
+	// clique affinity, which in practice co-locates them, so their channels are load
+	// bearing today. Enabling this on a cluster whose charts do not set the annotation
+	// removes IMEX from those workloads, and the failure is silent until NCCL init.
+	//
+	// Turn it on per-cluster only once every chart deployed there sets the annotation.
+	NVLinkGateOnDomainIndex       = newFeatureFlag("NVLinkGateOnDomainIndex", newBool(false))
 	HelmInternalPersistentStorage = newHelmInternalPersistentStorageFeatureFlag(false)
 	MultiNodeWorkloads            = newFeatureFlag("MultiNodeWorkloads", newBool(true))
 	BYOObservability              = newFeatureFlag("BYOObservability", newBool(false))

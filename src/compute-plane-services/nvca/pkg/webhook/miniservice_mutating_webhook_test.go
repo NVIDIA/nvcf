@@ -20,6 +20,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -1466,50 +1467,63 @@ func TestMiniserviceMutatingWebhook_MutateNVLinkDRA(t *testing.T) {
 			},
 		}
 	}
-	wh := &miniserviceMutatingWebhook{}
-
-	t.Run("no annotation gets preferred affinity, no claim", func(t *testing.T) {
-		pod := newGPUPod(nil)
-		wh.mutateNVLinkDRA("ns-key", nvcatypes.MiniserviceMetadata{}, pod)
-
-		assert.Empty(t, pod.Spec.ResourceClaims)
-		assert.Empty(t, pod.Spec.Containers[0].Resources.Claims)
-		require.NotNil(t, pod.Spec.Affinity)
-		require.NotNil(t, pod.Spec.Affinity.PodAffinity)
-		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
-		assert.Empty(t, pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
-	})
-
-	t.Run("annotation with matching ref gets claim and required affinity", func(t *testing.T) {
-		pod := newGPUPod(map[string]string{nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0"})
-		meta := nvcatypes.MiniserviceMetadata{
-			NVLinkComputeDomains: map[string]nvcfdra.ComputeDomainRef{
-				"0": {ComputeDomainName: "nvcf-cd-index-1", ChannelName: "nvcf-cd-channel-1"},
-			},
+	newWH := func(gate bool) *miniserviceMutatingWebhook {
+		wh := &miniserviceMutatingWebhook{fff: &featureflagmock.Fetcher{}}
+		if gate {
+			wh.fff = &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.NVLinkGateOnDomainIndex},
+			}
 		}
-		wh.mutateNVLinkDRA("ns-key", meta, pod)
+		return wh
+	}
+
+	t.Run("gate off: unannotated pod keeps the default domain claim", func(t *testing.T) {
+		// Default behaviour must match pre-gating NVCA exactly, or every unannotated
+		// workload silently loses IMEX on rollout.
+		pod := newGPUPod(nil)
+		newWH(false).mutateNVLinkDRA("ns-key", pod)
 
 		require.Len(t, pod.Spec.ResourceClaims, 1)
-		assert.Equal(t, "nvcf-cd-index-1", pod.Spec.ResourceClaims[0].Name)
+		assert.Equal(t, "nvcf-cd-index-0", pod.Spec.ResourceClaims[0].Name)
 		require.NotNil(t, pod.Spec.ResourceClaims[0].ResourceClaimTemplateName)
-		assert.Equal(t, "nvcf-cd-channel-1", *pod.Spec.ResourceClaims[0].ResourceClaimTemplateName)
-		require.Len(t, pod.Spec.Containers[0].Resources.Claims, 1)
-		assert.Equal(t, "nvcf-cd-index-1", pod.Spec.Containers[0].Resources.Claims[0].Name)
-
-		require.NotNil(t, pod.Spec.Affinity)
-		require.NotNil(t, pod.Spec.Affinity.PodAffinity)
-		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
-		assert.Empty(t, pod.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
+		assert.Equal(t, "nvcf-cd-channel-0", *pod.Spec.ResourceClaims[0].ResourceClaimTemplateName)
+		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
 	})
 
-	t.Run("annotation without matching ref gets required affinity but no claim", func(t *testing.T) {
-		pod := newGPUPod(map[string]string{nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0"})
-		wh.mutateNVLinkDRA("ns-key", nvcatypes.MiniserviceMetadata{}, pod)
+	t.Run("gate on: unannotated pod gets no claim", func(t *testing.T) {
+		pod := newGPUPod(nil)
+		newWH(true).mutateNVLinkDRA("ns-key", pod)
 
 		assert.Empty(t, pod.Spec.ResourceClaims)
 		assert.Empty(t, pod.Spec.Containers[0].Resources.Claims)
-		require.NotNil(t, pod.Spec.Affinity)
-		require.NotNil(t, pod.Spec.Affinity.PodAffinity)
-		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
+		assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
+	})
+
+	for _, gate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("annotated pod claims its own domain (gate=%v)", gate), func(t *testing.T) {
+			// The name is derived from the annotation value, so it matches what the
+			// reconciler created without any shared state.
+			pod := newGPUPod(map[string]string{nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0"})
+			newWH(gate).mutateNVLinkDRA("ns-key", pod)
+
+			want := nvcfdra.ComputeDomainForIndex("0")
+			require.Len(t, pod.Spec.ResourceClaims, 1)
+			assert.Equal(t, want.Name, pod.Spec.ResourceClaims[0].Name)
+			assert.Equal(t, want.Spec.Channel.ResourceClaimTemplate.Name,
+				*pod.Spec.ResourceClaims[0].ResourceClaimTemplateName)
+			require.Len(t, pod.Spec.Containers[0].Resources.Claims, 1)
+			assert.NotEmpty(t, pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
+			assert.Empty(t, pod.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
+		})
+	}
+
+	t.Run("annotated pod never gets required affinity without a claim", func(t *testing.T) {
+		// The old map-miss path produced exactly that: pinned to one clique with no
+		// channel, which fails at NCCL init with nothing in the operator logs.
+		pod := newGPUPod(map[string]string{nvcfdra.RequiredNVLinkDomainIndexAnnotation: "unmapped"})
+		newWH(true).mutateNVLinkDRA("ns-key", pod)
+
+		assert.NotEmpty(t, pod.Spec.ResourceClaims,
+			"a pod pinned by required affinity must always carry its channel claim")
 	})
 }

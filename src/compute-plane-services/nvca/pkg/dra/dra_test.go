@@ -22,11 +22,10 @@ import (
 
 	nvresourcev1beta1 "github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1"
 	"github.com/stretchr/testify/assert"
-	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -297,480 +296,135 @@ func TestNVLinkDomainSchedulingParametersNarrowRequiredNodeAffinity(t *testing.T
 	}
 }
 
-func TestTransformNVLinkOptimizedDRAObjects(t *testing.T) {
-	type spec struct {
-		name       string
-		objs       []client.Object
-		keyToHash  string
-		expObjs    []client.Object
-		expDRAObjs []client.Object
-		expError   string
+func TestComputeDomainsForWorkload(t *testing.T) {
+	podWith := func(idx *string) client.Object {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "w",
+			Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{
+				corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("4"),
+			}},
+		}}}}
+		if idx != nil {
+			p.Annotations = map[string]string{RequiredNVLinkDomainIndexAnnotation: *idx}
+		}
+		return p
+	}
+	names := func(cds []*nvresourcev1beta1.ComputeDomain) []string {
+		out := make([]string, 0, len(cds))
+		for _, cd := range cds {
+			out = append(out, cd.Name)
+		}
+		return out
 	}
 
-	nvlinkDomainPartitionKeyFoo := "x2c26b46b68ffc68ff9x"
-	nvlinkDomainPartitionKeyFooIdx0 := "xbb4eca334f61af3b67x"
-	// nvlinkDomainPartitionKeyFooIdx1 is the partition key for the second normalized NVLink
-	// domain index (2) when two distinct required-nvlink-domain-index values are present;
-	// computed directly rather than hardcoded since it only arises in the multi-index test case.
-	nvlinkDomainPartitionKeyFooIdx1 := newPartitionKey([]byte("foo2"))
-	newDefaultPrefAffinity := func() *corev1.Affinity {
-		return &corev1.Affinity{
-			PodAffinity: &corev1.PodAffinity{
-				PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
-					Weight: 100,
-					PodAffinityTerm: corev1.PodAffinityTerm{
-						LabelSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{
-								{
-									Key:      NVLinkDomainPartitionLabel,
-									Operator: metav1.LabelSelectorOpExists,
-								},
-								{
-									Key:      NVLinkDomainPartitionLabel,
-									Operator: metav1.LabelSelectorOpIn,
-									Values:   []string{nvlinkDomainPartitionKeyFoo},
-								},
-							},
-						},
-						TopologyKey: GPUCliqueNodeLabel,
-					},
-				}},
-			},
-			NodeAffinity: &corev1.NodeAffinity{
-				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-					NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-						MatchExpressions: []corev1.NodeSelectorRequirement{{
-							Key:      GPUCliqueNodeLabel,
-							Operator: corev1.NodeSelectorOpExists,
-						}},
-					}},
-				},
-			},
-		}
-	}
-	staticGPUResourceKey := gpuResourceKeys[0]
-	defaultGPULimit := resource.MustParse("2")
+	t.Run("no annotation still yields the default domain", func(t *testing.T) {
+		// Regression guard: returning nothing here strips the IMEX channel from every
+		// unannotated workload, and removes the name an older agent claims on rollback.
+		cds := ComputeDomainsForWorkload(podWith(nil))
+		assert.Equal(t, []string{defaultComputeDomainName}, names(cds))
+	})
 
-	newDefaultPodSpec := func() corev1.PodSpec {
-		return corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: "foo",
-				Resources: corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-				},
-			}},
-			InitContainers: []corev1.Container{{
-				Name: "foo-init",
-				Resources: corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-				},
-			}},
-		}
-	}
-	// newDefaultExpPodSpec is the expected spec for a GPU pod with no required-domain-index
-	// annotation: it only gets preferred NVLink domain affinity, never a ComputeDomain claim,
-	// since it never declared a cross-node NVLink requirement.
-	newDefaultExpPodSpec := func() corev1.PodSpec {
-		return corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: "foo",
-				Resources: corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-				},
-			}},
-			InitContainers: []corev1.Container{{
-				Name: "foo-init",
-				Resources: corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-				},
-			}},
-			Affinity: newDefaultPrefAffinity(),
-		}
-	}
-	newDefaultExpBinpackObjectMetadata := func() metav1.ObjectMeta {
-		return metav1.ObjectMeta{
-			Labels: map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFoo},
-		}
-	}
-	// newExpReqPodSpec is the expected spec for a GPU pod with a required-domain-index
-	// annotation: it gets a claim on the ComputeDomain provisioned for its normalized index,
-	// plus required (not preferred) NVLink domain affinity keyed off partitionKey.
-	newExpReqPodSpec := func(cd *nvresourcev1beta1.ComputeDomain, partitionKey string) corev1.PodSpec {
-		channelName := cd.Spec.Channel.ResourceClaimTemplate.Name
-		return corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: "foo",
-				Resources: corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-					Claims: []corev1.ResourceClaim{{
-						Name: cd.Name,
-					}},
-				},
-			}},
-			InitContainers: []corev1.Container{{
-				Name: "foo-init",
-				Resources: corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-					Claims: []corev1.ResourceClaim{{
-						Name: cd.Name,
-					}},
-				},
-			}},
-			ResourceClaims: []corev1.PodResourceClaim{{
-				Name:                      cd.Name,
-				ResourceClaimTemplateName: &channelName,
-			}},
-			Affinity: &corev1.Affinity{
-				PodAffinity: &corev1.PodAffinity{
-					RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-						LabelSelector: &metav1.LabelSelector{
-							MatchExpressions: []metav1.LabelSelectorRequirement{
-								{
-									Key:      NVLinkDomainPartitionLabel,
-									Operator: metav1.LabelSelectorOpExists,
-								},
-								{
-									Key:      NVLinkDomainPartitionLabel,
-									Operator: metav1.LabelSelectorOpIn,
-									Values:   []string{partitionKey},
-								},
-							},
-						},
-						TopologyKey: GPUCliqueNodeLabel,
-					}},
-				},
-				NodeAffinity: &corev1.NodeAffinity{
-					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-						NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-							MatchExpressions: []corev1.NodeSelectorRequirement{{
-								Key:      GPUCliqueNodeLabel,
-								Operator: corev1.NodeSelectorOpExists,
-							}},
-						}},
-					},
-				},
-			},
-		}
-	}
+	t.Run("annotated workload gets the default domain plus its own", func(t *testing.T) {
+		idx := "0"
+		cds := ComputeDomainsForWorkload(podWith(&idx))
+		require.Len(t, cds, 2)
+		assert.Equal(t, defaultComputeDomainName, cds[0].Name)
+		assert.Equal(t, ComputeDomainForIndex("0").Name, cds[1].Name)
+	})
 
-	for _, tt := range []spec{
-		{
-			name:     "no key",
-			expError: "key to partition NVLink domains is empty",
-		},
-		{
-			name: "single pod",
-			objs: []client.Object{
-				&corev1.Pod{
-					Spec: newDefaultPodSpec(),
-				},
-			},
-			keyToHash: "foo",
-			expObjs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-					Spec:       newDefaultExpPodSpec(),
-				},
-			},
-		},
-		{
-			name: "cpu pod",
-			objs: []client.Object{
-				&corev1.Pod{
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{{
-							Name: "foo",
-							Resources: corev1.ResourceRequirements{
-								Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
-							},
-						}},
-					},
-				},
-			},
-			keyToHash: "foo",
-			expObjs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{{
-							Name: "foo",
-							Resources: corev1.ResourceRequirements{
-								Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
-							},
-						}},
-						Affinity: newDefaultPrefAffinity(),
-					},
-				},
-			},
-		},
-		{
-			name: "zero gpu pod",
-			objs: []client.Object{
-				&corev1.Pod{
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{{
-							Name: "foo",
-							Resources: corev1.ResourceRequirements{
-								Limits: corev1.ResourceList{staticGPUResourceKey: resource.MustParse("0")},
-							},
-						}},
-					},
-				},
-			},
-			keyToHash: "foo",
-			expObjs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{{
-							Name: "foo",
-							Resources: corev1.ResourceRequirements{
-								Limits: corev1.ResourceList{staticGPUResourceKey: resource.MustParse("0")},
-							},
-						}},
-						Affinity: newDefaultPrefAffinity(),
-					},
-				},
-			},
-		},
-		{
-			name:      "all types",
-			keyToHash: "foo",
-			objs: []client.Object{
-				&corev1.Pod{
-					Spec: newDefaultPodSpec(),
-				},
-				&appsv1.Deployment{
-					Spec: appsv1.DeploymentSpec{
-						Template: corev1.PodTemplateSpec{
-							Spec: newDefaultPodSpec(),
-						},
-					},
-				},
-				&appsv1.ReplicaSet{
-					Spec: appsv1.ReplicaSetSpec{
-						Template: corev1.PodTemplateSpec{
-							Spec: newDefaultPodSpec(),
-						},
-					},
-				},
-				&appsv1.StatefulSet{
-					Spec: appsv1.StatefulSetSpec{
-						Template: corev1.PodTemplateSpec{
-							Spec: newDefaultPodSpec(),
-						},
-					},
-				},
-				&batchv1.Job{
-					Spec: batchv1.JobSpec{
-						Template: corev1.PodTemplateSpec{
-							Spec: newDefaultPodSpec(),
-						},
-					},
-				},
-				&batchv1.CronJob{
-					Spec: batchv1.CronJobSpec{
-						JobTemplate: batchv1.JobTemplateSpec{
-							Spec: batchv1.JobSpec{
-								Template: corev1.PodTemplateSpec{
-									Spec: newDefaultPodSpec(),
+	t.Run("distinct indices get distinct domains", func(t *testing.T) {
+		a, b := "0", "1"
+		cds := ComputeDomainsForWorkload(podWith(&a), podWith(&b))
+		assert.Len(t, cds, 3)
+		assert.NotEqual(t, ComputeDomainForIndex("0").Name, ComputeDomainForIndex("1").Name)
+	})
+
+	t.Run("naming is independent of which other indices are present", func(t *testing.T) {
+		// A rank-based name would shift when another value joins the render, renaming a
+		// domain out from under pods that already claim it.
+		one := "1"
+		zero := "0"
+		alone := ComputeDomainsForWorkload(podWith(&one))
+		together := ComputeDomainsForWorkload(podWith(&zero), podWith(&one))
+		assert.Contains(t, names(alone), ComputeDomainForIndex("1").Name)
+		assert.Contains(t, names(together), ComputeDomainForIndex("1").Name)
+	})
+
+	t.Run("non-numeric index is accepted, not a terminal error", func(t *testing.T) {
+		// The value is tenant-authored; it must never be able to fail an install.
+		for _, raw := range []string{"prefill", "1e3", " 0", "2147483648"} {
+			cds := ComputeDomainsForWorkload(podWith(&raw))
+			assert.Len(t, cds, 2, "raw=%q", raw)
+		}
+	})
+
+	t.Run("unstructured operator CRD is searched for nested annotations", func(t *testing.T) {
+		// Grove PodCliqueSet / DynamoGraphDeployment decode to unstructured and hold their
+		// pod templates at operator-defined paths.
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "grove.io/v1alpha1",
+			"kind":       "PodCliqueSet",
+			"metadata":   map[string]any{"name": "x"},
+			"spec": map[string]any{
+				"template": map[string]any{
+					"cliques": []any{
+						map[string]any{
+							"spec": map[string]any{
+								"podSpec": map[string]any{},
+								"annotations": map[string]any{
+									RequiredNVLinkDomainIndexAnnotation: "7",
 								},
 							},
 						},
 					},
 				},
 			},
-			expObjs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-					Spec:       newDefaultExpPodSpec(),
-				},
-				&appsv1.Deployment{
-					Spec: appsv1.DeploymentSpec{
-						Template: corev1.PodTemplateSpec{
-							ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-							Spec:       newDefaultExpPodSpec(),
-						},
-					},
-				},
-				&appsv1.ReplicaSet{
-					Spec: appsv1.ReplicaSetSpec{
-						Template: corev1.PodTemplateSpec{
-							ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-							Spec:       newDefaultExpPodSpec(),
-						},
-					},
-				},
-				&appsv1.StatefulSet{
-					Spec: appsv1.StatefulSetSpec{
-						Template: corev1.PodTemplateSpec{
-							ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-							Spec:       newDefaultExpPodSpec(),
-						},
-					},
-				},
-				&batchv1.Job{
-					Spec: batchv1.JobSpec{
-						Template: corev1.PodTemplateSpec{
-							ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-							Spec:       newDefaultExpPodSpec(),
-						},
-					},
-				},
-				&batchv1.CronJob{
-					Spec: batchv1.CronJobSpec{
-						JobTemplate: batchv1.JobTemplateSpec{
-							Spec: batchv1.JobSpec{
-								Template: corev1.PodTemplateSpec{
-									ObjectMeta: newDefaultExpBinpackObjectMetadata(),
-									Spec:       newDefaultExpPodSpec(),
-								},
-							},
-						},
-					},
-				},
+		}}
+		cds := ComputeDomainsForWorkload(u)
+		require.Len(t, cds, 2)
+		assert.Equal(t, ComputeDomainForIndex("7").Name, cds[1].Name)
+	})
+
+	t.Run("a CRD's own top-level annotations are not treated as a pod template", func(t *testing.T) {
+		u := &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{
+				"annotations": map[string]any{RequiredNVLinkDomainIndexAnnotation: "9"},
 			},
-		},
-		{
-			name: "single pod with req",
-			objs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"},
-					},
-					Spec: newDefaultPodSpec(),
-				},
-			},
-			keyToHash: "foo",
-			expObjs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels:      map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFooIdx0},
-						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"},
-					},
-					Spec: newExpReqPodSpec(computeDomainForIndex(1), nvlinkDomainPartitionKeyFooIdx0),
-				},
-			},
-			expDRAObjs: []client.Object{
-				computeDomainForIndex(1),
-			},
-		},
-		{
-			name: "two required indices get distinct ComputeDomains",
-			objs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"},
-					},
-					Spec: newDefaultPodSpec(),
-				},
-				&corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "1"},
-					},
-					Spec: newDefaultPodSpec(),
-				},
-			},
-			keyToHash: "foo",
-			expObjs: []client.Object{
-				&corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels:      map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFooIdx0},
-						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"},
-					},
-					Spec: newExpReqPodSpec(computeDomainForIndex(1), nvlinkDomainPartitionKeyFooIdx0),
-				},
-				&corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels:      map[string]string{NVLinkDomainPartitionLabel: nvlinkDomainPartitionKeyFooIdx1},
-						Annotations: map[string]string{RequiredNVLinkDomainIndexAnnotation: "1"},
-					},
-					Spec: newExpReqPodSpec(computeDomainForIndex(2), nvlinkDomainPartitionKeyFooIdx1),
-				},
-			},
-			expDRAObjs: []client.Object{
-				computeDomainForIndex(1),
-				computeDomainForIndex(2),
-			},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			gotObjs, gotDRAObjs, err := TransformNVLinkOptimizedDRAObjects(tt.objs, tt.keyToHash)
-			if tt.expError != "" {
-				assert.EqualError(t, err, tt.expError)
-			} else if assert.NoError(t, err) && assert.Len(t, gotObjs, len(tt.expObjs)) && assert.Len(t, gotDRAObjs, len(tt.expDRAObjs)) {
-				for i := range tt.expObjs {
-					assert.Equal(t, tt.expObjs[i], gotObjs[i])
-				}
-				for i := range tt.expDRAObjs {
-					assert.Equal(t, tt.expDRAObjs[i], gotDRAObjs[i])
-				}
-			}
-		})
-	}
+			"spec": map[string]any{},
+		}}
+		assert.Equal(t, []string{defaultComputeDomainName}, names(ComputeDomainsForWorkload(u)))
+	})
 }
 
-func TestComputeDomainsForWorkload(t *testing.T) {
-	staticGPUResourceKey := gpuResourceKeys[0]
-	defaultGPULimit := resource.MustParse("2")
-	newGPUPod := func(annos map[string]string) *corev1.Pod {
-		return &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Annotations: annos},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name: "foo",
-					Resources: corev1.ResourceRequirements{
-						Limits: corev1.ResourceList{staticGPUResourceKey: defaultGPULimit},
-					},
-				}},
+// TestComputeDomainsForWorkload_MultiTemplateUnstructured guards the disaggregated shape: one
+// operator CRD carrying several pod templates with different domain indices. Returning only the
+// first would leave the other groups' Pods claiming a ResourceClaimTemplate nobody created,
+// which strands them Pending with no diagnostic.
+func TestComputeDomainsForWorkload_MultiTemplateUnstructured(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "grove.io/v1alpha1",
+		"kind":       "PodCliqueSet",
+		"metadata":   map[string]any{"name": "disagg"},
+		"spec": map[string]any{
+			"template": map[string]any{
+				"cliques": []any{
+					map[string]any{"spec": map[string]any{
+						"annotations": map[string]any{RequiredNVLinkDomainIndexAnnotation: "0"},
+					}},
+					map[string]any{"spec": map[string]any{
+						"annotations": map[string]any{RequiredNVLinkDomainIndexAnnotation: "1"},
+					}},
+				},
 			},
-		}
+		},
+	}}
+	got := make([]string, 0)
+	for _, cd := range ComputeDomainsForWorkload(u) {
+		got = append(got, cd.Name)
 	}
-
-	t.Run("no annotated objects yields no ComputeDomains", func(t *testing.T) {
-		cds, refs, err := ComputeDomainsForWorkload(newGPUPod(nil), newGPUPod(map[string]string{"other": "annotation"}))
-		assert.NoError(t, err)
-		assert.Nil(t, cds)
-		assert.Nil(t, refs)
-	})
-
-	t.Run("single index yields one ComputeDomain", func(t *testing.T) {
-		cds, refs, err := ComputeDomainsForWorkload(
-			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
-		)
-		assert.NoError(t, err)
-		if assert.Len(t, cds, 1) {
-			assert.Equal(t, computeDomainForIndex(1), cds[0])
-		}
-		assert.Equal(t, map[string]ComputeDomainRef{
-			"0": {ComputeDomainName: computeDomainForIndex(1).Name, ChannelName: computeDomainForIndex(1).Spec.Channel.ResourceClaimTemplate.Name},
-		}, refs)
-	})
-
-	t.Run("distinct indices yield distinct ComputeDomains", func(t *testing.T) {
-		cds, refs, err := ComputeDomainsForWorkload(
-			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
-			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "1"}),
-			newGPUPod(nil), // unannotated pod contributes nothing.
-		)
-		assert.NoError(t, err)
-		if assert.Len(t, cds, 2) {
-			assert.Equal(t, computeDomainForIndex(1), cds[0])
-			assert.Equal(t, computeDomainForIndex(2), cds[1])
-		}
-		assert.Equal(t, map[string]ComputeDomainRef{
-			"0": {ComputeDomainName: computeDomainForIndex(1).Name, ChannelName: computeDomainForIndex(1).Spec.Channel.ResourceClaimTemplate.Name},
-			"1": {ComputeDomainName: computeDomainForIndex(2).Name, ChannelName: computeDomainForIndex(2).Spec.Channel.ResourceClaimTemplate.Name},
-		}, refs)
-	})
-
-	t.Run("repeated raw index reuses the same ComputeDomain", func(t *testing.T) {
-		cds, refs, err := ComputeDomainsForWorkload(
-			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
-			newGPUPod(map[string]string{RequiredNVLinkDomainIndexAnnotation: "0"}),
-		)
-		assert.NoError(t, err)
-		assert.Len(t, cds, 1)
-		assert.Len(t, refs, 1)
-	})
+	assert.ElementsMatch(t, []string{
+		defaultComputeDomainName,
+		ComputeDomainForIndex("0").Name,
+		ComputeDomainForIndex("1").Name,
+	}, got)
 }

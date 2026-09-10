@@ -1682,7 +1682,9 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, nil)
+		// The default domain is always provisioned: it backs pods that declare no index,
+		// and it is the name an older agent claims unconditionally after a rollback.
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, []string{"nvcf-cd-index-0"})
 	})
 	t.Run("required domains", func(t *testing.T) {
 		helmObjs := []client.Object{
@@ -1799,7 +1801,11 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, []string{"nvcf-cd-index-1", "nvcf-cd-index-2"})
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, []string{
+			"nvcf-cd-index-0",
+			nvcfdra.ComputeDomainForIndex("0").Name,
+			nvcfdra.ComputeDomainForIndex("1").Name,
+		})
 	})
 }
 

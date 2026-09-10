@@ -329,7 +329,7 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 		if isCreate {
 			// NVLink DRA mutations for claims/scheduling.
 			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-				w.mutateNVLinkDRA(obj.GetNamespace(), meta, t)
+				w.mutateNVLinkDRA(obj.GetNamespace(), t)
 			}
 
 			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {
@@ -403,14 +403,18 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 // value present in the MiniService (meta.NVLinkComputeDomains) since a ComputeDomain represents
 // a single IMEX domain; the webhook only looks up the ComputeDomain for this pod's value, it
 // does not decide naming itself.
-func (w *miniserviceMutatingWebhook) mutateNVLinkDRA(key string, meta nvcatypes.MiniserviceMetadata, pod *corev1.Pod) {
+func (w *miniserviceMutatingWebhook) mutateNVLinkDRA(key string, pod *corev1.Pod) {
 	idxStr := pod.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]
+
+	// The ComputeDomain name is derived from the annotation value, which the reconciler
+	// used to name the object it created, so both sides agree without exchanging state.
+	if idxStr != "" || !w.fff.IsFeatureFlagEnabled(featureflag.NVLinkGateOnDomainIndex) {
+		nvcfdra.SetComputeDomainToGPUPodResourceClaims(nvcfdra.ComputeDomainForIndex(idxStr), pod)
+	}
+
 	if idxStr == "" {
 		nvcfdra.SetPreferredNVLinkDomainSchedulingParameters(key, pod)
 		return
-	}
-	if ref, ok := meta.NVLinkComputeDomains[idxStr]; ok {
-		nvcfdra.SetComputeDomainToGPUPodResourceClaims(nvcfdra.ComputeDomainFromRef(ref), pod)
 	}
 	nvcfdra.SetRequiredNVLinkDomainSchedulingParameters(key, idxStr, pod)
 }

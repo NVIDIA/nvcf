@@ -95,7 +95,11 @@ clusterProfiles:
       requests:
         nvidia.com/gpu: 4
         nvidia.com/mlnxnics: "4"
-    podAnnotations: {}
+    podAnnotations:
+      # Declares that every Pod of this worker group must be scheduled into one NVLink
+      # domain. On an NVLinkOptimized cluster this is also what provisions the
+      # ComputeDomain backing the group's IMEX channel.
+      dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
     securityContext:
       capabilities:
         add:

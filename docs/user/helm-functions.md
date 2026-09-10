@@ -112,15 +112,13 @@ domain.
 </Warning>
 
 <Note>
-This annotation is not optional legacy configuration. It is the signal NVCA
-uses to decide whether a Pod needs a `ComputeDomain` and IMEX channel claim
-at all. Set it even for charts that use KAI Scheduler or Grove topology
-constraints for scheduling, if the function needs cross-node NVLink memory
-sharing.
+This annotation is not optional legacy configuration. It selects which
+`ComputeDomain` a Pod's IMEX channel claim is drawn from. Set it whenever a
+group of Pods must share one NVLink domain, including for charts that use KAI
+Scheduler or Grove topology constraints for scheduling.
 </Note>
 
-For charts that do not use KAI Scheduler or Grove topology constraints, NVCA
-supports this Pod template annotation:
+NVCA supports this Pod template annotation:
 
 ```yaml
 spec:
@@ -140,8 +138,10 @@ value of the `nvidia.com/gpu.clique` node label and does not select a physical
 rack or clique:
 
 - Pods with the same value form one logical placement group.
-- Pods with different values get different logical group labels. This does not
-  require the groups to use different GPU cliques.
+- Pods with different values get different logical group labels, and each group
+  is backed by its own `ComputeDomain`. A `ComputeDomain` is a single IMEX
+  domain and cannot span two cliques, so groups that set different values must
+  be free to land in different cliques.
 - Pods without the annotation share a default logical group.
 
 ##### ComputeDomain allocation
@@ -153,17 +153,22 @@ whether a Pod needs a `ComputeDomain` and IMEX channel resource claim at all:
   into a specific NVLink domain, which only makes sense if it does cross-node
   NVLink memory sharing. NVCA allocates a `ComputeDomain` for that domain and
   attaches a channel resource claim to the Pod's GPU containers.
-- A Pod without the annotation has no declared NVLink domain requirement. Its
-  GPU peers can already land in different, unrelated NVLink domains, or on
-  nodes with no NVLink domain membership at all. NVCA does not attach a
-  `ComputeDomain` claim to it, since the claim would provide no functional
-  benefit to a Pod that never declared a cross-node NVLink requirement.
+- A Pod without the annotation is placed in a default group and receives a
+  claim on the function's default `ComputeDomain`. Its placement is
+  best-effort rather than guaranteed, but in practice preferred clique
+  affinity co-locates such groups, so the channel is still load bearing.
+
+  Cluster operators who have annotated every chart deployed to a cluster can
+  enable the `NVLinkGateOnDomainIndex` feature flag there. With it enabled,
+  Pods that declare no index receive no `ComputeDomain` claim, which lets
+  workloads smaller than a whole node bin-pack. Enabling it on a cluster whose
+  charts do not set the annotation removes IMEX from those workloads, and the
+  failure is silent until NCCL initialization.
 
 NVCA creates one `ComputeDomain` per distinct annotation value present in the
-function, not one shared `ComputeDomain` for the whole function. A
-`ComputeDomain` represents a single IMEX domain, so Pods that set different
-values are meant to join different, independent NVLink domains and each gets
-its own `ComputeDomain` and channel.
+function, plus the default `ComputeDomain`. A `ComputeDomain` represents a
+single IMEX domain, so Pods that set different values are meant to join
+different, independent NVLink domains and each gets its own domain and channel.
 
 On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
 
