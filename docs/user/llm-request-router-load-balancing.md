@@ -43,9 +43,8 @@ The example uses these settings in the `model-a` configuration:
 
 Replace `model-a` with the exact routed model name. For requests with an
 affinity key, this example keeps public buckets closed for 200 ms. Stargate can
-select an available affine candidate immediately. `cache_affinity_wait_ms` is
-a model configuration field; it works without a deadline header from the
-gateway.
+select an available affine candidate immediately. Set `cache_affinity_wait_ms`
+in the model configuration.
 
 The self-managed stack passes
 `addons.llm.requestRouter.loadBalancer` to the request-router chart as
@@ -99,10 +98,10 @@ through the Stargate and control-plane compatibility aliases.
 
 ## Keep router headers trusted
 
-The LLM API Gateway resolves router-facing headers from authenticated function
-metadata and the parsed request:
+The gateway can send the following headers to Stargate. Derive or validate
+their values from authenticated function metadata and the request.
 
-| Header | NVCF source |
+| Header | Gateway contract |
 | --- | --- |
 | `x-request-id` | Gateway request context. |
 | `x-routing-key` | Authorized function routing key. |
@@ -111,16 +110,9 @@ metadata and the parsed request:
 | `x-input-tokens` | Gateway input-token estimate. |
 | `x-cache-affinity-key` | Gateway session-affinity derivation. |
 | `x-priority` | Gateway-owned priority when one is resolved. |
-| `x-request-slo-ms` | Optional queue-SLO duration supplied by a trusted caller on native proxy paths. It controls queue admission and does not shorten the affinity wait. |
-| `x-max-wait-ms` | Optional routing wait limit supplied by a trusted caller on native proxy paths. It can expire before public buckets open. |
-| `x-stargate-max-wait-ms` | Optional proxy retry budget supplied by a trusted caller on native proxy paths. |
-
-The NVCF LLM API Gateway does not set `x-request-slo-ms`, `x-max-wait-ms`,
-or `x-stargate-max-wait-ms`. The chat-completions provider creates a new
-outbound request, so it does not forward these headers. Responses and
-embeddings use native proxy paths that can forward them when present. Those
-paths clone inbound headers, set resolved routing values, and remove
-caller-supplied `x-priority`.
+| `x-request-slo-ms` | Optional request SLO in milliseconds. Stargate uses it to interpolate queue-admission limits; it does not shorten the affinity wait. |
+| `x-max-wait-ms` | Optional routing wait limit in milliseconds from request arrival, capped at 60000. It can expire before public buckets open. |
+| `x-stargate-max-wait-ms` | Optional proxy retry budget in milliseconds. |
 
 An explicit `x-max-wait-ms` shorter than the configured affinity wait can end
 routing with HTTP `503` before public candidates become eligible. Set the
@@ -160,13 +152,11 @@ See the
 [Gateway API header modifier guide](https://gateway-api.sigs.k8s.io/guides/user-guides/http-header-modifier/)
 for filter semantics.
 
-The gateway derives `x-cache-affinity-key` for chat-completions and Responses
-requests when affinity applies. A request body can contain the raw
-`prompt_cache_key`, but only its SHA-256-derived value appears in the internal
-header. The router forwards the request body to the model backend. It does not
-derive affinity for embeddings. Do not set `require_cache_affinity_key` on a
-model that serves `/v1/embeddings` unless another trusted gateway supplies the
-key.
+For affinity routing, the gateway can supply `x-cache-affinity-key` as a stable
+session or prefix identifier. When using `prompt_cache_key`, place its
+SHA-256-derived value in the header. The request body can retain the raw value
+for the model backend. Enable `require_cache_affinity_key` only when the
+gateway supplies a key for every endpoint served by the model.
 
 Stargate returns HTTP `400` for a blank, unknown, or configured-but-unavailable
 `x-routing-method`. It also returns HTTP `400` when a required router header is
