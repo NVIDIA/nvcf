@@ -227,6 +227,29 @@ class CanonicalSuiteTests(unittest.TestCase):
         stop_forward.assert_called_once_with()
         start_forward.assert_called_once_with()
 
+    def test_port_forward_uses_websocket_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = object.__new__(LOADTEST.Campaign)
+            campaign.output = Path(directory)
+            campaign.args = SimpleNamespace(local_port=18000)
+            campaign.stargate_context = "stargate"
+            campaign.namespace = "test"
+            campaign.endpoint = "http://127.0.0.1:18000/v1"
+            campaign.port_forward = None
+            campaign.port_forward_log = None
+            with (
+                mock.patch.object(LOADTEST.socket, "socket"),
+                mock.patch.object(LOADTEST.socket, "create_connection"),
+                mock.patch.object(LOADTEST.subprocess, "Popen") as popen,
+                mock.patch.object(campaign, "log"),
+            ):
+                popen.return_value.poll.return_value = None
+                campaign.start_port_forward()
+
+            environment = popen.call_args.kwargs["env"]
+            self.assertEqual(environment["KUBECTL_PORT_FORWARD_WEBSOCKETS"], "true")
+            campaign.port_forward_log.close()
+
 
 if __name__ == "__main__":
     unittest.main()

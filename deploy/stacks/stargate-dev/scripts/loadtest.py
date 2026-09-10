@@ -428,6 +428,8 @@ class Campaign:
         self.port_forward_log = (self.output / "port-forward.log").open(
             "a", encoding="utf-8"
         )
+        environment = os.environ.copy()
+        environment["KUBECTL_PORT_FORWARD_WEBSOCKETS"] = "true"
         self.port_forward = subprocess.Popen(
             [
                 "kubectl",
@@ -443,6 +445,7 @@ class Campaign:
             ],
             stdout=self.port_forward_log,
             stderr=subprocess.STDOUT,
+            env=environment,
         )
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
