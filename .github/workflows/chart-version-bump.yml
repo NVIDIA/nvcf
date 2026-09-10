@@ -33,9 +33,16 @@ permissions:
   contents: read
 
 concurrency:
-  # One bump at a time. Several releases landing together refresh the same
-  # pull request rather than racing on the same files.
-  group: chart-version-bump
+  # Scoped per tag, not repo-wide. A shared group meant several releases
+  # landing together queued behind each other, and GitHub Actions keeps only
+  # the most recently queued run per group: earlier queued runs were
+  # silently cancelled before they ever started, dropping their bump with no
+  # error anywhere (seen for real on 2026-09-04, when a combined release
+  # dropped the encrypted-secret-store and cloud-functions bumps). Per-tag
+  # groups let simultaneous releases for different services run
+  # independently; the push retry below handles the remaining race on the
+  # shared bump branch.
+  group: chart-version-bump-${{ github.event.inputs.tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
@@ -214,7 +221,23 @@ jobs:
               -m "${subject}" \
               -m "Opened by the chart version bump workflow on release of ${TAG}."
           fi
-          git push --force-with-lease origin "${branch}"
+          # Retried, not a single shot: the branch is now shared across truly
+          # concurrent runs (see the concurrency block above), so another
+          # release's push can land between this job's checkout and its own
+          # push. force-with-lease turns that into a rejected push rather than
+          # a silent overwrite; re-fetching and rebasing recovers instead of
+          # dropping this bump on the floor.
+          attempt=0
+          until git push --force-with-lease origin "${branch}"; do
+            attempt=$((attempt + 1))
+            if [ "${attempt}" -ge 5 ]; then
+              echo "push kept losing the race against another release after ${attempt} attempts" >&2
+              exit 1
+            fi
+            echo "push raced with another release on the shared branch, retrying (attempt ${attempt})" >&2
+            git fetch origin "${branch}"
+            git rebase "origin/${branch}"
+          done
 
           # The pull request squashes to one commit, so its title has to carry
           # the largest step among every bump accumulated on the branch.
