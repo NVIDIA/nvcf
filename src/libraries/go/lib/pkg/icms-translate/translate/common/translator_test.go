@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// TestAddNVIDIAGPUNoScheduleToleration verifies that the GPU toleration is added only when absent.
 func TestAddNVIDIAGPUNoScheduleToleration(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -86,6 +87,22 @@ func TestAddNVIDIAGPUNoScheduleToleration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMutateUtilsContainer verifies the worker-utils metrics port and health probes.
+func TestMutateUtilsContainer(t *testing.T) {
+	container := corev1.Container{}
+
+	MutateUtilsContainer(&container)
+
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          WorkerMetricsPortName,
+		ContainerPort: UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
+	assert.NotNil(t, container.StartupProbe)
+	assert.NotNil(t, container.ReadinessProbe)
+	assert.NotNil(t, container.LivenessProbe)
 }
 
 func TestMergeTolerations(t *testing.T) {
