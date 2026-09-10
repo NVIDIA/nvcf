@@ -170,6 +170,12 @@ Legacy `shadowModelName`, `shadowModelNames`, `shadowPercentage`,
 supported. Their policy applies to every legacy shadow target. Do not combine
 the `shadows` field with legacy shadow fields on the same route.
 
+The schema rejects a route that has both forms, a shadow key spelled with any
+other capitalization, and a shadow target with an unknown field or a percentage
+outside 1 to 100. The gateway accepts other capitalizations of the route-level
+shadow keys, but the schema needs the exact spelling to tell the forms apart.
+`tests/chart-render/verify-shadow-schema.sh` exercises these rules.
+
 Both sections are empty by default. `vanityGateway.config.shadowMaxConcurrent`
 bounds concurrent shadow requests across all routes.
 
