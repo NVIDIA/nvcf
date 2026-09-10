@@ -72,6 +72,7 @@ management:
 icms:
   cloud-failure-detection-enabled: true
   air-gapped-mode-enabled: false
+  cluster-by-id-reads-enabled: true
   queue-per-instance-enabled: false
   instance-update-task-enabled: true
   queue-creation-per-instance-type-enabled: true
