@@ -414,7 +414,7 @@ struct zmq_msg_checkpoint {
 
 ## 6. State Dependencies
 
-```
+```text
 Context
   ├─ I/O Threads (N threads)
   │    ├─ Poller (epoll/kqueue)

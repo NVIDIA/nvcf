@@ -198,7 +198,7 @@ func TestQueueMessageProcessing(t *testing.T) {
 
 **Package structure:**
 
-```
+```text
 cmd/                    - Binary entry points (nvca, webhook-server, nvca-operator, nvca-self-managed, nvca-mirror)
 pkg/apis/               - CRD definitions (triggers codegen)
 pkg/apis/nvcf/v1/       - NVCFBackend CRD types
@@ -228,7 +228,7 @@ deployments/nvca-operator/ - Operator Helm chart
 
 **Commit format (Conventional Commits v1.0.0 required):**
 
-```
+```text
 <type>(<scope>): <short description>
 
 [optional body]
@@ -243,7 +243,7 @@ Closes NVCFCLUST-XXXX  # or use NO-REF if no ticket
 
 **Examples:**
 
-```
+```text
 feat(queue): add support for batch message processing
 fix(storage): handle PVC deletion race condition
 test(miniservice): add unit tests for chart reconciliation
@@ -251,7 +251,7 @@ test(miniservice): add unit tests for chart reconciliation
 
 **Breaking changes - add to footer:**
 
-```
+```text
 feat(api): change MiniService status structure
 
 BREAKING CHANGE: The status.conditions field has been restructured.

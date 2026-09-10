@@ -379,7 +379,7 @@ To customize a network policy:
 
    kubectl logs -n nvca-operator -l app.kubernetes.io/name=nvca-operator
 
-```
+```text
 
    You should see a message indicating successful patching:
    `configmap patched successfully`

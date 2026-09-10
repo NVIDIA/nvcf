@@ -851,7 +851,7 @@ This script bypasses normal cleanup procedures by removing finalizers. Always tr
 
 </Warning>
 
-```
+```bash
 #!/bin/bash
 # =============================================================================
 # force-cleanup-nvcf.sh - NVCA Component Removal Script

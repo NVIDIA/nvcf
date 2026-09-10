@@ -168,7 +168,7 @@ The proven legacy path freezes the source pod for the duration of the
 `a.criu.DumpRPC()` call (~150s). Phase 5c keeps this frozen window
 unchanged but moves the slow PVC write OFF the critical path:
 
-```
+```text
 T=0      agent: cuda Lock + Checkpoint + CRIU dump → local hostPath
 T=150s   agent: cuda Restore + Unlock + SIGUSR2  ← source pod RESUMES
 T=150s   agent: kicks off Backend.Put with Kind=erofs source

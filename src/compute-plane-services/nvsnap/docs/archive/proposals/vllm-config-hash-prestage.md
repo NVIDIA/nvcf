@@ -39,7 +39,7 @@ restore will resolve → identical `config_hash` → compile-cache hit at restor
 
 Injected by `cacheDirCapturePatches` alongside the existing `/opt/nvsnap` emptyDir:
 
-```
+```yaml
 initContainers:
 - name: nvsnap-prestage-model
   image: <same image as main container>     # has python + huggingface_hub
@@ -107,7 +107,7 @@ slower**. The weights are NOT pre-downloaded.
 Capture-side only (cachedir mode, no `restore-from`), gated on detecting a vLLM `--model
 <repo-id>`:
 
-```
+```yaml
 initContainers:
 - name: nvsnap-prestage-meta
   image: <same image as main container>             # has huggingface_hub already

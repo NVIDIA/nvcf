@@ -697,6 +697,55 @@ after
 	}
 }
 
+func TestReplaceMarkedBlockAcceptsCompactMDXMarkers(t *testing.T) {
+	got, changed, err := ReplaceMarkedBlock(`before
+{/*docs-version-sync:BEGIN sample*/}
+stale
+{/*docs-version-sync:END sample*/}
+after
+`, "sample", "fresh")
+	if err != nil {
+		t.Fatalf("ReplaceMarkedBlock failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("ReplaceMarkedBlock reported no change")
+	}
+	for _, want := range []string{
+		"{/*docs-version-sync:BEGIN sample*/}",
+		"fresh",
+		"{/*docs-version-sync:END sample*/}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("updated content missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFindRepoRootFromUsesPublicCheckoutSentinels(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "docs", "version-catalog", "main.yaml"), "version: 1\n")
+	writeFile(t, filepath.Join(repo, "tools", "docs-version-sync", "go.mod"), "module docs-version-sync\n")
+	nested := filepath.Join(repo, "tools", "docs-version-sync")
+
+	got, err := findRepoRootFrom(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != repo {
+		t.Fatalf("findRepoRootFrom(%s) = %s, want %s", nested, got, repo)
+	}
+}
+
+func TestFindRepoRootFromRequiresBothPublicCheckoutSentinels(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "docs", "version-catalog", "main.yaml"), "version: 1\n")
+
+	_, err := findRepoRootFrom(repo)
+	if err == nil || !strings.Contains(err.Error(), "NVCF repository root not found") {
+		t.Fatalf("findRepoRootFrom error = %v, want missing-root error", err)
+	}
+}
+
 func TestSyncDocsRejectsMissingMarker(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "docs/user/manifest.md"), "no generated marker\n")
@@ -801,8 +850,8 @@ helm-nvcf-api:1.13.0
 	if !sawToken {
 		t.Fatal("GitLab request did not use token from .netrc")
 	}
-	if catalog.Stack.Version != "0.9.0" {
-		t.Fatalf("stack version = %q, want 0.9.0", catalog.Stack.Version)
+	if catalog.Stack.PublicationVersion != "0.9.0" {
+		t.Fatalf("stack publication version = %q, want 0.9.0", catalog.Stack.PublicationVersion)
 	}
 	if catalog.Stack.PackageName != defaultPackageName || catalog.Stack.Name != defaultStackResourceName {
 		t.Fatalf("stack metadata = %#v, want package %s resource %s", catalog.Stack, defaultPackageName, defaultStackResourceName)
@@ -990,8 +1039,8 @@ func TestUpdateCatalogDiscoversLatestStackPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
 	}
-	if catalog.Stack.Version != "0.9.1" {
-		t.Fatalf("stack version = %q, want discovered 0.9.1", catalog.Stack.Version)
+	if catalog.Stack.PublicationVersion != "0.9.1" {
+		t.Fatalf("stack publication version = %q, want discovered 0.9.1", catalog.Stack.PublicationVersion)
 	}
 }
 
@@ -1089,9 +1138,9 @@ func testCatalog() *Catalog {
 			},
 		},
 		Stack: StackMetadata{
-			Name:     "nvcf-self-managed-stack",
-			Version:  "0.5.0",
-			Registry: "staging",
+			Name:               "nvcf-self-managed-stack",
+			PublicationVersion: "0.5.0",
+			Registry:           "staging",
 		},
 		Denylist: []DenylistEntry{
 			{Name: "nvcf-base", Reason: "managed separately"},

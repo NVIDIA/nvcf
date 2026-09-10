@@ -171,7 +171,7 @@ below), so the same identity under different accounts is tracked separately.
 
 A request is evaluated against **at most two tiers**:
 
-```
+```text
 allowed  =  [ user tier   (only if perUserRate is configured) ]
        AND  [ exactly ONE NCA-axis tier:  per-NCA-ID  OR  global ]
 ```

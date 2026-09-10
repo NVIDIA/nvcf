@@ -466,3 +466,22 @@ func TestBareAndFullyQuotedVersionsBothResolve(t *testing.T) {
 		}
 	}
 }
+
+func TestBumpReportsTheSemverStepOfThePin(t *testing.T) {
+	for _, c := range []struct{ tag, want string }{
+		{"deploy/helm/alpha/v1.0.1", "bump: patch\n"},
+		{"deploy/helm/alpha/v1.3.0", "bump: minor\n"},
+		{"deploy/helm/alpha/v2.0.0", "bump: major\n"},
+	} {
+		f := newStack(t, stackMeta, map[string]string{"02-core.yaml.gotmpl": stackFile})
+		_, out, _ := f.bump(t, c.tag, false)
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: output lacks %q:\n%s", c.tag, c.want, out)
+		}
+	}
+	f := newStack(t, stackMeta, map[string]string{"02-core.yaml.gotmpl": stackFile})
+	_, out, _ := f.bump(t, "deploy/helm/alpha/v1.0.0", false)
+	if strings.Contains(out, "bump:") {
+		t.Errorf("already-pinned run must not report a level:\n%s", out)
+	}
+}

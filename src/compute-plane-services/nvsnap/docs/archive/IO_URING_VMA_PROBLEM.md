@@ -26,7 +26,7 @@ libuv creates two separate io_uring instances:
 - **fd 4**: Main "accept" ring (SQPOLL enabled, larger queue)
 - **fd 5**: Control "ctl" ring (no SQPOLL, smaller queue)
 
-```
+```text
 === fd 4 ===
 SqThread:    2862274   (SQPOLL thread running)
 SqThreadCpu: 6
@@ -40,7 +40,7 @@ SqThreadCpu: -1
 
 Linux kernel uses a single `anon_inode:[io_uring]` for ALL io_uring instances:
 
-```
+```text
 fd 4 -> anon_inode:[io_uring] (ino=15288)
 fd 5 -> anon_inode:[io_uring] (ino=15288)  <- SAME INODE!
 ```
@@ -59,14 +59,14 @@ Since both io_urings have the same inode, ALL VMAs get assigned to the first ent
 
 Result in dump:
 
-```
+```text
 io_uring fd 4: SQ=64 CQ=128 n_vmas=4  <- gets ALL 4 VMAs
 (fd 5 is never even created as an entry)
 ```
 
 Result in restore:
 
-```
+```text
 io_uring restore [1/2]: fd=4 sq_addr=0x7fbcce5db000  <- correct
 io_uring restore [2/2]: fd=5 sq_addr=0x0             <- BROKEN!
 ```
@@ -83,7 +83,7 @@ When libuv tries to use fd 5's `ctl` ring, it accesses the NULL mapped memory an
 
 **Problem**: The kernel doesn't expose `SqMask`, `SqSize`, `CqSize` in `/proc/pid/fdinfo/FD` (at least on this kernel version). We only see:
 
-```
+```text
 SqThread: ...
 SqThreadCpu: ...
 UserFiles: 0
@@ -103,7 +103,7 @@ Without the queue sizes, we can't predict expected VMA sizes.
 
 From the checkpoint dump:
 
-```
+```text
 VMA 1: addr=0x7fbcce57b000 size=16384 pgoff=0x10000000 (SQEs)   <- 256 entries
 VMA 2: addr=0x7fbcce5db000 size=12288 pgoff=0x0 (SQ/CQ ring)
 VMA 3: addr=0x7fbcce5de000 size=4096  pgoff=0x10000000 (SQEs)   <- 64 entries

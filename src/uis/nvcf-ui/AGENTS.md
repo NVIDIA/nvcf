@@ -6,7 +6,7 @@ This file covers cross-cutting rules that apply to every task. Verify file paths
 
 ## Project Structure
 
-```
+```text
 ui/src/
 ├── main.tsx          # Entry point — mounts providers, stays thin
 ├── rootRoute.tsx     # Root route — app shell and layout

@@ -44,7 +44,7 @@ Order doesn't matter — `ComputeHash` sorts `EngineCompatFlags` before hashing,
 
 Three layers, called L1 / L2 / L3:
 
-```
+```text
 L1: per-node hostPath cache
       <RootfsCapture.CacheDir>/<hash>/      ← e.g. /var/lib/nvsnap/rootfs-cache/abc123.../
       (in this agent: /var/lib/nvsnap/cache)
@@ -116,7 +116,7 @@ The ConfigMap is the **lookup index**. The manifest is the **routing table**. Th
 
 `cmregistry.go` stamps these labels on the ConfigMap so ops can list captures by source identity:
 
-```
+```text
 nvsnap.io/source-namespace=<ns of originating pod>
 nvsnap.io/source-engine=<vllm|sglang|trtllm|nim>
 nvsnap.io/source-image-base=<image-name minus registry/tag, DNS-sanitized>
@@ -128,7 +128,7 @@ These are derived from `Manifest.SourcePodMeta` — captures retain a back-point
 
 The receiving agent (`internal/agent/capture_cascade.go:EnsureCaptureLocal`) runs this when the webhook calls into it:
 
-```
+```text
 Tier 1: same-node short-circuit
   if <RootfsCapture.CacheDir>/<hash>/ exists → done
     (zero copy, ~0ms)
@@ -178,13 +178,13 @@ The `RootfsCapture.Backend` configuration selects:
 
 ## Side-by-side example — the same workload, both flows
 
-```
+```text
 fastapi_echo_sample:0.0.1, pod 0-sr-9f501ca8-...-4717990b60a7 in nvcf-backend
 ```
 
 **Flow 1 (today's deployed cluster, after our manual POST):**
 
-```
+```text
 L1 (local):    /var/lib/nvsnap/checkpoints/0-sr-9f501ca8-...__nvcf-backend__20260530-020747/
                  ├ rootfs-diff/...
                  ├ mounts/
@@ -207,7 +207,7 @@ NVCA lookup:   not possible — no hash, no ConfigMap. Restore is by checkpoint-
 
 **Flow 2 (same workload, agent in `--rootfs-capture` mode):**
 
-```
+```text
 hash = sha256(image_digest=sha256:abc..., model_id=, engine_compat_flags=[], cuda_driver_major=580, capture_format_version=1)
      = abcdef...64hex
 shortHash = abcdef...32hex
@@ -247,7 +247,7 @@ NVCA lookup:   cmName = "nvsnap-capture-" + shortHash
 
 ## Appendix — operator cheatsheet
 
-```
+```bash
 # List all captures (by shortHash) in this cluster
 kubectl get configmap -n nvsnap-system -l nvsnap.io/source-engine
 

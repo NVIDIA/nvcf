@@ -68,7 +68,7 @@ func manifestIsRootfs(m checkpointstore.Manifest) bool {
 
 ### New dispatch in Mutate
 
-```
+```text
 resolve hash
 manifest = Backend.Stat(hash)            // Stat FIRST (currently after L2)
 if manifestIsRootfs(manifest):

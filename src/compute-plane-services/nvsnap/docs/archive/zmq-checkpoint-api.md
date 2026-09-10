@@ -955,7 +955,7 @@ zmq-checkpoint --action=restore --input=/tmp/zmq.ckpt --pid=1234
 
 Force all ZMQ communication through a proxy:
 
-```
+```text
 App <-> ZMQ Proxy <-> Peer
 ```
 
@@ -1078,7 +1078,7 @@ curl localhost:8000/v1/completions -d '{"prompt": "Hello", "max_tokens": 100}'
 
 ## Appendix B: Checkpoint Format Versioning
 
-```
+```text
 Byte Offset | Field          | Size    | Description
 ------------|----------------|---------|---------------------------
 0-3         | Magic          | 4       | 0x5A4D5143 ("ZMQC")

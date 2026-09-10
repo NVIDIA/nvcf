@@ -171,7 +171,7 @@ echo 'debug: true' >> ~/.nvcf-cli.yaml
 
 **Debug Output Example:**
 
-```
+```text
 DEBUG: HTTP debugging enabled with multi-token support
 DEBUG: API key available: true
 DEBUG: Function token available: true
@@ -1021,7 +1021,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 
 **Example get function output:**
 
-```
+```text
 Function Details:
   ID: func-12345678-1234-1234-1234-123456789abc
   Version ID: ver-87654321-4321-4321-4321-123456789abc
@@ -1258,7 +1258,7 @@ export NVCF_CLI_DEBUG=true
 
 #### **401 Unauthorized on Function Creation**
 
-```
+```text
 Error: API error 401: Invalid JWT serialization
 ```
 
@@ -1272,7 +1272,7 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 
 #### **Missing NVCF_TOKEN on Delete Operations**
 
-```
+```text
 Error: failed to load configuration: NVCF_TOKEN is required for delete operations
 ```
 
@@ -1286,7 +1286,7 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 
 #### **401 Unauthorized on Invoke/List Operations**
 
-```
+```text
 Error: API error 401: Unauthorized
 ```
 
@@ -1300,7 +1300,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 
 #### **Deploy Operation Token Issues**
 
-```
+```text
 Error: API error 401: Unauthorized
 ```
 
@@ -1356,7 +1356,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 
 ### **Project Structure**
 
-```
+```text
 .
 ├── cmd/                    # CLI commands
 │   ├── root.go            # Root command and initialization

@@ -25,14 +25,14 @@ kubectl describe pod -n <namespace> <pod-name>
 
 ### Symptoms
 
-```
+```text
 NAME           READY   STATUS             RESTARTS   AGE
 cassandra-0    0/1     ImagePullBackOff   0          5m
 ```
 
 Events show:
 
-```
+```text
 Failed to pull image "nvcr.io/.../image:tag": 401 Unauthorized
 ```
 
@@ -82,7 +82,7 @@ kubectl get sa <sa-name> -n <namespace> -o jsonpath='{.imagePullSecrets}'
 
 Service pods stuck in `Init:0/1` for minutes:
 
-```
+```bash
 NAME                        READY   STATUS     RESTARTS   AGE
 nvcf-api-7f4c76f788-44vlt  0/2     Init:0/1   0          10m
 ```
@@ -156,7 +156,7 @@ kubectl logs -n <namespace> <pod-name> -c vault-agent-init
 
 ### Symptoms
 
-```
+```text
 NAME          READY   STATUS    RESTARTS   AGE
 cassandra-0   0/1     OOMKilled  3         10m
 ```
@@ -189,7 +189,7 @@ Note: `resourcePreset` is not available in the NVCF cassandra wrapper chart. Use
 
 ### Symptoms
 
-```
+```text
 NAME          READY   STATUS    RESTARTS   AGE
 cassandra-0   0/1     Pending   0          10m
 ```

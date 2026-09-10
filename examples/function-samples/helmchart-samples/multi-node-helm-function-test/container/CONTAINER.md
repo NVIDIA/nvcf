@@ -12,13 +12,13 @@ The base image is configurable via the `BASE_IMAGE` build argument to support di
 
 **AWS** (default):
 
-```
+```bash
 docker build -t multi-node-test .
 ```
 
 **NCP**:
 
-```
+```bash
 docker build \
   --build-arg BASE_IMAGE=ghcr.io/coreweave/nccl-tests:13.0.2-devel-ubuntu22.04-nccl2.29.2-1-d73ec07 \
   -t multi-node-test .

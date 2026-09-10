@@ -2,7 +2,7 @@
 
 ## Directory Layout
 
-```
+```bash
 nvcf-self-managed-stack/
 |-- helmfile.d/
 |   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao

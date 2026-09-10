@@ -22,7 +22,7 @@ This method can help you act quickly in the event of a compromise by rotating th
 
 ## Template Example
 
-```
+```text
 {{ with printf "transit/export/encryption-key/%s/%s" ( key "named-key" ) ( key "vault-index" ) | secret }}{{ if .Data.keys }}Encryption Key Version {{ ( key "vault-index" ) }}: {{ index .Data.keys ( key "vault-index" ) }}{{ end }}{{ end }}
 ```
 
@@ -38,7 +38,7 @@ This method can help you act quickly in the event of a compromise by rotating th
 
 Run the below script against a running Consul & unsealed Vault cluster. Assumes both Vault and Consul are reachable locally.
 
-```
+```bash
 #!/bin/bash
 set -e
 
@@ -147,7 +147,7 @@ echo "Finished"
 
 Run the below script in the same location as above to see how consul-template leverages Vault & Consul to automatically rotate local encryption keys.
 
-```
+```bash
 #!/bin/bash
 set -e
 

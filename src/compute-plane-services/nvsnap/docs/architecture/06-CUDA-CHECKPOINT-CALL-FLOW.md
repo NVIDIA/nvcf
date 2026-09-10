@@ -4,7 +4,7 @@ How a GPU checkpoint actually gets created from `kubectl` → cuda-checkpoint su
 
 ## End-to-end flow
 
-```
+```text
 test-e2e.sh (host)
   │
   ▼
@@ -112,7 +112,7 @@ This silent-fall-through is what we observed on GCP-H100-a 2026-05-23: 4.4 GB ch
 
 For an env var to reach `cuda-checkpoint.real` on the CRIU-plugin path, it must traverse:
 
-```
+```text
 agent process  --[cmd.Env in rpc_dump.go]-->  criu swrk
 criu swrk      --[inherited]-->                cuda_plugin (loaded inside criu)
 cuda_plugin    --[execvp inherits env]-->      cuda-checkpoint (wrapper)

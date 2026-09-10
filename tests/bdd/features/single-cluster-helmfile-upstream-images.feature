@@ -21,41 +21,17 @@ Feature: Install a local single-cluster stack with upstream supporting images
     Then the command exit code should be 1
     Given I copy the file "deploy/stacks/self-managed/Makefile.dist" to "deploy/stacks/self-managed/Makefile"
     And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
-      | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
-      | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-      | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-      | observability.profile           | disabled                             |
+      | global.imagePullSecrets[0].name       | nvcr-pull-secret                     |
+      | global.helm.sources.repository        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | observability.profile                 | disabled                             |
+      | nats.reloader.image.registry          | docker.io                            |
+      | nats.reloader.image.repository        | natsio/nats-server-config-reloader   |
+      | nats.reloader.image.tag               | 0.24.0                               |
+      | api.accountBootstrap.image.registry   | docker.io                            |
+      | api.accountBootstrap.image.repository | alpine/k8s                           |
+      | api.accountBootstrap.image.tag        | 1.37.0                               |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
-    And I substitute a block in file "deploy/stacks/self-managed/global.yaml.gotmpl":
-      """
-        reloader:
-          image:
-            registry: {{ .Values.global.image.registry }}
-            repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
-            tag: "0.24.0"
-      ---
-        reloader:
-          image:
-            registry: docker.io
-            repository: natsio/nats-server-config-reloader
-            tag: "0.24.0"
-      """
-    And I substitute a block in file "deploy/stacks/self-managed/global.yaml.gotmpl":
-      """
-        accountBootstrap:
-          image:
-            registry: {{ .Values.global.image.registry }}
-            repository: {{ .Values.global.image.repository }}/alpine-k8s
-            tag: 1.37.0
-            pullPolicy: IfNotPresent
-      ---
-        accountBootstrap:
-          image:
-            registry: docker.io
-            repository: alpine/k8s
-            tag: "1.37.0"
-            pullPolicy: IfNotPresent
-      """
     And a single-cluster ncp-local cluster is running
     And the "nvcr-pull-secret" image pull secret exists in namespaces:
       | cassandra-system |

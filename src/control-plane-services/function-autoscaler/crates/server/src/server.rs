@@ -403,7 +403,11 @@ async fn initialize_scaling_settings(
                 "Using Custom scaling policy - per-function configs from gRPC endpoint: {}",
                 nvcf_api_grpc_address
             );
-            tracing::info!("Cache configuration: TTL={}s", config.ttl_seconds);
+            tracing::info!(
+                "Policy cache configuration: TTL={}s, request timeout={}s",
+                config.ttl_seconds,
+                config.request_timeout_seconds,
+            );
 
             // Create OAuth2 client for gRPC auth (same auth mechanism as NVCF API)
             let oauth2_client = match OAuth2Client::new(
@@ -425,6 +429,7 @@ async fn initialize_scaling_settings(
                 nvcf_api_grpc_address,
                 oauth2_client,
                 config.ttl_seconds,
+                config.request_timeout_seconds,
                 settings.policy_cache_max_capacity,
                 config.default_thresholds.clone(),
                 config.default_factors.clone(),

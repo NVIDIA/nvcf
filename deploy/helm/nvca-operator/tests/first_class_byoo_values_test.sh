@@ -49,16 +49,62 @@ assert_equal() {
   fi
 }
 
+assert_absent() {
+  local manifest="$1"
+  local expression="$2"
+  local message="$3"
+
+  if agent_config_value "${manifest}" "${expression}" >/dev/null 2>&1; then
+    echo "${message}: expected field to be absent, but it was present" >&2
+    exit 1
+  fi
+}
+
+# byoo.resources/otelCollector/additionalResourceOverhead/fluentbit.resources default to {}
+# so a no-op chart upgrade does not change the agent's built-in resource defaults; only
+# logChunking and utils.resources ship non-empty chart defaults.
 render "${default_manifest}"
-assert_equal "1000m" "$(agent_config_value "${default_manifest}" '.agent.BYOOResources.limits.cpu')" "unexpected BYOO CPU limit"
-assert_equal "4Gi" "$(agent_config_value "${default_manifest}" '.agent.BYOOResources.requests.memory')" "unexpected BYOO memory request"
-assert_equal "262144" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "unexpected BYOO log chunk payload size"
-assert_equal "1000000" "$(agent_config_value "${default_manifest}" '.agent.byooOtelCollector.exporterHelper.sendingQueue.batch.maxSize')" "unexpected BYOO exporter batch limit"
-assert_equal "8" "$(agent_config_value "${default_manifest}" '.agent.additionalResourceOverhead.cpu')" "unexpected BYOO capacity reservation"
-assert_equal "500m" "$(agent_config_value "${default_manifest}" '.agent.BYOOFluentBitResources.limits.cpu')" "unexpected BYOO FluentBit CPU limit"
-assert_equal "128Mi" "$(agent_config_value "${default_manifest}" '.agent.BYOOFluentBitResources.requests.memory')" "unexpected BYOO FluentBit memory request"
+assert_absent "${default_manifest}" '.agent.BYOOResources' "BYOOResources should be unset by default"
+assert_absent "${default_manifest}" '.agent.byooOtelCollector' "byooOtelCollector should be unset by default"
+assert_absent "${default_manifest}" '.agent.additionalResourceOverhead' "additionalResourceOverhead should be unset by default"
+assert_absent "${default_manifest}" '.agent.BYOOFluentBitResources' "BYOOFluentBitResources should be unset by default"
+assert_equal "0" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "unexpected default BYOO log chunk payload size"
+assert_equal "false" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.dryRun')" "unexpected default BYOO log chunk dry-run"
 assert_equal "4" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.cpu')" "unexpected utils CPU sizing"
 assert_equal "4Gi" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.memory')" "unexpected utils memory sizing"
+
+explicit_values="${tmp_dir}/explicit-values.yaml"
+cat > "${explicit_values}" <<'EOF'
+byoo:
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 4Gi
+  logChunking:
+    maxPayloadBytes: 262144
+    dryRun: false
+  additionalResourceOverhead:
+    cpu: "8"
+  fluentbit:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+EOF
+explicit_manifest="${tmp_dir}/explicit-manifest.yaml"
+render "${explicit_manifest}" --values "${explicit_values}"
+assert_equal "1000m" "$(agent_config_value "${explicit_manifest}" '.agent.BYOOResources.limits.cpu')" "unexpected explicit BYOO CPU limit"
+assert_equal "4Gi" "$(agent_config_value "${explicit_manifest}" '.agent.BYOOResources.requests.memory')" "unexpected explicit BYOO memory request"
+assert_equal "262144" "$(agent_config_value "${explicit_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "unexpected explicit BYOO log chunk payload size"
+assert_equal "8" "$(agent_config_value "${explicit_manifest}" '.agent.additionalResourceOverhead.cpu')" "unexpected explicit BYOO capacity reservation"
+assert_equal "500m" "$(agent_config_value "${explicit_manifest}" '.agent.BYOOFluentBitResources.limits.cpu')" "unexpected explicit BYOO FluentBit CPU limit"
+assert_equal "128Mi" "$(agent_config_value "${explicit_manifest}" '.agent.BYOOFluentBitResources.requests.memory')" "unexpected explicit BYOO FluentBit memory request"
 
 yq eval '
   .agentConfig.mergeConfig = "agent:\n  BYOOResources:\n    limits:\n      cpu: 1500m\n  byooLogChunking:\n    maxPayloadBytes: 131072\n  UtilsResources:\n    cpu: \"6\"\ncluster:\n  validationPolicy:\n    name: Unrestricted\n    allowedExtraKubernetesTypes:\n      - group: nvidia.com\n        kind: DynamoGraphDeployment\n        resource: dynamographdeployments\n        version: v1alpha1" |
@@ -78,4 +124,4 @@ assert_equal "1500m" "$(agent_config_value "${legacy_manifest}" '.agent.BYOOReso
 assert_equal "131072" "$(agent_config_value "${legacy_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "legacy BYOO chunking did not override the chart default"
 assert_equal "6" "$(agent_config_value "${legacy_manifest}" '.agent.UtilsResources.cpu')" "legacy utils resources did not override the chart default"
 assert_equal "dynamographdeployments" "$(agent_config_value "${legacy_manifest}" '.cluster.validationPolicy.allowedExtraKubernetesTypes[0].resource')" "legacy validation policy was dropped"
-assert_equal "true" "$(yq -er 'select(.kind == "ConfigMap" and .metadata.name == "agent-config-merge") | .metadata.annotations."nvcf.nvidia.com/legacy-byoo-config"' "${legacy_manifest}")" "legacy BYOO config was not annotated"
+assert_equal "true" "$(yq -er 'select(.kind == "ConfigMap" and .metadata.name == "agent-config-merge") | .metadata.annotations."nvcf.nvidia.com/legacy-first-class-config"' "${legacy_manifest}")" "legacy BYOO config was not annotated"
