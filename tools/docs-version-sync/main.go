@@ -86,13 +86,13 @@ func run(args []string) error {
 				return err
 			}
 			if !equal {
-				return fmt.Errorf("%w: %s does not match latest %s artifact manifest for stack %s", ErrCheckFailed, relOrAbs(repoRoot, *catalogPath), defaultPackageName, updated.Stack.Version)
+				return fmt.Errorf("%w: %s does not match latest %s artifact manifest for stack publication %s", ErrCheckFailed, relOrAbs(repoRoot, *catalogPath), defaultPackageName, updated.Stack.PublicationVersion)
 			}
 		} else {
 			if err := writeCatalogAfterStackSourceValidation(repoRoot, *catalogPath, updated); err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "updated %s for stack %s\n", relOrAbs(repoRoot, *catalogPath), updated.Stack.Version)
+			fmt.Fprintf(os.Stderr, "updated %s for stack publication %s\n", relOrAbs(repoRoot, *catalogPath), updated.Stack.PublicationVersion)
 		}
 	} else {
 		loaded, err := LoadCatalog(*catalogPath)
@@ -112,7 +112,7 @@ func run(args []string) error {
 
 func writeCatalogAfterStackSourceValidation(repoRoot, catalogPath string, catalog *Catalog) error {
 	if catalog.Stack.SourceCommit == "" {
-		return fmt.Errorf("cannot write updated catalog for stack %s without an immutable source snapshot", catalog.Stack.Version)
+		return fmt.Errorf("cannot write updated catalog for stack publication %s without an immutable source snapshot", catalog.Stack.PublicationVersion)
 	}
 	if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
 		return fmt.Errorf("validate stack source snapshot: %w", err)

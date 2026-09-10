@@ -850,8 +850,8 @@ helm-nvcf-api:1.13.0
 	if !sawToken {
 		t.Fatal("GitLab request did not use token from .netrc")
 	}
-	if catalog.Stack.Version != "0.9.0" {
-		t.Fatalf("stack version = %q, want 0.9.0", catalog.Stack.Version)
+	if catalog.Stack.PublicationVersion != "0.9.0" {
+		t.Fatalf("stack publication version = %q, want 0.9.0", catalog.Stack.PublicationVersion)
 	}
 	if catalog.Stack.PackageName != defaultPackageName || catalog.Stack.Name != defaultStackResourceName {
 		t.Fatalf("stack metadata = %#v, want package %s resource %s", catalog.Stack, defaultPackageName, defaultStackResourceName)
@@ -1039,8 +1039,8 @@ func TestUpdateCatalogDiscoversLatestStackPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
 	}
-	if catalog.Stack.Version != "0.9.1" {
-		t.Fatalf("stack version = %q, want discovered 0.9.1", catalog.Stack.Version)
+	if catalog.Stack.PublicationVersion != "0.9.1" {
+		t.Fatalf("stack publication version = %q, want discovered 0.9.1", catalog.Stack.PublicationVersion)
 	}
 }
 
@@ -1138,9 +1138,9 @@ func testCatalog() *Catalog {
 			},
 		},
 		Stack: StackMetadata{
-			Name:     "nvcf-self-managed-stack",
-			Version:  "0.5.0",
-			Registry: "staging",
+			Name:               "nvcf-self-managed-stack",
+			PublicationVersion: "0.5.0",
+			Registry:           "staging",
 		},
 		Denylist: []DenylistEntry{
 			{Name: "nvcf-base", Reason: "managed separately"},
