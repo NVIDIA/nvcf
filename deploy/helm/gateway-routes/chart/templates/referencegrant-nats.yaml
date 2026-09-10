@@ -20,7 +20,7 @@
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-tcproute-to-nats
+  name: allow-tcproute-to-{{ .Values.nvcfGatewayRoutes.routes.nats.name }}
   namespace: {{ .Values.nvcfGatewayRoutes.routes.nats.backend.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}

@@ -21,7 +21,7 @@
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-httproute-to-nvcf-ui
+  name: allow-httproute-to-{{ .Values.nvcfGatewayRoutes.routes.nvcfUi.name }}
   namespace: {{ .Values.nvcfGatewayRoutes.routes.nvcfUi.backend.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}

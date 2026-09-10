@@ -22,7 +22,8 @@ enabled_render="$(mktemp)"
 annotated_render="$(mktemp)"
 disabled_render="$(mktemp)"
 hostname_conflict_error="$(mktemp)"
-trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render" "$hostname_conflict_error"' EXIT
+named_render="$(mktemp)"
+trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render" "$hostname_conflict_error" "$named_render"' EXIT
 
 if ! command -v yq >/dev/null 2>&1; then
   echo "yq is required for render tests" >&2
@@ -307,5 +308,89 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   > "$annotated_render"
 
 assert_resource_field "$annotated_render" TCPRoute nats gateway '.metadata.annotations."example.com/nats-route"' true
+
+helm template nvcf-gateway-routes "$repo_root/chart" \
+  --set nvcfGatewayRoutes.routes.nvcfApi.name=plane-a-nvcf-api \
+  --set nvcfGatewayRoutes.routes.nvcfApi.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.nvcfApi.grpc.enabled=true \
+  --set nvcfGatewayRoutes.routes.nvcfApi.grpc.name=plane-a-nvcf-api-grpc \
+  --set nvcfGatewayRoutes.routes.nvcfApi.grpc.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.nvctApi.name=plane-a-nvct-api \
+  --set nvcfGatewayRoutes.routes.nvctApi.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.nvctApi.grpc.enabled=true \
+  --set nvcfGatewayRoutes.routes.nvctApi.grpc.name=plane-a-nvct-api-grpc \
+  --set nvcfGatewayRoutes.routes.nvctApi.grpc.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.apiKeys.name=plane-a-api-keys \
+  --set nvcfGatewayRoutes.routes.apiKeys.backend.namespace=plane-a-api-keys \
+  --set nvcfGatewayRoutes.routes.invocation.name=plane-a-invocation-service \
+  --set nvcfGatewayRoutes.routes.invocation.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.llmApiGateway.name=plane-a-llm-api-gateway \
+  --set nvcfGatewayRoutes.routes.llmApiGateway.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.llmInvocation.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmInvocation.name=plane-a-llm-invocation \
+  --set nvcfGatewayRoutes.routes.llmInvocation.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.vanityGateway.enabled=true \
+  --set nvcfGatewayRoutes.routes.vanityGateway.name=plane-a-vanity-gateway \
+  --set nvcfGatewayRoutes.routes.vanityGateway.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.reval.name=plane-a-reval \
+  --set nvcfGatewayRoutes.routes.reval.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.nvcfUi.enabled=true \
+  --set nvcfGatewayRoutes.routes.nvcfUi.name=plane-a-nvcf-ui \
+  --set nvcfGatewayRoutes.routes.nvcfUi.backend.namespace=plane-a-nvcf-ui \
+  --set nvcfGatewayRoutes.routes.sis.name=plane-a-sis \
+  --set nvcfGatewayRoutes.routes.sis.backend.namespace=plane-a-sis \
+  --set nvcfGatewayRoutes.routes.eventLedger.name=plane-a-event-ledger \
+  --set nvcfGatewayRoutes.routes.eventLedger.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.grpc.name=plane-a-grpc \
+  --set nvcfGatewayRoutes.routes.grpc.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.grpcWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.grpcWorker.name=plane-a-grpc-worker \
+  --set nvcfGatewayRoutes.routes.grpcWorker.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.nats.enabled=true \
+  --set nvcfGatewayRoutes.routes.nats.name=plane-a-nats \
+  --set nvcfGatewayRoutes.routes.nats.backend.namespace=plane-a-nats-system \
+  --set nvcfGatewayRoutes.gateways.nats.name=nats-gateway \
+  --set nvcfGatewayRoutes.gateways.nats.namespace=gateway \
+  --set nvcfGatewayRoutes.routes.llmWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmWorker.name=plane-a-llm-worker \
+  --set nvcfGatewayRoutes.routes.llmWorker.backend.namespace=plane-a-nvcf \
+  --set llmRequestRouter.grpcTls.enabled=true \
+  --set llmRequestRouter.grpcTls.mode=certManager \
+  --set llmRequestRouter.grpcTls.secretName=plane-a-llm-grpc-tls \
+  --set llmRequestRouter.grpcTls.dnsNames[0]=llm-grpc.example.invalid \
+  --set llmRequestRouter.grpcTls.issuerRef.name=plane-a-nvcf-openbao-pki \
+  > "$named_render"
+
+assert_resource_count "$named_render" HTTPRoute plane-a-nvcf-api gateway 1
+assert_resource_field "$named_render" HTTPRoute plane-a-nvcf-api gateway '.spec.rules[0].backendRefs[0].namespace' plane-a-nvcf
+assert_resource_count "$named_render" GRPCRoute plane-a-nvcf-api-grpc gateway 1
+assert_resource_field "$named_render" GRPCRoute plane-a-nvcf-api-grpc gateway '.spec.rules[0].backendRefs[0].namespace' plane-a-nvcf
+assert_resource_count "$named_render" HTTPRoute plane-a-nvct-api gateway 1
+assert_resource_field "$named_render" HTTPRoute plane-a-nvct-api gateway '.spec.rules[0].backendRefs[0].namespace' plane-a-nvcf
+assert_resource_count "$named_render" GRPCRoute plane-a-nvct-api-grpc gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-api-keys gateway 1
+assert_resource_field "$named_render" HTTPRoute plane-a-api-keys gateway '.spec.rules[0].backendRefs[0].namespace' plane-a-api-keys
+assert_resource_count "$named_render" HTTPRoute plane-a-invocation-service gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-llm-api-gateway gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-llm-invocation gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-vanity-gateway gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-reval gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-nvcf-ui gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-sis gateway 1
+assert_resource_count "$named_render" HTTPRoute plane-a-event-ledger gateway 1
+assert_resource_count "$named_render" TCPRoute plane-a-grpc gateway 1
+assert_resource_count "$named_render" TCPRoute plane-a-grpc-worker gateway 1
+assert_resource_count "$named_render" TCPRoute plane-a-nats gateway 1
+assert_resource_count "$named_render" GRPCRoute plane-a-llm-worker-grpc gateway 1
+assert_resource_count "$named_render" UDPRoute plane-a-llm-worker-quic gateway 1
+assert_resource_count "$named_render" BackendTrafficPolicy plane-a-llm-worker-grpc-streams gateway 1
+assert_resource_field "$named_render" BackendTrafficPolicy plane-a-llm-worker-grpc-streams gateway '.spec.targetRefs[0].name' plane-a-llm-worker-grpc
+
+assert_resource_count "$named_render" ReferenceGrant allow-routes-to-plane-a-nvcf plane-a-nvcf 1
+assert_resource_count "$named_render" ReferenceGrant allow-httproute-to-plane-a-api-keys plane-a-api-keys 1
+assert_resource_count "$named_render" ReferenceGrant allow-httproute-to-plane-a-sis plane-a-sis 1
+assert_resource_count "$named_render" ReferenceGrant allow-httproute-to-plane-a-nvcf-ui plane-a-nvcf-ui 1
+assert_resource_count "$named_render" ReferenceGrant allow-tcproute-to-plane-a-nats plane-a-nats-system 1
+assert_resource_count "$named_render" ReferenceGrant allow-plane-a-llm-worker-routes plane-a-nvcf 1
 
 echo "Gateway route render checks passed."

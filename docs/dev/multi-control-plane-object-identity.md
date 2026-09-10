@@ -259,6 +259,33 @@ committed `--allow-shared-identity-file` when the real named-render gate is
 enabled. Duplicate identities across two named renders use the same rule, even
 when both objects are labelled `shared`.
 
+## Phase 4D Gateway Route Identity
+
+Phase 4D wires the self-managed stack to pass owner-derived gateway route
+identities when a named control plane is rendered.
+
+For the legacy `default` owner, the stack still leaves the gateway-routes chart
+defaults in control where possible, so the default render stays byte-identical.
+For a named owner such as `plane-a`, the stack passes values like these into the
+gateway-routes chart:
+
+- route names such as `plane-a-nvcf-api`, `plane-a-api-keys`, and
+  `plane-a-grpc`;
+- route backend namespaces such as `plane-a-nvcf`, `plane-a-api-keys`,
+  `plane-a-sis`, `plane-a-nats-system`, and `plane-a-nvcf-ui`;
+- optional route names for gRPC, worker, NATS, LLM, vanity-gateway, ESS, UI,
+  and event-ledger routes.
+
+The gateway-routes chart also derives ReferenceGrant names and target namespaces
+from those route values. For example, a named API keys route renders
+`ReferenceGrant/plane-a-api-keys/allow-httproute-to-plane-a-api-keys` instead of
+writing `ReferenceGrant/api-keys/allow-httproute-to-api-keys`.
+
+Named mode intentionally remains fail-closed after this phase. Gateway route
+identity is one leak class; service DNS, OpenBao injector cluster-scoped
+objects, and ClusterIssuer identity still need to pass the Phase 4C checker
+before the block can be removed.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |

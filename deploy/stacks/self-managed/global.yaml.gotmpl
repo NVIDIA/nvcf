@@ -24,6 +24,16 @@ tolerations:
 {{- end -}}
 {{- end -}}
 
+{{- define "nvcf.prefixedObjectName" -}}
+{{- $prefix := .prefix | default "" -}}
+{{- $name := .name | toString -}}
+{{- if and $prefix (not (hasPrefix $prefix $name)) -}}
+{{- printf "%s%s" $prefix $name -}}
+{{- else -}}
+{{- $name -}}
+{{- end -}}
+{{- end -}}
+
 {{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" -}}
 {{- $alphaNamedControlPlane := env "NVCF_ALPHA_NAMED_CONTROL_PLANE" | default "false" -}}
 {{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 30) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) -}}
@@ -1599,19 +1609,47 @@ nvcfGatewayRoutes:
     {{- end }}
   routes:
     nvcfApi:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvcfApi" "name" "nvcf-api" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" "name" "api" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
       grpc:
         enabled: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "enabled" false .Values }}
+        {{- if ne $controlPlaneOwner "default" }}
+        name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "name" "nvcf-api-grpc" .Values)) }}
+        backend:
+          name: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "backend" "name" "api" .Values }}
+          namespace: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+          port: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "backend" "port" 9090 .Values }}
+        {{- end }}
         {{- with $nvcfApiGrpcRouteHostnames }}
         hostnames:
           {{- toYaml . | nindent 10 }}
         {{- end }}
     nvctApi:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvctApi" "name" "nvct-api" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" "name" "nvct-api" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
       grpc:
         enabled: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "enabled" false .Values }}
+        {{- if ne $controlPlaneOwner "default" }}
+        name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "name" "nvct-api-grpc" .Values)) }}
+        backend:
+          name: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "backend" "name" "nvct-api" .Values }}
+          namespace: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+          port: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "backend" "port" 9090 .Values }}
+        {{- end }}
         {{- with $nvctApiGrpcRouteHostnames }}
         hostnames:
           {{- toYaml . | nindent 10 }}
@@ -1629,12 +1667,26 @@ nvcfGatewayRoutes:
       {{- if hasKey $apiKeysRoute "enabled" }}
       enabled: {{ $apiKeysRoute.enabled }}
       {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "name" "api-keys" $apiKeysRoute)) }}
+      backend:
+        name: {{ dig "backend" "name" "api-keys" $apiKeysRoute }}
+        namespace: {{ dig "backend" "namespace" $apiKeysNamespace $apiKeysRoute | default $apiKeysNamespace }}
+        port: {{ dig "backend" "port" 8080 $apiKeysRoute }}
+      {{- end }}
       routeAnnotations:
         {{ dig "routeAnnotations" dict $apiKeysRoute | toYaml | nindent 8 | trim }}
     sis:
       {{- $sisRoute := dig "ingress" "gatewayApi" "routes" "sis" dict .Values }}
       {{- if hasKey $sisRoute "enabled" }}
       enabled: {{ $sisRoute.enabled }}
+      {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "name" "sis" $sisRoute)) }}
+      backend:
+        name: {{ dig "backend" "name" "api" $sisRoute }}
+        namespace: {{ dig "backend" "namespace" $sisNamespace $sisRoute | default $sisNamespace }}
+        port: {{ dig "backend" "port" 8080 $sisRoute }}
       {{- end }}
       routeAnnotations:
         {{ dig "routeAnnotations" dict $sisRoute | toYaml | nindent 8 | trim }}
@@ -1643,13 +1695,40 @@ nvcfGatewayRoutes:
       {{- if hasKey $revalRoute "enabled" }}
       enabled: {{ $revalRoute.enabled }}
       {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "name" "reval" $revalRoute)) }}
+      backend:
+        name: {{ dig "backend" "name" "reval" $revalRoute }}
+        namespace: {{ dig "backend" "namespace" $nvcfNamespace $revalRoute | default $nvcfNamespace }}
+        port: {{ dig "backend" "port" 8080 $revalRoute }}
+      {{- end }}
       routeAnnotations:
         {{ dig "routeAnnotations" dict $revalRoute | toYaml | nindent 8 | trim }}
     invocation:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "invocation" "name" "invocation-service" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "invocation" "backend" "name" "invocation" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "invocation" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "invocation" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    {{- if ne $controlPlaneOwner "default" }}
+    llmApiGateway:
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "llmApiGateway" "name" "llm-api-gateway" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "backend" "name" "llm-api-gateway" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "backend" "port" 8080 .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    {{- end }}
     llmInvocation:
       enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "llmInvocation" "name" "llm-invocation" .Values)) }}
+      {{- end }}
       backend:
         name: llm-api-gateway
         namespace: {{ $nvcfNamespace }}
@@ -1658,11 +1737,14 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "llmInvocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     vanityGateway:
       enabled: {{ dig "addons" "vanityGateway" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "vanityGateway" "name" "vanity-gateway" .Values)) }}
+      {{- end }}
       hostnames:
         {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "hostnames" (list) .Values | default (list (printf "vanity.%s" .Values.global.domain)) | toYaml | nindent 8 | trim }}
       backend:
         name: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "name" "vanity-gateway" .Values }}
-        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" $nvcfNamespace .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
         port: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "port" 8080 .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
@@ -1671,30 +1753,69 @@ nvcfGatewayRoutes:
     # nvcf-ui namespace, nvcf-ui.<domain>).
     nvcfUi:
       enabled: {{ dig "addons" "nvcfUi" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvcfUi" "name" "nvcf-ui" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "backend" "name" "nvcf-ui" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "backend" "namespace" $nvcfUiNamespace .Values | default $nvcfUiNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "backend" "port" 8300 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     eventLedger:
       enabled: {{ dig "addons" "eventLedger" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "eventLedger" "name" "event-ledger" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "backend" "name" "event-ledger" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "grpc" "name" "grpc" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "grpc" "backend" "name" "grpc" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "grpc" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "grpc" "backend" "port" 10081 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpcWorker:
       enabled: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "grpcWorker" "name" "grpc-worker" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "backend" "name" "grpc" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "backend" "port" 10086 .Values }}
+      {{- end }}
       listenerName: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "listenerName" "worker-tcp" .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     nats:
       enabled: {{ $natsRouteEnabled }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nats" "name" "nats" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nats" "backend" "name" "nats" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nats" "backend" "namespace" $natsNamespace .Values | default $natsNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nats" "backend" "port" 4222 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nats" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     llmWorker:
       enabled: {{ $llmWorkerRouteEnabled }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "llmWorker" "name" "llm-worker" .Values)) }}
+      {{- end }}
       {{- if $llmWorkerRouteEnabled }}
+      {{- $llmWorkerBackendNamespace := dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "namespace" "" .Values }}
       backend:
         name: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "name" "llm-request-router-backend-router" .Values }}
-        namespace: {{ required "ingress.gatewayApi.routes.llmWorker.backend.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.routes.llmWorker.backend.namespace }}
+        namespace: {{ if ne $controlPlaneOwner "default" }}{{ $llmWorkerBackendNamespace | default $nvcfNamespace }}{{ else }}{{ required "ingress.gatewayApi.routes.llmWorker.backend.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" $llmWorkerBackendNamespace }}{{ end }}
         grpcPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "grpcPort" 50071 .Values }}
         quicPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "quicPort" 50072 .Values }}
       {{- end }}
@@ -1704,6 +1825,13 @@ nvcfGatewayRoutes:
     # defaults); only the enable flag and annotations are environment-driven.
     ess:
       enabled: {{ $essRouteEnabled }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "ess" "name" "ess" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "ess" "backend" "name" "ess-api" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "ess" "backend" "namespace" $essNamespace .Values | default $essNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "ess" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "ess" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
   podMonitors:
