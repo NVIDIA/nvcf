@@ -2,4 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 schemaVersion: 1
+# The release workflow authenticates to its chart source before rendering.
 publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf

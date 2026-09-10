@@ -110,8 +110,12 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	if runner.templateCalls != len(resolvedInventoryStates) {
 		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(resolvedInventoryStates))
 	}
-	if runner.prepareCalls != len(resolvedInventoryStates) {
-		t.Fatalf("repository preparation calls = %d, want %d", runner.prepareCalls, len(resolvedInventoryStates))
+	if runner.prepareCalls != 2 {
+		t.Fatalf("repository preparation calls = %d, want source and public repository preparation", runner.prepareCalls)
+	}
+	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
+	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("operation prefix = %v, want %v", runner.operations, wantPrefix)
 	}
 }
 
@@ -223,9 +227,12 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 type fakeResolvedInventoryRunner struct {
-	t             *testing.T
-	prepareCalls  int
-	templateCalls int
+	t              *testing.T
+	prepareCalls   int
+	templateCalls  int
+	sourcePrepared bool
+	publicPrepared bool
+	operations     []string
 }
 
 func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repositories map[string]helmfileRepository, ngcAPIKey string) error {
@@ -234,12 +241,23 @@ func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repos
 	if ngcAPIKey != "test-api-key" {
 		runner.t.Fatalf("NGC API key = %q", ngcAPIKey)
 	}
-	if _, ok := repositories["nvcf"]; !ok {
-		runner.t.Fatal("nvcf repository was not prepared")
+	if repository, ok := repositories["nvcf"]; ok {
+		if len(repositories) != 1 || !repository.OCI || repository.URL != "registry.example.test/release/charts" {
+			runner.t.Fatalf("source repositories = %#v", repositories)
+		}
+		runner.sourcePrepared = true
+		runner.operations = append(runner.operations, "prepare-source")
+		return nil
 	}
-	if !repositories["nvcf"].OCI {
-		runner.t.Fatal("nvcf repository was not prepared as OCI")
+	if repository, ok := repositories["public"]; ok {
+		if len(repositories) != 1 || repository.OCI || repository.URL != "https://charts.example.test" {
+			runner.t.Fatalf("public repositories = %#v", repositories)
+		}
+		runner.publicPrepared = true
+		runner.operations = append(runner.operations, "prepare-public")
+		return nil
 	}
+	runner.t.Fatalf("unexpected repositories = %#v", repositories)
 	return nil
 }
 
@@ -253,13 +271,24 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	}
 	stateFile := argumentAfter(runner.t, args, "--file")
 	action := resolvedInventoryAction(args)
+	if (action == "list" || action == "build") && !runner.sourcePrepared {
+		runner.t.Fatalf("Helmfile %s ran before source-registry authentication", action)
+	}
+	runner.operations = append(runner.operations, action)
 	releases := fakeResolvedInventoryReleases(stateFile, hasResolvedInventoryFullOverrides(args))
 	switch action {
 	case "list":
 		return mustJSON(runner.t, releases), nil
 	case "build":
-		return []byte("repositories:\n  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"), nil
+		built := "repositories:\n  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"
+		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") {
+			built += "  - name: public\n    url: https://charts.example.test\n    oci: false\n"
+		}
+		return []byte(built), nil
 	case "template":
+		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") && !runner.publicPrepared {
+			runner.t.Fatal("Helmfile template ran before public repository preparation")
+		}
 		runner.templateCalls++
 		outputDir := argumentAfter(runner.t, args, "--output-dir")
 		for _, release := range releases {
