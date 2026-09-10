@@ -52,6 +52,9 @@ jobs:
           # carry whatever the chart looked like then onto a branch cut from
           # today's main.
           ref: ${{ github.event.repository.default_branch }}
+          # Full history: the pull request title is derived from every bump
+          # commit on the shared branch, which needs the merge base with main.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -64,6 +67,10 @@ jobs:
         # here rather than somewhere that might not be reached. A test that
         # gates nothing is not a test.
         run: go test -C tools/chart-version-bumper ./...
+
+      - name: Test the commit type helper
+        # It decides the semver step of the chart release this bump causes.
+        run: bash tools/ci/test-release-bump-type
 
       - name: Select the tag
         id: tag
@@ -133,8 +140,9 @@ jobs:
           # it still applied every chart it could move safely. Aborting here
           # would throw those away and leave the refusal as the only outcome.
           tools/ci/chart-version-bumper \
-            --tag "${TAG}" --write 2>/tmp/refusals
+            --tag "${TAG}" --write >/tmp/bump.out 2>/tmp/refusals
           status=$?
+          cat /tmp/bump.out
           cat /tmp/refusals >&2
           # The exit code, not whether stderr is empty. SystemExit writes its
           # message to stderr too, so an unresolvable tag looks exactly like a
@@ -161,38 +169,61 @@ jobs:
             echo "changed=true" >> "${GITHUB_OUTPUT}"
             git --no-pager diff --stat -- deploy/helm
           fi
+          # The largest semver step any chart took, reported by the bumper as
+          # "bump: <level>". Empty when nothing moved.
+          echo "level=$(sed -n 's/^bump: //p' /tmp/bump.out | tail -n 1)" >> "${GITHUB_OUTPUT}"
 
       - name: Open or refresh the pull request
         if: steps.bump.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
+          LEVEL: ${{ steps.bump.outputs.level }}
           REFUSED: ${{ steps.bump.outputs.refused }}
           SERVER_URL: ${{ github.server_url }}
           REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           branch="chore/chart-version-bumps"
 
           git add deploy/helm
+          # The commit type carries the semver step of the service release
+          # into the chart release. tools/ci/github-release feeds RELEASE_RULES
+          # to semantic-release: fix cuts a patch, feat a minor, "!" a major,
+          # and chore cuts nothing (which would stop the cascade here, since a
+          # published chart release is what triggers stack-pin-bump.yml). A
+          # service that moved a minor therefore moves its chart a minor, and
+          # one step later the stack, instead of every bump reading as a patch.
+          type="$(tools/ci/release-bump-type for-level "${LEVEL}")"
+          case "${type}" in
+            *!) subject="${type%!}(charts)!: bump for ${TAG}" ;;
+            *)  subject="${type}(charts): bump for ${TAG}" ;;
+          esac
           # Separate -m flags rather than an embedded multi-line string: the
           # continuation lines of one would have to sit at column zero, which
           # ends the YAML block scalar this script lives in.
-          # fix, not chore. tools/ci/github-release feeds RELEASE_RULES to
-          # semantic-release, where chore carries "release": false. A chore
-          # commit therefore cuts no chart release, and since publishing a chart
-          # release is exactly what triggers stack-pin-bump.yml, the cascade
-          # would stop here: the chart would carry the new appVersion on main
-          # and the stack would never learn about it.
-          #
-          # A patch bump of the chart is the right size. The chart's own
-          # templates and values schema have not changed, only the application
-          # version it defaults to, which is the conventional reading of chart
-          # version against appVersion.
-          git commit \
-            -m "fix(charts): bump for ${TAG}" \
-            -m "Opened by the chart version bump workflow on release of ${TAG}."
+          if [ "${type}" = 'feat!' ]; then
+            git commit \
+              -m "${subject}" \
+              -m "Opened by the chart version bump workflow on release of ${TAG}." \
+              -m "BREAKING CHANGE: ${TAG} is a major release of the service this chart deploys."
+          else
+            git commit \
+              -m "${subject}" \
+              -m "Opened by the chart version bump workflow on release of ${TAG}."
+          fi
           git push --force-with-lease origin "${branch}"
+
+          # The pull request squashes to one commit, so its title has to carry
+          # the largest step among every bump accumulated on the branch.
+          pr_type="$(tools/ci/release-bump-type for-branch "origin/${BASE_BRANCH}")"
+          case "${pr_type}" in
+            *!) title="${pr_type%!}(charts)!: bump chart versions for released services"
+                breaking="BREAKING CHANGE: a pinned service moved to a new major version." ;;
+            *)  title="${pr_type}(charts): bump chart versions for released services"
+                breaking="" ;;
+          esac
 
           notes=""
           if [ -n "${REFUSED}" ]; then
@@ -220,7 +251,8 @@ jobs:
             "If this pull request sits unmerged, later service releases add their bumps to the same branch, so merging it applies all of them." \
             "" \
             "Github commit:" \
-            "fix(charts): bump chart versions for released services" \
+            "${title}" \
+            "${breaking}" \
             "")"
 
           # gh api, not `gh pr edit`. Against this repository `gh pr edit` fails
@@ -229,12 +261,12 @@ jobs:
           # cards it does not need. The REST endpoint has no such dependency.
           number="$(gh api "repos/${REPO}/pulls?head=${REPO%%/*}:${branch}&state=open" -q '.[0].number')"
           if [ -n "${number}" ] && [ "${number}" != "null" ]; then
-            jq -n --arg b "${body}" '{body: $b}' \
+            jq -n --arg t "${title}" --arg b "${body}" '{title: $t, body: $b}' \
               | gh api -X PATCH "repos/${REPO}/pulls/${number}" --input - >/dev/null
             echo "refreshed pull request #${number}"
           else
             gh pr create --base main --head "${branch}" \
-              --title "fix(charts): bump chart versions for released services" \
+              --title "${title}" \
               --body "${body}"
           fi
 

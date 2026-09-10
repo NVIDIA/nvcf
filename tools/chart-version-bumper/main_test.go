@@ -713,3 +713,47 @@ func TestEmptyStringDeployEntryIsRejected(t *testing.T) {
 		t.Fatal("an empty string-form deploys entry must fail to decode")
 	}
 }
+
+func TestBumpLevel(t *testing.T) {
+	cases := []struct{ from, to, want string }{
+		{"1.0.0", "1.0.1", "patch"},
+		{"1.0.0", "1.1.0", "minor"},
+		{"1.9.9", "2.0.0", "major"},
+		{"v1.0.0", "1.1.0-rc.1", "minor"}, // v prefix and pre-release suffix are tolerated
+		{"1.0.0", "1.0.0", ""},            // no move
+		{"1.1.0", "1.0.5", ""},            // downgrade is not a level
+		{"latest", "1.0.1", ""},           // floating tag has no level
+		{"1.0", "1.0.1", ""},              // not MAJOR.MINOR.PATCH
+	}
+	for _, c := range cases {
+		if got := BumpLevel(c.from, c.to); got != c.want {
+			t.Errorf("BumpLevel(%q, %q) = %q, want %q", c.from, c.to, got, c.want)
+		}
+	}
+	if got := HigherLevel("patch", "minor"); got != "minor" {
+		t.Errorf("HigherLevel(patch, minor) = %q", got)
+	}
+	if got := HigherLevel("major", ""); got != "major" {
+		t.Errorf("HigherLevel(major, \"\") = %q", got)
+	}
+}
+
+func TestRunReportsTheLargestSemverStepTaken(t *testing.T) {
+	for _, c := range []struct{ tag, want string }{
+		{"src/svc/v1.0.1", "bump: patch\n"},
+		{"src/svc/v1.2.0", "bump: minor\n"},
+		{"src/svc/v2.0.0", "bump: major\n"},
+	} {
+		f := full(t)
+		_, out, _ := f.run(t, c.tag, false)
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: output lacks %q:\n%s", c.tag, c.want, out)
+		}
+	}
+	// Nothing moved: no level line, so the workflow does not commit a no-op.
+	f := full(t)
+	_, out, _ := f.run(t, "src/svc/v1.0.0", false)
+	if strings.Contains(out, "bump:") {
+		t.Errorf("no-op run must not report a level:\n%s", out)
+	}
+}
