@@ -45,13 +45,20 @@ class CanonicalSuiteTests(unittest.TestCase):
         self.assertEqual(
             suite["scenarios"]["long-context-affinity"],
             {
-                "kind": "long-context-affinity",
-                "sessions": 32,
-                "sessionBatchSize": 8,
-                "inputTokensByTurn": [80_000, 100_000, 120_000],
+                "kind": "session-workers",
                 "repeats": 1,
-                "rate": 1,
-                "workers": 4,
+                "rate": 32,
+                "workers": 32,
+                "sessionTasks": [
+                    [80_000, 100_000, 120_000],
+                    [80_000, 100_000, 120_000],
+                    [8_000, 16_000, 24_000],
+                    [80_000, 100_000, 120_000],
+                    [80_000, 100_000, 120_000],
+                    [1_000, 2_000, 4_000],
+                    [80_000, 100_000, 120_000],
+                    [80_000, 100_000, 120_000],
+                ],
                 "requestSloMs": 60_000,
                 "maxWaitMs": 60_000,
                 "timeoutSeconds": 90,
@@ -70,28 +77,34 @@ class CanonicalSuiteTests(unittest.TestCase):
         self.assertTrue(sessions[2].startswith(sessions[0]))
         self.assertTrue(sessions[4].startswith(sessions[2]))
 
-        long_context = list(
-            LOADTEST.long_context_prompts(3, 2, [80_000, 100_000, 120_000])
+        session_workers = list(
+            LOADTEST.session_worker_prompts(
+                2,
+                [
+                    [80_000, 100_000],
+                    [8_000, 16_000],
+                ],
+            )
+        )
+        first_worker = session_workers[0::2]
+        second_worker = session_workers[1::2]
+        self.assertEqual(
+            len({prompt[:256] for prompt in session_workers}),
+            4,
         )
         self.assertEqual(
-            [5 + len(prompt) // 4 for prompt in long_context],
-            [
-                80_000,
-                80_000,
-                100_000,
-                100_000,
-                120_000,
-                120_000,
-                80_000,
-                100_000,
-                120_000,
-            ],
+            [5 + len(prompt) // 4 for prompt in first_worker],
+            [80_000, 100_000, 8_000, 16_000],
         )
-        self.assertEqual(long_context[0][:256], long_context[2][:256])
-        self.assertEqual(long_context[2][:256], long_context[4][:256])
-        self.assertEqual(long_context[6][:256], long_context[7][:256])
-        self.assertNotEqual(long_context[0][:256], long_context[1][:256])
-        self.assertNotEqual(long_context[0][:256], long_context[6][:256])
+        self.assertEqual(
+            [5 + len(prompt) // 4 for prompt in second_worker],
+            [8_000, 16_000, 80_000, 100_000],
+        )
+        self.assertEqual(first_worker[0][:256], first_worker[1][:256])
+        self.assertEqual(first_worker[2][:256], first_worker[3][:256])
+        self.assertNotEqual(first_worker[0][:256], first_worker[2][:256])
+        self.assertEqual(second_worker[0][:256], second_worker[1][:256])
+        self.assertEqual(second_worker[2][:256], second_worker[3][:256])
 
         hot = list(LOADTEST.mixed_hot_prompts(4, 512, 1024))
         self.assertEqual(len({prompt[:256] for prompt in hot}), 1)
@@ -168,10 +181,10 @@ class CanonicalSuiteTests(unittest.TestCase):
                 Path("long-context/wait-and-widen"),
                 "wait-and-widen",
                 scenario="long-context-affinity",
-                rate=1,
-                workers=1,
+                rate=32,
+                workers=32,
                 workload=workload,
-                requests=24,
+                requests=768,
                 request_slo_ms=60_000,
                 max_wait_ms=60_000,
                 timeout_seconds=90,

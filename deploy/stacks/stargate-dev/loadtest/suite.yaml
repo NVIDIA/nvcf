@@ -64,13 +64,19 @@ scenarios:
     turnBytes: 512
 
   long-context-affinity:
-    kind: long-context-affinity
-    sessions: 32
-    sessionBatchSize: 8
-    inputTokensByTurn: [80000, 100000, 120000]
+    kind: session-workers
     repeats: 1
-    rate: 1
-    workers: 4
+    rate: 32
+    workers: 32
+    sessionTasks:
+      - [80000, 100000, 120000]
+      - [80000, 100000, 120000]
+      - [8000, 16000, 24000]
+      - [80000, 100000, 120000]
+      - [80000, 100000, 120000]
+      - [1000, 2000, 4000]
+      - [80000, 100000, 120000]
+      - [80000, 100000, 120000]
     requestSloMs: 60000
     maxWaitMs: 60000
     timeoutSeconds: 90

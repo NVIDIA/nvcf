@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import os
-import random
 import re
 import shlex
 import shutil
@@ -72,7 +71,7 @@ def load_suite(path: Path = SUITE_PATH) -> dict:
         "requests",
         "sweep",
         "session-affinity",
-        "long-context-affinity",
+        "session-workers",
         "mixed-sessions",
     }
     for name, scenario in suite["scenarios"].items():
@@ -136,31 +135,32 @@ def session_prompts(
             yield histories[session]
 
 
-def long_context_prompts(
-    sessions: int, session_batch_size: int, input_tokens_by_turn: list[int]
+def session_worker_prompts(
+    workers: int, session_tasks: list[list[int]]
 ) -> Iterable[str]:
-    random_source = random.Random(0)
-    session_ids = [f"{random_source.getrandbits(128):032x}" for _ in range(sessions)]
-    for batch_start in range(0, sessions, session_batch_size):
-        histories = [
-            fixed_size_text(
-                f"canonical-long-context-session={session_id}; ",
+    def prompts_for_worker(worker: int) -> Iterable[str]:
+        offset = worker % len(session_tasks)
+        ordered_tasks = session_tasks[offset:] + session_tasks[:offset]
+        for task, input_tokens_by_turn in enumerate(ordered_tasks):
+            session_id = hashlib.sha256(
+                f"canonical-session-worker={worker};task={task}".encode()
+            ).hexdigest()
+            history = fixed_size_text(
+                f"canonical-session={session_id}; ",
                 "Stable repository and coding context. ",
                 256,
             )
-            for session_id in session_ids[
-                batch_start : batch_start + session_batch_size
-            ]
-        ]
-        for input_tokens in input_tokens_by_turn:
-            content_bytes = (input_tokens - 5) * 4
-            for index, history in enumerate(histories):
-                histories[index] = fixed_size_text(
+            for input_tokens in input_tokens_by_turn:
+                history = fixed_size_text(
                     history,
                     " Additional source code, build output, and conversation context. ",
-                    content_bytes,
+                    (input_tokens - 5) * 4,
                 )
-                yield histories[index]
+                yield history
+
+    worker_prompts = [prompts_for_worker(worker) for worker in range(workers)]
+    for prompts in zip(*worker_prompts, strict=True):
+        yield from prompts
 
 
 def mixed_hot_prompts(count: int, minimum: int, maximum: int) -> Iterable[str]:
@@ -509,14 +509,12 @@ class Campaign:
                     kind,
                 )
                 self.workloads[name] = {"main": path}
-            elif kind == "long-context-affinity":
+            elif kind == "session-workers":
                 path = self.workload_dir / f"{name}.yaml"
                 write_workload(
                     path,
-                    long_context_prompts(
-                        scenario["sessions"],
-                        scenario["sessionBatchSize"],
-                        scenario["inputTokensByTurn"],
+                    session_worker_prompts(
+                        scenario["workers"], scenario["sessionTasks"]
                     ),
                     kind,
                 )
@@ -923,10 +921,12 @@ class Campaign:
             )
 
     def run_affinity(self, name: str, scenario: dict) -> None:
-        turns = scenario.get(
-            "turnsPerSession", len(scenario.get("inputTokensByTurn", []))
-        )
-        requests = scenario["sessions"] * turns
+        if scenario["kind"] == "session-workers":
+            requests = scenario["workers"] * sum(
+                len(task) for task in scenario["sessionTasks"]
+            )
+        else:
+            requests = scenario["sessions"] * scenario["turnsPerSession"]
         for repeat in range(1, scenario["repeats"] + 1):
             root = self.runs / name / f"repeat-{repeat:02d}"
             for algorithm in self.algorithm_order(reverse=repeat % 2 == 0):
@@ -1052,7 +1052,7 @@ class Campaign:
         for name in self.scenarios:
             self.log(f"starting canonical scenario {name}")
             scenario = self.suite["scenarios"][name]
-            if scenario["kind"] in ("session-affinity", "long-context-affinity"):
+            if scenario["kind"] in ("session-affinity", "session-workers"):
                 self.run_affinity(name, scenario)
             else:
                 runners[scenario["kind"]](scenario)
@@ -1077,13 +1077,18 @@ def measured_minutes(suite: dict, suite_name: str) -> float:
             seconds += scenario["requests"] / scenario["rate"]
         elif scenario["kind"] == "sweep":
             seconds += len(scenario["rates"]) * scenario["durationSeconds"]
-        elif scenario["kind"] in ("session-affinity", "long-context-affinity"):
-            turns = scenario.get(
-                "turnsPerSession", len(scenario.get("inputTokensByTurn", []))
-            )
+        elif scenario["kind"] == "session-affinity":
             seconds += (
-                scenario["sessions"] * turns * scenario["repeats"] / scenario["rate"]
+                scenario["sessions"]
+                * scenario["turnsPerSession"]
+                * scenario["repeats"]
+                / scenario["rate"]
             )
+        elif scenario["kind"] == "session-workers":
+            requests = scenario["workers"] * sum(
+                len(task) for task in scenario["sessionTasks"]
+            )
+            seconds += requests * scenario["repeats"] / scenario["rate"]
         else:
             seconds += scenario["durationSeconds"] * scenario["repeats"]
     return seconds * 2 / 60
