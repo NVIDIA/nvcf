@@ -54,6 +54,7 @@ scaling:
     type: Custom
     settings:
       ttl_seconds: 300
+      request_timeout_seconds: 30
       default_thresholds:
         scale_up_threshold: 70.0
         scale_down_threshold: 30.0

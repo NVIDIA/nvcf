@@ -52,6 +52,7 @@ impl PolicyCache {
         grpc_endpoint: String,
         oauth2_client: Arc<OAuth2Client>,
         ttl_seconds: u64,
+        request_timeout_seconds: u64,
         max_capacity: u64,
         default_thresholds: ScalingThresholds,
         default_factors: ScalingFactors,
@@ -61,7 +62,13 @@ impl PolicyCache {
             .time_to_live(Duration::from_secs(ttl_seconds))
             .build();
 
-        let grpc_client = Arc::new(PolicyClient::new_lazy(grpc_endpoint, oauth2_client)?);
+        let grpc_client = Arc::new(PolicyClient::new_lazy(
+            grpc_endpoint,
+            oauth2_client,
+            Duration::from_secs(request_timeout_seconds),
+            default_thresholds.clone(),
+            default_factors.clone(),
+        )?);
 
         Ok(Self {
             cache,
@@ -188,6 +195,7 @@ mod tests {
             "http://localhost:50051".to_string(),
             oauth2_client,
             86400,
+            30,
             10000,
             ScalingThresholds::default(),
             ScalingFactors::default(),
@@ -204,6 +212,7 @@ mod tests {
             "http://localhost:50051".to_string(),
             oauth2_client,
             86400,
+            30,
             10000,
             ScalingThresholds::default(),
             ScalingFactors::default(),
@@ -223,6 +232,7 @@ mod tests {
             "http://localhost:50051".to_string(),
             oauth2_client,
             86400,
+            30,
             10000,
             ScalingThresholds::default(),
             ScalingFactors::default(),

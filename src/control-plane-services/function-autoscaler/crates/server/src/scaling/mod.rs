@@ -58,6 +58,9 @@ fn default_policy_cache_max_capacity() -> u64 {
 fn default_policy_cache_ttl_seconds() -> u64 {
     300
 }
+fn default_policy_request_timeout_seconds() -> u64 {
+    30
+}
 fn default_discovery_recently_invoked_lookback_minutes() -> u64 {
     5
 }
@@ -241,6 +244,8 @@ pub enum ScalingPolicy {
 pub struct CustomScalingPolicyConfig {
     #[serde(rename = "ttl_seconds")]
     pub ttl_seconds: u64,
+    #[serde(default = "default_policy_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
     // Fallback defaults when custom policy fetch fails
     pub default_thresholds: ScalingThresholds,
     pub default_factors: ScalingFactors,
@@ -250,6 +255,7 @@ impl Default for CustomScalingPolicyConfig {
     fn default() -> Self {
         Self {
             ttl_seconds: default_policy_cache_ttl_seconds(),
+            request_timeout_seconds: default_policy_request_timeout_seconds(),
             default_thresholds: ScalingThresholds::default(),
             default_factors: ScalingFactors::default(),
         }
@@ -505,6 +511,7 @@ mod tests {
             panic!("default scaling policy should be Custom");
         };
         assert_eq!(config.ttl_seconds, 300);
+        assert_eq!(config.request_timeout_seconds, 30);
         assert_eq!(config.default_thresholds, ScalingThresholds::default());
         assert_eq!(config.default_factors, ScalingFactors::default());
     }
