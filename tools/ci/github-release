@@ -585,6 +585,15 @@ def create_release(tag, title, notes, draft, dry_run):
     return True
 
 
+def publish_release(tag, dry_run):
+    """Publish a draft GitHub release after its required assets are present."""
+    if dry_run:
+        print(f"[github-release] dry-run: would publish GitHub release {tag}")
+        return
+    run(["gh", "release", "edit", tag, "--draft=false"])
+    print(f"[github-release] published GitHub release {tag}")
+
+
 def release_asset_service(metadata, tag, root):
     matches = []
     for service in metadata.get("services", []):
@@ -1248,20 +1257,24 @@ def tag_release(args):
     asset_name = asset_service["resolved_inventory_asset"]
     if dry_run:
         print(f"[github-release] dry-run: would generate and upload {asset_name} for {tag}")
-        create_release(tag, tag, notes, draft=draft, dry_run=True)
+        create_release(tag, tag, notes, draft=True, dry_run=True)
+        if not draft:
+            publish_release(tag, dry_run=True)
         return
 
     commit = tag_sha(root, tag)
     with tempfile.TemporaryDirectory(prefix="nvcf-resolved-stack-inventory-") as tmp:
         asset_path = Path(tmp) / asset_name
         generate_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path)
-        created = create_release(tag, tag, notes, draft=draft, dry_run=False)
+        created = create_release(tag, tag, notes, draft=True, dry_run=False)
         try:
             publish_resolved_stack_inventory(tag, asset_path)
         except (Exception, SystemExit):
             if created:
                 delete_release_after_inventory_failure(tag)
             raise
+        if not draft:
+            publish_release(tag, dry_run=False)
 
 
 def fetch_semantic_release_notes(root):

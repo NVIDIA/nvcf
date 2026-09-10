@@ -6,7 +6,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,9 +80,6 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	for _, state := range resolvedInventoryStates {
 		writeFile(t, filepath.Join(repo, filepath.FromSlash(state.path)), "releases: []\n")
 	}
-	if err := os.MkdirAll(filepath.Join(repo, "deploy/stacks/self-managed/secrets"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	source := stackSourceRelease{
 		Version: "1.2.3",
@@ -154,8 +150,14 @@ func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repos
 	return nil
 }
 
-func (runner *fakeResolvedInventoryRunner) Output(_ string, _ []string, args ...string) ([]byte, error) {
+func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args ...string) ([]byte, error) {
 	runner.t.Helper()
+	if got := argumentAfter(runner.t, args, "--environment"); got != "default" {
+		runner.t.Fatalf("Helmfile environment = %q, want default", got)
+	}
+	if got := environmentValue(env, "HELMFILE_ENV"); got != "inventory" {
+		runner.t.Fatalf("HELMFILE_ENV = %q, want inventory", got)
+	}
 	stateFile := argumentAfter(runner.t, args, "--file")
 	action := resolvedInventoryAction(args)
 	releases := fakeResolvedInventoryReleases(stateFile, hasResolvedInventoryFullOverrides(args))
@@ -240,5 +242,15 @@ func argumentAfter(t *testing.T, args []string, flag string) string {
 		}
 	}
 	t.Fatalf("missing %s in %v", flag, args)
+	return ""
+}
+
+func environmentValue(env []string, name string) string {
+	for _, entry := range env {
+		entryName, value, found := strings.Cut(entry, "=")
+		if found && entryName == name {
+			return value
+		}
+	}
 	return ""
 }

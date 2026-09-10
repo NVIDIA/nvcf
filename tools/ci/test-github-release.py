@@ -1165,6 +1165,28 @@ class GithubReleaseTest(unittest.TestCase):
             ],
         }
 
+    def test_publish_release_makes_the_exact_draft_public(self):
+        calls = []
+        self.github_release.run = lambda args, **_kwargs: calls.append(args)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.publish_release(
+                "deploy/stacks/self-managed/v1.2.3", dry_run=False
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "gh",
+                    "release",
+                    "edit",
+                    "deploy/stacks/self-managed/v1.2.3",
+                    "--draft=false",
+                ]
+            ],
+        )
+
     def test_stack_tag_generates_inventory_before_release_and_uploads_after(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(root))
@@ -1179,9 +1201,14 @@ class GithubReleaseTest(unittest.TestCase):
         self.github_release.generate_resolved_stack_inventory = (
             lambda _root, _tag, _version, _commit, path: calls.append(("generate", Path(path).name))
         )
-        self.github_release.create_release = lambda *_args, **_kwargs: calls.append(("release", tag))
+        self.github_release.create_release = (
+            lambda _tag, _title, _notes, draft, dry_run: calls.append(("release", draft, dry_run)) or True
+        )
         self.github_release.publish_resolved_stack_inventory = (
             lambda _tag, path: calls.append(("upload", Path(path).name))
+        )
+        self.github_release.publish_release = (
+            lambda _tag, dry_run: calls.append(("publish", dry_run))
         )
 
         with contextlib.redirect_stdout(io.StringIO()):
@@ -1191,10 +1218,33 @@ class GithubReleaseTest(unittest.TestCase):
             calls,
             [
                 ("generate", "nvcf-self-managed-stack-inventory.json"),
-                ("release", tag),
+                ("release", True, False),
                 ("upload", "nvcf-self-managed-stack-inventory.json"),
+                ("publish", False),
             ],
         )
+
+    def test_stack_tag_preserves_explicit_draft_after_inventory_upload(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        calls = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: self.stack_release_metadata()
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.bool_env = lambda *_args: True
+        self.github_release.tag_sha = lambda *_args: "a" * 40
+        self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
+        self.github_release.create_release = (
+            lambda _tag, _title, _notes, draft, dry_run: calls.append(("release", draft, dry_run)) or True
+        )
+        self.github_release.publish_resolved_stack_inventory = lambda *_args: calls.append("upload")
+        self.github_release.publish_release = lambda *_args: calls.append("publish")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
+
+        self.assertEqual(calls, ["generate", ("release", True, False), "upload"])
 
     def test_stack_inventory_generation_failure_prevents_partial_release(self):
         root = Path(tempfile.mkdtemp())

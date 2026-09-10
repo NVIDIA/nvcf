@@ -363,6 +363,9 @@ func prepareResolvedInventoryEnvironment(copiedRepoRoot string) ([]string, strin
 		}
 	}
 	secretsPath := filepath.Join(copiedRepoRoot, "deploy", "stacks", "self-managed", "secrets", "inventory-secrets.yaml")
+	if err := os.MkdirAll(filepath.Dir(secretsPath), 0o755); err != nil {
+		return nil, "", fmt.Errorf("create inventory-only stack secrets directory: %w", err)
+	}
 	if err := os.WriteFile(secretsPath, []byte("{}\n"), 0o600); err != nil {
 		return nil, "", fmt.Errorf("write inventory-only stack secrets: %w", err)
 	}
@@ -484,6 +487,7 @@ func runResolvedInventoryHelmfile(
 	overrides []string,
 	command ...string,
 ) ([]byte, error) {
+	// The stack states expose "default" while HELMFILE_ENV selects inventory.yaml within it.
 	args := []string{"--file", stateFile, "--environment", "default", "--quiet"}
 	for _, override := range overrides {
 		args = append(args, "--state-values-set", override)
