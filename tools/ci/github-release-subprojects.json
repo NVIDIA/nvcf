@@ -203,13 +203,21 @@
       "id": "admin-token-issuer-proxy",
       "path": "deploy/helm/admin-token-issuer-proxy",
       "service_name": "helm-admin-token-issuer-proxy",
-      "legacy_tag_prefix": "helm-admin-token-issuer-proxy-v"
+      "legacy_tag_prefix": "helm-admin-token-issuer-proxy-v",
+      "deploys": [
+        "admin-token-issuer-proxy-app"
+      ]
     },
     {
       "id": "cassandra",
       "path": "deploy/helm/cassandra",
       "service_name": "helm-nvcf-cassandra",
       "legacy_tag_prefix": "helm-nvcf-cassandra-v"
+    },
+    {
+      "id": "cassandra-image",
+      "path": "infra/cassandra",
+      "service_name": "nvcf-cassandra"
     },
     {
       "id": "api-keys-colocated",
@@ -222,6 +230,11 @@
       "path": "deploy/helm/openbao",
       "service_name": "helm-nvcf-openbao-server",
       "legacy_tag_prefix": "helm-nvcf-openbao-server-v"
+    },
+    {
+      "id": "openbao-image",
+      "path": "infra/openbao",
+      "service_name": "nvcf-openbao"
     },
     {
       "id": "cert-manager",
@@ -264,7 +277,16 @@
       "service_name": "helm-nvca-operator",
       "legacy_tag_prefix": "helm-nvca-operator-v",
       "deploys": [
-        "nvca"
+        "nvca",
+        {
+          "service": "byoo-otel-collector",
+          "values_paths": [
+            "otelCollector.imageTag",
+            "agent.byooOtelCollector.imageTag",
+            "helmManaged.otelCollector.imageTag",
+            "selfManaged.otelCollector.imageTag"
+          ]
+        }
       ]
     },
     {

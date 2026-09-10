@@ -289,9 +289,10 @@ func (v *validator) validateHosts() {
 
 func (v *validator) validateNoDNSHostHeaders() {
 	cp := v.doc.ControlPlane
-	requireHostForGatewayURL(v.add, "controlPlane.gateway.httpURL", cp.Gateway.HTTPURL, "", "controlPlane.hosts.api", cp.Hosts.API)
+	requireHostForGatewayURL(v.add, "controlPlane.gateway.httpURL", cp.Gateway.HTTPURL, cp.Gateway.HTTPURL, "controlPlane.hosts.api", cp.Hosts.API)
 	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.icmsURL", cp.Endpoints.ComputeReachable.ICMSURL, cp.Gateway.HTTPURL, "controlPlane.hosts.sis", cp.Hosts.SIS)
 	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.revalURL", cp.Endpoints.ComputeReachable.ReValURL, cp.Gateway.HTTPURL, "controlPlane.hosts.reval", cp.Hosts.ReVal)
+	requireHostForGatewayURL(v.add, "controlPlane.endpoints.computeReachable.natsURL", cp.Endpoints.ComputeReachable.NATSURL, cp.Gateway.HTTPURL, "controlPlane.hosts.nats", cp.Hosts.NATS)
 }
 
 // validateManagementTLS validates managementTls only when it is provided. An

@@ -33,21 +33,28 @@ Never echo the key value (nvapi-...) into chat or logs. Report only that the key
 Before running any `task` command in a fresh agent session, verify credentials:
 
 1. Check whether `NVCF_API_KEY` is set:
+
    ```sh
    printenv NVCF_API_KEY > /dev/null 2>&1 && echo set || echo unset
    ```
+
 2. If unset, read the stored key expiry without printing the value:
+
    ```sh
    python3 -c "import json,pathlib; s=json.loads(pathlib.Path('~/.nvcf-cli.state').expanduser().read_text()); print(s.get('nvctApiKeyExpiration','missing'))"
    ```
+
 3. If the expiry is in the past or missing, regenerate:
+
    ```sh
    nvcf-cli refresh
    nvcf-cli api-key generate --for task --description="task-key" --expires-in=24h --validate
    ```
+
 4. Inject the stored key into the subprocess env without logging the value. Use a shell subshell or env prefix — never print the key into chat.
 
 Error classification:
+
 - "missing authentication credentials" or exit 2: key not injected; repeat pre-flight.
 - HTTP 403: key expired or wrong audience; regenerate.
 - Empty task list: valid; no tasks exist yet.

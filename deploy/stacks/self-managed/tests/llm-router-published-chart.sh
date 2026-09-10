@@ -11,8 +11,8 @@ stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
 published_manifest="$work_dir/llm-request-router.yaml"
 published_release="$work_dir/llm-request-router-release.json"
-published_version=1.12.2
-expected_stargate_image="${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/stargate:0.14.1"
+published_version=1.13.3
+expected_stargate_image="${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/stargate:0.16.2"
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {

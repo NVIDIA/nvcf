@@ -116,6 +116,8 @@ class AutoscalingConfigurationTest {
             "fixtures/autoscaler/config/invalid_missing_threshold.json";
     private static final String CONFIG_NEGATIVE_THRESHOLD_JSON =
             "fixtures/autoscaler/config/invalid_negative_threshold.json";
+    private static final String CONFIG_THRESHOLD_ABOVE_100_JSON =
+            "fixtures/autoscaler/config/invalid_threshold_above_100.json";
     private static final String CONFIG_MISSING_FACTOR_JSON =
             "fixtures/autoscaler/config/invalid_missing_factor.json";
     private static final String CONFIG_SCALE_UP_FACTOR_LTE_1_JSON =
@@ -307,13 +309,16 @@ class AutoscalingConfigurationTest {
                              HttpStatus.BAD_REQUEST),
                 // 10. scaleUpDetails negative threshold: 400
                 Arguments.of(readFileAsString(CONFIG_NEGATIVE_THRESHOLD_JSON),
+                              HttpStatus.BAD_REQUEST),
+                // 11. scaleUpDetails threshold above 100: 400
+                Arguments.of(readFileAsString(CONFIG_THRESHOLD_ABOVE_100_JSON),
                              HttpStatus.BAD_REQUEST),
-                // 11. scaleUpDetails missing factor: 400
+                // 12. scaleUpDetails missing factor: 400
                 Arguments.of(readFileAsString(CONFIG_MISSING_FACTOR_JSON), HttpStatus.BAD_REQUEST),
-                // 12. scaleUpDetails factor <= 1.0: 400
+                // 13. scaleUpDetails factor <= 1.0: 400
                 Arguments.of(readFileAsString(CONFIG_SCALE_UP_FACTOR_LTE_1_JSON),
-                             HttpStatus.BAD_REQUEST),
-                // 13. scaleDownDetails factor >= 1.0: 400
+                              HttpStatus.BAD_REQUEST),
+                // 14. scaleDownDetails factor >= 1.0: 400
                 Arguments.of(readFileAsString(CONFIG_SCALE_DOWN_FACTOR_GTE_1_JSON),
                              HttpStatus.BAD_REQUEST)
         );

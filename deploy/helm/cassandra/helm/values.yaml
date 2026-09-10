@@ -196,7 +196,9 @@ cassandra:
       # repository: must be supplied in additional values
       registry: ""
       repository: ""
-      tag: 0.17.1
+      # 0.17.3 includes the current NVCT task schema while preserving tables
+      # required by the published function autoscaler 1.21.0.
+      tag: 0.17.3
       pullPolicy: Always
 
   dbUser:

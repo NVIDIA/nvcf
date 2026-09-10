@@ -41,6 +41,7 @@ Surface the events + last log lines. Don't propose `kubectl delete pod` unless t
 ## 4. When the user wants to start over
 
 If they confirm a teardown:
+
 - Single-cluster: `cd nvcf-self-managed-stack && make destroy` (or `helm uninstall` per release in reverse order).
 - Multi-cluster: `helm uninstall nvca-operator -n nvca-operator` on the compute plane FIRST; then control plane; then `nvcf-cli cluster delete --cluster-id=<id>` to remove the ICMS row.
 

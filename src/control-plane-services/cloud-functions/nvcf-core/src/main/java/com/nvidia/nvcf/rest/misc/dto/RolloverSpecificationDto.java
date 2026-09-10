@@ -17,21 +17,17 @@
 package com.nvidia.nvcf.rest.misc.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import java.util.UUID;
 import lombok.Builder;
 
 @Builder
 @Schema(description = "DTO representing worker rollover specification.")
 public record RolloverSpecificationDto(
-        @Schema(description = "GPU name from the cluster")
-        @NotBlank String gpu,
+        @Schema(description = "GPU specification ID")
+        @NotNull UUID gpuSpecId,
 
-        @Schema(description = "Instance type, based on GPU, assigned to a Worker")
-        @NotBlank String instanceType,
-
-        @Schema(description = "Number of instances for the deployment spec")
+        @Schema(description = "Number of instances to create for the GPU specification")
         @NotNull @Positive Integer numInstances) {
-
 }

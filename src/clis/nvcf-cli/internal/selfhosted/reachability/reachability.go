@@ -36,6 +36,7 @@ type CheckRequest struct {
 	NATSURL           string
 	SISHost           string
 	ReValHost         string
+	NATSHost          string
 	HTTPClient        *http.Client
 	ProbeHTTP         bool
 }
@@ -67,7 +68,7 @@ func Check(ctx context.Context, req CheckRequest) error {
 	var problems []string
 	problems = append(problems, validateHTTPService("controlPlane.endpoints.computeReachable.icmsURL", req.ICMSURL, req.GatewayHTTPURL, "controlPlane.hosts.sis", req.SISHost)...)
 	problems = append(problems, validateHTTPService("controlPlane.endpoints.computeReachable.revalURL", req.ReValURL, req.GatewayHTTPURL, "controlPlane.hosts.reval", req.ReValHost)...)
-	problems = append(problems, validateNATSServiceShape(req.NATSURL)...)
+	problems = append(problems, validateNATSServiceShape(req.NATSURL, req.GatewayHTTPURL, req.NATSHost)...)
 	if len(problems) == 0 && req.ProbeHTTP {
 		client := req.HTTPClient
 		if client == nil {
@@ -108,7 +109,7 @@ func validateHTTPService(urlField, rawURL, gatewayHTTPURL, hostField, hostHeader
 	return problems
 }
 
-func validateNATSServiceShape(rawURL string) []string {
+func validateNATSServiceShape(rawURL, gatewayHTTPURL, hostHeader string) []string {
 	if strings.TrimSpace(rawURL) == "" {
 		return []string{"controlPlane.endpoints.computeReachable.natsURL: required"}
 	}
@@ -118,6 +119,9 @@ func validateNATSServiceShape(rawURL string) []string {
 	}
 	if u.Scheme != "nats" && u.Scheme != "tls" {
 		return []string{"controlPlane.endpoints.computeReachable.natsURL: scheme must be nats or tls; TCP reachability is not probed"}
+	}
+	if isGatewayAddress(u.Hostname(), gatewayHTTPURL) && strings.TrimSpace(hostHeader) == "" {
+		return []string{"controlPlane.hosts.nats: required when controlPlane.endpoints.computeReachable.natsURL uses a shared gateway address; set controlPlane.hosts.nats to the service Host header"}
 	}
 	return nil
 }

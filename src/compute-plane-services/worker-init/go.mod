@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260807010315-d791d3c11262
-	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260710034659-973443ac16c3
+	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20260903135415-10c9eba7e15d
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.10

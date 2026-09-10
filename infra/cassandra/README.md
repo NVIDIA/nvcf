@@ -32,9 +32,11 @@ docker build \
   -t <your-registry>/<your-org>/nvcf-cassandra:<version> .
 ```
 
-Supplying only `EXPORTER_JAR` without `EXPORTER_JAVAAGENT` copies the jar into the image but never loads it; the image still runs without metrics. Both build args must be set together to get a working exporter.
+Both build args must be set together to get a working exporter. The build rejects either mismatched combination so an exporter jar cannot be silently omitted from the JVM or an empty placeholder loaded as a Java agent.
 
 The jar must expose the same metrics interface the image's `JVM_EXTRA_OPTS` javaagent wiring expects (see `Dockerfile`). If you change the jar, update the `EXPORTER_JAR` build-arg accordingly; the source path and filename are entirely up to you.
+
+The build replaces the exporter's complete shaded Netty module set with the checksum-pinned version declared in `scripts/repack-exporter-netty.sh`. It fails if the input jar's Netty module set changes, rather than leaving a partially updated dependency graph in the image. The exporter implementation, Java agent manifest, and unrelated shaded dependencies are preserved.
 
 ## Prerequisites
 

@@ -113,6 +113,7 @@ go_test(
         "cluster_registration_test.go",
         "deploy_test.go",
         "exit_code_error_test.go",
+        "function_create_test.go",
         "function_llm_model_test.go",
         "function_request_priority_test.go",
         "main_test.go",

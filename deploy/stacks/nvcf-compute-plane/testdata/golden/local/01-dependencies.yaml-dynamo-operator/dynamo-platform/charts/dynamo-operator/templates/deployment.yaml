@@ -9,10 +9,10 @@ metadata:
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
     control-plane: controller-manager
-    helm.sh/chart: dynamo-operator-1.4.1
+    helm.sh/chart: dynamo-operator-1.4.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.1"
+    app.kubernetes.io/version: "1.4.2"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
@@ -31,11 +31,11 @@ spec:
         app.kubernetes.io/instance: dynamo-operator
       annotations:
         kubectl.kubernetes.io/default-container: manager
-        checksum/config: 0c8ea1834ecd65a5dc13c7eb06542616828dfea7bbb5819416745500c0322362
+        checksum/config: 2c980230ddc059b0f682a4b8cbf766c66289c03ce4deaf8793cb1d7a789374aa
     spec:
       initContainers:
       - name: crd-apply
-        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.1
+        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.2
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
@@ -45,14 +45,14 @@ spec:
         command: ["/crd-apply"]
         args:
           - "--crds-dir=/opt/dynamo-operator/crds/"
-          - "--version=1.4.1"
+          - "--version=1.4.2"
           - "--conversion-webhook-service-name=dynamo-operator-webhook-service"
           - "--conversion-webhook-service-namespace=dynamo-system"
       containers:
       - args:
         - --config=/etc/dynamo-operator/config.yaml
-        - --operator-version=1.4.1
-        - "--operator-image=nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.1"
+        - --operator-version=1.4.2
+        - "--operator-image=nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.2"
         - "--operator-image-pull-policy=IfNotPresent"
         command:
         - /manager
@@ -68,7 +68,7 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         imagePullPolicy: "IfNotPresent"
-        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.1
+        image: nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.2
         livenessProbe:
           httpGet:
             path: /healthz

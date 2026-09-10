@@ -25,9 +25,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Keep GitHub release automation inert until the migration cutover is ready.
-  # Set the repository variable NVCF_GITHUB_AUTO_TAGGING_ENABLED=true after
-  # GitHub has the required path-format release anchors.
+  # Release automation is live. This repository is the sole tag and release
+  # authority, and both variables are set in repository settings
+  # (NVCF_GITHUB_AUTO_TAGGING_ENABLED=true, NVCF_GITHUB_RELEASE_DRY_RUN=false).
+  #
+  # The literals below are NOT the behavior here. They are the fallback for a
+  # context that has neither variable set -- a fork, or a re-created repository
+  # -- where defaulting to dry-run keeps a misconfigured checkout from cutting
+  # real releases against someone else's registries. Read the repository
+  # variables to see what actually runs; do not read these defaults as the
+  # current mode.
   NVCF_GITHUB_AUTO_TAGGING_ENABLED: ${{ vars.NVCF_GITHUB_AUTO_TAGGING_ENABLED || 'false' }}
   NVCF_GITHUB_RELEASE_DRY_RUN: ${{ vars.NVCF_GITHUB_RELEASE_DRY_RUN || 'true' }}
   NVCF_GITHUB_RELEASE_DRAFT: ${{ vars.NVCF_GITHUB_RELEASE_DRAFT || 'false' }}

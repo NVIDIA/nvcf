@@ -107,7 +107,7 @@ RUN curl -sSfL -o /usr/local/bin/grpc_health_probe \
 #########################
 ### BASE RUNTIME STAGE ##
 #########################
-FROM nvcr.io/nvidia/distroless/cc:v4.0.8 AS runtime-base
+FROM nvcr.io/nvidia/distroless/cc:v4.1.2 AS runtime-base
 
 ################################
 ### TILT INTEGRATION RUNTIME ###

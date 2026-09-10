@@ -201,7 +201,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-openbao-server
-    version: 0.32.1
+    version: 0.32.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-pki
@@ -722,6 +722,8 @@ stack:
   gitlab_project_id: 182049
   package_name: ncp-deploy
   artifacts_file: artifacts-0.9.1.txt
+  source_version: 0.9.1
+  source_tag: deploy/stacks/self-managed/v0.9.1
   source_commit: 9cf1103b0e9fe90bde6a8147c95d3d423e96c781
   pin_sources:
     - deploy/stacks/nvcf-compute-plane/environments/base.yaml
@@ -861,7 +863,7 @@ artifacts:
   - name: helm-nvcf-openbao-server
     type: chart
     registry: staging
-    version: 0.32.1
+    version: 0.32.2
   - name: helm-nvcf-pki
     type: chart
     registry: staging

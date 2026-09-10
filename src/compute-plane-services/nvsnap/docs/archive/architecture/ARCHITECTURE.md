@@ -5,6 +5,7 @@
 NVSNAP is a production-grade GPU checkpoint/restore system for Kubernetes that enables live migration of GPU workloads without application modification. This document outlines the architecture, technical challenges, and phased implementation plan.
 
 **Key Constraints:**
+
 - ❌ Cannot modify applications (PyTorch, vLLM, etc.)
 - ❌ Cannot depend on specific container runtimes (containerd, CRI-O)
 - ❌ Cannot depend on specific Kubernetes versions
@@ -32,7 +33,7 @@ NVSNAP is a production-grade GPU checkpoint/restore system for Kubernetes that e
 
 Unlike CPU applications where all state lives in process memory (checkpointable via CRIU), GPU applications have state in multiple places:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                     GPU Application State                        │
 ├─────────────────────────────────────────────────────────────────┤
@@ -60,12 +61,14 @@ Unlike CPU applications where all state lives in process memory (checkpointable 
 ### Problem 2: NVIDIA Doesn't Provide Checkpoint APIs
 
 NVIDIA does not provide public APIs for:
+
 - Dumping GPU memory contents
 - Saving CUDA context state
 - Serializing stream/event state
 - Restoring any of the above
 
 **Our Approach:** We must work around this limitation using:
+
 1. **CUDA Driver API** - Low-level access to GPU memory
 2. **Library Interposition** - Track CUDA calls without modifying apps
 3. **Process Introspection** - Understand GPU state from /proc and nvidia-smi
@@ -73,12 +76,13 @@ NVIDIA does not provide public APIs for:
 ### Problem 3: Multi-Process Coordination (vLLM/DeepSpeed)
 
 vLLM and similar frameworks use:
+
 - Multiple worker processes
 - NCCL for GPU-to-GPU communication
 - Shared memory for IPC
 - Complex process hierarchies
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                    vLLM Process Hierarchy                        │
 ├─────────────────────────────────────────────────────────────────┤
@@ -120,6 +124,7 @@ vLLM and similar frameworks use:
 ### Problem 4: Container Runtime Independence
 
 We cannot use containerd or CRI-O checkpoint APIs because:
+
 1. Not all runtimes support checkpoint
 2. Runtime versions vary across clusters
 3. Checkpoint implementations differ
@@ -133,7 +138,7 @@ We cannot use containerd or CRI-O checkpoint APIs because:
 
 ### High-Level Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              NVSNAP System                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -206,7 +211,7 @@ func (pd *ProcessDiscovery) FindGPUProcesses(ctx context.Context) ([]*GPUProcess
 
 **How we map processes to pods without runtime APIs:**
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Process to Pod Mapping                         │
 ├─────────────────────────────────────────────────────────────────┤
@@ -229,7 +234,7 @@ func (pd *ProcessDiscovery) FindGPUProcesses(ctx context.Context) ([]*GPUProcess
 
 We use `LD_PRELOAD` to intercept CUDA calls and track state:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                   CUDA Interposition Layer                       │
 ├─────────────────────────────────────────────────────────────────┤
@@ -298,7 +303,7 @@ int checkpoint_gpu_memory(pid_t pid, GPUAllocation** allocs, int* count) {
 
 We use CRIU for CPU state but with custom handling for GPU:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Checkpoint Flow                                │
 ├─────────────────────────────────────────────────────────────────┤
@@ -332,6 +337,7 @@ We use CRIU for CPU state but with custom handling for GPU:
 ## Multi-Process GPU Workloads (vLLM)
 
 This is the hardest part. vLLM uses:
+
 - Ray or multiprocessing for worker management
 - NCCL for GPU collective operations
 - Shared memory for tensor passing
@@ -339,7 +345,7 @@ This is the hardest part. vLLM uses:
 
 ### The vLLM Checkpoint Challenge
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │              vLLM Checkpoint Challenges                          │
 ├─────────────────────────────────────────────────────────────────┤
@@ -394,7 +400,7 @@ This is the hardest part. vLLM uses:
 
 ### Multi-Process Checkpoint Protocol
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │           Coordinated Multi-Process Checkpoint                   │
 ├─────────────────────────────────────────────────────────────────┤
@@ -511,7 +517,7 @@ def restore_nccl_workload(checkpoint_data, target_gpus):
 
 **Goal:** Establish project infrastructure and core abstractions.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 0 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -554,7 +560,7 @@ def restore_nccl_workload(checkpoint_data, target_gpus):
 
 **Goal:** Checkpoint and restore a single containerized process (no GPU).
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 1 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -593,6 +599,7 @@ def restore_nccl_workload(checkpoint_data, target_gpus):
 ```
 
 **Cluster Test Plan:**
+
 ```bash
 # Deploy test workload
 kubectl apply -f test/workloads/simple-python.yaml
@@ -636,7 +643,7 @@ kubectl logs <restored-pod> | grep "resumed"
 
 **Goal:** Checkpoint and restore a single-process GPU application (simple CUDA).
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 2 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -677,6 +684,7 @@ kubectl logs <restored-pod> | grep "resumed"
 ```
 
 **Test Program:**
+
 ```cuda
 // test_cuda_checkpoint.cu
 // Performs iterative computation, checkpointable at any iteration
@@ -707,7 +715,7 @@ int main() {
 
 **Goal:** Checkpoint and restore PyTorch training jobs.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 3 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -746,7 +754,7 @@ int main() {
 
 **Goal:** Checkpoint and restore multi-process GPU workloads (DDP, no NCCL yet).
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 4 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -785,7 +793,7 @@ int main() {
 
 **Goal:** Full NCCL support for production multi-GPU training.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 5 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -824,7 +832,7 @@ int main() {
 
 **Goal:** Full support for vLLM inference workloads.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 6 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -869,7 +877,7 @@ int main() {
 
 **Goal:** Production readiness with comprehensive testing.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 7 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -920,7 +928,7 @@ int main() {
 
 **Goal:** Beautiful, functional web UI.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Phase 8 Deliverables                      │
 ├─────────────────────────────────────────────────────────────────┤
@@ -961,7 +969,7 @@ int main() {
 
 ### Test Pyramid
 
-```
+```text
                     ┌─────────────────┐
                     │     E2E Tests   │  ← Full cluster, real GPUs
                     │    (10 tests)   │
@@ -992,7 +1000,7 @@ int main() {
 
 Each phase must pass before proceeding:
 
-```
+```text
 ☐ All unit tests pass (>80% coverage)
 ☐ All integration tests pass
 ☐ E2E tests pass on real cluster
@@ -1102,7 +1110,7 @@ CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize) {
 
 ### C. Checkpoint File Format
 
-```
+```text
 checkpoint/
 ├── manifest.json           # Metadata, version, options
 ├── process/

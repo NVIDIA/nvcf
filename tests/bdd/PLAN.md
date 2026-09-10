@@ -121,6 +121,7 @@ refactor in every consumer; that is a feature.
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
+| `When I export the function selected by NVCF CLI to environment variables {string} and {string}` | Runs one `nvcf-cli status --json` for the selected config and exports the selected function ID and version ID under the two named env vars, in that order. Fails when no function is selected or either ID is empty. Both names stay visible in Gherkin. Snapshotted by the env Ledger; restored at suite teardown. |
 
 #### Registration observability command adapters
 
@@ -197,6 +198,8 @@ original order. Repeated options and empty values are preserved.
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
 | `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
 | `Then DNS name {string} should resolve within {string} seconds` | Waits for the explicit DNS name to resolve through the host resolver within the explicit timeout. `${VAR}` interpolation applies to the name and timeout. Resolution must remain successful for three consecutive checks. Failures report the unresolved name and timeout without printing resolver output. |
+| `Then the function selected by NVCF CLI should have no scheduled compute-plane instances using context {string} and kubeconfig {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then reads `cluster agent list-functions --json` with the explicit compute-plane context and kubeconfig. The compute-plane CLI lists only scheduled functions, so no matching row and a matching row reporting zero instances both satisfy the assertion. |
+| `Then the function selected by NVCF CLI should report {string} compute-plane instances with status {string} using context {string} and kubeconfig {string} within {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then polls `cluster agent get-function --json` with the explicit compute-plane context and kubeconfig until the reported instance count matches and that many instances report the visible status, compared case-insensitively. The expected count, status, and timeout stay visible. Each attempt is a separate runner invocation, so every poll is logged. |
 
 #### YAML comparison semantics
 
@@ -242,31 +245,42 @@ Reference argv shapes used by the CLI features (matches the current CLI
 contract verified in `src/clis/nvcf-cli/cmd/`):
 
 - `self-hosted up`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain up --cluster-name <name> --region us-west-1 --nca-id nvcf-default
   ```
+
 - `self-hosted install --control-plane` (multi-cluster):
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain --control-plane-context k3d-<cp> --compute-plane-context k3d-<compute> install --control-plane --cluster-name <cp> --region us-west-1 --nca-id nvcf-default
   ```
+
 - `self-hosted control-plane profile validate`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain control-plane profile validate --file <profile-path> --require in-cluster
   ```
+
 - `self-hosted compute-plane register`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
+
 - Helmfile control-plane profile handoff (single cluster):
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
   make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
   ```
+
   The profile export runs after the selected Helmfile environment is installed
   so endpoint and PKI trust data describe that deployment. A single-cluster
   export omits both persistent context flags; the CLI accepts a split-cluster
   pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
+
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
   ```
@@ -373,7 +387,7 @@ old `tests/bdd` tree.
 
 ### Package layout
 
-```
+```text
 tests/bdd/
   features/                      (Gherkin, already committed)
   fixtures/                      (sample env + CLI config, already committed)
@@ -615,6 +629,7 @@ Each `*_steps.go` file holds a small registrar (`registerFileSteps`,
 ### Phase 1 (MR 1): foundation, no Godog
 
 Files:
+
 - `tests/bdd/harness/config.go`
 - `tests/bdd/harness/runner.go`
 - `tests/bdd/harness/ledger.go`
@@ -626,6 +641,7 @@ Files:
 - Unit tests next to each source file.
 
 Acceptance:
+
 - `go test ./tests/bdd/harness ./tests/bdd/dsl` passes.
 - Ledger snapshot/restore roundtrip is covered including the
   did-not-exist-becomes-deleted case.
@@ -638,6 +654,7 @@ Acceptance:
 ### Phase 2 (MR 2): step handlers
 
 Files:
+
 - `tests/bdd/steps/context.go`
 - `tests/bdd/steps/file_steps.go`
 - `tests/bdd/steps/command_steps.go`
@@ -647,6 +664,7 @@ Files:
   fake CommandRunner and a real Ledger backed by a t.TempDir.
 
 Acceptance:
+
 - `go test ./tests/bdd/steps` passes.
 - Each handler validates argument shape and propagates results into
   ScenarioContext fields. No domain logic; everything routes through
@@ -658,12 +676,14 @@ Acceptance:
 ### Phase 3 (MR 3): suite entry points and first feature
 
 Files:
+
 - `tests/bdd/godog_test.go` adds `TestSingleClusterUp` plus
   `TestSingleClusterUpFeatureFileWiresToSteps`.
 - Wiring test uses a fake CommandRunner that returns canned
   exit-code-0 results so every step resolves.
 
 Acceptance:
+
 - `go test ./tests/bdd -run TestSingleClusterUpFeatureFileWiresToSteps`
   passes.
 - The handler chain resolves every step in
@@ -674,10 +694,12 @@ Acceptance:
 ### Phase 4 (MR 4): remaining features wired
 
 Files:
+
 - `tests/bdd/godog_test.go` gains `TestMultiClusterUp` and
   `TestSingleClusterHelmfile`, plus their wiring tests.
 
 Acceptance:
+
 - Both new wiring tests pass against the same fake CommandRunner shape.
 - Live run of either feature is exercisable; the documented argv path
   matches what `harness/cli.go` produced in the old suite (verified by
@@ -686,6 +708,7 @@ Acceptance:
 ### Phase 5 (MR 5, optional, gated on live verification)
 
 Files:
+
 - Delete `tests/bdd/operator/`, `tests/bdd/stack/`, the now-unused
   `tests/bdd/steps/*.go` handlers, and the feature files that have a
   `bdd` counterpart.
@@ -693,6 +716,7 @@ Files:
 - Update `tests/bdd/AGENTS.md` and any `.gitlab-ci.yml` references.
 
 Acceptance:
+
 - Live `make` invocations in the project root that reference the BDD
   suite still resolve.
 - One green live run of each feature on the contributor's k3d.

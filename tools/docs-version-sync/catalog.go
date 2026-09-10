@@ -127,16 +127,19 @@ type VersionOverride struct {
 	Source  string `yaml:"source,omitempty"`
 }
 
+// StackMetadata identifies the independently versioned publication inventory and source release.
 type StackMetadata struct {
-	Name            string   `yaml:"name"`
-	Version         string   `yaml:"version"`
-	Registry        string   `yaml:"registry"`
-	GitLabProjectID int      `yaml:"gitlab_project_id,omitempty"`
-	PackageName     string   `yaml:"package_name,omitempty"`
-	ArtifactsFile   string   `yaml:"artifacts_file,omitempty"`
-	SourceCommit    string   `yaml:"source_commit,omitempty"`
-	PinSources      []string `yaml:"pin_sources,omitempty"`
-	PinSourceDigest string   `yaml:"pin_source_digest,omitempty"`
+	Name               string   `yaml:"name"`
+	PublicationVersion string   `yaml:"version"`
+	Registry           string   `yaml:"registry"`
+	GitLabProjectID    int      `yaml:"gitlab_project_id,omitempty"`
+	PackageName        string   `yaml:"package_name,omitempty"`
+	ArtifactsFile      string   `yaml:"artifacts_file,omitempty"`
+	SourceVersion      string   `yaml:"source_version,omitempty"`
+	SourceTag          string   `yaml:"source_tag,omitempty"`
+	SourceCommit       string   `yaml:"source_commit,omitempty"`
+	PinSources         []string `yaml:"pin_sources,omitempty"`
+	PinSourceDigest    string   `yaml:"pin_source_digest,omitempty"`
 }
 
 type DenylistEntry struct {
@@ -305,19 +308,25 @@ func ValidateCatalog(catalog *Catalog) error {
 	if strings.TrimSpace(catalog.Stack.Name) == "" {
 		return fmt.Errorf("stack name cannot be empty")
 	}
-	if strings.TrimSpace(catalog.Stack.Version) == "" {
-		return fmt.Errorf("stack version cannot be empty")
+	if strings.TrimSpace(catalog.Stack.PublicationVersion) == "" {
+		return fmt.Errorf("stack publication version cannot be empty")
 	}
 	if _, ok := catalog.Registries[catalog.Stack.Registry]; !ok {
 		return fmt.Errorf("stack registry %q is not defined", catalog.Stack.Registry)
 	}
+	hasSourceVersion := strings.TrimSpace(catalog.Stack.SourceVersion) != ""
+	hasSourceTag := strings.TrimSpace(catalog.Stack.SourceTag) != ""
 	hasSourceCommit := strings.TrimSpace(catalog.Stack.SourceCommit) != ""
 	hasPinSources := len(catalog.Stack.PinSources) != 0
 	hasPinSourceDigest := strings.TrimSpace(catalog.Stack.PinSourceDigest) != ""
-	if (hasSourceCommit || hasPinSources || hasPinSourceDigest) && (!hasSourceCommit || !hasPinSources || !hasPinSourceDigest) {
-		return fmt.Errorf("stack source snapshot must set source_commit, pin_sources, and pin_source_digest together")
+	if (hasSourceVersion || hasSourceTag || hasSourceCommit || hasPinSources || hasPinSourceDigest) && (!hasSourceVersion || !hasSourceTag || !hasSourceCommit || !hasPinSources || !hasPinSourceDigest) {
+		return fmt.Errorf("stack source snapshot must set source_version, source_tag, source_commit, pin_sources, and pin_source_digest together")
 	}
 	if hasSourceCommit {
+		wantSourceTag := "deploy/stacks/self-managed/v" + catalog.Stack.SourceVersion
+		if catalog.Stack.SourceTag != wantSourceTag {
+			return fmt.Errorf("stack source_tag must be %s for source version %s", wantSourceTag, catalog.Stack.SourceVersion)
+		}
 		if !fullLowercaseCommitSHARe.MatchString(catalog.Stack.SourceCommit) {
 			return fmt.Errorf("stack source_commit must be a full lowercase commit SHA")
 		}
@@ -609,7 +618,8 @@ func (registry Registry) resourceRef(name, version string) string {
 	return fmt.Sprintf("%s/%s:%s", registry.Namespace, name, version)
 }
 
-func BuildCatalogFromArtifacts(stackVersion string, artifacts []Artifact) *Catalog {
+// BuildCatalogFromArtifacts creates a catalog from a published package inventory.
+func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) *Catalog {
 	catalog := &Catalog{
 		Version: 1,
 		Target:  "main",
@@ -620,12 +630,12 @@ func BuildCatalogFromArtifacts(stackVersion string, artifacts []Artifact) *Catal
 			},
 		},
 		Stack: StackMetadata{
-			Name:            defaultStackResourceName,
-			Version:         stackVersion,
-			Registry:        defaultStackRegistry,
-			GitLabProjectID: defaultStackProjectID,
-			PackageName:     defaultPackageName,
-			ArtifactsFile:   fmt.Sprintf("artifacts-%s.txt", stackVersion),
+			Name:               defaultStackResourceName,
+			PublicationVersion: publicationVersion,
+			Registry:           defaultStackRegistry,
+			GitLabProjectID:    defaultStackProjectID,
+			PackageName:        defaultPackageName,
+			ArtifactsFile:      fmt.Sprintf("artifacts-%s.txt", publicationVersion),
 		},
 		SupplementalArtifacts: []Artifact{
 			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: defaultCLIRegistry, Version: defaultCLIVersion},
@@ -645,8 +655,9 @@ func BuildCatalogFromArtifacts(stackVersion string, artifacts []Artifact) *Catal
 	return catalog
 }
 
-func BuildCatalogFromArtifactsWithBase(stackVersion string, artifacts []Artifact, base *Catalog) *Catalog {
-	catalog := BuildCatalogFromArtifacts(stackVersion, artifacts)
+// BuildCatalogFromArtifactsWithBase refreshes an existing catalog from a published package inventory.
+func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Artifact, base *Catalog) *Catalog {
+	catalog := BuildCatalogFromArtifacts(publicationVersion, artifacts)
 	if base == nil {
 		return catalog
 	}
@@ -661,11 +672,12 @@ func BuildCatalogFromArtifactsWithBase(stackVersion string, artifacts []Artifact
 	catalog.PublicationPending = append(catalog.PublicationPending, base.PublicationPending...)
 	catalog.Denylist = append(catalog.Denylist, base.Denylist...)
 	catalog.Manifest = base.Manifest
-	if base.Stack.Version == stackVersion {
-		catalog.Stack.SourceCommit = base.Stack.SourceCommit
-		catalog.Stack.PinSources = append(catalog.Stack.PinSources, base.Stack.PinSources...)
-		catalog.Stack.PinSourceDigest = base.Stack.PinSourceDigest
-	}
+	// A package refresh does not identify a new GitHub source release.
+	catalog.Stack.SourceVersion = base.Stack.SourceVersion
+	catalog.Stack.SourceCommit = base.Stack.SourceCommit
+	catalog.Stack.SourceTag = base.Stack.SourceTag
+	catalog.Stack.PinSources = append(catalog.Stack.PinSources, base.Stack.PinSources...)
+	catalog.Stack.PinSourceDigest = base.Stack.PinSourceDigest
 
 	manifestNames := map[string]struct{}{}
 	for _, artifact := range catalog.Artifacts {

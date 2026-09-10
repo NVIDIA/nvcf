@@ -50,7 +50,7 @@ func TestCheckRequiresHostHeadersForSharedGatewayHostname(t *testing.T) {
 		GatewayHTTPURL:    "https://gateway.example.test",
 		ICMSURL:           "https://gateway.example.test",
 		ReValURL:          "https://gateway.example.test",
-		NATSURL:           "tls://nats.example.test:4222",
+		NATSURL:           "tls://gateway.example.test:4222",
 		ProbeHTTP:         false,
 	})
 
@@ -59,6 +59,8 @@ func TestCheckRequiresHostHeadersForSharedGatewayHostname(t *testing.T) {
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
 	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.nats")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
 }
 
 func TestCheckAllowsDirectServiceHostnamesWithoutHostOverrides(t *testing.T) {
@@ -68,6 +70,20 @@ func TestCheckAllowsDirectServiceHostnamesWithoutHostOverrides(t *testing.T) {
 		ICMSURL:           "https://sis.example.test",
 		ReValURL:          "https://reval.example.test",
 		NATSURL:           "tls://nats.example.test:4222",
+		ProbeHTTP:         false,
+	})
+
+	require.NoError(t, err)
+}
+
+func TestCheckAllowsSharedGatewayNATSWithHostOverride(t *testing.T) {
+	err := Check(context.Background(), CheckRequest{
+		TargetClusterName: "gpu-a",
+		GatewayHTTPURL:    "https://gateway.example.test",
+		ICMSURL:           "https://sis.example.test",
+		ReValURL:          "https://reval.example.test",
+		NATSURL:           "tls://gateway.example.test:4222",
+		NATSHost:          "nats.example.test",
 		ProbeHTTP:         false,
 	})
 

@@ -6,9 +6,9 @@
 # emulation) and verify it against a pinned checksum.
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS yq-downloader
 ARG TARGETARCH
-ARG YQ_VERSION=v4.44.3
-ARG YQ_LINUX_AMD64_SHA256=a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
-ARG YQ_LINUX_ARM64_SHA256=0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156
+ARG YQ_VERSION=v4.53.6
+ARG YQ_LINUX_AMD64_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
+ARG YQ_LINUX_ARM64_SHA256=88a1016bc1d657375a35864e4f44b6f333df8ff97b559f51bba0adcb2169df09
 RUN apk add --no-cache curl && \
     case "${TARGETARCH}" in \
       amd64) YQ_SHA256="${YQ_LINUX_AMD64_SHA256}" ;; \
@@ -19,7 +19,62 @@ RUN apk add --no-cache curl && \
     printf '%s  /tmp/yq\n' "${YQ_SHA256}" | sha256sum -c - && \
     chmod +x /tmp/yq
 
-FROM cassandra:5.0.8
+# Cassandra 5.0.9 is still the latest supported 5.0 release, but its bundled
+# Jackson and Netty versions can lag security-only patch releases. Download a
+# checksum-pinned replacement set without adding build tools to the final image.
+# The lock pins public Maven Central URLs. A release build can route the same
+# artifact paths through a caching repository manager with
+# --build-arg MAVEN_REPOSITORY_BASE=<base>; checksums are verified either way.
+ARG MAVEN_REPOSITORY_BASE=https://repo.maven.apache.org/maven2
+COPY java-libraries.lock /tmp/java-libraries.lock
+COPY scripts/fetch-verified.sh /usr/local/bin/fetch-verified
+COPY scripts/fetch-java-libraries.sh /usr/local/bin/fetch-java-libraries
+RUN MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
+    fetch-java-libraries /tmp/java-libraries.lock /tmp/java-libraries
+
+FROM --platform=$BUILDPLATFORM alpine:3.21 AS exporter-repacker
+RUN apk add --no-cache curl unzip zip
+
+# The release build supplies a compatible exporter agent. Replace the complete
+# shaded Netty module set with checksum-pinned security updates while retaining
+# the agent implementation, manifest, and unrelated dependencies.
+ARG EXPORTER_JAR=files/.gitkeep
+ARG EXPORTER_JAVAAGENT=""
+# Same override as the java-libraries stage; the Netty jars default to Maven
+# Central's canonical host when it is not set.
+ARG MAVEN_REPOSITORY_BASE=""
+COPY ${EXPORTER_JAR} /tmp/exporter-input.jar
+COPY scripts/fetch-verified.sh /usr/local/bin/fetch-verified
+COPY scripts/repack-exporter-netty.sh /usr/local/bin/repack-exporter-netty
+RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
+      echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
+      exit 1; \
+    fi && \
+    if [ ! -s /tmp/exporter-input.jar ] && [ -n "${EXPORTER_JAVAAGENT}" ]; then \
+      echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
+      exit 1; \
+    fi && \
+    MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
+    repack-exporter-netty /tmp/exporter-input.jar /tmp/cassandra-exporter-agent.jar
+
+FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
+
+# Refresh the OpenSSL runtime packages independently of the upstream image
+# rebuild cadence. Fail the build if the Debian repository cannot provide the
+# first release containing the required fixes.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --only-upgrade \
+      libssl3t64 \
+      openssl-provider-legacy && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3t64)" ge 3.5.7-1~deb13u2 && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' openssl-provider-legacy)" ge 3.5.7-1~deb13u2 && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f \
+      /opt/cassandra/lib/jackson-annotations-*.jar \
+      /opt/cassandra/lib/jackson-core-*.jar \
+      /opt/cassandra/lib/jackson-databind-*.jar \
+      /opt/cassandra/lib/jackson-datatype-jsr310-*.jar && \
+    find /opt/cassandra/lib -maxdepth 1 -type f -name 'netty-*-4.1.130.Final*.jar' -delete
 
 # Metrics exporter agent. The OSS snapshot does not redistribute the jar;
 # only files/.gitkeep ships, so the default here points at that placeholder
@@ -27,8 +82,6 @@ FROM cassandra:5.0.8
 # builds override this with --build-arg EXPORTER_JAR=files/<real-jar> (see
 # Makefile / .gitlab-ci.yml). To build with the exporter locally, download
 # the jar into files/ and pass --build-arg EXPORTER_JAR=files/<jar-name>.
-ARG EXPORTER_JAR=files/.gitkeep
-
 # The javaagent flag itself is also gated behind a build arg. Without a real
 # jar, wiring -javaagent unconditionally would point the JVM at the empty
 # .gitkeep placeholder and abort startup with "Error opening zip file or JAR
@@ -37,9 +90,10 @@ ARG EXPORTER_JAR=files/.gitkeep
 # passes neither, so the image boots with no agent and no metrics.
 ARG EXPORTER_JAVAAGENT=""
 
-COPY ${EXPORTER_JAR} /opt/cassandra/lib/cassandra-exporter-agent.jar
+COPY --from=exporter-repacker /tmp/cassandra-exporter-agent.jar /opt/cassandra/lib/cassandra-exporter-agent.jar
 COPY scripts/cassandra-env.sh /etc/cassandra/cassandra-env.sh
 COPY --from=yq-downloader /tmp/yq /usr/local/bin/yq
+COPY --from=yq-downloader /tmp/java-libraries/*.jar /opt/cassandra/lib/
 
 # load cassandra exporter prom metrics library
 # The exporter agent reflects into JDK-internal com.sun.jmx classes to

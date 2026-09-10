@@ -285,7 +285,7 @@ labels:
   release-group: workers
 ```
 
-2. **Remove \`\`--dry-run=server\`\`** from the `helmDefaults.diffArgs` section. This prevents server-side validation during the diff phase, which fails when the CRD doesn't exist:
+1. **Remove \`\`--dry-run=server\`\`** from the `helmDefaults.diffArgs` section. This prevents server-side validation during the diff phase, which fails when the CRD doesn't exist:
 
 ```yaml
 helmDefaults:
@@ -851,7 +851,7 @@ This script bypasses normal cleanup procedures by removing finalizers. Always tr
 
 </Warning>
 
-```
+```bash
 #!/bin/bash
 # =============================================================================
 # force-cleanup-nvcf.sh - NVCA Component Removal Script

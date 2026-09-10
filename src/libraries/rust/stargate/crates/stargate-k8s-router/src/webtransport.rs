@@ -144,8 +144,13 @@ impl WebTransportRouterRuntime {
         tokio::pin!(reload_task);
         loop {
             tokio::select! {
+                biased;
                 _ = shutdown.cancelled() => {
-                    self.endpoint.close(0u32.into(), b"shutdown");
+                    self.endpoint.set_server_config(None);
+                    info!(
+                        active_connections = self.endpoint.open_connections(),
+                        "WebTransport router stopped accepting new connections; draining active streams"
+                    );
                     return Ok(());
                 }
                 result = &mut reload_task => {
@@ -164,7 +169,6 @@ impl WebTransportRouterRuntime {
                     let metrics = metrics.clone();
                     let config = self.config.clone();
                     let session_shutdown = shutdown.child_token();
-                    let stream_tasks = connection_tasks.clone();
                     connection_tasks.spawn(async move {
                         if let Err(error) = dispatch_incoming(
                             incoming,
@@ -172,7 +176,6 @@ impl WebTransportRouterRuntime {
                             metrics,
                             config,
                             session_shutdown,
-                            stream_tasks,
                         ).await {
                             warn!(%error, "WebTransport router session failed");
                         }
@@ -201,9 +204,9 @@ async fn dispatch_incoming(
     metrics: Arc<RouterMetrics>,
     config: Arc<WebTransportRouterRuntimeConfig>,
     shutdown: CancellationToken,
-    connection_tasks: TaskTracker,
 ) -> Result<()> {
     let connection = tokio::select! {
+        biased;
         _ = shutdown.cancelled() => return Ok(()),
         connection = incoming => connection.context("accept downstream QUIC connection")?,
     };
@@ -235,6 +238,7 @@ async fn dispatch_incoming(
     );
     let downstream_connection = connection.clone();
     let downstream = match tokio::select! {
+        biased;
         _ = shutdown.cancelled() => {
             downstream_connection.close(0u32.into(), b"router shutdown");
             return Ok(());
@@ -257,6 +261,7 @@ async fn dispatch_incoming(
         }
     };
     let upstream = match tokio::select! {
+        biased;
         _ = shutdown.cancelled() => {
             downstream_connection.close(0u32.into(), b"router shutdown");
             return Ok(());
@@ -288,13 +293,7 @@ async fn dispatch_incoming(
             return Err(error);
         }
     };
-    match tokio::select! {
-        _ = shutdown.cancelled() => {
-            downstream_connection.close(0u32.into(), b"router shutdown");
-            return Ok(());
-        }
-        result = downstream.forward(upstream, shutdown.clone(), connection_tasks) => result,
-    } {
+    match downstream.forward(upstream, shutdown.clone()).await {
         Ok(None) => {
             metrics.observe_webtransport_session("completed");
             Ok(())
@@ -354,10 +353,9 @@ impl DownstreamSession {
         self,
         upstream: UpstreamSession,
         shutdown: CancellationToken,
-        connection_tasks: TaskTracker,
     ) -> Result<Option<RejectedDownstreamSession>> {
         if upstream.response_status.is_success() {
-            self.accept_and_bridge(upstream, shutdown, connection_tasks)
+            self.accept_and_bridge(upstream, shutdown)
                 .await
                 .map(|()| None)
         } else {
@@ -412,25 +410,36 @@ impl DownstreamSession {
         mut self,
         upstream: UpstreamSession,
         shutdown: CancellationToken,
-        connection_tasks: TaskTracker,
     ) -> Result<()> {
         let downstream_session_id = self.connect_stream.id().into_inner();
         send_downstream_response(&mut self.connect_stream, StatusCode::OK).await?;
         // Keep the accepted CONNECT and H3 session handles alive while WebTransport streams bridge.
-        let _downstream_h3 = self.h3_connection;
+        let mut downstream_h3 = self.h3_connection;
         let _downstream_connect = self.connect_stream;
         let _upstream_endpoint = upstream.quic.endpoint;
-        let _upstream_h3 = upstream.h3_connection;
+        let mut upstream_h3 = upstream.h3_connection;
         let _upstream_connect = upstream.connect_stream;
-        bridge_upstream_webtransport_streams(
+        let bridge = bridge_upstream_webtransport_streams(
             self.connection,
             upstream.quic.connection,
             upstream.session_id,
             downstream_session_id,
-            shutdown,
-            connection_tasks,
-        )
-        .await;
+            shutdown.clone(),
+        );
+        tokio::pin!(bridge);
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                if let Err(error) = downstream_h3.shutdown(0).await {
+                    warn!(?error, "failed to send downstream HTTP/3 GOAWAY during drain");
+                }
+                if let Err(error) = upstream_h3.shutdown(0).await {
+                    warn!(?error, "failed to send upstream HTTP/3 GOAWAY during drain");
+                }
+                bridge.await;
+            }
+            () = &mut bridge => {}
+        }
         Ok(())
     }
 }
@@ -614,34 +623,33 @@ async fn bridge_upstream_webtransport_streams(
     upstream_session_id: u64,
     downstream_session_id: u64,
     shutdown: CancellationToken,
-    connection_tasks: TaskTracker,
 ) {
-    loop {
+    let stream_tasks = TaskTracker::new();
+    let draining = loop {
         tokio::select! {
+            biased;
             _ = shutdown.cancelled() => {
-                downstream_connection.close(0u32.into(), b"shutdown");
-                upstream_connection.close(0u32.into(), b"shutdown");
-                break;
+                break true;
             }
             _ = downstream_connection.closed() => {
                 upstream_connection.close(0u32.into(), b"downstream webtransport closed");
-                break;
+                break false;
             }
             stream = upstream_connection.accept_bi() => {
                 let Ok((upstream_send, upstream_recv)) = stream else {
                     downstream_connection.close(0u32.into(), b"upstream webtransport closed");
-                    break;
+                    break false;
                 };
                 let downstream_connection = downstream_connection.clone();
-                let stream_shutdown = shutdown.child_token();
-                connection_tasks.spawn(async move {
+                let stream_drain = shutdown.child_token();
+                stream_tasks.spawn(async move {
                     if let Err(error) = bridge_upstream_webtransport_stream(
                         downstream_connection,
                         upstream_send,
                         upstream_recv,
                         upstream_session_id,
                         downstream_session_id,
-                        stream_shutdown,
+                        stream_drain,
                     )
                     .await
                     {
@@ -650,6 +658,13 @@ async fn bridge_upstream_webtransport_streams(
                 });
             }
         }
+    };
+
+    stream_tasks.close();
+    stream_tasks.wait().await;
+    if draining {
+        downstream_connection.close(0u32.into(), b"router drained");
+        upstream_connection.close(0u32.into(), b"router drained");
     }
 }
 
@@ -659,48 +674,41 @@ async fn bridge_upstream_webtransport_stream(
     mut upstream_recv: quinn::RecvStream,
     upstream_session_id: u64,
     downstream_session_id: u64,
-    shutdown: CancellationToken,
+    drain: CancellationToken,
 ) -> Result<()> {
-    tokio::select! {
-        _ = shutdown.cancelled() => return Err(anyhow!("WebTransport stream bridge cancelled")),
-        result = tokio::time::timeout(
-            WEBTRANSPORT_STREAM_HEADER_TIMEOUT,
-            stargate_protocol::read_webtransport_bidi_header(&mut upstream_recv),
-        ) => result
-            .map_err(|_| anyhow!("timed out waiting for upstream WebTransport stream header"))
-            .and_then(|result| result.context("read upstream WebTransport stream header"))
-            .and_then(|stream_session_id| {
-                ensure!(
-                    stream_session_id == upstream_session_id,
-                    "upstream WebTransport session id mismatch: got {stream_session_id}, expected {upstream_session_id}"
-                );
-                Ok(())
-            }),
-    }
+    tokio::time::timeout(
+        WEBTRANSPORT_STREAM_HEADER_TIMEOUT,
+        stargate_protocol::read_webtransport_bidi_header(&mut upstream_recv),
+    )
+    .await
+    .map_err(|_| anyhow!("timed out waiting for upstream WebTransport stream header"))?
+    .context("read upstream WebTransport stream header")
+    .and_then(|stream_session_id| {
+        ensure!(
+            stream_session_id == upstream_session_id,
+            "upstream WebTransport session id mismatch: got {stream_session_id}, expected {upstream_session_id}"
+        );
+        Ok(())
+    })
     .inspect_err(|_| {
         reset_webtransport_stream(&mut upstream_send, &mut upstream_recv);
     })?;
 
-    let (mut downstream_send, downstream_recv) = tokio::select! {
-        _ = shutdown.cancelled() => return Err(anyhow!("WebTransport stream bridge cancelled")),
-        stream = downstream_connection.open_bi() => stream.context("open downstream WebTransport stream")?,
-    };
+    let (mut downstream_send, downstream_recv) = downstream_connection
+        .open_bi()
+        .await
+        .context("open downstream WebTransport stream")?;
     stargate_protocol::write_webtransport_bidi_header(&mut downstream_send, downstream_session_id)
         .await
         .context("write downstream WebTransport stream header")?;
 
-    tokio::select! {
-        _ = shutdown.cancelled() => Err(anyhow!("WebTransport stream bridge cancelled")),
-        result = async {
-            let (downstream_result, upstream_result) = tokio::join!(
-                copy_stream(upstream_recv, downstream_send),
-                copy_stream(downstream_recv, upstream_send),
-            );
-            downstream_result.context("copy upstream to downstream")?;
-            upstream_result.context("copy downstream to upstream")?;
-            Ok(())
-        } => result,
-    }
+    let (downstream_result, upstream_result) = tokio::join!(
+        copy_stream(upstream_recv, downstream_send, drain.clone()),
+        copy_stream(downstream_recv, upstream_send, drain),
+    );
+    downstream_result.context("copy upstream to downstream")?;
+    upstream_result.context("copy downstream to upstream")?;
+    Ok(())
 }
 
 fn reset_webtransport_stream(
@@ -711,7 +719,11 @@ fn reset_webtransport_stream(
     let _ = quinn_recv.stop(0u32.into());
 }
 
-async fn copy_stream(mut recv: quinn::RecvStream, mut send: quinn::SendStream) -> Result<()> {
+async fn copy_stream(
+    mut recv: quinn::RecvStream,
+    mut send: quinn::SendStream,
+    drain: CancellationToken,
+) -> Result<()> {
     while let Some(chunk) = recv
         .read_chunk(usize::MAX, true)
         .await
@@ -722,6 +734,11 @@ async fn copy_stream(mut recv: quinn::RecvStream, mut send: quinn::SendStream) -
             .context("write QUIC stream chunk")?;
     }
     send.finish().context("finish QUIC send stream")?;
+    if drain.is_cancelled() {
+        send.stopped()
+            .await
+            .context("wait for drained QUIC send stream acknowledgement")?;
+    }
     Ok(())
 }
 
@@ -1100,8 +1117,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn webtransport_router_shutdown_cancels_admitted_session_and_drains_tracker() -> Result<()>
-    {
+    async fn webtransport_router_shutdown_drains_admitted_session_and_tracker() -> Result<()> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let upstream_endpoint = Endpoint::server(
             server_config(&ServerTlsIdentity::SelfSigned)?,
@@ -1447,7 +1463,7 @@ mod tests {
 
         {
             let rejected = downstream_session
-                .forward(upstream, CancellationToken::new(), TaskTracker::new())
+                .forward(upstream, CancellationToken::new())
                 .await?
                 .expect("a non-success upstream CONNECT must not create a data bridge");
             assert_eq!(
@@ -1465,7 +1481,7 @@ mod tests {
     async fn stalled_upstream_stream_header_does_not_block_later_streams() -> Result<()> {
         let fixture = connect_bridge_fixture().await?;
 
-        let bridge_task = fixture.spawn_bridge(CancellationToken::new(), TaskTracker::new());
+        let bridge_task = fixture.spawn_bridge(CancellationToken::new());
         let (_stalled_send, _stalled_recv) = fixture.upstream_server_connection.open_bi().await?;
 
         let (mut upstream_send, _upstream_recv) =
@@ -1484,28 +1500,43 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn shutdown_closes_active_webtransport_stream_tasks_and_drains_tracker() -> Result<()> {
+    async fn shutdown_drains_active_webtransport_stream_before_closing_session() -> Result<()> {
         let fixture = connect_bridge_fixture().await?;
         let shutdown = CancellationToken::new();
-        let connection_tasks = TaskTracker::new();
-        let bridge_task = fixture.spawn_bridge(shutdown.clone(), connection_tasks.clone());
+        let mut bridge_task = fixture.spawn_bridge(shutdown.clone());
 
-        let (_upstream_send, _upstream_recv) =
+        let (mut upstream_send, mut upstream_recv) =
             open_webtransport_stream(&fixture.upstream_server_connection, UPSTREAM_SESSION_ID)
                 .await?;
-        let (_downstream_send, _downstream_recv) = fixture.accept_downstream_stream().await?;
+        let (mut downstream_send, mut downstream_recv) = fixture.accept_downstream_stream().await?;
 
         shutdown.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut bridge_task)
+                .await
+                .is_err(),
+            "shutdown must wait for the active WebTransport stream"
+        );
+
+        upstream_send.write_all(b"upstream payload").await?;
+        upstream_send.finish()?;
+        assert_eq!(
+            downstream_recv.read_to_end(1024).await?,
+            b"upstream payload"
+        );
+        downstream_send.write_all(b"downstream payload").await?;
+        downstream_send.finish()?;
+        assert_eq!(
+            upstream_recv.read_to_end(1024).await?,
+            b"downstream payload"
+        );
+
         tokio::time::timeout(TEST_TIMEOUT, fixture.upstream_server_connection.closed())
             .await
-            .context("router shutdown should close the upstream WebTransport connection")?;
+            .context("drained WebTransport session should close upstream")?;
         tokio::time::timeout(TEST_TIMEOUT, bridge_task)
             .await
-            .context("stream accept loop should stop after shutdown")??;
-        connection_tasks.close();
-        tokio::time::timeout(TEST_TIMEOUT, connection_tasks.wait())
-            .await
-            .context("active stream bridge task should drain after shutdown")?;
+            .context("stream accept loop should finish after the active stream")??;
         Ok(())
     }
 
@@ -1561,7 +1592,7 @@ mod tests {
     async fn downstream_close_closes_upstream_session() -> Result<()> {
         let fixture = connect_bridge_fixture().await?;
 
-        let bridge_task = fixture.spawn_bridge(CancellationToken::new(), TaskTracker::new());
+        let bridge_task = fixture.spawn_bridge(CancellationToken::new());
 
         fixture
             .downstream_client_connection
@@ -1583,18 +1614,13 @@ mod tests {
     }
 
     impl BridgeFixture {
-        fn spawn_bridge(
-            &self,
-            shutdown: CancellationToken,
-            connection_tasks: TaskTracker,
-        ) -> tokio::task::JoinHandle<()> {
+        fn spawn_bridge(&self, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
             tokio::spawn(bridge_upstream_webtransport_streams(
                 self.downstream_proxy_connection.clone(),
                 self.upstream_proxy_connection.clone(),
                 UPSTREAM_SESSION_ID,
                 DOWNSTREAM_SESSION_ID,
                 shutdown,
-                connection_tasks,
             ))
         }
 

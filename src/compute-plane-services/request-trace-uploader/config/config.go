@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,6 +32,13 @@ const (
 	EnvRetryInitialBackoff  = "REQUEST_TRACE_UPLOADER_RETRY_INITIAL_BACKOFF"
 	EnvRetryMaximumBackoff  = "REQUEST_TRACE_UPLOADER_RETRY_MAX_BACKOFF"
 	EnvRetryMultiplier      = "REQUEST_TRACE_UPLOADER_RETRY_MULTIPLIER"
+	EnvObjectStoreBucket    = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_BUCKET"
+	EnvObjectStoreRegion    = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_REGION"
+	EnvObjectStoreEndpoint  = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_ENDPOINT"
+	EnvObjectStoreKeyPrefix = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_KEY_PREFIX"
+	EnvObjectStorePathStyle = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_PATH_STYLE"
+	EnvObjectStoreDryRun    = "REQUEST_TRACE_UPLOADER_OBJECTSTORE_DRY_RUN"
+	EnvDebugVerbosity       = "REQUEST_TRACE_UPLOADER_DEBUG_VERBOSITY"
 	DefaultSecretsFile      = "/var/secrets/secrets.json"
 	DefaultHealthAddr       = ":8011"
 	DefaultSegmentPrefix    = "request-trace"
@@ -52,6 +60,28 @@ type Backend string
 const (
 	BackendObjectStore Backend = "objectstore"
 	BackendKratos      Backend = "kratos"
+	// BackendDebug reads and reports segments without exporting them. It
+	// exists so the read path can be exercised against a real Dynamo without
+	// credentials or a destination.
+	BackendDebug Backend = "debug"
+)
+
+// DebugVerbosity controls how much the debug backend logs per segment.
+type DebugVerbosity string
+
+const (
+	// DebugVerbosityBasic logs one summary line per segment: counts and
+	// shapes only. This is the default, and matches the containment rule
+	// every uploader backend follows: no request identifiers, session
+	// identifiers, header values, or record bodies in a log line.
+	DebugVerbosityBasic DebugVerbosity = "basic"
+	// DebugVerbosityDetailed adds one line per record with its index, event
+	// type, and byte size, plus the non-identifying metrics and metadata
+	// each record type carries (tokens, timing, model, tool class and
+	// status). It still never logs a request identifier, a session
+	// identifier, a header value, or a request or response body: verbosity
+	// changes resolution, not the containment rule.
+	DebugVerbosityDetailed DebugVerbosity = "detailed"
 )
 
 // LookupFunc obtains one environment setting.
@@ -63,16 +93,43 @@ type LookupFunc func(string) (string, bool)
 // uploader scans a single prefix. Record classification comes from event_type
 // on each record, which the parsing increment adds.
 type Config struct {
-	SourceDir     string
-	SegmentPrefix string
-	Backend       Backend
-	SecretsFile   string
-	StateDir      string
-	QuarantineDir string
-	HealthAddr    string
-	ScanInterval  time.Duration
-	RetryPolicy   RetryPolicy
-	Kratos        KratosPolicy
+	SourceDir      string
+	SegmentPrefix  string
+	Backend        Backend
+	SecretsFile    string
+	StateDir       string
+	QuarantineDir  string
+	HealthAddr     string
+	ScanInterval   time.Duration
+	RetryPolicy    RetryPolicy
+	Kratos         KratosPolicy
+	ObjectStore    ObjectStorePolicy
+	DebugVerbosity DebugVerbosity
+}
+
+// ObjectStorePolicy configures the generic S3-compatible backend. Bucket and
+// Region are validated by that backend's constructor, not here, because they
+// only matter when Backend is objectstore.
+type ObjectStorePolicy struct {
+	Bucket string
+	Region string
+	// Endpoint overrides the AWS endpoint resolution for an S3-compatible
+	// store that is not AWS. Empty uses the SDK default for Region. When set,
+	// it must satisfy ValidObjectStoreEndpoint: an absolute https:// URL with
+	// a host. A non-https or hostless endpoint would send credentials and
+	// segment data in cleartext, or to nowhere.
+	Endpoint string
+	// KeyPrefix is joined with each segment's file name to form its object
+	// key. Empty uploads to the bucket root.
+	KeyPrefix string
+	// PathStyle selects path-style bucket addressing, which most non-AWS
+	// S3-compatible stores require.
+	PathStyle bool
+	// DryRun computes and logs the bucket, key, and size the backend would
+	// upload, but never calls the store and never requires credentials. It
+	// exists to exercise config, key computation, and hostname namespacing
+	// without a destination, the same role debug plays for the read path.
+	DryRun bool
 }
 
 // KratosPolicy bounds the asynchronous job polling that only the Kratos Bulk
@@ -156,6 +213,20 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	}
 	multiplier := floatValue(lookup, EnvRetryMultiplier, DefaultRetryMultiplier, 1.1, 10.0, &warnings)
 
+	objectStoreEndpoint := strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreEndpoint, ""))
+	if !ValidObjectStoreEndpoint(objectStoreEndpoint) {
+		return Config{}, nil, fmt.Errorf("%s must be an absolute https:// URL with a host; a non-https or hostless endpoint is invalid", EnvObjectStoreEndpoint)
+	}
+	objectStore := ObjectStorePolicy{
+		Bucket:    strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreBucket, "")),
+		Region:    strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreRegion, "")),
+		Endpoint:  objectStoreEndpoint,
+		KeyPrefix: strings.Trim(strings.TrimSpace(valueOrDefault(lookup, EnvObjectStoreKeyPrefix, "")), "/"),
+		PathStyle: boolValue(lookup, EnvObjectStorePathStyle, false, &warnings),
+		DryRun:    boolValue(lookup, EnvObjectStoreDryRun, false, &warnings),
+	}
+	debugVerbosity := debugVerbosityValue(lookup, EnvDebugVerbosity, &warnings)
+
 	return Config{
 		SourceDir:     sourceDir,
 		SegmentPrefix: segmentPrefix,
@@ -177,6 +248,8 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 			MaximumBackoff:   maximumBackoff,
 			Multiplier:       multiplier,
 		},
+		ObjectStore:    objectStore,
+		DebugVerbosity: debugVerbosity,
 	}, warnings, nil
 }
 
@@ -216,6 +289,23 @@ func optionalName(lookup LookupFunc, name, fallback string) (string, error) {
 	return value, nil
 }
 
+// ValidObjectStoreEndpoint reports whether endpoint is a safe value for
+// ObjectStorePolicy.Endpoint: empty, meaning use the SDK default for Region,
+// or an absolute https:// URL with a nonempty host. A bare scheme such as
+// "https://" parses without error but has no host, so a prefix check alone
+// would accept it; both Load and the objectstore backend's own constructor
+// call this so the rule cannot be bypassed by constructing a Config directly.
+func ValidObjectStoreEndpoint(endpoint string) bool {
+	if endpoint == "" {
+		return true
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "https" && parsed.Host != ""
+}
+
 func backendValue(lookup LookupFunc, name string) (Backend, error) {
 	value, ok := lookup(name)
 	value = strings.TrimSpace(value)
@@ -223,10 +313,29 @@ func backendValue(lookup LookupFunc, name string) (Backend, error) {
 		return "", fmt.Errorf("%s is required", name)
 	}
 	switch Backend(value) {
-	case BackendObjectStore, BackendKratos:
+	case BackendObjectStore, BackendKratos, BackendDebug:
 		return Backend(value), nil
 	default:
-		return "", fmt.Errorf("%s must be %q or %q", name, BackendObjectStore, BackendKratos)
+		return "", fmt.Errorf("%s must be one of %q, %q, or %q", name, BackendObjectStore, BackendKratos, BackendDebug)
+	}
+}
+
+// debugVerbosityValue reads the debug backend's log verbosity. An unknown
+// value falls back to DebugVerbosityBasic with a warning rather than a hard
+// error: this only changes logging, not correctness, so it does not belong
+// with the required-value checks that fail Load outright.
+func debugVerbosityValue(lookup LookupFunc, name string, warnings *[]string) DebugVerbosity {
+	value, ok := lookup(name)
+	value = strings.TrimSpace(value)
+	if !ok || value == "" {
+		return DebugVerbosityBasic
+	}
+	switch DebugVerbosity(value) {
+	case DebugVerbosityBasic, DebugVerbosityDetailed:
+		return DebugVerbosity(value)
+	default:
+		*warnings = append(*warnings, name)
+		return DebugVerbosityBasic
 	}
 }
 
@@ -280,6 +389,19 @@ func integer(lookup LookupFunc, name string, fallback, minimum, maximum int, war
 	}
 	parsed, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || parsed < minimum || parsed > maximum {
+		*warnings = append(*warnings, name)
+		return fallback
+	}
+	return parsed
+}
+
+func boolValue(lookup LookupFunc, name string, fallback bool, warnings *[]string) bool {
+	value, ok := lookup(name)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
 		*warnings = append(*warnings, name)
 		return fallback
 	}

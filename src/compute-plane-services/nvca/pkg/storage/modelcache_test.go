@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -55,7 +56,6 @@ import (
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage/cacheprobe"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -217,7 +217,10 @@ func TestReconcile_ModelCache(t *testing.T) {
 	}
 	volumeHandlePrefix := "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:"
 	primaryPV.Spec.CSI = &corev1.CSIPersistentVolumeSource{
-		Driver:       "nvmesh",
+		// The real driver name: NVCA keys the reader handle rewrite on it, and
+		// the rest of the model cache code compares it against the selected
+		// StorageClass provisioner.
+		Driver:       NVMeshStorageClassProvisioner,
 		VolumeHandle: volumeHandlePrefix + ModelCacheInitNamespace,
 	}
 	primaryPV.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
@@ -1332,18 +1335,10 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 	require.NoError(t, c.Create(ctx, srNamespace))
 	require.NoError(t, c.Create(ctx, NewModelCacheInitNamespace()))
 
-	// The shared class exists (operator- or Samba-provided) and its reader
-	// access mode is pre-resolved to ROX so resolveSharedFSStrategy does not
-	// run a live probe.
+	// The shared class exists (operator- or Samba-provided).
 	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
 		ObjectMeta:  metav1.ObjectMeta{Name: HelmCacheSharedStorageClassName},
 		Provisioner: SMBCSIDriverName,
-	}))
-	store := cacheprobe.NewStateStore(c, ModelCacheInitNamespace)
-	require.NoError(t, store.Save(ctx, map[string]cacheprobe.Result{
-		cacheprobe.ResultKey(HelmCacheSharedStorageClassName, cacheprobe.StrategyROX): {
-			State: cacheprobe.StateSupported,
-		},
 	}))
 
 	cacheHandle := "sharedfshandle"
@@ -1403,31 +1398,76 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		}
 	}, 5*time.Second, 50*time.Millisecond)
 
-	// Bind the writer RW PVC and complete the job: shared-FS keeps the writer
-	// claim (no primary PV finalize) and moves to Creating.
-	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
-	rwPVC.Status.Phase = corev1.ClaimBound
-	require.NoError(t, c.Status().Update(ctx, rwPVC))
+	// Bind the writer RW PVC to a volume and complete the job. The writer
+	// volume is the cache, so the reader must be derived from it.
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv-" + cacheHandle},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			StorageClassName:              HelmCacheSharedStorageClassName,
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       SMBCSIDriverName,
+					VolumeHandle: "shared-writer-volume",
+				},
+			},
+		},
+	}
+	require.NoError(t, c.Create(ctx, writerPV))
+	// The controller also writes this claim, so re-read before each update
+	// rather than racing it with a stale resourceVersion.
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC); err != nil {
+			return err
+		}
+		rwPVC.Spec.VolumeName = writerPV.Name
+		return c.Update(ctx, rwPVC)
+	}))
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC); err != nil {
+			return err
+		}
+		rwPVC.Status.Phase = corev1.ClaimBound
+		return c.Status().Update(ctx, rwPVC)
+	}))
 
 	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
 	completeJob(ctx, t, c, initJob)
 
-	// A read-only reader PVC is created in the workload namespace on the shared
-	// class with the probed ROX access mode.
+	// A read-only reader PV is derived from the writer volume, and the reader
+	// claim binds to it by name. A claim naming only the shared class would let
+	// a dynamic provisioner hand back a new empty volume, which is what this
+	// path used to do.
+	roPV := &corev1.PersistentVolume{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "secondary-pv-" + sr.Name}, roPV)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NotNil(t, roPV.Spec.CSI)
+	assert.Equal(t, "shared-writer-volume", roPV.Spec.CSI.VolumeHandle,
+		"the reader must address the volume the writer populated")
+	assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}, roPV.Spec.AccessModes)
+	assert.Equal(t, corev1.PersistentVolumeReclaimRetain, roPV.Spec.PersistentVolumeReclaimPolicy)
+
 	roPVC := &corev1.PersistentVolumeClaim{}
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
 		err := c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: workloadNS.Name}, roPVC)
 		assert.NoError(ct, err)
 	}, 5*time.Second, 50*time.Millisecond)
+	assert.Equal(t, roPV.Name, roPVC.Spec.VolumeName)
 	if assert.NotNil(t, roPVC.Spec.StorageClassName) {
-		assert.Equal(t, HelmCacheSharedStorageClassName, *roPVC.Spec.StorageClassName)
+		assert.Empty(t, *roPVC.Spec.StorageClassName,
+			"a StorageClass here would provision a new empty volume")
+		// Kubernetes refuses to bind a pre-bound pair whose classes disagree,
+		// and nothing in this suite runs the binding controller, so the pair
+		// has to be checked against each other here rather than one side at a
+		// time. The reader PV deep-copies the writer, which carries a class.
+		assert.Equal(t, *roPVC.Spec.StorageClassName, roPV.Spec.StorageClassName,
+			"the pre-bound reader PV and claim must agree on storage class or the claim never binds")
 	}
 	assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}, roPVC.Spec.AccessModes)
-
-	// Shared-FS does not create cross-namespace primary/secondary PVs.
-	secondaryPV := &corev1.PersistentVolume{}
-	err = c.Get(ctx, client.ObjectKey{Name: "secondary-pv-" + st.Name}, secondaryPV)
-	assert.True(t, apierrors.IsNotFound(err), "shared-FS must not create a secondary PV")
 
 	// Bind the reader PVC: the request becomes Ready and exposes the RO PVC.
 	roPVC.Status.Phase = corev1.ClaimBound
@@ -1926,4 +1966,157 @@ func TestReclaimIdleSharedFSModelCaches(t *testing.T) {
 		"recently referenced handle must be kept")
 	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sambaPVC), &corev1.PersistentVolumeClaim{}),
 		"samba backing PVCs are reclaimed by the samba pass, not here")
+}
+
+// TestDeriveReaderVolumeHandle pins the one vendor specific step in reader
+// derivation. NVMesh encodes the consuming namespace in the CSI volume handle
+// so the reader needs its own substituted in. Every other driver addresses one
+// volume by one handle, so reusing the writer's handle is what gives the
+// reader the writer's data. Both were measured on real clusters.
+func TestDeriveReaderVolumeHandle(t *testing.T) {
+	tests := []struct {
+		name        string
+		provisioner string
+		handle      string
+		want        string
+		wantErr     bool
+	}{
+		{
+			name:        "NVMesh substitutes the reader namespace",
+			provisioner: NVMeshStorageClassProvisioner,
+			handle:      "nvmesh/csivol-abc:nvcf-modelcache-init",
+			want:        "nvmesh/csivol-abc:tenant-ns",
+		},
+		{
+			name:        "Weka reuses the handle unchanged",
+			provisioner: "csi.weka.io",
+			handle:      "weka/v2/csivol-pvc-8e38c07d-I6LIT56NBYME",
+			want:        "weka/v2/csivol-pvc-8e38c07d-I6LIT56NBYME",
+		},
+		{
+			// The FSS handle contains colons, so a rewrite would corrupt the
+			// export path rather than address another namespace.
+			name:        "OCI FSS reuses the handle unchanged",
+			provisioner: "fss.csi.oraclecloud.com",
+			handle:      "ocid1.filesystem.oc1.ap_kulai_2.aaaa:100.64.0.56:/csi-fss-eaf964b0",
+			want:        "ocid1.filesystem.oc1.ap_kulai_2.aaaa:100.64.0.56:/csi-fss-eaf964b0",
+		},
+		{
+			name:        "an unknown driver reuses the handle unchanged",
+			provisioner: "csi.example.test",
+			handle:      "opaque-handle",
+			want:        "opaque-handle",
+		},
+		{
+			name:        "a malformed NVMesh handle is an error",
+			provisioner: NVMeshStorageClassProvisioner,
+			handle:      "no-colons-here",
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := deriveReaderVolumeHandle(tt.provisioner, tt.handle, "tenant-ns")
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestNewSharedFSReaderPVIsReadOnlyWithoutMountOptions covers the shared
+// filesystem case that motivates the read-only CSI source. A provisioner with
+// no declared reader options gets an empty mount option list, so mount options
+// cannot be what keeps the reader read-only, and access modes are only used
+// for binding. Without a read-only CSI source nothing stops a consumer
+// mounting the shared cache read-write.
+func TestNewSharedFSReaderPVIsReadOnlyWithoutMountOptions(t *testing.T) {
+	const wekaProvisioner = "csi.weka.io"
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(wekaProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       wekaProvisioner,
+					VolumeHandle: "weka/v2/csivol-pvc-8e38c07d",
+					ReadOnly:     false,
+				},
+			},
+		},
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req"},
+	}
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Empty(t, roPV.Spec.MountOptions,
+		"this provisioner declares no reader options, so mount options cannot enforce read-only")
+	assert.True(t, roPV.Spec.CSI.ReadOnly,
+		"with no mount options the CSI source is the only thing keeping the reader read-only")
+	assert.Equal(t, "weka/v2/csivol-pvc-8e38c07d", roPV.Spec.CSI.VolumeHandle,
+		"a non-NVMesh handle addresses one volume and is reused unchanged")
+}
+
+// TestNewSharedFSReaderPVResolvesMountOptions pins that a derived reader takes
+// the provisioner's required reader options instead of inheriting the writer's.
+//
+// This matters once NVMesh reaches this path. NVMesh is detected today by the
+// nvcf-sc-30 marker class; when that goes away it is identified by provisioner
+// like every other backend and resolves to the shared filesystem flow. Its
+// reader attaches the same XFS filesystem as the writer, so without nouuid and
+// norecovery the mount fails outright, and inheriting the writer's read-write
+// options is exactly the wrong answer.
+func TestNewSharedFSReaderPVResolvesMountOptions(t *testing.T) {
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			// What the writer was provisioned with, which the reader must not keep.
+			MountOptions: []string{"rw"},
+			Capacity:     corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       NVMeshStorageClassProvisioner,
+					VolumeHandle: "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:writer-ns",
+				},
+			},
+		},
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req"},
+	}
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, roPV.Spec.MountOptions,
+		"a derived reader must take the provisioner's reader options, not the writer's")
+	assert.NotContains(t, roPV.Spec.MountOptions, "rw",
+		"the writer's read-write option must not survive onto a read-only reader")
+	assert.True(t, strings.HasSuffix(roPV.Spec.CSI.VolumeHandle, ":reader-ns"),
+		"the NVMesh handle must be rewritten for the reader namespace")
+	assert.True(t, roPV.Spec.CSI.ReadOnly,
+		"the CSI source must be read-only: access modes are not enforced by the kubelet")
 }

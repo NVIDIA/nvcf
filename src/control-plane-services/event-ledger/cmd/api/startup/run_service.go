@@ -177,8 +177,6 @@ func runService(cfg config.Config) error {
 	authRouter.Use(tracingMW)
 	authRouter.Use(loggerMW)
 
-	// If we're not using Policy, we need to handle scope checks locally in our middleware
-	// We assume we're using Policy by default
 	var requireLocalScopeCheck = false
 
 	if cfg.Auth.Enabled {
@@ -290,19 +288,25 @@ func runService(cfg config.Config) error {
 				}
 			}
 
-			// Create Policy middleware with the client
-			// The underlying HTTP client will be refreshed automatically when credentials change
-			policyMiddleware := middleware.NewPolicyMiddleware(
+			var jwtOpts *middleware.JWTParserOptions
+			if cfg.Auth.JWKSetUrl != "" {
+				opts := middleware.NewJWTParserOptions(cfg.Auth.JWKSetUrl, nil, cacheDuration, &cfg.HTTP)
+				opts.Issuer = cfg.Auth.Issuer
+				opts.Audience = cfg.Auth.Audience
+				opts.TenantClaim = cfg.Auth.TenantClaim
+				jwtOpts = &opts
+			}
+
+			requireLocalScopeCheck = cfg.SelfManaged
+
+			authRouter.Use(middleware.NewAuthMiddleware(
 				policyClient,
 				"nv-cloud-functions",
-				cfg.Auth.JWKSetUrl,
-				cacheDuration,
+				jwtOpts,
 				jwkCache,
-				&cfg.HTTP,
+				cfg.SelfManaged,
 				logger,
-			)
-
-			authRouter.Use(policyMiddleware)
+			))
 		default:
 			// This should never be reached since ValidateAuthConfig handles invalid providers
 			logger.Error("auth is enabled but no valid auth provider was provided")

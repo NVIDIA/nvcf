@@ -266,3 +266,10 @@ pub(crate) fn request_class(headers: &HeaderMap) -> TestRequestClass {
         _ => TestRequestClass::ApiGateway,
     }
 }
+
+pub(crate) fn is_canary_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|request_id| request_id.starts_with(CANARY_REQUEST_ID_PREFIX))
+}

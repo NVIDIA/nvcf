@@ -20,6 +20,7 @@ package com.nvidia.boot.core;
 import com.nvidia.boot.core.cors.ServletCoreCorsConfiguration;
 import com.nvidia.boot.core.cors.ReactiveCoreCorsConfiguration;
 import com.nvidia.boot.core.health.HealthConfiguration;
+import com.nvidia.boot.core.info.InfoConfiguration;
 import com.nvidia.boot.core.openapi.OpenApiConfiguration;
 import com.nvidia.boot.core.openapi.ServletOpenApiCorsConfiguration;
 import com.nvidia.boot.core.openapi.ReactiveOpenApiCorsConfiguration;
@@ -29,6 +30,7 @@ import org.springframework.context.annotation.Import;
 @AutoConfiguration
 @Import({
         HealthConfiguration.class,
+        InfoConfiguration.class,
         OpenApiConfiguration.class,
         ReactiveCoreCorsConfiguration.class,
         ReactiveOpenApiCorsConfiguration.class,
