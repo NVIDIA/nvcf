@@ -5,7 +5,10 @@
 set -eu
 
 NETTY_VERSION=4.1.137.Final
-MAVEN_CENTRAL_URL=https://repo1.maven.org/maven2/io/netty
+# MAVEN_REPOSITORY_BASE lets a release build route the downloads through a
+# caching repository manager; the artifact paths and checksums do not change.
+MAVEN_CENTRAL_URL=${MAVEN_REPOSITORY_BASE:-https://repo1.maven.org/maven2}
+MAVEN_CENTRAL_URL=${MAVEN_CENTRAL_URL%/}/io/netty
 NETTY_ARTIFACTS='netty-buffer f474b14c7734f15e0540394cb6f39d67777b7581a42919e4ac89d253d4efd929
 netty-codec 9987b6a660b0a6b1f0d791485dae33180b3d1c63687c006fe6d3fd025e9e3798
 netty-codec-http 0535bb5a736472bef5c948d15eb273c4ab9f796656fc7c5d6b982ad92bddbd49
@@ -30,6 +33,14 @@ for tool in awk basename cp curl dirname find grep mkdir mktemp mv rm sed sha256
         exit 1
     }
 done
+# Sibling of this script both in the repository and under /usr/local/bin in
+# the image, so the download policy lives in one place.
+fetch_verified=$(dirname -- "$0")/fetch-verified
+[ -x "${fetch_verified}" ] || fetch_verified=$(dirname -- "$0")/fetch-verified.sh
+[ -x "${fetch_verified}" ] || {
+    echo "missing required command: fetch-verified" >&2
+    exit 1
+}
 
 [ -f "${input}" ] || {
     echo "exporter input does not exist: ${input}" >&2
@@ -99,9 +110,9 @@ printf '%s\n' "${NETTY_ARTIFACTS}" |
 while read -r artifact checksum; do
     [ -n "${artifact}" ] || continue
     jar=${downloads_dir}/${artifact}-${NETTY_VERSION}.jar
-    curl -fsSLo "${jar}" \
-        "${MAVEN_CENTRAL_URL}/${artifact}/${NETTY_VERSION}/${artifact}-${NETTY_VERSION}.jar"
-    printf '%s  %s\n' "${checksum}" "${jar}" | sha256sum -c -
+    "${fetch_verified}" "${checksum}" \
+        "${MAVEN_CENTRAL_URL}/${artifact}/${NETTY_VERSION}/${artifact}-${NETTY_VERSION}.jar" \
+        "${jar}"
 
     # Only copy Netty-owned entries. This keeps the exporter implementation,
     # manifest, and all unrelated shaded dependencies byte-for-byte intact.

@@ -22,14 +22,15 @@ RUN apk add --no-cache curl && \
 # Cassandra 5.0.9 is still the latest supported 5.0 release, but its bundled
 # Jackson and Netty versions can lag security-only patch releases. Download a
 # checksum-pinned replacement set without adding build tools to the final image.
+# The lock pins public Maven Central URLs. A release build can route the same
+# artifact paths through a caching repository manager with
+# --build-arg MAVEN_REPOSITORY_BASE=<base>; checksums are verified either way.
+ARG MAVEN_REPOSITORY_BASE=https://repo.maven.apache.org/maven2
 COPY java-libraries.lock /tmp/java-libraries.lock
-RUN mkdir /tmp/java-libraries && \
-    while read -r checksum url; do \
-      case "${checksum}" in \#*|'') continue ;; esac; \
-      destination="/tmp/java-libraries/${url##*/}"; \
-      curl -fsSLo "${destination}" "${url}" && \
-      printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c - || exit 1; \
-    done < /tmp/java-libraries.lock
+COPY scripts/fetch-verified.sh /usr/local/bin/fetch-verified
+COPY scripts/fetch-java-libraries.sh /usr/local/bin/fetch-java-libraries
+RUN MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
+    fetch-java-libraries /tmp/java-libraries.lock /tmp/java-libraries
 
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS exporter-repacker
 RUN apk add --no-cache curl unzip zip
@@ -39,7 +40,11 @@ RUN apk add --no-cache curl unzip zip
 # the agent implementation, manifest, and unrelated dependencies.
 ARG EXPORTER_JAR=files/.gitkeep
 ARG EXPORTER_JAVAAGENT=""
+# Same override as the java-libraries stage; the Netty jars default to Maven
+# Central's canonical host when it is not set.
+ARG MAVEN_REPOSITORY_BASE=""
 COPY ${EXPORTER_JAR} /tmp/exporter-input.jar
+COPY scripts/fetch-verified.sh /usr/local/bin/fetch-verified
 COPY scripts/repack-exporter-netty.sh /usr/local/bin/repack-exporter-netty
 RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
       echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
@@ -49,6 +54,7 @@ RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
       echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
       exit 1; \
     fi && \
+    MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
     repack-exporter-netty /tmp/exporter-input.jar /tmp/cassandra-exporter-agent.jar
 
 FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
