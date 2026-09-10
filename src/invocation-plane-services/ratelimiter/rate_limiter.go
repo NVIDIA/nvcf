@@ -70,6 +70,9 @@ import (
 const (
 	defaultLimiterCacheCapacity       = 300
 	defaultIndexedPolicyCacheCapacity = 100
+	// Keep a backup of every counter so losing a member does not reset it.
+	// Olric warns and places fewer backups when the cluster is smaller.
+	DefaultOlricReplicaCount = 2
 )
 
 type FunctionRateLimitConfig struct {
@@ -99,6 +102,9 @@ type Config struct {
 	NvcfApiUrl               string `mapstructure:"NVCF_API_URL"`
 	CacheTTL                 int    `mapstructure:"CACHE_TTL"`
 	CollectMetrics           bool   `mapstructure:"COLLECT_METRICS"`
+	// Copies of each counter kept in the cluster. At 1 the owning member is a
+	// single point of failure for the counters it holds.
+	OlricReplicaCount int `mapstructure:"OLRIC_REPLICA_COUNT"`
 }
 
 type CustomClaims struct {
@@ -419,8 +425,17 @@ func (r *RateLimiter) Health() error {
 		}
 		return errors.New("olric db shutdown")
 	default:
-		return nil
 	}
+	// Not ready until this member is in the cluster: a member on its own counts
+	// against an empty view, and cannot receive counters from a member leaving.
+	members, err := r.db.NewEmbeddedClient().Members(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to list olric members: %w", err)
+	}
+	if len(members) == 0 {
+		return errors.New("olric member list is empty")
+	}
+	return nil
 }
 
 // GetStore returns the limiter store for metrics/debugging purposes
