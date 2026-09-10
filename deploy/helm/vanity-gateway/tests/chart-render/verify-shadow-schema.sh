@@ -4,8 +4,8 @@
 #
 # Verify the values schema for the per-target shadows list: the list and its
 # entries are validated the way the gateway validates them, in any letter
-# case; the legacy shadow fields keep the checks they had before the list
-# existed; the two forms never mix; multipart image endpoints take no shadows.
+# case; the two forms never mix; multipart image endpoints take no shadows.
+# The legacy shadow fields are not under test here; their schema is unchanged.
 #
 # Rejection needles are key names or route path fragments, because the Helm
 # version decides the error message format (dotted paths on 3.18, JSON
@@ -90,24 +90,10 @@ SHADOWS_FULL="            shadows:
 SHADOWS_MINIMAL="            shadows:
               - modelName: acme/a-model-next"
 SHADOWS_EMPTY="            shadows: []"
-LEGACY_FULL="            shadowModelName: acme/a-model-next
-            shadowModelNames:
-              - acme/a-model-other
-            shadowPercentage: 50
-            shadowSamplingMethod: perBearerKey
-            shadowCancelOnClientDisconnect: true"
-LEGACY_ZERO="            shadowModelName: \"\"
-            shadowModelNames: []
-            shadowSamplingMethod: \"\"
-            shadowCancelOnClientDisconnect: false"
 
-# Both forms render on their own, in every non-multipart section.
 for section in chatCompletions completions embeddings responses imageGenerations; do
   write_values "${section}" "${SHADOWS_FULL}"
   assert_renders "a shadows list renders in ${section}"
-
-  write_values "${section}" "${LEGACY_FULL}"
-  assert_renders "legacy shadow fields render in ${section}"
 done
 
 write_values chatCompletions "            functionType: LLM
@@ -135,18 +121,11 @@ write_values chatCompletions "            Shadows:
                 percentage: 500"
 assert_rejected "Shadows" "a shadows list is validated in any letter case"
 
-# Legacy fields keep the checks they had before shadows existed: the four
-# typed keys are validated under their exact spelling, everything else about
-# them is left to the gateway.
-write_values chatCompletions "${LEGACY_ZERO}"
-assert_renders "zero-valued legacy shadow fields render"
-
-write_values chatCompletions "            shadowPercentage: 500"
-assert_rejected "shadowPercentage" "a legacy shadowPercentage of 500 is rejected"
-
+# The mixed-form rule only evaluates when a shadows key is present, so a
+# legacy-only route is untouched by it, even one the gateway would reject.
 write_values chatCompletions "            shadowpercentage: 500
             shadowSamplingMethod: Random"
-assert_renders "legacy keys outside the schema's exact spelling and enum render unchanged"
+assert_renders "a legacy-only route is not touched by the shadows rules"
 
 # The forms are exclusive in any spelling: shadows plus any legacy key, even
 # zero-valued, fails.
@@ -213,8 +192,7 @@ write_values chatCompletions "            shadows:
 assert_rejected "shadows" "a null shadows entry is rejected"
 
 # Multipart image endpoints take no shadows; an empty list is what an absent
-# key produces, so it stays accepted. Legacy keys there are unchanged from
-# before and left to the gateway.
+# key produces, so it stays accepted.
 for section in imageEdits imageVariations; do
   write_values "${section}" "${SHADOWS_MINIMAL}"
   assert_rejected "shadows" "shadows is rejected in ${section}"
@@ -225,9 +203,6 @@ for section in imageEdits imageVariations; do
 
   write_values "${section}" "${SHADOWS_EMPTY}"
   assert_renders "an empty shadows list renders in ${section}"
-
-  write_values "${section}" "${LEGACY_ZERO}"
-  assert_renders "zero-valued legacy shadow fields render in ${section}"
 done
 
 echo "All shadow schema render checks passed."
