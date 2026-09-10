@@ -30,9 +30,9 @@ func TestNewGitHubClientFromEnvironmentUsesExplicitSettings(t *testing.T) {
 }
 
 func TestResolveStackSourceReleaseDiscoversLatestStableTag(t *testing.T) {
-	const latestCommit = "1414141414141414141414141414141414141410"
+	const latestCommit = "ffffffffffffffffffffffffffffffffffffffff"
 	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/NVIDIA/nvcf/git/matching-refs/tags/deploy/stacks/self-managed/v" {
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
 			return
@@ -50,7 +50,8 @@ func TestResolveStackSourceReleaseDiscoversLatestStableTag(t *testing.T) {
 ]`)
 		case "2":
 			fmt.Fprint(w, `[
-  {"ref":"refs/tags/deploy/stacks/self-managed/v0.14.10","object":{"type":"commit","sha":"`+latestCommit+`"}},
+  {"ref":"refs/tags/deploy/stacks/self-managed/v184467440737095516160.14.10","object":{"type":"commit","sha":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}},
+  {"ref":"refs/tags/deploy/stacks/self-managed/v999999999999999999999.14.10","object":{"type":"commit","sha":"`+latestCommit+`"}},
   {"ref":"refs/tags/deploy/stacks/self-managed/v10.0.0-dev.1","object":{"type":"commit","sha":"1010101010101010101010101010101010101010"}},
   {"ref":"refs/tags/deploy/stacks/self-managed/v0.14.5","object":{"type":"commit","sha":"1414141414141414141414141414141414141405"}}
 ]`)
@@ -65,8 +66,8 @@ func TestResolveStackSourceReleaseDiscoversLatestStableTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveStackSourceRelease failed: %v", err)
 	}
-	if release.Version != "0.14.10" || release.Tag != stackTagPrefix+"0.14.10" || release.Commit != latestCommit {
-		t.Fatalf("release = %#v, want latest stable 0.14.10 at %s", release, latestCommit)
+	if release.Version != "999999999999999999999.14.10" || release.Tag != stackTagPrefix+"999999999999999999999.14.10" || release.Commit != latestCommit {
+		t.Fatalf("release = %#v, want latest overflow-safe stable version at %s", release, latestCommit)
 	}
 }
 
@@ -149,12 +150,56 @@ func TestResolveStackSourceReleaseRejectsMalformedExplicitRefBeforeRequest(t *te
 	defer server.Close()
 
 	client := testGitHubClient(server, "")
-	_, err := client.resolveStackSourceRelease("latest")
-	if err == nil || !strings.Contains(err.Error(), "must be a semantic version") {
-		t.Fatalf("resolveStackSourceRelease error = %v, want malformed-ref rejection", err)
+	for _, selector := range []string{"latest", "1.2.3-01"} {
+		_, err := client.resolveStackSourceRelease(selector)
+		if err == nil || !strings.Contains(err.Error(), "must be a semantic version") {
+			t.Errorf("resolveStackSourceRelease(%q) error = %v, want malformed-ref rejection", selector, err)
+		}
 	}
 	if requested {
 		t.Fatal("malformed explicit ref made a GitHub request")
+	}
+}
+
+func TestGitHubClientRejectsTokenOverHTTP(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		fmt.Fprint(w, `{}`)
+	}))
+	defer server.Close()
+
+	client := testGitHubClient(server, "github-token")
+	var result any
+	_, err := client.getJSON("/test", &result)
+	if err == nil || !strings.Contains(err.Error(), "refuse to send GitHub token over non-HTTPS") {
+		t.Fatalf("getJSON error = %v, want cleartext-token rejection", err)
+	}
+	if requested {
+		t.Fatal("cleartext token request reached the server")
+	}
+}
+
+func TestGitHubClientRejectsHTTPSDowngradeRedirect(t *testing.T) {
+	redirected := false
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirected = true
+		fmt.Fprint(w, `{}`)
+	}))
+	defer httpServer.Close()
+	httpsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, httpServer.URL+"/target", http.StatusFound)
+	}))
+	defer httpsServer.Close()
+
+	client := testGitHubClient(httpsServer, "github-token")
+	var result any
+	_, err := client.getJSON("/test", &result)
+	if err == nil || !strings.Contains(err.Error(), "refuse GitHub API redirect from HTTPS to http") {
+		t.Fatalf("getJSON error = %v, want HTTPS downgrade rejection", err)
+	}
+	if redirected {
+		t.Fatal("HTTPS downgrade redirect reached the cleartext server")
 	}
 }
 
@@ -174,6 +219,7 @@ func TestResolveStackSourceReleaseRejectsOnlyPrereleaseTags(t *testing.T) {
 	}
 }
 
+// testGitHubClient creates a GitHub client backed by a local test server.
 func testGitHubClient(server *httptest.Server, token string) *githubClient {
 	return &githubClient{
 		baseURL:    server.URL,

@@ -106,6 +106,7 @@ func (client *GitLabClient) LatestStackVersion(projectID int, packageName string
 	return "", fmt.Errorf("no package or release version found for %s", packageName)
 }
 
+// LatestGenericPackageVersion returns the newest matching GitLab generic package version.
 func (client *GitLabClient) LatestGenericPackageVersion(projectID int, packageName string) (string, error) {
 	for page := 1; ; {
 		query := url.Values{}

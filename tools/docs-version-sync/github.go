@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,7 +27,8 @@ const (
 
 var (
 	stableStackVersionRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-	stackVersionRE       = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	stackVersionRE       = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	numericIdentifierRE  = regexp.MustCompile(`^[0-9]+$`)
 )
 
 // githubClient reads immutable stack release refs from GitHub.
@@ -59,11 +61,12 @@ type stackSourceRelease struct {
 
 // stableStackVersion is a stable semantic version used for numeric ordering.
 type stableStackVersion struct {
-	major int
-	minor int
-	patch int
+	major string
+	minor string
+	patch string
 }
 
+// newGitHubClientFromEnvironment creates a GitHub client from docs-version-sync environment variables.
 func newGitHubClientFromEnvironment() *githubClient {
 	baseURL := strings.TrimRight(os.Getenv("DOC_VERSION_SYNC_GITHUB_API_URL"), "/")
 	if baseURL == "" {
@@ -89,6 +92,7 @@ func newGitHubClientFromEnvironment() *githubClient {
 	}
 }
 
+// resolveStackSourceRelease selects the latest stable release or an explicit stack source ref.
 func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSourceRelease, error) {
 	wantedRef := ""
 	wantedVersion := ""
@@ -145,6 +149,7 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 	}, nil
 }
 
+// stackRef reads one exact stack source ref from GitHub.
 func (client *githubClient) stackRef(ref string) (githubRef, error) {
 	path := fmt.Sprintf(
 		"/repos/%s/%s/git/ref/%s",
@@ -162,6 +167,7 @@ func (client *githubClient) stackRef(ref string) (githubRef, error) {
 	return result, nil
 }
 
+// stackRefs reads every GitHub ref with the self-managed stack tag prefix.
 func (client *githubClient) stackRefs() ([]githubRef, error) {
 	path := fmt.Sprintf(
 		"/repos/%s/%s/git/matching-refs/tags/%s",
@@ -192,6 +198,7 @@ func (client *githubClient) stackRefs() ([]githubRef, error) {
 	return refs, nil
 }
 
+// resolveCommit dereferences a GitHub ref object to an immutable commit SHA.
 func (client *githubClient) resolveCommit(object githubRefObject) (string, error) {
 	for depth := 0; depth < 10; depth++ {
 		switch object.Type {
@@ -221,11 +228,21 @@ func (client *githubClient) resolveCommit(object githubRefObject) (string, error
 	return "", fmt.Errorf("GitHub annotated tag chain exceeds 10 objects")
 }
 
+// getJSON reads and decodes one GitHub API response.
 func (client *githubClient) getJSON(path string, target any) (http.Header, error) {
-	if client.httpClient == nil {
-		client.httpClient = http.DefaultClient
+	httpClient := client.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
 	}
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(client.baseURL, "/")+path, nil)
+	requestURL := strings.TrimRight(client.baseURL, "/") + path
+	parsedURL, err := url.Parse(requestURL)
+	if err != nil {
+		return nil, err
+	}
+	if client.token != "" && !strings.EqualFold(parsedURL.Scheme, "https") {
+		return nil, fmt.Errorf("refuse to send GitHub token over non-HTTPS URL %s", parsedURL.Redacted())
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +252,21 @@ func (client *githubClient) getJSON(path string, target any) (http.Header, error
 	if client.token != "" {
 		req.Header.Set("Authorization", "Bearer "+client.token)
 	}
-	resp, err := client.httpClient.Do(req)
+	requestClient := *httpClient
+	checkRedirect := requestClient.CheckRedirect
+	requestClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && strings.EqualFold(via[len(via)-1].URL.Scheme, "https") && !strings.EqualFold(req.URL.Scheme, "https") {
+			return fmt.Errorf("refuse GitHub API redirect from HTTPS to %s", req.URL.Scheme)
+		}
+		if checkRedirect != nil {
+			return checkRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	resp, err := requestClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -250,6 +281,7 @@ func (client *githubClient) getJSON(path string, target any) (http.Header, error
 	return resp.Header.Clone(), nil
 }
 
+// normalizeStackSourceRef converts a version, tag, or full ref to a canonical tag ref.
 func normalizeStackSourceRef(sourceRef string) (string, string, error) {
 	value := strings.TrimSpace(sourceRef)
 	value = strings.TrimPrefix(value, "refs/tags/")
@@ -257,12 +289,30 @@ func normalizeStackSourceRef(sourceRef string) (string, string, error) {
 		value = stackTagPrefix + value
 	}
 	version := strings.TrimPrefix(value, stackTagPrefix)
-	if !stackVersionRE.MatchString(version) {
+	if !validStackVersion(version) {
 		return "", "", fmt.Errorf("stack source %q must be a semantic version, %s tag, or refs/tags/%s ref", sourceRef, stackTagPrefix, stackTagPrefix)
 	}
 	return "refs/tags/" + value, version, nil
 }
 
+// validStackVersion reports whether a value follows the SemVer 2.0.0 grammar used by stack tags.
+func validStackVersion(version string) bool {
+	match := stackVersionRE.FindStringSubmatch(version)
+	if match == nil {
+		return false
+	}
+	if match[1] == "" {
+		return true
+	}
+	for _, identifier := range strings.Split(match[1], ".") {
+		if len(identifier) > 1 && identifier[0] == '0' && numericIdentifierRE.MatchString(identifier) {
+			return false
+		}
+	}
+	return true
+}
+
+// parseStableStackRef parses a stable stack tag ref for numeric ordering.
 func parseStableStackRef(ref string) (string, stableStackVersion, bool) {
 	if !strings.HasPrefix(ref, stackRefPrefix) {
 		return "", stableStackVersion{}, false
@@ -272,18 +322,27 @@ func parseStableStackRef(ref string) (string, stableStackVersion, bool) {
 	if match == nil {
 		return "", stableStackVersion{}, false
 	}
-	major, _ := strconv.Atoi(match[1])
-	minor, _ := strconv.Atoi(match[2])
-	patch, _ := strconv.Atoi(match[3])
-	return version, stableStackVersion{major: major, minor: minor, patch: patch}, true
+	return version, stableStackVersion{major: match[1], minor: match[2], patch: match[3]}, true
 }
 
+// less reports whether a stable stack version precedes another version.
 func (version stableStackVersion) less(other stableStackVersion) bool {
-	if version.major != other.major {
-		return version.major < other.major
+	if comparison := compareNumericIdentifier(version.major, other.major); comparison != 0 {
+		return comparison < 0
 	}
-	if version.minor != other.minor {
-		return version.minor < other.minor
+	if comparison := compareNumericIdentifier(version.minor, other.minor); comparison != 0 {
+		return comparison < 0
 	}
-	return version.patch < other.patch
+	return compareNumericIdentifier(version.patch, other.patch) < 0
+}
+
+// compareNumericIdentifier compares arbitrarily large decimal SemVer components.
+func compareNumericIdentifier(left, right string) int {
+	if len(left) < len(right) {
+		return -1
+	}
+	if len(left) > len(right) {
+		return 1
+	}
+	return strings.Compare(left, right)
 }

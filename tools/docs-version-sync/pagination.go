@@ -10,6 +10,7 @@ import (
 	"strings"
 )
 
+// nextPageFromHeaders returns the next page declared by GitLab or RFC 8288 headers.
 func nextPageFromHeaders(headers http.Header) (int, bool) {
 	if value := strings.TrimSpace(headers.Get("X-Next-Page")); value != "" {
 		if page, err := strconv.Atoi(value); err == nil && page > 0 {
@@ -36,6 +37,7 @@ func nextPageFromHeaders(headers http.Header) (int, bool) {
 	return 0, false
 }
 
+// linkHasRelNext reports whether Link parameters include the next relation.
 func linkHasRelNext(params []string) bool {
 	for _, param := range params {
 		param = strings.TrimSpace(param)
