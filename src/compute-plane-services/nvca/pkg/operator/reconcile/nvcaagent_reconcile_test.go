@@ -2473,6 +2473,7 @@ func TestGetInternalPersistentStorageConfig(t *testing.T) {
 	}
 }
 
+// TestGetNetworkPoliciesDataEmptyDDCSIPList verifies generated network policies without DDCS CIDRs.
 func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	expNPNames := []string{
 		EgressNetworkPolicyNameKey,
@@ -2496,6 +2497,7 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
 	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
+	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 9089)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {
@@ -2505,6 +2507,7 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols.yaml"))), stripSPDXHeaders(b.String()))
 }
 
+// TestGetNetworkPoliciesDataWithDDCSIPList verifies generated network policies with DDCS CIDRs.
 func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	expNPNames := []string{
 		EgressNetworkPolicyNameKey,
@@ -2529,6 +2532,7 @@ func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
 	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
+	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 9089)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {

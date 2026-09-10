@@ -30,6 +30,8 @@ import (
 	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 )
 
+// translateHelmChartUtilsDeploy builds Helm workload resources with worker-utils
+// in a separate deployment.
 func translateHelmChartUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	// Fail if LLS is enabled for utils pod as a separate pod from the inference pod
 	if t.Details.FunctionType == FunctionTypeStreaming {
@@ -319,7 +321,7 @@ func translateHelmChartUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig)
 		VolumeMounts:    utilsContainerVolumeMounts,
 	}
 	// mutate startup / liveness / readiness probes
-	common.MutateUtilsProbes(&utilsContainer)
+	common.MutateUtilsContainer(&utilsContainer)
 	utilsPod.Spec.Containers = append(utilsPod.Spec.Containers, utilsContainer)
 
 	replicas := int32(1)

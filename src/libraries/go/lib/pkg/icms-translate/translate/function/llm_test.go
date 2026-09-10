@@ -57,6 +57,7 @@ func healthPathArgs(args []string) []string {
 	return healthPaths
 }
 
+// TestNewLLMRouterClientContainer verifies Pylon configuration and validation.
 func TestNewLLMRouterClientContainer(t *testing.T) {
 	type spec struct {
 		name       string
@@ -381,6 +382,11 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			assert.Equal(t, []corev1.ContainerPort{{
+				Name:          common.WorkerMetricsPortName,
+				ContainerPort: llmMetricsPort,
+				Protocol:      corev1.ProtocolTCP,
+			}}, c.Ports)
 			tt.validate(t, c)
 		})
 	}
