@@ -45,6 +45,7 @@ clusters:
           healthDelayMs: 0
 
 router:
+  cacheAffinityWaitMs: 200
   hostname: router.usw2.stargate-dev.example.invalid
   acmCertificateArn: arn:aws:acm:us-west-2:000000000000:certificate/00000000-0000-0000-0000-000000000000
   tlsSecretName: stargate-router-tls

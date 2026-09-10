@@ -134,6 +134,54 @@ class RenderedStackTests(unittest.TestCase):
             if resource["kind"] == kind
         ]
 
+    def test_affinity_hold_accepts_regional_and_protected_values(self) -> None:
+        region = yaml.safe_load(
+            (STACK_DIR / "environments" / "us-west-2.yaml").read_text()
+        )
+        configmap = next(
+            resource
+            for _, resource in self.resources("ConfigMap")
+            if resource["metadata"]["name"] == "llm-request-router-lb"
+        )
+        config = json.loads(configmap["data"]["lb-config.json"])
+        self.assertEqual(
+            config["models"][region["modelName"]]["cache_affinity_wait_ms"],
+            region["router"]["cacheAffinityWaitMs"],
+        )
+        for hold_ms in (0, 350):
+            with self.subTest(hold_ms=hold_ms):
+                values = Path(self.temporary.name) / f"hold-{hold_ms}.yaml"
+                values.write_text(
+                    yaml.safe_dump({"router": {"cacheAffinityWaitMs": hold_ms}})
+                )
+                environment = dict(
+                    os.environ,
+                    STARGATE_DEV_VALUES_FILE=str(values),
+                    STARGATE_DEV_CREDENTIALS_FILE=str(
+                        Path(self.temporary.name) / "credentials.json"
+                    ),
+                )
+                result = subprocess.run(
+                    ["helmfile", "-e", "us-west-2", "-l", "phase=stargate", "template"],
+                    cwd=STACK_DIR,
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                configmap = next(
+                    resource
+                    for resource in yaml.safe_load_all(result.stdout)
+                    if isinstance(resource, dict)
+                    and resource.get("kind") == "ConfigMap"
+                    and resource["metadata"]["name"] == "llm-request-router-lb"
+                )
+                config = json.loads(configmap["data"]["lb-config.json"])
+                self.assertEqual(
+                    config["models"][region["modelName"]]["cache_affinity_wait_ms"],
+                    hold_ms,
+                )
+
     def test_every_release_has_the_intended_explicit_context(self) -> None:
         releases = next(
             document["releases"]
@@ -226,6 +274,7 @@ class RenderedStackTests(unittest.TestCase):
                     "require_cache_affinity_key": True,
                     "require_input_tokens": True,
                     "cache_affinity_backend_selection_count": 2,
+                    "cache_affinity_wait_ms": 200,
                     "cache_affinity_input_tokens_scale": 0.1,
                     "cache_affinity_virtual_nodes": 150,
                     "max_queue_time_floor_ms": 100,
