@@ -344,7 +344,6 @@ func MutateUtilsContainer(containerSpec *corev1.Container) {
 	MutateUtilsProbes(containerSpec)
 }
 
-// MutateUtilsProbes configures startup, readiness, and liveness probes for worker-utils.
 func MutateUtilsProbes(containerSpec *corev1.Container) {
 	const (
 		liveEndpoint  = "/v1/health/live"
