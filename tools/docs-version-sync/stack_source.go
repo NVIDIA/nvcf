@@ -141,38 +141,31 @@ func pinSourceDigest(sources map[string][]byte, pins []effectiveStackPin) (strin
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
 }
 
+// validateStackSourceSnapshot verifies the catalog against its immutable stack release inputs.
 func validateStackSourceSnapshot(repoRoot string, catalog *Catalog) error {
 	return validateStackSourceSnapshotWithPins(repoRoot, catalog, effectiveStackPins)
 }
 
+// validateStackSourceSnapshotWithPins verifies catalog artifacts with a supplied pin definition set.
 func validateStackSourceSnapshotWithPins(repoRoot string, catalog *Catalog, pins []effectiveStackPin) error {
 	if catalog.Stack.SourceCommit == "" {
 		return nil
 	}
 
-	tagRef := "refs/tags/" + catalog.Stack.SourceTag
-	commit, err := gitOutput(repoRoot, "rev-parse", "--verify", tagRef+"^{commit}")
-	if err != nil {
-		return fmt.Errorf("resolve stack source tag %s: %w", catalog.Stack.SourceTag, err)
-	}
-	if string(commit) != catalog.Stack.SourceCommit+"\n" {
-		return fmt.Errorf("stack source tag %s resolves to %s, want recorded commit %s", catalog.Stack.SourceTag, trimOutput(commit), catalog.Stack.SourceCommit)
-	}
-
-	sources := make(map[string][]byte, len(catalog.Stack.PinSources))
-	for _, sourcePath := range catalog.Stack.PinSources {
-		body, err := gitOutput(repoRoot, "show", catalog.Stack.SourceCommit+":"+sourcePath)
-		if err != nil {
-			return fmt.Errorf("read %s from stack source commit %s: %w", sourcePath, catalog.Stack.SourceCommit, err)
-		}
-		sources[sourcePath] = body
-	}
-
-	versions, err := extractEffectiveStackPins(sources, pins)
+	snapshot, err := loadStackSourceSnapshot(repoRoot, stackSourceRelease{
+		Version: catalog.Stack.SourceVersion,
+		Tag:     catalog.Stack.SourceTag,
+		Commit:  catalog.Stack.SourceCommit,
+	}, catalog.Stack.PinSources)
 	if err != nil {
 		return err
 	}
-	digest, err := pinSourceDigest(sources, pins)
+
+	versions, err := extractEffectiveStackPins(snapshot.Files, pins)
+	if err != nil {
+		return err
+	}
+	digest, err := pinSourceDigest(snapshot.Files, pins)
 	if err != nil {
 		return err
 	}
