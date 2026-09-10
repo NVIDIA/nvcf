@@ -32,7 +32,8 @@ mockDynamo:
 
 pylon:
   doCalibration: false
-  initialInputTps: ""
+  initialInputTps: 7000
+  activeCanaryIntervalMs: 0
 
 resources:
   mockDynamo:

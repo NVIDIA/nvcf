@@ -51,6 +51,7 @@
       "required": ["doCalibration", "initialInputTps"],
       "properties": {
         "doCalibration": {"type": "boolean"},
+        "activeCanaryIntervalMs": {"type": "integer", "minimum": 0},
         "initialInputTps": {
           "oneOf": [
             {"type": "string", "maxLength": 0},

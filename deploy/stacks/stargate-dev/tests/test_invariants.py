@@ -345,9 +345,8 @@ class RenderedStackTests(unittest.TestCase):
                     if value.startswith("--cluster-id=")
                 )
             )
-            self.assertFalse(
-                any(value.startswith("--initial-input-tps") for value in arguments)
-            )
+            self.assertIn("--initial-input-tps=7000", arguments)
+            self.assertIn("--active-canary-interval-ms=0", arguments)
             self.assertIn(
                 "--grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt", arguments
             )
