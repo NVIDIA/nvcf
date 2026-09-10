@@ -222,7 +222,7 @@ func TestResolveStackSourceReleaseRejectsOnlyPrereleaseTags(t *testing.T) {
 func TestResolvedStackInventoryRejectsMissingAsset(t *testing.T) {
 	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":"other.json","browser_download_url":"https://example.com/other.json"}]}`, source.Tag)
+		_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":"other.json","browser_download_url":"https://example.com/other.json"}]}`, source.Tag)
 	}))
 	defer server.Close()
 
@@ -244,9 +244,9 @@ func TestResolvedStackInventoryRejectsMismatchedSourceIdentity(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/NVIDIA/nvcf/releases/tags/" + source.Tag:
-			fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, source.Tag, resolvedStackInventoryAssetName, server.URL+"/inventory")
+			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, source.Tag, resolvedStackInventoryAssetName, server.URL+"/inventory")
 		case "/inventory":
-			w.Write(raw)
+			_, _ = w.Write(raw)
 		default:
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
 		}

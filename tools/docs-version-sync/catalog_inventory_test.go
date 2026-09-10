@@ -27,14 +27,14 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventoryWithoutGitLab(t *tes
 		requested[r.URL.Path] = true
 		switch r.URL.Path {
 		case "/repos/NVIDIA/nvcf/git/ref/tags/" + release.Tag:
-			fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
+			_, _ = fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
 		case "/repos/NVIDIA/nvcf/releases/tags/" + release.Tag:
-			fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, release.Tag, resolvedStackInventoryAssetName, server.URL+"/inventory")
+			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, release.Tag, resolvedStackInventoryAssetName, server.URL+"/inventory")
 		case "/inventory":
 			if got := r.Header.Get("Authorization"); got != "" {
 				t.Errorf("asset request Authorization = %q, want no credentials", got)
 			}
-			w.Write(raw)
+			_, _ = w.Write(raw)
 		default:
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
 		}
@@ -130,8 +130,8 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	if err != nil {
 		t.Fatal(err)
 	}
-	if distribution != "nvcr.io/nvidia/nvcf/nvca:6.7.8@sha256:"+strings.Repeat("b", 64) {
-		t.Fatalf("digest-pinned NVCA distribution = %q", distribution)
+	if distribution != "nvcr.io/nvidia/nvcf/nvca:6.7.8" {
+		t.Fatalf("remapped NVCA distribution = %q", distribution)
 	}
 	compute, _ := catalog.findArtifact(computeStackResourceName)
 	if catalog.publicationIsPending(compute) {

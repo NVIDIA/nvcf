@@ -557,7 +557,7 @@ func (catalog *Catalog) artifactPath(artifact Artifact) (string, error) {
 		name = artifact.Name
 	}
 	reference := registry.fullPath(name, version)
-	if artifact.Digest != "" {
+	if artifact.Digest != "" && registryName == artifact.Registry && version == artifact.Version {
 		reference += "@" + artifact.Digest
 	}
 	return reference, nil
@@ -872,13 +872,4 @@ func defaultOutputs() []OutputFile {
 		{Path: "docs/user/cluster-management/self-managed.md"},
 		{Path: "docs/user/cluster-management/reference.md"},
 	}
-}
-
-func artifactNames(artifacts []Artifact) []string {
-	names := make([]string, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		names = append(names, artifact.Name)
-	}
-	sort.Strings(names)
-	return names
 }

@@ -330,6 +330,71 @@ func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	}
 }
 
+func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	artifact := Artifact{
+		Name:     "example",
+		Type:     ArtifactTypeImage,
+		Registry: "staging",
+		Version:  "1.2.3",
+		Digest:   digest,
+	}
+	tests := []struct {
+		name        string
+		publication *Publication
+		want        string
+	}{
+		{
+			name: "source reference",
+			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3@" + digest,
+		},
+		{
+			name: "unchanged publication",
+			publication: &Publication{
+				Name:     artifact.Name,
+				Version:  artifact.Version,
+				Registry: artifact.Registry,
+			},
+			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3@" + digest,
+		},
+		{
+			name: "registry remap",
+			publication: &Publication{
+				Name:     artifact.Name,
+				Version:  artifact.Version,
+				Registry: "public-images",
+			},
+			want: "nvcr.io/nvidia/nvcf/example:1.2.3",
+		},
+		{
+			name: "version remap",
+			publication: &Publication{
+				Name:             artifact.Name,
+				Version:          artifact.Version,
+				PublishedVersion: "1.2.3-public",
+				Registry:         artifact.Registry,
+			},
+			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3-public",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalog := testCatalog()
+			catalog.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+			if tt.publication != nil {
+				catalog.Publications = []Publication{*tt.publication}
+			}
+			got, err := catalog.artifactPath(artifact)
+			if err != nil {
+				t.Fatalf("artifactPath failed: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("artifactPath = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 	base := testCatalog()
 	base.VersionOverrides = []VersionOverride{{

@@ -330,7 +330,7 @@ func (client *githubClient) getJSON(path string, target any) (http.Header, error
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("GitHub GET %s failed: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
@@ -385,7 +385,7 @@ func (client *githubClient) downloadPublicAsset(downloadURL string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("GitHub asset GET failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
