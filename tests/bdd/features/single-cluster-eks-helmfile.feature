@@ -103,8 +103,7 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
     #    DNS resolver. AWS DNS propagation typically lags ~30-90s
     #    behind NLB programming; without this wait, subsequent
     #    in-pod connections can fail intermittently.
-    When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
-    Then the command exit code should be 0
+    Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
 
     # 6. Copy base.yaml -> eks-bdd.yaml and patch with the EKS
     #    knobs (including global.domain from the just-exported

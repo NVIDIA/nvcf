@@ -41,7 +41,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 69
 fi
 
-deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
+start_time=$(date +%s)
 attempt=0
 consecutive_successes=0
 while [[ "$consecutive_successes" -lt 3 ]]; do
@@ -60,7 +60,9 @@ PY
   if [[ "$consecutive_successes" -ge 3 ]]; then
     break
   fi
-  if [[ $(date +%s) -ge "$deadline" ]]; then
+  current_time=$(date +%s)
+  elapsed_seconds=$(( current_time - start_time ))
+  if (( elapsed_seconds >= TIMEOUT_SECONDS )); then
     echo "timed out after ${TIMEOUT_SECONDS}s waiting for DNS for $HOSTNAME (attempts=$attempt)" >&2
     exit 2
   fi

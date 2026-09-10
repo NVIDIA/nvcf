@@ -381,9 +381,9 @@ After `CRIU restore`:
 4. Pointers in `struct uv__iou` still point to OLD mmap'd regions
 5. Reading/writing to OLD regions causes kernel to use invalid state
 
-### What needs to happen in uv_loop_fork():
+### What needs to happen in uv_loop_fork()
 
-```
+```text
 Current state (BROKEN):
   1. Close backend_fd (epoll)
   2. Delete io_uring rings (munmap, close ringfd)
@@ -396,7 +396,7 @@ Current state (BROKEN):
            App code expecting completions never gets them
 ```
 
-### Concrete failure scenario:
+### Concrete failure scenario
 
 1. Before checkpoint: App submits 10 filesystem reads via io_uring
 2. CRIU checkpoints process (submissions frozen in old ring)

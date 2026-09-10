@@ -29,6 +29,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.RequestEntity;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.web.client.RestTemplate;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * OSS executable ({@link App} + {@code nvct-core}) smoke tests. Parallels the managed
@@ -45,6 +46,9 @@ class NvctServiceIntegrationTest {
 
     @Autowired
     private TestRestTemplate testRestTemplate;
+
+    @Autowired
+    private JsonMapper jsonMapper;
 
     @LocalManagementPort
     private int managementPort;
@@ -64,5 +68,18 @@ class NvctServiceIntegrationTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody()).containsIgnoringCase("status");
+    }
+
+    @Test
+    void infoEndpointReturnsOk() {
+        var response = testRestTemplate.exchange(
+                RequestEntity.get(URI.create("/info")).build(),
+                String.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+        var info = jsonMapper.readTree(response.getBody());
+        assertThat(info.has("service")).isTrue();
+        assertThat(info.has("version")).isTrue();
+        assertThat(info.has("commit")).isTrue();
     }
 }

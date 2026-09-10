@@ -1,4 +1,4 @@
-## uvloop-mp-test
+# uvloop-mp-test
 
 This test image uses `sitecustomize.py` to enable `uvloop` without touching
 app code. Python auto-imports `sitecustomize` on startup if it is on `sys.path`,
