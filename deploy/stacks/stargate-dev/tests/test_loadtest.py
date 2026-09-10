@@ -254,17 +254,27 @@ class CanonicalSuiteTests(unittest.TestCase):
         start_forward.assert_called_once_with()
 
     def test_port_forward_uses_websocket_transport(self) -> None:
+        with LOADTEST.socket.socket() as listener:
+            listener.setsockopt(
+                LOADTEST.socket.SOL_SOCKET, LOADTEST.socket.SO_REUSEADDR, 1
+            )
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            with LOADTEST.socket.create_connection(("127.0.0.1", port)) as client:
+                connection, _ = listener.accept()
+                connection.close()
+                self.assertEqual(client.recv(1), b"")
         with tempfile.TemporaryDirectory() as directory:
             campaign = object.__new__(LOADTEST.Campaign)
             campaign.output = Path(directory)
-            campaign.args = SimpleNamespace(local_port=18000)
+            campaign.args = SimpleNamespace(local_port=port)
             campaign.stargate_context = "stargate"
             campaign.namespace = "test"
             campaign.endpoint = "http://127.0.0.1:18000/v1"
             campaign.port_forward = None
             campaign.port_forward_log = None
             with (
-                mock.patch.object(LOADTEST.socket, "socket"),
                 mock.patch.object(LOADTEST.socket, "create_connection"),
                 mock.patch.object(LOADTEST.subprocess, "Popen") as popen,
                 mock.patch.object(campaign, "log"),

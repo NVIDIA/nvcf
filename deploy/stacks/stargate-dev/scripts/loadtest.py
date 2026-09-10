@@ -425,6 +425,7 @@ class Campaign:
 
     def start_port_forward(self) -> None:
         with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(("127.0.0.1", self.args.local_port))
             except OSError as error:
