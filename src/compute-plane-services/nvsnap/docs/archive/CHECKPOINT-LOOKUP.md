@@ -68,7 +68,7 @@ A "capture's bytes" is the union of L1, L2, and L3 entries for the same hash. An
 
 NVCA's Hook A needs to answer: **"given a pod about to be created, is there a checkpoint I can restore from?"** The current answer chain:
 
-```
+```text
 1. Compute the canonical hash from the pod's spec (using ComputeHash above).
 
 2. Read the per-capture ConfigMap to know "does a capture for this hash exist

@@ -14,7 +14,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-Rendering PKI Certificates from Vault with Consul Template
+# Rendering PKI Certificates from Vault with Consul Template
+
 ----------------------------------------------------------
 
 [Vault][vault] is a popular open source tool for managing secrets. In addition

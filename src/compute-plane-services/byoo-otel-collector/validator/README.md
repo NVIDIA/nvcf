@@ -21,25 +21,30 @@ Start a instance by horde or aws. The host name will be saved in `instance_info.
 ```bash
 ./validator/setup.sh --ip=10.176.221.36 --user=horde --password=<pwd> --env=k8s --kubeconfig_output_path=$(pwd) --cloud-backend=horde
 ```
+
 - Setup Remote VM(gfn) Environment
   - This deploys gfn specific kube-state-metrics
 
 ```bash
 ./validator/setup.sh --ip=10.176.221.36 --user=horde --password=<pwd> --env=vm --kubeconfig_output_path=$(pwd) --cloud-backend=horde
 ```
+
 - (Or) Setup Environment on Local Machine
 
 ```bash
 sudo ./validator/setup.sh --local --env=k8s --kubeconfig_output_path=$(pwd)
 ```
+
 - A kubeconfig file called `.microk8s_kubeconfig.yaml` will be created under `$kubeconfig_output_path`
 
 ### Deploy Otel Collector for Validation
+
 - Export the kubeconfig file created from previous step
 
 ```bash
 export KUBECONFIG=$(pwd)/.microk8s_kubeconfig.yaml
 ```
+
 - Deploy otel collector with vm-helm config
 
 ```bash
@@ -49,6 +54,7 @@ helm upgrade --create-namespace --install --wait --timeout=60s \
     opentelemetry-collector validator/charts/otel-collector/ \
     -f ./validator/charts/otel-collector/values-$COLLECTOR_CONFIG.yaml
 ```
+
 - Deploy otel collector with vm-container config
 
 ```bash

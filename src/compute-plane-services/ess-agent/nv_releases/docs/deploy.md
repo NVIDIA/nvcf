@@ -18,14 +18,14 @@ limitations under the License.
 
 ## Building Zip Files
 
-### 1. Run the [build_zips.sh](../scripts/build_zips.sh) script to generate the zip files. A version must be provided as an argument; this will be used in the zip file name.
+### 1. Run the [build_zips.sh](../scripts/build_zips.sh) script to generate the zip files. A version must be provided as an argument; this will be used in the zip file name
 
 ```bash
 # Example using `v1.0.5` as the version
 nv_releases/scripts/build_zips.sh v1.0.5
 ```
 
-### 2. After the script is finished, the compiled binaries will be in the [nv_releases/builds](../builds) directory:
+### 2. After the script is finished, the compiled binaries will be in the [nv_releases/builds](../builds) directory
 
 ```text
 darwin_amd64/

@@ -120,7 +120,7 @@ provides the following functions:
   - [nomadVarListSafe](#nomadvarlistsafe)
   - [nomadVar](#nomadvar)
   - [nomadVarExists](#nomadvarexists)
-- [Debugging Functions](#debugging)
+- [Debugging Functions](#debugging-functions)
   - [spew_dump](#spew_dump)
   - [spew_sdump](#spew_sdump)
   - [spew_printf](#spew_printf)
@@ -343,8 +343,8 @@ renders
 5
 ```
 
-Note that Consul Template uses a [multi-phase
-execution](#multi-phase-execution). During the first phase of evaluation, Consul
+Note that Consul Template uses a multi-phase
+execution. During the first phase of evaluation, Consul
 Template will have no data from Consul and thus will _always_ fall back to the
 default value. Subsequent reads from Consul will pull in the real value from
 Consul (if the key exists) on the next template pass. This is important because
@@ -1590,7 +1590,7 @@ renders
 
 Note: Consul stores all KV data as strings. Thus true is "true", 1 is "1", etc.
 
-##### `toUnescapedJSON`
+#### `toUnescapedJSON`
 
 Takes the result from a [`tree`](#tree) or [`ls`](#ls) call and converts it into a JSON object without HTML escaping. This function comes in handy when working with db connection strings or URIs containing query parameters.
 

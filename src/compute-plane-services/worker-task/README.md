@@ -42,13 +42,13 @@ Create a directory used to share data between `worker-task` and the task
 container.
 
 ```bash
-$ mkdir ~/nvct-shared-dir
+mkdir ~/nvct-shared-dir
 ```
 
 Create a directory used to store secrets consumed by `worker-task`.
 
 ```bash
-$ mkdir ~/nvct-secrets-dir
+mkdir ~/nvct-secrets-dir
 ```
 
 Create `secrets.json` in `~/nvct-secrets-dir` and add your NGC API key. The key
@@ -65,7 +65,7 @@ is used to upload results to the NGC private registry.
 Start the mock NVCT server for communication with `worker-task`.
 
 ```bash
-$ bazel run //src/libraries/go/worker/test/cmd/nvctserver
+bazel run //src/libraries/go/worker/test/cmd/nvctserver
 ```
 
 ### Run worker-task
@@ -113,15 +113,15 @@ Once everything is running, write results to `~/nvct-shared-dir` for
 1. Create a folder for the checkpoint result.
 
 ```bash
-$ cd ~/nvct-shared-dir/result
-$ mkdir <result-name>
+cd ~/nvct-shared-dir/result
+mkdir <result-name>
 ```
 
 1. Generate a random file of a certain size in that folder.
 
 ```bash
-$ cd ~/nvct-shared-dir/result/<result-name>
-$ dd if=/dev/urandom of=result_file bs=1M count=100
+cd ~/nvct-shared-dir/result/<result-name>
+dd if=/dev/urandom of=result_file bs=1M count=100
 ```
 
 1. Create (or update) the progress file `~/nvct-shared-dir/result/progress`:

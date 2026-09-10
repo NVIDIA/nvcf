@@ -14,7 +14,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-Joining Structures with Consul Template
+# Joining Structures with Consul Template
+
 ---------------------------------------
 
 Consul Template has built-in support for joining existing arrays and lists on a given separator, but there is no built-in support for complex map-reduce functions. This section details some common join techniques.

@@ -14,3 +14,30 @@ third_party/
 #
 # The [0-9] keeps docs/version-catalog/, which is not frozen, in scope.
 docs/v[0-9]*/
+
+# Vendored Helm subcharts. Same rationale as vendor/: upstream chart content
+# this repository redistributes rather than authors.
+deploy/helm/*/charts/
+
+# CLAUDE.md is not prose. AGENTS.md requires every one of them to contain only
+# "@AGENTS.md" and to never hold unique content, so they can carry neither a
+# top-level heading (MD041) nor an inline markdownlint-disable comment.
+CLAUDE.md
+
+# GitHub issue templates render inside the issue form rather than as standalone
+# documents, so their first heading is intentionally "##" and nests under the
+# form's own title.
+.github/ISSUE_TEMPLATE/
+
+# MyST-anchored load-test guides. These open with a "(target)=" anchor line
+# that MyST {ref} cross-references point at, so the anchor has to stay ahead of
+# the heading and MD041 can never pass. An inline disable is not an option
+# either: docs/ is rendered as MDX, where an HTML comment is a parse error, and
+# MDX's own {/* */} comment is not a markdownlint directive. MD041 is their only
+# violation. docs/user/ copies are symlinks to the docs/dev/ originals.
+docs/dev/grpc-load-test-sli-guide.md
+docs/dev/http-load-test-sli-guide.md
+docs/dev/http-load-testing.md
+docs/user/grpc-load-test-sli-guide.md
+docs/user/http-load-test-sli-guide.md
+docs/user/http-load-testing.md

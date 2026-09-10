@@ -47,7 +47,7 @@ The rendered secrets should be found in the [nv_releases/test/secrets](..%2Ftest
 
 ### Commands
 
-### Run local tag against Mockoon:
+### Run local tag against Mockoon
 
 Init container
 
@@ -75,7 +75,7 @@ docker run --rm -it \
     -config=/ess-agent/file/configs/config-with-non-tls-telemetry-docker.hcl
 ```
 
-### Run URM tag against Mockoon:
+### Run URM tag against Mockoon
 
 ```bash
 docker run --rm -it \
@@ -88,7 +88,7 @@ docker run --rm -it \
     -config=/ess-agent/file/configs/config-docker.hcl
 ```
 
-### Run nvcr.io tag against Mockoon:
+### Run nvcr.io tag against Mockoon
 
 ```bash
 docker run --rm -it \

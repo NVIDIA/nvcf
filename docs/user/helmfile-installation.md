@@ -86,10 +86,12 @@ Helmfile `1.3.0+` re-introduced sequential execution via the `--sequential-helmf
 - The `nvcf-self-managed-stack` repository must be downloaded to your local machine (see [download-nvcf-self-managed-stack](./image-mirroring.md)).
 
 <Accordion title="Install helm-diff plugin">
+
 ```bash
 # Install helm-diff plugin (required for helmfile)
 helm plugin install https://github.com/databus23/helm-diff
 ```
+
 </Accordion>
 
 <Warning>
@@ -643,6 +645,7 @@ cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 
 <Accordion title="Configuration Template">
 </Accordion>
+
 ```yaml title="secrets/example-secrets.yaml"
 
 # Required structure for any environment secrets.
@@ -700,7 +703,6 @@ api:
         description: "NGC Helm registry"
 
 ```
-
 
 <Note>
 NVCF supports these registries for function containers (set in

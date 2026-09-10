@@ -7,7 +7,7 @@
 **Status:** open-source-ready candidate, validated on
 `feat/rootfs-only-restore` (GKE H100 cluster, 2026-05-12).
 For freshly captured benchmark numbers see
-[§ Benchmarks](#benchmarks).
+[§ Benchmarks](#10-benchmarks).
 
 ---
 

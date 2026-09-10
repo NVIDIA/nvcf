@@ -30,7 +30,7 @@ limitations under the License.
 - **NVCT Task Support**: First-class commands for NVIDIA Cloud Tasks (`nvcf-cli task ...`)
 - **Cluster Diagnostics**: One-command health report and support bundle for self-managed deployments (`nvcf-cli cluster-dump`)
 
-**[Jump to Token Generation Guide](#automatic-token-generation-)**
+**[Jump to Token Generation Guide](#automatic-token-generation)**
 
 ---
 

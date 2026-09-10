@@ -923,7 +923,7 @@ Display the secrets configured for the current function in state:
 
 **Sample Output:**
 
-```
+```text
 Secrets configured for function 550e8400-e29b-41d4-a716-446655440000 version 660e8400-e29b-41d4-a716-446655440001:
 
 1. API_KEY

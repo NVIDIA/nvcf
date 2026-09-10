@@ -1,3 +1,5 @@
+# Multi-Node Function Test Chart
+
 Notes:
 
 - The `nodesPerInstance` in `values.yaml` controls how many replicas are to be created per instance

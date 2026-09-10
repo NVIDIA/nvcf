@@ -11,7 +11,7 @@
 
 ### Checkpoint Flow
 
-```
+```text
 1. NvSnap agent freezes cgroup
 2. NvSnap agent writes trigger files, unfreezes
 3. libnvsnap_intercept (each process):
@@ -32,7 +32,7 @@
 
 ### Restore Flow
 
-```
+```text
 1. CRIU restore (processes frozen, RM state from cuda-checkpoint)
 2. PostRestore hook: cuda-checkpoint --action restore --pid <each TP worker>
    This fixes the RM state so CUDA APIs work (validated: cudaMalloc works post-CRIU)

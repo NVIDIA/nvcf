@@ -204,7 +204,7 @@ Default labels:
 
 | Label | Description | Example |
 | -------- | ------- | ------- |
-| ess_agent_id | unique agent id generated on startup | `45852a0cd7b290d5b804a07e3d16d5e4`
+| ess_agent_id | unique agent id generated on startup | `45852a0cd7b290d5b804a07e3d16d5e4` |
 
 Metrics can be scrapped on the below endpoint
 
@@ -331,4 +331,4 @@ Refer [Building & Release](nv_releases/docs/deploy.md) on how to generate a ess-
 
 ## Testing
 
-Refer [link](nv_releases/docs/test.md) for local testing.
+Refer to the [local testing guide](nv_releases/docs/test.md).

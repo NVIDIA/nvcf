@@ -2,6 +2,7 @@
 
 **Status:** design — not yet implemented. Captures the architecture we'll
 follow when we re-attempt multi-GPU GPU-state restore. Single-GPU CRIU
+
 - cuda-checkpoint already works; this doc is for the multi-GPU path
 (currently blocked at the libcudart wall — see MEMORY.md).
 

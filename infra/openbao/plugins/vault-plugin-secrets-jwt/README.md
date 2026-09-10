@@ -1,6 +1,6 @@
 # Vault Plugin: JWT Secrets
 
-### A [Hashicorp Vault](https://www.github.com/hashicorp/vault) secrets plugin for generating and verifying JSON Web Tokens  
+## A [Hashicorp Vault](https://www.github.com/hashicorp/vault) secrets plugin for generating and verifying JSON Web Tokens  
 
 - [Overview](#overview)
 - [Encryption And Key Managment](#encryption-and-key-management)
@@ -27,7 +27,7 @@ The plugin explicitly does not support verifying JWTs as a service; instead rely
 fetch the verification keys via HTTP and verify JWTs locally. This dramatically reduces traffic to
 Vault as well as allows clients to use standard client libraries for verification.
 
-### ⚠️ Early Access
+## ⚠️ Early Access
 
 The plugin is still under early development and should be tested thoroughly before being used in
 any environment.
@@ -315,6 +315,6 @@ can be used in production.
 
 # Quick Links
 
-    - Vault Website: https://www.vaultproject.io
-    - Main Project Github: https://www.github.com/hashicorp/vault
-    - JWT docs: https://jwt.io
+- Vault Website: https://www.vaultproject.io
+- Main Project Github: https://www.github.com/hashicorp/vault
+- JWT docs: https://jwt.io

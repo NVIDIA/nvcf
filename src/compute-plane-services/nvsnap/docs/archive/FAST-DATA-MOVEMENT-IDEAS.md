@@ -77,10 +77,7 @@ Receive:      mount -t erofs -o ro,loop <id>.erofs <mountpoint>
 | Pack time | **116 s** (single-threaded; `mkfs.erofs` doesn't parallelize) |
 | Pack throughput | **257 MB/s** |
 | Mount time | **<1 s** |
-| CRIU read-path compatibility | **validated** — `crit decode` works on
-  mount; `criu restore` reads the same image set and reaches the same
-  expected error line as a direct-dir restore (mount-NS mismatch
-  unrelated to EROFS). |
+| CRIU read-path compatibility | **validated** — `crit decode` works on mount; `criu restore` reads the same image set and reaches the same expected error line as a direct-dir restore (mount-NS mismatch unrelated to EROFS). |
 
 The operational story is the reason to consider EROFS, not the
 compression ratio (tar+zstd compresses better and packs ~5× faster).
