@@ -47,10 +47,11 @@ class CanonicalSuiteTests(unittest.TestCase):
             {
                 "kind": "long-context-affinity",
                 "sessions": 32,
+                "sessionBatchSize": 8,
                 "inputTokensByTurn": [80_000, 100_000, 120_000],
                 "repeats": 1,
                 "rate": 1,
-                "workers": 1,
+                "workers": 4,
                 "requestSloMs": 60_000,
                 "maxWaitMs": 60_000,
                 "timeoutSeconds": 90,
@@ -70,15 +71,27 @@ class CanonicalSuiteTests(unittest.TestCase):
         self.assertTrue(sessions[4].startswith(sessions[2]))
 
         long_context = list(
-            LOADTEST.long_context_prompts(2, [80_000, 100_000, 120_000])
+            LOADTEST.long_context_prompts(3, 2, [80_000, 100_000, 120_000])
         )
         self.assertEqual(
             [5 + len(prompt) // 4 for prompt in long_context],
-            [80_000, 100_000, 120_000, 80_000, 100_000, 120_000],
+            [
+                80_000,
+                80_000,
+                100_000,
+                100_000,
+                120_000,
+                120_000,
+                80_000,
+                100_000,
+                120_000,
+            ],
         )
-        self.assertEqual(long_context[0][:256], long_context[1][:256])
-        self.assertEqual(long_context[1][:256], long_context[2][:256])
-        self.assertNotEqual(long_context[0][:256], long_context[3][:256])
+        self.assertEqual(long_context[0][:256], long_context[2][:256])
+        self.assertEqual(long_context[2][:256], long_context[4][:256])
+        self.assertEqual(long_context[6][:256], long_context[7][:256])
+        self.assertNotEqual(long_context[0][:256], long_context[1][:256])
+        self.assertNotEqual(long_context[0][:256], long_context[6][:256])
 
         hot = list(LOADTEST.mixed_hot_prompts(4, 512, 1024))
         self.assertEqual(len({prompt[:256] for prompt in hot}), 1)

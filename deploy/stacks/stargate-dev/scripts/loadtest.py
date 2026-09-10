@@ -137,24 +137,30 @@ def session_prompts(
 
 
 def long_context_prompts(
-    sessions: int, input_tokens_by_turn: list[int]
+    sessions: int, session_batch_size: int, input_tokens_by_turn: list[int]
 ) -> Iterable[str]:
     random_source = random.Random(0)
     session_ids = [f"{random_source.getrandbits(128):032x}" for _ in range(sessions)]
-    for session_id in session_ids:
-        history = fixed_size_text(
-            f"canonical-long-context-session={session_id}; ",
-            "Stable repository and coding context. ",
-            256,
-        )
+    for batch_start in range(0, sessions, session_batch_size):
+        histories = [
+            fixed_size_text(
+                f"canonical-long-context-session={session_id}; ",
+                "Stable repository and coding context. ",
+                256,
+            )
+            for session_id in session_ids[
+                batch_start : batch_start + session_batch_size
+            ]
+        ]
         for input_tokens in input_tokens_by_turn:
             content_bytes = (input_tokens - 5) * 4
-            history = fixed_size_text(
-                history,
-                " Additional source code, build output, and conversation context. ",
-                content_bytes,
-            )
-            yield history
+            for index, history in enumerate(histories):
+                histories[index] = fixed_size_text(
+                    history,
+                    " Additional source code, build output, and conversation context. ",
+                    content_bytes,
+                )
+                yield histories[index]
 
 
 def mixed_hot_prompts(count: int, minimum: int, maximum: int) -> Iterable[str]:
@@ -508,7 +514,9 @@ class Campaign:
                 write_workload(
                     path,
                     long_context_prompts(
-                        scenario["sessions"], scenario["inputTokensByTurn"]
+                        scenario["sessions"],
+                        scenario["sessionBatchSize"],
+                        scenario["inputTokensByTurn"],
                     ),
                     kind,
                 )
