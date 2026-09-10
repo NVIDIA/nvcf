@@ -225,6 +225,40 @@ teardown path still destroys Helm releases with the named owner selector, but it
 does not delete named namespaces until the shared prerequisite lifecycle is wired
 later in Phase 4.
 
+## Phase 4C Named Render Isolation Checker
+
+Phase 4C adds the object-level render checker that later Phase 4 work must pass
+before the named-mode block is removed.
+
+The checker parses rendered YAML instead of grepping raw text. It fails a named
+render when it finds any of these unsafe identities:
+
+- an object namespace, `Namespace`, gateway backend reference, RoleBinding
+  subject, or other `namespace` field that still points at a legacy plane-owned
+  namespace such as `nvcf`, `api-keys`, `sis`, or `vault-system`;
+- an in-cluster service DNS name that still points at a legacy plane-owned
+  namespace, such as `openbao-server.vault-system.svc.cluster.local`;
+- a gateway route in any unprefixed namespace whose name is not derived from the
+  control-plane owner, unless that exact route identity is explicitly allowed as
+  shared;
+- any cluster-scoped object that is not derived from the control-plane owner,
+  unless that exact object identity is explicitly allowed as shared;
+- the same Kubernetes object identity appearing in two named renders, unless
+  that exact object identity is explicitly allowed as shared.
+
+This phase intentionally keeps named mode fail-closed. The checker has synthetic
+positive and negative tests now; later Phase 4 subphases must run it against real
+named renders after each object-level leak class is fixed.
+
+The cluster-scoped, unprefixed gateway-route, and duplicate-identity rules are
+intentionally allowlist-based. A `shared` owner label is not enough by itself,
+because a chart could accidentally mark a colliding object as shared. Truly
+shared identities, such as shared prerequisite CRDs, webhook RBAC, or a shared
+gateway route, must be passed with `--allow-shared-identity` or listed in a
+committed `--allow-shared-identity-file` when the real named-render gate is
+enabled. Duplicate identities across two named renders use the same rule, even
+when both objects are labelled `shared`.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |
