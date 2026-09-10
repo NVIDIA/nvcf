@@ -482,9 +482,8 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		}
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
-			"endpoint":    config.Telemetries.Metrics.Endpoint,
-			"tls":         exporterCredential,
-			"target_info": map[string]interface{}{"enabled": false},
+			"endpoint": config.Telemetries.Metrics.Endpoint,
+			"tls":      exporterCredential,
 		}
 
 	case ProviderDatadog:

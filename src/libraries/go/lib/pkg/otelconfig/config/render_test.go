@@ -18,7 +18,6 @@ limitations under the License.
 package otelconfig
 
 import (
-	"strings"
 	"testing"
 
 	"fmt"
@@ -233,124 +232,56 @@ func Test_generateExportersAndService(t *testing.T) {
 	}
 }
 
-// TestMetricsPipelineDropsEmptyResourceAttrs pins the invariant that motivated
-// the processor: a Prometheus-compatible receiver rejects an entire write
-// request when any series carries a label with an empty value, so every
-// attribute the Prometheus receiver can leave empty must be removed before the
-// metrics reach the exporter.
-func TestMetricsPipelineDropsEmptyResourceAttrs(t *testing.T) {
-	for _, provider := range []Provider{ProviderThanos, ProviderPrometheus} {
-		t.Run(string(provider), func(t *testing.T) {
-			input := fmt.Sprintf(
-				`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": %q, "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "m"}}}`,
-				provider,
-			)
-			raw, err := RenderOtelConfigFromBytes([]byte(input), backendconfig.TemplateConfig{
-				BackendType:  backendconfig.K8s,
-				WorkloadType: backendconfig.Container,
+// TestResourceProcessorInsertsInstanceID pins the attribute that keeps
+// target_info unique per instance.
+//
+// target_info is built by the exporter from resource attributes only, so it
+// never receives the datapoint labels metricstransform adds. Without a
+// per-instance resource attribute every collector federating the same upstream
+// on a node emits an identical target_info series, and those writes conflict on
+// ingest. Inserting instance_id makes the series distinct while leaving the
+// rest of target_info, including caller-supplied OTLP resource attributes,
+// intact.
+func TestResourceProcessorInsertsInstanceID(t *testing.T) {
+	for _, backend := range []backendconfig.BackendType{backendconfig.K8s, backendconfig.VM} {
+		for _, workload := range []backendconfig.WorkloadType{backendconfig.Container, backendconfig.Helm} {
+			t.Run(string(backend)+"/"+string(workload), func(t *testing.T) {
+				raw, err := RenderOtelConfigFromBytes(
+					[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "KRATOS_THANOS", "endpoint": "https://m.example.invalid/api/v1/write", "name": "m"}}}`),
+					backendconfig.TemplateConfig{BackendType: backend, WorkloadType: workload},
+				)
+				if err != nil {
+					t.Fatalf("render failed: %v", err)
+				}
+
+				var cfg struct {
+					Processors struct {
+						Resource struct {
+							Attributes []struct {
+								Key    string `yaml:"key"`
+								Action string `yaml:"action"`
+								Value  string `yaml:"value"`
+							} `yaml:"attributes"`
+						} `yaml:"resource"`
+					} `yaml:"processors"`
+				}
+				if err := yaml.Unmarshal(raw, &cfg); err != nil {
+					t.Fatalf("unmarshal failed: %v", err)
+				}
+
+				var deletesInstanceID, insertsInstanceID bool
+				for _, attr := range cfg.Processors.Resource.Attributes {
+					if attr.Key == "service.instance.id" && attr.Action == "delete" {
+						deletesInstanceID = true
+					}
+					if attr.Key == "instance_id" && attr.Action == "insert" {
+						insertsInstanceID = true
+						assert.Equal(t, "${env:NVCF_INSTANCE_ID:-unknown}", attr.Value)
+					}
+				}
+				assert.True(t, deletesInstanceID, "resource processor must still delete service.instance.id")
+				assert.True(t, insertsInstanceID, "resource processor must insert instance_id so target_info is unique")
 			})
-			if err != nil {
-				t.Fatalf("render failed: %v", err)
-			}
-
-			var cfg struct {
-				Processors map[string]struct {
-					MetricStatements []struct {
-						Context    string   `yaml:"context"`
-						Statements []string `yaml:"statements"`
-					} `yaml:"metric_statements"`
-				} `yaml:"processors"`
-				Service struct {
-					Pipelines map[string]struct {
-						Processors []string `yaml:"processors"`
-					} `yaml:"pipelines"`
-				} `yaml:"service"`
-			}
-			if err := yaml.Unmarshal(raw, &cfg); err != nil {
-				t.Fatalf("unmarshal failed: %v", err)
-			}
-
-			proc, ok := cfg.Processors[dropEmptyLabelsProcessorID]
-			if !ok {
-				t.Fatalf("%s is not defined", dropEmptyLabelsProcessorID)
-			}
-			var gotContexts []string
-			for _, block := range proc.MetricStatements {
-				gotContexts = append(gotContexts, block.Context)
-				want := fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
-					block.Context, block.Context)
-				assert.Contains(t, block.Statements, want,
-					"context %q is missing its empty-value filter", block.Context)
-			}
-			assert.Equal(t, dropEmptyLabelsContexts, gotContexts)
-
-			// datapoint is excluded deliberately: the exporter already drops
-			// empty datapoint attribute values, and the statement would run
-			// once per point rather than once per resource.
-			assert.NotContains(t, gotContexts, "datapoint")
-
-			procs := cfg.Service.Pipelines["metrics"].Processors
-			assert.Contains(t, procs, dropEmptyLabelsProcessorID)
-			assert.Greater(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "resource"),
-				"must run after the resource processor")
-			assert.Less(t, indexOf(procs, dropEmptyLabelsProcessorID), indexOf(procs, "batch"),
-				"must run before batching")
-		})
-	}
-}
-
-func indexOf(haystack []string, needle string) int {
-	for i, v := range haystack {
-		if v == needle {
-			return i
 		}
-	}
-	return -1
-}
-
-// TestRemoteWriteExporterDisablesTargetInfo pins that the remote-write exporter
-// does not emit target_info. The series is generated from resource attributes
-// only, so it never carries the function, instance or account labels that
-// metricstransform adds as datapoint labels, and reduces to a label set that is
-// identical across every collector federating the same upstream on a node.
-func TestRemoteWriteExporterDisablesTargetInfo(t *testing.T) {
-	for _, provider := range []Provider{ProviderThanos, ProviderPrometheus} {
-		t.Run(string(provider), func(t *testing.T) {
-			input := fmt.Sprintf(
-				`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": %q, "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "m"}}}`,
-				provider,
-			)
-			raw, err := RenderOtelConfigFromBytes([]byte(input), backendconfig.TemplateConfig{
-				BackendType:  backendconfig.K8s,
-				WorkloadType: backendconfig.Container,
-			})
-			if err != nil {
-				t.Fatalf("render failed: %v", err)
-			}
-
-			var cfg struct {
-				Exporters map[string]struct {
-					TargetInfo *struct {
-						Enabled *bool `yaml:"enabled"`
-					} `yaml:"target_info"`
-				} `yaml:"exporters"`
-			}
-			if err := yaml.Unmarshal(raw, &cfg); err != nil {
-				t.Fatalf("unmarshal failed: %v", err)
-			}
-
-			var checked int
-			for id, exporter := range cfg.Exporters {
-				if !strings.HasPrefix(id, "prometheusremotewrite/") {
-					continue
-				}
-				checked++
-				if exporter.TargetInfo == nil || exporter.TargetInfo.Enabled == nil {
-					t.Fatalf("%s does not set target_info.enabled", id)
-				}
-				assert.False(t, *exporter.TargetInfo.Enabled, "%s must disable target_info", id)
-			}
-			assert.Equal(t, 1, checked, "expected exactly one remote-write exporter")
-		})
 	}
 }

@@ -241,6 +241,9 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
   transform/drop_empty_labels:
     error_mode: ignore
     metric_statements:

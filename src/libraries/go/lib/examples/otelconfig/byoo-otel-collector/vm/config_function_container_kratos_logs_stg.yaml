@@ -201,6 +201,9 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
 extensions:
   cgroupruntime:
     gomaxprocs:

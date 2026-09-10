@@ -30,54 +30,14 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 )
 
-const dropEmptyLabelsProcessorID = "transform/drop_empty_labels"
-
-// dropEmptyLabelsContexts are the OTTL contexts filtered for empty attribute
-// values before export.
-//
-// A Prometheus-compatible receiver rejects the whole write request when any
-// series carries a label with an empty value, and the remote-write exporter
-// classifies the resulting 4xx as permanent, so one empty attribute silently
-// drops every unrelated metric batched with it.
-//
-// resource covers server.port and url.scheme, which the Prometheus receiver's
-// CreateResource writes unconditionally (unlike server.address, which it guards
-// behind isDiscernibleHost): a scrape target whose instance label carries no
-// port yields server.port="".
-//
-// scope covers the otel_scope_* labels, which the translator's createAttributes
-// writes without an empty check. This is the only path the exporter does not
-// already guard.
-//
-// datapoint is deliberately excluded. The exporter's createAttributes drops
-// empty datapoint attribute values itself, and that statement would run once
-// per datapoint rather than once per resource, allocating a replacement map for
-// every point in every batch for no additional coverage.
-var dropEmptyLabelsContexts = []string{"resource", "scope"}
-
-// addDropEmptyLabelsProcessor removes attributes that carry an empty value
-// before the metrics reach the exporter, so they never become an empty
-// Prometheus label.
-//
-// The Filter lambda requires the ottl.functions.enableLambda feature gate,
-// which the collector wrapper passes on startup.
-func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
-	blocks := make([]map[string]interface{}, 0, len(dropEmptyLabelsContexts))
-	for _, ottlContext := range dropEmptyLabelsContexts {
-		blocks = append(blocks, map[string]interface{}{
-			"context": ottlContext,
-			"statements": []string{
-				fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
-					ottlContext, ottlContext),
-			},
-		})
-	}
-	otelConfig.Processors[dropEmptyLabelsProcessorID] = map[string]interface{}{
-		"error_mode":        "ignore",
-		"metric_statements": blocks,
-	}
-	return dropEmptyLabelsProcessorID
-}
+// This renderer deliberately does not add the empty-value filter that the
+// byoo-otel-collector renderer applies. That filter uses an OTTL lambda, which
+// needs the ottl.functions.enableLambda feature gate and collector v0.155.0 or
+// newer. This is a shared library: the config it renders is consumed by sidecar
+// images chosen independently of it, including versions well below v0.155.0,
+// and nothing on that path passes the gate. Emitting the lambda here would fail
+// config parsing and leave those sidecars unable to start, which is worse than
+// the ingest conflicts the filter avoids.
 
 type Telemetry struct {
 	Protocol Protocol `json:"protocol"`
@@ -343,9 +303,8 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		}
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
-			"endpoint":    config.Telemetries.Metrics.Endpoint,
-			"tls":         exporterCredential,
-			"target_info": map[string]interface{}{"enabled": false},
+			"endpoint": config.Telemetries.Metrics.Endpoint,
+			"tls":      exporterCredential,
 		}
 
 	case ProviderDatadog:
@@ -539,14 +498,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline := otelConfig.Service.Pipelines["metrics"]
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
-		metricPipeline.Processors = []string{
-			"memory_limiter",
-			"filter/metrics",
-			"resource",
-			addDropEmptyLabelsProcessor(otelConfig),
-			"metricstransform",
-			"batch",
-		}
+		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource", "metricstransform", "batch"}
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline
 	}
 

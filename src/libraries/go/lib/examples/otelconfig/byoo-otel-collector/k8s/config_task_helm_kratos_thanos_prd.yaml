@@ -127,8 +127,6 @@ receivers:
 exporters:
   prometheusremotewrite/KRATOS_THANOS-kratos-thanos-nvcf-metrics:
     endpoint: https://prometheus-rw-prod.example.com/api/v1/receive
-    target_info:
-      enabled: false
     tls:
       cert_file: /etc/byoo-otel-collector/secrets/kratos-thanos-nvcf-clientCert
       key_file: /etc/byoo-otel-collector/secrets/kratos-thanos-nvcf-clientKey
@@ -198,15 +196,9 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
-  transform/drop_empty_labels:
-    error_mode: ignore
-    metric_statements:
-      - context: resource
-        statements:
-          - set(resource.attributes, Filter(resource.attributes, (_, v) => v != ""))
-      - context: scope
-        statements:
-          - set(scope.attributes, Filter(scope.attributes, (_, v) => v != ""))
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
 extensions:
   cgroupruntime:
     gomaxprocs:
@@ -261,7 +253,6 @@ service:
         - memory_limiter
         - filter/metrics
         - resource
-        - transform/drop_empty_labels
         - metricstransform
         - batch
   extensions:

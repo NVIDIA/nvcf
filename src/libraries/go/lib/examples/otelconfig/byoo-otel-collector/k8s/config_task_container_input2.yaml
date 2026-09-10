@@ -156,15 +156,9 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
-  transform/drop_empty_labels:
-    error_mode: ignore
-    metric_statements:
-      - context: resource
-        statements:
-          - set(resource.attributes, Filter(resource.attributes, (_, v) => v != ""))
-      - context: scope
-        statements:
-          - set(scope.attributes, Filter(scope.attributes, (_, v) => v != ""))
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
 extensions:
   basicauth/GRAFANA_CLOUD-Grafana_prd-logs:
     client_auth:
@@ -240,7 +234,6 @@ service:
         - memory_limiter
         - filter/metrics
         - resource
-        - transform/drop_empty_labels
         - metricstransform
         - batch
     traces:

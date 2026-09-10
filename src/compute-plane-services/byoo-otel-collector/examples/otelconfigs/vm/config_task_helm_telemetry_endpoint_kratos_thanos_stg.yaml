@@ -150,8 +150,6 @@ receivers:
 exporters:
   prometheus_remote_write/KRATOS_THANOS-kratos-thanos-sandbox-metrics:
     endpoint: https://sandbox-receivers.thanos.example.com/api/v1/receive
-    target_info:
-      enabled: false
     tls:
       ca_file: /etc/byoo-otel-collector/secrets/kratos-thanos-sandbox-caFile
       cert_file: /etc/byoo-otel-collector/secrets/kratos-thanos-sandbox-clientCert
@@ -228,6 +226,9 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
   transform/drop_empty_labels:
     error_mode: ignore
     metric_statements:
