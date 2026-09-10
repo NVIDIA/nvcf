@@ -34,6 +34,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
+// TestTranslateContainer_AppliesConfiguredTolerations verifies configured
+// tolerations on container function pods.
 func TestTranslateContainer_AppliesConfiguredTolerations(t *testing.T) {
 	customToleration := corev1.Toleration{
 		Key:      "dedicated",

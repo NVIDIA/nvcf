@@ -57,6 +57,7 @@ func TestTranslateContainerCreatesTaskPod(t *testing.T) {
 	assert.Equal(t, string(common.UploadResult), envValue(utilsContainer.Env, resultHandlingStratEnvKey))
 }
 
+// TestTranslateContainerWithCacheAndSecrets verifies cache and secret resources for a container task.
 func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	msg := newTaskMessage(false)
 	msg.LaunchSpecification.EnvironmentB64 = encodeTaskTextEnv(map[string]string{

@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// TestAddNVIDIAGPUNoScheduleToleration verifies that the GPU toleration is added only when absent.
 func TestAddNVIDIAGPUNoScheduleToleration(t *testing.T) {
 	tests := []struct {
 		name     string
