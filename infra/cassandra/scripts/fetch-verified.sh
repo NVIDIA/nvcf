@@ -15,9 +15,11 @@
 #
 # usage: fetch-verified <sha256> <url> <destination>
 #
-# FETCH_RETRIES (default 8) bounds the attempts and FETCH_RETRY_MAX_TIME
-# (default 600, seconds) caps the whole download. FETCH_RETRY_DELAY, when set,
-# replaces the exponential backoff with a fixed delay; the tests use it.
+# FETCH_RETRIES (default 8) bounds the attempts, FETCH_MAX_TIME (default 120,
+# seconds) caps one attempt so a stalled transfer is cut off and retried rather
+# than hanging the build, and FETCH_RETRY_MAX_TIME (default 600, seconds) caps
+# the whole download. FETCH_RETRY_DELAY, when set, replaces the exponential
+# backoff with a fixed delay; the tests use it.
 set -eu
 
 [ "$#" -eq 3 ] || {
@@ -29,7 +31,9 @@ url=$2
 destination=$3
 
 rm -f "${destination}"
-set -- --retry "${FETCH_RETRIES:-8}" --retry-max-time "${FETCH_RETRY_MAX_TIME:-600}"
+set -- --retry "${FETCH_RETRIES:-8}" \
+       --max-time "${FETCH_MAX_TIME:-120}" \
+       --retry-max-time "${FETCH_RETRY_MAX_TIME:-600}"
 [ -z "${FETCH_RETRY_DELAY:-}" ] || set -- "$@" --retry-delay "${FETCH_RETRY_DELAY}"
 if ! curl -fsSL "$@" -o "${destination}" "${url}"; then
     echo "download failed after retries: ${url}" >&2

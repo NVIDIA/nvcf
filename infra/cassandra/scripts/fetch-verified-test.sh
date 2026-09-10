@@ -38,6 +38,11 @@ class H(http.server.BaseHTTPRequestHandler):
         seen[self.path] += 1
         if self.path.endswith("/missing"):
             self.send_response(404); self.end_headers(); return
+        if self.path.endswith("/stall"):
+            # Headers, one byte, then silence: a transfer that never ends.
+            self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self.wfile.write(body[:1]); self.wfile.flush()
+            import time; time.sleep(30); return
         if seen[self.path] <= limit:
             self.send_response(429); self.send_header("Retry-After", "0"); self.end_headers(); return
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
@@ -79,5 +84,15 @@ if "${fetch}" "${good_sha}" "${base}/0/missing" "${work_dir}/out4.jar" 2>/dev/nu
 fi
 [ ! -e "${work_dir}/out4.jar" ] || fail "404 download was left on disk"
 [ $(( $(date +%s) - start )) -lt 3 ] || fail "a 404 was retried; only transient responses should be"
+
+# 5. A transfer that stalls after the headers is cut off by the per-attempt
+#    cap, retried, and finally fails, without hanging the build and without
+#    leaving the partial file behind.
+start=$(date +%s)
+if FETCH_MAX_TIME=1 FETCH_RETRIES=1 "${fetch}" "${good_sha}" "${base}/0/stall" "${work_dir}/out5.jar" 2>/dev/null; then
+    fail "a stalled transfer should not succeed"
+fi
+[ ! -e "${work_dir}/out5.jar" ] || fail "stalled download was left on disk"
+[ $(( $(date +%s) - start )) -lt 10 ] || fail "a stalled transfer was not cut off by FETCH_MAX_TIME"
 
 echo "fetch-verified-test: all checks passed"
