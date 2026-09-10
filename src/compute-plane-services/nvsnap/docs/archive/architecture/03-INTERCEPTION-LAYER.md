@@ -6,7 +6,7 @@ The interception layer (`libnvsnap.so`) is the core technology that enables tran
 
 ## How Library Interposition Works
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    LIBRARY INTERPOSITION MECHANISM                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -138,7 +138,7 @@ COPY libnvsnap.so /lib/
 
 ## Implementation Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      LIBNVSNAP INTERNAL ARCHITECTURE                         │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -668,16 +668,16 @@ SRCS = $(wildcard src/*.c src/**/*.c)
 OBJS = $(SRCS:.c=.o)
 
 libnvsnap.so: $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+ $(CC) $(LDFLAGS) -o $@ $^
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
+ $(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) libnvsnap.so
+ rm -f $(OBJS) libnvsnap.so
 
 test: libnvsnap.so
-	$(MAKE) -C test run
+ $(MAKE) -C test run
 
 .PHONY: clean test
 ```
@@ -685,5 +685,6 @@ test: libnvsnap.so
 ## Next Steps
 
 See:
+
 - [04-CHECKPOINT-ENGINE.md](04-CHECKPOINT-ENGINE.md) - How the checkpoint engine uses tracked state
 - [05-MULTI-PROCESS.md](05-MULTI-PROCESS.md) - Multi-process coordination

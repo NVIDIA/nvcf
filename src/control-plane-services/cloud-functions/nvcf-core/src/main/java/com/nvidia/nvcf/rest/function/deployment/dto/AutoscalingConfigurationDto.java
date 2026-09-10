@@ -28,6 +28,7 @@ import jakarta.validation.ConstraintValidator;
 import jakarta.validation.ConstraintValidatorContext;
 import jakarta.validation.Payload;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
@@ -64,7 +65,7 @@ public record AutoscalingConfigurationDto(
             @Schema(description = "Scaling threshold (0-100) as a percentage of utilization" +
                     "upon which the number of current instances are multiplied with the" +
                     "specified factor.")
-            @NotNull @PositiveOrZero Integer threshold,
+            @NotNull @PositiveOrZero @Max(100) Integer threshold,
 
             @Schema(description = "Stickiness window configuration")
             @Nullable @Valid StickinessWindow stickiness

@@ -339,6 +339,166 @@
                 }
             }
         },
+        "storage": {
+            "type": "object",
+            "description": "First-class shared-storage and internal persistent storage configuration.",
+            "properties": {
+                "sharedStorage": {
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "object",
+                            "properties": {
+                                "image": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "resources": {
+                                    "type": "object",
+                                    "properties": {
+                                        "limits": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "requests": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "taskData": {
+                            "type": "object",
+                            "properties": {
+                                "storageClassName": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "mountOptions": {
+                                    "type": "array",
+                                    "default": [],
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                },
+                                "storageCapacity": {
+                                    "type": "string",
+                                    "default": ""
+                                }
+                            }
+                        }
+                    }
+                },
+                "internalPersistentStorage": {
+                    "type": "object",
+                    "properties": {
+                        "storageClassName": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "hardResourceQuota": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "worker": {
+            "type": "object",
+            "description": "First-class worker/agent behavior, scheduling, and timeout configuration.",
+            "properties": {
+                "minHealthcheckRefreshWait": {
+                    "type": "string",
+                    "default": ""
+                },
+                "staticGPUCapacity": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0
+                },
+                "computeBackend": {
+                    "type": "string",
+                    "default": ""
+                },
+                "requestsNamespace": {
+                    "type": "string",
+                    "default": ""
+                },
+                "namespaceLabels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "featureFlags": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "skipSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "forceSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "csiVolumeMountOptions": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "timeouts": {
+                    "type": "object",
+                    "properties": {
+                        "credRenewInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "heartbeatInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncQueueInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncRequestStatusInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "syncAcknowledgeRequestInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "periodicInstanceStatusInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "icmsRequestAckInterval": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "icmsRequestAckRetryTimeout": {
+                            "type": "string",
+                            "default": ""
+                        }
+                    }
+                }
+            }
+        },
         "operatorConfig": {
             "type": "object",
             "properties": {

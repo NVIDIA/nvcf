@@ -56,7 +56,8 @@ The `sed 's/^00*//'` command removes leading zeros from the hex representation o
 - Stripping them changes the mathematical value of the key
 
 **Example:**
-```
+
+```text
 Original hex:    00a1b2c3d4...  (64 chars, starts with 00)
 After sed:       a1b2c3d4...    (62 chars, leading 00 removed)
 ```
@@ -84,7 +85,7 @@ The `xxd -r -p` command silently ignores the invalid space characters, producing
 
 ### 3.5 The Chain of Failure
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  1. OpenSSL generates EC private key with leading zero byte (1/256 chance) │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -132,7 +133,7 @@ The observed rate is higher because `sed 's/^00*//'` strips **any** leading zero
 
 ### 4.3 Base64URL Encoding Math
 
-```
+```text
 32 bytes = 256 bits
 256 bits ÷ 6 bits/char = 42.67 → 43 base64url characters
 
@@ -146,7 +147,7 @@ The observed rate is higher because `sed 's/^00*//'` strips **any** leading zero
 
 ### 5.1 Call Chain
 
-```
+```text
 05_setup_notary-service.sh
     └── generate_asymmetric_signing_key()     # encryption_setup.sh:87
             └── D_VALUE extraction            # Line 112-115 (BUG)
@@ -157,7 +158,7 @@ The observed rate is higher because `sed 's/^00*//'` strips **any** leading zero
 
 ### 5.2 Where the Key is Stored
 
-```
+```text
 OpenBao Path: services/nvcf-notary/kv/keys/signing-key
 Fields:
   - keys: Base64-encoded JWKS containing the signing key
@@ -168,6 +169,7 @@ Fields:
 ### 5.3 Where the Key is Used
 
 The `nvcf-notary` service:
+
 1. Retrieves the signing key from OpenBao
 2. Uses it to sign JWTs for function invocation assertions
 3. Downstream services verify these JWTs
@@ -211,11 +213,13 @@ The `nvcf-notary` service:
 ### 7.1 Applied Fix (Line 146)
 
 **Before:**
+
 ```bash
 D_PADDED=$(printf "%064s" "$D_VALUE")
 ```
 
 **After:**
+
 ```bash
 # Note: printf %s pads with spaces, so we must replace them with zeros
 D_PADDED=$(printf "%064s" "$D_VALUE" | tr ' ' '0')
@@ -238,6 +242,7 @@ printf "%064s" "abc" | tr ' ' '0' → "00000000000000000000000000000000000000000
 ## 8. Verification - Test Harness Results
 
 A Go-based test harness was developed to statistically validate the bug and fix. The harness:
+
 1. Calls the bash `generate_asymmetric_signing_key()` function
 2. Parses the resulting JWK
 3. Signs a JWT using Go's `crypto/ecdsa`
@@ -248,7 +253,7 @@ A Go-based test harness was developed to statistically validate the bug and fix.
 
 **Critical Finding**: The bug only manifests on **Linux**, not macOS.
 
-```
+```text
 === Testing xxd behavior with spaces (the bug) ===
 Padded: |                                                          abc123|
 After xxd round-trip: |abc123|
@@ -264,7 +269,7 @@ Linux `xxd -r -p` silently drops space characters (invalid hex). macOS `xxd` han
 
 ### 8.2 Test Results - Buggy Code (Linux Container)
 
-```
+```text
 ╔══════════════════════════════════════════════════════════════╗
 ║          JWT Signing Key Test Harness (Go)                   ║
 ╠══════════════════════════════════════════════════════════════╣
@@ -300,7 +305,7 @@ Linux `xxd -r -p` silently drops space characters (invalid hex). macOS `xxd` han
 
 ### 8.3 Test Results - Fixed Code (Linux Container)
 
-```
+```text
 ╔══════════════════════════════════════════════════════════════╗
 ║          JWT Signing Key Test Harness (Go)                   ║
 ╠══════════════════════════════════════════════════════════════╣
@@ -429,13 +434,14 @@ Consider also reviewing line 115 (`sed 's/^00*//'`) to ensure leading zeros are 
 ## 12. References
 
 ### Standards
+
 - [RFC 7517 - JSON Web Key (JWK)](https://tools.ietf.org/html/rfc7517)
 - [RFC 7518 - JSON Web Algorithms (JWA)](https://tools.ietf.org/html/rfc7518) - Section 6.2.2 (EC Private Key)
 - [NIST FIPS 186-4](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.186-4.pdf) - P-256 Curve specification
 
 ### Internal Documentation
+
 - Test Harness: `tests/signing-key-harness/`
 - Test Harness Design: `docs/signing-key-test-harness-design.md`
 - Buggy Script (for testing): `tests/signing-key-harness/testdata/encryption_setup_buggy.sh`
 - Fixed Script (for testing): `tests/signing-key-harness/testdata/encryption_setup_fixed.sh`
-

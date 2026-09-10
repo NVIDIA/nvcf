@@ -185,6 +185,10 @@ releases:
     chart: nvcf/victoria-metrics-single
     version: {{ dig "victoriaMetrics" "version" "0.45.0" .Values | quote }}
     namespace: {{ $victoriaMetricsNamespace }}
+    {{- if $prometheusOperatorCrdsEnabled }}
+    needs:
+      - {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}/prometheus-operator-crds
+    {{- end }}
     values:
       - ../values/victoria-metrics.yaml.gotmpl
     labels:

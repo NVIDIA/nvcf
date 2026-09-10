@@ -253,29 +253,20 @@ func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *
 	}
 }
 
-func TestSelfManagedLocalBDDMultiFixtureUsesPlaintextNVCFGRPC(t *testing.T) {
+func TestSelfManagedLocalBDDMultiFixtureUsesStackDefaultForNVCFGRPC(t *testing.T) {
 	const fixturePath = "fixtures/self-managed-local-bdd-multi.yaml"
 
 	fixtureBytes, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatalf("read multi-cluster stack fixture: %v", err)
 	}
-	var fixture struct {
-		Addons struct {
-			LLM struct {
-				Gateway struct {
-					Auth struct {
-						GRPCInsecure bool `yaml:"grpcInsecure"`
-					} `yaml:"auth"`
-				} `yaml:"gateway"`
-			} `yaml:"llm"`
-		} `yaml:"addons"`
-	}
+	var fixture map[string]any
 	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
 		t.Fatalf("parse multi-cluster stack fixture: %v", err)
 	}
-	if !fixture.Addons.LLM.Gateway.Auth.GRPCInsecure {
-		t.Fatal("multi-cluster stack fixture must use plaintext NVCF API gRPC")
+	fixtureYAML := string(fixtureBytes)
+	if strings.Contains(fixtureYAML, "grpcInsecure") {
+		t.Fatal("multi-cluster stack fixture must exercise the stack default for NVCF API gRPC")
 	}
 }
 

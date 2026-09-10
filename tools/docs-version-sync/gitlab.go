@@ -106,6 +106,7 @@ func (client *GitLabClient) LatestStackVersion(projectID int, packageName string
 	return "", fmt.Errorf("no package or release version found for %s", packageName)
 }
 
+// LatestGenericPackageVersion returns the newest matching GitLab generic package version.
 func (client *GitLabClient) LatestGenericPackageVersion(projectID int, packageName string) (string, error) {
 	for page := 1; ; {
 		query := url.Values{}
@@ -132,7 +133,7 @@ func (client *GitLabClient) LatestGenericPackageVersion(projectID int, packageNa
 				return pkg.Version, nil
 			}
 		}
-		nextPage, ok := nextGitLabPage(headers)
+		nextPage, ok := nextPageFromHeaders(headers)
 		if !ok {
 			break
 		}
@@ -142,48 +143,6 @@ func (client *GitLabClient) LatestGenericPackageVersion(projectID int, packageNa
 		page = nextPage
 	}
 	return "", fmt.Errorf("no generic package version found for %s", packageName)
-}
-
-func nextGitLabPage(headers http.Header) (int, bool) {
-	if value := strings.TrimSpace(headers.Get("X-Next-Page")); value != "" {
-		if page, err := strconv.Atoi(value); err == nil && page > 0 {
-			return page, true
-		}
-	}
-	for _, header := range headers.Values("Link") {
-		for _, link := range strings.Split(header, ",") {
-			parts := strings.Split(link, ";")
-			if len(parts) < 2 || !linkHasRelNext(parts[1:]) {
-				continue
-			}
-			rawURL := strings.Trim(strings.TrimSpace(parts[0]), "<>")
-			parsed, err := url.Parse(rawURL)
-			if err != nil {
-				continue
-			}
-			page, err := strconv.Atoi(parsed.Query().Get("page"))
-			if err == nil && page > 0 {
-				return page, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func linkHasRelNext(params []string) bool {
-	for _, param := range params {
-		param = strings.TrimSpace(param)
-		if !strings.HasPrefix(param, "rel=") {
-			continue
-		}
-		rel := strings.Trim(strings.TrimPrefix(param, "rel="), `"`)
-		for _, value := range strings.Fields(rel) {
-			if value == "next" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (client *GitLabClient) FetchArtifactList(projectID int, packageName, stackVersion string) (string, error) {

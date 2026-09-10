@@ -9,6 +9,7 @@ When a Kubernetes pod is checkpointed and restored, it gets a **new IP address**
 - **Stale state**: Cached peer addresses in application memory are now invalid
 
 This affects:
+
 - vLLM (multi-process inference server)
 - Ray clusters (distributed computing)
 - Dask clusters (parallel computing)
@@ -19,7 +20,7 @@ This affects:
 
 NVSNAP provides a **Network Identity Layer** that preserves network connectivity across checkpoint/restore:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                   NVSNAP Network Identity                     │
 ├─────────────────────────────────────────────────────────────┤
@@ -33,7 +34,7 @@ NVSNAP provides a **Network Identity Layer** that preserves network connectivity
 
 ### Component Diagram
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                      NVSNAP Controller                            │
 │                                                                  │
@@ -57,7 +58,7 @@ NVSNAP provides a **Network Identity Layer** that preserves network connectivity
 
 ### Data Flow
 
-```
+```text
 CHECKPOINT PHASE:
 ┌──────────┐    ┌───────────┐    ┌──────────────────────┐
 │ kubectl  │───>│ Controller│───>│ Agent                │
@@ -84,9 +85,11 @@ RESTORE PHASE:
 ## Layer 1: Loopback Alias (Single-Pod)
 
 ### Purpose
+
 Allow applications to `bind()` to their original pod IP after restore.
 
 ### Mechanism
+
 ```bash
 # Add original pod IP to loopback interface
 ip addr add <ORIGINAL_POD_IP>/32 dev lo
@@ -98,6 +101,7 @@ iptables -t mangle -A OUTPUT -s <ORIGINAL_POD_IP>/32 -j DROP
 ```
 
 ### Why Loopback?
+
 | Property | eth0 | lo |
 |----------|------|-----|
 | ARP responses | Yes (dangerous) | No |
@@ -108,6 +112,7 @@ iptables -t mangle -A OUTPUT -s <ORIGINAL_POD_IP>/32 -j DROP
 ### Implementation
 
 **Checkpoint (Agent)**:
+
 ```go
 // internal/agent/checkpoint.go
 type CheckpointMetadata struct {
@@ -123,6 +128,7 @@ func (a *Agent) getPodIP(pid int) (string, error) {
 ```
 
 **Restore (Entrypoint)**:
+
 ```go
 // cmd/restore-entrypoint/main.go
 func setupLoopbackAlias(originalIP string) error {
@@ -143,7 +149,7 @@ func setupLoopbackAlias(originalIP string) error {
 
 ### Behavior
 
-```
+```text
 Before Restore:
   Pod IP: 192.168.67.200 (new)
   Worker tries: bind("192.168.67.131", 29500)  ← FAILS
@@ -159,15 +165,18 @@ After Loopback Alias:
 ## Layer 2: DNAT Redirection (Multi-Pod)
 
 ### Purpose
+
 Allow pods to connect to peers using their original IPs.
 
 ### Mechanism
+
 ```bash
 # For each peer: redirect old IP to new IP
 iptables -t nat -A OUTPUT -d <PEER_OLD_IP> -j DNAT --to-destination <PEER_NEW_IP>
 ```
 
 ### When Needed
+
 | Scenario | Loopback | DNAT |
 |----------|----------|------|
 | Single-pod (vLLM) | ✅ | ❌ |
@@ -177,6 +186,7 @@ iptables -t nat -A OUTPUT -d <PEER_OLD_IP> -j DNAT --to-destination <PEER_NEW_IP
 ### Implementation
 
 **Checkpoint (Agent)**:
+
 ```go
 // internal/agent/checkpoint.go
 type PeerPodInfo struct {
@@ -201,6 +211,7 @@ func (a *Agent) discoverPeers(pid int) ([]PeerPodInfo, error) {
 ```
 
 **Coordination (Controller)**:
+
 ```go
 // controllers/restoregroup_controller.go
 type IPMapping struct {
@@ -221,6 +232,7 @@ func (r *RestoreGroupReconciler) distributeMappings(mappings []IPMapping) {
 ```
 
 **Restore (Entrypoint)**:
+
 ```go
 // cmd/restore-entrypoint/main.go
 func applyPeerDNAT(mappings []IPMapping) error {
@@ -237,7 +249,7 @@ func applyPeerDNAT(mappings []IPMapping) error {
 
 ### Coordination Flow
 
-```
+```text
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │    User      │     │  Controller  │     │    Agents    │
 └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
@@ -271,9 +283,11 @@ func applyPeerDNAT(mappings []IPMapping) error {
 ## Layer 3: Stable VIP (Future)
 
 ### Purpose
+
 Eliminate the need for IP remapping by assigning stable virtual IPs.
 
 ### Mechanism
+
 ```bash
 # At pod creation (before app starts)
 ip addr add 10.200.0.42/32 dev lo
@@ -393,6 +407,7 @@ status:
 ### Guardrails
 
 1. **Source IP Leakage Prevention**
+
    ```bash
    # Block outbound packets with old IP as source (except local)
    iptables -t mangle -A OUTPUT -s <OLD_IP>/32 -j DROP
@@ -404,6 +419,7 @@ status:
    - No impact on other pods or cluster routing
 
 3. **Audit Logging**
+
    ```go
    log.Warn("Added loopback alias for old pod IP %s; " +
             "connections to this IP inside the pod will loop back", originalIP)
@@ -421,6 +437,7 @@ status:
 ## Implementation Phases
 
 ### Phase 1: Single-Pod ✅ (Current)
+
 - [x] Capture `source_pod_ip` at checkpoint
 - [x] Add loopback alias at restore
 - [x] Add iptables guardrails
@@ -428,6 +445,7 @@ status:
 - [ ] End-to-end test with vLLM
 
 ### Phase 2: Multi-Pod (Next)
+
 - [ ] Peer discovery at checkpoint
 - [ ] `checkpoint_group` tagging
 - [ ] `GPURestoreGroup` CRD
@@ -436,6 +454,7 @@ status:
 - [ ] End-to-end test with Ray
 
 ### Phase 3: Stable VIP (Future)
+
 - [ ] VIP pool management
 - [ ] VIP allocation API
 - [ ] Init container for VIP setup
@@ -444,6 +463,7 @@ status:
 ## Testing
 
 ### Single-Pod Test
+
 ```bash
 # 1. Deploy vLLM
 kubectl apply -f deploy/k8s/vllm-small.yaml
@@ -466,6 +486,7 @@ curl http://<new-pod-ip>:8000/v1/completions -d '{"prompt":"Hello"}'
 ```
 
 ### Multi-Pod Test (Future)
+
 ```bash
 # 1. Deploy Ray cluster
 kubectl apply -f deploy/k8s/ray-cluster.yaml

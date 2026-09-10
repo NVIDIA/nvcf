@@ -16,6 +16,7 @@ limitations under the License.
 -->
 Querying all services with Consul Template
 ------------------------------------------
+
 As of Consul Template 0.6.0, it is possible to have a complex dependency graph with dependent services. As such, it is possible to query and watch all services in Consul:
 
 ## Query All Services

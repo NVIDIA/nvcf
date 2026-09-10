@@ -8,7 +8,7 @@ Related: #194 (overlayfs-at-restore), #199 (whole-rootfs-restore), #189 (Hook B 
 
 A rootfs warm-restore of a fat multi-library image fails at admission:
 
-```
+```text
 failed to create instance ... err: etcdserver: request is too large
 ```
 
@@ -85,7 +85,7 @@ No single mechanism gives all three. Pick the provider per environment:
 Materialization is pluggable, selected by detected runtime at agent startup, so we
 are **not locked** to one runtime:
 
-```
+```text
 type RootfsProvider interface {
     // Materialize makes the warm rootfs (overlay of capture-over-image)
     // available for podUID on node, returning what the webhook must inject.

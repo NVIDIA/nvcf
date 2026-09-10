@@ -55,7 +55,7 @@ func TestResolveManifestEntriesRejectsUnclassifiedArtifact(t *testing.T) {
 	}
 }
 
-func TestResolveManifestEntriesKeepsCassandraOnlyInEASection(t *testing.T) {
+func TestResolveManifestEntriesKeepsEACVEArtifactsOutOfServiceSection(t *testing.T) {
 	entries, err := resolveManifestEntries(loadMainCatalog(t))
 	if err != nil {
 		t.Fatalf("resolveManifestEntries failed: %v", err)
@@ -66,12 +66,12 @@ func TestResolveManifestEntriesKeepsCassandraOnlyInEASection(t *testing.T) {
 		if entry.Kind == ManifestKindEACVE {
 			eaIDs = append(eaIDs, entry.ID)
 		}
-		if entry.Kind == ManifestKindServiceImage && (entry.ID == "bitnami-cassandra" || entry.ID == "nvcf-cassandra-migrations") {
+		if entry.Kind == ManifestKindServiceImage && entry.ID == "nvcf-cassandra-migrations" {
 			t.Fatalf("EA artifact %s also appears as a service image", entry.ID)
 		}
 	}
 	sort.Strings(eaIDs)
-	if got, want := strings.Join(eaIDs, ","), "bitnami-cassandra,nvcf-cassandra-migrations"; got != want {
+	if got, want := strings.Join(eaIDs, ","), "nvcf-cassandra-migrations"; got != want {
 		t.Fatalf("EA entries = %q, want %q", got, want)
 	}
 }
@@ -107,7 +107,6 @@ func TestRenderManifestTable(t *testing.T) {
 		"These Early Access artifacts have known CVE impact.",
 		"[GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats)",
 		"[Upstream](https://github.com/nats-io/k8s)",
-		"`bitnami-cassandra`",
 		"`nvcf-cassandra-migrations`",
 		"`nvcf-self-managed-stack`",
 		"`nvcf-compute-plane-stack`",

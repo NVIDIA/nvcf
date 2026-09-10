@@ -63,7 +63,7 @@ This chart is intended to be installed by invoking Helm directly from source.
 helm dependency build helm
 ```
 
-2. Install the chart:
+1. Install the chart:
 
 ```bash
 helm install openbao-server helm \

@@ -10,6 +10,7 @@ fail() {
   exit 1
 }
 
+# List enabled releases for the selected observability profile.
 profile_releases() {
   local profile="$1"
   HELMFILE_ENV=local helmfile \
@@ -22,6 +23,53 @@ profile_releases() {
     sort
 }
 
+# Render the evaluated Helmfile state without downloading charts, then recover
+# its YAML documents in "$work_dir/<output_name>.yaml". `show-dag` cannot be
+# used here because it eagerly prepares the placeholder OCI charts.
+render_release_state() {
+  local output_name="$1"
+  shift
+  local log_file="$work_dir/$output_name.log"
+  local state_file="$work_dir/$output_name.yaml"
+
+  if ! HELMFILE_ENV=local HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile \
+      --file "$stack_dir/helmfile.d" \
+      --log-level debug \
+      --environment default \
+      "$@" \
+      list --skip-charts --output json >"$log_file" 2>&1; then
+    cat "$log_file" >&2
+    fail "could not render the $output_name Helmfile state"
+  fi
+
+  awk '
+    /^rendering result of ".*":$/ { print "---"; capture = 1; next }
+    capture && /^[[:space:]]*[0-9]+: / {
+      sub(/^[[:space:]]*[0-9]+: ?/, "")
+      print
+      next
+    }
+    capture { capture = 0 }
+  ' "$log_file" >"$state_file"
+
+  test -s "$state_file" || fail "could not recover the $output_name Helmfile state"
+}
+
+# Print the `needs` entries for a named release from a rendered Helmfile state.
+release_needs() {
+  local state_file="$1"
+  local release_name="$2"
+
+  NVCF_RELEASE_NAME="$release_name" yq ea -r '
+    select(.releases != null) |
+    .releases[] |
+    select(.name == strenv(NVCF_RELEASE_NAME)) |
+    .needs[]?
+  ' "$state_file"
+}
+
+# Render default monitor manifests for the selected observability profile.
 render_monitors() {
   local profile="$1"
   local output_dir="$work_dir/$profile"
@@ -99,6 +147,18 @@ for profile in control compute all; do
     fail "$profile profile did not render the enabled release set exactly once"
 done
 
+render_release_state crds-installed \
+  --state-values-set observability.profile=control
+test "$(release_needs "$work_dir/crds-installed.yaml" victoria-metrics)" = \
+  "monitoring/prometheus-operator-crds" ||
+  fail "victoria-metrics must wait for stack-installed Prometheus Operator CRDs"
+
+render_release_state crds-existing \
+  --state-values-set observability.profile=control \
+  --state-values-set observability.components.prometheusOperatorCrds.mode=existing
+test -z "$(release_needs "$work_dir/crds-existing.yaml" victoria-metrics)" ||
+  fail "victoria-metrics must not depend on a CRD release the stack does not install"
+
 for profile in control compute all; do
   render_monitors "$profile"
 done
@@ -139,7 +199,7 @@ grep -q '^    - key: icms-request-id$' "$worker_monitor_manifest" ||
 grep -q '^      operator: Exists$' "$worker_monitor_manifest" ||
   fail "worker PodMonitor label expression must use Exists"
 
-for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
+for monitor in state-metrics function-autoscaler invocation-service grpc-proxy llm-api-gateway; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_control_manifests" ||
     fail "monitor chart control defaults are missing $monitor monitor"
   grep -q "nvcf-default-monitors-$monitor" $control_manifests ||
@@ -155,6 +215,27 @@ for monitor in state-metrics invocation-service grpc-proxy llm-api-gateway; do
     fail "compute profile rendered $monitor control-plane monitor"
   fi
 done
+
+autoscaler_monitor_manifest="$work_dir/chart-function-autoscaler-servicemonitor.yaml"
+sed -n '/name: nvcf-default-monitors-function-autoscaler/,/^---$/p' \
+  "$chart_control_manifests" >"$autoscaler_monitor_manifest"
+grep -q '^    nvcf.nvidia.com/observability-target: "true"$' \
+  "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must carry the Target Allocator discovery label"
+grep -q '^      app.kubernetes.io/instance: function-autoscaler$' \
+  "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must select the function-autoscaler release"
+grep -q '^      app.kubernetes.io/name: helm-nvcf-function-autoscaler$' \
+  "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must select the function-autoscaler service"
+grep -q '^      - nvcf$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must discover the nvcf namespace"
+grep -q '^    - port: "metrics"$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must scrape the named metrics port"
+grep -q '^      path: "/metrics"$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must scrape the metrics path"
+grep -q '^      interval: "30s"$' "$autoscaler_monitor_manifest" ||
+  fail "function autoscaler monitor must use the default scrape interval"
 
 for monitor in nvca dcgm worker; do
   grep -q "nvcf-default-monitors-$monitor" "$chart_compute_manifests" ||
