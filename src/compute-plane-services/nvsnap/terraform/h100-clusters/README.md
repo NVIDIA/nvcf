@@ -18,11 +18,13 @@ checkpoint movement tests.
      - `roles/iam.serviceAccountAdmin` (create node SAs)
      - `roles/resourcemanager.projectIamAdmin` (bind roles)
 2. **gcloud auth**:
+
    ```
    gcloud auth login
    gcloud auth application-default login
    gcloud config set project <your-project-id>
    ```
+
 3. **Terraform** ≥ 1.5.0.
 
 ## Setup
@@ -67,17 +69,20 @@ get-credentials` commands for both clusters. After that:
 1. **Verify GPU driver installed** on each cluster (GKE handles this
    via the `gpu_driver_installation_config` block; first node-ready
    is delayed ~3 min as the install runs):
+
    ```
    kubectl describe node <node> | grep -E 'nvidia\.com/gpu|gpu-driver-version'
    ```
 
 2. **Deploy nvsnap** to each cluster (project root has the scripts):
+
    ```
    ./scripts/build-agent.sh deploy --kubeconfig=<context-A>
    ./scripts/build-agent.sh deploy --kubeconfig=<context-B>
    ```
 
 3. **Smoke test**:
+
    ```
    ./scripts/test-e2e.sh vllm-small
    ```

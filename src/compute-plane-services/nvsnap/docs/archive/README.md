@@ -21,7 +21,7 @@ in the same PR.
 - **Session journals** (`SESSION-STATUS-*.md`, `SESSION-SUMMARY-*.md`,
   `task[34]-summary.md`, `phase2-summary.md`) — daily progress notes
   from the build-out. Useful for tracing how a fix was found; git log
-  + commit messages are the structured equivalent.
+  - commit messages are the structured equivalent.
 
 - **Status snapshots** (`STATUS.md`, `CHECKPOINT-RESTORE-STATUS.md`,
   `AGENT-DRIVEN-RESTORE-STATUS.md`, `BREAKTHROUGH-20260205.md`,

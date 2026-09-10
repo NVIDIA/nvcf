@@ -174,7 +174,7 @@ kubectl delete namespace nvsnap-system
 
 ### Agent pods stuck in `ImagePullBackOff`
 
-```
+```bash
 kubectl describe pod -n nvsnap-system <agent-pod-name> | tail -20
 ```
 
@@ -184,7 +184,7 @@ Usually means the pull-secret is missing, has the wrong API key, or hasn't been 
 
 Either no nodes match the nodeSelector / nodeAffinity, or all matching nodes have an untolerated taint.
 
-```
+```bash
 kubectl describe pod -n nvsnap-system <agent-pod-name> | grep -A5 "Events\|Conditions"
 ```
 

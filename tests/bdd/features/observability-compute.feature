@@ -154,6 +154,7 @@ Feature: Install local Helmfile observability with the compute profile
     Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
       | kind           | name                                             |
       | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-function-autoscaler        |
       | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
       | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
       | ServiceMonitor | nvcf-default-monitors-invocation-service          |

@@ -1344,6 +1344,26 @@ func testOpenAiAddingNewModel(t *testing.T, client http.Client, logger *CustomLo
 	})
 }
 
+func TestModelFunctionDetailsYAMLOmitsUnsetShadowFields(t *testing.T) {
+	data, err := yaml.Marshal(gatewayConfig.ModelFunctionDetails{
+		ModelName:  "primary",
+		FunctionID: "primary-function-id",
+		Shadows: []gatewayConfig.ShadowConfig{{
+			ModelName: "shadow",
+		}},
+	})
+	require.NoError(t, err)
+
+	config := string(data)
+	require.Contains(t, config, "shadows:")
+	require.Contains(t, config, "modelName: shadow")
+	require.NotContains(t, config, "shadowModelName:")
+	require.NotContains(t, config, "shadowModelNames:")
+	require.NotContains(t, config, "shadowPercentage:")
+	require.NotContains(t, config, "shadowSamplingMethod:")
+	require.NotContains(t, config, "shadowCancelOnClientDisconnect:")
+}
+
 func testCorsPreflightRequest(t *testing.T, client http.Client) {
 	t.Run("Testing CORS preflight request", func(t *testing.T) {
 		// Create a preflight OPTIONS request

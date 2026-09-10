@@ -15,13 +15,19 @@ secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
 : "${NVCF_PUBLISHED_CHART_REPOSITORY:?NVCF_PUBLISHED_CHART_REPOSITORY is required}"
 published_chart_registry="$NVCF_PUBLISHED_CHART_REGISTRY"
 published_chart_repository="$NVCF_PUBLISHED_CHART_REPOSITORY"
-published_chart_version=0.32.1
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
   echo "openbao-published-chart: $*" >&2
   exit 1
 }
+
+published_chart_version="$(awk '
+  $1 == "-" && $2 == "name:" { release = $3 }
+  release == "openbao-server" && $1 == "version:" { print $2; exit }
+' "$stack_dir/helmfile.d/01-dependencies.yaml.gotmpl")"
+test -n "$published_chart_version" ||
+  fail "could not derive the published OpenBao version from the stack Helmfile"
 
 # Match the existing Cassandra/OpenBao credential-wiring test's rendered stack
 # values, but keep that local-chart test offline and independent of registry

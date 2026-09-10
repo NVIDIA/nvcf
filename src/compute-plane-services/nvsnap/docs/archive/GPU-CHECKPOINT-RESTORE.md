@@ -13,7 +13,7 @@ The solution uses two components:
 
 ### Workflow
 
-```
+```text
 1. Application runs with GPU (vLLM, PyTorch, etc.)
      |
 2. cuda-checkpoint --action lock --pid <PID>

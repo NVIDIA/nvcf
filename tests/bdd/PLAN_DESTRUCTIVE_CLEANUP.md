@@ -72,7 +72,7 @@ Both opt-in. Default suite behavior is unchanged.
 
 ### Env var (BDD-driven)
 
-```
+```text
 BDD_CLEANUP_MODE = "" | "stack-single" | "stack-multi" | "topology-single" | "topology-multi"
 ```
 
@@ -167,13 +167,13 @@ delete failure of a present cluster is a real error.
 
 ```make
 destroy:
-	@if k3d cluster get $(CLUSTER_NAME) >/dev/null 2>&1; then \
-		echo "Destroying k3d cluster $(CLUSTER_NAME)..."; \
-		k3d cluster delete $(CLUSTER_NAME); \
-		echo "Cluster $(CLUSTER_NAME) destroyed."; \
-	else \
-		echo "Cluster $(CLUSTER_NAME) absent; skipping."; \
-	fi
+ @if k3d cluster get $(CLUSTER_NAME) >/dev/null 2>&1; then \
+  echo "Destroying k3d cluster $(CLUSTER_NAME)..."; \
+  k3d cluster delete $(CLUSTER_NAME); \
+  echo "Cluster $(CLUSTER_NAME) destroyed."; \
+ else \
+  echo "Cluster $(CLUSTER_NAME) absent; skipping."; \
+ fi
 ```
 
 #### New target: destroy-all-ncp-local
@@ -183,20 +183,20 @@ compute-cluster case the existing `destroy-multicluster` misses.
 
 ```make
 destroy-all-ncp-local:
-	@command -v jq >/dev/null 2>&1 || { \
-		echo "destroy-all-ncp-local requires jq; install it and retry." >&2; \
-		exit 1; \
-	}
-	@set -o pipefail; \
-	NAMES=$$(k3d cluster list -o json | jq -r '.[] | select(.name|startswith("ncp-local")) | .name'); \
-	if [ -z "$$NAMES" ]; then \
-		echo "No ncp-local* clusters present."; \
-		exit 0; \
-	fi; \
-	for name in $$NAMES; do \
-		echo "Destroying k3d cluster $$name..."; \
-		k3d cluster delete "$$name"; \
-	done
+ @command -v jq >/dev/null 2>&1 || { \
+  echo "destroy-all-ncp-local requires jq; install it and retry." >&2; \
+  exit 1; \
+ }
+ @set -o pipefail; \
+ NAMES=$$(k3d cluster list -o json | jq -r '.[] | select(.name|startswith("ncp-local")) | .name'); \
+ if [ -z "$$NAMES" ]; then \
+  echo "No ncp-local* clusters present."; \
+  exit 0; \
+ fi; \
+ for name in $$NAMES; do \
+  echo "Destroying k3d cluster $$name..."; \
+  k3d cluster delete "$$name"; \
+ done
 ```
 
 No `|| true`. `set -o pipefail` so the pipe failure of `k3d cluster
@@ -218,16 +218,16 @@ with explicit kube-context flags; it belongs in the dev wrapper.
 
 ```make
 destroy-stack-single: ## Uninstall NVCF stack from one cluster; leaves k3d running
-	@set -euo pipefail; \
-	CTX="k3d-$(CLUSTER_NAME)"; \
-	if ! kubectl --context "$$CTX" cluster-info >/dev/null 2>&1; then \
-		echo "Context $$CTX unreachable; skipping cluster resources."; \
-	else \
-		$(MAKE) _delete-stack-crs    CTX="$$CTX" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
-		$(MAKE) _uninstall-stack-releases CTX="$$CTX" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
-		$(MAKE) _delete-stack-namespaces CTX="$$CTX" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
-	fi; \
-	$(MAKE) _clean-stack-out
+ @set -euo pipefail; \
+ CTX="k3d-$(CLUSTER_NAME)"; \
+ if ! kubectl --context "$$CTX" cluster-info >/dev/null 2>&1; then \
+  echo "Context $$CTX unreachable; skipping cluster resources."; \
+ else \
+  $(MAKE) _delete-stack-crs    CTX="$$CTX" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
+  $(MAKE) _uninstall-stack-releases CTX="$$CTX" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
+  $(MAKE) _delete-stack-namespaces CTX="$$CTX" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
+ fi; \
+ $(MAKE) _clean-stack-out
 ```
 
 `set -euo pipefail` is required so a failed nested `$(MAKE)` helper
@@ -250,34 +250,34 @@ use-context` anywhere; every command carries `--context` /
 
 ```make
 destroy-stack-multi: ## Uninstall NVCF stack from CP plus every discovered compute cluster
-	@set -euo pipefail; \
-	command -v jq >/dev/null 2>&1 || { \
-		echo "destroy-stack-multi requires jq; install it and retry." >&2; \
-		exit 1; \
-	}; \
-	COMPUTES=$$(k3d cluster list -o json | jq -r '.[] | select(.name|startswith("ncp-local-compute-")) | .name'); \
-	for name in $$COMPUTES; do \
-		CTX="k3d-$$name"; \
-		echo ">>> Cleaning compute cluster $$CTX"; \
-		if ! kubectl --context "$$CTX" cluster-info >/dev/null 2>&1; then \
-			echo "Context $$CTX unreachable; skipping."; \
-			continue; \
-		fi; \
-		$(MAKE) _delete-stack-crs    CTX="$$CTX" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
-		$(MAKE) _uninstall-stack-releases CTX="$$CTX" RELEASE_LIST="$(STACK_RELEASES_WORKER)"; \
-		$(MAKE) _delete-stack-namespaces CTX="$$CTX" NS_LIST="$(STACK_NAMESPACES_WORKER)"; \
-	done; \
-	if k3d cluster get ncp-local-cp >/dev/null 2>&1; then \
-		echo ">>> Cleaning control-plane cluster k3d-ncp-local-cp"; \
-		if kubectl --context k3d-ncp-local-cp cluster-info >/dev/null 2>&1; then \
-			$(MAKE) _delete-stack-crs CTX="k3d-ncp-local-cp" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
-			$(MAKE) _uninstall-stack-releases CTX="k3d-ncp-local-cp" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
-			$(MAKE) _delete-stack-namespaces CTX="k3d-ncp-local-cp" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
-		else \
-			echo "Context k3d-ncp-local-cp unreachable; skipping."; \
-		fi; \
-	fi; \
-	$(MAKE) _clean-stack-out
+ @set -euo pipefail; \
+ command -v jq >/dev/null 2>&1 || { \
+  echo "destroy-stack-multi requires jq; install it and retry." >&2; \
+  exit 1; \
+ }; \
+ COMPUTES=$$(k3d cluster list -o json | jq -r '.[] | select(.name|startswith("ncp-local-compute-")) | .name'); \
+ for name in $$COMPUTES; do \
+  CTX="k3d-$$name"; \
+  echo ">>> Cleaning compute cluster $$CTX"; \
+  if ! kubectl --context "$$CTX" cluster-info >/dev/null 2>&1; then \
+   echo "Context $$CTX unreachable; skipping."; \
+   continue; \
+  fi; \
+  $(MAKE) _delete-stack-crs    CTX="$$CTX" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
+  $(MAKE) _uninstall-stack-releases CTX="$$CTX" RELEASE_LIST="$(STACK_RELEASES_WORKER)"; \
+  $(MAKE) _delete-stack-namespaces CTX="$$CTX" NS_LIST="$(STACK_NAMESPACES_WORKER)"; \
+ done; \
+ if k3d cluster get ncp-local-cp >/dev/null 2>&1; then \
+  echo ">>> Cleaning control-plane cluster k3d-ncp-local-cp"; \
+  if kubectl --context k3d-ncp-local-cp cluster-info >/dev/null 2>&1; then \
+   $(MAKE) _delete-stack-crs CTX="k3d-ncp-local-cp" CR_LIST="$(STACK_CRS_WORKER)" NS_LIST="nvca-operator"; \
+   $(MAKE) _uninstall-stack-releases CTX="k3d-ncp-local-cp" RELEASE_LIST="$(STACK_RELEASES_WORKER) $(STACK_RELEASES_CP)"; \
+   $(MAKE) _delete-stack-namespaces CTX="k3d-ncp-local-cp" NS_LIST="$(STACK_NAMESPACES_WORKER) $(STACK_NAMESPACES_CP)"; \
+  else \
+   echo "Context k3d-ncp-local-cp unreachable; skipping."; \
+  fi; \
+ fi; \
+ $(MAKE) _clean-stack-out
 ```
 
 The live implementation is `tests/bdd/scripts/destroy-stack.sh`, not these
@@ -301,14 +301,14 @@ For each namespace in `NS_LIST` that exists, delete each CR kind in
 
 ```make
 _delete-stack-crs:
-	@for ns in $(NS_LIST); do \
-		if kubectl --context $(CTX) get namespace $$ns >/dev/null 2>&1; then \
-			for cr in $(CR_LIST); do \
-				echo "  delete $$cr in $$ns"; \
-				kubectl --context $(CTX) -n $$ns delete $$cr --all --ignore-not-found --timeout=60s; \
-			done; \
-		fi; \
-	done
+ @for ns in $(NS_LIST); do \
+  if kubectl --context $(CTX) get namespace $$ns >/dev/null 2>&1; then \
+   for cr in $(CR_LIST); do \
+    echo "  delete $$cr in $$ns"; \
+    kubectl --context $(CTX) -n $$ns delete $$cr --all --ignore-not-found --timeout=60s; \
+   done; \
+  fi; \
+ done
 ```
 
 No `|| true`. A finalizer-stall timeout will propagate and abort
@@ -323,13 +323,13 @@ blast-radius risk.
 
 ```make
 _uninstall-stack-releases:
-	@for entry in $(RELEASE_LIST); do \
-		name=$${entry%:*}; \
-		ns=$${entry#*:}; \
-		echo "  uninstall $$name in $$ns"; \
-		helm --kube-context $(CTX) uninstall "$$name" -n "$$ns" \
-			--ignore-not-found --wait --timeout 2m; \
-	done
+ @for entry in $(RELEASE_LIST); do \
+  name=$${entry%:*}; \
+  ns=$${entry#*:}; \
+  echo "  uninstall $$name in $$ns"; \
+  helm --kube-context $(CTX) uninstall "$$name" -n "$$ns" \
+   --ignore-not-found --wait --timeout 2m; \
+ done
 ```
 
 `--ignore-not-found` is a helm 3.13+ flag. The dev workstation README
@@ -344,11 +344,11 @@ Stack-owned namespaces only. `envoy-gateway-system` and
 
 ```make
 _delete-stack-namespaces:
-	@for ns in $(NS_LIST); do \
-		echo "  delete namespace $$ns"; \
-		kubectl --context $(CTX) delete namespace $$ns \
-			--ignore-not-found --wait --timeout=120s; \
-	done
+ @for ns in $(NS_LIST); do \
+  echo "  delete namespace $$ns"; \
+  kubectl --context $(CTX) delete namespace $$ns \
+   --ignore-not-found --wait --timeout=120s; \
+ done
 ```
 
 ##### _clean-stack-out

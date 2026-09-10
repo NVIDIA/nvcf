@@ -143,6 +143,7 @@ fn raw_quic_response_headers(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use super::super::core::{
@@ -165,6 +166,8 @@ mod tests {
             upstream_http_base_url: "http://127.0.0.1:1".to_string(),
             max_request_body_bytes: 8,
             max_sse_buffer_bytes: 1024,
+            force_chat_completions_include_usage: false,
+            chat_usage_rewrite_permits: Arc::new(tokio::sync::Semaphore::new(1)),
             first_output_timeout: Duration::from_secs(1),
             output_chunk_timeout: Duration::from_secs(1),
             runtime_state: PylonRuntimeState::default(),

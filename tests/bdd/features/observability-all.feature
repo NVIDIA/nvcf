@@ -129,6 +129,7 @@ Feature: Install local Helmfile observability for both planes
     Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
       | kind           | name                                             |
       | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-function-autoscaler        |
       | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
       | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
       | ServiceMonitor | nvcf-default-monitors-invocation-service          |

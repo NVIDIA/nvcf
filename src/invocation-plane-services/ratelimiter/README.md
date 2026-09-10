@@ -48,7 +48,8 @@ The NVCF Rate Limiter provides:
 The service uses the [ulule/limiter](https://github.com/ulule/limiter) library to implement rate limiting functionality. It maintains a TTL cache that maps function version IDs to rate limiter metadata, including the rate limiter instance and any excluded NCA IDs.
 Rate Limiter Service also leverages [buraksezer/olric](https://github.com/buraksezer/olric) for in store memory for multi instance support.
 
-## RateLimiter Interaction with Invocation Service/gRPC Proxy 
+## RateLimiter Interaction with Invocation Service/gRPC Proxy
+
 ```plantuml
 participant "Invocation Service/gRPC Proxy" as client
 participant "NVCF Ratelimiter" as service
@@ -86,6 +87,7 @@ end group
 ```
 
 ## RateLimiter Architecture
+
 ```plantuml
 participant "NVCF Ratelimiter" as service
 
@@ -169,7 +171,7 @@ below), so the same identity under different accounts is tracked separately.
 
 A request is evaluated against **at most two tiers**:
 
-```
+```text
 allowed  =  [ user tier   (only if perUserRate is configured) ]
        AND  [ exactly ONE NCA-axis tier:  per-NCA-ID  OR  global ]
 ```

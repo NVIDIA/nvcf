@@ -66,7 +66,7 @@ A failure in any keyspace's migration set stops the run.
 
 If a migration fails partway through, `golang-migrate` marks the row in `schema_migrations` as `dirty=true`. The next `migrate up` refuses to proceed and exits with:
 
-```
+```text
 Dirty database version <N>. Fix and force version.
 ```
 

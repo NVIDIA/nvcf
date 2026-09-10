@@ -16,7 +16,7 @@ File-based trigger + shared memory barrier. No signals needed.
 
 ### Architecture
 
-```
+```text
 Agent                         Worker Processes (rank 0-3)
   |                               |
   |  1. Create trigger file       | quiesce thread polling (1ms)
@@ -40,7 +40,7 @@ Agent                         Worker Processes (rank 0-3)
 
 ### Shared Memory Layout
 
-```
+```text
 /dev/shm/nvsnap-quiesce          <- trigger file (created by agent)
   Contents: nranks (e.g., "4")  <- expected number of GPU ranks
 
@@ -57,7 +57,7 @@ Agent                         Worker Processes (rank 0-3)
 
 #### Agent Side (checkpoint.go)
 
-```
+```text
 1. Stop readiness probe (optional — prevents new requests during checkpoint)
 2. Write nranks to /dev/shm/nvsnap-quiesce (via kubectl exec or /proc/PID/root)
 3. Poll for /dev/shm/nvsnap-quiesce-done-<pid> for each worker PID
@@ -139,6 +139,7 @@ Agent                         Worker Processes (rank 0-3)
 ### Phase 2: Restore-side NCCL Recreation
 
 Not in this change. After checkpoint + restore:
+
 - Workers have aborted communicators
 - Need to recreate with new ncclUniqueId
 - Requires intercepting NCCL collective calls to lazy-recreate

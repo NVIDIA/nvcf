@@ -3,6 +3,7 @@
 **Status:** design — not yet implemented. Supersedes phase 5b (writer-Job-runs-CRIU) and phase 5c (EROFS compaction). Both were derailed by the same root cause: **CRIU's go-criu RPC client rejects any read-only mount of the images dir in 7 ms**, regardless of whether RO is enforced at the kernel level (`mount -o ro`) or kubelet level (`readOnly: true`).
 
 **Empirical evidence (gathered 2026-05-09):**
+
 - v0.17.13 with hostPath restore → ✅ PASS, /v1/completions works.
 - Same v0.17.13 dump on PVC with `mountOptions: [ro,norecovery,nouuid]` → ❌ 7 ms reject.
 - Same dump on PVC with `mountOptions: []` + `readOnly: true` on the volume → ❌ 7 ms reject.
@@ -12,6 +13,7 @@
 **Architectural conclusion:** any shared read-only mount strategy for cross-node fanout breaks CRIU restore. The fix is to **never mount a shared volume into the restore pod** — give each restore its own writable local copy.
 
 **Related docs:**
+
 - `docs/PHASE5B-CRIU-IN-WRITER-JOB.md` — failed phase 5b architecture (kept for history)
 - `docs/PHASE5B-DIAGNOSTIC-PLAN.md` — diagnostic notes that led here
 - `docs/PHASE5C-EROFS-COMPACTION.md` — failed EROFS pivot (kept for history)
@@ -23,7 +25,7 @@ Three storage tiers per cluster, queried in priority order on restore. A
 fourth tier (cross-cluster S3) is **layered transparently below the
 in-cluster blob service** — the agent never knows about it.
 
-```
+```text
 PER-CLUSTER VIEW (what the agent sees):
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -102,7 +104,7 @@ Rust HTTP service for blob serving, not S3-compat.
 
 ### Protocol
 
-```
+```text
 # Content-addressed blobs (sha256-keyed, dedup across captures)
 PUT  /v1/blob/{sha256}             body: file stream → 201 Created (or 200 if exists)
 GET  /v1/blob/{sha256}             → 200 + body (file stream)
@@ -124,12 +126,14 @@ streaming body. The server writes to a temp file, fsyncs, renames into
 place after sha256 verification.
 
 Estimated implementation:
+
 - Server: ~150 lines Go (net/http + os.WriteFile streaming)
 - Client (in agent): ~150 lines Go (parallel uploads/downloads with concurrency limit)
 
 ### Future cross-cluster path
 
 When AWS S3 access is available:
+
 - Add a `nvsnap-blob-sync` sidecar to nvsnap-blobstore that periodically pushes
   new blobs to S3 and pulls missing ones from S3 on demand.
 - Agents continue speaking only the local nvsnap-blobstore protocol.
@@ -142,12 +146,14 @@ When AWS S3 access is available:
 Phase 5d ships in two stages:
 
 **Stage 5d.1 — peer-to-peer only (in-cluster fanout, no durability):**
+
 - Agent peer HTTP server (#57)
 - NvSnap-server catalog routing — peer list only, no s3_uri yet (#59)
 - Restore-side cascading fetch (peer → peer → fail) (#60)
 - Validation: cross-node restore via peer fanout works for vllm-small / sglang-small / trtllm-small / nim-llama-8b.
 
 **Stage 5d.2 — durability backstop (nvsnap-blobstore added):**
+
 - Build nvsnap-blobstore HTTP service + Pod + PVC (#61)
 - Agent background uploader → blob store after capture (#58)
 - NvSnap-server catalog: add s3_uri field (#59 extension)
@@ -155,6 +161,7 @@ Phase 5d ships in two stages:
 - Validation: kill source node after blob upload, verify restore from blob store works.
 
 **Stage 5d.3 — cleanup:**
+
 - Delete obsolete code: gpdrox/, phase 5b runPhase5bDump, EROFS test yamls, etc. (#62)
 
 Stage 5d.1 unblocks the demo. Stage 5d.2 unblocks production. Stage 5d.3 keeps the codebase honest.
@@ -234,6 +241,7 @@ the restore-side ephemeral cache.**
 ### `nvsnap-agent` (extend existing)
 
 **Add HTTP endpoints (peer server):**
+
 - `GET /v1/checkpoints/{id}/manifest` — JSON list of files in the local dump dir, with sha256 + sizes
 - `GET /v1/checkpoints/{id}/file?path=...` — streams the file bytes
 - Read-only. Serves from `/var/lib/nvsnap/checkpoints/<id>/`.
@@ -241,43 +249,51 @@ the restore-side ephemeral cache.**
 - Estimated ~150 lines of Go.
 
 **Add S3 client:**
+
 - AWS SDK v2 — likely already a transitive dep. If not, add `github.com/aws/aws-sdk-go-v2/service/s3`.
 - Configuration via env: `NVSNAP_BLOB_ENDPOINT`, `NVSNAP_BLOB_BUCKET`, `NVSNAP_BLOB_ACCESS_KEY` (or IRSA on EKS, GKE Workload Identity, etc).
 
 **Background upload after capture:**
+
 - Goroutine triggered post-resume of source pod.
 - Walks dump dir, parallel uploads (4-8 workers), content-addressed.
 - On completion, POSTs to nvsnap-server to register the s3 URI.
 
 **Cascading download for restore:**
+
 - Pre-restore step (init container OR agent code path).
 - Calls nvsnap-server for sources, tries peers, falls back to blob.
 - Writes to `/var/lib/nvsnap/checkpoints/<id>/` on the local node (so this restore-target becomes a future peer).
 
 **Local retention / eviction:**
+
 - LRU by total bytes; configurable max-size flag (`--checkpoint-cache-max-bytes`).
 - On eviction, POSTs `/api/v1/checkpoints/{id}/peer-remove` to nvsnap-server.
 
 ### `nvsnap-server` catalog (extend)
 
 **Schema additions to checkpoints table:**
+
 - `local_peers` (JSON array of `{node_name, agent_url, registered_at}`)
 - `s3_uri` (nullable string)
 - `blob_uploaded_at` (nullable timestamp)
 
 **New endpoints:**
+
 - `GET /api/v1/checkpoints/{id}/sources` — returns prioritized peer list + blob fallback
 - `POST /api/v1/checkpoints/{id}/peer-add` — agent registers itself as a peer
 - `POST /api/v1/checkpoints/{id}/peer-remove` — agent deregisters on eviction
 - `POST /api/v1/checkpoints/{id}/blob-uploaded` — agent reports S3 upload completion
 
 **Catalog cleanup:**
+
 - Periodic sweep: ping each registered peer's HTTP `/healthz`. Remove dead peers from catalog.
 - Don't auto-delete entries that lost all peers but still have `s3_uri` — they're recoverable.
 
 ### nvsnap-blobstore deployment (new component, but no custom code)
 
 `deploy/k8s/nvsnap-minio.yaml`:
+
 ```yaml
 # Single-replica nvsnap-blobstore with a backing PVC.
 # Production: replace with multi-replica nvsnap-blobstore + erasure coding, OR migrate to AWS S3.
@@ -339,12 +355,14 @@ PVC sized for retention: e.g. 1 TB (`storageClassName: nvsnap-capture` or whatev
 ## What we keep / delete from earlier phases
 
 **KEEP:**
+
 - `cmd/restore-entrypoint/main.go` — the wakeRestoredThreads timeout fix (v0.18.6) is a genuine robustness improvement, unrelated to the architecture.
 - Agent-side CRIU dump path (legacy v0.17.13). Local hostPath capture is the foundation.
 - `internal/checkpointstore/store.go` `Manifest` / `VolumeMeta` types, with new fields for peer list + s3_uri.
 - Helper functions: `mirrorOverlayDir`, `parseSkippedResources`, `getMappedFilesInfo`, etc — needed for capture.
 
 **DELETE (after 5d validates):**
+
 - `internal/checkpointstore/gpdrox/` — entire package. PV-flip + multi-attach RO is gone.
 - Phase 5b code in `internal/agent/checkpoint.go`: `runPhase5bDump`, `stagePhase5bMetadata`, `phase5bMetadataInputs`, `phase5bDumpResult`.
 - Phase 5b `Kind=criu` branch in `cmd/agent/capture_write.go::runCRIUDump`.
@@ -354,6 +372,7 @@ PVC sized for retention: e.g. 1 TB (`storageClassName: nvsnap-capture` or whatev
 - The PVC restore manifest patching logic.
 
 **ADD:**
+
 - `internal/agent/peer_server.go` — HTTP endpoints serving local checkpoints.
 - `internal/agent/blob_uploader.go` — S3 client + async upload after capture.
 - `internal/agent/cascade_fetch.go` — download with peer→peer→blob fallback.

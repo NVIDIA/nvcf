@@ -1,4 +1,5 @@
 Notes:
+
 - Multi instances of the same container will be spun up.
 - One must realize it is the "head" node and run the main server entrypoint.
 - The rest of the nodes only require running a health/readiness endpoint as defined in the helm chart

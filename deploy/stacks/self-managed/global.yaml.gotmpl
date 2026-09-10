@@ -247,15 +247,31 @@ nats:
         {{- end }}
   {{- end }}
 
+  # One merged config: block -- a second config: key under nats: would be
+  # silently collapsed. Surfaces server TLS for split-plane workers that reach
+  # NATS over an L4-passthrough LB: TLS must terminate at the server (an LB
+  # can't -- the INFO-first client deadlocks a terminated handshake), and
+  # allow_non_tls keeps in-cluster plaintext clients on :4222. Emitted only when
+  # set, so an env file that sets neither renders identical.
+  {{- $natsTls := dig "nats" "config" "nats" "tls" dict .Values }}
+  {{- $allowNonTls := dig "nats" "config" "merge" "allow_non_tls" nil .Values }}
   config:
     merge:
       server_tags:
         {{- toYaml $natsServerTags | nindent 8 }}
+      {{- if kindIs "bool" $allowNonTls }}
+      allow_non_tls: {{ $allowNonTls }}
+      {{- end }}
     {{- if .Values.global.storageClass }}
     jetstream:
       fileStore:
         pvc:
           storageClassName: {{ .Values.global.storageClass }}
+    {{- end }}
+    {{- with $natsTls }}
+    nats:
+      tls:
+        {{- toYaml . | nindent 8 }}
     {{- end }}
 
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}
@@ -765,7 +781,7 @@ notary:
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/notary-service
+    repository: {{ .Values.global.image.repository }}/nvcf-notary
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -881,6 +897,32 @@ stateMetrics:
 {{- $bundledPromqlEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428" $victoriaMetricsNamespace }}
 {{- $promqlEndpoint := ternary $bundledPromqlEndpoint (dig "metricsBackend" "promqlEndpoint" "" .Values) (eq $metricsBackendMode "install") }}
 functionautoscaler:
+  {{- $configuredFunctionAutoscalerEnv := dig "functionAutoscaler" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredFunctionAutoscalerEnv) }}
+  {{- fail "functionAutoscaler.env must be a map" }}
+  {{- end }}
+  {{- $functionAutoscalerEnv := dict
+        "CONFIG" "/etc/server/config/settings-local.yaml"
+        "SECRETS_PATH" "/vault/secrets/secrets.json"
+        "REGION" (dig "functionAutoscaler" "region" "local" .Values)
+        "CASSANDRA__CONTACT_POINTS" (dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values)
+        "CASSANDRA__IS_DEVELOPMENT" (printf "%v" (dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values))
+        "NVCF_API__NVCF_API_GRPC_ADDRESS" (dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values)
+        "NVCF_API__DISABLE_AUTH" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values))
+        "NVCF_API__DRY_RUN" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values))
+        "TIMESERIES_DB__TIMESERIES_DB_URL" (required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint)
+        "TIMESERIES_DB__AUTH_MODE" (dig "metricsBackend" "authentication" "mode" "none" .Values)
+        "TIMESERIES_DB__IGNORE_ENV" (printf "%v" (dig "functionAutoscaler" "timeseriesDb" "ignoreEnv" true .Values)) -}}
+  {{- with dig "metricsBackend" "authentication" "authnEndpoint" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__AUTHN_URL" . }}
+  {{- end }}
+  {{- with dig "metricsBackend" "authentication" "clientCertificatePath" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__CLIENT_CERTIFICATE_PATH" . }}
+  {{- end }}
+  {{- with dig "metricsBackend" "authentication" "clientPrivateKeyPath" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__CLIENT_PRIVATE_KEY_PATH" . }}
+  {{- end }}
+  {{- $functionAutoscalerEnv = mergeOverwrite $functionAutoscalerEnv (deepCopy $configuredFunctionAutoscalerEnv) }}
   namespace: nvcf
   fullnameOverride: function-autoscaler
   {{- if .Values.global.imagePullSecrets }}
@@ -894,26 +936,7 @@ functionautoscaler:
     tag: {{ . | quote }}
     {{- end }}
   env:
-    CONFIG: /etc/server/config/settings-local.yaml
-    SECRETS_PATH: /vault/secrets/secrets.json
-    REGION: {{ dig "functionAutoscaler" "region" "local" .Values | quote }}
-    CASSANDRA__CONTACT_POINTS: {{ dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values | quote }}
-    CASSANDRA__IS_DEVELOPMENT: {{ dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values | quote }}
-    NVCF_API__NVCF_API_GRPC_ADDRESS: {{ dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values | quote }}
-    NVCF_API__DISABLE_AUTH: {{ dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values | quote }}
-    NVCF_API__DRY_RUN: {{ dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values | quote }}
-    TIMESERIES_DB__TIMESERIES_DB_URL: {{ required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint | quote }}
-    TIMESERIES_DB__AUTH_MODE: {{ dig "metricsBackend" "authentication" "mode" "none" .Values | quote }}
-    TIMESERIES_DB__IGNORE_ENV: {{ dig "functionAutoscaler" "timeseriesDb" "ignoreEnv" true .Values | quote }}
-    {{- with dig "metricsBackend" "authentication" "authnEndpoint" "" .Values }}
-    TIMESERIES_DB__AUTHN_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "metricsBackend" "authentication" "clientCertificatePath" "" .Values }}
-    TIMESERIES_DB__CLIENT_CERTIFICATE_PATH: {{ . | quote }}
-    {{- end }}
-    {{- with dig "metricsBackend" "authentication" "clientPrivateKeyPath" "" .Values }}
-    TIMESERIES_DB__CLIENT_PRIVATE_KEY_PATH: {{ . | quote }}
-    {{- end }}
+    {{- toYaml $functionAutoscalerEnv | nindent 4 }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -972,10 +995,8 @@ llmApiGateway:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if dig "addons" "llm" "gateway" "auth" "grpcInsecure" false .Values }}
   config:
-    nvcfGrpcInsecure: true
-  {{- end }}
+    nvcfGrpcInsecure: {{ dig "addons" "llm" "gateway" "auth" "grpcInsecure" true .Values }}
   metrics:
     enabled: {{ dig "addons" "llm" "gateway" "metrics" "enabled" true .Values }}
     serviceMonitor:

@@ -6,15 +6,4 @@ repo_root="$(cd "${script_dir}/../.." && pwd)"
 
 cd "${repo_root}/tools/docs-version-sync"
 
-set +e
-output="$(go run . --target main --update-catalog --check "$@" 2>&1)"
-status=$?
-set -e
-
-if [ -n "${output}" ]; then
-  printf '%s\n' "${output}" >&2
-fi
-
-if [ "${status}" -ne 0 ]; then
-  printf 'WARNING: docs version sync check failed but is advisory; continuing.\n' >&2
-fi
+go run . --target main --check "$@"

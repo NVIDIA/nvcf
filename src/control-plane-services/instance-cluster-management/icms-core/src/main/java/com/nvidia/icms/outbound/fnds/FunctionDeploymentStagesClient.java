@@ -17,6 +17,8 @@
 package com.nvidia.icms.outbound.fnds;
 
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
+import com.nvidia.icms.configuration.staticclientauth.FixedBearerExchangeFilterFunction;
+import com.nvidia.icms.configuration.staticclientauth.StaticClientAuthConfiguration.StaticClientFndsProperties;
 import com.nvidia.icms.outbound.fnds.model.FndsMessageModel;
 import com.nvidia.icms.outbound.fnds.model.FndsMessageV2Model;
 import com.nvidia.icms.outbound.fnds.model.FndsStages;
@@ -38,6 +40,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +50,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.reactive.function.client.support.WebClientAdapter;
@@ -88,6 +92,7 @@ public class FunctionDeploymentStagesClient {
             @Value("${spring.security.oauth2.client.registration.fnds.client-secret}") String clientSecret,
             @Value("${spring.security.oauth2.client.registration.fnds.scope}") String scope,
             @Value("${spring.security.oauth2.client.provider.fnds.token-uri}") String tokenUri,
+            Optional<StaticClientFndsProperties> staticClientFndsProperties,
             @NotNull IcmsConfigurationProperties icmsConfigurationProperties,
             @NotNull TelemetryEventClient telemetryEventClient,
             @NotNull EventFormat format,
@@ -101,14 +106,31 @@ public class FunctionDeploymentStagesClient {
         var webClient = webClientBuilder
                 .baseUrl(fndsBaseUrl)
                 .clientConnector(httpResources.connector())
-                .filter(OAuth2ClientUtils.getOauth2ExchangeFilter(
-                        CLIENT_REGISTRATION_ID, tokenUri, clientId, clientSecret, scope))
+                .filter(authFilter(staticClientFndsProperties, tokenUri, clientId, clientSecret, scope))
                 .filter(OAuth2ClientUtils.getRetryableFilter(CLIENT_REGISTRATION_ID))
                 .build();
 
         var adapter = WebClientAdapter.create(webClient);
         var factory = HttpServiceProxyFactory.builderFor(adapter).build();
         this.fndsStubService = factory.createClient(FndsStubService.class);
+    }
+
+    // Self-hosted deployments have no external NGC/FNDS OAuth2 provider. When a
+    // static Vault-signed token is configured (icms.fnds.static.token, rendered
+    // by the vault-agent template from services/event-ledger/jwt/sign/sis-api),
+    // use it directly instead of the OAuth2 client-credentials flow, matching
+    // the pattern used by nvcf-api and nvct-api for their self-hosted outbound
+    // clients.
+    private static ExchangeFilterFunction authFilter(
+            Optional<StaticClientFndsProperties> staticClientFndsProperties,
+            String tokenUri,
+            String clientId,
+            String clientSecret,
+            String scope) {
+        return staticClientFndsProperties
+                .map(p -> (ExchangeFilterFunction) new FixedBearerExchangeFilterFunction(p::getToken))
+                .orElseGet(() -> OAuth2ClientUtils.getOauth2ExchangeFilter(
+                        CLIENT_REGISTRATION_ID, tokenUri, clientId, clientSecret, scope));
     }
 
     public Integer sendFunctionDeploymentStage(@NotNull FndsMessageV2Model message) {
