@@ -18,7 +18,7 @@
 ## @param image.tag NVCA Operator container image tag. This defaults to the chart's appVersion
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
-  repository: ""
+  repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
   tag: ""
   pullPolicy: IfNotPresent
 ## @param nvcaImage.repositoryOverride (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config
