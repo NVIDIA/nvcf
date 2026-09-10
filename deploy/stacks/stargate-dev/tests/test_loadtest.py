@@ -141,7 +141,7 @@ class CanonicalSuiteTests(unittest.TestCase):
             campaign.output = root
             campaign.runs = root / "runs"
             campaign.suite = LOADTEST.load_suite()
-            campaign.args = SimpleNamespace(spark_image="spark:test")
+            campaign.args = SimpleNamespace(spark_image="spark:test", spark_pod=None)
             campaign.endpoint = "http://127.0.0.1:18000/v1"
             campaign.region = {
                 "modelName": "test-model",
@@ -177,7 +177,7 @@ class CanonicalSuiteTests(unittest.TestCase):
             override = power.index("--stargate-load-balancing-algorithm")
             self.assertEqual(power[override + 1], "powerOfN")
 
-            long_context = campaign.spark_run(
+            long_run = campaign.spark_run(
                 Path("long-context/wait-and-widen"),
                 "wait-and-widen",
                 scenario="long-context-affinity",
@@ -188,7 +188,9 @@ class CanonicalSuiteTests(unittest.TestCase):
                 request_slo_ms=60_000,
                 max_wait_ms=60_000,
                 timeout_seconds=90,
-            ).command
+            )
+            long_context = long_run.command
+            self.assertEqual(long_run.expected_seconds, 2160)
             self.assertEqual(
                 long_context[long_context.index("--stargate-request-slo-ms") + 1],
                 "60000",
@@ -200,6 +202,32 @@ class CanonicalSuiteTests(unittest.TestCase):
             self.assertEqual(
                 long_context[long_context.index("--timeout") + 1],
                 "90s",
+            )
+
+            campaign.args.spark_pod = "spark-worker"
+            campaign.stargate_context = "stargate"
+            campaign.namespace = "test"
+            remote = campaign.spark_run(
+                Path("smoke/power-of-n"),
+                "power-of-n",
+                scenario="smoke",
+                rate=8,
+                workers=8,
+                workload=workload,
+                requests=32,
+            ).command
+            self.assertEqual(
+                remote[:6], ["kubectl", "--context", "stargate", "-n", "test", "exec"]
+            )
+            self.assertIn("-i", remote)
+            self.assertIn("spark-worker", remote)
+            self.assertEqual(
+                remote[remote.index("--workload") + 1],
+                f"/campaign/{root.name}/workloads/smoke.yaml",
+            )
+            self.assertEqual(
+                remote[remote.index("--stargate-load-balancing-algorithm") + 1],
+                "powerOfN",
             )
 
     def test_regional_health_waits_for_backend_registration(self) -> None:
@@ -223,7 +251,7 @@ class CanonicalSuiteTests(unittest.TestCase):
             campaign = object.__new__(LOADTEST.Campaign)
             campaign.output = Path(directory)
             campaign.stargate_context = "stargate"
-            campaign.args = SimpleNamespace(endpoint=None)
+            campaign.args = SimpleNamespace(endpoint=None, spark_pod=None)
             empty = {
                 "backend-0": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
                 "backend-1": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
@@ -295,6 +323,7 @@ class CanonicalSuiteTests(unittest.TestCase):
                 campaign = object.__new__(LOADTEST.Campaign)
                 campaign.output = Path(directory)
                 campaign.token = "test-token"
+                campaign.args = SimpleNamespace(spark_pod=None)
                 campaign.state = {}
                 campaign.children = []
                 campaign.port_forward = mock.Mock()
@@ -322,6 +351,38 @@ class CanonicalSuiteTests(unittest.TestCase):
                 metadata = json.loads((run.directory / "metadata.json").read_text())
                 self.assertNotEqual(metadata["status"], "complete")
                 self.assertFalse((run.directory / "spark.txt").exists())
+
+    def test_remote_workload_mismatch_stops_before_traffic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = object.__new__(LOADTEST.Campaign)
+            campaign.output = Path(directory)
+            campaign.workload_dir = campaign.output / "workloads"
+            campaign.args = SimpleNamespace(
+                spark_pod="worker", spark_image="spark:test"
+            )
+            campaign.stargate_context = "hub"
+            campaign.namespace = "test"
+            LOADTEST.write_workload(
+                campaign.workload_dir / "smoke.yaml", ["test"], "test"
+            )
+
+            def command(args, **kwargs):
+                output = (
+                    "wrong-hash  smoke.yaml" if "sha256sum" in args else "spark test"
+                )
+                return CompletedProcess(args, 0, output)
+
+            def upload(args, **kwargs):
+                self.assertEqual(kwargs["stdin"].read(2), b"\x1f\x8b")
+                return CompletedProcess(args, 0, b"", b"")
+
+            with (
+                mock.patch.object(campaign, "kubectl", return_value="{}"),
+                mock.patch.object(campaign, "command", side_effect=command),
+                mock.patch.object(LOADTEST.subprocess, "run", side_effect=upload),
+                self.assertRaisesRegex(LOADTEST.LoadTestError, "fingerprint differs"),
+            ):
+                campaign.prepare_spark_pod()
 
 
 if __name__ == "__main__":

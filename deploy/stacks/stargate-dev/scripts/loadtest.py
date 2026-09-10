@@ -14,6 +14,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -241,7 +243,11 @@ class Campaign:
         self.workload_dir = self.output / "workloads"
         self.namespace = self.region["namespace"]
         self.stargate_context = self.region["clusters"]["stargate"]["kubeContext"]
-        self.endpoint = args.endpoint or f"http://127.0.0.1:{args.local_port}/v1"
+        self.endpoint = args.endpoint or (
+            "http://llm-request-router:8000/v1"
+            if args.spark_pod
+            else f"http://127.0.0.1:{args.local_port}/v1"
+        )
         self.algorithms = (
             list(ALGORITHM_ORDER) if args.algorithm == "both" else [args.algorithm]
         )
@@ -252,7 +258,10 @@ class Campaign:
             "suiteSha256": hashlib.sha256(SUITE_PATH.read_bytes()).hexdigest(),
             "sparkImage": args.spark_image,
             "algorithms": self.algorithms,
-            "endpoint": args.endpoint or "kubectl-port-forward",
+            "endpoint": self.endpoint
+            if args.spark_pod
+            else args.endpoint or "kubectl-port-forward",
+            "sparkPod": args.spark_pod,
         }
         self.children: list[subprocess.Popen] = []
         self.port_forward: subprocess.Popen | None = None
@@ -354,10 +363,93 @@ class Campaign:
         self.token = self.load_token()
         self.snapshot_environment(image)
         self.prepare_workloads()
-        if not self.args.endpoint:
+        if self.args.spark_pod:
+            self.prepare_spark_pod()
+        elif not self.args.endpoint:
             self.start_port_forward()
         self.state["status"] = "running"
         self.save_state()
+
+    @property
+    def spark_directory(self) -> Path:
+        root = Path("/campaign")
+        return root / self.output.name if self.args.spark_pod else root
+
+    def pod_exec(self, *command: str, stdin: bool = False) -> list[str]:
+        return [
+            "kubectl",
+            "--context",
+            self.stargate_context,
+            "-n",
+            self.namespace,
+            "exec",
+            *(["-i"] if stdin else []),
+            self.args.spark_pod,
+            "--",
+            *command,
+        ]
+
+    def prepare_spark_pod(self) -> None:
+        pod = json.loads(
+            self.kubectl(
+                self.stargate_context, ["get", "pod", self.args.spark_pod, "-o", "json"]
+            )
+        )
+        atomic_json(self.output / "spark-pod.json", pod)
+        local_version = self.command(
+            ["docker", "run", "--rm", self.args.spark_image, "--version"]
+        ).stdout.strip()
+        remote_version = self.command(
+            self.pod_exec("spark", "--version")
+        ).stdout.strip()
+        if local_version != remote_version:
+            raise LoadTestError("local and remote Spark versions differ")
+        self.command(self.pod_exec("mkdir", "-p", str(self.spark_directory)))
+        with tempfile.TemporaryFile() as archive:
+            with tarfile.open(fileobj=archive, mode="w:gz") as stream:
+                stream.add(self.workload_dir, arcname="workloads")
+            archive.seek(0)
+            result = subprocess.run(
+                self.pod_exec(
+                    "tar", "-xzf", "-", "-C", str(self.spark_directory), stdin=True
+                ),
+                stdin=archive,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=300,
+            )
+        if result.returncode:
+            raise LoadTestError(f"workload upload failed: {result.stderr.decode()}")
+        for workload in self.workload_dir.glob("*.yaml"):
+            expected = json.loads(workload.with_suffix(".json").read_text())["sha256"]
+            actual = self.command(
+                self.pod_exec(
+                    "sha256sum", str(self.spark_directory / "workloads" / workload.name)
+                )
+            ).stdout.split()[0]
+            if actual != expected:
+                raise LoadTestError(
+                    f"remote workload fingerprint differs: {workload.name}"
+                )
+
+    def download_report(self, run: SparkRun) -> None:
+        directory = self.spark_directory / run.directory.relative_to(self.output)
+        with tempfile.TemporaryFile() as archive:
+            result = subprocess.run(
+                self.pod_exec("tar", "-czf", "-", "-C", str(directory), "spark.json"),
+                stdout=archive,
+                stderr=subprocess.PIPE,
+                timeout=300,
+            )
+            if result.returncode:
+                raise LoadTestError(f"report download failed: {result.stderr.decode()}")
+            archive.seek(0)
+            with tarfile.open(fileobj=archive, mode="r:gz") as stream:
+                report = stream.extractfile("spark.json")
+                if report is None:
+                    raise LoadTestError("remote Spark report is missing")
+                with (run.directory / "spark.json").open("wb") as output:
+                    shutil.copyfileobj(report, output)
 
     def load_token(self) -> str:
         if token := os.environ.get("OPENAI_API_KEY"):
@@ -598,9 +690,12 @@ class Campaign:
             "0",
             "--quiet",
             "--output",
-            f"/campaign/{(directory / 'spark.json').relative_to(self.output)}",
+            str(
+                self.spark_directory
+                / (directory / "spark.json").relative_to(self.output)
+            ),
             "--workload",
-            f"/campaign/{workload.relative_to(self.output)}",
+            str(self.spark_directory / workload.relative_to(self.output)),
             "--scenario",
             "normal",
         ]
@@ -611,11 +706,32 @@ class Campaign:
         )
         if header := self.suite["algorithms"][algorithm]["routingHeader"]:
             command.extend(["--stargate-load-balancing-algorithm", header])
+        if self.args.spark_pod:
+            arguments = command[command.index("--endpoint") :]
+            pid_file = (
+                self.spark_directory / directory.relative_to(self.output) / "spark.pid"
+            )
+            command = self.pod_exec(
+                "bash",
+                "-c",
+                'IFS= read -r OPENAI_API_KEY; export OPENAI_API_KEY; echo $$ > "$1"; shift; exec "$@"',
+                "--",
+                str(pid_file),
+                "spark",
+                *arguments,
+                stdin=True,
+            )
         return SparkRun(
             directory=directory,
             command=command,
             expected_seconds=float(
-                duration if duration is not None else requests / rate
+                duration
+                if duration is not None
+                else max(
+                    requests / rate,
+                    math.ceil(requests / workers)
+                    * (timeout_seconds or defaults["timeoutSeconds"]),
+                )
             ),
             metadata={
                 "scenario": scenario,
@@ -674,14 +790,23 @@ class Campaign:
         started = time.monotonic()
         try:
             for run, output in zip(runs, outputs):
+                if self.args.spark_pod:
+                    remote = self.spark_directory / run.directory.relative_to(
+                        self.output
+                    )
+                    self.command(self.pod_exec("mkdir", "-p", str(remote)))
                 process = subprocess.Popen(
                     run.command,
+                    stdin=subprocess.PIPE if self.args.spark_pod else None,
                     stdout=output,
                     stderr=subprocess.STDOUT,
                     env=environment,
                 )
                 processes.append(process)
                 self.children.append(process)
+                if self.args.spark_pod:
+                    process.stdin.write((self.token + "\n").encode())
+                    process.stdin.close()
             while True:
                 if (
                     self.port_forward is not None
@@ -703,7 +828,31 @@ class Campaign:
                     raise LoadTestError("Spark exceeded its expected duration")
                 time.sleep(2)
         except BaseException:
-            self.stop_processes(processes)
+            try:
+                if self.args.spark_pod:
+                    pid_files = [
+                        str(
+                            self.spark_directory
+                            / run.directory.relative_to(self.output)
+                            / "spark.pid"
+                        )
+                        for run, process in zip(runs, processes)
+                        if process.poll() is None
+                    ]
+                    if pid_files:
+                        self.command(
+                            self.pod_exec(
+                                "bash",
+                                "-c",
+                                'for file in "$@"; do if [ -f "$file" ]; then read -r pid < "$file"; kill -INT "$pid" 2>/dev/null || true; fi; done',
+                                "--",
+                                *pid_files,
+                            ),
+                            timeout=30,
+                            check=False,
+                        )
+            finally:
+                self.stop_processes(processes)
             raise
         finally:
             for output in outputs:
@@ -721,6 +870,8 @@ class Campaign:
                 atomic_json(run.directory / "metadata.json", value)
                 raise LoadTestError(f"Spark failed: {run.directory}")
             report_path = run.directory / "spark.json"
+            if self.args.spark_pod:
+                self.download_report(run)
             if not report_path.is_file():
                 raise LoadTestError(f"Spark did not write {report_path}")
             report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -817,7 +968,7 @@ class Campaign:
             timeout=330,
         )
         self.verify_region()
-        if not self.args.endpoint:
+        if not self.args.endpoint and not self.args.spark_pod:
             self.stop_port_forward()
             self.start_port_forward()
         stats = self.cache_stats()
@@ -1119,6 +1270,10 @@ def parse_args(suite: dict) -> argparse.Namespace:
         "--algorithm", choices=("both", *ALGORITHM_ORDER), default="both"
     )
     parser.add_argument("--endpoint")
+    parser.add_argument(
+        "--spark-pod",
+        help="Run traffic in a dedicated hub Pod with matching Spark, bash, tar, and writable /campaign",
+    )
     parser.add_argument("--local-port", type=int, default=18000)
     parser.add_argument("--grafana-url", default="http://localhost:3000")
     parser.add_argument("--resume", action="store_true")
@@ -1154,7 +1309,14 @@ def main() -> int:
         campaign = Campaign(args, suite)
         campaign.run()
         return 0
-    except (LoadTestError, OSError, ValueError, KeyError, yaml.YAMLError) as error:
+    except (
+        LoadTestError,
+        OSError,
+        ValueError,
+        KeyError,
+        yaml.YAMLError,
+        subprocess.TimeoutExpired,
+    ) as error:
         if campaign is not None:
             campaign.state["status"] = "failed"
             campaign.state["error"] = str(error)
