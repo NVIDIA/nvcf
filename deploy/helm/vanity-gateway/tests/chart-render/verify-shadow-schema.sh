@@ -162,12 +162,12 @@ LEGACY_KEYS=(
 for legacy in "${LEGACY_KEYS[@]}"; do
   write_values chatCompletions "${SHADOWS_EMPTY}
             ${legacy}"
-  assert_rejected "a_model" "shadows combined with $(first_key "${legacy}") is rejected"
+  assert_rejected "$(first_key "${legacy}")" "shadows combined with $(first_key "${legacy}") is rejected"
 done
 
 write_values chatCompletions "            Shadows: []
             shadowPercentage: 50"
-assert_rejected "a_model" "Shadows combined with a legacy key is rejected"
+assert_rejected "shadowPercentage" "Shadows combined with a legacy key is rejected"
 
 # Per-target entry validation.
 write_values chatCompletions "            shadows:
@@ -217,11 +217,11 @@ assert_rejected "shadows" "a null shadows entry is rejected"
 # before and left to the gateway.
 for section in imageEdits imageVariations; do
   write_values "${section}" "${SHADOWS_MINIMAL}"
-  assert_rejected "a_model" "shadows is rejected in ${section}"
+  assert_rejected "shadows" "shadows is rejected in ${section}"
 
   write_values "${section}" "            Shadows:
               - modelName: acme/a-model-next"
-  assert_rejected "a_model" "Shadows is rejected in ${section}"
+  assert_rejected "Shadows" "Shadows is rejected in ${section}"
 
   write_values "${section}" "${SHADOWS_EMPTY}"
   assert_renders "an empty shadows list renders in ${section}"
