@@ -90,7 +90,6 @@ class MiscEndpointsTest {
         assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
-
     @SneakyThrows
     @Test
     void testOpenApiDocs() {

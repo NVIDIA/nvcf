@@ -48,10 +48,11 @@ import tools.jackson.databind.json.JsonMapper;
 @AutoConfigureTestRestTemplate
 class NotaryServiceIntegrationTest {
 
-    private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
-
     @Autowired
     private TestRestTemplate testRestTemplate;
+
+    @Autowired
+    private JsonMapper jsonMapper;
 
     @LocalManagementPort
     private int managementPort;
@@ -82,7 +83,7 @@ class NotaryServiceIntegrationTest {
                 String.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
-        var info = JSON_MAPPER.readTree(response.getBody());
+        var info = jsonMapper.readTree(response.getBody());
         assertThat(info.has("service")).isTrue();
         assertThat(info.has("version")).isTrue();
         assertThat(info.has("commit")).isTrue();

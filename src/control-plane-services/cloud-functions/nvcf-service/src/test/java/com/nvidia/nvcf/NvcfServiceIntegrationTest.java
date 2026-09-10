@@ -50,10 +50,11 @@ import tools.jackson.databind.json.JsonMapper;
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 class NvcfServiceIntegrationTest {
 
-    private static final JsonMapper JSON_MAPPER = JsonMapper.builder().build();
-
     @Autowired
     private TestRestTemplate testRestTemplate;
+
+    @Autowired
+    private JsonMapper jsonMapper;
 
     @LocalManagementPort
     private int managementPort;
@@ -95,7 +96,8 @@ class NvcfServiceIntegrationTest {
                 RequestEntity.get(URI.create("/info")).build(),
                 String.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        var info = JSON_MAPPER.readTree(response.getBody());
+        assertThat(response.getBody()).isNotNull();
+        var info = jsonMapper.readTree(response.getBody());
         assertThat(info.has("service")).isTrue();
         assertThat(info.has("version")).isTrue();
         assertThat(info.has("commit")).isTrue();
