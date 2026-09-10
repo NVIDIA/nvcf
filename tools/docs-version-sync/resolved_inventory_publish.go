@@ -24,6 +24,7 @@ import (
 const (
 	resolvedInventoryRepository = "https://github.com/NVIDIA/nvcf/tree"
 	resolvedInventoryTimeout    = 30 * time.Minute
+	resolvedInventoryConfigPath = "deploy/stacks/self-managed/release-inventory.yaml"
 )
 
 var resolvedInventoryCommonOverrides = []string{
@@ -89,6 +90,12 @@ type resolvedInventoryCommandRunner interface {
 
 type execResolvedInventoryCommandRunner struct{}
 
+type resolvedInventoryHelmCommand struct {
+	Repository    string
+	Args          []string
+	Authenticated bool
+}
+
 func (execResolvedInventoryCommandRunner) Output(dir string, env []string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), resolvedInventoryTimeout)
 	defer cancel()
@@ -109,36 +116,68 @@ func (execResolvedInventoryCommandRunner) Output(dir string, env []string, args 
 }
 
 func (execResolvedInventoryCommandRunner) PrepareRepositories(env []string, repositories map[string]helmfileRepository, ngcAPIKey string) error {
+	commands, err := resolvedInventoryRepositoryCommands(repositories)
+	if err != nil {
+		return err
+	}
+	for _, helmCommand := range commands {
+		var stdin io.Reader
+		if helmCommand.Authenticated {
+			stdin = strings.NewReader(ngcAPIKey + "\n")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), resolvedInventoryTimeout)
+		command := exec.CommandContext(ctx, "helm", helmCommand.Args...)
+		command.Env = env
+		command.Stdin = stdin
+		output, commandErr := command.CombinedOutput()
+		cancel()
+		if commandErr != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("configure Helm repository %s: timed out after %s", helmCommand.Repository, resolvedInventoryTimeout)
+			}
+			return fmt.Errorf("configure Helm repository %s: %w\n%s", helmCommand.Repository, commandErr, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
+
+func resolvedInventoryRepositoryCommands(repositories map[string]helmfileRepository) ([]resolvedInventoryHelmCommand, error) {
 	names := make([]string, 0, len(repositories))
 	for name := range repositories {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	commands := make([]resolvedInventoryHelmCommand, 0, len(names))
 	for _, name := range names {
 		repository := repositories[name]
 		if repository.OCI {
+			if name != "nvcf" {
+				continue
+			}
+			reference := strings.TrimPrefix(strings.TrimSuffix(repository.URL, "/"), "oci://")
+			registry, _, found := strings.Cut(reference, "/")
+			if !found || registry == "" {
+				return nil, fmt.Errorf("Helm repository %s has an invalid OCI reference", name)
+			}
+			commands = append(commands, resolvedInventoryHelmCommand{
+				Repository:    name,
+				Args:          []string{"registry", "login", registry, "--username", "$oauthtoken", "--password-stdin"},
+				Authenticated: true,
+			})
 			continue
 		}
 		args := []string{"repo", "add", repository.Name, repository.URL, "--force-update"}
-		var stdin io.Reader
-		if strings.HasPrefix(repository.URL, "https://helm.ngc.nvidia.com/") {
+		authenticated := strings.HasPrefix(repository.URL, "https://helm.ngc.nvidia.com/")
+		if authenticated {
 			args = append(args, "--username", "$oauthtoken", "--password-stdin")
-			stdin = strings.NewReader(ngcAPIKey + "\n")
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), resolvedInventoryTimeout)
-		command := exec.CommandContext(ctx, "helm", args...)
-		command.Env = env
-		command.Stdin = stdin
-		output, err := command.CombinedOutput()
-		cancel()
-		if err != nil {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return fmt.Errorf("configure Helm repository %s: timed out after %s", repository.Name, resolvedInventoryTimeout)
-			}
-			return fmt.Errorf("configure Helm repository %s: %w\n%s", repository.Name, err, strings.TrimSpace(string(output)))
-		}
+		commands = append(commands, resolvedInventoryHelmCommand{
+			Repository:    name,
+			Args:          args,
+			Authenticated: authenticated,
+		})
 	}
-	return nil
+	return commands, nil
 }
 
 type helmfileRepository struct {
@@ -154,6 +193,20 @@ type helmfileBuildDocument struct {
 type localChartMetadata struct {
 	Name    string `yaml:"name"`
 	Version string `yaml:"version"`
+}
+
+type resolvedInventoryConfig struct {
+	SchemaVersion            int    `yaml:"schemaVersion"`
+	PublishedChartRepository string `yaml:"publishedChartRepository"`
+}
+
+type resolvedInventoryHelmSource struct {
+	Registry   string
+	Repository string
+}
+
+func (source resolvedInventoryHelmSource) reference() string {
+	return source.Registry + "/" + source.Repository
 }
 
 func writeResolvedStackInventory(repoRoot, outputPath string, source stackSourceRelease) error {
@@ -213,7 +266,11 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 	if err := copyResolvedInventoryInputs(repoRoot, copiedRepoRoot); err != nil {
 		return resolvedStackInventory{}, err
 	}
-	env, ngcAPIKey, err := prepareResolvedInventoryEnvironment(copiedRepoRoot)
+	config, err := loadResolvedInventoryConfig(copiedRepoRoot)
+	if err != nil {
+		return resolvedStackInventory{}, err
+	}
+	env, renderSource, ngcAPIKey, err := prepareResolvedInventoryEnvironment(copiedRepoRoot)
 	if err != nil {
 		return resolvedStackInventory{}, err
 	}
@@ -234,6 +291,8 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 			source,
 			state,
 			env,
+			renderSource,
+			config.PublishedChartRepository,
 			ngcAPIKey,
 			runner,
 		)
@@ -313,20 +372,74 @@ func copyResolvedInventoryStack(source, destination string) error {
 	})
 }
 
-func prepareResolvedInventoryEnvironment(copiedRepoRoot string) ([]string, string, error) {
+func loadResolvedInventoryConfig(repoRoot string) (resolvedInventoryConfig, error) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(resolvedInventoryConfigPath)))
+	if err != nil {
+		return resolvedInventoryConfig{}, fmt.Errorf("read resolved inventory config: %w", err)
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	var config resolvedInventoryConfig
+	if err := decoder.Decode(&config); err != nil {
+		return resolvedInventoryConfig{}, fmt.Errorf("parse resolved inventory config: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return resolvedInventoryConfig{}, fmt.Errorf("parse resolved inventory config: %w", err)
+		}
+		return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory config contains multiple YAML documents")
+	}
+	if config.SchemaVersion != 1 {
+		return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory config schemaVersion is %d, want 1", config.SchemaVersion)
+	}
+	repository := config.PublishedChartRepository
+	if repository == "" || repository != strings.TrimSpace(repository) || strings.HasSuffix(repository, "/") ||
+		!strings.HasPrefix(repository, "https://") || strings.ContainsAny(repository, "{}$?#") {
+		return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory publishedChartRepository must be a resolved HTTPS repository without a trailing slash")
+	}
+	return config, nil
+}
+
+func parseResolvedInventoryHelmSource(raw string) (resolvedInventoryHelmSource, error) {
+	value := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if value == "" {
+		return resolvedInventoryHelmSource{}, fmt.Errorf("NVCF_RELEASE_HELM_REGISTRY is required to render release charts")
+	}
+	if strings.Contains(value, "://") || strings.ContainsAny(value, "@?# \t\r\n") {
+		return resolvedInventoryHelmSource{}, fmt.Errorf("NVCF_RELEASE_HELM_REGISTRY must use host/repository format without credentials or a URL scheme")
+	}
+	registry, repository, found := strings.Cut(value, "/")
+	if !found || registry == "" || repository == "" {
+		return resolvedInventoryHelmSource{}, fmt.Errorf("NVCF_RELEASE_HELM_REGISTRY must include a registry host and repository path")
+	}
+	for _, segment := range strings.Split(repository, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return resolvedInventoryHelmSource{}, fmt.Errorf("NVCF_RELEASE_HELM_REGISTRY contains an invalid repository path")
+		}
+	}
+	return resolvedInventoryHelmSource{Registry: registry, Repository: repository}, nil
+}
+
+func prepareResolvedInventoryEnvironment(copiedRepoRoot string) ([]string, resolvedInventoryHelmSource, string, error) {
 	ngcAPIKey := strings.TrimSpace(os.Getenv("NVCF_RELEASE_NGC_API_KEY"))
 	if ngcAPIKey == "" {
 		ngcAPIKey = strings.TrimSpace(os.Getenv("NGC_API_KEY"))
 	}
 	if ngcAPIKey == "" {
-		return nil, "", fmt.Errorf("NVCF_RELEASE_NGC_API_KEY is required to render public NGC charts")
+		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("NVCF_RELEASE_NGC_API_KEY is required to render release charts")
+	}
+	renderSource, err := parseResolvedInventoryHelmSource(os.Getenv("NVCF_RELEASE_HELM_REGISTRY"))
+	if err != nil {
+		return nil, resolvedInventoryHelmSource{}, "", err
 	}
 	values, err := yaml.Marshal(map[string]any{
 		"global": map[string]any{
 			"domain": "inventory.example.invalid",
 			"helm": map[string]any{
 				"sources": map[string]any{
-					"url": "https://helm.ngc.nvidia.com/nvidia/nvcf",
+					"registry":   renderSource.Registry,
+					"repository": renderSource.Repository,
 				},
 			},
 			"image": map[string]any{
@@ -351,36 +464,36 @@ func prepareResolvedInventoryEnvironment(copiedRepoRoot string) ([]string, strin
 		},
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("marshal inventory-only stack environment: %w", err)
+		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("marshal inventory-only stack environment: %w", err)
 	}
 	for _, stack := range []string{"self-managed", "nvcf-compute-plane", "observability"} {
 		environmentPath := filepath.Join(copiedRepoRoot, "deploy", "stacks", stack, "environments", "inventory.yaml")
 		if err := os.MkdirAll(filepath.Dir(environmentPath), 0o755); err != nil {
-			return nil, "", err
+			return nil, resolvedInventoryHelmSource{}, "", err
 		}
 		if err := os.WriteFile(environmentPath, values, 0o600); err != nil {
-			return nil, "", fmt.Errorf("write %s inventory-only stack environment: %w", stack, err)
+			return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("write %s inventory-only stack environment: %w", stack, err)
 		}
 	}
 	secretsPath := filepath.Join(copiedRepoRoot, "deploy", "stacks", "self-managed", "secrets", "inventory-secrets.yaml")
 	if err := os.MkdirAll(filepath.Dir(secretsPath), 0o755); err != nil {
-		return nil, "", fmt.Errorf("create inventory-only stack secrets directory: %w", err)
+		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("create inventory-only stack secrets directory: %w", err)
 	}
 	if err := os.WriteFile(secretsPath, []byte("{}\n"), 0o600); err != nil {
-		return nil, "", fmt.Errorf("write inventory-only stack secrets: %w", err)
+		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("write inventory-only stack secrets: %w", err)
 	}
 	registrationDir := filepath.Join(copiedRepoRoot, "deploy", "stacks", "nvcf-compute-plane", "inventory-registration")
 	if err := os.MkdirAll(registrationDir, 0o755); err != nil {
-		return nil, "", err
+		return nil, resolvedInventoryHelmSource{}, "", err
 	}
 	registration := []byte("clusterName: inventory\nclusterID: 00000000-0000-0000-0000-000000000001\nclusterGroupID: 00000000-0000-0000-0000-000000000002\nncaID: inventory\nregion: inventory\nselfManaged:\n  identitySource: psat\n  icmsServiceURL: http://icms.example.invalid:8080\n  revalServiceURL: http://reval.example.invalid:8080\n  natsURL: nats://nats.example.invalid:4222\n")
 	if err := os.WriteFile(filepath.Join(registrationDir, "inventory-register-values.yaml"), registration, 0o600); err != nil {
-		return nil, "", fmt.Errorf("write inventory-only registration values: %w", err)
+		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("write inventory-only registration values: %w", err)
 	}
 	helmRoot := filepath.Join(copiedRepoRoot, ".helm")
 	for _, path := range []string{filepath.Join(helmRoot, "cache"), filepath.Join(helmRoot, "config"), filepath.Join(helmRoot, "data")} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
-			return nil, "", err
+			return nil, resolvedInventoryHelmSource{}, "", err
 		}
 	}
 	env := append([]string{}, os.Environ()...)
@@ -393,7 +506,7 @@ func prepareResolvedInventoryEnvironment(copiedRepoRoot string) ([]string, strin
 		"NCA_ID":           "inventory",
 		"OUTPUT_DIR":       registrationDir,
 	})
-	return env, ngcAPIKey, nil
+	return env, renderSource, ngcAPIKey, nil
 }
 
 func setResolvedInventoryEnvironment(env []string, values map[string]string) []string {
@@ -422,6 +535,8 @@ func collectResolvedInventoryState(
 	source stackSourceRelease,
 	state resolvedInventoryState,
 	env []string,
+	renderSource resolvedInventoryHelmSource,
+	publishedChartRepository string,
 	ngcAPIKey string,
 	runner resolvedInventoryCommandRunner,
 ) ([]helmfileRelease, map[string][]byte, error) {
@@ -443,7 +558,10 @@ func collectResolvedInventoryState(
 	if err != nil {
 		return nil, nil, err
 	}
-	releases, err := mergeAndResolveHelmfileReleases(copiedRepoRoot, stateFile, source, baseList, fullList, repositories)
+	if err := validateResolvedInventoryRenderRepository(repositories, renderSource); err != nil {
+		return nil, nil, err
+	}
+	releases, err := mergeAndResolveHelmfileReleases(copiedRepoRoot, stateFile, source, baseList, fullList, repositories, publishedChartRepository)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -517,6 +635,7 @@ func mergeAndResolveHelmfileReleases(
 	baseRaw []byte,
 	fullRaw []byte,
 	repositories map[string]helmfileRepository,
+	publishedChartRepository string,
 ) ([]helmfileRelease, error) {
 	base, err := decodeHelmfileReleaseList(baseRaw)
 	if err != nil {
@@ -547,7 +666,7 @@ func mergeAndResolveHelmfileReleases(
 		} else {
 			full[i].Enabled = false
 		}
-		if err := resolveHelmfileChartReference(copiedRepoRoot, stateFile, source, repositories, &full[i]); err != nil {
+		if err := resolveHelmfileChartReference(copiedRepoRoot, stateFile, source, repositories, publishedChartRepository, &full[i]); err != nil {
 			return nil, fmt.Errorf("resolve release %s chart: %w", full[i].Name, err)
 		}
 	}
@@ -562,6 +681,21 @@ func mergeAndResolveHelmfileReleases(
 		return nil, err
 	}
 	return parseHelmfileReleaseList(raw)
+}
+
+func validateResolvedInventoryRenderRepository(repositories map[string]helmfileRepository, source resolvedInventoryHelmSource) error {
+	repository, ok := repositories["nvcf"]
+	if !ok {
+		return fmt.Errorf("built Helmfile state has no nvcf repository")
+	}
+	if !repository.OCI {
+		return fmt.Errorf("built Helmfile nvcf repository must use OCI for release inventory rendering")
+	}
+	reference := strings.TrimPrefix(strings.TrimSuffix(repository.URL, "/"), "oci://")
+	if reference != source.reference() {
+		return fmt.Errorf("built Helmfile nvcf repository does not match NVCF_RELEASE_HELM_REGISTRY")
+	}
+	return nil
 }
 
 func parseHelmfileRepositories(raw []byte) (map[string]helmfileRepository, error) {
@@ -594,6 +728,7 @@ func resolveHelmfileChartReference(
 	stateFile string,
 	source stackSourceRelease,
 	repositories map[string]helmfileRepository,
+	publishedChartRepository string,
 	release *helmfileRelease,
 ) error {
 	chart := strings.TrimSpace(release.Chart)
@@ -638,6 +773,10 @@ func resolveHelmfileChartReference(
 	repository, ok := repositories[alias]
 	if !ok {
 		return fmt.Errorf("chart %q uses unknown repository alias %s", chart, alias)
+	}
+	if alias == "nvcf" {
+		release.Chart = publishedChartRepository + "/" + name
+		return nil
 	}
 	base := strings.TrimSuffix(repository.URL, "/")
 	if repository.OCI && !strings.Contains(base, "://") {

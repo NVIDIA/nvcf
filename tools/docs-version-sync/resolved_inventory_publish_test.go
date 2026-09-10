@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+const testPublishedChartRepository = "https://helm.example.test/nvcf"
 
 func TestVerifyResolvedInventoryCheckoutRequiresTaggedCleanStack(t *testing.T) {
 	repo := initTestGitRepo(t)
@@ -39,7 +42,7 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 		{Name: "required", Chart: "nvcf/required", Version: "1.0.0", Enabled: true, Installed: true},
 		{Name: "optional", Chart: "../charts/local", Enabled: true, Installed: true},
 	})
-	built := []byte("repositories:\n  - name: nvcf\n    url: nvcr.io/nvidia/nvcf\n    oci: true\n")
+	built := []byte("repositories:\n  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n")
 	repositories, err := parseHelmfileRepositories(built)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +53,7 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 		Commit:  strings.Repeat("a", 40),
 	}
 
-	releases, err := mergeAndResolveHelmfileReleases(repo, stateFile, source, base, full, repositories)
+	releases, err := mergeAndResolveHelmfileReleases(repo, stateFile, source, base, full, repositories, testPublishedChartRepository)
 	if err != nil {
 		t.Fatalf("mergeAndResolveHelmfileReleases failed: %v", err)
 	}
@@ -61,7 +64,7 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 	for _, release := range releases {
 		byName[release.Name] = release
 	}
-	if got := byName["required"].Chart; got != "oci://nvcr.io/nvidia/nvcf/required" {
+	if got := byName["required"].Chart; got != testPublishedChartRepository+"/required" {
 		t.Fatalf("required chart = %q", got)
 	}
 	optional := byName["optional"]
@@ -76,7 +79,9 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 
 func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
+	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
 	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath)), "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\n")
 	for _, state := range resolvedInventoryStates {
 		writeFile(t, filepath.Join(repo, filepath.FromSlash(state.path)), "releases: []\n")
 	}
@@ -107,6 +112,91 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	}
 	if runner.prepareCalls != len(resolvedInventoryStates) {
 		t.Fatalf("repository preparation calls = %d, want %d", runner.prepareCalls, len(resolvedInventoryStates))
+	}
+}
+
+func TestParseResolvedInventoryHelmSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    resolvedInventoryHelmSource
+		wantErr string
+	}{
+		{
+			name: "registry and nested repository",
+			raw:  " registry.example.test/team/charts/ ",
+			want: resolvedInventoryHelmSource{Registry: "registry.example.test", Repository: "team/charts"},
+		},
+		{name: "missing", wantErr: "is required"},
+		{name: "URL scheme", raw: "https://registry.example.test/team/charts", wantErr: "without credentials or a URL scheme"},
+		{name: "missing repository", raw: "registry.example.test", wantErr: "registry host and repository path"},
+		{name: "empty segment", raw: "registry.example.test/team//charts", wantErr: "invalid repository path"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseResolvedInventoryHelmSource(test.raw)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error = %v, want substring %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("source = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadResolvedInventoryConfig(t *testing.T) {
+	repo := t.TempDir()
+	configPath := filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath))
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\n")
+	config, err := loadResolvedInventoryConfig(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.PublishedChartRepository != testPublishedChartRepository {
+		t.Fatalf("published repository = %q", config.PublishedChartRepository)
+	}
+
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: oci://registry.example.test/charts\n")
+	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "resolved HTTPS repository") {
+		t.Fatalf("non-HTTPS repository error = %v", err)
+	}
+}
+
+func TestResolvedInventoryRepositoryCommandsAuthenticatesNVCFRegistry(t *testing.T) {
+	commands, err := resolvedInventoryRepositoryCommands(map[string]helmfileRepository{
+		"nvcf": {
+			Name: "nvcf", URL: "registry.example.test/release/charts", OCI: true,
+		},
+		"public": {
+			Name: "public", URL: "https://charts.example.test", OCI: false,
+		},
+		"unrelated-oci": {
+			Name: "unrelated-oci", URL: "registry.example.test/public/charts", OCI: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []resolvedInventoryHelmCommand{
+		{
+			Repository:    "nvcf",
+			Args:          []string{"registry", "login", "registry.example.test", "--username", "$oauthtoken", "--password-stdin"},
+			Authenticated: true,
+		},
+		{
+			Repository: "public",
+			Args:       []string{"repo", "add", "public", "https://charts.example.test", "--force-update"},
+		},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
 }
 
@@ -147,6 +237,9 @@ func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repos
 	if _, ok := repositories["nvcf"]; !ok {
 		runner.t.Fatal("nvcf repository was not prepared")
 	}
+	if !repositories["nvcf"].OCI {
+		runner.t.Fatal("nvcf repository was not prepared as OCI")
+	}
 	return nil
 }
 
@@ -165,7 +258,7 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	case "list":
 		return mustJSON(runner.t, releases), nil
 	case "build":
-		return []byte("repositories:\n  - name: nvcf\n    url: nvcr.io/nvidia/nvcf\n    oci: true\n"), nil
+		return []byte("repositories:\n  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"), nil
 	case "template":
 		runner.templateCalls++
 		outputDir := argumentAfter(runner.t, args, "--output-dir")

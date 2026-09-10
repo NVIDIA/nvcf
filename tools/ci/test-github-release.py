@@ -1411,6 +1411,10 @@ class GithubReleaseTest(unittest.TestCase):
         workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
         self.assertIn("actions/setup-go@v5", workflow)
         self.assertIn('HELMFILE_VERSION: "1.1.9"', workflow)
+        self.assertIn(
+            "NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}",
+            workflow,
+        )
         self.assertIn("Install inventory rendering tools", workflow)
         self.assertLess(
             workflow.index("Install inventory rendering tools"),

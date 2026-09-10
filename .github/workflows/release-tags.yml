@@ -147,5 +147,6 @@ jobs:
 
       - name: Validate tag and create release notes
         env:
+          NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
           NVCF_RELEASE_NGC_API_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
         run: ./tools/ci/github-release tag "$GITHUB_REF_NAME"
