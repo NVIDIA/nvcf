@@ -20,6 +20,7 @@ package mscontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	corev1 "k8s.io/api/core/v1"
@@ -88,10 +89,20 @@ func (r *Reconciler) buildMiniserviceMetadata(
 		ModelCacheInitEnv:             in.ModelCacheInitEnv,
 	}
 
-	meta.Labels, meta.Annotations = newGeneralObjectLabelsAndAnnotations(
+	labels, annotations := newGeneralObjectLabelsAndAnnotations(
 		r.FeatureFlagFetcher, ms, icmsReq,
 		r.ClusterRegion, r.ClusterName, in.FunctionName, in.TaskName, false,
 	)
+	if meta.Labels == nil {
+		meta.Labels = labels
+	} else {
+		maps.Copy(meta.Labels, labels)
+	}
+	if meta.Annotations == nil {
+		meta.Annotations = annotations
+	} else {
+		maps.Copy(meta.Annotations, annotations)
+	}
 
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 		meta.SchedulerName = kaischeduler.SchedulerName
