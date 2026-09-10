@@ -48,7 +48,9 @@ func TestResolveStackSourceSnapshotAcceptsExplicitSelector(t *testing.T) {
 			http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
 			return
 		}
-		fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
+		if _, err := fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit); err != nil {
+			t.Errorf("write GitHub response: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -69,6 +71,17 @@ func TestLoadStackSourceSnapshotRejectsMissingFile(t *testing.T) {
 	want := "read missing.yaml from stack source commit " + release.Commit
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("loadStackSourceSnapshot error = %v, want %q", err, want)
+	}
+}
+
+func TestLoadStackSourceSnapshotRejectsDirectory(t *testing.T) {
+	repo := initTestGitRepo(t)
+	release := commitTestStackSource(t, repo, "1.2.3", map[string]string{"deploy/stack.yaml": "version: 1.2.3\n"})
+
+	_, err := loadStackSourceSnapshot(repo, release, []string{"deploy"})
+	want := "read deploy from stack source commit " + release.Commit
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("loadStackSourceSnapshot error = %v, want directory rejection %q", err, want)
 	}
 }
 
@@ -131,6 +144,45 @@ func TestNormalizeStackSourcePathsRejectsInvalidInput(t *testing.T) {
 			_, err := normalizeStackSourcePaths(test.paths)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("normalizeStackSourcePaths error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateStackSourceReleaseRejectsInvalidIdentity(t *testing.T) {
+	valid := stackSourceRelease{
+		Version: "1.2.3",
+		Tag:     stackTagPrefix + "1.2.3",
+		Commit:  strings.Repeat("a", 40),
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*stackSourceRelease)
+		wantErr string
+	}{
+		{
+			name:    "invalid semantic version",
+			mutate:  func(release *stackSourceRelease) { release.Version = "release-1.2.3" },
+			wantErr: "is not a semantic version",
+		},
+		{
+			name:    "non-canonical tag",
+			mutate:  func(release *stackSourceRelease) { release.Tag = "v1.2.3" },
+			wantErr: "stack source tag must be " + stackTagPrefix + "1.2.3",
+		},
+		{
+			name:    "malformed commit",
+			mutate:  func(release *stackSourceRelease) { release.Commit = "abc123" },
+			wantErr: "full lowercase commit SHA",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			release := valid
+			test.mutate(&release)
+			if err := validateStackSourceRelease(release); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("validateStackSourceRelease error = %v, want %q", err, test.wantErr)
 			}
 		})
 	}

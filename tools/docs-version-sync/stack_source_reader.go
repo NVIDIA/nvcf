@@ -47,7 +47,7 @@ func loadStackSourceSnapshot(repoRoot string, release stackSourceRelease, source
 
 	files := make(map[string][]byte, len(paths))
 	for _, sourcePath := range paths {
-		body, err := gitOutput(repoRoot, "show", release.Commit+":"+sourcePath)
+		body, err := gitOutput(repoRoot, "cat-file", "blob", release.Commit+":"+sourcePath)
 		if err != nil {
 			return stackSourceSnapshot{}, fmt.Errorf("read %s from stack source commit %s: %w", sourcePath, release.Commit, err)
 		}
