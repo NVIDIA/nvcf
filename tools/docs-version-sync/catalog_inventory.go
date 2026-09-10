@@ -38,6 +38,7 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 	catalog := BuildCatalogFromArtifactsWithBase(inventory.Source.Version, artifacts, base)
+	retainIndependentResourceArtifacts(catalog)
 	if base != nil {
 		catalog.Stack.Name = base.Stack.Name
 		catalog.Stack.Registry = base.Stack.Registry
@@ -127,8 +128,17 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 			continue
 		}
 		artifacts[i].ID = matches[0].ID
-		artifacts[i].RepositoryName = matches[0].RepositoryName
 	}
+}
+
+func retainIndependentResourceArtifacts(catalog *Catalog) {
+	resources := catalog.SupplementalArtifacts[:0]
+	for _, artifact := range catalog.SupplementalArtifacts {
+		if artifact.Type == ArtifactTypeResource {
+			resources = append(resources, artifact)
+		}
+	}
+	catalog.SupplementalArtifacts = resources
 }
 
 func assignCatalogArtifactIDs(artifacts []Artifact) {

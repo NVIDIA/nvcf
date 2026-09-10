@@ -82,6 +82,8 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	base.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
 	base.Stack.Registry = "public-resources"
 	base.Denylist = append(base.Denylist, DenylistEntry{Name: "source-chart", Reason: "source-only test chart"})
+	base.Artifacts = append(base.Artifacts, Artifact{Name: "stale-service", Type: ArtifactTypeImage, Registry: "staging", Version: "0.9.0"})
+	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "4.5.6"})
 	base.Publications = []Publication{
 		{Name: "helm-nvcf-llm-request-router", Version: "1.2.3", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 		{Name: "nvca", Version: "6.7.8", Registry: "public-resources"},
@@ -94,6 +96,12 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	}
 	if _, found := catalog.findArtifact("source-chart"); found {
 		t.Fatal("custom-denylisted source-chart is present")
+	}
+	if _, found := catalog.findArtifact("stale-service"); found {
+		t.Fatal("artifact absent from the resolved inventory was retained")
+	}
+	if _, found := catalog.findArtifact("independent-resource"); !found {
+		t.Fatal("independent resource artifact was not preserved")
 	}
 	router, ok := catalog.findArtifact("helm-nvcf-llm-request-router")
 	if !ok {
