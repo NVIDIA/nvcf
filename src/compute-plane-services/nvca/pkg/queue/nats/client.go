@@ -176,7 +176,10 @@ func (c *client) ReceiveMessage(ctx context.Context, input queue.ReceiveMessageI
 		// Messages did arrive despite the error. Hand them to the caller instead
 		// of dropping work already taken off the stream; the next poll reports
 		// the condition if it persists.
-		log.WithError(err).Warn("nats fetch batch reported error with partial results")
+		log.WithError(err).
+			WithField("cluster_id", c.clusterID).
+			WithField("durable_name", durableName).
+			Warn("nats fetch batch reported error with partial results")
 	}
 
 	return outputs, nil

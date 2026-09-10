@@ -78,6 +78,8 @@ func TestRepeatedAuthErrorsDoNotCloseTheConnection(t *testing.T) {
 
 	assert.False(t, obs.seen(ConnStateClosed),
 		"the observer must not see a closed connection, or the alert on state==3 fires on a recoverable condition")
-	assert.NotEqual(t, ConnStateConnected, obs.first(),
+	got, ok := obs.first()
+	require.True(t, ok, "observer recorded nothing, so the check below would pass vacuously")
+	assert.NotEqual(t, ConnStateConnected, got,
 		"a rejected credential must not be reported as connected")
 }

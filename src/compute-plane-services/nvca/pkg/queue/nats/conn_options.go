@@ -84,7 +84,11 @@ func firstObserver(observer []ConnectionObserver) ConnectionObserver {
 // which meant a NATS drop produced no log line at all: the connection would go
 // away, polls would fail, and nothing said why. Logging is unconditional; the
 // observer is optional and drives metrics.
-func connectionHandlers(obs ConnectionObserver) []nats.Option {
+func connectionHandlers(clusterID string, obs ConnectionObserver) []nats.Option {
+	// These lines are aggregated across every cluster, so "NATS connection
+	// lost" on its own says nothing about who lost it. Bounded field: the
+	// cluster ID is fixed for the life of the process.
+	clog := log.WithField("cluster_id", clusterID)
 	return []nats.Option{
 		// Required by RetryOnFailedConnect, not merely symmetrical. When the
 		// first connection is deferred, nats.go queues ConnectedCB and not
@@ -97,19 +101,19 @@ func connectionHandlers(obs ConnectionObserver) []nats.Option {
 		// Deliberately does not call ReconnectSucceeded: this is the first
 		// connection, and counting it would make a clean start look like a flap.
 		nats.ConnectHandler(func(nc *nats.Conn) {
-			log.WithField("url", nc.ConnectedUrl()).Info("NATS connection established")
+			clog.WithField("url", nc.ConnectedUrl()).Info("NATS connection established")
 			if obs != nil {
 				obs.ConnectionStateChanged(connState(nc))
 			}
 		}),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			log.WithError(err).Warn("NATS connection lost; client is reconnecting")
+			clog.WithError(err).Warn("NATS connection lost; client is reconnecting")
 			if obs != nil {
 				obs.ConnectionStateChanged(connState(nc))
 			}
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			log.WithField("url", nc.ConnectedUrl()).Info("NATS connection re-established")
+			clog.WithField("url", nc.ConnectedUrl()).Info("NATS connection re-established")
 			if obs != nil {
 				obs.ConnectionStateChanged(connState(nc))
 				obs.ReconnectSucceeded()
@@ -118,7 +122,7 @@ func connectionHandlers(obs ConnectionObserver) []nats.Option {
 		nats.ClosedHandler(func(nc *nats.Conn) {
 			// Terminal. nats.go never reopens a closed connection, so this is
 			// the state that needs a restart and the one to alert on.
-			log.WithError(nc.LastError()).Error("NATS connection closed permanently; queue processing cannot recover without a restart")
+			clog.WithError(nc.LastError()).Error("NATS connection closed permanently; queue processing cannot recover without a restart")
 			if obs != nil {
 				obs.ConnectionStateChanged(ConnStateClosed)
 			}
@@ -135,7 +139,7 @@ func connect(natsURL, natsHostOverride, clusterID string, authOption nats.Option
 		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)),
 	}
 	opts = append(opts, resilienceOptions()...)
-	opts = append(opts, connectionHandlers(obs)...)
+	opts = append(opts, connectionHandlers(clusterID, obs)...)
 	opts = append(opts, natsHostOverrideOptions(natsURL, natsHostOverride)...)
 
 	nc, err := nats.Connect(natsURLOrDefault(natsURL), opts...)

@@ -70,13 +70,18 @@ func (o *recordingObserver) reconnectCount() int {
 	return o.reconnects
 }
 
-func (o *recordingObserver) first() ConnState {
+// first reports the earliest observed state, and whether anything was observed
+// at all. The bool is load-bearing: ConnState is a string, so an observer that
+// was never called returns "", and a NotEqual against a real state passes for
+// it. That is precisely the regression these tests exist to catch, so without
+// the flag they would stay green for an observer wired to nothing.
+func (o *recordingObserver) first() (ConnState, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if len(o.states) == 0 {
-		return ""
+		return "", false
 	}
-	return o.states[0]
+	return o.states[0], true
 }
 
 func newObservedClient(t *testing.T, obs ConnectionObserver) (*client, func()) {
@@ -108,7 +113,9 @@ func TestConnectionObserverSeedsConnectedState(t *testing.T) {
 	t.Cleanup(cl.nc.Close)
 	t.Cleanup(shutdown)
 
-	assert.Equal(t, ConnStateConnected, obs.first(),
+	got, ok := obs.first()
+	require.True(t, ok, "observer recorded no state at all")
+	assert.Equal(t, ConnStateConnected, got,
 		"a client that connected must report connected before anything else happens")
 }
 
@@ -130,7 +137,9 @@ func TestConnectionObserverReportsUnreachableBrokerAsNotConnected(t *testing.T) 
 	cl := qc.(*client)
 	t.Cleanup(cl.nc.Close)
 
-	assert.NotEqual(t, ConnStateConnected, obs.first(),
+	got, ok := obs.first()
+	require.True(t, ok, "observer recorded nothing, so the check below would pass vacuously")
+	assert.NotEqual(t, ConnStateConnected, got,
 		"a client that never reached the broker must not report connected")
 	assert.False(t, cl.ConnectionClosed(),
 		"still retrying, so this is not the state that warrants a restart")
@@ -168,7 +177,9 @@ func TestConnectionObserverReportsDelayedFirstConnect(t *testing.T) {
 	cl := qc.(*client)
 	t.Cleanup(cl.nc.Close)
 
-	require.NotEqual(t, ConnStateConnected, obs.first(),
+	seeded, ok := obs.first()
+	require.True(t, ok, "observer recorded nothing, so the check below would pass vacuously")
+	require.NotEqual(t, ConnStateConnected, seeded,
 		"must not claim connected before the broker exists")
 
 	srv := natstest.RunServer(&server.Options{
