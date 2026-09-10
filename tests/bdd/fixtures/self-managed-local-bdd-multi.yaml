@@ -69,15 +69,13 @@ openbao:
     # Single-node local cluster: hard anti-affinity would leave the 2nd replica Pending.
     replicas: 1
 
-# LLM gateway talks to nvcf-api over plaintext gRPC in local dev
-# (api.nvcf.svc.cluster.local:9090 has no TLS).
+# The bundled NVCF API serves plaintext gRPC on port 9090. This fixture relies
+# on the self-managed stack default for the gateway authentication hop.
 addons:
   llm:
     enabled: true
     gateway:
       replicaCount: 1
-      auth:
-        grpcInsecure: true
       metrics:
         serviceMonitor:
           enabled: false

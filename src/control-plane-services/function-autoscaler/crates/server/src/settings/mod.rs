@@ -32,7 +32,7 @@ pub use server_settings::{MetricsSettings, OtelResourceSettings, ServerSettings,
 pub struct AppSettings {
     #[serde(default)]
     pub server: ServerSettings,
-    #[serde(default)]
+    #[serde(default = "default_region")]
     pub region: String,
     pub secrets_path: Option<PathBuf>,
     #[serde(default)]
@@ -42,28 +42,28 @@ pub struct AppSettings {
     #[serde(default)]
     pub scaling: ScalingSettings,
     #[serde(default)]
-    pub tracing_key: String,
-    #[serde(default)]
     pub nvcf_api: NvcfApiSettings,
+}
+
+fn default_region() -> String {
+    std::env::var("AWS_REGION").unwrap_or_else(|_| "us-west-1".to_string())
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        let region = "us-west-1".to_string();
+        let region = default_region();
         let cassandra = CassandraSettings::default();
         let timeseries_db = TimeseriesDbSettings::default();
         let scaling = ScalingSettings::default();
-        let tracing_key = "tracing-key".to_string();
         let secrets_path = Some(PathBuf::from("local_env/vault/secrets.json"));
 
         AppSettings {
-            server: ServerSettings::default_with_service_name(env!("CARGO_PKG_NAME").to_string()),
+            server: ServerSettings::default(),
             region,
             secrets_path,
             cassandra,
             timeseries_db,
             scaling,
-            tracing_key,
             nvcf_api: NvcfApiSettings::default(),
         }
     }
@@ -77,31 +77,8 @@ pub struct AppCliArgs {
     pub config: Option<PathBuf>,
 }
 
-impl AppSettings {
-    pub fn new(
-        region: &str,
-        cassandra: CassandraSettings,
-        timeseries_db: TimeseriesDbSettings,
-        scaling: ScalingSettings,
-        tracing_key: &str,
-        secrets_path: &str,
-        nvcf_api: NvcfApiSettings,
-    ) -> Self {
-        AppSettings {
-            server: ServerSettings::default_with_service_name(env!("CARGO_PKG_NAME").to_string()),
-            region: region.to_string(),
-            secrets_path: Some(PathBuf::from(secrets_path)),
-            cassandra,
-            timeseries_db,
-            scaling,
-            tracing_key: tracing_key.to_string(),
-            nvcf_api,
-        }
-    }
-}
-
 /// Load settings from config file (if -c/--config given) and environment variables.
-/// Env vars use __ as separator, e.g. SERVER__METRICS__SERVICE_NAME=nvcf-autoscaler.
+/// Env vars use __ as separator, e.g. SCALING__LOOKBACK_SECONDS=90.
 pub fn parse_settings() -> (AppCliArgs, AppSettings) {
     let args = AppCliArgs::parse();
 
@@ -125,8 +102,8 @@ pub fn parse_settings() -> (AppCliArgs, AppSettings) {
         }
     };
 
-    // When no config file was provided, merge with defaults for missing values
-    if args.config.is_none() && settings.region.is_empty() {
+    // When no config file was provided, use the local default secrets path.
+    if args.config.is_none() {
         let defaults = AppSettings::default();
         if settings.secrets_path.is_none() {
             settings.secrets_path = defaults.secrets_path;
@@ -134,11 +111,6 @@ pub fn parse_settings() -> (AppCliArgs, AppSettings) {
         if settings.region.is_empty() {
             settings.region = defaults.region;
         }
-    }
-
-    // Default service name for metrics if not set
-    if settings.server.metrics.service_name.is_none() {
-        settings.server.metrics.service_name = Some(env!("CARGO_PKG_NAME").to_string());
     }
 
     // Inject OpenTelemetry resource attributes for all spans
@@ -166,12 +138,9 @@ pub fn parse_settings() -> (AppCliArgs, AppSettings) {
         ),
         (
             opentelemetry_semantic_conventions::resource::CLOUD_REGION,
-            std::env::var("AWS_REGION").unwrap_or_else(|_| "unknown".to_string()),
+            settings.region.clone(),
         ),
-        (
-            "host.dc",
-            std::env::var("AWS_REGION").unwrap_or_else(|_| "unknown".to_string()),
-        ),
+        ("host.dc", settings.region.clone()),
     ]);
     settings.server.resource = Some(resource);
 

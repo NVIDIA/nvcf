@@ -282,8 +282,8 @@ streamed chunk, carries `functionID/modelName` back to the caller.
 these requests. The LLM Gateway resolves the function from the model, so the
 gateway sets none of them, and a caller-supplied value is removed rather than
 forwarded: the mapping is what decides which function a caller reaches.
-`Authorization`, `NVCF-POLL-SECONDS`, and the caller's other headers pass
-through unchanged.
+Vanity Gateway passes `Authorization`, `NVCF-POLL-SECONDS`, and the caller's
+other headers to the LLM Gateway.
 
 Config validation rejects `functionType: LLM` outside the three supported
 sections, and rejects `usePexec`, `outgoingPathOverride`, and `sessionTimeout`
@@ -492,5 +492,9 @@ docker run --gpus all -p 8080:80 -v $PWD:/data --pull always ghcr.io/huggingface
 
 ## Known Limitations
 
+- For `functionType: LLM` models, the LLM Gateway does not forward inbound
+  headers on `/v1/chat/completions` to the function container. This includes
+  mapping `customHeaders` and the `NVCF-Shadow` marker. Do not rely on these
+  headers in the function container for this endpoint.
 - HTTP polling invocations that last longer than 20 minutes return a `504 Timeout` error when using OpenAI-compatible endpoints. This does not apply to Vanity URL routes.
 - Streaming invocations that last longer than 5 minutes return a `502 Timeout` error when using OpenAI-compatible endpoints. This does not apply to Vanity URL routes.

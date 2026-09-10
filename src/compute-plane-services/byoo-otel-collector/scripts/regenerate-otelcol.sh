@@ -28,7 +28,7 @@ set -euo pipefail
 # Pinned to the OpenTelemetry release line that all the receivers/
 # processors/etc. in otel-collector-build.yaml are tagged for. Bump in
 # lockstep with the gomod versions in that YAML.
-OTEL_BUILDER_VERSION="${OTEL_BUILDER_VERSION:-v0.157.0}"
+OTEL_BUILDER_VERSION="${OTEL_BUILDER_VERSION:-v0.160.0}"
 
 # OCB writes a temporary module under output/; keep parent go.work from
 # overriding that generated module's replacements.
