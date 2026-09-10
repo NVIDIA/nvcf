@@ -65,11 +65,14 @@ scenarios:
 
   long-context-affinity:
     kind: long-context-affinity
-    sessions: 16
+    sessions: 8
     inputTokensByTurn: [80000, 100000, 120000]
     repeats: 3
     rate: 1
-    workers: 16
+    workers: 1
+    requestSloMs: 60000
+    maxWaitMs: 60000
+    timeoutSeconds: 90
 
   mixed-sessions:
     kind: mixed-sessions

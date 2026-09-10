@@ -547,6 +547,9 @@ class Campaign:
         duration: int | None = None,
         requests: int | None = None,
         measured: bool = True,
+        request_slo_ms: int | None = None,
+        max_wait_ms: int | None = None,
+        timeout_seconds: int | None = None,
     ) -> SparkRun:
         if (duration is None) == (requests is None):
             raise LoadTestError("Spark run must set duration or requests")
@@ -570,15 +573,15 @@ class Campaign:
             "--stargate-routing-key",
             self.region["routingKey"],
             "--stargate-max-wait-ms",
-            str(defaults["maxWaitMs"]),
+            str(max_wait_ms or defaults["maxWaitMs"]),
             "--stargate-request-slo-ms",
-            str(defaults["requestSloMs"]),
+            str(request_slo_ms or defaults["requestSloMs"]),
             "--workers",
             str(workers),
             "--rate-limit",
             str(rate),
             "--timeout",
-            f"{defaults['timeoutSeconds']}s",
+            f"{timeout_seconds or defaults['timeoutSeconds']}s",
             "--max-tokens",
             str(defaults["maxTokens"]),
             "--warmup",
@@ -924,6 +927,9 @@ class Campaign:
                     workers=scenario["workers"],
                     workload=self.workloads[name]["main"],
                     requests=requests,
+                    request_slo_ms=scenario.get("requestSloMs"),
+                    max_wait_ms=scenario.get("maxWaitMs"),
+                    timeout_seconds=scenario.get("timeoutSeconds"),
                 )
                 delta = root / algorithm / "cache-stats.delta.json"
                 if self.completed_report(run) is not None and delta.is_file():

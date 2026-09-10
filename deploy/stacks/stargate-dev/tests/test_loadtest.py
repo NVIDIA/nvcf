@@ -42,6 +42,20 @@ class CanonicalSuiteTests(unittest.TestCase):
             ],
         )
         self.assertLess(LOADTEST.measured_minutes(suite, "canonical"), 120)
+        self.assertEqual(
+            suite["scenarios"]["long-context-affinity"],
+            {
+                "kind": "long-context-affinity",
+                "sessions": 8,
+                "inputTokensByTurn": [80_000, 100_000, 120_000],
+                "repeats": 3,
+                "rate": 1,
+                "workers": 1,
+                "requestSloMs": 60_000,
+                "maxWaitMs": 60_000,
+                "timeoutSeconds": 90,
+            },
+        )
 
     def test_generated_sessions_have_the_intended_affinity_keys(self) -> None:
         unique = list(LOADTEST.unique_prompts(3, 512))
@@ -136,6 +150,31 @@ class CanonicalSuiteTests(unittest.TestCase):
             self.assertNotIn("--stargate-load-balancing-algorithm", wait)
             override = power.index("--stargate-load-balancing-algorithm")
             self.assertEqual(power[override + 1], "powerOfN")
+
+            long_context = campaign.spark_run(
+                Path("long-context/wait-and-widen"),
+                "wait-and-widen",
+                scenario="long-context-affinity",
+                rate=1,
+                workers=1,
+                workload=workload,
+                requests=24,
+                request_slo_ms=60_000,
+                max_wait_ms=60_000,
+                timeout_seconds=90,
+            ).command
+            self.assertEqual(
+                long_context[long_context.index("--stargate-request-slo-ms") + 1],
+                "60000",
+            )
+            self.assertEqual(
+                long_context[long_context.index("--stargate-max-wait-ms") + 1],
+                "60000",
+            )
+            self.assertEqual(
+                long_context[long_context.index("--timeout") + 1],
+                "90s",
+            )
 
     def test_regional_health_waits_for_backend_registration(self) -> None:
         campaign = object.__new__(LOADTEST.Campaign)
