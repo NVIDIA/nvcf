@@ -76,6 +76,7 @@ type TranslateConfig struct {
 
 	ClusterRegion string `json:"clusterRegion"`
 	ClusterName   string `json:"clusterName"`
+	ClusterID     string `json:"clusterID,omitempty"`
 }
 
 func (c *TranslateConfig) Default() {

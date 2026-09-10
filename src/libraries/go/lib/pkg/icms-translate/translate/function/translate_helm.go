@@ -260,10 +260,17 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 		Name:  "INSTANCE_ID",
 		Value: instanceID,
 	}
+	infraEnvs := []corev1.EnvVar{instanceIDEnv}
+	if tcfg.ClusterID != "" {
+		infraEnvs = append(infraEnvs, corev1.EnvVar{
+			Name:  "NVCF_CLUSTER_ID",
+			Value: tcfg.ClusterID,
+		})
+	}
 	initEnvs := common.MapToEnv(allEnvSet)
-	initEnvs = append(initEnvs, instanceIDEnv)
+	initEnvs = append(initEnvs, infraEnvs...)
 	utilsEnvs := common.MapToEnv(allEnvSet)
-	utilsEnvs = append(utilsEnvs, instanceIDEnv)
+	utilsEnvs = append(utilsEnvs, infraEnvs...)
 
 	if hasSecretsAssertionToken {
 		essEnvs := []corev1.EnvVar{{

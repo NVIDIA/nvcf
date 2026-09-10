@@ -129,6 +129,12 @@ func newLLMRouterClientContainer(
 			Value: llmWorkerTokenPath,
 		},
 	)
+	if tcfg.ClusterID != "" {
+		envs = append(envs, corev1.EnvVar{
+			Name:  "NVCF_CLUSTER_ID",
+			Value: tcfg.ClusterID,
+		})
+	}
 
 	var upstreamHttpBaseUrl string
 	svcPort := allEnvSet["INFERENCE_PORT"]
