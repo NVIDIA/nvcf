@@ -26,7 +26,7 @@ SPEC.loader.exec_module(LOADTEST)
 
 
 class CanonicalSuiteTests(unittest.TestCase):
-    def test_canonical_suite_covers_capacity_and_cache_behavior_under_two_hours(
+    def test_canonical_suite_covers_capacity_and_cache_behavior(
         self,
     ) -> None:
         suite = LOADTEST.load_suite()
@@ -41,7 +41,7 @@ class CanonicalSuiteTests(unittest.TestCase):
                 "mixed-sessions",
             ],
         )
-        self.assertLess(LOADTEST.measured_minutes(suite, "canonical"), 120)
+        self.assertLess(LOADTEST.minimum_measured_minutes(suite, "canonical"), 120)
         self.assertEqual(
             suite["scenarios"]["long-context-affinity"],
             {

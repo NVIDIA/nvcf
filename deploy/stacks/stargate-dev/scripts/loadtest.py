@@ -1232,7 +1232,7 @@ class Campaign:
         self.stop_port_forward()
 
 
-def measured_minutes(suite: dict, suite_name: str) -> float:
+def minimum_measured_minutes(suite: dict, suite_name: str) -> float:
     seconds = 0.0
     for name in suite["suites"][suite_name]:
         scenario = suite["scenarios"][name]
@@ -1288,7 +1288,7 @@ def main() -> int:
         if args.list:
             for name, scenarios in suite["suites"].items():
                 print(
-                    f"{name}: {measured_minutes(suite, name):.1f} measured minutes: "
+                    f"{name}: at least {minimum_measured_minutes(suite, name):.1f} measured minutes at rate caps: "
                     f"{', '.join(scenarios)}"
                 )
             return 0
