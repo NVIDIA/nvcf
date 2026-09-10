@@ -205,6 +205,9 @@ nvct:
     cache-ttl: PT1S
   reval:
     base-url: http://localhost:9099
+  worker:
+    delegated-token:
+      enabled: true
   icms:
     base-url: http://localhost:9096
     allocator:

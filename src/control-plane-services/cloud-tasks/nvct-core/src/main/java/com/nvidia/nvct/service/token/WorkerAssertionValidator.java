@@ -52,6 +52,12 @@ public class WorkerAssertionValidator {
             "NCA id '%s': Does not match the one in the access token";
     private static final String MESG_MISMATCH_TASK_ID =
             "Task id '%s': Does not match the one in the access token";
+    private static final String MESG_DELEGATED_DISABLED =
+            "Task id '%s': Delegated worker tokens are not enabled";
+    private static final String MESG_DELEGATED_INACTIVE =
+            "Task id '%s': worker token not active";
+    private static final String MESG_DELEGATED_NOT_BOUND =
+            "Task id '%s': worker token not bound to requested task";
 
     private static final Duration VALIDITY = Duration.ofHours(3);
 
@@ -60,6 +66,7 @@ public class WorkerAssertionValidator {
     private final Clock clock;
     private final String issuer;
     private final String subject;
+    private final WorkerTokenIntrospectionService workerTokenIntrospectionService;
 
     public WorkerAssertionValidator(
             @Qualifier("notaryJwtDecoder") JwtDecoder jwtDecoder,
@@ -67,15 +74,58 @@ public class WorkerAssertionValidator {
             Clock clock,
             @Value("${nvct.notary.base-url}") String issuer,
             @Value("${spring.security.oauth2.client.registration.notary.client-id}")
-            String subject) {
+            String subject,
+            WorkerTokenIntrospectionService workerTokenIntrospectionService) {
         this.jwtDecoder = jwtDecoder;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
         this.issuer = issuer;
         this.subject = subject;
+        this.workerTokenIntrospectionService = workerTokenIntrospectionService;
     }
 
-    public void validate(String token, String ncaId, UUID taskId) {
+    /**
+     * Validates the worker's bearer token for the given task. The path is chosen by token
+     * shape: a delegated token (compact JWS with an {@code nvcf-icms:} audience) is
+     * introspected through ICMS and its task binding must equal the requested task; any other
+     * token is a legacy Notary assertion and is validated locally. A failure on one path never
+     * falls through to the other.
+     *
+     * @return true when the caller authenticated with a delegated token
+     */
+    public boolean validate(String token, String ncaId, UUID taskId) {
+        if (!WorkerTokenIntrospectionService.isDelegatedToken(token)) {
+            validateNotaryJwt(token, ncaId, taskId);
+            return false;
+        }
+        if (!workerTokenIntrospectionService.isEnabled()) {
+            var mesg = MESG_DELEGATED_DISABLED.formatted(taskId);
+            log.error(mesg);
+            throw new ForbiddenException(mesg);
+        }
+        var result = workerTokenIntrospectionService.introspect(token);
+        if (!result.isActive()) {
+            log.warn("worker token introspection returned active=false: {}", result.getError());
+            throw new ForbiddenException(MESG_DELEGATED_INACTIVE.formatted(taskId));
+        }
+        if (!ncaId.equals(result.getNcaId()) || !taskId.equals(parseTaskId(result.getTaskId()))) {
+            log.error("delegated worker token bound to task {} / nca {} presented for task {} / nca {}",
+                      result.getTaskId(), result.getNcaId(), taskId, ncaId);
+            throw new ForbiddenException(MESG_DELEGATED_NOT_BOUND.formatted(taskId));
+        }
+        log.debug("task worker authorized via delegated token, instance_id={}", result.getInstanceId());
+        return true;
+    }
+
+    private static UUID parseTaskId(String taskId) {
+        try {
+            return UUID.fromString(taskId);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            return null;
+        }
+    }
+
+    private void validateNotaryJwt(String token, String ncaId, UUID taskId) {
         var jwt = decode(token, taskId);
         validateIssuer(jwt, taskId);
         validateIssuedAt(jwt, taskId);
