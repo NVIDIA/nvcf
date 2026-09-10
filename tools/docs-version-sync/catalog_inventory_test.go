@@ -166,6 +166,26 @@ func TestBuildCatalogFromResolvedInventoryRejectsPinDrift(t *testing.T) {
 	}
 }
 
+func TestBuildCatalogFromResolvedInventoryValidatesStackPinsByType(t *testing.T) {
+	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
+	inventory := testCatalogResolvedInventory(t, source)
+	inventory.Artifacts = append(inventory.Artifacts, resolvedInventoryArtifact{
+		Type:       "container-image",
+		Name:       "helm-nvcf-llm-request-router",
+		Repository: "nvcr.io/nvidia/nvcf/helm-nvcf-llm-request-router",
+		Version:    "9.9.9",
+		Reference:  "nvcr.io/nvidia/nvcf/helm-nvcf-llm-request-router:9.9.9",
+		Sources:    []resolvedArtifactSource{{Plane: "control-plane", Release: "llm-request-router"}},
+	})
+	sort.Slice(inventory.Artifacts, func(i, j int) bool {
+		return compareResolvedInventoryArtifacts(inventory.Artifacts[i], inventory.Artifacts[j]) < 0
+	})
+
+	if _, err := buildCatalogFromResolvedStackInventory(inventory, stackSourceSnapshot{Release: source, Files: testCatalogPinSourceBytes()}, testCatalog()); err != nil {
+		t.Fatalf("typed stack pin validation rejected the matching chart: %v", err)
+	}
+}
+
 func TestCatalogArtifactsFromResolvedInventoryPreservesTypedIDs(t *testing.T) {
 	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
 	inventory := testCatalogResolvedInventory(t, source)
@@ -180,6 +200,8 @@ func TestCatalogArtifactsFromResolvedInventoryPreservesTypedIDs(t *testing.T) {
 	base := testCatalog()
 	base.Artifacts = []Artifact{
 		{ID: "request-router-chart", Name: "helm-nvcf-llm-request-router", Type: ArtifactTypeChart, Registry: "staging", Version: "1.0.0"},
+	}
+	base.SupplementalArtifacts = []Artifact{
 		{ID: "request-router-image", Name: "helm-nvcf-llm-request-router", Type: ArtifactTypeImage, Registry: "staging", Version: "1.0.0"},
 	}
 

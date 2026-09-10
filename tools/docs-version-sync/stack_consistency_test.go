@@ -424,7 +424,7 @@ func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pins := []effectiveStackPin{{artifact: "chart", path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
+	pins := []effectiveStackPin{{artifact: "chart", artifactType: ArtifactTypeChart, path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
 	digest, err := pinSourceDigest(map[string][]byte{sourcePath: []byte("version: 1.2.3\n")}, pins)
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +438,7 @@ func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
 			PinSources:         []string{sourcePath},
 			PinSourceDigest:    digest,
 		},
-		Artifacts: []Artifact{{Name: "chart", Version: "1.2.3"}},
+		Artifacts: []Artifact{{Name: "chart", Type: ArtifactTypeChart, Version: "1.2.3"}},
 	}
 
 	writeFile(t, filepath.Join(repo, sourcePath), "version: 9.9.9\n")
@@ -478,7 +478,7 @@ func TestValidateStackSourceSnapshotRequiresTagRef(t *testing.T) {
 			PinSourceDigest:    "sha256:" + strings.Repeat("0", 64),
 		},
 	}
-	pins := []effectiveStackPin{{artifact: "chart", path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
+	pins := []effectiveStackPin{{artifact: "chart", artifactType: ArtifactTypeChart, path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
 
 	err = validateStackSourceSnapshotWithPins(repo, catalog, pins)
 	if err == nil || !strings.Contains(err.Error(), "resolve stack source tag") {

@@ -117,9 +117,12 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 	if base == nil {
 		return
 	}
+	candidates := make([]Artifact, 0, len(base.Artifacts)+len(base.SupplementalArtifacts))
+	candidates = append(candidates, base.Artifacts...)
+	candidates = append(candidates, base.SupplementalArtifacts...)
 	for i := range artifacts {
 		var matches []Artifact
-		for _, candidate := range base.Artifacts {
+		for _, candidate := range candidates {
 			if candidate.Name == artifacts[i].Name && candidate.Type == artifacts[i].Type {
 				matches = append(matches, candidate)
 			}
@@ -195,13 +198,14 @@ func validateCatalogEffectiveStackPins(catalog *Catalog, sources map[string][]by
 	if err != nil {
 		return err
 	}
-	for name, version := range versions {
-		artifact, ok := catalog.findArtifact(name)
+	for _, pin := range effectiveStackPins {
+		version := versions[pin.artifact]
+		artifact, ok := catalog.findArtifactByNameAndType(pin.artifact, pin.artifactType)
 		if !ok {
-			return fmt.Errorf("resolved inventory is missing stack-pinned artifact %s", name)
+			return fmt.Errorf("resolved inventory is missing stack-pinned %s artifact %s", pin.artifactType, pin.artifact)
 		}
 		if artifact.Version != version {
-			return fmt.Errorf("resolved inventory %s version is %s, want tagged stack pin %s", name, artifact.Version, version)
+			return fmt.Errorf("resolved inventory %s version is %s, want tagged stack pin %s", pin.artifact, artifact.Version, version)
 		}
 	}
 	return nil
