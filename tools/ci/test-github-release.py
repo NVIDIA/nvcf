@@ -1221,21 +1221,36 @@ class GithubReleaseTest(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(root))
         tag = "deploy/stacks/self-managed/v1.2.3"
         metadata = self.stack_release_metadata()
-        calls = []
         self.github_release.repo_root = lambda: root
         self.github_release.load_metadata = lambda *_args: metadata
         self.github_release.github_release_mode = lambda: (True, False)
         self.github_release.tag_sha = lambda *_args: "c" * 40
-        self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
-        self.github_release.create_release = lambda *_args, **_kwargs: calls.append("release")
-        self.github_release.publish_resolved_stack_inventory = lambda *_args: (_ for _ in ()).throw(
-            RuntimeError("upload failed")
-        )
+        for created in (False, True):
+            with self.subTest(created=created):
+                calls = []
+                self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
 
-        with self.assertRaisesRegex(RuntimeError, "upload failed"):
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
-        self.assertEqual(calls, ["generate", "release"])
+                def create(*_args, **_kwargs):
+                    calls.append("release")
+                    return created
+
+                self.github_release.create_release = create
+                self.github_release.publish_resolved_stack_inventory = lambda *_args: (
+                    _ for _ in ()
+                ).throw(RuntimeError("upload failed"))
+                self.github_release.delete_release_after_inventory_failure = lambda *_args: calls.append(
+                    "delete"
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "upload failed"):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.github_release.tag_release(
+                            types.SimpleNamespace(tag=tag, metadata="metadata.json")
+                        )
+                expected = ["generate", "release"]
+                if created:
+                    expected.append("delete")
+                self.assertEqual(calls, expected)
 
     def test_resolved_stack_inventory_identity_must_match_release(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1292,6 +1307,55 @@ class GithubReleaseTest(unittest.TestCase):
             self.github_release.run = fake_different_run
             with self.assertRaisesRegex(SystemExit, "refusing to replace"):
                 self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+
+    def test_missing_release_inventory_is_uploaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "inventory.json"
+            asset.write_text("inventory\n")
+            calls = []
+
+            def fake_run(args, **_kwargs):
+                calls.append(args)
+                if args[:3] == ["gh", "release", "view"]:
+                    return ""
+                if args[:3] == ["gh", "release", "upload"]:
+                    return ""
+                raise AssertionError(f"unexpected call: {args}")
+
+            self.github_release.run = fake_run
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+
+            self.assertEqual(
+                calls,
+                [
+                    [
+                        "gh",
+                        "release",
+                        "view",
+                        "stack/v1.2.3",
+                        "--json",
+                        "assets",
+                        "--jq",
+                        ".assets[].name",
+                    ],
+                    ["gh", "release", "upload", "stack/v1.2.3", str(asset)],
+                ],
+            )
+
+    def test_incomplete_release_cleanup_uses_exact_tag(self):
+        calls = []
+        self.github_release.run = lambda args, **_kwargs: calls.append(args)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(
+                self.github_release.delete_release_after_inventory_failure(
+                    "deploy/stacks/self-managed/v1.2.3"
+                )
+            )
+        self.assertEqual(
+            calls,
+            [["gh", "release", "delete", "deploy/stacks/self-managed/v1.2.3", "--yes"]],
+        )
 
     def test_stack_tag_workflow_installs_pinned_inventory_tools(self):
         workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()

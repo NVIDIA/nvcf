@@ -41,13 +41,17 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 		{Name: "optional", Chart: "../charts/local", Enabled: true, Installed: true},
 	})
 	built := []byte("repositories:\n  - name: nvcf\n    url: nvcr.io/nvidia/nvcf\n    oci: true\n")
+	repositories, err := parseHelmfileRepositories(built)
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := stackSourceRelease{
 		Version: "1.2.3",
 		Tag:     stackTagPrefix + "1.2.3",
 		Commit:  strings.Repeat("a", 40),
 	}
 
-	releases, err := mergeAndResolveHelmfileReleases(repo, stateFile, source, base, full, built)
+	releases, err := mergeAndResolveHelmfileReleases(repo, stateFile, source, base, full, repositories)
 	if err != nil {
 		t.Fatalf("mergeAndResolveHelmfileReleases failed: %v", err)
 	}
@@ -105,6 +109,9 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	if runner.templateCalls != len(resolvedInventoryStates) {
 		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(resolvedInventoryStates))
 	}
+	if runner.prepareCalls != len(resolvedInventoryStates) {
+		t.Fatalf("repository preparation calls = %d, want %d", runner.prepareCalls, len(resolvedInventoryStates))
+	}
 }
 
 func TestReadRenderedReleaseManifestIsDeterministic(t *testing.T) {
@@ -131,7 +138,20 @@ func mustJSON(t *testing.T, value any) []byte {
 
 type fakeResolvedInventoryRunner struct {
 	t             *testing.T
+	prepareCalls  int
 	templateCalls int
+}
+
+func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repositories map[string]helmfileRepository, ngcAPIKey string) error {
+	runner.t.Helper()
+	runner.prepareCalls++
+	if ngcAPIKey != "test-api-key" {
+		runner.t.Fatalf("NGC API key = %q", ngcAPIKey)
+	}
+	if _, ok := repositories["nvcf"]; !ok {
+		runner.t.Fatal("nvcf repository was not prepared")
+	}
+	return nil
 }
 
 func (runner *fakeResolvedInventoryRunner) Output(_ string, _ []string, args ...string) ([]byte, error) {

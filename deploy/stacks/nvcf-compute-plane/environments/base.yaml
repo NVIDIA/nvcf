@@ -6,7 +6,7 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
-  # Set url to use an HTTP Helm repository. Otherwise, set registry and
+  # Set url to use an HTTPS Helm repository. Otherwise, set registry and
   # repository to use OCI.
   helm:
     sources:

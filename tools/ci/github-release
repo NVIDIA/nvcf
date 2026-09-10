@@ -670,6 +670,19 @@ def publish_resolved_stack_inventory(tag, asset_path):
     print(f"[github-release] GitHub release {tag} already has the identical {asset_path.name}")
 
 
+def delete_release_after_inventory_failure(tag):
+    try:
+        run(["gh", "release", "delete", tag, "--yes"])
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"[github-release] WARNING: failed to remove incomplete GitHub release {tag}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    print(f"[github-release] removed incomplete GitHub release {tag}")
+    return True
+
+
 def repo_slug():
     slug = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if slug:
@@ -1242,8 +1255,13 @@ def tag_release(args):
     with tempfile.TemporaryDirectory(prefix="nvcf-resolved-stack-inventory-") as tmp:
         asset_path = Path(tmp) / asset_name
         generate_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path)
-        create_release(tag, tag, notes, draft=draft, dry_run=False)
-        publish_resolved_stack_inventory(tag, asset_path)
+        created = create_release(tag, tag, notes, draft=draft, dry_run=False)
+        try:
+            publish_resolved_stack_inventory(tag, asset_path)
+        except (Exception, SystemExit):
+            if created:
+                delete_release_after_inventory_failure(tag)
+            raise
 
 
 def fetch_semantic_release_notes(root):
