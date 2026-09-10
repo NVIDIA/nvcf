@@ -13,6 +13,7 @@ dockerfile="${subtree_dir}/Dockerfile"
 runtime_dockerfile="${repo_dir}/infra/cassandra/Dockerfile"
 init_script="${repo_dir}/deploy/helm/cassandra/helm/scripts/initdb.sh"
 init_hook="${repo_dir}/deploy/helm/cassandra/helm/templates/hook-post-01-initdb.yaml"
+migration_hook="${repo_dir}/deploy/helm/cassandra/helm/templates/hook-post-02-migrations.yaml"
 legacy_rbac_cleanup_hook="${repo_dir}/deploy/helm/cassandra/helm/templates/hook-pre-00-cleanup-legacy-rbac.yaml"
 statefulset="${repo_dir}/deploy/helm/cassandra/helm/templates/statefulset.yaml"
 init_cql_hook="${repo_dir}/deploy/helm/cassandra/helm/templates/hook-pre-01-initdb-configmap.yaml"
@@ -119,6 +120,58 @@ if ! grep -F -q 'MIGRATE_MAX_RETRIES=${MIGRATE_MAX_RETRIES:-8}' "${script}" ||
   fail "execute_sqls.sh must retry transient migrate connection failures per keyspace"
 fi
 
+percent_encode_function=$(sed -n '/^percent_encode()/,/^}/p' "${script}")
+encoded_credentials=$(
+  sh -c "${percent_encode_function}
+percent_encode \"\$1\"" sh 'user+name&role=admin#100%'
+)
+if [ "${encoded_credentials}" != 'user%2Bname%26role%3Dadmin%23100%25' ]; then
+  fail "execute_sqls.sh does not percent-encode reserved characters in Cassandra credentials"
+fi
+
+if ! grep -F -q 'username=${CASSANDRA_USER_ENCODED}&password=${CASSANDRA_PASSWORD_ENCODED}' "${script}"; then
+  fail "execute_sqls.sh must use percent-encoded credentials in the migrate DSN"
+fi
+
+migration_function=$(sed -n '/^run_migrations_for_keyspace()/,/^}/p' "${script}")
+fake_bin=$(mktemp -d)
+fake_migrate_calls="${fake_bin}/calls"
+printf '%s\n' '#!/bin/sh' \
+  'calls=$(cat "$FAKE_MIGRATE_CALLS")' \
+  'calls=$((calls + 1))' \
+  'printf "%s\n" "$calls" > "$FAKE_MIGRATE_CALLS"' \
+  'echo "Dirty database version 7. Fix and force version."' \
+  'exit 1' > "${fake_bin}/migrate"
+chmod +x "${fake_bin}/migrate"
+printf '0\n' > "${fake_migrate_calls}"
+
+dirty_output=$(
+  PATH="${fake_bin}:${PATH}" \
+    FAKE_MIGRATE_CALLS="${fake_migrate_calls}" \
+    MIGRATE_MAX_RETRIES=8 \
+    MIGRATE_RETRY_SECONDS=0 \
+    CASSANDRA_HOSTS=host \
+    CASSANDRA_PORT=9042 \
+    CASSANDRA_USER_ENCODED=user \
+    CASSANDRA_PASSWORD_ENCODED=password \
+    MIGRATE_CONSISTENCY=LOCAL_QUORUM \
+    MIGRATE_PROTOCOL=4 \
+    MIGRATE_TIMEOUT=2m \
+    MIGRATE_CONNECT_TIMEOUT=30s \
+    MIGRATE_DISABLE_HOST_LOOKUP=true \
+    sh -c "${migration_function}
+run_migrations_for_keyspace /tmp/test_keyspace" 2>&1
+)
+dirty_status=$?
+if [ "${dirty_status}" -eq 0 ]; then
+  fail "execute_sqls.sh accepts a dirty migration state"
+fi
+if [ "$(cat "${fake_migrate_calls}")" -ne 1 ] ||
+  printf '%s\n' "${dirty_output}" | grep -F -q 'retrying in'; then
+  fail "execute_sqls.sh retries a deterministic dirty migration failure"
+fi
+rm -rf "${fake_bin}"
+
 if grep -Eq '(^|[[:space:]])kubectl([[:space:]]|$)' "${dockerfile}" "${init_script}" "${init_hook}" "${legacy_rbac_cleanup_hook}"; then
   fail "Cassandra init and migration runtime must not depend on kubectl"
 fi
@@ -154,7 +207,7 @@ fi
 
 if ! grep -F -q 'CASSANDRA_READY_HOSTS' "${init_script}" ||
   ! grep -F -q 'CASSANDRA_READY_HOSTS' "${init_hook}" ||
-  ! grep -F -q 'CASSANDRA_READY_HOSTS' "${repo_dir}/deploy/helm/cassandra/helm/templates/hook-post-02-migrations.yaml" ||
+  ! grep -F -q 'CASSANDRA_READY_HOSTS' "${migration_hook}" ||
   ! grep -F -q 'CASSANDRA_HOSTS' "${init_hook}" ||
   ! grep -F -q 'CASSANDRA_CQLSH_COMMAND_TIMEOUT="${CASSANDRA_CQLSH_COMMAND_TIMEOUT:-45s}"' "${init_script}" ||
   ! grep -F -q 'timeout "$CASSANDRA_CQLSH_COMMAND_TIMEOUT"' "${init_script}" ||
@@ -162,8 +215,19 @@ if ! grep -F -q 'CASSANDRA_READY_HOSTS' "${init_script}" ||
   fail "initdb.sh must use direct cqlsh connectivity from Helm-rendered Cassandra hosts"
 fi
 
-if ! grep -F -q 'cassandra.firstReplicaHost' "${repo_dir}/deploy/helm/cassandra/helm/templates/hook-post-02-migrations.yaml"; then
-  fail "migration hook must use a stable StatefulSet pod DNS contact point instead of the load-balanced Service"
+if ! grep -F -q 'cassandra.firstReplicaHost' "${init_hook}" ||
+  ! grep -F -q 'cassandra.firstReplicaHost' "${migration_hook}"; then
+  fail "Cassandra hooks must use a stable StatefulSet pod DNS contact point instead of the load-balanced Service"
+fi
+
+if ! grep -F -q 'activeDeadlineSeconds: {{ .Values.cassandra.hooks.initializeCluster.activeDeadlineSeconds }}' "${init_hook}" ||
+  ! grep -F -q 'activeDeadlineSeconds: {{ .Values.cassandra.hooks.migrations.activeDeadlineSeconds }}' "${migration_hook}"; then
+  fail "Cassandra hook Jobs must enforce their configured active deadlines"
+fi
+if ! grep -F -q 'backoffLimit: {{ .Values.cassandra.hooks.initializeCluster.backoffLimit }}' "${init_hook}" ||
+  ! grep -F -q 'backoffLimit: {{ .Values.cassandra.hooks.migrations.backoffLimit }}' "${migration_hook}" ||
+  ! grep -F -q 'restartPolicy: Never' "${migration_hook}"; then
+  fail "Cassandra hook retries must be bounded by their scripts and Job specifications"
 fi
 
 if ! grep -F -q 'wait_for_cassandra_hosts_stable "default"' "${init_script}" ||
@@ -191,7 +255,7 @@ fi
 for template in \
   "${statefulset}" \
   "${init_hook}" \
-  "${repo_dir}/deploy/helm/cassandra/helm/templates/hook-post-02-migrations.yaml" \
+  "${migration_hook}" \
   "${legacy_rbac_cleanup_hook}"
 do
   if ! grep -F -q '.Values.cassandra.containerSecurityContext' "${template}"; then

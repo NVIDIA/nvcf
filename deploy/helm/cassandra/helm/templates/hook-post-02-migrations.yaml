@@ -25,6 +25,8 @@ metadata:
     helm.sh/hook-weight: "2"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
+  activeDeadlineSeconds: {{ .Values.cassandra.hooks.migrations.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.cassandra.hooks.migrations.backoffLimit }}
   template:
     {{- with .Values.cassandra.hooks.migrations.podAnnotations }}
     metadata:
@@ -40,7 +42,7 @@ spec:
       schedulingGates:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      restartPolicy: OnFailure
+      restartPolicy: Never
       containers:
         - name: nvcf-cassandra-migrations
           image: "{{ .Values.cassandra.migrations.image.registry }}/{{ .Values.cassandra.migrations.image.repository }}:{{ .Values.cassandra.migrations.image.tag }}"

@@ -31,6 +31,8 @@ metadata:
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
+  activeDeadlineSeconds: {{ .Values.cassandra.hooks.initializeCluster.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.cassandra.hooks.initializeCluster.backoffLimit }}
   template:
     {{- with .Values.cassandra.hooks.initializeCluster.podAnnotations }}
     metadata:
@@ -61,7 +63,7 @@ spec:
             - /scripts/initdb.sh
           env:
             - name: CASSANDRA_HOSTS
-              value: "{{ $fullname }}-0.{{ $fullname }}-headless.{{ $namespace }}.svc.cluster.local"
+              value: {{ include "cassandra.firstReplicaHost" . | quote }}
             - name: CASSANDRA_READY_HOSTS
               value: {{ include "cassandra.replicaHosts" . | quote }}
             - name: CASSANDRA_PORT

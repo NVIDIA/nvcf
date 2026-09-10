@@ -152,21 +152,44 @@ done
 
 echo "SQL files pre-processed successfully"
 
+percent_encode() {
+  printf '%s' "$1" | python3 -c \
+    'import sys; from urllib.parse import quote; print(quote(sys.stdin.read(), safe=""))'
+}
+
+{ set +x; } 2>/dev/null
+CASSANDRA_USER_ENCODED=$(percent_encode "$CASSANDRA_USER") || {
+  echo "Failed to percent-encode the Cassandra username" >&2
+  exit 1
+}
+CASSANDRA_PASSWORD_ENCODED=$(percent_encode "$CASSANDRA_PASSWORD") || {
+  echo "Failed to percent-encode the Cassandra password" >&2
+  exit 1
+}
+
 run_migrations_for_keyspace() {
   keyspace_dir="$1"
   migration_table_name=$(basename "$keyspace_dir")
   attempt=1
 
   while [ "$attempt" -le "$MIGRATE_MAX_RETRIES" ]; do
-    migrate \
+    migrate_output=$(migrate \
       -path "$keyspace_dir" \
-      -database "cassandra://${CASSANDRA_HOSTS}:${CASSANDRA_PORT}/schema_migrations?x-multi-statement=true&x-migrations-table=${migration_table_name}&username=${CASSANDRA_USER}&password=${CASSANDRA_PASSWORD}&consistency=${MIGRATE_CONSISTENCY}&protocol=${MIGRATE_PROTOCOL}&timeout=${MIGRATE_TIMEOUT}&connect-timeout=${MIGRATE_CONNECT_TIMEOUT}&disable-host-lookup=${MIGRATE_DISABLE_HOST_LOOKUP}" \
-      up
+      -database "cassandra://${CASSANDRA_HOSTS}:${CASSANDRA_PORT}/schema_migrations?x-multi-statement=true&x-migrations-table=${migration_table_name}&username=${CASSANDRA_USER_ENCODED}&password=${CASSANDRA_PASSWORD_ENCODED}&consistency=${MIGRATE_CONSISTENCY}&protocol=${MIGRATE_PROTOCOL}&timeout=${MIGRATE_TIMEOUT}&connect-timeout=${MIGRATE_CONNECT_TIMEOUT}&disable-host-lookup=${MIGRATE_DISABLE_HOST_LOOKUP}" \
+      up 2>&1)
     migrate_status=$?
+    printf '%s\n' "$migrate_output"
 
     if [ "$migrate_status" -eq 0 ]; then
       return 0
     fi
+
+    case "$migrate_output" in
+      *"Dirty database version "*". Fix and force version."*)
+        echo "Migration state is dirty for ${keyspace_dir}; refusing to retry automatically" >&2
+        return "$migrate_status"
+        ;;
+    esac
 
     if [ "$attempt" -eq "$MIGRATE_MAX_RETRIES" ]; then
       return "$migrate_status"

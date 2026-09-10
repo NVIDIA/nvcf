@@ -183,6 +183,10 @@ cassandra:
       # gossip, so re-running init against the new datacenter is unnecessary and
       # can race the existing schema. See the datacenter-expansion upgrade guide.
       enabled: true
+      # Bound the hook independently of the invoking Helm client's timeout.
+      # The script handles transient CQL retries within this deadline.
+      activeDeadlineSeconds: 900
+      backoffLimit: 0
       podAnnotations: {}
       schedulingGates: []
       resources:
@@ -199,6 +203,10 @@ cassandra:
       # datacenter that is not yet in every keyspace's replication can re-apply
       # them from an earlier version. Leave true for normal installs.
       enabled: true
+      # The migration script retries transient failures itself. Do not have the
+      # Job controller rerun deterministic or dirty migration failures.
+      activeDeadlineSeconds: 900
+      backoffLimit: 0
       podAnnotations: {}
       schedulingGates: []
       resources:

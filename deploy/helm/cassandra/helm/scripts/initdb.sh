@@ -47,28 +47,6 @@ probe_cqlsh() {
   run_cqlsh "$host" "$user" "$password" -e "SELECT key FROM system.local;" > /dev/null 2>&1
 }
 
-wait_for_cassandra_host() {
-  local host="$1"
-  local attempt=1
-
-  while [ "$attempt" -le "$CASSANDRA_INIT_MAX_RETRIES" ]; do
-    if probe_cqlsh "$host" "$CASSANDRA_USER" "$CASSANDRA_PASSWORD" ||
-      probe_cqlsh "$host" "$DEFAULT_CASSANDRA_USER" "$DEFAULT_CASSANDRA_PASSWORD"; then
-      echo "Cassandra cqlsh is available on ${host}:${CASSANDRA_PORT}"
-      return 0
-    fi
-
-    if [ "$attempt" -eq "$CASSANDRA_INIT_MAX_RETRIES" ]; then
-      echo "Timed out waiting for Cassandra cqlsh on ${host}:${CASSANDRA_PORT}"
-      return 1
-    fi
-
-    echo "Waiting for Cassandra cqlsh on ${host}:${CASSANDRA_PORT} (${attempt}/${CASSANDRA_INIT_MAX_RETRIES})"
-    attempt=$((attempt + 1))
-    sleep "$CASSANDRA_INIT_RETRY_SECONDS"
-  done
-}
-
 wait_for_cassandra_hosts_stable() {
   local mode="$1"
   local stable_attempts=0
