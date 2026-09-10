@@ -59,6 +59,7 @@ profile_releases_csv() {
     paste -sd, -
 }
 
+# render_monitors renders default monitor manifests for an observability profile.
 render_monitors() {
   local profile="$1"
   local output_name="$2"
