@@ -31,7 +31,8 @@ RUN mkdir /tmp/java-libraries && \
       case "${checksum}" in \#*|'') continue ;; esac; \
       destination="/tmp/java-libraries/${artifact_path##*/}"; \
       curl -fsSLo "${destination}" \
-        --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+        --retry 5 --retry-all-errors --retry-delay 5 \
+        --retry-max-time 120 --max-time 120 \
         "${MAVEN_REPOSITORY_BASE%/}/${artifact_path#/}" && \
       printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c - || exit 1; \
     done < /tmp/java-libraries.lock

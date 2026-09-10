@@ -100,7 +100,8 @@ while read -r artifact checksum; do
     [ -n "${artifact}" ] || continue
     jar=${downloads_dir}/${artifact}-${NETTY_VERSION}.jar
     curl -fsSLo "${jar}" \
-        --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 120 \
+        --retry 5 --retry-all-errors --retry-delay 5 \
+        --retry-max-time 120 --max-time 120 \
         "${MAVEN_REPOSITORY_BASE%/}/io/netty/${artifact}/${NETTY_VERSION}/${artifact}-${NETTY_VERSION}.jar"
     printf '%s  %s\n' "${checksum}" "${jar}" | sha256sum -c -
 
