@@ -681,8 +681,19 @@ class Campaign:
                 )
                 processes.append(process)
                 self.children.append(process)
-            while any(process.poll() is None for process in processes):
-                if any(process.poll() not in (None, 0) for process in processes):
+            while True:
+                if (
+                    self.port_forward is not None
+                    and self.port_forward.poll() is not None
+                ):
+                    raise LoadTestError(
+                        "Stargate port-forward exited during the run; "
+                        "the interrupted arm is not valid for comparison"
+                    )
+                statuses = [process.poll() for process in processes]
+                if all(status is not None for status in statuses):
+                    break
+                if any(status not in (None, 0) for status in statuses):
                     raise LoadTestError("a concurrent Spark process failed")
                 if (
                     time.monotonic() - started

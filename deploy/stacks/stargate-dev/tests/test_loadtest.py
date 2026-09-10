@@ -276,6 +276,43 @@ class CanonicalSuiteTests(unittest.TestCase):
             self.assertEqual(environment["KUBECTL_PORT_FORWARD_WEBSOCKETS"], "true")
             campaign.port_forward_log.close()
 
+    def test_dead_forwarder_never_produces_a_completed_arm(self) -> None:
+        for spark_status in (None, 0):
+            with (
+                self.subTest(spark_status=spark_status),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                campaign = object.__new__(LOADTEST.Campaign)
+                campaign.output = Path(directory)
+                campaign.token = "test-token"
+                campaign.state = {}
+                campaign.children = []
+                campaign.port_forward = mock.Mock()
+                campaign.port_forward.poll.return_value = 1
+                run = LOADTEST.SparkRun(
+                    directory=campaign.output / "arm",
+                    command=["spark"],
+                    expected_seconds=1,
+                    metadata={},
+                )
+                process = mock.Mock()
+                process.poll.return_value = spark_status
+                with (
+                    mock.patch.object(campaign, "save_state"),
+                    mock.patch.object(campaign, "stop_processes") as stop,
+                    mock.patch.object(
+                        LOADTEST.subprocess, "Popen", return_value=process
+                    ),
+                    self.assertRaisesRegex(
+                        LOADTEST.LoadTestError, "port-forward exited"
+                    ),
+                ):
+                    campaign.execute([run])
+                stop.assert_called_once_with([process])
+                metadata = json.loads((run.directory / "metadata.json").read_text())
+                self.assertNotEqual(metadata["status"], "complete")
+                self.assertFalse((run.directory / "spark.txt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
