@@ -270,7 +270,11 @@ func TestResourceProcessorInsertsInstanceID(t *testing.T) {
 				}
 
 				var deletesInstanceID, insertsInstanceID bool
+				deleted := map[string]bool{}
 				for _, attr := range cfg.Processors.Resource.Attributes {
+					if attr.Action == "delete" {
+						deleted[attr.Key] = true
+					}
 					if attr.Key == "service.instance.id" && attr.Action == "delete" {
 						deletesInstanceID = true
 					}
@@ -281,6 +285,14 @@ func TestResourceProcessorInsertsInstanceID(t *testing.T) {
 				}
 				assert.True(t, deletesInstanceID, "resource processor must still delete service.instance.id")
 				assert.True(t, insertsInstanceID, "resource processor must insert instance_id so target_info is unique")
+
+				// This renderer has no empty-value filter, so the attributes the
+				// Prometheus receiver can leave empty must be deleted outright or
+				// target_info exports an empty label and the write is rejected.
+				for _, key := range []string{"server.port", "url.scheme"} {
+					assert.True(t, deleted[key],
+						"resource processor must delete %q, which CreateResource can write empty", key)
+				}
 			})
 		}
 	}

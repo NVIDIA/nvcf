@@ -121,6 +121,18 @@ processors:
       - key: instance_id
         action: insert
         value: ${env:NVCF_INSTANCE_ID:-unknown}
+      # The Prometheus receiver writes these two unconditionally, unlike
+      # server.address which it guards, so a scrape target whose instance label
+      # carries no port yields server.port="". target_info would then export an
+      # empty label and the receiver rejects the whole write request. The
+      # byoo-otel-collector renderer filters empty values with an OTTL lambda
+      # instead, but that needs collector v0.155.0 and a feature gate this
+      # shared renderer cannot rely on, so it deletes them outright. Neither
+      # carries information a consumer selects on.
+      - key: server.port
+        action: delete
+      - key: url.scheme
+        action: delete
   attributes/add-metadata:
     actions:
 {{ attributes "non-gfn" . | indent 6 }}

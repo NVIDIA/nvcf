@@ -151,6 +151,10 @@ processors:
       - action: insert
         key: instance_id
         value: ${env:NVCF_INSTANCE_ID:-unknown}
+      - action: delete
+        key: server.port
+      - action: delete
+        key: url.scheme
 extensions:
   basicauth/GRAFANA_CLOUD-Grafana_prd-metrics:
     client_auth:
