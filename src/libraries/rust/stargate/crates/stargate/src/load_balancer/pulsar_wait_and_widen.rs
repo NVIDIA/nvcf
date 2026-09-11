@@ -52,13 +52,14 @@ impl PulsarWaitAndWidenLoadBalancer {
             })
             .collect::<Vec<_>>();
         self.wait_and_widen
-            .choose_from_candidate_indices(
+            .decide_from_candidate_indices(
                 request,
                 candidates,
                 &eligible,
                 1.0,
                 request.received_at.elapsed(),
             )
+            .selected()
             .map(|choice| {
                 let rank_depth = ranked_indices
                     .iter()

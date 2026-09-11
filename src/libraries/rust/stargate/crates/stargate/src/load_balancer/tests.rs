@@ -3151,3 +3151,43 @@ fn wait_and_widen_affinity_discount_with_ignore_queue() {
 fn wait_and_widen_affinity_discount_with_ignore_prefill() {
     assert_affinity_discount_survives_bucket_flags(false, true);
 }
+
+#[test]
+fn wait_and_widen_affinity_wait_preserves_the_next_bucket_wakeup() {
+    let target = target();
+    let request = request(&target, Some("prefix"), Some(100));
+    let candidates = [
+        work_candidate("full-first-bucket", 10, 1_000.0, 0).with_stats(|stats| {
+            stats.max_engine_concurrency = 1;
+            stats.num_running_queries = 1;
+        }),
+        work_candidate("available-next-bucket", 50, 1_000.0, 0).with_stats(|stats| {
+            stats.max_engine_concurrency = 1;
+        }),
+    ];
+    for (hold_ms, expected_waits) in [(200, [(0, 10), (5, 5)]), (5, [(0, 5), (5, 5)])] {
+        let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+            settings.cache_affinity_backend_selection_count = Some(2);
+            settings.cache_affinity_wait_ms = Some(hold_ms);
+            settings.ttft_bucket_size_ms = Some(20);
+            settings.next_bucket_unlock_factor = Some(0.25);
+        }));
+        let lb = WaitAndWidenLoadBalancer::new(config);
+        // The available affine bucket unlocks at (150 - 110) * 0.25 = 10 ms.
+        // A shorter hold opens global routing first; the affine hint still wins
+        // when its bucket unlocks before the next global bucket.
+        for (elapsed_ms, expected_wait_ms) in expected_waits {
+            assert_eq!(
+                lb.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
+                LoadBalancerDecision::Wait(Duration::from_millis(expected_wait_ms)),
+                "hold={hold_ms} ms, elapsed={elapsed_ms} ms",
+            );
+        }
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::from_millis(10))
+            .selected()
+            .expect("the affine bucket should be unlocked");
+        assert_eq!(choice.candidate_index, 1);
+        assert_eq!(choice.rank_depth, 1);
+    }
+}

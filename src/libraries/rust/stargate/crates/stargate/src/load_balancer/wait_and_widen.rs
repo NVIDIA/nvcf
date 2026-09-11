@@ -182,32 +182,47 @@ impl WaitAndWidenLoadBalancer {
             // Every attempt checks affinity first, even after the hold expires.
             // Affinity uses the same TTFT buckets, admission and comparator as
             // global routing. A busy ring primary must not bypass those rules.
-            if let Some(choice) = self.choose_from_candidate_indices(
+            let affinity_bucket_wait = match self.decide_from_candidate_indices(
                 request,
                 candidates,
                 &affinity_indices,
                 self.config.cache_affinity_input_tokens_scale,
                 elapsed,
             ) {
-                return LoadBalancerDecision::Selected(choice);
-            }
+                LoadBalancerDecision::Selected(choice) => {
+                    return LoadBalancerDecision::Selected(choice);
+                }
+                LoadBalancerDecision::Wait(delay) => Some(delay),
+                LoadBalancerDecision::Unavailable => None,
+            };
             if elapsed < self.config.cache_affinity_wait {
-                return LoadBalancerDecision::Wait(self.config.cache_affinity_wait - elapsed);
+                let remaining = self.config.cache_affinity_wait - elapsed;
+                return LoadBalancerDecision::Wait(
+                    affinity_bucket_wait.map_or(remaining, |delay| delay.min(remaining)),
+                );
             }
 
             // Global routing includes the affinity group at full prefill cost.
             // Bucket zero opens at X; subsequent buckets use time since X.
-            let mut decision = self.decide_from_candidate_iter(
+            return match self.decide_from_candidate_iter(
                 request,
                 candidates.iter(),
                 candidates,
                 1.0,
                 elapsed.saturating_sub(self.config.cache_affinity_wait),
-            );
-            if let LoadBalancerDecision::Selected(choice) = &mut decision {
-                choice.rank_depth = affinity_indices.len() + 1;
-            }
-            return decision;
+            ) {
+                LoadBalancerDecision::Selected(mut choice) => {
+                    choice.rank_depth = affinity_indices.len() + 1;
+                    LoadBalancerDecision::Selected(choice)
+                }
+                LoadBalancerDecision::Wait(delay) => LoadBalancerDecision::Wait(
+                    affinity_bucket_wait.map_or(delay, |affine_delay| affine_delay.min(delay)),
+                ),
+                LoadBalancerDecision::Unavailable => affinity_bucket_wait.map_or(
+                    LoadBalancerDecision::Unavailable,
+                    LoadBalancerDecision::Wait,
+                ),
+            };
         }
 
         if candidates.is_empty() {
@@ -240,16 +255,16 @@ impl WaitAndWidenLoadBalancer {
         self.cache_affinity.cached_key_bytes()
     }
 
-    pub(super) fn choose_from_candidate_indices(
+    pub(super) fn decide_from_candidate_indices(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         candidate_indices: &[usize],
         input_tokens_scale: f64,
         elapsed: Duration,
-    ) -> Option<LoadBalancerCandidateChoice> {
+    ) -> LoadBalancerDecision {
         if candidate_indices.is_empty() {
-            return None;
+            return LoadBalancerDecision::Unavailable;
         }
         if let Some(choice) = self.choose_from_two_ready_candidates(
             request,
@@ -257,7 +272,7 @@ impl WaitAndWidenLoadBalancer {
             candidate_indices,
             input_tokens_scale,
         ) {
-            return Some(choice);
+            return LoadBalancerDecision::Selected(choice);
         }
 
         // Cache-affinity selection stores indices into the current candidate
@@ -270,7 +285,6 @@ impl WaitAndWidenLoadBalancer {
             input_tokens_scale,
             elapsed,
         )
-        .selected()
     }
 
     fn choose_from_two_ready_candidates(

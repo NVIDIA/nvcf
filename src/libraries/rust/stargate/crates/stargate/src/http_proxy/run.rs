@@ -120,11 +120,13 @@ impl<'a> ProxyRequestRun<'a> {
         let num_candidates = candidates.len();
         let eligible_candidate_count =
             eligible_cluster_candidate_count(candidates, self.excluded_cluster_ids());
+        if eligible_candidate_count == 0 {
+            return self.resolve_no_routing_choice(num_candidates, 0).await;
+        }
         let decision = {
             let lb_request = self.load_balancer_request();
             let lb_config = self.request.lb_resolution.config();
-            if eligible_candidate_count > 0
-                && let Some(limit_seconds) = lb_config.max_input_work_seconds
+            if let Some(limit_seconds) = lb_config.max_input_work_seconds
                 && let Some(reason) = input_work_admission_rejection_reason(
                     lb_config,
                     &lb_request,
@@ -515,5 +517,66 @@ mod tests {
 
         assert_eq!(excluded.len(), 1);
         assert!(excluded.contains("cluster-a"));
+    }
+
+    #[tokio::test]
+    async fn permanent_exclusions_finalize_without_affinity_wait() {
+        let config: crate::load_balancer::LoadBalancerConfig = serde_json::from_str(
+            r#"{"models":{"model-a":{"algorithm":"wait-and-widen","cache_affinity_backend_selection_count":1,"cache_affinity_wait_ms":60000}}}"#,
+        ).unwrap();
+        let app = super::super::test_support::test_proxy_app_state_with_lb_config(config);
+        let registration = app
+            .state
+            .begin_registration(&RegistrationIdentity {
+                inference_server_id: "inst-a".to_string(),
+                cluster_id: "cluster-a".to_string(),
+                inference_server_url: "quic://127.0.0.1:5000".to_string(),
+                routing_key: target().routing_key,
+                reverse_tunnel: false,
+            })
+            .unwrap();
+        let update = stargate_proto::pb::InferenceServerRegistration {
+            models: std::collections::HashMap::from([(
+                "model-a".to_string(),
+                stargate_proto::pb::InferenceServerModelRegistration {
+                    status: InferenceServerStatus::Active.into(),
+                    stats: Some(ModelStats {
+                        last_mean_input_tps: 1_000.0,
+                        max_engine_concurrency: 1,
+                        ..Default::default()
+                    }),
+                },
+            )]),
+            ..Default::default()
+        };
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                false,
+                Some(Duration::from_millis(1)),
+            )
+            .await;
+        assert_eq!(
+            app.state
+                .routing_target_snapshot(&target())
+                .await
+                .unwrap()
+                .clusters()
+                .len(),
+            1
+        );
+        for affinity_key in [None, Some("prefix".to_string())] {
+            let mut inputs = request_inputs();
+            inputs.cache_affinity_key = affinity_key;
+            let mut run = ProxyRequestRun::new(&app, prepared_request(&app, inputs));
+            run.failed_cluster_ids.insert("cluster-a".to_string());
+            let result = run.run_routing_attempt().await;
+            assert!(
+                matches!(result, Some(Err(StatusCode::SERVICE_UNAVAILABLE))),
+                "all registered candidates are permanently excluded; got {result:?}",
+            );
+        }
+        app.state.end_registration(registration).await;
     }
 }
