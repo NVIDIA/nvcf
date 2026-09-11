@@ -304,6 +304,143 @@ func TestQueueReadinessSurvivesAnyConfiguredSyncInterval(t *testing.T) {
 	}
 }
 
+// newSyncCycleQueueManager builds a QueueManager that can run a real SyncQueues
+// cycle to completion, including the paused branch, which needs the ICMS lister
+// to check for in-flight termination requests.
+func newSyncCycleQueueManager(
+	t *testing.T, gpu types.GPUResource,
+) (*QueueManager, *recordingQueueClient) {
+	t.Helper()
+	ctx := newTestContext()
+
+	clients := mockKubeClients()
+	bk8s := &BackendK8sCache{
+		featureFlagFetcher: featureflag.DefaultFetcher,
+		clients:            clients,
+		requestsNamespace:  RequestsNamespace,
+	}
+	bk8s.icmsRequestLister = mustICMSRequestLister(t, nvcainformers.NewSharedInformerFactoryWithOptions(
+		clients.BART,
+		ResyncInterval,
+		nvcainformers.WithNamespace(bk8s.requestsNamespace)))
+
+	statusGetter := health.NewBackendStatusCache(0, &mockBackendStatusGetter{
+		hs: types.AgentHealth{
+			Status:   types.HealthStatusHealthy,
+			GPUUsage: map[types.GPUName]types.GPUResource{"H100": gpu},
+		},
+	})
+
+	qc := &recordingQueueClient{Client: &mockqueue.Client{Use10MillisForWaits: true}}
+
+	qm := NewQueueManager(bk8s, statusGetter, qc,
+		types.QueueCredentials{
+			CreationQueues: types.CreationQueueInfoSet{
+				"H100": queue.MessageQueueInfo{
+					GPU:       "H100",
+					QueueURL:  "create-h100",
+					QueueType: queue.CreationQueue,
+				},
+			},
+			TerminationQueue: queue.MessageQueueInfo{
+				QueueURL:  "term",
+				QueueType: queue.TerminationQueue,
+			},
+		},
+		featureflag.DefaultFetcher,
+		types.MaintenanceModeNone,
+		nvcametrics.FromContext(ctx),
+	)
+	return qm, qc
+}
+
+// TestQueueReadinessReflectsPauseAcrossASyncCycle covers the paused branch of
+// SyncQueues, which reaches none of the poll-result recordings the other
+// branches do — the maintenance-cordon branch records one either way, and so
+// does the normal path. A paused manager therefore used to keep serving whatever
+// the component said just before the pause, which is nvcf#1590's staleness
+// window arriving through the pause path.
+//
+// A real cycle is driven rather than the flag being poked, so the assertion
+// covers the branch as SyncQueues actually runs it.
+func TestQueueReadinessReflectsPauseAcrossASyncCycle(t *testing.T) {
+	ctx := newTestContext()
+	qm, qc := newSyncCycleQueueManager(t, types.GPUResource{Capacity: 8, Allocated: 0})
+
+	require.NoError(t, qm.SyncQueues(ctx))
+	require.Contains(t, qc.polledURLs(), "create-h100",
+		"with spare capacity the creation queue must be polled, or the healthy "+
+			"baseline below is healthy for the wrong reason")
+	require.Equal(t, types.HealthStatusHealthy, queueComponent(t, qm).Status)
+
+	qm.Pause()
+	require.NoError(t, qm.SyncQueues(ctx))
+
+	ch := queueComponent(t, qm)
+	assert.Equal(t, types.HealthStatusUnhealthy, ch.Status,
+		"a paused manager consumes no creation messages, so it must stop serving "+
+			"the pre-pause status")
+	assert.Equal(t, types.StatusLevelError, ch.StatusLevel,
+		"must be Error level or the readiness aggregate ignores it")
+	require.NotEmpty(t, ch.Errors)
+	assert.Contains(t, ch.Errors[0], "paused",
+		"the payload should name the pause rather than blame a stalled poll")
+}
+
+// TestQueueReadinessPauseIsIndependentOfTheStalenessCounter pins the two apart.
+//
+// Before the pause was reported in its own right, the only thing that eventually
+// corrected a paused manager was the no-poll counter crossing its threshold,
+// which made the report both late and wrong about the cause. The pause must
+// register on the very first paused cycle, well inside the tolerance, and it
+// must not be mistaken for a stall.
+//
+// A pause long enough to run the counter past its threshold then keeps the
+// backend unready through resume until a real poll lands, which is the safe
+// direction: nothing has consumed the queue since before the pause.
+func TestQueueReadinessPauseIsIndependentOfTheStalenessCounter(t *testing.T) {
+	ctx := newTestContext()
+	qm, _ := newSyncCycleQueueManager(t, types.GPUResource{Capacity: 8, Allocated: 0})
+
+	require.NoError(t, qm.SyncQueues(ctx))
+	require.Equal(t, types.HealthStatusHealthy, queueComponent(t, qm).Status)
+
+	// One cycle only, so the counter cannot be what reports this.
+	qm.Pause()
+	require.NoError(t, qm.SyncQueues(ctx))
+	require.False(t, qm.pollIsStale(),
+		"one cycle is well inside the tolerance, so a stall is not yet in play")
+
+	ch := queueComponent(t, qm)
+	require.Equal(t, types.HealthStatusUnhealthy, ch.Status,
+		"the pause must register immediately, not once the counter catches up")
+	require.NotEmpty(t, ch.Errors)
+	assert.Contains(t, ch.Errors[0], "paused")
+
+	// Past the threshold the pause is still the reason reported, rather than the
+	// stall the counter would otherwise claim.
+	for cycle := 0; cycle <= maxCyclesWithoutPoll; cycle++ {
+		require.NoError(t, qm.SyncQueues(ctx))
+	}
+	require.True(t, qm.pollIsStale(), "the counter should have run past its threshold by now")
+
+	ch = queueComponent(t, qm)
+	require.NotEmpty(t, ch.Errors)
+	assert.Contains(t, ch.Errors[0], "paused",
+		"a deliberate stop must not be reported as a stalled worker")
+
+	// Resuming alone does not restore ready after a pause that long: the last
+	// poll predates it, so the counter keeps the backend out until one lands.
+	qm.Resume()
+	assert.Equal(t, types.HealthStatusUnhealthy, queueComponent(t, qm).Status,
+		"resume must not advertise ready off a poll that predates the pause")
+
+	require.NoError(t, qm.SyncQueues(ctx))
+	assert.Equal(t, types.HealthStatusHealthy, queueComponent(t, qm).Status,
+		"and it must recover once polling resumes, or a pause could latch a "+
+			"backend out of service")
+}
+
 // TestQueueReadinessTracksPollResultTransitions guards the lockstep between the
 // liveness flag and the poll record, since readiness reads both.
 func TestQueueReadinessTracksPollResultTransitions(t *testing.T) {

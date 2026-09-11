@@ -983,6 +983,26 @@ func (qm *QueueManager) GetComponentStatus(_ context.Context) (types.AgentHealth
 	// writes agentStatus Unknown on a non-200 — so a full cluster would look
 	// broken. Only the states below mean the backend genuinely cannot consume.
 	switch {
+	case qm.IsPaused():
+		// A paused manager deliberately does not consume creation messages, so
+		// the backend cannot pick up work however the last poll went. None of
+		// the exits from the paused branch of SyncQueues records a poll result,
+		// so without this the component serves its pre-pause status until the
+		// no-poll counter happens to cross the staleness threshold on its own.
+		//
+		// Reported here rather than by having that branch record a poll result:
+		// setPollResult(true) would claim a poll that never happened, and a
+		// manager paused since startup would then report the queue healthy the
+		// moment it resumes, before the first fetch. setPollResult(false) would
+		// label a deliberate stop a polling failure. Leaving the counter to run
+		// also keeps resume fail-closed — it reads stale until a real poll lands.
+		//
+		// It matters that this is reported at all: every caller that pauses
+		// today also drops a separate readiness flag in the same code path, but
+		// Pause is exported, so that coverage is incidental.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors,
+			"queue manager is paused, creation queue is not being consumed")
 	case !qm.polled.Load():
 		// Startup: credentials may exist but nothing has consumed the queue yet.
 		ch.Status = types.HealthStatusUnhealthy

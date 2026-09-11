@@ -35,6 +35,7 @@ go_test(
         "liveness_test.go",
         "readiness_test.go",
         "status_addgetter_test.go",
+        "status_getter_error_test.go",
         "status_test.go",
         "tokenfetcher_test.go",
     ],

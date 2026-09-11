@@ -60,6 +60,34 @@ func (f GetComponentStatusFunc) GetComponentStatus(ctx context.Context) (nvcatyp
 	return f(ctx)
 }
 
+// refreshTolerance is how many consecutive failed refreshes of one getter may
+// pass before readiness reports its components unhealthy.
+//
+// Deliberately not zero. Most of these getters read through shared informers
+// against the same API server, so they fail together, and reporting on the
+// first error would take every backend in the fleet out of service at once on a
+// single blip — the operator writes agentStatus Unknown on a non-200, so
+// nothing self-corrects quickly. That is the mass-restart shape this PR removes
+// from liveness, and it would be no better arriving through readiness.
+// Tolerating a few refreshes serves the last known status through a blip and
+// still reports a sustained failure.
+//
+// Counted in refreshes rather than elapsed time for the same reason
+// maxCyclesWithoutPoll is: the cadence here follows SyncQueueInterval and
+// MinHealthcheckRefreshWait, both operator-tunable with no upper bound, so any
+// fixed duration is wrong for some valid configuration.
+const refreshTolerance = 3
+
+// getterHistory carries what a getter reported last and how long it has been
+// failing, so a refresh can tell a blip from a sustained failure.
+//
+// Index-aligned with BackendStatusCache.getters, which is only ever appended
+// to, so an index stays valid for the life of the process. Guarded by gmu.
+type getterHistory struct {
+	consecutiveFails int
+	components       []string
+}
+
 type BackendStatusCache struct {
 	backendStatus atomic.Value
 
@@ -69,6 +97,8 @@ type BackendStatusCache struct {
 	// storeRefreshed.
 	gmu     sync.RWMutex
 	getters []ComponentStatusGetter
+	// history is index-aligned with getters. See getterHistory.
+	history []getterHistory
 	// gen counts registrations, so a refresh can tell that the getter set
 	// changed while it was gathering and avoid clobbering the new component.
 	gen uint64
@@ -94,6 +124,7 @@ func NewBackendStatusCache(
 ) *BackendStatusCache {
 	cache := &BackendStatusCache{
 		getters:        getters,
+		history:        make([]getterHistory, len(getters)),
 		minRefreshWait: minRefreshWait,
 		nowFunc:        time.Now,
 	}
@@ -132,6 +163,9 @@ func (c *BackendStatusCache) AddGetter(ctx context.Context, g ComponentStatusGet
 	c.gmu.Lock()
 	defer c.gmu.Unlock()
 	c.getters = append(c.getters, g)
+	// Seeded with whatever it just reported, so a later failure knows which
+	// components to keep serving and then to blame.
+	c.history = append(c.history, getterHistory{components: componentNames(ah.Components)})
 	c.gen++
 
 	if len(ah.Components) == 0 {
@@ -172,8 +206,22 @@ func (c *BackendStatusCache) snapshotGetters() ([]ComponentStatusGetter, uint64,
 	return slices.Clone(c.getters), c.gen, c.refreshSeq
 }
 
-// storeRefreshed publishes a refresh result without discarding a component that
-// was registered while the refresh was in flight.
+// publishRefresh folds one refresh's results into the cache and reports getters
+// that could not answer.
+//
+// A getter error used to set the aggregate Status and drop the getter's
+// components. GetStatusForLevel then rebuilt Status from Components alone and
+// ignored the stored aggregate, so the names simply vanished from the payload
+// and readiness answered 200 with a component that had no idea how it was
+// doing. Same shape as the stale-poll half of nvcf#1590, reached through the
+// error path: a component that cannot report must not be able to disappear.
+//
+// Failures are held for refreshTolerance refreshes before they change what
+// readiness reports, serving the getter's last known components in the
+// meantime. See refreshTolerance for why that latitude is not optional.
+//
+// It also publishes without discarding a component that was registered while
+// the refresh was in flight.
 //
 // A refresh gathers from the getters it snapshotted and then overwrites the
 // cache wholesale. An AddGetter that lands in that gap has already folded its
@@ -189,7 +237,11 @@ func (c *BackendStatusCache) snapshotGetters() ([]ComponentStatusGetter, uint64,
 // newer one, so /healthz can go back to 200 after a refresh has already seen the
 // queue broken. Ordering only the store keeps the fan-out concurrent; taking the
 // lock across the gather would let one slow getter block every refresh caller.
-func (c *BackendStatusCache) storeRefreshed(ah nvcatypes.AgentHealth, snapGen, seq uint64) {
+func (c *BackendStatusCache) publishRefresh(
+	ctx context.Context,
+	results []statusResult,
+	snapGen, seq uint64,
+) {
 	c.gmu.Lock()
 	defer c.gmu.Unlock()
 
@@ -200,16 +252,52 @@ func (c *BackendStatusCache) storeRefreshed(ah nvcatypes.AgentHealth, snapGen, s
 	}
 	c.lastStoredSeq = seq
 
+	cur, _ := c.backendStatus.Load().(nvcatypes.AgentHealth)
+	ah := nvcatypes.AgentHealth{
+		Status:     nvcatypes.HealthStatusHealthy,
+		GPUUsage:   map[nvcatypes.GPUName]nvcatypes.GPUResource{},
+		Components: map[string]nvcatypes.ComponentHealth{},
+	}
+
+	for _, res := range results {
+		h := &c.history[res.idx]
+
+		if res.err == nil {
+			h.consecutiveFails = 0
+			h.components = componentNames(res.agentHealth.Components)
+			for gk, gv := range res.agentHealth.GPUUsage {
+				ah.GPUUsage[gk] = gv
+			}
+			addComponents(&ah, res.agentHealth.Components)
+			continue
+		}
+
+		h.consecutiveFails++
+		if h.consecutiveFails <= refreshTolerance {
+			// Serve what this getter last reported. GPU usage is deliberately
+			// not carried: a stale capacity number is worse than none, and it
+			// only feeds reporting rather than the readiness decision.
+			for _, name := range h.components {
+				if ch, ok := cur.Components[name]; ok {
+					addComponents(&ah, map[string]nvcatypes.ComponentHealth{name: ch})
+				}
+			}
+			continue
+		}
+
+		core.GetLogger(ctx).WithError(res.err).
+			WithField("getter", res.name).
+			WithField("consecutive_failures", h.consecutiveFails).
+			Error("Component status unavailable past the refresh tolerance, reporting unhealthy")
+		addComponents(&ah, unavailableComponents(res.name, h.components, h.consecutiveFails, res.err))
+	}
+
 	if c.gen != snapGen {
-		cur, _ := c.backendStatus.Load().(nvcatypes.AgentHealth)
 		for ck, cv := range cur.Components {
 			// Only components this refresh knew nothing about. Anything it did
 			// query is authoritative and must be allowed to go healthy again.
 			if _, queried := ah.Components[ck]; queried {
 				continue
-			}
-			if ah.Components == nil {
-				ah.Components = map[string]nvcatypes.ComponentHealth{}
 			}
 			ah.Components[ck] = cv
 			if cv.Status == nvcatypes.HealthStatusUnhealthy {
@@ -219,6 +307,64 @@ func (c *BackendStatusCache) storeRefreshed(ah nvcatypes.AgentHealth, snapGen, s
 	}
 
 	c.backendStatus.Store(ah)
+}
+
+// addComponents merges components into the aggregate, letting any unhealthy one
+// take the aggregate with it.
+func addComponents(ah *nvcatypes.AgentHealth, cs map[string]nvcatypes.ComponentHealth) {
+	for name, ch := range cs {
+		ah.Components[name] = ch
+		if ch.Status == nvcatypes.HealthStatusUnhealthy {
+			ah.Status = nvcatypes.HealthStatusUnhealthy
+		}
+	}
+}
+
+// componentNames lists the component keys a getter reported, for when a later
+// call fails and only the names are still needed. Sorted so the payload and the
+// logs stay stable across refreshes.
+func componentNames(cs map[string]nvcatypes.ComponentHealth) []string {
+	if len(cs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(cs))
+	for name := range cs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// unavailableComponents reports a getter that has failed past the tolerance.
+//
+// The names it last reported are reused, so the payload keeps blaming the same
+// components across the transition instead of renaming them mid-outage. A getter
+// that has never reported anything is named by its Go type, because something
+// has to appear under Components for readiness to gate on it: an empty map is
+// precisely what let the failure go unnoticed.
+func unavailableComponents(
+	getterName string,
+	names []string,
+	fails int,
+	err error,
+) map[string]nvcatypes.ComponentHealth {
+	if len(names) == 0 {
+		names = []string{getterName}
+	}
+	out := make(map[string]nvcatypes.ComponentHealth, len(names))
+	for _, name := range names {
+		out[name] = nvcatypes.ComponentHealth{
+			Status: nvcatypes.HealthStatusUnhealthy,
+			// StatusLevelError, not Warn: GetStatusForLevel only lets components
+			// strictly below Warn set the aggregate, so a Warn entry would show
+			// up in the payload and gate nothing.
+			StatusLevel: nvcatypes.StatusLevelError,
+			Errors: []string{
+				fmt.Sprintf("status unavailable for %d consecutive refreshes: %v", fails, err),
+			},
+		}
+	}
+	return out
 }
 
 // WaitForHealthSuccess blocks the current thread until the AgentHealth is completely healthy
@@ -283,6 +429,12 @@ func (c *BackendStatusCache) GetStatusForLevel(level nvcatypes.StatusLevel) nvca
 }
 
 type statusResult struct {
+	// idx locates the getter in this refresh's snapshot, so its history can be
+	// updated and its error placed in a stable position in the aggregate.
+	idx int
+	// name identifies the getter in logs, and in the payload when it has never
+	// reported a component to be named by.
+	name        string
 	agentHealth nvcatypes.AgentHealth
 	err         error
 }
@@ -307,8 +459,8 @@ func (c *BackendStatusCache) RefreshStatusForLevel(ctx context.Context, level nv
 	getters, snapGen, seq := c.snapshotGetters()
 
 	results := make(chan statusResult)
-	for _, getter := range getters {
-		go func(getter ComponentStatusGetter) {
+	for idx, getter := range getters {
+		go func(idx int, getter ComponentStatusGetter) {
 			ah, err := getter.GetComponentStatus(ctx)
 			if err != nil && !nvcaerrors.IsNotExist(err) {
 				log.WithError(err).Error("Failed to retrieve component status")
@@ -317,41 +469,25 @@ func (c *BackendStatusCache) RefreshStatusForLevel(ctx context.Context, level nv
 				log.WithError(err).Debug("ignoring NotExist error")
 				err = nil
 			}
-			results <- statusResult{agentHealth: ah, err: err}
-		}(getter)
+			results <- statusResult{
+				idx:         idx,
+				name:        fmt.Sprintf("%T", getter),
+				agentHealth: ah,
+				err:         err,
+			}
+		}(idx, getter)
 	}
 
-	allAH := nvcatypes.AgentHealth{
-		Status:     nvcatypes.HealthStatusHealthy,
-		GPUUsage:   map[nvcatypes.GPUName]nvcatypes.GPUResource{},
-		Components: map[string]nvcatypes.ComponentHealth{},
+	gathered := make([]statusResult, 0, len(getters))
+	errs := make([]error, len(getters))
+	for range getters {
+		res := <-results
+		errs[res.idx] = res.err
+		gathered = append(gathered, res)
 	}
-	i := len(getters)
-	errs := make([]error, i)
-	for res := range results {
-		if res.err != nil {
-			errs[i-1] = res.err
-			allAH.Status = nvcatypes.HealthStatusUnhealthy
-		} else {
-			for gk, gv := range res.agentHealth.GPUUsage {
-				allAH.GPUUsage[gk] = gv
-			}
-			for ck, cv := range res.agentHealth.Components {
-				allAH.Components[ck] = cv
-				if cv.Status == nvcatypes.HealthStatusUnhealthy {
-					allAH.Status = cv.Status
-				}
-			}
-		}
-		i--
-		if i == 0 {
-			break
-		}
-	}
-	close(results)
 
 	// Create a new health status instance and update the cache
-	c.storeRefreshed(allAH, snapGen, seq)
+	c.publishRefresh(ctx, gathered, snapGen, seq)
 
 	if err := utilerror.NewAggregate(errs); err != nil {
 		return nvcatypes.AgentHealth{}, err
