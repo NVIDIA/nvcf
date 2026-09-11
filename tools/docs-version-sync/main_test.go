@@ -17,7 +17,6 @@ package main
 
 import (
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -924,10 +923,6 @@ func testCatalog() *Catalog {
 	}
 }
 
-func serverURL(r *http.Request) string {
-	return "http://" + r.Host
-}
-
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -961,16 +956,4 @@ func sectionBetween(t *testing.T, content, startMarker, endMarker string) string
 		t.Fatalf("content missing end marker %q after %q:\n%s", endMarker, startMarker, content[start:])
 	}
 	return content[start : start+end]
-}
-
-func optionalSectionBetween(content, startMarker, endMarker string) (string, bool) {
-	start := strings.Index(content, startMarker)
-	if start == -1 {
-		return "", false
-	}
-	end := strings.Index(content[start:], endMarker)
-	if end == -1 {
-		return content[start:], true
-	}
-	return content[start : start+end], true
 }
