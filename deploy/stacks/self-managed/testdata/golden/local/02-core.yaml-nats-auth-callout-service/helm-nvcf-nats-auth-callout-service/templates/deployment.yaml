@@ -38,7 +38,7 @@ spec:
     metadata:
       annotations:
         # Force pod restart when configmap changes
-        checksum/config: 367d8d16063c6c5127cb19160495e4abd624f8101c2a718d6c4c60f61c8f6c18
+        checksum/config: 735906305b326530beb0f841e2f91faacbebaaab6cfe9b4895af51276c12acac
       labels:
         helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.2.0
         app.kubernetes.io/name: helm-nvcf-nats-auth-callout-service
@@ -88,6 +88,16 @@ spec:
               value: "false"
 
             # Additional Environment Variables
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED
+              valueFrom:
+                secretKeyRef:
+                  key: nkey_seed
+                  name: nats-auth-callout-nkeys
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SIGNATURE
+              valueFrom:
+                secretKeyRef:
+                  key: nkey_signature
+                  name: nats-auth-callout-nkeys
 
             # Metrics Configuration
             - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED

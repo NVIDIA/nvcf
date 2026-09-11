@@ -3,7 +3,7 @@ MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 include Makefile.dist
 
-.PHONY: test test-published-charts render-local test-local generate-golden test-golden-comparator test-render-structure test-render-structure-detects-violations test-named-control-plane-render-isolation test-named-control-plane-render-isolation-detects-violations test-control-plane-owner-label-renderer test-control-plane-owner-label-placement test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-golden-diff
+.PHONY: test test-published-charts render-local test-local generate-golden test-golden-comparator test-render-structure test-render-structure-detects-violations test-named-control-plane-render-isolation test-named-control-plane-render-isolation-detects-violations test-control-plane-owner-label-renderer test-control-plane-owner-label-placement test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-golden-diff test-nats-auth-callout-service-wiring
 
 GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local
 GOLDEN_RENDER_DIR ?= $(MAKEFILE_DIR)/.golden/out
@@ -38,6 +38,7 @@ test:
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
+	@tests/nats-auth-callout-service-wiring.sh
 	@tests/notary-image-repository.sh
 
 test-published-charts:
@@ -86,6 +87,9 @@ test-control-plane-owner-namespace-marker:
 
 test-control-plane-owner-label-golden-diff:
 	@tests/verify-control-plane-owner-label-golden-diff.sh "$(GOLDEN_LOCAL_DIR)"
+
+test-nats-auth-callout-service-wiring:
+	@tests/nats-auth-callout-service-wiring.sh
 
 test-local: test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-named-control-plane-render-isolation-detects-violations test-named-control-plane-render-isolation render-local test-golden-comparator test-render-structure-detects-violations test-render-structure
 	@tests/verify-control-plane-owner-label-placement.sh "$(GOLDEN_RENDER_DIR)"

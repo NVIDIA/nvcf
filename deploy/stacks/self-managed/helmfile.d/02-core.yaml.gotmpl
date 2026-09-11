@@ -41,6 +41,8 @@ environments:
 {{- $nvcfUiNamespace := printf "%snvcf-ui" $controlPlaneNamespacePrefix }}
 {{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix }}
 {{- $ingressNamespace := .Values.ingress.gatewayApi.controllerNamespace }}
+{{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace }}
+{{- $natsAuthCalloutSecretName := dig "nats" "authCallout" "secretName" "nats-auth-callout-nkeys" .Values }}
 
 repositories:
   - name: nvcf
@@ -220,6 +222,20 @@ releases:
       - ../global.yaml.gotmpl
       - image:
           repository: {{ printf "%s/%s/nvcf-nats-auth-callout-service" .Values.global.image.registry .Values.global.image.repository | quote }}
+      - serviceConfig:
+          service:
+            nats_url: {{ $natsServiceURL | quote }}
+      - extraEnvs:
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED
+            valueFrom:
+              secretKeyRef:
+                name: {{ $natsAuthCalloutSecretName | quote }}
+                key: nkey_seed
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SIGNATURE
+            valueFrom:
+              secretKeyRef:
+                name: {{ $natsAuthCalloutSecretName | quote }}
+                key: nkey_signature
       {{- if .Values.global.imagePullSecrets }}
       - imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
