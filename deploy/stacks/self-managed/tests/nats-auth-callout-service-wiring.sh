@@ -92,7 +92,25 @@ assert_yaml_value "$manifest_file" \
   'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_ACCOUNT") | .value' \
   APP "shared worker NKey account mapping"
 assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_PLUGIN__TYPE") | .value' \
+  webhook "OIDC webhook plugin type"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_CONFIG_URL") | .value' \
+  http://api.sis.svc.cluster.local:8080/v1/nvca/nats-authorize "OIDC webhook URL"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_CONFIG_TIMEOUT") | .value' \
+  5s "OIDC webhook timeout"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_CONFIG_RETRY__ATTEMPTS") | .value' \
+  1 "OIDC webhook retry attempts"
+assert_yaml_value "$manifest_file" \
   'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_0_ID") | .value' \
   nkey "APP enabled NKey plugin"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_1_ID") | .value' \
+  webhook "APP enabled OIDC webhook plugin"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_1_ALIAS") | .value' \
+  oidc "APP OIDC webhook alias"
 
 echo "nats-auth-callout-service-wiring: OK"
