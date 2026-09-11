@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -204,8 +205,9 @@ type resolvedInventoryConfig struct {
 }
 
 type resolvedInventorySourceChart struct {
-	TagPrefix string `yaml:"tagPrefix"`
-	Path      string `yaml:"path"`
+	TagPrefix    string            `yaml:"tagPrefix"`
+	Path         string            `yaml:"path"`
+	RenderValues map[string]string `yaml:"renderValues,omitempty"`
 }
 
 type resolvedInventoryHelmSource struct {
@@ -444,6 +446,14 @@ func loadResolvedInventoryConfig(repoRoot, configPath string) (resolvedInventory
 			(sourceChart.Path != componentPath && !strings.HasPrefix(sourceChart.Path, componentPath+"/")) {
 			return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory source chart %s path must be within %s", name, componentPath)
 		}
+		for valueName, value := range sourceChart.RenderValues {
+			if !validResolvedInventoryRenderValueName(valueName) {
+				return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory source chart %s render value name %q is invalid", name, valueName)
+			}
+			if value == "" || value != strings.TrimSpace(value) {
+				return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory source chart %s render value %s must be non-empty and trimmed", name, valueName)
+			}
+		}
 	}
 	return config, nil
 }
@@ -465,6 +475,20 @@ func validResolvedInventoryRepoPath(value string) bool {
 	return value != "" && value != "." && value != ".." && !strings.HasPrefix(value, "-") &&
 		!filepath.IsAbs(value) && filepath.ToSlash(filepath.Clean(value)) == value && !strings.HasPrefix(value, "../") &&
 		!strings.ContainsAny(value, "{}$?#@ 	\r\n")
+}
+
+func validResolvedInventoryRenderValueName(value string) bool {
+	if value == "" || strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") || strings.Contains(value, "..") {
+		return false
+	}
+	for _, character := range value {
+		if character != '.' && character != '-' && character != '_' &&
+			(character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func parseResolvedInventoryHelmSource(raw string) (resolvedInventoryHelmSource, error) {
@@ -727,7 +751,7 @@ func materializeResolvedInventorySourceCharts(
 		if err := setResolvedInventorySourceChartVersion(chartPath, name, release.Version); err != nil {
 			return nil, fmt.Errorf("set source chart %s version: %w", name, err)
 		}
-		if err := replaceResolvedInventoryStateChart(stateFile, name, chartPath); err != nil {
+		if err := replaceResolvedInventoryStateChart(stateFile, release.Name, name, chartPath, sourceChart.RenderValues); err != nil {
 			return nil, err
 		}
 		used = append(used, name)
@@ -838,18 +862,175 @@ func setResolvedInventorySourceChartVersion(chartPath, wantName, version string)
 	return os.WriteFile(metadataPath, updated, 0o644)
 }
 
-func replaceResolvedInventoryStateChart(stateFile, chartName, chartPath string) error {
+func replaceResolvedInventoryStateChart(stateFile, releaseName, chartName, chartPath string, renderValues map[string]string) error {
 	raw, err := os.ReadFile(stateFile)
 	if err != nil {
 		return err
 	}
-	needle := "chart: nvcf/" + chartName
-	if count := bytes.Count(raw, []byte(needle)); count != 1 {
-		return fmt.Errorf("resolved %d %s chart references in %s; want exactly one", count, chartName, stateFile)
+	raw, err = setResolvedInventoryReleaseChart(raw, stateFile, releaseName, chartName, chartPath)
+	if err != nil {
+		return err
 	}
-	replacement := "chart: " + strconv.Quote(filepath.ToSlash(chartPath))
-	updated := bytes.Replace(raw, []byte(needle), []byte(replacement), 1)
-	return os.WriteFile(stateFile, updated, 0o644)
+	raw, err = mergeResolvedInventoryReleaseSetValues(raw, stateFile, releaseName, renderValues)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(stateFile, raw, 0o644)
+}
+
+type resolvedInventoryReleaseBlock struct {
+	indent       []byte
+	lineEnding   []byte
+	contentStart int
+	end          int
+}
+
+func findResolvedInventoryReleaseBlock(raw []byte, stateFile, releaseName string) (resolvedInventoryReleaseBlock, error) {
+	name := regexp.QuoteMeta(releaseName)
+	releasePattern := regexp.MustCompile(`(?m)^([ \t]*)- name:[ \t]+(?:` + name + `|"` + name + `"|'` + name + `')[ \t]*(?:#[^\r\n]*)?(\r?)$`)
+	matches := releasePattern.FindAllSubmatchIndex(raw, -1)
+	if len(matches) != 1 {
+		return resolvedInventoryReleaseBlock{}, fmt.Errorf("resolved %d %s release entries in %s; want exactly one", len(matches), releaseName, stateFile)
+	}
+	match := matches[0]
+	indent := raw[match[2]:match[3]]
+	lineEnding := []byte("\n")
+	if match[4] >= 0 && match[4] != match[5] {
+		lineEnding = []byte("\r\n")
+	}
+	contentStart := match[1]
+	if contentStart >= len(raw) || raw[contentStart] != '\n' {
+		return resolvedInventoryReleaseBlock{}, fmt.Errorf("%s release entry in %s must end with a newline", releaseName, stateFile)
+	}
+	contentStart++
+	return resolvedInventoryReleaseBlock{
+		indent:       append([]byte(nil), indent...),
+		lineEnding:   lineEnding,
+		contentStart: contentStart,
+		end:          findResolvedInventoryYAMLBlockEnd(raw, contentStart, len(indent)),
+	}, nil
+}
+
+func findResolvedInventoryYAMLBlockEnd(raw []byte, start, parentIndent int) int {
+	for offset := start; offset < len(raw); {
+		lineEnd := bytes.IndexByte(raw[offset:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(raw)
+		} else {
+			lineEnd += offset
+		}
+		line := bytes.TrimSuffix(raw[offset:lineEnd], []byte("\r"))
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) != 0 && !bytes.HasPrefix(trimmed, []byte("#")) && !bytes.HasPrefix(trimmed, []byte("{{")) {
+			indent := len(line) - len(bytes.TrimLeft(line, " \t"))
+			if indent <= parentIndent {
+				return offset
+			}
+		}
+		if lineEnd == len(raw) {
+			return len(raw)
+		}
+		offset = lineEnd + 1
+	}
+	return len(raw)
+}
+
+func setResolvedInventoryReleaseChart(raw []byte, stateFile, releaseName, chartName, chartPath string) ([]byte, error) {
+	block, err := findResolvedInventoryReleaseBlock(raw, stateFile, releaseName)
+	if err != nil {
+		return nil, err
+	}
+	childIndent := string(block.indent) + "  "
+	chartPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(childIndent) + `chart:[^\r\n]*(\r?)$`)
+	chartMatches := chartPattern.FindAllSubmatchIndex(raw[block.contentStart:block.end], -1)
+	if len(chartMatches) > 1 {
+		return nil, fmt.Errorf("resolved %d chart entries for %s release %s in %s; want at most one", len(chartMatches), chartName, releaseName, stateFile)
+	}
+	replacement := []byte(childIndent + "chart: " + strconv.Quote(filepath.ToSlash(chartPath)))
+	if len(chartMatches) == 0 {
+		replacement = append(replacement, block.lineEnding...)
+		return insertResolvedInventoryBytes(raw, block.contentStart, replacement), nil
+	}
+	match := chartMatches[0]
+	start := block.contentStart + match[0]
+	end := block.contentStart + match[1]
+	if match[2] >= 0 && match[2] != match[3] {
+		replacement = append(replacement, '\r')
+	}
+	return replaceResolvedInventoryBytes(raw, start, end, replacement), nil
+}
+
+func mergeResolvedInventoryReleaseSetValues(raw []byte, stateFile, releaseName string, renderValues map[string]string) ([]byte, error) {
+	if len(renderValues) == 0 {
+		return raw, nil
+	}
+	block, err := findResolvedInventoryReleaseBlock(raw, stateFile, releaseName)
+	if err != nil {
+		return nil, err
+	}
+	childIndent := string(block.indent) + "  "
+	setPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(childIndent) + `set:[^\r\n]*(\r?)$`)
+	setMatches := setPattern.FindAllSubmatchIndex(raw[block.contentStart:block.end], -1)
+	if len(setMatches) > 1 {
+		return nil, fmt.Errorf("resolved %d set entries for release %s in %s; want at most one", len(setMatches), releaseName, stateFile)
+	}
+	entries := resolvedInventoryRenderSetEntries(block.indent, block.lineEnding, renderValues)
+	if len(setMatches) == 0 {
+		setBlock := append([]byte(childIndent+"set:"), block.lineEnding...)
+		setBlock = append(setBlock, entries...)
+		return insertResolvedInventoryBytes(raw, block.contentStart, setBlock), nil
+	}
+	match := setMatches[0]
+	setStart := block.contentStart + match[0]
+	setEnd := block.contentStart + match[1]
+	setLine := bytes.TrimSuffix(raw[setStart:setEnd], []byte("\r"))
+	setValue := strings.TrimSpace(strings.TrimPrefix(string(setLine), childIndent+"set:"))
+	if setValue != "" && !strings.HasPrefix(setValue, "#") {
+		return nil, fmt.Errorf("set entry for release %s in %s must use a block sequence", releaseName, stateFile)
+	}
+	if setEnd >= len(raw) || raw[setEnd] != '\n' {
+		return nil, fmt.Errorf("set entry for release %s in %s must end with a newline", releaseName, stateFile)
+	}
+	setContentStart := setEnd + 1
+	insertAt := findResolvedInventoryYAMLBlockEnd(raw, setContentStart, len(childIndent))
+	if insertAt > block.end {
+		insertAt = block.end
+	}
+	return insertResolvedInventoryBytes(raw, insertAt, entries), nil
+}
+
+func resolvedInventoryRenderSetEntries(indent, lineEnding []byte, renderValues map[string]string) []byte {
+	names := make([]string, 0, len(renderValues))
+	for name := range renderValues {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	entries := make([]byte, 0)
+	for _, name := range names {
+		entries = append(entries, indent...)
+		entries = append(entries, []byte("    - name: "+strconv.Quote(name))...)
+		entries = append(entries, lineEnding...)
+		entries = append(entries, indent...)
+		entries = append(entries, []byte("      value: "+strconv.Quote(renderValues[name]))...)
+		entries = append(entries, lineEnding...)
+	}
+	return entries
+}
+
+func insertResolvedInventoryBytes(raw []byte, offset int, addition []byte) []byte {
+	updated := make([]byte, 0, len(raw)+len(addition))
+	updated = append(updated, raw[:offset]...)
+	updated = append(updated, addition...)
+	updated = append(updated, raw[offset:]...)
+	return updated
+}
+
+func replaceResolvedInventoryBytes(raw []byte, start, end int, replacement []byte) []byte {
+	updated := make([]byte, 0, len(raw)-(end-start)+len(replacement))
+	updated = append(updated, raw[:start]...)
+	updated = append(updated, replacement...)
+	updated = append(updated, raw[end:]...)
+	return updated
 }
 
 func runResolvedInventoryHelmfile(
