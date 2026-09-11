@@ -667,6 +667,7 @@ func collectResolvedInventoryState(
 		fullOverrides,
 		"template",
 		"--include-crds",
+		"--skip-tests",
 		"--output-dir", renderDir,
 		"--output-dir-template", "{{ .OutputDir }}/{{ .Release.Name }}",
 	); err != nil {

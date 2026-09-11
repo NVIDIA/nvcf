@@ -412,6 +412,9 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") && !runner.publicPrepared {
 			runner.t.Fatal("Helmfile template ran before public repository preparation")
 		}
+		if !containsArgument(args, "--skip-tests") {
+			runner.t.Fatalf("Helmfile template included test hooks: %v", args)
+		}
 		runner.templateCalls++
 		outputDir := argumentAfter(runner.t, args, "--output-dir")
 		for _, release := range releases {
@@ -493,6 +496,15 @@ func argumentAfter(t *testing.T, args []string, flag string) string {
 	}
 	t.Fatalf("missing %s in %v", flag, args)
 	return ""
+}
+
+func containsArgument(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }
 
 func environmentValue(env []string, name string) string {
