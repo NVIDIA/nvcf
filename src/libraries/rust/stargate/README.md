@@ -38,6 +38,11 @@ OpenAI-style ready endpoint work without extra configuration. The repeatable
 in place as a fallback, and `--upstream-health-wait-ms` bounds how long startup
 retries the probe (default 60000; `0` probes once and exits).
 
+For engines without a stats endpoint, set `pylon --max-engine-concurrency N`
+to provide a positive concurrency fallback for routing and local queue
+admission. Engine-reported limits take precedence. See the
+[runtime stats interface](docs/runtime-stats-interface.md#concurrency-fallback).
+
 Use [docs/README.md](docs/README.md) as the docs entrypoint.
 Use [local quickstart](docs/getting-started/local-quickstart.md) to run the local stack.
 

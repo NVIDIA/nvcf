@@ -161,7 +161,12 @@ queued input tokens by `last_mean_input_tps`. Prefill time divides
 
 Pylon applies the same free-slot rule to local queue admission, excluding the
 incoming request's own reservation. Engine stats pings can advertise a model's
-`max_engine_concurrency`; zero means unknown. Raw queued-token counts and
+`max_engine_concurrency`. Pylon's `--max-engine-concurrency N` supplies a fallback
+when the engine has not reported a limit, such as when no stats endpoint exists.
+A positive engine report takes precedence; a zero report restores the fallback.
+Without either source, Pylon advertises zero, meaning unknown. See
+[Runtime stats interface](runtime-stats-interface.md#concurrency-fallback).
+Raw queued-token counts and
 priority work estimates are retained even while effective queue delay is zero,
 so they remain available when pending assignments fill the last slot. This rule
 also applies to the queue component of other Stargate comparators and the
