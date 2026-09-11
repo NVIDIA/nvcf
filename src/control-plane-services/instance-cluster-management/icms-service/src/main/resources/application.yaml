@@ -418,6 +418,8 @@ icms:
   reservation-backup-enabled: false
   spot-post-reserved-exhaustion-for-function-enabled: false # Feature flag to enable spot usage after reservation is exhausted for functions
 
+  cluster-by-id-reads-enabled: true
+
   nats:
     enabled: false
     nats-url: nats://localhost:4222

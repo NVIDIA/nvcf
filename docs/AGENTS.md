@@ -72,14 +72,23 @@ NVIDIA Cloud Functions glyphs inside green icon boxes must stay white in both mo
 Before finishing SVG changes, render light and dark previews for every changed SVG and compare them together for consistent background tone, panel contrast, connector contrast, text readability, and accent brightness.
 
 Use `--update-catalog` only when synchronizing artifact versions and registry
-paths from the latest stack manifest. Presentation-only changes to
+paths from the latest stable GitHub stack release. Presentation-only changes to
 `manifest.entries` use the regeneration command above.
 
-To synchronize the catalog and generated blocks:
+To synchronize the catalog and generated blocks from the latest stable GitHub
+stack release:
 
 ```bash
 go run -C tools/docs-version-sync . --target main --update-catalog
 ./tools/ci/check-doc-version-sync
+```
+
+The first command reads GitHub and writes updates. The second command is an
+offline consistency check. CI runs the offline check before this separate
+network check:
+
+```bash
+./tools/ci/check-doc-version-publication
 ```
 
 Generated blocks are marked with comments such as:
