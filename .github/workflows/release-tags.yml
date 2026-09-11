@@ -176,6 +176,7 @@ jobs:
           cd "${RUNNER_TEMP}/inventory-source"
           "${RUNNER_TEMP}/docs-version-sync" \
             --generate-stack-inventory "${RUNNER_TEMP}/nvcf-self-managed-stack-inventory.json" \
+            --inventory-config "${GITHUB_WORKSPACE}/deploy/stacks/self-managed/release-inventory.yaml" \
             --stack-version "${version}" \
             --stack-source-tag "${INVENTORY_TAG}" \
             --stack-source-commit "${commit}"

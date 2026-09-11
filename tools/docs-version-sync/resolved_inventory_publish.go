@@ -217,11 +217,11 @@ func (source resolvedInventoryHelmSource) reference() string {
 	return source.Registry + "/" + source.Repository
 }
 
-func writeResolvedStackInventory(repoRoot, outputPath string, source stackSourceRelease) error {
+func writeResolvedStackInventory(repoRoot, outputPath, configPath string, source stackSourceRelease) error {
 	if err := verifyResolvedInventoryCheckout(repoRoot, source); err != nil {
 		return err
 	}
-	inventory, err := collectResolvedStackInventory(repoRoot, source, execResolvedInventoryCommandRunner{})
+	inventory, err := collectResolvedStackInventory(repoRoot, configPath, source, execResolvedInventoryCommandRunner{})
 	if err != nil {
 		return err
 	}
@@ -263,7 +263,7 @@ func verifyResolvedInventoryCheckout(repoRoot string, source stackSourceRelease)
 	return nil
 }
 
-func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, runner resolvedInventoryCommandRunner) (resolvedStackInventory, error) {
+func collectResolvedStackInventory(repoRoot, configPath string, source stackSourceRelease, runner resolvedInventoryCommandRunner) (resolvedStackInventory, error) {
 	tempRoot, err := os.MkdirTemp("", "nvcf-resolved-stack-inventory-")
 	if err != nil {
 		return resolvedStackInventory{}, err
@@ -274,7 +274,7 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 	if err := copyResolvedInventoryInputs(repoRoot, copiedRepoRoot); err != nil {
 		return resolvedStackInventory{}, err
 	}
-	config, err := loadResolvedInventoryConfig(copiedRepoRoot)
+	config, err := loadResolvedInventoryConfig(copiedRepoRoot, configPath)
 	if err != nil {
 		return resolvedStackInventory{}, err
 	}
@@ -401,8 +401,11 @@ func copyResolvedInventoryStack(source, destination string) error {
 	})
 }
 
-func loadResolvedInventoryConfig(repoRoot string) (resolvedInventoryConfig, error) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(resolvedInventoryConfigPath)))
+func loadResolvedInventoryConfig(repoRoot, configPath string) (resolvedInventoryConfig, error) {
+	if configPath == "" {
+		configPath = filepath.Join(repoRoot, filepath.FromSlash(resolvedInventoryConfigPath))
+	}
+	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return resolvedInventoryConfig{}, fmt.Errorf("read resolved inventory config: %w", err)
 	}

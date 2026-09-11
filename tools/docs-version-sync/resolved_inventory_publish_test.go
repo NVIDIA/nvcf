@@ -93,7 +93,7 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 		Commit:  strings.Repeat("b", 40),
 	}
 	runner := &fakeResolvedInventoryRunner{t: t}
-	inventory, err := collectResolvedStackInventory(repo, source, runner)
+	inventory, err := collectResolvedStackInventory(repo, "", source, runner)
 	if err != nil {
 		t.Fatalf("collectResolvedStackInventory failed: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	repo := t.TempDir()
 	configPath := filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath))
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: nvcr.io/nvidia/nvcf-byoc\n")
-	config, err := loadResolvedInventoryConfig(repo)
+	config, err := loadResolvedInventoryConfig(repo, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,18 +172,28 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	}
 
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: oci://registry.example.test/charts\n")
-	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "resolved HTTPS repository") {
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "resolved HTTPS repository") {
 		t.Fatalf("non-HTTPS repository error = %v", err)
 	}
 
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  unknown-stack: registry.example.test/charts\n")
-	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "unknown stack") {
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "unknown stack") {
 		t.Fatalf("unknown override stack error = %v", err)
 	}
 
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: https://registry.example.test/charts\n")
-	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "without credentials or a URL scheme") {
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "without credentials or a URL scheme") {
 		t.Fatalf("invalid override repository error = %v", err)
+	}
+
+	externalConfig := filepath.Join(t.TempDir(), "release-inventory.yaml")
+	writeFile(t, externalConfig, "schemaVersion: 1\npublishedChartRepository: https://helm.example.test/external\n")
+	external, err := loadResolvedInventoryConfig(repo, externalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if external.PublishedChartRepository != "https://helm.example.test/external" {
+		t.Fatalf("external published repository = %q", external.PublishedChartRepository)
 	}
 }
 

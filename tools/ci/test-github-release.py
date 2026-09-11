@@ -1429,6 +1429,10 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertIn('token: ${{ github.token }}', workflow)
         self.assertIn("Render tagged inventory without publishing", workflow)
         self.assertIn("--generate-stack-inventory", workflow)
+        self.assertIn(
+            '--inventory-config "${GITHUB_WORKSPACE}/deploy/stacks/self-managed/release-inventory.yaml"',
+            workflow,
+        )
         preflight = workflow.index("inventory-preflight:")
         tag_release = workflow.index("tag-release-notes:")
         self.assertNotIn("github-release tag", workflow[preflight:tag_release])
