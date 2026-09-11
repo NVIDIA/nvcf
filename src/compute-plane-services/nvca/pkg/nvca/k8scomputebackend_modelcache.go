@@ -113,6 +113,12 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 		return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 	}
 
+	// A shared claim (ReadWriteMany selection) and a running shared writer are
+	// used by every request for the handle; the claim is reclaimed by the
+	// reference sweep and the writer only once it has finished.
+	if regularModelCacheKeepsSharedClaim(req) {
+		return c.cleanupSharedClaimRequestArtifacts(ctx, initJob, rwPVC.Name)
+	}
 	// cleanup InitJob & its pods, this will clear the rw-pvc also
 	backgroundDeletion := metav1.DeletePropagationBackground
 	err = c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Delete(ctx, initJob.Name, metav1.DeleteOptions{

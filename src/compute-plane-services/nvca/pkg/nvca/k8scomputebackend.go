@@ -670,8 +670,26 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 	cachemf mutateFunc,
 ) (mf func(*corev1.Pod), roPVCName string, err error) {
 	log := core.GetLogger(ctx)
-	// setup init cache Job writer and RWMany PVC
-	mc, roPVCName := c.SetupModelCachingForRequest(ctx, rwPVC, initJob, req, cachemf)
+	var mc ModelCachingState
+	// The selection persisted at request creation decides the flow, mirroring
+	// HelmCacheBackendFromSelection. A request without one predates selections
+	// and takes the legacy path unchanged.
+	selection, present, err := regularModelCacheSelection(req)
+	switch {
+	case err != nil:
+		log.WithError(err).Errorf("invalid persisted model cache selection on request %v/%v, model caching will be disabled",
+			req.Namespace, req.Name)
+		mc = ModelCachingFailed
+	case present && selection.Mode != nvcastorage.ModelCacheSelectionDurable:
+		log.Infof("persisted model cache selection is %q for request %v/%v, skipping durable caching",
+			selection.Mode, req.Namespace, req.Name)
+		return func(*corev1.Pod) {}, "", nil
+	case present && selection.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly:
+		mc, roPVCName = c.setupRWXReadOnlyModelCachingForRequest(ctx, req, rwPVC, initJob, selection)
+	default:
+		// setup init cache Job writer and RWMany PVC
+		mc, roPVCName = c.SetupModelCachingForRequest(ctx, rwPVC, initJob, req, cachemf)
+	}
 	switch mc {
 	case ModelCachingCompleted:
 		log.Infof("model caching completed, starting worker creation")
@@ -685,6 +703,15 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 							ClaimName: roPVCName,
 							ReadOnly:  true,
 						},
+					}
+				}
+			}
+			// The claim may be shared by every reader in the namespace, so the
+			// mount is read-only too, not only the volume source.
+			for ci := range pod.Spec.Containers {
+				for mi := range pod.Spec.Containers[ci].VolumeMounts {
+					if pod.Spec.Containers[ci].VolumeMounts[mi].Name == ModelVolumeName {
+						pod.Spec.Containers[ci].VolumeMounts[mi].ReadOnly = true
 					}
 				}
 			}
