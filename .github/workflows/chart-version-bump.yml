@@ -218,18 +218,32 @@ jobs:
           # release can push first. Fetch and rebase onto it, then retry.
           # Time-budgeted, not attempt-counted: real bursts have hit 23
           # releases at once (NVIDIA/nvcf#1762), past any small fixed count.
+          # `remaining` bounds every step below, sleep included, so the loop
+          # cannot overrun the budget even if one step is slow.
           deadline=$(($(date +%s) + 300))
           attempt=0
-          until git push --force-with-lease origin "${branch}"; do
+          remaining() {
+            local left=$((deadline - $(date +%s)))
+            [ "${left}" -gt 0 ] && echo "${left}"
+          }
+          give_up() {
+            echo "push kept losing the race against another release past the 5 minute retry budget (attempt ${attempt})" >&2
+            exit 1
+          }
+
+          left="$(remaining)" || give_up
+          until timeout "${left}" git push --force-with-lease origin "${branch}"; do
             attempt=$((attempt + 1))
-            if [ "$(date +%s)" -ge "${deadline}" ]; then
-              echo "push kept losing the race against another release past the 5 minute retry budget (attempt ${attempt})" >&2
-              exit 1
-            fi
             echo "push raced with another release on the shared branch, retrying (attempt ${attempt})" >&2
-            sleep "$(((RANDOM % 5) + 1))"
-            git fetch origin "${branch}"
-            git rebase "origin/${branch}"
+            left="$(remaining)" || give_up
+            sleep_for=$(((RANDOM % 5) + 1))
+            [ "${sleep_for}" -gt "${left}" ] && sleep_for="${left}"
+            sleep "${sleep_for}"
+            left="$(remaining)" || give_up
+            timeout "${left}" git fetch origin "${branch}"
+            left="$(remaining)" || give_up
+            timeout "${left}" git rebase "origin/${branch}"
+            left="$(remaining)" || give_up
           done
 
           # The pull request squashes to one commit, so its title has to carry
