@@ -840,6 +840,21 @@ class GithubReleaseTest(unittest.TestCase):
             "deploy/helm/cloud-tasks/v1.4.4",
         )
 
+    def test_reval_chart_continues_its_published_lineage(self):
+        metadata = json.loads(
+            SCRIPT_PATH.with_name("github-release-subprojects.json").read_text()
+        )
+        service = next(s for s in metadata["services"] if s["id"] == "reval-helm")
+
+        self.assertEqual(service["path"], "deploy/helm/helm-reval")
+        self.assertEqual(service["service_name"], "helm-reval")
+        self.assertEqual(service["initial_version"], "1.3.8")
+        self.assertEqual(service["deploys"], ["helm-reval"])
+        self.assertEqual(
+            self.github_release.tag_for_version(service, service["initial_version"]),
+            "deploy/helm/helm-reval/v1.3.8",
+        )
+
     def test_http_invocation_chart_uses_its_published_lineage(self):
         root = SCRIPT_PATH.parents[2]
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
