@@ -114,6 +114,7 @@ spec:
             - --active-canary-interval-ms={{ $.Values.pylon.activeCanaryIntervalMs }}
             {{- if $.Values.pylon.doCalibration }}
             - --do-calibration
+            - --calibration-max-concurrency={{ $.Values.pylon.calibrationMaxConcurrency }}
             {{- end }}
             {{- if $initialInputTps }}
             - --initial-input-tps={{ $initialInputTps }}

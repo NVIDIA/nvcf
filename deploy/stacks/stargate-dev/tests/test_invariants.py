@@ -315,6 +315,9 @@ class RenderedStackTests(unittest.TestCase):
             tls_volume["secret"]["items"],
         )
 
+        chart_values = yaml.safe_load(
+            (STACK_DIR / "charts/stargate-dev-mockdc/values.yaml").read_text()
+        )
         inference_server_ids = set()
         cluster_ids = set()
         for path, deployment in deployments:
@@ -353,6 +356,10 @@ class RenderedStackTests(unittest.TestCase):
                 "--grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt", arguments
             )
             self.assertIn("--do-calibration", arguments)
+            self.assertIn(
+                f"--calibration-max-concurrency={chart_values['pylon']['calibrationMaxConcurrency']}",
+                arguments,
+            )
             self.assertIn("mockdc-usw2", str(path))
             self.assertEqual(
                 deployment["spec"]["template"]["metadata"]["labels"][
