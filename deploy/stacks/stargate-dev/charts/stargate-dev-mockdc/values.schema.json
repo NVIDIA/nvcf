@@ -51,6 +51,7 @@
       "required": ["doCalibration", "initialInputTps"],
       "properties": {
         "doCalibration": {"type": "boolean"},
+        "engineStatsStream": {"enum": ["auto", "off", "required"]},
         "calibrationMaxConcurrency": {"type": "integer", "minimum": 1},
         "activeCanaryIntervalMs": {"type": "integer", "minimum": 0},
         "initialInputTps": {
@@ -84,7 +85,8 @@
       "required": ["profile", "healthDelayMs"],
       "properties": {
         "profile": {"enum": ["h100-llama-3.1-8b"]},
-        "healthDelayMs": {"type": "integer", "minimum": 0}
+        "healthDelayMs": {"type": "integer", "minimum": 0},
+        "statsStreamEnabled": {"type": "boolean"}
       }
     }
   }

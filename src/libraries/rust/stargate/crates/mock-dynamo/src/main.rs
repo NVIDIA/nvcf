@@ -147,6 +147,9 @@ struct Args {
     /// Total mock KV-cache capacity in tokens. 0 disables cache tracking
     #[arg(long, default_value_t = 0, value_name = "TOKENS")]
     kv_cache_capacity_tokens: u64,
+    /// Return 404 for the engine stats stream so clients use fallback observations
+    #[arg(long, default_value_t = false)]
+    disable_stats_stream: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -402,6 +405,7 @@ struct AppState {
     health_delay: Duration,
     kv_cache: Arc<Mutex<kv_cache::KvCacheState>>,
     stats_events: broadcast::Sender<stats_stream::StatsStreamEvent>,
+    stats_stream_enabled: bool,
     test_control: test_control::TestControlState,
 }
 
@@ -448,6 +452,7 @@ async fn main() -> Result<()> {
             behavior.kv_cache_capacity_tokens,
         ))),
         stats_events,
+        stats_stream_enabled: !args.disable_stats_stream,
         test_control: test_control::TestControlState::with_discovered_models([args.model_name]),
     };
 
@@ -472,7 +477,11 @@ async fn main() -> Result<()> {
 
     let listener = TcpListener::bind(http_addr).await?;
     let actual_http_addr = listener.local_addr()?;
-    info!(addr = %actual_http_addr, "mock-dynamo HTTP listening");
+    info!(
+        addr = %actual_http_addr,
+        stats_stream_enabled = !args.disable_stats_stream,
+        "mock-dynamo HTTP listening"
+    );
     info!("send POST to http://{actual_http_addr}/v1/chat/completions");
     info!("send POST to http://{actual_http_addr}/v1/responses");
     info!("send POST to http://{actual_http_addr}/v1/embeddings");

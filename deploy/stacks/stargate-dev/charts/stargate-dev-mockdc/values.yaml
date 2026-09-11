@@ -26,11 +26,14 @@ mockDynamo:
   backend0:
     profile: h100-llama-3.1-8b
     healthDelayMs: 0
+    statsStreamEnabled: false
   backend1:
     profile: h100-llama-3.1-8b
     healthDelayMs: 0
+    statsStreamEnabled: false
 
 pylon:
+  engineStatsStream: auto
   doCalibration: true
   calibrationMaxConcurrency: 25
   initialInputTps: ""

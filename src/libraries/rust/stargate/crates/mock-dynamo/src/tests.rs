@@ -56,8 +56,32 @@ fn test_state() -> AppState {
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
         stats_events: test_stats_events(),
+        stats_stream_enabled: true,
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
+}
+
+#[test]
+fn profile_allows_disabling_the_stats_stream() {
+    let args = Args::try_parse_from([
+        "mock-dynamo",
+        "--profile",
+        "h100-llama-3.1-8b",
+        "--disable-stats-stream",
+    ])
+    .expect("profile should allow disabling telemetry");
+    assert!(args.disable_stats_stream);
+}
+
+#[tokio::test]
+async fn disabled_stats_stream_returns_not_found_without_subscribing() {
+    let state = AppState {
+        stats_stream_enabled: false,
+        ..test_state()
+    };
+    let response = stats_stream(State(state.clone())).await;
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(state.stats_events.receiver_count(), 0);
 }
 
 #[test]

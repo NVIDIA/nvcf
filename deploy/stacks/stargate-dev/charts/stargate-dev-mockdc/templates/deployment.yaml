@@ -74,6 +74,9 @@ spec:
             - --model-name={{ $modelName }}
             - --profile={{ $mock.profile }}
             - --health-delay-ms={{ $mock.healthDelayMs }}
+            {{- if not $mock.statsStreamEnabled }}
+            - --disable-stats-stream
+            {{- end }}
           ports:
             - name: mock-http
               containerPort: 8090
@@ -112,6 +115,7 @@ spec:
             - --auth-token-file=/var/run/stargate/auth/token
             - --kv-cache-stats-path=/kv-cache/stats
             - --active-canary-interval-ms={{ $.Values.pylon.activeCanaryIntervalMs }}
+            - --engine-stats-stream={{ $.Values.pylon.engineStatsStream }}
             {{- if $.Values.pylon.doCalibration }}
             - --do-calibration
             - --calibration-max-concurrency={{ $.Values.pylon.calibrationMaxConcurrency }}

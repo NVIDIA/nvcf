@@ -352,6 +352,13 @@ class RenderedStackTests(unittest.TestCase):
                 any(value.startswith("--initial-input-tps=") for value in arguments)
             )
             self.assertIn("--active-canary-interval-ms=0", arguments)
+            self.assertIn("--engine-stats-stream=auto", arguments)
+            mock_dynamo = next(
+                container
+                for container in deployment["spec"]["template"]["spec"]["containers"]
+                if container["name"] == "mock-dynamo"
+            )
+            self.assertIn("--disable-stats-stream", mock_dynamo["args"])
             self.assertIn(
                 "--grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt", arguments
             )

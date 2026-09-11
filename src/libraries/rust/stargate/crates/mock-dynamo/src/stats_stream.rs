@@ -15,7 +15,8 @@
 
 use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -50,6 +51,9 @@ fn is_false(value: &bool) -> bool {
 }
 
 pub(crate) async fn stats_stream(State(state): State<AppState>) -> Response {
+    if !state.stats_stream_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let mut events = state.stats_events.subscribe();
     let model = state.model_name;
     let max_engine_concurrency = state
