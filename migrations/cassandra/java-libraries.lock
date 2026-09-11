@@ -1,0 +1,6 @@
+# SHA-256 and Maven Central URL for Cassandra migrations dependency overlays.
+# Jackson annotations follows the upstream family's major.minor versioning.
+53ca085f4a150f703f49e1aabd935bd03b43e1ea3d55d135438292af22cef56b  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar
+4b40a06396f239f8de2da57419adde6e94e5edc18a2171d471ea05eeed4e5c2d  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.21.4/jackson-core-2.21.4.jar
+3888e9e69ab66fbacaacc9aea0e9ffbf15368288e4aca468b024dba11c09fbf9  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.21.4/jackson-databind-2.21.4.jar
+d1ac4b98b70304e56448423589fde5e775b100889643ad1ead62cc7811633684  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.21.4/jackson-datatype-jsr310-2.21.4.jar
