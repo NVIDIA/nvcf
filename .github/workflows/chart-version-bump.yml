@@ -33,15 +33,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Scoped per tag, not repo-wide. A shared group meant several releases
-  # landing together queued behind each other, and GitHub Actions keeps only
-  # the most recently queued run per group: earlier queued runs were
-  # silently cancelled before they ever started, dropping their bump with no
-  # error anywhere (seen for real on 2026-09-04, when a combined release
-  # dropped the encrypted-secret-store and cloud-functions bumps). Per-tag
-  # groups let simultaneous releases for different services run
-  # independently; the push retry below handles the remaining race on the
-  # shared bump branch.
+  # Per tag, not repo-wide: a shared group silently dropped queued runs
+  # when releases landed close together (NVIDIA/nvcf#1762).
   group: chart-version-bump-${{ github.event.inputs.tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
@@ -221,20 +214,10 @@ jobs:
               -m "${subject}" \
               -m "Opened by the chart version bump workflow on release of ${TAG}."
           fi
-          # Retried, not a single shot: the branch is now shared across truly
-          # concurrent runs (see the concurrency block above), so another
-          # release's push can land between this job's checkout and its own
-          # push. force-with-lease turns that into a rejected push rather than
-          # a silent overwrite; re-fetching and rebasing recovers instead of
-          # dropping this bump on the floor.
-          #
-          # Budgeted by wall clock, not by a fixed attempt count. This
-          # repository's own release history has produced bursts of up to 23
-          # service releases and 13 chart releases within a few minutes of
-          # each other (see NVIDIA/nvcf#1762), so a small fixed retry count
-          # would still fail under a burst this repository has already
-          # produced. A time budget scales with however large the next burst
-          # turns out to be instead of hard-coding today's observed maximum.
+          # The branch is now shared across truly concurrent runs, so another
+          # release can push first. Fetch and rebase onto it, then retry.
+          # Time-budgeted, not attempt-counted: real bursts have hit 23
+          # releases at once (NVIDIA/nvcf#1762), past any small fixed count.
           deadline=$(($(date +%s) + 300))
           attempt=0
           until git push --force-with-lease origin "${branch}"; do
