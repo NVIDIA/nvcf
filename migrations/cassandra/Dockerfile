@@ -84,6 +84,10 @@ COPY --from=migrate-builder --chmod=0555 /out/migrate /usr/bin/migrate
 COPY --from=kubectl-downloader --chmod=0555 /out/kubectl /usr/local/bin/kubectl
 COPY --from=java-library-downloader /tmp/java-libraries/*.jar /opt/cassandra/lib/
 
+# The Cassandra base uses gosu from its own entrypoint. This image replaces
+# that entrypoint with /bin/sh and never invokes the inherited helper.
+RUN rm -f /usr/local/bin/gosu
+
 COPY keyspaces /app/keyspaces
 COPY --chmod=775 execute_sqls.sh /app
 
