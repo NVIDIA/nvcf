@@ -45,6 +45,10 @@ env:
   NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
   GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
   GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+  HELM_VERSION: "3.21.4"
+  HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+  HELMFILE_VERSION: "1.1.9"
+  HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
 
 jobs:
   # NVIDIA self-hosted runners. Eligible without a conditional because this
@@ -129,11 +133,6 @@ jobs:
           go-version-file: tools/go-toolchain/go.mod
 
       - name: Install inventory rendering tools
-        env:
-          HELM_VERSION: "3.21.4"
-          HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
-          HELMFILE_VERSION: "1.1.9"
-          HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"
@@ -200,11 +199,6 @@ jobs:
 
       - name: Install inventory rendering tools
         if: startsWith(github.ref_name, 'deploy/stacks/self-managed/v')
-        env:
-          HELM_VERSION: "3.21.4"
-          HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
-          HELMFILE_VERSION: "1.1.9"
-          HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"

@@ -771,7 +771,7 @@ func extractResolvedInventoryGitChart(repoRoot, tag, sourcePath, destination str
 			if err := os.MkdirAll(target, header.FileInfo().Mode().Perm()); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -809,7 +809,7 @@ func setResolvedInventorySourceChartVersion(chartPath, wantName, version string)
 		return err
 	}
 	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return fmt.Errorf("Chart.yaml must contain one mapping")
+		return fmt.Errorf("chart metadata must contain one YAML mapping")
 	}
 	mapping := document.Content[0]
 	name := ""
@@ -823,10 +823,10 @@ func setResolvedInventorySourceChartVersion(chartPath, wantName, version string)
 		}
 	}
 	if name != wantName {
-		return fmt.Errorf("Chart.yaml name is %q, want %q", name, wantName)
+		return fmt.Errorf("chart metadata name is %q, want %q", name, wantName)
 	}
 	if versionNode == nil {
-		return fmt.Errorf("Chart.yaml has no version")
+		return fmt.Errorf("chart metadata has no version")
 	}
 	versionNode.Value = version
 	versionNode.Tag = "!!str"

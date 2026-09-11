@@ -1409,13 +1409,21 @@ class GithubReleaseTest(unittest.TestCase):
 
     def test_stack_tag_workflow_installs_pinned_inventory_tools(self):
         workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
+        workflow_env = workflow.split("\njobs:\n", 1)[0]
         self.assertIn("actions/setup-go@v5", workflow)
-        self.assertIn('HELMFILE_VERSION: "1.1.9"', workflow)
+        for pin in (
+            'HELM_VERSION: "3.21.4"',
+            'HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"',
+            'HELMFILE_VERSION: "1.1.9"',
+            'HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"',
+        ):
+            self.assertIn(pin, workflow_env)
+            self.assertEqual(workflow.count(pin), 1)
         self.assertIn(
             "NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}",
             workflow,
         )
-        self.assertIn("Install inventory rendering tools", workflow)
+        self.assertEqual(workflow.count("Install inventory rendering tools"), 2)
         self.assertLess(
             workflow.index("Install inventory rendering tools"),
             workflow.index("Validate tag and create release notes"),
