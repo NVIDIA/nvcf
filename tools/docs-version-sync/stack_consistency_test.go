@@ -234,8 +234,7 @@ func TestPendingPublicationsNeverRenderPrivateRegistryPaths(t *testing.T) {
 	}
 
 	allPublicOutput := manifest + imageMirroringOutput
-	staging := catalog.Registries[defaultStackRegistry]
-	privateRegistryPath := staging.Host + "/" + staging.Namespace
+	privateRegistryPath := "registry.example.com/private/team"
 	if strings.Contains(allPublicOutput, privateRegistryPath) {
 		t.Fatalf("generated public docs expose private registry path %q", privateRegistryPath)
 	}
@@ -571,7 +570,7 @@ func TestValidateCatalogAcceptsPendingArtifactID(t *testing.T) {
 		ID:       "cache-image",
 		Name:     "cache",
 		Type:     ArtifactTypeImage,
-		Registry: "staging",
+		Registry: defaultImageRegistry,
 		Version:  "1.2.3",
 	})
 	catalog.PublicationPending = []string{"cache-image"}

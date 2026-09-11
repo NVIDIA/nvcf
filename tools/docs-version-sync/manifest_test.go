@@ -37,13 +37,13 @@ func TestResolveManifestEntriesRejectsUnclassifiedArtifact(t *testing.T) {
 		Artifact{
 			Name:     "new-unclassified-service",
 			Type:     ArtifactTypeImage,
-			Registry: "staging",
+			Registry: defaultImageRegistry,
 			Version:  "1.0.0",
 		},
 		Artifact{
 			Name:     "another-unclassified-service",
 			Type:     ArtifactTypeImage,
-			Registry: "staging",
+			Registry: defaultImageRegistry,
 			Version:  "1.0.0",
 		},
 	)

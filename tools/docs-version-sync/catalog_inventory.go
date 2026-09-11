@@ -56,11 +56,11 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 
-	markPublicationPendingUnlessExact(catalog, catalog.stackArtifact())
 	if setArtifactVersion(catalog, computeStackResourceName, inventory.Source.Version) {
-		compute, _ := catalog.findArtifact(computeStackResourceName)
-		markPublicationPendingUnlessExact(catalog, compute)
+		// The source release advances both deployment bundles together. Their
+		// public publication status remains independently verified below.
 	}
+	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	if err := ValidateCatalog(catalog); err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 		artifacts = append(artifacts, Artifact{
 			Name:     resolved.Name,
 			Type:     artifactType,
-			Registry: defaultStackRegistry,
+			Registry: publicRegistryForArtifactType(artifactType),
 			Version:  resolved.Version,
 			Digest:   resolved.Digest,
 		})
@@ -97,6 +97,17 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 	preserveCatalogArtifactIdentity(artifacts, base)
 	assignCatalogArtifactIDs(artifacts)
 	return artifacts, nil
+}
+
+func publicRegistryForArtifactType(artifactType ArtifactType) string {
+	switch artifactType {
+	case ArtifactTypeImage:
+		return defaultImageRegistry
+	case ArtifactTypeChart:
+		return defaultChartRegistry
+	default:
+		return defaultStackRegistry
+	}
 }
 
 func catalogArtifactType(resolvedType string) (ArtifactType, error) {
@@ -206,10 +217,4 @@ func validateCatalogEffectiveStackPins(catalog *Catalog, sources map[string][]by
 		}
 	}
 	return nil
-}
-
-func markPublicationPendingUnlessExact(catalog *Catalog, artifact Artifact) {
-	if _, published := catalog.publicationFor(artifact); !published {
-		catalog.PublicationPending = append(catalog.PublicationPending, artifact.catalogKey())
-	}
 }

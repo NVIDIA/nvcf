@@ -30,8 +30,10 @@ import (
 const (
 	defaultStackResourceName = "nvcf-self-managed-stack"
 	computeStackResourceName = "nvcf-compute-plane-stack"
-	defaultStackRegistry     = "staging"
+	defaultStackRegistry     = "public-resources"
 	defaultCLIRegistry       = defaultStackRegistry
+	defaultImageRegistry     = "public-images"
+	defaultChartRegistry     = "public-helm"
 	defaultCLIVersion        = "0.0.30"
 )
 
@@ -634,7 +636,16 @@ func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) 
 		Registries: map[string]Registry{
 			defaultStackRegistry: {
 				Host:      "nvcr.io",
-				Namespace: "0833294136851237/nvcf-ncp-staging",
+				Namespace: "nvidia/nvcf",
+			},
+			defaultImageRegistry: {
+				Host:      "nvcr.io",
+				Namespace: "nvidia/nvcf",
+			},
+			defaultChartRegistry: {
+				Host:            "https://helm.ngc.nvidia.com",
+				Namespace:       "nvidia/nvcf",
+				RepositoryAlias: "nvcf",
 			},
 		},
 		Stack: StackMetadata{
@@ -656,6 +667,7 @@ func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) 
 		artifact.Source = ""
 		catalog.Artifacts = append(catalog.Artifacts, artifact)
 	}
+	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	return catalog
 }
@@ -713,9 +725,20 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 		seenSupplemental[key] = struct{}{}
 	}
 	catalog.applyVersionOverrides()
+	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	catalog.pruneUnusedRegistries()
 	return catalog
+}
+
+func (catalog *Catalog) markAllUnpublishedAsPending() {
+	artifacts := append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...)
+	artifacts = append(artifacts, catalog.SupplementalArtifacts...)
+	for _, artifact := range artifacts {
+		if _, published := catalog.publicationFor(artifact); !published {
+			catalog.PublicationPending = append(catalog.PublicationPending, artifact.catalogKey())
+		}
+	}
 }
 
 func (catalog *Catalog) reconcilePublicationPending() {
@@ -733,32 +756,11 @@ func (catalog *Catalog) reconcilePublicationPending() {
 			}
 		}
 	}
-	for _, artifact := range artifacts {
-		if !catalog.artifactUsesStagingRegistry(artifact) {
-			continue
-		}
-		if _, published := catalog.publicationFor(artifact); !published {
-			pending[artifact.catalogKey()] = struct{}{}
-		}
-	}
-
 	catalog.PublicationPending = catalog.PublicationPending[:0]
 	for name := range pending {
 		catalog.PublicationPending = append(catalog.PublicationPending, name)
 	}
 	sort.Strings(catalog.PublicationPending)
-}
-
-func (catalog *Catalog) artifactUsesStagingRegistry(artifact Artifact) bool {
-	registry, ok := catalog.Registries[artifact.Registry]
-	if !ok {
-		return false
-	}
-	staging, ok := catalog.Registries[defaultStackRegistry]
-	if !ok {
-		return false
-	}
-	return registry.Host == staging.Host && registry.Namespace == staging.Namespace
 }
 
 func (catalog *Catalog) applyVersionOverrides() {

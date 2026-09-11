@@ -52,11 +52,11 @@ func TestRenderManifestDeploymentResources(t *testing.T) {
 func TestRenderManifestHandlesNewNVCAAndNVCTImageAndHelmArtifacts(t *testing.T) {
 	catalog := testCatalog()
 	catalog.Artifacts = append(catalog.Artifacts,
-		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.0.0-rc.13"},
-		Artifact{Name: "nvca-operator", Type: ArtifactTypeImage, Registry: "staging", Version: "3.0.0-rc.13"},
-		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: "staging", Version: "1.11.1"},
-		Artifact{Name: "nvct-service-oss", Type: ArtifactTypeImage, Registry: "staging", Version: "1.2.11"},
-		Artifact{Name: "helm-nvcf-nvct-api", Type: ArtifactTypeChart, Registry: "staging", Version: "1.4.2"},
+		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.0.0-rc.13"},
+		Artifact{Name: "nvca-operator", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.0.0-rc.13"},
+		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.11.1"},
+		Artifact{Name: "nvct-service-oss", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "1.2.11"},
+		Artifact{Name: "helm-nvcf-nvct-api", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.4.2"},
 	)
 	catalog.Manifest.Entries = append(catalog.Manifest.Entries,
 		ManifestEntry{ArtifactID: "nvca", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Registers GPU clusters."},
@@ -112,15 +112,16 @@ func TestRenderManifestUsesVerifiedPublicLocations(t *testing.T) {
 		RepositoryAlias: "nvcf",
 	}
 	catalog.Artifacts = append(catalog.Artifacts,
-		Artifact{Name: "nvcf-grpc-proxy", Type: ArtifactTypeImage, Registry: "staging", Version: "1.29.1"},
-		Artifact{Name: "helm-nvcf-grpc-proxy", Type: ArtifactTypeChart, Registry: "staging", Version: "1.6.7"},
-		Artifact{Name: "helm-nvcf-nats", Type: ArtifactTypeChart, Registry: "staging", Version: "0.6.1"},
+		Artifact{Name: "nvcf-grpc-proxy", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "1.29.1"},
+		Artifact{Name: "helm-nvcf-grpc-proxy", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.6.7"},
+		Artifact{Name: "helm-nvcf-nats", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "0.6.1"},
 	)
 	catalog.Publications = []Publication{
 		{Name: "nvcf-grpc-proxy", Version: "1.29.1", Registry: "public-images"},
 		{Name: "helm-nvcf-grpc-proxy", Version: "1.6.7", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 		{Name: "helm-nvcf-nats", Version: "0.7.1", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 	}
+	catalog.PublicationPending = []string{"helm-nvcf-nats"}
 	catalog.Manifest.Entries = append(catalog.Manifest.Entries,
 		ManifestEntry{ArtifactID: "nvcf-grpc-proxy", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Proxies gRPC traffic."},
 		ManifestEntry{ArtifactID: "helm-nvcf-grpc-proxy", Plane: ManifestPlaneControl, Kind: ManifestKindChart, Requirement: ManifestRequired, Description: "Deploys the gRPC proxy."},
@@ -135,7 +136,7 @@ func TestRenderManifestUsesVerifiedPublicLocations(t *testing.T) {
 	for _, want := range []string{
 		"`nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.29.1`",
 		"`https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-grpc-proxy:1.6.7`",
-		"`nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvcf-nats:0.6.1`",
+		"`Publication pending`",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered table missing %q:\n%s", want, got)
@@ -158,7 +159,7 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 	updated := BuildCatalogFromArtifactsWithBase("0.6.0-rc.99", []Artifact{{
 		Name:     "nvcf-grpc-proxy",
 		Type:     ArtifactTypeImage,
-		Registry: "staging",
+		Registry: defaultImageRegistry,
 		Version:  "1.30.0",
 	}}, base)
 
@@ -173,15 +174,15 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 	if err != nil {
 		t.Fatalf("artifactPath failed: %v", err)
 	}
-	if path != "nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-grpc-proxy:1.30.0" {
+	if path != "nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.30.0" {
 		t.Fatalf("path = %q, want refreshed version at its stack-provided location", path)
 	}
 }
 
-func TestCatalogRefreshWithoutBaseRendersStagingArtifactsAsPending(t *testing.T) {
+func TestCatalogRefreshWithoutBaseRendersUnverifiedArtifactsAsPending(t *testing.T) {
 	catalog := BuildCatalogFromArtifactsWithBase("0.9.1", []Artifact{
-		{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: "staging", Version: "1.21.3"},
-		{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.2.19"},
+		{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.21.3"},
+		{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.2.19"},
 	}, nil)
 	catalog.Manifest.Entries = []ManifestEntry{
 		{ArtifactID: defaultStackResourceName, Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Control-plane stack."},
@@ -197,20 +198,17 @@ func TestCatalogRefreshWithoutBaseRendersStagingArtifactsAsPending(t *testing.T)
 	for _, name := range []string{defaultStackResourceName, "nvcf-cli", "helm-nvca-operator", "nvca"} {
 		row := manifestRow(t, got, name)
 		if !strings.Contains(row, "`Publication pending`") {
-			t.Errorf("%s row does not mark the unverified staging artifact pending: %s", name, row)
+			t.Errorf("%s row does not mark the unverified artifact pending: %s", name, row)
 		}
-	}
-	if strings.Contains(got, catalog.Registries[defaultStackRegistry].Namespace) {
-		t.Fatalf("rendered manifest exposes staging namespace:\n%s", got)
 	}
 }
 
-func TestCatalogRefreshMarksChangedStagingVersionsPendingAndKeepsPublishedVersionsPublic(t *testing.T) {
+func TestCatalogRefreshMarksChangedVersionsPendingAndKeepsPublishedVersionsPublic(t *testing.T) {
 	base := testCatalog()
 	base.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
 	base.Artifacts = append(base.Artifacts,
-		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.2.18"},
-		Artifact{Name: "verified-service", Type: ArtifactTypeImage, Registry: "staging", Version: "2.0.0"},
+		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.2.18"},
+		Artifact{Name: "verified-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "2.0.0"},
 	)
 	base.Publications = []Publication{
 		{Name: "nvca", Version: "3.2.18", Registry: "public-images"},
@@ -222,8 +220,8 @@ func TestCatalogRefreshMarksChangedStagingVersionsPendingAndKeepsPublishedVersio
 	)
 
 	catalog := BuildCatalogFromArtifactsWithBase("0.6.0", []Artifact{
-		{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.2.19"},
-		{Name: "verified-service", Type: ArtifactTypeImage, Registry: "staging", Version: "2.0.0"},
+		{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.2.19"},
+		{Name: "verified-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "2.0.0"},
 	}, base)
 	got, err := Render("manifest-artifact-registry-paths", catalog)
 	if err != nil {
@@ -233,21 +231,18 @@ func TestCatalogRefreshMarksChangedStagingVersionsPendingAndKeepsPublishedVersio
 	for _, name := range []string{defaultStackResourceName, computeStackResourceName, "nvcf-cli", "nvca"} {
 		row := manifestRow(t, got, name)
 		if !strings.Contains(row, "`Publication pending`") {
-			t.Errorf("%s row does not mark the unverified staging artifact pending: %s", name, row)
+			t.Errorf("%s row does not mark the unverified artifact pending: %s", name, row)
 		}
 	}
 	publicRow := manifestRow(t, got, "verified-service")
 	if !strings.Contains(publicRow, "`nvcr.io/nvidia/nvcf/verified-service:2.0.0`") {
 		t.Errorf("matching verified publication did not retain its public distribution: %s", publicRow)
 	}
-	if strings.Contains(got, catalog.Registries[defaultStackRegistry].Namespace) {
-		t.Fatalf("rendered manifest exposes staging namespace:\n%s", got)
-	}
 }
 
 func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	catalog := testCatalog()
-	catalog.Registries["ea-images"] = Registry{Host: "nvcr.io", Namespace: "example/selfhosted-ga"}
+	catalog.Registries["ea-images"] = Registry{Host: "nvcr.io", Namespace: "example/public-preview"}
 	catalog.Publications = []Publication{{
 		Name:             "llm-api-gateway",
 		Version:          "0.3.0",
@@ -274,7 +269,7 @@ func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("artifactPath failed: %v", err)
 	}
-	if want := "nvcr.io/example/selfhosted-ga/llm-api-gateway:0.3.0-ea"; got != want {
+	if want := "nvcr.io/example/public-preview/llm-api-gateway:0.3.0-ea"; got != want {
 		t.Fatalf("artifactPath = %q, want %q", got, want)
 	}
 }
@@ -284,7 +279,7 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 	artifact := Artifact{
 		Name:     "example",
 		Type:     ArtifactTypeImage,
-		Registry: "staging",
+		Registry: defaultImageRegistry,
 		Version:  "1.2.3",
 		Digest:   digest,
 	}
@@ -295,7 +290,7 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 	}{
 		{
 			name: "source reference",
-			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3@" + digest,
+			want: "nvcr.io/nvidia/nvcf/example:1.2.3@" + digest,
 		},
 		{
 			name: "unchanged publication",
@@ -304,16 +299,16 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 				Version:  artifact.Version,
 				Registry: artifact.Registry,
 			},
-			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3@" + digest,
+			want: "nvcr.io/nvidia/nvcf/example:1.2.3@" + digest,
 		},
 		{
 			name: "registry remap",
 			publication: &Publication{
 				Name:     artifact.Name,
 				Version:  artifact.Version,
-				Registry: "public-images",
+				Registry: "public-mirror",
 			},
-			want: "nvcr.io/nvidia/nvcf/example:1.2.3",
+			want: "registry.example.com/public/nvcf/example:1.2.3",
 		},
 		{
 			name: "version remap",
@@ -323,13 +318,13 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 				PublishedVersion: "1.2.3-public",
 				Registry:         artifact.Registry,
 			},
-			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3-public",
+			want: "nvcr.io/nvidia/nvcf/example:1.2.3-public",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			catalog := testCatalog()
-			catalog.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+			catalog.Registries["public-mirror"] = Registry{Host: "registry.example.com", Namespace: "public/nvcf"}
 			if tt.publication != nil {
 				catalog.Publications = []Publication{*tt.publication}
 			}
@@ -354,7 +349,7 @@ func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 	updated := BuildCatalogFromArtifactsWithBase("0.6.0-rc.99", []Artifact{{
 		Name:     "nvcf_worker_utils",
 		Type:     ArtifactTypeImage,
-		Registry: "staging",
+		Registry: defaultImageRegistry,
 		Version:  "2.101.0",
 	}}, base)
 
@@ -369,7 +364,7 @@ func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("artifactPath failed: %v", err)
 	}
-	if path != "nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf_worker_utils:2.109.4" {
+	if path != "nvcr.io/nvidia/nvcf/nvcf_worker_utils:2.109.4" {
 		t.Fatalf("path = %q, want overridden version at its stack-provided location", path)
 	}
 }
@@ -414,13 +409,13 @@ func TestRenderImageMirroringResourceExamples(t *testing.T) {
 	if !strings.Contains(got, `export STACK_VERSION="0.5.0"`) {
 		t.Fatalf("resource examples missing stack version:\n%s", got)
 	}
-	if !strings.Contains(got, `0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:${STACK_VERSION}`) {
+	if !strings.Contains(got, `nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}`) {
 		t.Fatalf("resource examples missing versioned stack ref:\n%s", got)
 	}
 	if !strings.Contains(got, `export COMPUTE_STACK_VERSION="0.5.0"`) {
 		t.Fatalf("resource examples missing compute stack version:\n%s", got)
 	}
-	if !strings.Contains(got, `0833294136851237/nvcf-ncp-staging/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}`) {
+	if !strings.Contains(got, `nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}`) {
 		t.Fatalf("resource examples missing compute stack ref:\n%s", got)
 	}
 	for _, stale := range []string{"resource list", "Download latest", ":*"} {
@@ -439,7 +434,7 @@ func TestRenderImageMirroringSnippets(t *testing.T) {
 	if !strings.Contains(stack, `export VERSION="0.5.0"`) {
 		t.Fatalf("stack snippet missing stack version:\n%s", stack)
 	}
-	if !strings.Contains(stack, `0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:${VERSION}`) {
+	if !strings.Contains(stack, `nvidia/nvcf/nvcf-self-managed-stack:${VERSION}`) {
 		t.Fatalf("stack snippet missing stack resource path:\n%s", stack)
 	}
 	computeStack, err := Render("image-mirroring-compute-stack-snippet", catalog)
@@ -449,7 +444,7 @@ func TestRenderImageMirroringSnippets(t *testing.T) {
 	if !strings.Contains(computeStack, `export COMPUTE_VERSION="0.5.0"`) {
 		t.Fatalf("compute stack snippet missing version:\n%s", computeStack)
 	}
-	if !strings.Contains(computeStack, `0833294136851237/nvcf-ncp-staging/nvcf-compute-plane-stack:${COMPUTE_VERSION}`) {
+	if !strings.Contains(computeStack, `nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}`) {
 		t.Fatalf("compute stack snippet missing resource path:\n%s", computeStack)
 	}
 
@@ -460,7 +455,7 @@ func TestRenderImageMirroringSnippets(t *testing.T) {
 	if !strings.Contains(cli, `export VERSION="0.0.30"`) {
 		t.Fatalf("cli snippet missing cli version:\n%s", cli)
 	}
-	if !strings.Contains(cli, `0833294136851237/nvcf-ncp-staging/nvcf-cli:${VERSION}`) {
+	if !strings.Contains(cli, `nvidia/nvcf/nvcf-cli:${VERSION}`) {
 		t.Fatalf("cli snippet missing cli resource path:\n%s", cli)
 	}
 }
@@ -531,13 +526,13 @@ func TestRenderComputeStackDownloadsMatchPublicationState(t *testing.T) {
 func TestSyncInlineSelfManagedNVCAOperatorVersions(t *testing.T) {
 	catalog := testCatalog()
 	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
-		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.0.0-rc.11"},
-		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: "staging", Version: "1.9.0"},
+		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.0.0-rc.11"},
+		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.9.0"},
 	)
 	content := "| **Chart** | `helm-nvca-operator` |\n| --- | --- |\n| **Version** | `1.6.7` |\n\n" +
 		"selfManaged:\n  nvcaVersion: \"3.0.0-rc.3\"  # NVCA agent version to deploy\n\n" +
 		"helm upgrade --install nvca-operator \\\n" +
-		"  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator \\\n" +
+		"  oci://nvcr.io/nvidia/nvcf/helm-nvca-operator \\\n" +
 		"  --namespace nvca-operator --create-namespace \\\n" +
 		"  --version 1.6.7\n"
 
@@ -558,8 +553,8 @@ func TestSyncInlineSelfManagedNVCAOperatorVersions(t *testing.T) {
 func TestSyncInlineSelfManagedNVCAOperatorPlainVersionTable(t *testing.T) {
 	catalog := testCatalog()
 	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
-		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.0.0-rc.11"},
-		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: "staging", Version: "1.9.0"},
+		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.0.0-rc.11"},
+		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.9.0"},
 	)
 	content := "| Chart | `helm-nvca-operator` |\n| --- | --- |\n| Version | `1.6.7` |\n\n" +
 		"The compute-plane Helmfile installs the operator.\n"
@@ -579,12 +574,13 @@ func TestSyncInlineSelfManagedNVCAOperatorPlainVersionTable(t *testing.T) {
 func TestSyncInlineImageMirroringNVCAOperatorChartVersions(t *testing.T) {
 	catalog := testCatalog()
 	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
-		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: "staging", Version: "1.9.0"},
+		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.9.0"},
 	)
-	content := "helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.4.7\n" +
+	catalog.PublicationPending = []string{"helm-nvca-operator"}
+	content := "helm pull oci://nvcr.io/nvidia/nvcf/helm-nvca-operator --version 1.4.7\n" +
 		"# This creates: helm-nvca-operator-1.4.7.tgz\n" +
 		"helm push helm-nvca-operator-1.4.7.tgz oci://example.test/repo\n" +
-		"helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvca-operator --version 1.2.9\n" +
+		"helm pull oci://nvcr.io/nvidia/nvcf/nvca-operator --version 1.2.9\n" +
 		"# This creates: nvca-operator-1.2.9.tgz\n" +
 		"helm push nvca-operator-1.2.9.tgz oci://example.test/repo\n"
 
@@ -595,13 +591,13 @@ func TestSyncInlineImageMirroringNVCAOperatorChartVersions(t *testing.T) {
 	if !changed {
 		t.Fatal("SyncInlineVersions reported no change")
 	}
-	for _, stale := range []string{"1.4.7", "1.2.9", "nvcf-ncp-staging/nvca-operator"} {
+	for _, stale := range []string{"1.4.7", "1.2.9", "nvcf/nvca-operator"} {
 		if strings.Contains(got, stale) {
 			t.Fatalf("updated content still contains %q:\n%s", stale, got)
 		}
 	}
 	for _, want := range []string{
-		"nvcf-ncp-staging/helm-nvca-operator --version 1.9.0",
+		"HELM_NVCA_OPERATOR_REFERENCE",
 		"# This creates: helm-nvca-operator-1.9.0.tgz",
 		"helm push helm-nvca-operator-1.9.0.tgz",
 	} {
@@ -619,7 +615,7 @@ func TestSyncInlineImageMirroringUsesTraditionalPublicHelmChart(t *testing.T) {
 		RepositoryAlias: "nvcf",
 	}
 	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
-		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: "staging", Version: "1.12.7"},
+		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.12.7"},
 	)
 	catalog.Publications = []Publication{{
 		Name:        "helm-nvca-operator",
@@ -627,7 +623,7 @@ func TestSyncInlineImageMirroringUsesTraditionalPublicHelmChart(t *testing.T) {
 		Registry:    "public-helm",
 		ChartFormat: ChartFormatHTTP,
 	}}
-	content := "helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.12.6\n" +
+	content := "helm pull oci://nvcr.io/nvidia/nvcf/helm-nvca-operator --version 1.12.6\n" +
 		"# This creates: helm-nvca-operator-1.12.6.tgz\n" +
 		"helm push helm-nvca-operator-1.12.6.tgz oci://example.test/repo\n"
 
@@ -834,28 +830,37 @@ func testCatalog() *Catalog {
 		Version: 1,
 		Target:  "main",
 		Registries: map[string]Registry{
-			"staging": {
+			defaultStackRegistry: {
 				Host:      "nvcr.io",
-				Namespace: "0833294136851237/nvcf-ncp-staging",
+				Namespace: "nvidia/nvcf",
+			},
+			defaultImageRegistry: {
+				Host:      "nvcr.io",
+				Namespace: "nvidia/nvcf",
+			},
+			defaultChartRegistry: {
+				Host:            "https://helm.ngc.nvidia.com",
+				Namespace:       "nvidia/nvcf",
+				RepositoryAlias: "nvcf",
 			},
 		},
 		Stack: StackMetadata{
 			Name:               "nvcf-self-managed-stack",
 			PublicationVersion: "0.5.0",
-			Registry:           "staging",
+			Registry:           defaultStackRegistry,
 		},
 		Denylist: []DenylistEntry{
 			{Name: "nvcf-base", Reason: "managed separately"},
 			{Name: "samba", Reason: "internal base dependency"},
 		},
 		Artifacts: []Artifact{
-			{Name: "nvcf-base", Type: ArtifactTypeResource, Registry: "staging", Version: "0.1.4"},
+			{Name: "nvcf-base", Type: ArtifactTypeResource, Registry: defaultStackRegistry, Version: "0.1.4"},
 		},
 		SupplementalArtifacts: []Artifact{
-			{Name: "nvcf-compute-plane-stack", Type: ArtifactTypeResource, Registry: "staging", Version: "0.5.0"},
-			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: "staging", Version: "0.0.30"},
-			{Name: "llm-api-gateway", Type: ArtifactTypeImage, Registry: "staging", Version: "0.3.0"},
-			{Name: "llm-request-router", Type: ArtifactTypeImage, Registry: "staging", RepositoryName: "stargate", Version: "0.2.0"},
+			{Name: "nvcf-compute-plane-stack", Type: ArtifactTypeResource, Registry: defaultStackRegistry, Version: "0.5.0"},
+			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: defaultStackRegistry, Version: "0.0.30"},
+			{Name: "llm-api-gateway", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "0.3.0"},
+			{Name: "llm-request-router", Type: ArtifactTypeImage, Registry: defaultImageRegistry, RepositoryName: "stargate", Version: "0.2.0"},
 		},
 		Manifest: ManifestMetadata{Entries: []ManifestEntry{
 			{ArtifactID: "nvcf-self-managed-stack", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Control-plane deployment bundle."},

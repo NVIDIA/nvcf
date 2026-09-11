@@ -77,7 +77,7 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	base.Stack.Registry = "public-resources"
 	base.Denylist = append(base.Denylist, DenylistEntry{Name: "source-chart", Reason: "source-only test chart"})
 	base.Denylist = append(base.Denylist, DenylistEntry{Name: "denied-resource", Reason: "excluded test resource"})
-	base.Artifacts = append(base.Artifacts, Artifact{Name: "stale-service", Type: ArtifactTypeImage, Registry: "staging", Version: "0.9.0"})
+	base.Artifacts = append(base.Artifacts, Artifact{Name: "stale-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "0.9.0"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "4.5.6"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "denied-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "7.8.9"})
 	base.Publications = []Publication{
@@ -193,10 +193,10 @@ func TestCatalogArtifactsFromResolvedInventoryPreservesTypedIDs(t *testing.T) {
 	})
 	base := testCatalog()
 	base.Artifacts = []Artifact{
-		{ID: "request-router-chart", Name: "helm-nvcf-llm-request-router", Type: ArtifactTypeChart, Registry: "staging", Version: "1.0.0"},
+		{ID: "request-router-chart", Name: "helm-nvcf-llm-request-router", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.0.0"},
 	}
 	base.SupplementalArtifacts = []Artifact{
-		{ID: "request-router-image", Name: "helm-nvcf-llm-request-router", Type: ArtifactTypeImage, Registry: "staging", Version: "1.0.0"},
+		{ID: "request-router-image", Name: "helm-nvcf-llm-request-router", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "1.0.0"},
 	}
 
 	artifacts, err := catalogArtifactsFromResolvedStackInventory(inventory, base)
