@@ -45,8 +45,12 @@ sis:
       image:
         # registry: must be supplied in additional values
         # repository: must be supplied in additional values
-        # tag: must be supplied in additional values (see icms-api/values.versions.yaml for the internal pin)
+        # tag or digest: must be supplied in additional values (see
+        # icms-api/values.versions.yaml for the immutable pin NVIDIA builds against)
         tag: ""
+        # Optional immutable manifest digest. When set, this takes precedence
+        # over `tag` while preserving `tag` for release automation and traceability.
+        digest: ""
         pullPolicy: IfNotPresent
       # OpenBao connection settings
       # When empty, baoService is derived from lls.namespace in templates (openbao-server.<namespace>.svc.cluster.local)
