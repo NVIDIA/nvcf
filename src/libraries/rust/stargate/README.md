@@ -71,10 +71,12 @@ load-balancer topology for production backend traffic.
 ## Load balancing
 
 Use `wait-and-widen` with `cache_affinity_wait_ms` to keep requests in their
-cache-affinity group before opening public TTFT buckets. The setting defaults
+cache-affinity group before opening global TTFT buckets. The setting defaults
 to `0`. A positive value works without a request SLO header. Optional
-`cache_affinity_input_tokens_scale` discounts cached request prefill while
-leaving queued work and public candidates at full cost.
+`cache_affinity_input_tokens_scale` discounts request prefill during affinity
+selection. Global buckets include every candidate, including the affinity
+group, at full prefill cost. Queued work and the expected queue header sent to
+Pylon are not discounted.
 
 See [Load balancer configuration](docs/load-balancer-configuration.md) for
 examples, defaults, routing deadlines, and retry behavior.

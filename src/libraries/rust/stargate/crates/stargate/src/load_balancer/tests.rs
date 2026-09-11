@@ -2126,7 +2126,7 @@ fn wait_and_widen_keeps_ttft_selection_within_affinity_group() {
 }
 
 #[test]
-fn wait_and_widen_opens_public_buckets_only_after_affinity_deadline() {
+fn wait_and_widen_opens_global_buckets_only_after_affinity_deadline() {
     let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
         settings.seed = Some("seed-1".to_string());
         settings.cache_affinity_backend_selection_count = Some(1);
@@ -2144,10 +2144,11 @@ fn wait_and_widen_opens_public_buckets_only_after_affinity_deadline() {
         .collect();
     candidates[affinity].stats.max_engine_concurrency = 1;
     candidates[affinity].stats.num_running_queries = 1;
-    candidates[public[0]].rtt = Duration::from_millis(100);
+    candidates[affinity].rtt = Duration::from_millis(100);
+    candidates[public[0]].rtt = Duration::from_millis(300);
     candidates[public[0]].stats.max_engine_concurrency = 10;
     candidates[public[0]].stats.num_running_queries = 1;
-    candidates[public[1]].rtt = Duration::from_millis(300);
+    candidates[public[1]].rtt = Duration::from_millis(500);
     candidates[public[1]].stats.max_engine_concurrency = 10;
 
     for (elapsed_ms, remaining_ms) in [(0, 200), (199, 1)] {
@@ -2156,8 +2157,13 @@ fn wait_and_widen_opens_public_buckets_only_after_affinity_deadline() {
             LoadBalancerDecision::Wait(Duration::from_millis(remaining_ms))
         );
     }
-    // The second public bucket needs (300 - 100) * 0.25 = 50 ms after X.
-    for (elapsed_ms, expected) in [(200, public[0]), (249, public[0]), (250, public[1])] {
+    // The full affine backend anchors global bucket zero at X. The other
+    // backends unlock at X + (300 - 100) * 0.25 and another 50 ms later.
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(200)),
+        LoadBalancerDecision::Wait(Duration::from_millis(50))
+    );
+    for (elapsed_ms, expected) in [(250, public[0]), (299, public[0]), (300, public[1])] {
         let choice = lb
             .decide_at(&request, &candidates, Duration::from_millis(elapsed_ms))
             .selected()
@@ -2168,11 +2174,11 @@ fn wait_and_widen_opens_public_buckets_only_after_affinity_deadline() {
 
     candidates[public[0]].stats.num_running_queries = 10;
     assert_eq!(
-        lb.decide_at(&request, &candidates, Duration::from_millis(200)),
+        lb.decide_at(&request, &candidates, Duration::from_millis(250)),
         LoadBalancerDecision::Wait(Duration::from_millis(50))
     );
     assert_eq!(
-        lb.decide_at(&request, &candidates, Duration::from_millis(250))
+        lb.decide_at(&request, &candidates, Duration::from_millis(300))
             .selected()
             .unwrap()
             .candidate_index,
@@ -2191,6 +2197,60 @@ fn wait_and_widen_opens_public_buckets_only_after_affinity_deadline() {
         .selected()
         .unwrap();
     assert_eq!(recovered.candidate_index, affinity);
+}
+
+#[test]
+fn wait_and_widen_global_buckets_include_affinity_candidates_at_full_prefill_cost() {
+    for ids in [&["a", "b"][..], &["a", "b", "c", "d"][..]] {
+        let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+            settings.cache_affinity_backend_selection_count = Some(2);
+            settings.cache_affinity_wait_ms = Some(200);
+            settings.cache_affinity_input_tokens_scale = Some(0.1);
+            settings.comparator = Some(ClusterComparator::Utilization);
+            settings.max_queued = Some(1);
+            settings.max_queue_time_floor_ms = Some(100);
+            settings.max_queue_time_ceil_ms = Some(5_000);
+        }));
+        let lb = WaitAndWidenLoadBalancer::new(config.clone());
+        let target = target();
+        let request = request(&target, Some("long-context"), Some(80_000));
+        let mut candidates = candidates(ids);
+        let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+        for candidate in &mut candidates {
+            candidate.rtt = Duration::from_secs(10);
+            candidate.stats.last_mean_input_tps = 7_000.0;
+            candidate.stats.max_engine_concurrency = 25;
+        }
+        candidates[affine[0]].rtt = Duration::ZERO;
+        candidates[affine[0]].stats.num_running_queries = 26;
+        candidates[affine[1]].rtt = Duration::from_millis(2_500);
+        candidates[affine[1]].stats.last_mean_input_tps = 14_000.0;
+
+        // Discounted TTFT puts the full backend first (1143 vs 3071 ms).
+        // Its affine backup remains locked until about 482 ms. Full prefill
+        // reverses that order (11429 vs 8214 ms), opening the backup globally.
+        assert_eq!(
+            lb.decide_at(&request, &candidates, Duration::from_millis(199)),
+            LoadBalancerDecision::Wait(Duration::from_millis(1))
+        );
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::from_millis(200))
+            .selected()
+            .expect("global routing must include the available affine backup");
+        assert_eq!(choice.candidate_index, affine[1]);
+        assert_eq!(choice.rank_depth, 3);
+
+        // Every retry still checks affinity first after X. Once the primary
+        // recovers, its discounted score wins even though global scoring
+        // continues to favor the faster-prefill backup.
+        candidates[affine[0]].stats.num_running_queries = 0;
+        let recovered = lb
+            .decide_at(&request, &candidates, Duration::from_millis(201))
+            .selected()
+            .expect("recovered affinity must be checked before global fallback");
+        assert_eq!(recovered.candidate_index, affine[0]);
+        assert_eq!(recovered.rank_depth, 1);
+    }
 }
 
 #[test]
@@ -2218,6 +2278,9 @@ fn wait_and_widen_affinity_deadline_does_not_depend_on_estimates_or_slo() {
             candidates[affinity].stats.max_engine_concurrency = 1;
             candidates[affinity].stats.num_running_queries = 1;
             for public_rtt_ms in [0, 10_000] {
+                // Keep both candidates in global bucket zero to isolate X
+                // from the separate waits for later global TTFT buckets.
+                candidates[affinity].rtt = Duration::from_millis(public_rtt_ms);
                 candidates[1 - affinity].rtt = Duration::from_millis(public_rtt_ms);
                 assert_eq!(
                     lb.decide_at(&request, &candidates, Duration::from_millis(99)),

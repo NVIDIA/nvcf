@@ -39,12 +39,17 @@ The example uses these settings in the `model-a` configuration:
 | WaitAndWiden model field | Default | Effect |
 | --- | --- | --- |
 | `cache_affinity_backend_selection_count` | unset | Number of clusters in the affine group. A positive value enables the group. |
-| `cache_affinity_wait_ms` | `0` | Minimum time in milliseconds from request arrival before public buckets become eligible. |
+| `cache_affinity_wait_ms` | `0` | Minimum time in milliseconds from request arrival before global buckets become eligible. |
 
 Replace `model-a` with the exact routed model name. For requests with an
-affinity key, this example keeps public buckets closed for 200 ms. Stargate can
+affinity key, this example keeps global buckets closed for 200 ms. Stargate can
 select an available affine candidate immediately. Set `cache_affinity_wait_ms`
 in the model configuration.
+
+After the wait, global buckets include all backends, including the affinity
+group. Global selection uses full prefill cost for every backend and retains
+the queue-admission, capacity, and retry-exclusion checks. Stargate still tries
+affinity selection first on each routing attempt.
 
 The self-managed stack passes
 `addons.llm.requestRouter.loadBalancer` to the request-router chart as
@@ -111,11 +116,11 @@ their values from authenticated function metadata and the request.
 | `x-cache-affinity-key` | Gateway session-affinity derivation. |
 | `x-priority` | Gateway-owned priority when one is resolved. |
 | `x-request-slo-ms` | Optional request SLO in milliseconds. Stargate uses it to interpolate queue-admission limits; it does not shorten the affinity wait. |
-| `x-max-wait-ms` | Optional routing wait limit in milliseconds from request arrival, capped at 60000. It can expire before public buckets open. |
+| `x-max-wait-ms` | Optional routing wait limit in milliseconds from request arrival, capped at 60000. It can expire before global buckets open. |
 | `x-stargate-max-wait-ms` | Optional proxy retry budget in milliseconds. |
 
 An explicit `x-max-wait-ms` shorter than the configured affinity wait can end
-routing with HTTP `503` before public candidates become eligible. Set the
+routing with HTTP `503` before global buckets become eligible. Set the
 affinity wait within the latency budget for the workload.
 
 <Warning>

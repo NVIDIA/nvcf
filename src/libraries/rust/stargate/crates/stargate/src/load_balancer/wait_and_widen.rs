@@ -183,8 +183,9 @@ impl WaitAndWidenLoadBalancer {
             self.cache_affinity
                 .candidate_indices(&self.config, request, candidates)
         {
+            // Every attempt checks affinity first, even after the hold expires.
             // Affinity uses the same TTFT buckets, admission and comparator as
-            // public routing. A busy ring primary must not bypass those rules.
+            // global routing. A busy ring primary must not bypass those rules.
             if let Some(choice) = self.choose_from_candidate_indices(
                 request,
                 candidates,
@@ -198,15 +199,11 @@ impl WaitAndWidenLoadBalancer {
                 return LoadBalancerDecision::Wait(self.config.cache_affinity_wait - elapsed);
             }
 
-            // The affinity hold is spent once. Public bucket zero opens at X;
-            // subsequent buckets use only time elapsed since X.
+            // Global routing includes the affinity group at full prefill cost.
+            // Bucket zero opens at X; subsequent buckets use time since X.
             let mut decision = self.decide_from_candidate_iter(
                 request,
-                candidates
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| !affinity_indices.contains(index))
-                    .map(|(_, candidate)| candidate),
+                candidates.iter(),
                 candidates,
                 1.0,
                 elapsed.saturating_sub(self.config.cache_affinity_wait),

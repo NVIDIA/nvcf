@@ -164,18 +164,32 @@ When `cache_affinity_backend_selection_count` is enabled and the request has
 stable subset. Normal TTFT selection runs within that subset. The seed, routing
 key, model ID, affinity key, cluster ID, and virtual-node index contribute to
 the hash. Retry exclusions remove failed members from selection without
-replacing them in the affinity group. A cold successor therefore stays in the
-public group and does not receive the affinity discount.
+replacing them in the affinity group. A cold successor therefore participates
+only in global selection and does not receive the affinity discount.
 
 `cache_affinity_wait_ms` sets X, the minimum time from request arrival before
-public candidates become eligible. Until X, requests can select only from the
+global buckets become eligible. Until X, requests can select only from the
 affinity group. If no affine candidate is usable, the proxy waits and rechecks
-capacity. After X, the first public TTFT bucket opens. Later public buckets use
-only elapsed time after X. An available affine candidate remains preferred.
+capacity. After X, the first global TTFT bucket opens. Global buckets include
+all candidates, including the original affinity group, at full prefill cost.
+Retry exclusions and queue-admission checks still apply. Later global buckets
+use only elapsed time after X. An available affine candidate remains preferred
+through the initial affinity selection on each routing attempt.
 
 ```text
-request arrival              X                   X + bucket delay
-      |--- affine only ------|--- public 0 -------|--- public 1 ...
+Each routing attempt
+        |
+        v
+Check affine set A, B -------- selectable ------> dispatch
+        |
+   no selection
+        |
+        +--- elapsed < X ----------------------> wait, then retry from top
+        |
+        +--- elapsed >= X ---> check global set A, B, C, D
+                                      |
+                                      +--- selectable ---> dispatch
+                                      +--- no selection -> retry if budget remains
 ```
 
 X defaults to `0`. Neither `x-request-slo-ms` nor `x-max-wait-ms` is required
@@ -184,10 +198,11 @@ interpolation; it does not shorten X. An explicit `x-max-wait-ms` can end the
 routing wait before X, with HTTP `503` if no affine candidate is available.
 
 `cache_affinity_input_tokens_scale` multiplies only the current request's
-prefill input for affine candidates. It defaults to `1.0` and accepts values
-from `0.0` through `1.0`. Queued work and public candidates retain full cost.
-A scale of `0.0` does not make invalid input throughput usable for nonzero
-request input.
+prefill input during affinity selection. It defaults to `1.0` and accepts
+values from `0.0` through `1.0`. Global selection uses full prefill cost for
+every candidate, including affine candidates. The scale does not change queued
+work, routing reservations, or the expected queue header sent to Pylon. A scale
+of `0.0` does not make invalid input throughput usable for nonzero request input.
 
 Example with a 200 ms affinity wait and a 10 percent prefill estimate:
 
@@ -298,8 +313,8 @@ that algorithm's detailed configuration prevents startup.
 | --- | --- | --- | --- |
 | `cache_affinity_virtual_nodes` | unsigned integer | `150` | Virtual nodes per cluster. `0` is normalized to `1`. |
 | `cache_affinity_backend_selection_count` | unsigned integer | unset | Enables the affinity subset. `0` disables it. Values above the candidate count select all candidates. |
-| `cache_affinity_wait_ms` | unsigned integer | `0` | Minimum elapsed time before public fallback. Public bucket widening starts at this time. |
-| `cache_affinity_input_tokens_scale` | number | `1.0` | Affine request-prefill multiplier, from `0.0` through `1.0`. Does not discount queued work or public candidates. |
+| `cache_affinity_wait_ms` | unsigned integer | `0` | Minimum elapsed time before global fallback. Global bucket widening starts at this time. |
+| `cache_affinity_input_tokens_scale` | number | `1.0` | Request-prefill multiplier during affinity selection, from `0.0` through `1.0`. Does not discount queued work or global selection. |
 
 The virtual-node and backend-selection-count fields are accepted in
 `pulsar-wait-and-widen` JSON but do not affect its selection. Pulsar ranking
@@ -396,7 +411,7 @@ These proxy headers affect load-balancer behavior:
 | `x-input-tokens` | required `u64` | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
 | `x-priority` | optional `u32`, default `0` | Chooses the nearest published queue estimate at or below this priority. |
 | `x-request-slo-ms` | optional `u64` | Interpolates queue bounds. Does not set or shorten the affinity wait. |
-| `x-max-wait-ms` | optional `u64` | Routing wait limit from request arrival, capped at 60 seconds. Can expire before public buckets open. |
+| `x-max-wait-ms` | optional `u64` | Routing wait limit from request arrival, capped at 60 seconds. Can expire before global buckets open. |
 
 Invalid required or numeric values return HTTP `400`. `x-routing-method` is
 consumed by Stargate and is not forwarded upstream. See the
@@ -407,7 +422,8 @@ contract.
 
 Algorithm fallback is part of load-balancer selection:
 
-- WaitAndWiden public fallback starts at X. Later public buckets use elapsed
+- WaitAndWiden global fallback starts at X and includes affine candidates at
+  full prefill cost. Later global buckets use elapsed
   time after X; affine candidates remain preferred. Without an affinity group,
   later buckets use elapsed request time and the existing explicit retry budget.
 - Pulsar fallback walks the stable ranking after exclusions or optional KV
@@ -429,11 +445,12 @@ is configurable with `--metrics-prefix`. See the
 for metric names, labels, and descriptions.
 
 The proxy request span records the effective comparator in `routing.comparator`.
-WaitAndWiden records affine-group selections with `rank_depth` 1 and public
-fallback with a higher rank. An affine backup is still an affine-group
-selection. The existing fallback selection series therefore records public
-escalation; deployments that previously saw only primary selections can see
-new fallback counts. Metric names and label sets are unchanged.
+WaitAndWiden records affinity-phase selections with `rank_depth` 1 and global
+fallback with a higher rank. Selecting an affine backend through global buckets
+counts as fallback; selecting it through the initial affinity phase does not.
+The existing fallback selection series therefore records global escalation;
+deployments that previously saw only primary selections can see new fallback
+counts. Metric names and label sets are unchanged.
 
 ## Validation checklist
 
