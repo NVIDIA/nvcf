@@ -114,6 +114,8 @@ or the pod is killed mid-drain.
   path requires `path` and `functionID`.
 
 Both sections are empty by default.
+`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
+across all routes.
 
 An `openai` model may set `functionType: LLM` to be served by the LLM Gateway
 instead of the invocation service, supported in `chatCompletions`, `responses`,
@@ -131,6 +133,11 @@ that would fail the container fails the render instead:
   answers `400 Bad Request` for any request carrying it
 - `vanityGateway.config.llmGatewayEndpoint` must be set, and must be an `http`
   or `https` origin with no path
+
+Shadow traffic is supported. Each shadow target is resolved from the same model
+table and routed by its own `functionType`, so a shadow of an LLM model reaches
+the LLM Gateway, and an LLM model may shadow a model served by the invocation
+service.
 
 `mappingConfig` is rendered into a ConfigMap, which is not a secret store. Do
 not put credentials in `customHeaders` on any route. Caller `Authorization`
@@ -164,13 +171,6 @@ shadow-b:
 The legacy route-level fields `shadowModelName`, `shadowModelNames`,
 `shadowPercentage`, `shadowSamplingMethod`, and `shadowCancelOnClientDisconnect`
 keep working unchanged; they apply one policy to every target on the route.
-
-Each shadow target is resolved from the same model table and routed by its own
-`functionType`, so a shadow of an LLM model reaches the LLM Gateway, and an LLM
-model may shadow a model served by the invocation service.
-
-`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
-across all routes.
 
 ## Notes
 
