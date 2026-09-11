@@ -17,23 +17,23 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: vllm-tp2
+  name: vllm-70b-criu
   namespace: nvsnap-system
   labels:
-    app: vllm-tp2
+    app: vllm-70b-criu
     nvsnap.io/demo: "true"
   annotations:
     nvsnap.io/demo-name: "vLLM TP=2 eager"
-    nvsnap.io/desc: "TinyLlama 1.1B on vLLM, TP=2 eager (multi-GPU cachedir)"
+    nvsnap.io/desc: "criu-v2 TinyLlama 1.1B on vLLM, TP=2 eager (multi-GPU cachedir)"
     nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     nvsnap.io/port: "8000"
-    nvsnap.io/gpus: "2"
+    nvsnap.io/gpus: "4"
     # cachedir, not criu: the agent refuses multi-GPU CRIU outright
     # (checkpoint.go, "multi-GPU CRIU is unsupported"), and test-e2e.sh routes
     # anything requesting >= 2 GPUs here. Declaring "criu" made the manifest
     # generator emit a criu-v2 restore placeholder that nothing ever drives,
     # so the restore pod idled until the readiness timeout.
-    nvsnap.io/path: "rootfs"
+    nvsnap.io/path: "criu"
 spec:
   automountServiceAccountToken: false
   tolerations:
@@ -66,14 +66,14 @@ spec:
           # works. Default-config support needs the transparent sever
           # (teardown/reinit) - the nvsnap_cr.so/lib-sever port, issue #25.
           nohup setsid vllm serve \
-            --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --model meta-llama/Llama-3.1-70B-Instruct \
             --host 0.0.0.0 \
             --port 8000 \
-            --max-model-len 2048 \
-            --tensor-parallel-size 2 \
+            --max-model-len 4096 \
+            --tensor-parallel-size 4 \
             --enforce-eager \
             --disable-custom-all-reduce \
-            --gpu-memory-utilization 0.3 > /vllm.out 2>&1 < /dev/null &
+            --gpu-memory-utilization 0.85 > /vllm.out 2>&1 < /dev/null &
           tail -F /vllm.out &
           while true; do sleep 30; done
       env:
@@ -82,8 +82,11 @@ spec:
         - { name: PYTHONUNBUFFERED,   value: "1" }
         - { name: NVSNAP_LOG_LEVEL,     value: "3" }
         - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
-        - { name: CUDA_VISIBLE_DEVICES, value: "0,1" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0,1,2,3" }
         - { name: HF_HOME,            value: "/root/.cache/huggingface" }
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef: { name: hf-token, key: token }
         # TP=2 requires the multi-process engine (EngineCore + TP workers).
         - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "1" }
         # E1b peer-state sever (config-based, ember M0 Exp 3 set): kill NCCL
@@ -110,9 +113,9 @@ spec:
         failureThreshold: 60
       resources:
         limits:
-          nvidia.com/gpu: "2"
+          nvidia.com/gpu: "4"
         requests:
-          nvidia.com/gpu: "2"
+          nvidia.com/gpu: "4"
       securityContext:
         privileged: true
       volumeMounts:

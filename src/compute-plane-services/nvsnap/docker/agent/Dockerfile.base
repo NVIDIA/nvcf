@@ -15,7 +15,13 @@
 # lock timeouts). Requires driver 570+ on the node at runtime. The CUDA devel
 # image supplies cuda.h and the libcuda link stub; at runtime the wrapper
 # points LD_LIBRARY_PATH at the node's real driver libcuda.
-FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cuda-cli-builder
+# CUDA 13 is required for the r580 GPU-migration fields: 12.x declares
+# CUcheckpointRestoreArgs as a reserved[8] blob with no gpuPairs member, so
+# migration cannot be expressed against those headers at all. Staying on
+# ubuntu22.04 is deliberate -- the produced binary runs inside the workload's
+# container against the criu bundle's glibc 2.35, and a 24.04 builder would
+# raise the required glibc and break that contract.
+FROM nvidia/cuda:13.0.3-devel-ubuntu22.04 AS cuda-cli-builder
 COPY nvsnap-cuda-checkpoint.c /src/nvsnap-cuda-checkpoint.c
 RUN gcc -O2 -o /src/nvsnap-cuda-checkpoint /src/nvsnap-cuda-checkpoint.c \
         -I/usr/local/cuda/include -L/usr/local/cuda/lib64/stubs -lcuda && \
