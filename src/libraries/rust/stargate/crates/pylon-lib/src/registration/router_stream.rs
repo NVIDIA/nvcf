@@ -29,7 +29,7 @@ use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, Infere
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
 use super::grpc_endpoint::{
-    StargateGrpcEndpoint, connect_stargate_grpc_channel, log_stargate_grpc_certificate_failure,
+    RegistrationFailureLog, StargateGrpcEndpoint, connect_stargate_grpc_channel,
 };
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
@@ -45,7 +45,7 @@ pub(super) async fn run_router_registration_stream(
     stop: CancellationToken,
 ) {
     let router_addr = router_endpoint.authority_addr().to_string();
-    let mut last_certificate_failure = None;
+    let mut failure_log = RegistrationFailureLog::default();
 
     loop {
         let connection = tokio::select! {
@@ -58,16 +58,12 @@ pub(super) async fn run_router_registration_stream(
             ) => connection,
         };
         let (mut ack_stream, update_tx) = match connection {
-            Ok(connection) => {
-                last_certificate_failure = None;
-                connection
-            }
+            Ok(connection) => connection,
             Err(error) => {
-                last_certificate_failure = log_stargate_grpc_certificate_failure(
+                failure_log.report(
                     &router_endpoint,
                     "register_inference_server",
                     error.as_ref(),
-                    last_certificate_failure,
                 );
                 if stop
                     .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
@@ -160,8 +156,20 @@ pub(super) async fn run_router_registration_stream(
                     connected
                 }
                 maybe_ack = ack_stream.message() => {
-                    let Ok(Some(ack)) = maybe_ack else {
-                        break false;
+                    let ack = match maybe_ack {
+                        Ok(Some(ack)) => {
+                            failure_log.recovered();
+                            ack
+                        }
+                        Ok(None) => {
+                            failure_log.report(&router_endpoint, "register_inference_server_stream",
+                                &std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "registration response stream ended"));
+                            break false;
+                        }
+                        Err(error) => {
+                            failure_log.report(&router_endpoint, "register_inference_server_stream", &error);
+                            break false;
+                        }
                     };
                     if config.reverse_tunnel {
                         let endpoint = reverse_tunnel_endpoint_from_ack(&ack);
@@ -185,7 +193,12 @@ pub(super) async fn run_router_registration_stream(
         if let Some(task) = reverse_task {
             task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
         }
-        if stopped {
+        if stopped
+            || stop
+                .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+                .await
+                .is_none()
+        {
             return;
         }
     }
@@ -298,7 +311,7 @@ pub(super) async fn open_registration_stream(
         min_update_interval.as_millis().to_string().parse()?,
     );
     if let Some(provider) = auth_token_provider {
-        let token = provider.resolve_token().await?;
+        let token = resolve_registration_token(provider).await?;
         request.metadata_mut().insert(
             "authorization",
             format!("Bearer {token}")
@@ -312,4 +325,15 @@ pub(super) async fn open_registration_stream(
         .await?
         .into_inner();
     Ok((ack_stream, update_tx))
+}
+
+pub(super) async fn resolve_registration_token(
+    provider: &AuthTokenProvider,
+) -> anyhow::Result<String> {
+    // The top-level context identifies token-file and issuer failures without
+    // exposing a parser's secret-file excerpt through the source chain.
+    provider
+        .resolve_token()
+        .await
+        .map_err(|error| anyhow::anyhow!("failed to resolve registration token: {error}"))
 }
