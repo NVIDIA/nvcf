@@ -2,7 +2,11 @@ environments:
   default:
     values:
       - ../environments/base.yaml
+      # Standalone use loads the selected environment. An including stack can
+      # skip this lookup after forwarding its already-resolved values.
+      {{- if not (dig "nvcfInternal" "observabilityEnvironmentLoaded" false .Values) }}
       - ../environments/{{ requiredEnv "HELMFILE_ENV" }}.yaml
+      {{- end }}
 
 ---
 
