@@ -14,8 +14,8 @@ This repository ships:
 
 The container builds [`golang-migrate`](https://github.com/golang-migrate/migrate) v4.19.1 from its checksum-verified release source. The build enables only the Cassandra database driver. This keeps unrelated database and cloud-provider clients out of the runtime binary.
 
-The image also replaces Cassandra's Jackson libraries with the coherent,
-checksum-pinned versions in `java-libraries.lock`. Set
+The image also replaces Cassandra's Jackson and Netty libraries with the
+coherent, checksum-pinned versions in `java-libraries.lock`. Set
 `MAVEN_REPOSITORY_BASE` at build time to use a caching Maven repository while
 preserving the locked paths and checksums.
 
