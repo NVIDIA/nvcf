@@ -3108,3 +3108,46 @@ fn pulsar_returns_none_when_all_candidates_lack_valid_last_mean_input_tps() {
     );
     assert!(choice.is_none());
 }
+
+fn assert_affinity_discount_survives_bucket_flags(ignore_queue: bool, ignore_prefill: bool) {
+    let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+        settings.cache_affinity_backend_selection_count = Some(2);
+        settings.cache_affinity_input_tokens_scale = Some(0.1);
+        settings.cache_affinity_wait_ms = Some(100);
+        settings.ignore_queue_time = Some(ignore_queue);
+        settings.ignore_input_processing_time = Some(ignore_prefill);
+        settings.ttft_bucket_size_ms = Some(100);
+        settings.n = Some(2);
+        settings.comparator = Some(ClusterComparator::Ttft);
+    }));
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let target = target();
+    let request = request(&target, Some("prefix"), Some(1_000));
+    let candidates = [
+        work_candidate("higher-rtt-fast-prefill", 50, 10_000.0, 0),
+        work_candidate("lower-rtt-slow-prefill", 1, 2_000.0, 0),
+    ];
+    let choice = lb
+        .decide_at(&request, &candidates, Duration::ZERO)
+        .selected()
+        .unwrap();
+    assert_eq!(
+        candidates[choice.candidate_index].cluster_id, "lower-rtt-slow-prefill",
+        "scaled comparator TTFT is 60 ms vs 51 ms; bucket flags must not restore full prefill",
+    );
+}
+
+#[test]
+fn wait_and_widen_affinity_discount_without_bucket_flags() {
+    assert_affinity_discount_survives_bucket_flags(false, false);
+}
+
+#[test]
+fn wait_and_widen_affinity_discount_with_ignore_queue() {
+    assert_affinity_discount_survives_bucket_flags(true, false);
+}
+
+#[test]
+fn wait_and_widen_affinity_discount_with_ignore_prefill() {
+    assert_affinity_discount_survives_bucket_flags(false, true);
+}

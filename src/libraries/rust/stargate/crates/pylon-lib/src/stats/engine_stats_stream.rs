@@ -27,7 +27,9 @@ use serde::{Deserialize, Deserializer};
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 
-use super::collector::{RequestCounterUpdate, StatsAggregatorUpdate, StatsUpdateSource};
+use super::collector::{
+    EngineConcurrencyUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsUpdateSource,
+};
 use super::metrics::PylonMetrics;
 use crate::PylonRuntimeState;
 use crate::generated_request_id::generated_request_generation;
@@ -122,13 +124,7 @@ pub fn start_engine_stats_stream(
 #[derive(Debug)]
 pub(crate) enum ParsedEngineStatsEvent {
     Stats(RequestCounterUpdate),
-    Ping(Option<EngineConcurrency>),
-}
-
-#[derive(Debug)]
-pub(crate) struct EngineConcurrency {
-    model_id: String,
-    max_engine_concurrency: Option<u64>,
+    Ping(Option<EngineConcurrencyUpdate>),
 }
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EngineStatsParseError {
@@ -173,10 +169,13 @@ fn parse_ping_event(
         return Ok(ParsedEngineStatsEvent::Ping(None));
     };
     let model_id = required_nonempty_string(raw.model, "model")?;
-    Ok(ParsedEngineStatsEvent::Ping(Some(EngineConcurrency {
-        model_id,
-        max_engine_concurrency: (max_engine_concurrency > 0).then_some(max_engine_concurrency),
-    })))
+    Ok(ParsedEngineStatsEvent::Ping(Some(
+        EngineConcurrencyUpdate {
+            model_id,
+            generation: None,
+            max_engine_concurrency: (max_engine_concurrency > 0).then_some(max_engine_concurrency),
+        },
+    )))
 }
 fn engine_stats_event_type<'a>(
     raw: &'a mut RawEngineStatsEvent<'_>,
@@ -633,26 +632,17 @@ async fn emit_engine_stats_event(
             )
             .await
         }
-        ParsedEngineStatsEvent::Ping(Some(EngineConcurrency {
-            model_id,
-            max_engine_concurrency,
-        })) => {
-            let generation = config
+        ParsedEngineStatsEvent::Ping(Some(mut update)) => {
+            update.generation = config
                 .runtime_state
                 .as_ref()
-                .and_then(|runtime_state| runtime_state.current_generation(&model_id));
-            if config.runtime_state.is_some() && generation.is_none() {
+                .and_then(|runtime_state| runtime_state.current_generation(&update.model_id));
+            if config.runtime_state.is_some() && update.generation.is_none() {
                 return true;
             }
             send_stats_update(
                 stats_update_tx,
-                StatsAggregatorUpdate::EngineConcurrency(
-                    super::collector::EngineConcurrencyUpdate {
-                        model_id,
-                        generation,
-                        max_engine_concurrency,
-                    },
-                ),
+                StatsAggregatorUpdate::EngineConcurrency(update),
                 stop,
             )
             .await

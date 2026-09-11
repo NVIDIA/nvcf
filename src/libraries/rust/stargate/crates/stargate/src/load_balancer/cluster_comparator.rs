@@ -75,7 +75,9 @@ impl ClusterComparator {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Ttft {
     pub(crate) queue_ms: f64,
+    // Bucket formation applies the ignore flags; final ranking keeps all components.
     pub(crate) ttft_ms: f64,
+    pub(crate) comparator_ms: f64,
 }
 
 #[inline]
@@ -97,7 +99,8 @@ pub(crate) fn ttft(
             input_tps,
         )
     };
-    let ttft_ms = rtt_ms(candidate)
+    let rtt_ms = rtt_ms(candidate);
+    let ttft_ms = rtt_ms
         + if ignore_queue_time { 0.0 } else { queue_ms }
         + if ignore_input_processing_time {
             0.0
@@ -105,7 +108,11 @@ pub(crate) fn ttft(
             prefill_ms
         };
 
-    Ttft { queue_ms, ttft_ms }
+    Ttft {
+        queue_ms,
+        ttft_ms,
+        comparator_ms: rtt_ms + queue_ms + prefill_ms,
+    }
 }
 
 #[inline]

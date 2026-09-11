@@ -141,11 +141,7 @@ impl WaitAndWidenConfig {
     ) -> Ordering {
         match self.comparator {
             None => compare_least_queue_time(candidate_a, ttft_a, candidate_b, ttft_b),
-            Some(ClusterComparator::Ttft)
-                if !self.ignore_queue_time && !self.ignore_input_processing_time =>
-            {
-                ttft_a.ttft_ms.total_cmp(&ttft_b.ttft_ms)
-            }
+            Some(ClusterComparator::Ttft) => ttft_a.comparator_ms.total_cmp(&ttft_b.comparator_ms),
             Some(ClusterComparator::QueueTime) => ttft_a.queue_ms.total_cmp(&ttft_b.queue_ms),
             Some(comparator) => comparator.compare(request, candidate_a, candidate_b),
         }
@@ -346,18 +342,14 @@ impl WaitAndWidenLoadBalancer {
     fn decide_from_candidate_iter<'a>(
         &self,
         request: &LoadBalancerRequest<'_>,
-        candidates: impl Iterator<Item = &'a RoutedClusterSnapshot>,
+        candidates: impl ExactSizeIterator<Item = &'a RoutedClusterSnapshot>,
         candidate_index_source: &[RoutedClusterSnapshot],
         input_tokens_scale: f64,
         elapsed: Duration,
     ) -> LoadBalancerDecision {
         // TTFT determines bucket eligibility and unlock timing. The configured
         // comparator is applied after the unlocked candidates are sampled.
-        let mut ttfts = CandidateTtftAccumulator::new(
-            &self.config,
-            request,
-            candidates.size_hint().1.unwrap_or(0),
-        );
+        let mut ttfts = CandidateTtftAccumulator::new(&self.config, request, candidates.len());
         if let RequestExclusions::One(excluded_cluster_id) = RequestExclusions::from(request) {
             for candidate in candidates {
                 if candidate.cluster_id != excluded_cluster_id {
