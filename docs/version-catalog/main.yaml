@@ -93,6 +93,7 @@ publications:
     chart_format: http
 version_overrides:
   - name: nvcf-cli
+    type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:

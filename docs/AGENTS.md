@@ -95,6 +95,7 @@ The current-release check does not discover public NGC availability. Keep
 exact public locations in `publications` and mark unavailable versions in
 `publication_pending`. Identify publication records by `name`, `type`, and
 `version` so charts, images, and resources with the same name remain distinct.
+Version overrides also require `name` and `type`.
 
 Generated blocks are marked with comments such as:
 

@@ -181,7 +181,7 @@ func TestMainCatalogMatchesDeclaredReleaseStackPins(t *testing.T) {
 		}
 		var source *VersionOverride
 		for i := range catalog.VersionOverrides {
-			if catalog.VersionOverrides[i].Name == "nvcf-cli" {
+			if catalog.VersionOverrides[i].Name == "nvcf-cli" && catalog.VersionOverrides[i].Type == ArtifactTypeResource {
 				source = &catalog.VersionOverrides[i]
 				break
 			}

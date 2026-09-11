@@ -345,8 +345,16 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 
 func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 	base := testCatalog()
+	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{
+		ID:       "nvcf-worker-utils-chart",
+		Name:     "nvcf_worker_utils",
+		Type:     ArtifactTypeChart,
+		Registry: defaultChartRegistry,
+		Version:  "1.2.3",
+	})
 	base.VersionOverrides = []VersionOverride{{
 		Name:    "nvcf_worker_utils",
+		Type:    ArtifactTypeImage,
 		Version: "2.109.4",
 		Source:  "helm-nvcf-api:1.22.5",
 	}}
@@ -363,6 +371,13 @@ func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 	}
 	if artifact.Version != "2.109.4" {
 		t.Fatalf("version = %q, want chart-derived override 2.109.4", artifact.Version)
+	}
+	chart, ok := updated.findArtifactByNameAndType("nvcf_worker_utils", ArtifactTypeChart)
+	if !ok {
+		t.Fatal("updated catalog is missing same-name nvcf_worker_utils chart")
+	}
+	if chart.Version != "1.2.3" {
+		t.Fatalf("same-name chart version = %q, want unchanged 1.2.3", chart.Version)
 	}
 	path, err := updated.artifactPath(artifact)
 	if err != nil {
@@ -384,6 +399,7 @@ func TestValidateCatalogRejectsPublishedVersionOverrideDrift(t *testing.T) {
 	}}
 	catalog.VersionOverrides = []VersionOverride{{
 		Name:    "nvcf_worker_utils",
+		Type:    ArtifactTypeImage,
 		Version: "2.109.4",
 	}}
 
@@ -411,11 +427,25 @@ func TestValidateCatalogAllowsUnpublishedVersionOverride(t *testing.T) {
 	catalog := testCatalog()
 	catalog.VersionOverrides = []VersionOverride{{
 		Name:    "pylon",
+		Type:    ArtifactTypeImage,
 		Version: "0.3.0",
 	}}
 
 	if err := ValidateCatalog(catalog); err != nil {
 		t.Fatalf("ValidateCatalog failed for unpublished override: %v", err)
+	}
+}
+
+func TestValidateCatalogRejectsVersionOverrideWithoutType(t *testing.T) {
+	catalog := testCatalog()
+	catalog.VersionOverrides = []VersionOverride{{
+		Name:    "pylon",
+		Version: "0.3.0",
+	}}
+
+	err := ValidateCatalog(catalog)
+	if err == nil || !strings.Contains(err.Error(), "has unsupported type") {
+		t.Fatalf("ValidateCatalog error = %v, want missing version override type rejection", err)
 	}
 }
 

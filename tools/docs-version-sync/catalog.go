@@ -121,9 +121,10 @@ type Publication struct {
 }
 
 type VersionOverride struct {
-	Name    string `yaml:"name"`
-	Version string `yaml:"version"`
-	Source  string `yaml:"source,omitempty"`
+	Name    string       `yaml:"name"`
+	Type    ArtifactType `yaml:"type"`
+	Version string       `yaml:"version"`
+	Source  string       `yaml:"source,omitempty"`
 }
 
 // StackMetadata identifies the stack release and its immutable source snapshot.
@@ -275,7 +276,8 @@ func ValidateCatalog(catalog *Catalog) error {
 			return fmt.Errorf("duplicate publication %s", key)
 		}
 		seenPublications[key] = struct{}{}
-		publicationVersions[publication.Name] = append(publicationVersions[publication.Name], publication.Version)
+		publicationKey := artifactNameAndTypeIdentityKey(publication.Name, publication.Type)
+		publicationVersions[publicationKey] = append(publicationVersions[publicationKey], publication.Version)
 	}
 	seenVersionOverrides := map[string]struct{}{}
 	for _, override := range catalog.VersionOverrides {
@@ -285,10 +287,16 @@ func ValidateCatalog(catalog *Catalog) error {
 		if strings.TrimSpace(override.Version) == "" {
 			return fmt.Errorf("version override %s has empty version", override.Name)
 		}
-		if _, exists := seenVersionOverrides[override.Name]; exists {
-			return fmt.Errorf("duplicate version override %s", override.Name)
+		switch override.Type {
+		case ArtifactTypeImage, ArtifactTypeChart, ArtifactTypeResource:
+		default:
+			return fmt.Errorf("version override %s has unsupported type %q", override.Name, override.Type)
 		}
-		if versions, published := publicationVersions[override.Name]; published {
+		overrideKey := artifactNameAndTypeIdentityKey(override.Name, override.Type)
+		if _, exists := seenVersionOverrides[overrideKey]; exists {
+			return fmt.Errorf("duplicate version override %s:%s", override.Name, override.Type)
+		}
+		if versions, published := publicationVersions[overrideKey]; published {
 			matches := false
 			for _, version := range versions {
 				if version == override.Version {
@@ -300,7 +308,7 @@ func ValidateCatalog(catalog *Catalog) error {
 				return fmt.Errorf("version override %s:%s does not match publication version %s", override.Name, override.Version, strings.Join(versions, ", "))
 			}
 		}
-		seenVersionOverrides[override.Name] = struct{}{}
+		seenVersionOverrides[overrideKey] = struct{}{}
 	}
 	seenPending := map[string]struct{}{}
 	for _, name := range catalog.PublicationPending {
@@ -722,7 +730,11 @@ func refreshCatalogFromArtifacts(stackVersion string, artifacts []Artifact, base
 }
 
 func artifactNameAndTypeKey(artifact Artifact) string {
-	return artifact.Name + "\x00" + string(artifact.Type)
+	return artifactNameAndTypeIdentityKey(artifact.Name, artifact.Type)
+}
+
+func artifactNameAndTypeIdentityKey(name string, artifactType ArtifactType) string {
+	return name + "\x00" + string(artifactType)
 }
 
 func publicationIdentityKey(name string, artifactType ArtifactType, version string) string {
@@ -764,12 +776,12 @@ func (catalog *Catalog) reconcilePublicationPending() {
 func (catalog *Catalog) applyVersionOverrides() {
 	for _, override := range catalog.VersionOverrides {
 		for i := range catalog.Artifacts {
-			if catalog.Artifacts[i].Name == override.Name {
+			if catalog.Artifacts[i].Name == override.Name && catalog.Artifacts[i].Type == override.Type {
 				catalog.Artifacts[i].Version = override.Version
 			}
 		}
 		for i := range catalog.SupplementalArtifacts {
-			if catalog.SupplementalArtifacts[i].Name == override.Name {
+			if catalog.SupplementalArtifacts[i].Name == override.Name && catalog.SupplementalArtifacts[i].Type == override.Type {
 				catalog.SupplementalArtifacts[i].Version = override.Version
 			}
 		}
