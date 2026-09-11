@@ -222,6 +222,20 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	}
 }
 
+func TestRepositoryReleaseInventorySourcesRevalFromTag(t *testing.T) {
+	config, err := loadResolvedInventoryConfig(filepath.Join("..", ".."), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, ok := config.SourceCharts["helm-reval"]
+	if !ok {
+		t.Fatal("release inventory does not define a source for helm-reval")
+	}
+	if source.TagPrefix != "deploy/helm/helm-reval/v" || source.Path != "deploy/helm/helm-reval" {
+		t.Fatalf("ReVal source chart = %#v", source)
+	}
+}
+
 func TestReplaceResolvedInventoryStateChart(t *testing.T) {
 	chartPath := filepath.Join(t.TempDir(), "helm-nvcf-invocation-service", "1.6.1")
 	quotedChartPath := strconv.Quote(filepath.ToSlash(chartPath))

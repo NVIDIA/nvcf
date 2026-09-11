@@ -23,6 +23,9 @@ sourceCharts:
   helm-nvcf-rate-limiter:
     tagPrefix: deploy/helm/ratelimiter/v
     path: deploy/helm/ratelimiter/nvcf-ratelimiter
+  helm-reval:
+    tagPrefix: deploy/helm/helm-reval/v
+    path: deploy/helm/helm-reval
 # The release workflow authenticates before evaluating the remaining charts and
 # permits states that contain only third-party or local charts.
 publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf
