@@ -1174,6 +1174,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithInfraOverheadGetter(infraOverheadGetter).
 		WithSecretMirrorConfig(a.SecretMirrorSourceNamespace, a.SecretMirrorLabelSelector).
 		WithEnvOverrides(a.FunctionEnvOverrides, a.TaskEnvOverrides).
+		WithNotFoundInstanceStatusReporter(func(ctx context.Context, reqID, instanceID string) error {
+			return a.handleNotFoundInstanceStatusSyncAction(ctx, reqID, instanceID, ICMSInstanceReconcileTerminateAndUpdate)
+		}).
 		Start(ctx)
 	if err != nil {
 		log.WithError(err).Error("Failed to configure the Backend K8s Cache")
