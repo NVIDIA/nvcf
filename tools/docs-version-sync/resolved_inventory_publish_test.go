@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -81,17 +82,27 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
-	repo := t.TempDir()
-	writeFile(t, filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath)), "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: nvcr.io/nvidia/nvcf-byoc\n")
-	for _, state := range resolvedInventoryStates {
-		writeFile(t, filepath.Join(repo, filepath.FromSlash(state.path)), "releases: []\n")
+	repo := initTestGitRepo(t)
+	writeFile(t, filepath.Join(repo, "deploy/helm/nvca-operator/nvca-operator/Chart.yaml"), "apiVersion: v2\nname: helm-nvca-operator\nversion: 0.0.0\n")
+	writeFile(t, filepath.Join(repo, "deploy/helm/nvca-operator/nvca-operator/templates/pod.yaml"), "kind: Pod\n")
+	if _, err := gitOutput(repo, "add", "--all"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(repo, "commit", "-m", "nvca chart fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(repo, "tag", "deploy/helm/nvca-operator/v1.0.0"); err != nil {
+		t.Fatal(err)
 	}
 
-	source := stackSourceRelease{
-		Version: "1.2.3",
-		Tag:     stackTagPrefix + "1.2.3",
-		Commit:  strings.Repeat("b", 40),
+	stackFiles := map[string]string{
+		resolvedInventoryConfigPath: "schemaVersion: 1\npublishedChartRepository: " + testPublishedChartRepository + "\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/nvca-operator/nvca-operator\n",
 	}
+	for _, state := range resolvedInventoryStates {
+		stackFiles[state.path] = "releases: []\n"
+	}
+	stackFiles["deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl"] = "releases:\n  - name: nvca-operator\n    chart: nvcf/helm-nvca-operator\n    version: 1.0.0\n"
+	source := commitTestStackSource(t, repo, "1.2.3", stackFiles)
 	runner := &fakeResolvedInventoryRunner{t: t}
 	inventory, err := collectResolvedStackInventory(repo, "", source, runner)
 	if err != nil {
@@ -111,10 +122,10 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	if runner.templateCalls != len(resolvedInventoryStates) {
 		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(resolvedInventoryStates))
 	}
-	if runner.prepareCalls != 4 {
-		t.Fatalf("repository preparation calls = %d, want two sources and two public repository preparations", runner.prepareCalls)
+	if runner.prepareCalls != 3 {
+		t.Fatalf("repository preparation calls = %d, want source and two public repository preparations", runner.prepareCalls)
 	}
-	wantPrefix := []string{"prepare-source", "prepare-source", "list", "list", "build", "prepare-public", "template"}
+	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
 	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("operation prefix = %v, want %v", runner.operations, wantPrefix)
 	}
@@ -159,7 +170,7 @@ func TestParseResolvedInventoryHelmSource(t *testing.T) {
 func TestLoadResolvedInventoryConfig(t *testing.T) {
 	repo := t.TempDir()
 	configPath := filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath))
-	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: nvcr.io/nvidia/nvcf-byoc\n")
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/nvca-operator/nvca-operator\n")
 	config, err := loadResolvedInventoryConfig(repo, "")
 	if err != nil {
 		t.Fatal(err)
@@ -167,8 +178,8 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	if config.PublishedChartRepository != testPublishedChartRepository {
 		t.Fatalf("published repository = %q", config.PublishedChartRepository)
 	}
-	if got := config.RenderChartRepositoryOverrides["nvcf-compute-plane"]; got != "nvcr.io/nvidia/nvcf-byoc" {
-		t.Fatalf("compute-plane render repository = %q", got)
+	if got := config.SourceCharts["helm-nvca-operator"].TagPrefix; got != "deploy/helm/nvca-operator/v" {
+		t.Fatalf("NVCA source chart tag prefix = %q", got)
 	}
 
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: oci://registry.example.test/charts\n")
@@ -176,14 +187,14 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 		t.Fatalf("non-HTTPS repository error = %v", err)
 	}
 
-	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  unknown-stack: registry.example.test/charts\n")
-	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "unknown stack") {
-		t.Fatalf("unknown override stack error = %v", err)
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator\n    path: deploy/helm/nvca-operator/nvca-operator\n")
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "ending in /v") {
+		t.Fatalf("invalid source chart tag prefix error = %v", err)
 	}
 
-	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: https://registry.example.test/charts\n")
-	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "without credentials or a URL scheme") {
-		t.Fatalf("invalid override repository error = %v", err)
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/other/nvca-operator\n")
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "path must be within") {
+		t.Fatalf("invalid source chart path error = %v", err)
 	}
 
 	externalConfig := filepath.Join(t.TempDir(), "release-inventory.yaml")
@@ -194,41 +205,6 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	}
 	if external.PublishedChartRepository != "https://helm.example.test/external" {
 		t.Fatalf("external published repository = %q", external.PublishedChartRepository)
-	}
-}
-
-func TestPrepareResolvedInventoryEnvironmentWritesStackRenderSources(t *testing.T) {
-	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
-	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
-	repo := t.TempDir()
-	config := resolvedInventoryConfig{
-		RenderChartRepositoryOverrides: map[string]string{
-			"nvcf-compute-plane": "nvcr.io/nvidia/nvcf-byoc",
-		},
-	}
-
-	_, sources, _, err := prepareResolvedInventoryEnvironment(repo, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := sources["self-managed"].reference(); got != "registry.example.test/release/charts" {
-		t.Fatalf("self-managed render source = %q", got)
-	}
-	if got := sources["nvcf-compute-plane"].reference(); got != "nvcr.io/nvidia/nvcf-byoc" {
-		t.Fatalf("compute-plane render source = %q", got)
-	}
-	for stack, want := range map[string]string{
-		"self-managed":       "repository: release/charts",
-		"observability":      "repository: release/charts",
-		"nvcf-compute-plane": "repository: nvidia/nvcf-byoc",
-	} {
-		raw, err := os.ReadFile(filepath.Join(repo, "deploy", "stacks", stack, "environments", "inventory.yaml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(raw), want) {
-			t.Fatalf("%s inventory environment = %s, want %q", stack, raw, want)
-		}
 	}
 }
 
@@ -336,12 +312,12 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 type fakeResolvedInventoryRunner struct {
-	t               *testing.T
-	prepareCalls    int
-	templateCalls   int
-	preparedSources map[string]bool
-	publicPrepared  bool
-	operations      []string
+	t              *testing.T
+	prepareCalls   int
+	templateCalls  int
+	sourcePrepared bool
+	publicPrepared bool
+	operations     []string
 }
 
 func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repositories map[string]helmfileRepository, ngcAPIKey string) error {
@@ -351,14 +327,10 @@ func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repos
 		runner.t.Fatalf("NGC API key = %q", ngcAPIKey)
 	}
 	if repository, ok := repositories["nvcf"]; ok {
-		if len(repositories) != 1 || !repository.OCI ||
-			(repository.URL != "registry.example.test/release/charts" && repository.URL != "nvcr.io/nvidia/nvcf-byoc") {
+		if len(repositories) != 1 || !repository.OCI || repository.URL != "registry.example.test/release/charts" {
 			runner.t.Fatalf("source repositories = %#v", repositories)
 		}
-		if runner.preparedSources == nil {
-			runner.preparedSources = map[string]bool{}
-		}
-		runner.preparedSources[repository.URL] = true
+		runner.sourcePrepared = true
 		runner.operations = append(runner.operations, "prepare-source")
 		return nil
 	}
@@ -391,12 +363,8 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	}
 	stateFile := argumentAfter(runner.t, args, "--file")
 	action := resolvedInventoryAction(args)
-	expectedSource := "registry.example.test/release/charts"
-	if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/") {
-		expectedSource = "nvcr.io/nvidia/nvcf-byoc"
-	}
-	if (action == "list" || action == "build") && !runner.preparedSources[expectedSource] {
-		runner.t.Fatalf("Helmfile %s ran before source-registry authentication for %s", action, expectedSource)
+	if (action == "list" || action == "build") && !runner.sourcePrepared {
+		runner.t.Fatalf("Helmfile %s ran before source-registry authentication", action)
 	}
 	runner.operations = append(runner.operations, action)
 	releases := fakeResolvedInventoryReleases(stateFile, hasResolvedInventoryFullOverrides(args))
@@ -404,11 +372,37 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	case "list":
 		return mustJSON(runner.t, releases), nil
 	case "build":
+		if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/helmfile.d/02-") {
+			raw, err := os.ReadFile(stateFile)
+			if err != nil {
+				runner.t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "chart: nvcf/helm-nvca-operator") || !strings.Contains(string(raw), "-source-charts") {
+				runner.t.Fatalf("NVCA state did not use the materialized source chart:\n%s", raw)
+			}
+			chartValue := ""
+			for _, line := range strings.Split(string(raw), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "chart: ") {
+					chartValue = strings.TrimPrefix(strings.TrimSpace(line), "chart: ")
+				}
+			}
+			chartPath, err := strconv.Unquote(chartValue)
+			if err != nil {
+				runner.t.Fatalf("unquote materialized chart path %q: %v", chartValue, err)
+			}
+			metadata, err := os.ReadFile(filepath.Join(chartPath, "Chart.yaml"))
+			if err != nil {
+				runner.t.Fatal(err)
+			}
+			if !strings.Contains(string(metadata), "version: \"1.0.0\"") {
+				runner.t.Fatalf("materialized chart did not use pinned version:\n%s", metadata)
+			}
+		}
 		built := "repositories:\n"
 		if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/helmfile.d/01-") {
 			built += "  - name: third-party\n    url: https://third-party.example.test\n    oci: false\n"
 		} else {
-			built += "  - name: nvcf\n    url: " + expectedSource + "\n    oci: true\n"
+			built += "  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"
 		}
 		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") {
 			built += "  - name: public\n    url: https://charts.example.test\n    oci: false\n"
@@ -463,7 +457,9 @@ func fakeResolvedInventoryReleases(stateFile string, full bool) []helmfileReleas
 		}
 		return releases
 	case strings.Contains(slashPath, "nvcf-compute-plane/helmfile.d/02-"):
-		return []helmfileRelease{release("nvca-operator")}
+		nvca := release("nvca-operator")
+		nvca.Chart = "nvcf/helm-nvca-operator"
+		return []helmfileRelease{nvca}
 	default:
 		panic("unexpected state " + stateFile)
 	}

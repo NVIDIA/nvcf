@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 schemaVersion: 1
-# NVCA is released independently in the public BYOC catalog. It is not mirrored
-# into the composite stack's release chart repository.
-renderChartRepositoryOverrides:
-  nvcf-compute-plane: nvcr.io/nvidia/nvcf-byoc
-# The release workflow authenticates each render source before evaluating the
-# stack and permits states that contain only third-party or local charts.
+# NVCA is released independently and is not mirrored into the composite stack's
+# release chart repository. Render the pinned chart from its immutable public
+# GitHub release tag, then report the public self-managed catalog destination.
+sourceCharts:
+  helm-nvca-operator:
+    tagPrefix: deploy/helm/nvca-operator/v
+    path: deploy/helm/nvca-operator/nvca-operator
+# The release workflow authenticates before evaluating the remaining charts and
+# permits states that contain only third-party or local charts.
 publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf
