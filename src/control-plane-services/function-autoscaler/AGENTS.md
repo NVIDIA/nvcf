@@ -38,20 +38,26 @@ SECRETS_PATH=local_env/vault/secrets.json \
 cargo run --bin server -p rs-autoscaler
 ```
 
+The `cargo run` above has the same Bazel-only dependency described under Build
+& Test, so it does not resolve either. Run the `:server` Bazel target instead.
+
 ## Build & Test
-```bash
-cargo fmt -p rs-autoscaler
-cargo clippy -p rs-autoscaler --all-targets -- -D warnings
-cargo test -p rs-autoscaler
-cargo deny check advisories
-```
 
 `crates/server` depends on `//src/libraries/rust/nvcf-info` as a Bazel target
-only, so the cargo commands above do not resolve it. Build and test that crate
-with Bazel from the monorepo root:
+only, and cargo does not declare it, so `cargo build`, `cargo clippy`, and
+`cargo test` fail to resolve it. Build and test with Bazel from the monorepo
+root:
 
 ```bash
 bazel test //src/control-plane-services/function-autoscaler/crates/server:all
+```
+
+Formatting and advisory checks do not compile the crate, so they still run
+under cargo:
+
+```bash
+cargo fmt -p rs-autoscaler
+cargo deny check advisories
 ```
 
 CI subproject id: `function-autoscaler`. Native Bazel validation and release
