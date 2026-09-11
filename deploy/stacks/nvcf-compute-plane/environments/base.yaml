@@ -6,6 +6,8 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
+  # Set url to use an HTTPS Helm repository. Otherwise, set registry and
+  # repository to use OCI.
   helm:
     sources:
       registry: "nvcr.io"
@@ -31,9 +33,8 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
-    imageTag: "3.3.2"
     selfManaged:
-      nvcaVersion: "3.3.2"
+      nvcaVersion: "3.5.2"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.

@@ -120,10 +120,25 @@ environments:
 {{- $_ := set $computePlaneMonitors "enabled" $computePlaneMonitorsEnabled }}
 {{- $_ := set $defaultMonitors "computePlane" $computePlaneMonitors }}
 
+{{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
+{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
+{{- fail "global.helm.sources.url must use https://" }}
+{{- end }}
+
 repositories:
   - name: nvcf
+{{- if $helmSourceURL }}
+    url: {{ $helmSourceURL | quote }}
+    {{- if dig "global" "helm" "sources" "username" "" .Values }}
+    username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
+    {{- end }}
+    {{- if dig "global" "helm" "sources" "password" "" .Values }}
+    password: {{ dig "global" "helm" "sources" "password" "" .Values | quote }}
+    {{- end }}
+{{- else }}
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
     oci: true
+{{- end }}
 
 helmDefaults:
   createNamespace: true
@@ -139,7 +154,7 @@ releases:
   {{- if $prometheusOperatorCrdsEnabled }}
   - name: prometheus-operator-crds
     chart: nvcf/prometheus-operator-crds
-    version: {{ dig "prometheusOperatorCrds" "version" "30.0.0" .Values | quote }}
+    version: {{ dig "prometheusOperatorCrds" "version" "31.0.1" .Values | quote }}
     namespace: {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}
     values:
       - {{- toYaml (dig "prometheusOperatorCrds" "values" dict .Values) | nindent 8 }}
@@ -150,7 +165,7 @@ releases:
   {{- if $opentelemetryOperatorEnabled }}
   - name: opentelemetry-operator
     chart: nvcf/opentelemetry-operator
-    version: {{ dig "opentelemetryOperator" "version" "0.114.1" .Values | quote }}
+    version: {{ dig "opentelemetryOperator" "version" "0.122.0" .Values | quote }}
     namespace: {{ dig "opentelemetryOperator" "namespace" $observabilityNamespace .Values }}
     {{- if $prometheusOperatorCrdsEnabled }}
     needs:
@@ -183,8 +198,12 @@ releases:
   {{- if $victoriaMetricsEnabled }}
   - name: victoria-metrics
     chart: nvcf/victoria-metrics-single
-    version: {{ dig "victoriaMetrics" "version" "0.38.0" .Values | quote }}
+    version: {{ dig "victoriaMetrics" "version" "0.45.0" .Values | quote }}
     namespace: {{ $victoriaMetricsNamespace }}
+    {{- if $prometheusOperatorCrdsEnabled }}
+    needs:
+      - {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}/prometheus-operator-crds
+    {{- end }}
     values:
       - ../values/victoria-metrics.yaml.gotmpl
     labels:

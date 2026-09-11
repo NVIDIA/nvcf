@@ -24,6 +24,10 @@ const (
 	ActionRefuse
 	// ActionSkip moves nothing because there is no chart to move.
 	ActionSkip
+	// ActionValuesPaths moves exactly the declared values.yaml paths.
+	// appVersion is left alone: in a multi-image chart it belongs to whichever
+	// other service, if any, uses the default single-image evidence.
+	ActionValuesPaths
 )
 
 // Floating tags are not pins. Replacing one with a version is a behaviour
@@ -59,6 +63,12 @@ var (
 	// # keeps commented lines out.
 	inlineImageRE = regexp.MustCompile(`(?m)^(?:[^#\n]*[\s{,])?image:[ \t]*[^ \t\n#].*$`)
 	keyLineRE     = regexp.MustCompile(`^(\s*)([A-Za-z0-9_.-]+):`)
+	// A scalar key: value line, indent and key captured with the trailing
+	// colon and whitespace so a rewrite can splice the new value back in
+	// without disturbing indentation or a trailing comment. Mirrors
+	// appVersionRE's shape for the same reason: quotes around the value are
+	// optional on read and always added on write.
+	scalarValueRE = regexp.MustCompile(`^(\s*[A-Za-z0-9_.-]+:\s*)"?([^"\s#]*)"?(.*)$`)
 )
 
 // An imageTag is a tag: entry that sits directly under an image: key, together
@@ -96,6 +106,52 @@ func imageTags(lines []string) []imageTag {
 		}
 	}
 	return out
+}
+
+// resolveValuesPath finds the line holding the scalar value at a dotted path,
+// for example "otelCollector.imageTag", in values.yaml.
+//
+// Matching walks the full ancestor chain rather than taking the nearest
+// parent alone, because a chart with more than one image can hold the same
+// leaf key more than once under different parents (otelCollector.imageTag
+// and helmManaged.otelCollector.imageTag both end in imageTag): a
+// nearest-parent match cannot tell those apart, only the full path can.
+func resolveValuesPath(lines []string, path string) (line int, value string, err error) {
+	segments := strings.Split(path, ".")
+	type frame struct {
+		indent int
+		key    string
+	}
+	var stack []frame
+	for i, l := range lines {
+		m := keyLineRE.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		indent := len(m[1])
+		key := m[2]
+		for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
+			stack = stack[:len(stack)-1]
+		}
+		if len(stack) == len(segments)-1 && key == segments[len(stack)] {
+			full := true
+			for depth, f := range stack {
+				if f.key != segments[depth] {
+					full = false
+					break
+				}
+			}
+			if full {
+				vm := scalarValueRE.FindStringSubmatch(l)
+				if vm == nil || vm[2] == "" {
+					return 0, "", fmt.Errorf("values path %q: line %d has no scalar value", path, i+1)
+				}
+				return i, vm[2], nil
+			}
+		}
+		stack = append(stack, frame{indent: indent, key: key})
+	}
+	return 0, "", fmt.Errorf("values path %q not found", path)
 }
 
 // A Plan is what to do for one chart.
@@ -234,7 +290,7 @@ func Apply(root string, chart Entry, version string, p Plan) error {
 		}
 		replaced = true
 		g := appVersionRE.FindStringSubmatch(line)
-		return fmt.Sprintf("%s%q%s", g[1], version, g[3])
+		return g[1] + scalarLike(line[len(g[1]):], version) + g[3]
 	})
 	if err := writeFilePreservingMode(chartYAML, updated); err != nil {
 		return err
@@ -256,9 +312,98 @@ func Apply(root string, chart Entry, version string, p Plan) error {
 		}
 		m := tagLineRE.FindStringSubmatch(lines[it.line])
 		suffix := lines[it.line][len(m[0]):]
-		lines[it.line] = fmt.Sprintf("%stag: %q%s", m[1], version, suffix)
+		valueStart := strings.Index(m[0], "tag:") + len("tag:")
+		valueStart += len(m[0][valueStart:]) - len(strings.TrimLeft(m[0][valueStart:], " \t"))
+		lines[it.line] = m[0][:valueStart] + scalarLike(m[0][valueStart:], version) + suffix
 	}
 	return writeFilePreservingMode(valuesYAML, strings.Join(lines, "\n"))
+}
+
+// PlanForValuesPaths decides what to do for a chart whose deploy edge names
+// the exact values.yaml paths holding this service's tag, rather than relying
+// on appVersion agreement. appVersion is never part of this plan: in a
+// multi-image chart it belongs to whichever other service, if any, uses the
+// default single-image evidence.
+func PlanForValuesPaths(root string, chart Entry, version string, paths []string) (Plan, error) {
+	chartYAML, valuesYAML := ChartFiles(root, chart.Path)
+	if chartYAML == "" {
+		return Plan{Action: ActionSkip, Detail: fmt.Sprintf("no Chart.yaml under %s", chart.Path)}, nil
+	}
+	b, err := os.ReadFile(valuesYAML)
+	if err != nil {
+		return Plan{}, fmt.Errorf("read %s: %w", valuesYAML, err)
+	}
+	lines := strings.Split(string(b), "\n")
+	values := make([]string, len(paths))
+	for i, p := range paths {
+		_, v, err := resolveValuesPath(lines, p)
+		if err != nil {
+			return Plan{ActionRefuse, err.Error(), "", nil}, nil
+		}
+		values[i] = v
+	}
+
+	// The declared paths are the ownership evidence here, in place of the
+	// appVersion agreement the default path uses. If they disagree, that
+	// evidence is broken: something already drifted, and moving every path to
+	// the same new version would paper over it rather than report it.
+	current := values[0]
+	for _, v := range values[1:] {
+		if v != current {
+			return Plan{
+				ActionRefuse,
+				fmt.Sprintf("declared values paths disagree: %s", describePaths(paths, values)),
+				"",
+				values,
+			}, nil
+		}
+	}
+	if floating[current] {
+		return Plan{ActionRefuse, "image tag is floating (" + current + ")", current, values}, nil
+	}
+	return Plan{ActionValuesPaths, "declared values path(s): " + strings.Join(paths, ", "), current, values}, nil
+}
+
+// describePaths pairs each declared path with the value found there, for a
+// refusal message that shows exactly where the disagreement is.
+func describePaths(paths, values []string) string {
+	parts := make([]string, len(paths))
+	for i, p := range paths {
+		parts[i] = fmt.Sprintf("%s=%s", p, values[i])
+	}
+	return strings.Join(parts, ", ")
+}
+
+// ApplyValuesPaths writes the released version to every path this deploy edge
+// named, and nothing else: appVersion and any other image in the chart are
+// left alone.
+func ApplyValuesPaths(root string, chart Entry, version string, paths []string) error {
+	_, valuesYAML := ChartFiles(root, chart.Path)
+	b, err := os.ReadFile(valuesYAML)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", valuesYAML, err)
+	}
+	lines := strings.Split(string(b), "\n")
+	for _, p := range paths {
+		line, _, err := resolveValuesPath(lines, p)
+		if err != nil {
+			return err
+		}
+		m := scalarValueRE.FindStringSubmatch(lines[line])
+		lines[line] = m[1] + scalarLike(lines[line][len(m[1]):], version) + m[3]
+	}
+	return writeFilePreservingMode(valuesYAML, strings.Join(lines, "\n"))
+}
+
+// scalarLike renders version the way the value it replaces was written:
+// quoted if that value was quoted, bare otherwise. Charts are often vendored
+// or regenerated by tools that keep each line's existing style (yq does), and
+// a check that diffs the regenerated file fails on a quoting-only change.
+func scalarLike(original, version string) string {
+	if strings.HasPrefix(original, `"`) {
+		return fmt.Sprintf("%q", version)
+	}
+	return version
 }
 
 func writeFilePreservingMode(path, content string) error {

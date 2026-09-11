@@ -241,7 +241,7 @@ public class RequestResponseTelemetryFilter extends OncePerRequestFilter {
             return getClusterIdFromApiKey(request);
         } else {
             // Sub fetching for JWT token
-            return getSubFromSsaToken(request);
+            return getSubFromBearerToken(request);
         }
     }
 
@@ -274,7 +274,7 @@ public class RequestResponseTelemetryFilter extends OncePerRequestFilter {
         }
     }
 
-    private String getSubFromSsaToken(HttpServletRequest request) {
+    private String getSubFromBearerToken(HttpServletRequest request) {
         try {
             String token = bearerTokenResolver.resolve(request);
             JWTClaimsSet jwtClaimsSet = JWTParser

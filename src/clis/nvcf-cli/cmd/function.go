@@ -1143,7 +1143,9 @@ func loadCreateConfigFile(config *CreateConfig) error {
 		return fmt.Errorf(errParseInputFileFmt, createFlags.inputFile, err)
 	}
 
-	fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	if !IsJSONOutput() {
+		fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	}
 	return nil
 }
 
@@ -1652,14 +1654,16 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create function: %w", err)
 	}
+	if resp.Function.ID == "" || resp.Function.VersionID == "" {
+		return fmt.Errorf("function create response did not include a function ID and version ID")
+	}
 
 	SetCurrentFunction(resp.Function.ID, resp.Function.VersionID, resp.Function.Name)
 	if err := SaveStateForCurrentCommand(); err != nil {
 		logging.Warning("Failed to save function state: %v", err)
 	}
 
-	printCreateResult(resp, config, health, clientConfig.Demo)
-	return nil
+	return outputCreateResult(resp, config, health, clientConfig.Demo)
 }
 
 func validateCreateConfig(config *CreateConfig) error {
@@ -1907,14 +1911,7 @@ func createAPIBodyFormat(apiBodyFormat string) string {
 	return apiBodyFormat
 }
 
-func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto, demo bool) {
-	logging.Success("Function created successfully!")
-	logging.Plain("Function ID: %s", resp.Function.ID)
-	logging.Plain("Version ID: %s", resp.Function.VersionID)
-	logging.Plain("Name: %s", resp.Function.Name)
-	logging.Plain("Status: %s", resp.Function.Status)
-	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
-
+func outputCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto, demo bool) error {
 	if demo {
 		if err := generateDemoFolder(resp.Function.ID, resp.Function.VersionID, config); err != nil {
 			logging.Warning("Failed to generate demo folder: %v", err)
@@ -1922,6 +1919,22 @@ func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig
 			logging.Success("Demo folder '%s_demo' created with JSON stubs!", resp.Function.VersionID)
 		}
 	}
+
+	if IsJSONOutput() {
+		return OutputJSON(resp)
+	}
+
+	printCreateResult(resp, config, health)
+	return nil
+}
+
+func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto) {
+	logging.Success("Function created successfully!")
+	logging.Plain("Function ID: %s", resp.Function.ID)
+	logging.Plain("Version ID: %s", resp.Function.VersionID)
+	logging.Plain("Name: %s", resp.Function.Name)
+	logging.Plain("Status: %s", resp.Function.Status)
+	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
 
 	if health != nil {
 		logging.Plain("Health Configuration:")

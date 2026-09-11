@@ -14,15 +14,14 @@
 # limitations under the License.
 
 {{- if .Values.vanityGateway.serviceMonitor.enabled }}
+{{- $serviceMonitorLabels := merge (dict "nvcf.nvidia.com/observability-target" "true") .Values.vanityGateway.serviceMonitor.labels }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "vanity-gateway.fullname" . }}
   labels:
     {{- include "vanity-gateway.labels" . | nindent 4 }}
-    {{- with .Values.vanityGateway.serviceMonitor.labels }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
+    {{- toYaml $serviceMonitorLabels | nindent 4 }}
 spec:
   selector:
     matchLabels:

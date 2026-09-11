@@ -3,6 +3,8 @@
 
 global:
   helm:
+    # Set url to use an HTTPS Helm repository. Otherwise, set registry and
+    # repository to use OCI.
     sources:
       registry: nvcr.io
       repository: YOUR_ORG/YOUR_TEAM
@@ -28,7 +30,7 @@ metricsBackend:
     clientPrivateKeyPath: ""
 
 prometheusOperatorCrds:
-  version: "30.0.0"
+  version: "31.0.1"
   values:
     crds:
       alertmanagerconfigs:
@@ -53,7 +55,7 @@ prometheusOperatorCrds:
         enabled: false
 
 opentelemetryOperator:
-  version: "0.114.1"
+  version: "0.122.0"
   admissionWebhooks:
     certManager:
       enabled: false
@@ -62,11 +64,11 @@ opentelemetryOperator:
   manager:
     collectorImage:
       repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
-      tag: "0.129.1"
+      tag: "0.160.0"
 
 collector:
   collectorName: nvcf-observability
-  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
+  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.160.0
   targetAllocator:
     allocationStrategy: consistent-hashing
     prometheusCR:
@@ -101,7 +103,7 @@ collector:
             - prometheusremotewrite
 
 victoriaMetrics:
-  version: "0.38.0"
+  version: "0.45.0"
   server:
     retentionPeriod: "1"
     persistentVolume:
@@ -133,6 +135,13 @@ defaultMonitors:
         selector:
           app.kubernetes.io/instance: state-metrics
           app.kubernetes.io/name: helm-nvcf-state-metrics
+      # The shared stack owns this ServiceMonitor. The application chart owns
+      # the metrics port and service labels.
+      - name: function-autoscaler
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: function-autoscaler
+          app.kubernetes.io/name: helm-nvcf-function-autoscaler
       - name: invocation-service
         enabled: true
         selector:

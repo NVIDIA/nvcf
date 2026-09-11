@@ -330,6 +330,71 @@ func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	}
 }
 
+func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	artifact := Artifact{
+		Name:     "example",
+		Type:     ArtifactTypeImage,
+		Registry: "staging",
+		Version:  "1.2.3",
+		Digest:   digest,
+	}
+	tests := []struct {
+		name        string
+		publication *Publication
+		want        string
+	}{
+		{
+			name: "source reference",
+			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3@" + digest,
+		},
+		{
+			name: "unchanged publication",
+			publication: &Publication{
+				Name:     artifact.Name,
+				Version:  artifact.Version,
+				Registry: artifact.Registry,
+			},
+			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3@" + digest,
+		},
+		{
+			name: "registry remap",
+			publication: &Publication{
+				Name:     artifact.Name,
+				Version:  artifact.Version,
+				Registry: "public-images",
+			},
+			want: "nvcr.io/nvidia/nvcf/example:1.2.3",
+		},
+		{
+			name: "version remap",
+			publication: &Publication{
+				Name:             artifact.Name,
+				Version:          artifact.Version,
+				PublishedVersion: "1.2.3-public",
+				Registry:         artifact.Registry,
+			},
+			want: "nvcr.io/0833294136851237/nvcf-ncp-staging/example:1.2.3-public",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalog := testCatalog()
+			catalog.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+			if tt.publication != nil {
+				catalog.Publications = []Publication{*tt.publication}
+			}
+			got, err := catalog.artifactPath(artifact)
+			if err != nil {
+				t.Fatalf("artifactPath failed: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("artifactPath = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 	base := testCatalog()
 	base.VersionOverrides = []VersionOverride{{
@@ -697,6 +762,55 @@ after
 	}
 }
 
+func TestReplaceMarkedBlockAcceptsCompactMDXMarkers(t *testing.T) {
+	got, changed, err := ReplaceMarkedBlock(`before
+{/*docs-version-sync:BEGIN sample*/}
+stale
+{/*docs-version-sync:END sample*/}
+after
+`, "sample", "fresh")
+	if err != nil {
+		t.Fatalf("ReplaceMarkedBlock failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("ReplaceMarkedBlock reported no change")
+	}
+	for _, want := range []string{
+		"{/*docs-version-sync:BEGIN sample*/}",
+		"fresh",
+		"{/*docs-version-sync:END sample*/}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("updated content missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFindRepoRootFromUsesPublicCheckoutSentinels(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "docs", "version-catalog", "main.yaml"), "version: 1\n")
+	writeFile(t, filepath.Join(repo, "tools", "docs-version-sync", "go.mod"), "module docs-version-sync\n")
+	nested := filepath.Join(repo, "tools", "docs-version-sync")
+
+	got, err := findRepoRootFrom(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != repo {
+		t.Fatalf("findRepoRootFrom(%s) = %s, want %s", nested, got, repo)
+	}
+}
+
+func TestFindRepoRootFromRequiresBothPublicCheckoutSentinels(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "docs", "version-catalog", "main.yaml"), "version: 1\n")
+
+	_, err := findRepoRootFrom(repo)
+	if err == nil || !strings.Contains(err.Error(), "NVCF repository root not found") {
+		t.Fatalf("findRepoRootFrom error = %v, want missing-root error", err)
+	}
+}
+
 func TestSyncDocsRejectsMissingMarker(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "docs/user/manifest.md"), "no generated marker\n")
@@ -766,235 +880,6 @@ func TestValidateTargetRejectsNonMainTargets(t *testing.T) {
 	}
 }
 
-func TestUpdateCatalogFetchesArtifactsFromGitLab(t *testing.T) {
-	var sawToken bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("PRIVATE-TOKEN") == "gitlab-token" {
-			sawToken = true
-		}
-		wantPath := "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.0/artifacts-0.9.0.txt"
-		if r.URL.Path != wantPath {
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-			return
-		}
-		fmt.Fprint(w, `nvcf-base:0.1.4
-strap:2.234.0
-helm-nvcf-api:1.13.0
-`)
-	}))
-	defer server.Close()
-
-	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, ".netrc"), "machine 127.0.0.1 login user password gitlab-token\n")
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
-	t.Setenv("NETRC", filepath.Join(tmp, ".netrc"))
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "")
-	t.Setenv("GITLAB_TOKEN", "")
-	t.Setenv("GITLAB_ACCESS_TOKEN", "")
-	t.Setenv("OAUTH_TOKEN", "")
-	t.Setenv("CI_JOB_TOKEN", "")
-
-	catalog, err := updateCatalogFromGitLab("0.9.0", nil)
-	if err != nil {
-		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
-	}
-	if !sawToken {
-		t.Fatal("GitLab request did not use token from .netrc")
-	}
-	if catalog.Stack.Version != "0.9.0" {
-		t.Fatalf("stack version = %q, want 0.9.0", catalog.Stack.Version)
-	}
-	if catalog.Stack.PackageName != defaultPackageName || catalog.Stack.Name != defaultStackResourceName {
-		t.Fatalf("stack metadata = %#v, want package %s resource %s", catalog.Stack, defaultPackageName, defaultStackResourceName)
-	}
-	if names := strings.Join(artifactNames(catalog.Artifacts), ","); names != "helm-nvcf-api,strap" {
-		t.Fatalf("artifact names = %q, want helm-nvcf-api,strap", names)
-	}
-	cli, ok := catalog.findArtifact("nvcf-cli")
-	if !ok {
-		t.Fatal("catalog missing supplemental nvcf-cli")
-	}
-	if cli.Registry != defaultCLIRegistry || cli.Version != defaultCLIVersion {
-		t.Fatalf("nvcf-cli = %#v, want %s %s", cli, defaultCLIRegistry, defaultCLIVersion)
-	}
-}
-
-func TestUpdateCatalogPreservesCustomDenylist(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.0/artifacts-0.9.0.txt":
-			fmt.Fprint(w, `legacy-service:1.0.0
-strap:2.234.0
-`)
-		case "/api/v4/projects/268903/packages":
-			fmt.Fprint(w, `[{"name":"nvcf-compute-plane-stack","version":"1.0.0"}]`)
-		default:
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-			return
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "env-token")
-
-	base := testCatalog()
-	base.Denylist = []DenylistEntry{{Name: "legacy-service", Reason: "not published in docs"}}
-
-	catalog, err := updateCatalogFromGitLab("0.9.0", base)
-	if err != nil {
-		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
-	}
-	if _, denied := catalog.DenylistMap()["legacy-service"]; !denied {
-		t.Fatalf("updated catalog denylist = %#v, want legacy-service", catalog.Denylist)
-	}
-	if _, ok := catalog.findArtifact("legacy-service"); ok {
-		t.Fatalf("updated catalog contains denylisted artifact: %#v", catalog)
-	}
-	if _, ok := catalog.findArtifact("strap"); !ok {
-		t.Fatal("updated catalog is missing allowed artifact strap")
-	}
-}
-
-func TestUpdateCatalogSyncsComputePlaneStackPackage(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.0/artifacts-0.9.0.txt":
-			fmt.Fprint(w, `strap:2.234.0`)
-		case "/api/v4/projects/268903/packages":
-			fmt.Fprint(w, `[{"name":"nvcf-compute-plane-stack","version":"1.0.0"}]`)
-		default:
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "env-token")
-
-	catalog, err := updateCatalogFromGitLab("0.9.0", testCatalog())
-	if err != nil {
-		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
-	}
-	compute, ok := catalog.findArtifact(computeStackResourceName)
-	if !ok {
-		t.Fatal("updated catalog is missing compute-plane stack artifact")
-	}
-	if compute.Version != "1.0.0" {
-		t.Fatalf("compute stack version = %q, want 1.0.0", compute.Version)
-	}
-}
-
-func TestUpdateCatalogMarksAdvancedComputeStackPendingWithoutExactPublication(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.0/artifacts-0.9.0.txt":
-			fmt.Fprint(w, ``)
-		case "/api/v4/projects/268903/packages":
-			fmt.Fprint(w, `[{"name":"nvcf-compute-plane-stack","version":"1.0.7"}]`)
-		default:
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "env-token")
-
-	base := testCatalog()
-	base.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
-	for i := range base.SupplementalArtifacts {
-		if base.SupplementalArtifacts[i].Name == computeStackResourceName {
-			base.SupplementalArtifacts[i].Registry = "public-resources"
-			base.SupplementalArtifacts[i].Version = "1.0.6"
-		}
-	}
-	base.Publications = []Publication{{Name: computeStackResourceName, Version: "1.0.6", Registry: "public-resources"}}
-
-	catalog, err := updateCatalogFromGitLab("0.9.0", base)
-	if err != nil {
-		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
-	}
-	compute, ok := catalog.findArtifact(computeStackResourceName)
-	if !ok || compute.Version != "1.0.7" {
-		t.Fatalf("compute stack = %#v, want version 1.0.7", compute)
-	}
-	got, err := Render("manifest-artifact-registry-paths", catalog)
-	if err != nil {
-		t.Fatalf("render manifest: %v", err)
-	}
-	if row := manifestRow(t, got, computeStackResourceName); !strings.Contains(row, "`Publication pending`") {
-		t.Fatalf("advanced compute stack is not marked pending: %s", row)
-	}
-}
-
-func TestUpdateCatalogKeepsAdvancedComputeStackPublicWithExactPublication(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.0/artifacts-0.9.0.txt":
-			fmt.Fprint(w, ``)
-		case "/api/v4/projects/268903/packages":
-			fmt.Fprint(w, `[{"name":"nvcf-compute-plane-stack","version":"1.0.7"}]`)
-		default:
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "env-token")
-
-	base := testCatalog()
-	base.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
-	for i := range base.SupplementalArtifacts {
-		if base.SupplementalArtifacts[i].Name == computeStackResourceName {
-			base.SupplementalArtifacts[i].Registry = "public-resources"
-			base.SupplementalArtifacts[i].Version = "1.0.6"
-		}
-	}
-	base.Publications = []Publication{
-		{Name: computeStackResourceName, Version: "1.0.6", Registry: "public-resources"},
-		{Name: computeStackResourceName, Version: "1.0.7", Registry: "public-resources"},
-	}
-
-	catalog, err := updateCatalogFromGitLab("0.9.0", base)
-	if err != nil {
-		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
-	}
-	got, err := Render("manifest-artifact-registry-paths", catalog)
-	if err != nil {
-		t.Fatalf("render manifest: %v", err)
-	}
-	if row := manifestRow(t, got, computeStackResourceName); !strings.Contains(row, "`nvcr.io/nvidia/nvcf/nvcf-compute-plane-stack:1.0.7`") {
-		t.Fatalf("exactly published compute stack does not use its public distribution: %s", row)
-	}
-}
-
-func TestUpdateCatalogDiscoversLatestStackPackage(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v4/projects/182049/packages":
-			fmt.Fprint(w, `[{"name":"ncp-deploy","version":"0.9.1"}]`)
-		case "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.1/artifacts-0.9.1.txt":
-			fmt.Fprint(w, `strap:2.234.1`)
-		default:
-			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
-	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "env-token")
-
-	catalog, err := updateCatalogFromGitLab("", nil)
-	if err != nil {
-		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
-	}
-	if catalog.Stack.Version != "0.9.1" {
-		t.Fatalf("stack version = %q, want discovered 0.9.1", catalog.Stack.Version)
-	}
-}
-
 func TestLatestStackVersionPaginatesPackages(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v4/projects/182049/packages" {
@@ -1052,32 +937,6 @@ func TestLatestGenericPackageVersionDoesNotUseReleaseFallback(t *testing.T) {
 	}
 }
 
-func TestComputeStackProjectIDUsesCIProjectID(t *testing.T) {
-	t.Setenv("DOC_VERSION_SYNC_COMPUTE_GITLAB_PROJECT_ID", "")
-	t.Setenv("CI_PROJECT_ID", "12345")
-
-	projectID, err := computeStackProjectID()
-	if err != nil {
-		t.Fatalf("computeStackProjectID failed: %v", err)
-	}
-	if projectID != 12345 {
-		t.Fatalf("projectID = %d, want 12345", projectID)
-	}
-}
-
-func TestComputeStackProjectIDUsesExplicitOverride(t *testing.T) {
-	t.Setenv("DOC_VERSION_SYNC_COMPUTE_GITLAB_PROJECT_ID", "67890")
-	t.Setenv("CI_PROJECT_ID", "12345")
-
-	projectID, err := computeStackProjectID()
-	if err != nil {
-		t.Fatalf("computeStackProjectID failed: %v", err)
-	}
-	if projectID != 67890 {
-		t.Fatalf("projectID = %d, want 67890", projectID)
-	}
-}
-
 func testCatalog() *Catalog {
 	return &Catalog{
 		Version: 1,
@@ -1089,9 +948,9 @@ func testCatalog() *Catalog {
 			},
 		},
 		Stack: StackMetadata{
-			Name:     "nvcf-self-managed-stack",
-			Version:  "0.5.0",
-			Registry: "staging",
+			Name:               "nvcf-self-managed-stack",
+			PublicationVersion: "0.5.0",
+			Registry:           "staging",
 		},
 		Denylist: []DenylistEntry{
 			{Name: "nvcf-base", Reason: "managed separately"},

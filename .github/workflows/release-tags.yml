@@ -16,6 +16,10 @@ on:
         description: Optional service id or service_name to scope the run to. Defaults to every registered service.
         required: false
         type: string
+      inventory_tag:
+        description: Optional self-managed stack tag to render and validate without publishing.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,15 +29,26 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Keep GitHub release automation inert until the migration cutover is ready.
-  # Set the repository variable NVCF_GITHUB_AUTO_TAGGING_ENABLED=true after
-  # GitHub has the required path-format release anchors.
+  # Release automation is live. This repository is the sole tag and release
+  # authority, and both variables are set in repository settings
+  # (NVCF_GITHUB_AUTO_TAGGING_ENABLED=true, NVCF_GITHUB_RELEASE_DRY_RUN=false).
+  #
+  # The literals below are NOT the behavior here. They are the fallback for a
+  # context that has neither variable set -- a fork, or a re-created repository
+  # -- where defaulting to dry-run keeps a misconfigured checkout from cutting
+  # real releases against someone else's registries. Read the repository
+  # variables to see what actually runs; do not read these defaults as the
+  # current mode.
   NVCF_GITHUB_AUTO_TAGGING_ENABLED: ${{ vars.NVCF_GITHUB_AUTO_TAGGING_ENABLED || 'false' }}
   NVCF_GITHUB_RELEASE_DRY_RUN: ${{ vars.NVCF_GITHUB_RELEASE_DRY_RUN || 'true' }}
   NVCF_GITHUB_RELEASE_DRAFT: ${{ vars.NVCF_GITHUB_RELEASE_DRAFT || 'false' }}
   NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
   GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
   GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+  HELM_VERSION: "3.21.4"
+  HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+  HELMFILE_VERSION: "1.1.9"
+  HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
 
 jobs:
   # NVIDIA self-hosted runners. Eligible without a conditional because this
@@ -48,7 +63,7 @@ jobs:
   # work.
   service-release:
     name: service release automation
-    if: github.ref_type != 'tag'
+    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || inputs.inventory_tag == '')
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
@@ -97,6 +112,74 @@ jobs:
           fi
           ./tools/ci/github-release auto
 
+  inventory-preflight:
+    name: self-managed inventory preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.inventory_tag != ''
+    runs-on: linux-amd64-cpu4
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ github.token }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Install inventory rendering tools
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Build inventory renderer
+        working-directory: tools/docs-version-sync
+        run: go build -o "${RUNNER_TEMP}/docs-version-sync" .
+
+      - name: Render tagged inventory without publishing
+        env:
+          INVENTORY_TAG: ${{ inputs.inventory_tag }}
+          NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          NVCF_RELEASE_NGC_API_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+        run: |
+          set -euo pipefail
+          case "${INVENTORY_TAG}" in
+            deploy/stacks/self-managed/v*) ;;
+            *)
+              echo "ERROR: inventory_tag must be a deploy/stacks/self-managed/v* tag." >&2
+              exit 1
+              ;;
+          esac
+          version="${INVENTORY_TAG#deploy/stacks/self-managed/v}"
+          commit="$(git rev-list -n 1 "${INVENTORY_TAG}")"
+          test -n "${commit}"
+          git worktree add --detach "${RUNNER_TEMP}/inventory-source" "${INVENTORY_TAG}"
+          cd "${RUNNER_TEMP}/inventory-source"
+          "${RUNNER_TEMP}/docs-version-sync" \
+            --generate-stack-inventory "${RUNNER_TEMP}/nvcf-self-managed-stack-inventory.json" \
+            --inventory-config "${GITHUB_WORKSPACE}/deploy/stacks/self-managed/release-inventory.yaml" \
+            --stack-version "${version}" \
+            --stack-source-tag "${INVENTORY_TAG}" \
+            --stack-source-commit "${commit}"
+
   tag-release-notes:
     name: tag release notes
     if: github.ref_type == 'tag'
@@ -109,5 +192,32 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - uses: actions/setup-go@v5
+        if: startsWith(github.ref_name, 'deploy/stacks/self-managed/v')
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Install inventory rendering tools
+        if: startsWith(github.ref_name, 'deploy/stacks/self-managed/v')
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
       - name: Validate tag and create release notes
+        env:
+          NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          NVCF_RELEASE_NGC_API_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
         run: ./tools/ci/github-release tag "$GITHUB_REF_NAME"

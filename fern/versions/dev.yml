@@ -294,6 +294,8 @@ navigation:
             path: ../../docs/ngc-managed/cluster-management/ngc-managed.md
           - page: Helm-Managed Clusters
             path: ../../docs/ngc-managed/cluster-management/helm-managed.md
+          - page: GitOps Cluster Registration
+            path: ../../docs/ngc-managed/cluster-management/gitops-registration.md
           - page: Configuration
             path: ../../docs/ngc-managed/cluster-management/configuration.md
           - page: Monitoring

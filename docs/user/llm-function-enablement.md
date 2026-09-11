@@ -846,10 +846,24 @@ not delete it before its certificates and consumers have moved to the
 replacement trust path. Do not use `stargateQUICInsecure` as a production
 rollback path.
 
-## Local Plaintext Transport
+## Gateway Authentication and Worker Transport
 
-Use plaintext transport only in local or isolated test clusters. Set both
-plaintext controls:
+The gateway authentication hop and the worker transport are independent:
+
+- The bundled LLM API Gateway authenticates requests through the bundled NVCF
+  API at `api.nvcf.svc.cluster.local:9090`. The bundled API currently serves
+  plaintext gRPC on that port, so the self-managed stack defaults
+  `addons.llm.gateway.auth.grpcInsecure` to `true`.
+- LLM workers use separately managed transport security for gRPC registration,
+  watches, and the QUIC request path to the LLM request router. Keep the
+  production TLS configuration described above for this path.
+
+Typical self-managed deployments do not need to set the gateway authentication
+transport. Set `addons.llm.gateway.auth.grpcInsecure: false` only when the NVCF
+API endpoint is configured to serve TLS-capable gRPC.
+
+For local or isolated test clusters that do not configure worker transport
+TLS, set only the worker plaintext control:
 
 ```yaml
 addons:
@@ -857,8 +871,6 @@ addons:
     enabled: true
     gateway:
       replicaCount: 1
-      auth:
-        grpcInsecure: true
     requestRouter:
       replicaCount: 1
 
@@ -868,15 +880,13 @@ agentConfig:
       stargateQUICInsecure: true
 ```
 
-`addons.llm.gateway.auth.grpcInsecure: true` configures the LLM API Gateway to
-talk to the NVCF API over plaintext gRPC.
-
 `workload.stargateQUICInsecure: true` configures generated LLM workers to pass
 the plaintext QUIC setting to the `pylon` sidecar.
 
 <Warning>
-Use these settings only for local or isolated test clusters. Do not enable
-plaintext worker transport in production.
+Do not enable plaintext worker transport in production. This warning applies
+to the worker-to-router transport, not the bundled in-cluster gateway-to-API
+authentication hop.
 
 </Warning>
 
@@ -896,8 +906,9 @@ mean the router knows the target but has no active eligible backend. Check:
 - The `llm-worker` sidecar connected to `llm-request-router`.
 - The effective LLM request-router worker address is reachable from the worker
   cluster.
-- Local clusters using plaintext transport include both `grpcInsecure` and
-  `stargateQUICInsecure`.
+- Local clusters without worker transport TLS set
+  `workload.stargateQUICInsecure: true`. The bundled gateway-to-API
+  authentication hop already defaults to plaintext.
 
 For transport TLS failures, check:
 

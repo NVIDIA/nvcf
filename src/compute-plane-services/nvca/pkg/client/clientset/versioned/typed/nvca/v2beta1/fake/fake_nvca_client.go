@@ -33,6 +33,10 @@ func (c *FakeNvcaV2beta1) ICMSRequests(namespace string) v2beta1.ICMSRequestInte
 	return newFakeICMSRequests(c, namespace)
 }
 
+func (c *FakeNvcaV2beta1) ModelCacheBindings(namespace string) v2beta1.ModelCacheBindingInterface {
+	return newFakeModelCacheBindings(c, namespace)
+}
+
 func (c *FakeNvcaV2beta1) StorageRequests(namespace string) v2beta1.StorageRequestInterface {
 	return newFakeStorageRequests(c, namespace)
 }

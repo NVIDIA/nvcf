@@ -32,6 +32,7 @@ non-NVCF nodes from capacity tracking and scheduling.
 Create `values.yaml` with the required default queues:
 
 <Accordion title="kai-scheduler-queues.yaml">
+
 ```yaml title="kai-scheduler-queues.yaml"
 scheduler:
   placementStrategy: binpack
@@ -76,7 +77,9 @@ defaultQueue:
       quota: -1
       limit: -1
       overQuotaWeight: 1
+
 ```
+
 </Accordion>
 
 ```bash

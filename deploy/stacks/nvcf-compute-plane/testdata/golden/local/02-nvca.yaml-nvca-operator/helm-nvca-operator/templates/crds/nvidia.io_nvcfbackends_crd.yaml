@@ -20,10 +20,10 @@ kind: CustomResourceDefinition
 metadata:
   name: nvcfbackends.nvcf.nvidia.io
   labels:
-    helm.sh/chart: helm-nvca-operator-1.21.8
+    helm.sh/chart: helm-nvca-operator-1.22.2
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.3.2"
+    app.kubernetes.io/version: "3.5.2"
     app.kubernetes.io/managed-by: Helm
 spec:
   group: nvcf.nvidia.io

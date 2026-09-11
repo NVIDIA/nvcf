@@ -11,17 +11,20 @@ Dockerfiles for every shipped image. Built by [`ci/build-image.sh`](../ci/build-
 ## Image map
 
 **Agent (two-stage: heavy base + fast app)**
+
 - [`agent/Dockerfile.base`](agent/) — CRIU + system deps; changes rarely.
 - [`agent/Dockerfile.app`](agent/) — Go binaries + `libnvsnap_intercept.so`,
   layered on the base; the one you rebuild most.
 - [`init/`](init/) — combined init image (patched deps + agent bundle).
 
 **Services**
+
 - [`Dockerfile.server`](Dockerfile.server), [`nvsnap-blobstore/`](nvsnap-blobstore/),
   [`nvsnap-l2-wait/`](nvsnap-l2-wait/).
 
 **Dependency builders** (patched forks; see
 [docs/THIRD-PARTY-FORKS.md](../docs/THIRD-PARTY-FORKS.md))
+
 - [`uvloop/`](uvloop/), [`libzmq/`](libzmq/), [`libuv/`](libuv/),
   [`pyzmq/`](pyzmq/), [`criu-builder/`](criu-builder/).
 

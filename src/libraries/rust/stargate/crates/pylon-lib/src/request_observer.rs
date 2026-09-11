@@ -13,13 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use reqwest::header::HeaderMap;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
-use crate::runtime_state::{ModelGeneration, PylonRuntimeState, RequestInputInterval};
+use crate::runtime_state::{
+    ModelGeneration, OutputCalibrationFacts, PylonRuntimeState, RequestInputInterval,
+    RequestObservationEvent,
+};
+use crate::sse_message_stream::{ChatChoiceCalibration, SseEventProtocol};
 
 mod embeddings;
 mod headers;
@@ -29,6 +34,8 @@ mod tunnel;
 use headers::MissingRequiredHeaderError;
 pub(crate) use headers::{RequiredTunnelHeaders, validate_required_tunnel_headers};
 pub(crate) use tunnel::TunnelRequestObserver;
+
+const MAX_TRACKED_CHAT_CHOICES: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestObservationState {
@@ -139,8 +146,20 @@ struct BackendPhaseData {
     first_token_at: Option<Instant>,
     output_messages: u64,
     output_tokens: u64,
+    output_calibration: OutputCalibrationFacts,
     output_tokens_explicit: bool,
     output_tokens_from_chunk_usage: bool,
+}
+
+#[derive(Debug, Default)]
+struct ChatCalibrationState {
+    choices: BTreeMap<u64, ChatChoiceState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatChoiceState {
+    Streaming,
+    Finished,
 }
 
 pub(crate) struct RequestObserver {
@@ -150,10 +169,12 @@ pub(crate) struct RequestObserver {
     routing_key: Option<String>,
     model_id: String,
     priority: u32,
+    request_input_tokens: u64,
     input_tokens: u64,
     input_tokens_explicit: bool,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
+    chat_calibration: Option<ChatCalibrationState>,
     state: RequestLifecycleState,
     runtime_state: PylonRuntimeState,
 }
@@ -174,6 +195,7 @@ impl RequestObserver {
             input_tokens,
             accepted_at,
         } = required;
+        let output_token_calibration_enabled = runtime_state.output_token_calibration_enabled();
         let mut observer = Self {
             endpoint,
             request_id,
@@ -181,15 +203,23 @@ impl RequestObserver {
             routing_key,
             model_id,
             priority,
+            request_input_tokens: input_tokens,
             input_tokens,
             input_tokens_explicit: false,
             generation,
             embedding_items: None,
+            chat_calibration: (output_token_calibration_enabled
+                && endpoint == RequestObservationEndpoint::ChatCompletions)
+                .then(ChatCalibrationState::default),
             state: RequestLifecycleState::UpstreamConnecting,
             runtime_state,
         };
         observer.emit();
         observer
+    }
+
+    pub(crate) fn output_token_calibration_enabled(&self) -> bool {
+        self.runtime_state.output_token_calibration_enabled()
     }
 
     pub(super) fn update_embedding_items(&mut self, embedding_items: Option<u64>) {
@@ -213,6 +243,7 @@ impl RequestObserver {
             first_token_at: None,
             output_messages: 0,
             output_tokens: 0,
+            output_calibration: OutputCalibrationFacts::default(),
             output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
         });
@@ -229,10 +260,18 @@ impl RequestObserver {
         self.emit();
     }
 
-    pub(crate) fn observe_generated_output(&mut self, observed_at: Instant, token_bearing: bool) {
+    pub(crate) fn observe_generated_output(
+        &mut self,
+        observed_at: Instant,
+        token_bearing: bool,
+        raw_output_units: u64,
+        reasoning_text: bool,
+    ) {
         let backend = Self::backend_mut(&mut self.state, &self.request_id, "output observation");
         backend.output_messages = backend.output_messages.saturating_add(1);
         backend.first_generated_output_at.get_or_insert(observed_at);
+        backend.output_calibration.raw_output_units = raw_output_units;
+        backend.output_calibration.reasoning_text_observed |= reasoning_text;
         if token_bearing {
             backend.first_token_at.get_or_insert(observed_at);
         }
@@ -272,21 +311,89 @@ impl RequestObserver {
         self.emit();
     }
 
-    pub(crate) fn observe_output_tokens(&mut self, output_tokens: u64) {
-        if output_tokens == 0 {
-            return;
-        }
-
+    pub(crate) fn observe_estimated_output_tokens_total(&mut self, output_tokens: u64) {
         let backend = Self::backend_mut(
             &mut self.state,
             &self.request_id,
             "output token observation",
         );
-        if backend.output_tokens_explicit {
+        if backend.output_tokens == output_tokens && !backend.output_tokens_explicit {
             return;
         }
-        backend.output_tokens = backend.output_tokens.saturating_add(output_tokens);
+        backend.output_tokens = output_tokens;
+        backend.output_tokens_explicit = false;
         self.emit();
+    }
+
+    pub(crate) fn observe_output_calibration_details(
+        &mut self,
+        reasoning_tokens: Option<u64>,
+        calibration_ineligible: bool,
+    ) {
+        let backend = Self::backend_mut(
+            &mut self.state,
+            &self.request_id,
+            "output usage detail observation",
+        );
+        backend.output_calibration.reasoning_tokens = match (
+            backend.output_calibration.reasoning_tokens,
+            reasoning_tokens,
+        ) {
+            (Some(previous), Some(current)) => Some(previous.max(current)),
+            (previous, current) => previous.or(current),
+        };
+        backend.output_calibration.calibration_ineligible |= calibration_ineligible;
+    }
+
+    pub(crate) fn observe_reasoning_output(&mut self) {
+        let backend = Self::backend_mut(
+            &mut self.state,
+            &self.request_id,
+            "reasoning output observation",
+        );
+        backend.output_calibration.reasoning_output_observed = true;
+    }
+
+    pub(crate) fn observe_sse_protocol(&mut self, protocol: SseEventProtocol) {
+        let matches_endpoint = matches!(
+            (self.endpoint, protocol),
+            (
+                RequestObservationEndpoint::ChatCompletions,
+                SseEventProtocol::ChatCompletions
+            ) | (
+                RequestObservationEndpoint::Responses,
+                SseEventProtocol::Responses
+            )
+        );
+        if !matches_endpoint {
+            self.observe_output_calibration_details(None, true);
+        }
+    }
+
+    pub(crate) fn observe_chat_choice_calibration(&mut self, choice: ChatChoiceCalibration) {
+        let Some(state) = self.chat_calibration.as_mut() else {
+            self.observe_output_calibration_details(None, true);
+            return;
+        };
+        let event_after_finish =
+            state.choices.get(&choice.index) == Some(&ChatChoiceState::Finished);
+        if event_after_finish {
+            self.observe_output_calibration_details(None, true);
+            return;
+        }
+        if !state.choices.contains_key(&choice.index)
+            && state.choices.len() >= MAX_TRACKED_CHAT_CHOICES
+        {
+            self.chat_calibration = None;
+            self.observe_output_calibration_details(None, true);
+            return;
+        }
+        let choice_state = if choice.safely_finished {
+            ChatChoiceState::Finished
+        } else {
+            ChatChoiceState::Streaming
+        };
+        state.choices.insert(choice.index, choice_state);
     }
 
     pub(crate) fn observe_output_tokens_generated_so_far(&mut self, output_tokens: u64) {
@@ -308,10 +415,15 @@ impl RequestObserver {
             &self.request_id,
             "output token observation",
         );
-        if backend.output_tokens_explicit && output_tokens < backend.output_tokens {
+        if backend
+            .output_calibration
+            .exact_output_tokens_baseline
+            .is_some_and(|prior| output_tokens < prior)
+        {
+            backend.output_calibration.calibration_ineligible = true;
             tracing::warn!(
                 request_id = self.request_id,
-                prior_output_tokens = backend.output_tokens,
+                prior_output_tokens = backend.output_calibration.exact_output_tokens_baseline,
                 output_tokens_generated_so_far = output_tokens,
                 "ignoring regressing explicit output token counter"
             );
@@ -326,6 +438,7 @@ impl RequestObserver {
         }
         let should_emit = output_tokens > 0 || output_tokens != backend.output_tokens;
         backend.output_tokens = output_tokens;
+        backend.output_calibration.exact_output_tokens_baseline = Some(output_tokens);
         backend.output_tokens_explicit = true;
         backend.output_tokens_from_chunk_usage = chunk_usage_observed;
         if emit_live_update && should_emit {
@@ -334,6 +447,18 @@ impl RequestObserver {
     }
 
     pub(crate) fn complete(&mut self) {
+        if self.is_terminal() {
+            return;
+        }
+        let unfinished_chat_choices = self.chat_calibration.as_ref().is_some_and(|state| {
+            state
+                .choices
+                .values()
+                .any(|choice| *choice != ChatChoiceState::Finished)
+        });
+        if unfinished_chat_choices {
+            self.observe_output_calibration_details(None, true);
+        }
         self.terminate(RequestTerminalOutcome::Complete);
     }
 
@@ -414,12 +539,21 @@ impl RequestObserver {
         };
         log_observation(&observation);
         self.runtime_state.observe_request_for_generation(
-            observation,
-            self.generation.clone(),
-            input_interval,
-            backend
-                .and_then(|backend| backend.last_upstream_event_at)
-                .map(|instant| instant.saturating_duration_since(self.started_at)),
+            RequestObservationEvent {
+                observation,
+                generation: self.generation.clone(),
+                changed_generations: Vec::new(),
+                input_interval,
+                input_tokens_explicit: self.input_tokens_explicit,
+                output_calibration: backend
+                    .map_or_else(OutputCalibrationFacts::default, |backend| {
+                        backend.output_calibration
+                    }),
+                upstream_duration: backend
+                    .and_then(|backend| backend.last_upstream_event_at)
+                    .map(|instant| instant.saturating_duration_since(self.started_at)),
+            },
+            self.request_input_tokens,
         );
     }
 }
@@ -530,7 +664,7 @@ mod tests {
         }
 
         fn observe_output_message(&mut self) {
-            self.observe_generated_output(Instant::now(), true);
+            self.observe_generated_output(Instant::now(), true, 0, false);
         }
 
         fn finish(&mut self) {
@@ -576,6 +710,71 @@ mod tests {
 
     fn test_observer(request_id: &str, runtime_state: PylonRuntimeState) -> RequestObserver {
         RequestObserver::new(&request_headers(request_id, 42), runtime_state).unwrap()
+    }
+
+    #[test]
+    fn chat_calibration_state_exists_only_when_enabled() {
+        for (enabled, expected_state) in [(false, false), (true, true)] {
+            let (runtime_state, _rx) = observed_runtime(4);
+            let runtime_state = if enabled {
+                runtime_state.with_single_pylon_output_token_calibration()
+            } else {
+                runtime_state
+            };
+            let observer = test_observer("req-calibration-state", runtime_state);
+
+            assert_eq!(observer.output_token_calibration_enabled(), enabled);
+            assert_eq!(observer.chat_calibration.is_some(), expected_state);
+        }
+    }
+
+    #[test]
+    fn chat_calibration_stops_tracking_after_the_choice_limit() {
+        let (runtime_state, _rx) = observed_runtime(4);
+        let mut observer = test_observer(
+            "req-choice-limit",
+            runtime_state.with_single_pylon_output_token_calibration(),
+        );
+        observer.submit_now();
+
+        for index in 0..MAX_TRACKED_CHAT_CHOICES as u64 {
+            observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+                index,
+                safely_finished: false,
+            });
+        }
+        assert_eq!(
+            observer
+                .chat_calibration
+                .as_ref()
+                .expect("choice tracking should remain active at the limit")
+                .choices
+                .len(),
+            MAX_TRACKED_CHAT_CHOICES
+        );
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: 0,
+            safely_finished: false,
+        });
+        assert!(observer.chat_calibration.is_some());
+
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: MAX_TRACKED_CHAT_CHOICES as u64,
+            safely_finished: false,
+        });
+
+        assert!(observer.chat_calibration.is_none());
+        assert!(
+            response(&observer)
+                .output_calibration
+                .calibration_ineligible
+        );
+
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: MAX_TRACKED_CHAT_CHOICES as u64 + 1,
+            safely_finished: false,
+        });
+        assert!(observer.chat_calibration.is_none());
     }
 
     #[test]
@@ -829,6 +1028,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn chat_observer_ignores_completion_after_terminalization_with_unfinished_choice() {
+        let (runtime_state, rx) = observed_runtime(8);
+        let mut observer = test_observer(
+            "req-chat-repeated-completion",
+            runtime_state.with_single_pylon_output_token_calibration(),
+        );
+        observer.submit_now();
+        observer.observe_chat_choice_calibration(ChatChoiceCalibration {
+            index: 0,
+            safely_finished: false,
+        });
+        observer.fail();
+        while rx.try_recv().is_ok() {}
+
+        observer.complete();
+
+        assert_eq!(
+            observer.state.observation_state(),
+            RequestObservationState::Failed
+        );
+        assert!(rx.is_empty(), "repeated terminalization must not emit");
+    }
+
     #[tokio::test]
     async fn counts_sse_events_across_chunk_boundaries() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
@@ -898,7 +1121,7 @@ mod tests {
         assert_eq!(headers.input_interval(), None);
 
         let first_generated_output_at = submitted_at + Duration::from_millis(10);
-        observer.observe_generated_output(first_generated_output_at, true);
+        observer.observe_generated_output(first_generated_output_at, true, 1, false);
         let output = rx.try_recv().unwrap();
         assert_eq!(
             output.input_interval(),
@@ -907,7 +1130,8 @@ mod tests {
                 first_generated_output_at,
             })
         );
-        observer.observe_output_tokens(2);
+
+        observer.observe_estimated_output_tokens_total(2);
         let tokens = rx.try_recv().unwrap();
         assert_eq!(tokens.input_interval(), output.input_interval());
 
@@ -942,12 +1166,11 @@ mod tests {
 
         let first_output_at = accepted_at + Duration::from_secs(1);
         observer.observe_upstream_event(first_output_at);
-        observer.observe_generated_output(first_output_at, true);
+        observer.observe_generated_output(first_output_at, true, 1, false);
         let output = rx.try_recv().unwrap();
         assert_eq!(output.upstream_duration, Some(Duration::from_secs(1)));
 
-        observer.observe_output_tokens(100);
-        rx.try_recv().unwrap();
+        observer.observe_output_tokens_total(100);
         observer.observe_upstream_event(accepted_at + Duration::from_secs(2));
         observer.complete();
         let terminal = rx.try_recv().unwrap();
@@ -986,14 +1209,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accumulates_output_tokens() {
+    async fn tracks_cumulative_estimated_output_tokens() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
         observer.submit_now();
         observer.on_upstream_response_headers(200);
         observer.observe_output_message();
-        observer.observe_output_tokens(3);
+        observer.observe_estimated_output_tokens_total(3);
         observer.observe_output_message();
-        observer.observe_output_tokens(2);
+        observer.observe_estimated_output_tokens_total(5);
         observer.finish();
 
         let response = response(&observer);
@@ -1005,7 +1228,7 @@ mod tests {
     async fn output_tokens_alone_do_not_start_real_ttft() {
         let (mut observer, rx, _) = responding_observer("req-token").await;
 
-        observer.observe_output_tokens(3);
+        observer.observe_estimated_output_tokens_total(3);
         let token_observation = recv_observation(&rx, "token observation should be emitted").await;
         assert_eq!(
             token_observation.state,
@@ -1020,7 +1243,8 @@ mod tests {
     async fn modal_output_starts_first_output_without_claiming_a_first_token() {
         let (mut observer, rx, _) = responding_observer("req-modal-output").await;
 
-        observer.observe_generated_output(Instant::now(), false);
+        observer.observe_output_calibration_details(None, true);
+        observer.observe_generated_output(Instant::now(), false, 0, false);
         let output = recv_observation(&rx, "modal output observation should be emitted").await;
 
         assert_eq!(output.state, RequestObservationState::OutputGeneration);
@@ -1030,14 +1254,49 @@ mod tests {
 
     #[tokio::test]
     async fn exact_input_usage_updates_tokens_without_starting_output() {
-        let (mut observer, rx, _) = responding_observer("req-input-usage").await;
+        let (runtime_state, rx) = PylonRuntimeState::observed(
+            InferenceServerStatus::Unknown,
+            &["model-a".to_string()],
+            8,
+            None,
+        );
+        let runtime_snapshot = runtime_state.clone();
+        let generation = runtime_state.current_generation("model-a");
+        let mut observer = RequestObserver::from_required(
+            RequestObservationEndpoint::ChatCompletions,
+            validate_required_tunnel_headers(&request_headers("req-input-usage", 42))
+                .expect("test headers should validate"),
+            generation,
+            runtime_state,
+        );
+        let initial = rx
+            .recv_async()
+            .await
+            .expect("initial observation should be emitted");
+        assert!(!initial.input_tokens_explicit());
+        observer.submit_now();
+        recv_observation(&rx, "backend-submission observation should be emitted").await;
+        observer.on_upstream_response_headers(200);
+        recv_observation(&rx, "response-header observation should be emitted").await;
 
         observer.observe_input_tokens_total(7);
-        let usage = recv_observation(&rx, "input usage observation should be emitted").await;
+        let usage = rx
+            .recv_async()
+            .await
+            .expect("input usage observation should be emitted");
+        assert!(usage.input_tokens_explicit());
+        let usage = usage.into_observation();
         assert_eq!(usage.state, RequestObservationState::InputProcessing);
         assert_eq!(usage.input_tokens, 7);
         assert_eq!(usage.time_to_first_output, None);
         assert_eq!(usage.time_to_first_token, None);
+        assert_eq!(
+            runtime_snapshot
+                .snapshot_live_model("model-a")
+                .total_query_input_size,
+            42,
+            "exact response usage must not replace request-side live queue work"
+        );
     }
 
     #[tokio::test]
@@ -1064,7 +1323,7 @@ mod tests {
         assert_eq!(header_observation.output_tokens, 0);
         assert!(!header_observation.output_tokens_explicit);
 
-        observer.observe_output_tokens(3);
+        observer.observe_estimated_output_tokens_total(3);
         let estimated_observation =
             recv_observation(&rx, "fallback token observation should be emitted").await;
         assert_eq!(
@@ -1080,7 +1339,7 @@ mod tests {
     async fn explicit_output_counter_corrects_prior_estimated_tokens() {
         let (mut observer, rx, _) = responding_observer("req-explicit-output").await;
 
-        observer.observe_output_tokens(5);
+        observer.observe_estimated_output_tokens_total(5);
         let estimated =
             recv_observation(&rx, "estimated token observation should be emitted").await;
         assert_eq!(estimated.output_tokens, 5);
@@ -1098,11 +1357,62 @@ mod tests {
             "repeated explicit counters with no value change should not emit"
         );
 
-        observer.observe_output_tokens(10);
-        assert!(
-            rx.is_empty(),
-            "fallback deltas should not emit after explicit counters"
+        observer.observe_estimated_output_tokens_total(10);
+        let estimated_tail =
+            recv_observation(&rx, "estimated tail observation should be emitted").await;
+        assert_eq!(estimated_tail.output_tokens, 10);
+        assert!(!estimated_tail.output_tokens_explicit);
+
+        observer.observe_output_tokens_generated_so_far(4);
+        let corrected = recv_observation(&rx, "later exact usage should reconcile the tail").await;
+        assert_eq!(corrected.output_tokens, 4);
+        assert!(corrected.output_tokens_explicit);
+    }
+
+    #[tokio::test]
+    async fn output_calibration_facts_accumulate_through_terminal_observation() {
+        let (mut observer, rx, _) = responding_observer("req-output-calibration-facts").await;
+
+        observer.observe_output_calibration_details(None, true);
+        observer.observe_generated_output(Instant::now(), true, 4, true);
+        let generated = rx
+            .recv_async()
+            .await
+            .expect("generated output event should be emitted");
+        assert_eq!(
+            generated.output_calibration(),
+            OutputCalibrationFacts {
+                raw_output_units: 4,
+                calibration_ineligible: true,
+                reasoning_text_observed: true,
+                ..OutputCalibrationFacts::default()
+            }
         );
+
+        observer.observe_output_calibration_details(Some(3), false);
+        observer.observe_output_tokens_generated_so_far(10);
+        let exact = rx
+            .recv_async()
+            .await
+            .expect("exact usage event should be emitted");
+        assert_eq!(
+            exact.output_calibration(),
+            OutputCalibrationFacts {
+                raw_output_units: 4,
+                exact_output_tokens_baseline: Some(10),
+                calibration_ineligible: true,
+                reasoning_output_observed: false,
+                reasoning_text_observed: true,
+                reasoning_tokens: Some(3),
+            }
+        );
+
+        observer.finish();
+        let terminal = rx
+            .recv_async()
+            .await
+            .expect("terminal event should be emitted");
+        assert_eq!(terminal.output_calibration(), exact.output_calibration());
     }
 
     #[tokio::test]
@@ -1164,11 +1474,11 @@ mod tests {
             "zero-token chunk usage before output should not emit a duplicate live update"
         );
 
-        observer.observe_output_tokens(3);
-        assert!(
-            rx.is_empty(),
-            "fallback token estimates should not emit after chunk usage becomes explicit"
-        );
+        observer.observe_estimated_output_tokens_total(3);
+        let estimated_tail =
+            recv_observation(&rx, "estimated tail should continue after sparse usage").await;
+        assert_eq!(estimated_tail.output_tokens, 3);
+        assert!(!estimated_tail.output_tokens_explicit);
 
         observer.observe_output_tokens_generated_so_far(4);
         let explicit = recv_observation(&rx, "positive chunk usage should be emitted").await;
@@ -1206,14 +1516,21 @@ mod tests {
             first_token_at: None,
             output_messages: 0,
             output_tokens: 5,
+            output_calibration: OutputCalibrationFacts {
+                exact_output_tokens_baseline: Some(5),
+                ..OutputCalibrationFacts::default()
+            },
             output_tokens_explicit: true,
             output_tokens_from_chunk_usage: true,
         });
 
+        observer.observe_output_calibration_details(Some(2), false);
         observer.observe_output_tokens_generated_so_far(3);
 
         let response = response(&observer);
         assert_eq!(response.output_tokens, 5);
+        assert_eq!(response.output_calibration.reasoning_tokens, Some(2));
+        assert!(response.output_calibration.calibration_ineligible);
         assert!(response.output_tokens_explicit);
         assert!(response.output_tokens_from_chunk_usage);
         assert_eq!(
@@ -1221,6 +1538,21 @@ mod tests {
             RequestObservationState::InputProcessing
         );
         assert_eq!(response.first_generated_output_at, None);
+    }
+
+    #[test]
+    fn reasoning_token_evidence_does_not_regress_to_zero() {
+        let mut observer = make_test_observer();
+        observer.submit_now();
+
+        observer.observe_output_calibration_details(Some(2), false);
+        observer.observe_output_tokens_generated_so_far(3);
+        observer.observe_output_calibration_details(Some(0), false);
+        observer.observe_output_tokens_generated_so_far(3);
+
+        let response = response(&observer);
+        assert_eq!(response.output_tokens, 3);
+        assert_eq!(response.output_calibration.reasoning_tokens, Some(2));
     }
 
     #[test]
@@ -1238,11 +1570,12 @@ mod tests {
             first_token_at: Some(first_output_at),
             output_messages: 2,
             output_tokens: 0,
+            output_calibration: OutputCalibrationFacts::default(),
             output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
         });
 
-        observer.observe_output_tokens(7);
+        observer.observe_estimated_output_tokens_total(7);
 
         let response = response(&observer);
         assert_eq!(response.first_generated_output_at, Some(first_output_at));

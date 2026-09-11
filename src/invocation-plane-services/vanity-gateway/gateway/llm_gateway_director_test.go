@@ -342,37 +342,59 @@ func TestBuildChiMux_HealthProbesUseUpstreamSpecificPaths(t *testing.T) {
 func TestOpenAIDirector_LLMModelShadowsToLLMGateway(t *testing.T) {
 	const shadowModel = "meta/llama-3.3-70b-next"
 
-	llmRequests := make(chan capturedRequest, 2)
-	llmBackend := captureServer(t, llmRequests, nil)
-	nvcfRequests := make(chan capturedRequest, 1)
-	nvcfBackend := captureServer(t, nvcfRequests, nil)
-
-	primary := llmModelEntry()
-	primary.ShadowModelNames = []string{shadowModel}
-	shadow := llmModelEntry()
-	shadow.ModelName = shadowModel
-
-	mappings := &config.GatewayConfig{}
-	mappings.OpenAI.Host = openAIHost
-	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
-		"llm":        primary,
-		"llm-shadow": shadow,
+	tests := []struct {
+		name      string
+		configure func(primary *config.ModelFunctionDetails)
+	}{
+		{
+			name: "legacy form",
+			configure: func(primary *config.ModelFunctionDetails) {
+				primary.ShadowModelNames = []string{shadowModel}
+			},
+		},
+		{
+			name: "per-target form",
+			configure: func(primary *config.ModelFunctionDetails) {
+				primary.Shadows = []config.ShadowConfig{{ModelName: shadowModel}}
+			},
+		},
 	}
-	require.NoError(t, mappings.Validate(), "shadow traffic must be valid on LLM models")
 
-	mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			llmRequests := make(chan capturedRequest, 2)
+			llmBackend := captureServer(t, llmRequests, nil)
+			nvcfRequests := make(chan capturedRequest, 1)
+			nvcfBackend := captureServer(t, nvcfRequests, nil)
 
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
-		`{"model":"`+publicModel+`","messages":[{"role":"user","content":"hi"}]}`))
-	require.Equal(t, http.StatusOK, rec.Code)
+			primary := llmModelEntry()
+			tc.configure(&primary)
+			shadow := llmModelEntry()
+			shadow.ModelName = shadowModel
 
-	// Both the primary and the shadow must reach the LLM Gateway, each rewritten
-	// to its own functionID/modelName. Order between them is not guaranteed.
-	got := []string{awaitRequest(t, llmRequests).body, awaitRequest(t, llmRequests).body}
-	assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+publicModel+`"`)
-	assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+shadowModel+`"`)
-	assert.Empty(t, nvcfRequests, "neither request may reach the invocation service")
+			mappings := &config.GatewayConfig{}
+			mappings.OpenAI.Host = openAIHost
+			mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+				"llm":        primary,
+				"llm-shadow": shadow,
+			}
+			require.NoError(t, mappings.Validate(), "shadow traffic must be valid on LLM models")
+
+			mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+				`{"model":"`+publicModel+`","messages":[{"role":"user","content":"hi"}]}`))
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			// Both the primary and the shadow must reach the LLM Gateway, each rewritten
+			// to its own functionID/modelName. Order between them is not guaranteed.
+			got := []string{awaitRequest(t, llmRequests).body, awaitRequest(t, llmRequests).body}
+			assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+publicModel+`"`)
+			assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+shadowModel+`"`)
+			assert.Empty(t, nvcfRequests, "neither request may reach the invocation service")
+		})
+	}
 }
 
 // A caller must not be able to aim NVCF routing headers at the LLM Gateway. The
@@ -646,4 +668,28 @@ func TestOpenAIDirector_LLMModelForwardsNonRoutingHeaders(t *testing.T) {
 		"a caller value passes through; the gateway injects no default here")
 	assert.Equal(t, "5", received.headers.Get("X-Priority"),
 		"the gateway does not strip X-Priority; the LLM Gateway rejects it upstream")
+}
+
+// The LLM Gateway renders its 429 through echo as a bare message object, which
+// is neither of the two shapes the append helper originally recognized.
+func TestOpenAIDirector_LLMModelSurfacesTooManyRequestsMessage(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"message":"rate limit exceeded"}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	entry := llmModelEntry()
+	entry.TooManyRequestsMessage = "Slow down please"
+	mux := openAIMux(t, llmMappings(entry), "http://nvcf.invalid", backend.URL)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`))
+
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Slow down please",
+		"the configured message must reach the caller on the LLM Gateway path")
+	assert.Contains(t, rec.Body.String(), "rate limit exceeded",
+		"the upstream message must be preserved")
 }

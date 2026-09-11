@@ -30,4 +30,5 @@ Once installed, your coding agent will automatically discover these skills when 
 - "Explain what deploys the API service in the stack"
 
 ## References
+
 - [Agent Skills Specification](https://agentskills.io)

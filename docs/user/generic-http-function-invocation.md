@@ -130,22 +130,22 @@ client waits for the PING acknowledgement before it closes the connection.
 
 ```go
 base := &http.Transport{
-	TLSClientConfig: &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	},
+ TLSClientConfig: &tls.Config{
+  MinVersion: tls.VersionTLS12,
+ },
 }
 
 h2, err := http2.ConfigureTransports(base)
 if err != nil {
-	return err
+ return err
 }
 
 h2.ReadIdleTimeout = 30 * time.Second
 h2.PingTimeout = 10 * time.Second
 
 client := &http.Client{
-	Transport: base,
-	Timeout:   30 * time.Minute,
+ Transport: base,
+ Timeout:   30 * time.Minute,
 }
 ```
 

@@ -272,7 +272,8 @@ rule 20):
 | arm | any | any | **rootfs** (cuda-checkpoint unsupported) |
 
 `cachedir` mode (canonical `/opt/nvsnap` cache path, identical at capture
-+ restore) lets engines reuse prebuilt JIT/CUDA-graph kernels instead of
+
+- restore) lets engines reuse prebuilt JIT/CUDA-graph kernels instead of
 recompiling — the bulk of the warm-restore win on compile-heavy models.
 
 ---

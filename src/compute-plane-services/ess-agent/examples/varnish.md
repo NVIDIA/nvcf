@@ -14,11 +14,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-Varnish Consul Template Example
+# Varnish Consul Template Example
+
 -------------------------------
+
 Varnish is an common caching engine that can also act as a proxy. You can read more about the Varnish configuration file syntax in the [Varnish documentation](https://varnish-cache.org/docs/).
 
 ## Backend Router
+
 Here is an example template for rendering a Varnish configuration file with Consul Template:
 
 ```liquid

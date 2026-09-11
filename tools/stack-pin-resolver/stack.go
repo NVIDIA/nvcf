@@ -12,8 +12,12 @@ import (
 	"strings"
 )
 
-// HelmfileDir holds the self-managed stack's release definitions.
-const HelmfileDir = "deploy/stacks/self-managed/helmfile.d"
+// StacksGlob matches every stack's release definitions. A chart is not
+// necessarily deployed by the self-managed stack: nvca-operator, for
+// example, is pinned only in deploy/stacks/nvcf-compute-plane. Scanning every
+// stack instead of one hardcoded directory is what lets Audit's "no chart
+// resolves to this release" check mean what it says.
+const StacksGlob = "deploy/stacks/*/helmfile.d"
 
 var (
 	nameRE  = regexp.MustCompile(`^(\s+)- name:\s*(\S+)`)
@@ -38,11 +42,26 @@ var (
 	// The default is the chart used unless an operator overrides it, so it is
 	// the one an automated bump should follow.
 	defaultChartRE = regexp.MustCompile(`default\s+"([^"]+)"`)
+	// A version line templated the same way an environment can override any
+	// other release field:
+	//   version: {{ dig "prometheusOperatorCrds" "version" "31.0.1" .Values | quote }}
+	// dig's last argument before .Values is its default, used unless an
+	// environment file sets prometheusOperatorCrds.version. That default is
+	// the version this chart actually ships at absent an override, so it is
+	// the value an automated bump reads and rewrites. The non-capturing group
+	// consumes every earlier quoted dig key so the capture always lands on the
+	// last one.
+	digVersionDefaultRE = regexp.MustCompile(`dig\s+(?:"[^"]*"\s+)*"([^"]*)"\s+\.Values`)
 )
 
 // A Release is one pinned entry in the stack.
 type Release struct {
 	Name string
+	// File is the helmfile path relative to root, for example
+	// deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl. Kept
+	// relative to root, not just the basename, so WritePin can reconstruct
+	// the full path directly: a release can live in any stack, not only the
+	// one a caller happens to be thinking about.
 	File string
 	// Chart is the published chart name this release pins, empty when
 	// Unresolved is set.
@@ -55,6 +74,19 @@ type Release struct {
 	// VersionLine is the index into the file's lines holding the pin, so the
 	// rewrite can replace exactly that line and nothing else.
 	VersionLine int
+	// DigDefault is set when the version pin is a
+	// `dig ... "<default>" .Values` template expression rather than a plain
+	// scalar. WritePin then replaces only the quoted default inside that
+	// expression, leaving the surrounding template untouched.
+	DigDefault bool
+	// DigExpression is the exact value half of the version line (m[2] in
+	// LoadStack) when DigDefault is set. WritePin requires the line to still
+	// hold this exact text before rewriting: matching digVersionDefaultRE
+	// again only proves the current line looks like *some* dig(...) default,
+	// not that it is still the same one LoadStack read. Without this, an
+	// edit that changed which key or default the expression names between
+	// LoadStack and WritePin would have its new default silently overwritten.
+	DigExpression string
 }
 
 // ChartNameForRelease returns the chart a stack release pins.
@@ -108,7 +140,7 @@ func lastPathSegment(s string) string {
 // lookahead, and Go's regexp engine has none. Tracking line numbers also lets
 // the rewrite replace one exact line instead of reconstructing a block.
 func LoadStack(root string) ([]Release, error) {
-	paths, err := filepath.Glob(filepath.Join(root, HelmfileDir, "*.yaml.gotmpl"))
+	paths, err := filepath.Glob(filepath.Join(root, StacksGlob, "*.yaml.gotmpl"))
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +148,10 @@ func LoadStack(root string) ([]Release, error) {
 
 	var out []Release
 	for _, path := range paths {
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil, fmt.Errorf("relativize %s: %w", path, err)
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
@@ -129,12 +165,23 @@ func LoadStack(root string) ([]Release, error) {
 			// pin would rewrite an unrelated key.
 			fieldIndent := blk.indent + 2
 			versionLine, version, malformed := -1, "", ""
+			digDefault := false
+			digExpression := ""
 			for i, line := range body {
 				m := versionLineRE.FindStringSubmatch(line)
 				if m == nil || len(m[1])-len("version:")-countTrailingSpace(m[1]) != fieldIndent {
 					continue
 				}
 				if !versionValueRE.MatchString(m[2]) {
+					// The extracted default must itself pass the same version
+					// check a plain scalar would: dig accepts any quoted
+					// string, so "latest" or "" would otherwise resolve as a
+					// legitimate pin and either report false success or have
+					// Bump overwrite it with something that was never a version.
+					if dm := digVersionDefaultRE.FindStringSubmatch(m[2]); dm != nil && versionValueRE.MatchString(dm[1]) {
+						versionLine, version, digDefault, digExpression = blk.start+i, dm[1], true, m[2]
+						break
+					}
 					// A release-level version that cannot be read is reported.
 					// Skipping it would drop a real pin silently, which is the
 					// failure this tool exists to prevent.
@@ -150,7 +197,10 @@ func LoadStack(root string) ([]Release, error) {
 				continue
 			}
 
-			r := Release{Name: blk.name, File: filepath.Base(path), Version: version, VersionLine: versionLine}
+			r := Release{
+				Name: blk.name, File: relPath, Version: version, VersionLine: versionLine,
+				DigDefault: digDefault, DigExpression: digExpression,
+			}
 			if malformed != "" {
 				r.Unresolved = fmt.Sprintf("version is not a recognisable pin: %s", malformed)
 				out = append(out, r)
@@ -201,7 +251,7 @@ func countTrailingSpace(s string) int {
 
 // WritePin replaces the version on a single release's pin line.
 func WritePin(root string, r Release, version string) error {
-	path := filepath.Join(root, HelmfileDir, r.File)
+	path := filepath.Join(root, r.File)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
@@ -216,7 +266,25 @@ func WritePin(root string, r Release, version string) error {
 		// would corrupt the stack, so stop instead.
 		return fmt.Errorf("%s: line %d in %s is no longer a version pin", r.Release(), r.VersionLine+1, path)
 	}
-	lines[r.VersionLine] = m[1] + version + m[3]
+	if r.DigDefault {
+		// Require the exact expression LoadStack read, not just something
+		// that still matches the dig-default shape: shape alone cannot tell
+		// this expression apart from one edited to name a different key or
+		// default between LoadStack and WritePin, and rewriting that one
+		// would overwrite a value this run never resolved or reported.
+		if m[2] != r.DigExpression {
+			return fmt.Errorf("%s: line %d in %s is no longer the dig-default version pin this run resolved", r.Release(), r.VersionLine+1, path)
+		}
+		// Replace only the quoted default inside the dig(...) expression, so
+		// the template around it, and any environment override it still
+		// respects, survive the bump untouched. The match cannot fail: m[2]
+		// is byte-identical to r.DigExpression, which LoadStack only set
+		// after this same regex matched it.
+		idx := digVersionDefaultRE.FindStringSubmatchIndex(m[2])
+		lines[r.VersionLine] = m[1] + m[2][:idx[2]] + version + m[2][idx[3]:] + m[3]
+	} else {
+		lines[r.VersionLine] = m[1] + version + m[3]
+	}
 
 	mode := os.FileMode(0o644)
 	if fi, err := os.Stat(path); err == nil {

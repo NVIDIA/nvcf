@@ -190,7 +190,7 @@ func (catalog *Catalog) stackArtifact() Artifact {
 		Name:     catalog.Stack.Name,
 		Type:     ArtifactTypeResource,
 		Registry: catalog.Stack.Registry,
-		Version:  catalog.Stack.Version,
+		Version:  catalog.Stack.PublicationVersion,
 	}
 }
 
@@ -249,6 +249,15 @@ func (catalog *Catalog) findArtifact(name string) (Artifact, bool) {
 	}
 	for _, artifact := range catalog.SupplementalArtifacts {
 		if artifact.Name == name {
+			return artifact, true
+		}
+	}
+	return Artifact{}, false
+}
+
+func (catalog *Catalog) findArtifactByNameAndType(name string, artifactType ArtifactType) (Artifact, bool) {
+	for _, artifact := range catalog.findArtifacts(name) {
+		if artifact.Type == artifactType {
 			return artifact, true
 		}
 	}
@@ -417,6 +426,10 @@ func markerSyntaxes(marker string) []markerSyntax {
 		{
 			Begin: fmt.Sprintf("{/* docs-version-sync:BEGIN %s */}", marker),
 			End:   fmt.Sprintf("{/* docs-version-sync:END %s */}", marker),
+		},
+		{
+			Begin: fmt.Sprintf("{/*docs-version-sync:BEGIN %s*/}", marker),
+			End:   fmt.Sprintf("{/*docs-version-sync:END %s*/}", marker),
 		},
 		{
 			Begin:  fmt.Sprintf("<!-- docs-version-sync:BEGIN %s -->", marker),

@@ -114,6 +114,10 @@ pub struct CassandraServiceManager {
     health_check_cache_ttl: Duration,
 }
 
+fn health_check_cache_ttl(config: &CassandraSettings) -> Duration {
+    Duration::from_secs(config.health_check_cache_ttl_seconds)
+}
+
 impl CassandraServiceManager {
     pub async fn new(
         config: &CassandraSettings,
@@ -124,7 +128,7 @@ impl CassandraServiceManager {
             secrets_watcher,
             current_session: Arc::new(Mutex::new(None)),
             health_check_cache: Mutex::new(None),
-            health_check_cache_ttl: Duration::from_secs(30),
+            health_check_cache_ttl: health_check_cache_ttl(config),
         };
 
         // Create initial service
@@ -819,6 +823,16 @@ mod tests {
 
     static INIT: Once = Once::new();
     static TEMP_DIR: OnceLock<TempDir> = OnceLock::new();
+
+    #[test]
+    fn health_check_cache_ttl_uses_configured_value() {
+        let settings = CassandraSettings {
+            health_check_cache_ttl_seconds: 17,
+            ..Default::default()
+        };
+
+        assert_eq!(health_check_cache_ttl(&settings), Duration::from_secs(17));
+    }
 
     fn init_temp_dir() {
         INIT.call_once(|| {

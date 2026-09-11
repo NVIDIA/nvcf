@@ -15,10 +15,15 @@ environments:
 {{- fail "function-autoscaler requires stateMetrics.enabled=true for control and all observability profiles" }}
 {{- end }}
 
+{{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
+{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
+{{- fail "global.helm.sources.url must use https://" }}
+{{- end }}
+
 repositories:
   - name: nvcf
-{{- if dig "global" "helm" "sources" "url" "" .Values }}
-    url: {{ .Values.global.helm.sources.url | quote }}
+{{- if $helmSourceURL }}
+    url: {{ $helmSourceURL | quote }}
     {{- if dig "global" "helm" "sources" "username" "" .Values }}
     username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
     {{- end }}
@@ -68,7 +73,7 @@ releases:
 
   {{- if $functionAutoscalerEnabled }}
   - name: function-autoscaler
-    version: 0.2.1
+    version: 0.4.0
     namespace: nvcf
     inherit:
       - template: functionAutoscaler

@@ -156,6 +156,11 @@ const AUTOSCALING_UTILIZATION_DATA_AGE: Metric = Metric {
         "Age in milliseconds of utilization data when successfully processing scaling requests",
 };
 
+const AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL: Metric = Metric {
+    name: "nvcf_autoscaler.processing.missing_current_instances_total",
+    description: "Total scaling cycles skipped because current instance data was unavailable",
+};
+
 const NVCF_API_REQUEST_DURATION: Metric = Metric {
     name: "nvcf_autoscaler.nvcf_api.request_duration_milliseconds",
     description: "Duration of NVCF API requests in milliseconds (includes count via _count)",
@@ -180,7 +185,7 @@ const GAUGES: [Metric; 11] = [
     AUTOSCALING_HEALTH_COMPONENT_STATUS,
 ];
 
-const COUNTERS: [Metric; 9] = [
+const COUNTERS: [Metric; 10] = [
     AUTOSCALING_REQUESTS_QUEUED_TOTAL,
     AUTOSCALING_REQUESTS_REJECTED_TOTAL,
     AUTOSCALING_REQUESTS_PROCESSED_TOTAL,
@@ -190,6 +195,7 @@ const COUNTERS: [Metric; 9] = [
     AUTOSCALING_DISTRIBUTED_LOCK,
     AUTOSCALING_DISTRIBUTED_LOCK_ACQUISITION_FAILURES_TOTAL,
     AUTOSCALING_TSDB_REQUESTS_TOTAL,
+    AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL,
 ];
 
 const HISTOGRAMS: [Metric; 5] = [
@@ -214,6 +220,10 @@ pub fn record_request_processed() {
 
 pub fn record_request_rate_limited() {
     counter!(AUTOSCALING_REQUESTS_RATE_LIMITED_TOTAL.name).increment(1);
+}
+
+pub fn record_missing_current_instances() {
+    counter!(AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL.name).increment(1);
 }
 
 pub fn update_queue_metrics(current_size: usize, capacity: usize) {

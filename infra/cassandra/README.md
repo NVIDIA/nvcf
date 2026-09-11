@@ -13,6 +13,7 @@ This repository ships:
 Once built, the image:
 
 - Runs Apache Cassandra at the version pinned by the `FROM cassandra:<version>` line in the `Dockerfile`
+- Rebuilds the base image's `gosu` 1.19 helper with the checksum-pinned source revision and the pinned Go toolchain
 - Wires a Prometheus exporter Java agent into `JVM_EXTRA_OPTS` and exposes port `9500` for scraping, when an exporter jar is supplied
 - Adds the `--add-opens` JVM flags the exporter agent needs to reflect into JDK-internal `com.sun.jmx` classes on the JDK 17 runtime shipped in the official image
 
@@ -32,14 +33,20 @@ docker build \
   -t <your-registry>/<your-org>/nvcf-cassandra:<version> .
 ```
 
-Supplying only `EXPORTER_JAR` without `EXPORTER_JAVAAGENT` copies the jar into the image but never loads it; the image still runs without metrics. Both build args must be set together to get a working exporter.
+Both build args must be set together to get a working exporter. The build rejects either mismatched combination so an exporter jar cannot be silently omitted from the JVM or an empty placeholder loaded as a Java agent.
 
 The jar must expose the same metrics interface the image's `JVM_EXTRA_OPTS` javaagent wiring expects (see `Dockerfile`). If you change the jar, update the `EXPORTER_JAR` build-arg accordingly; the source path and filename are entirely up to you.
+
+The build replaces the exporter's complete shaded Netty module set with the checksum-pinned version declared in `scripts/repack-exporter-netty.sh`. It fails if the input jar's Netty module set changes, rather than leaving a partially updated dependency graph in the image. The exporter implementation, Java agent manifest, and unrelated shaded dependencies are preserved.
 
 ## Prerequisites
 
 - Docker or another OCI-compatible builder (with `buildx` for multi-arch)
 - Optional: a Prometheus exporter agent jar under `files/`, if you want metrics
+
+The `gosu` source revision and Go builder image are immutable inputs in the
+Dockerfile. The final image verifies that the rebuilt helper can switch to the
+`nobody` user before continuing the Cassandra build.
 
 ## Building the container
 
