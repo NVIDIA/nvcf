@@ -52,6 +52,7 @@
       "properties": {
         "doCalibration": {"type": "boolean"},
         "engineStatsStream": {"enum": ["auto", "off", "required"]},
+        "maxEngineConcurrency": {"type": "integer", "minimum": 1},
         "calibrationMaxConcurrency": {"type": "integer", "minimum": 1},
         "activeCanaryIntervalMs": {"type": "integer", "minimum": 0},
         "initialInputTps": {

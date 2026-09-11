@@ -353,6 +353,10 @@ class RenderedStackTests(unittest.TestCase):
             )
             self.assertIn("--active-canary-interval-ms=0", arguments)
             self.assertIn("--engine-stats-stream=auto", arguments)
+            self.assertIn(
+                f"--max-engine-concurrency={chart_values['pylon']['maxEngineConcurrency']}",
+                arguments,
+            )
             mock_dynamo = next(
                 container
                 for container in deployment["spec"]["template"]["spec"]["containers"]
