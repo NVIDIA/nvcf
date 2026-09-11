@@ -78,6 +78,20 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Assert legacy Docker module is absent from the plugin
+        run: |
+          plugin="$RUNNER_TEMP/vault-plugin-secrets-jwt"
+          go build -o "$plugin" ./cmd/vault-plugin-secrets-jwt
+          metadata="$(go version -m "$plugin")" || {
+            echo "::error::failed to read plugin build metadata" >&2
+            exit 1
+          }
+          if grep -Fq 'github.com/docker/docker' <<<"$metadata"; then
+            echo "::error::the plugin embeds the legacy Docker module" >&2
+            exit 1
+          fi
+          echo "legacy Docker module absent from plugin build metadata"
+
       - name: Test
         run: go test ./...
 
