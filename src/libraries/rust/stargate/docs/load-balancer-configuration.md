@@ -149,9 +149,23 @@ compares every eligible cluster once.
 forwarded health RTT + queue delay + request prefill time
 ```
 
-The queue delay uses the backend's priority-aware queue estimate when present.
-Otherwise it divides queued input tokens by `last_mean_input_tps`. Prefill time
-divides `x-input-tokens` by the same capacity signal.
+Queue delay is zero when the reported engine concurrency limit is positive and
+the active request count is below that limit. Active requests include prefill,
+decode, and pending routing reservations. The new request's own prefill time
+still contributes to TTFT.
+
+At or above the limit, or when the limit is unknown, queue delay uses the
+backend's priority-aware queue estimate when present. Otherwise it divides
+queued input tokens by `last_mean_input_tps`. Prefill time divides
+`x-input-tokens` by the same throughput signal.
+
+Pylon applies the same free-slot rule to local queue admission, excluding the
+incoming request's own reservation. Engine stats pings can advertise a model's
+`max_engine_concurrency`; zero means unknown. Raw queued-token counts and
+priority work estimates are retained even while effective queue delay is zero,
+so they remain available when pending assignments fill the last slot. This rule
+also applies to the queue component of other Stargate comparators and the
+expected queue header sent to Pylon.
 
 The algorithm groups close TTFT values into buckets. It samples `n`
 candidates from unlocked buckets and chooses the candidate with the lowest

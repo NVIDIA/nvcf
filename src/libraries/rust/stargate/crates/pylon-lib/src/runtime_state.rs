@@ -581,8 +581,19 @@ impl PylonRuntimeState {
         generation: Option<&ModelGeneration>,
         headers: &HeaderMap,
     ) -> QueueAdmissionDecision {
-        self.live_requests
-            .evaluate_generation(config, required, generation, headers)
+        let max_engine_concurrency = generation.and_then(|generation| {
+            self.advertised
+                .lock()
+                .current(generation)
+                .and_then(|model| model.stats.max_engine_concurrency)
+        });
+        self.live_requests.evaluate_generation(
+            config,
+            required,
+            generation,
+            headers,
+            max_engine_concurrency,
+        )
     }
 
     #[cfg(test)]

@@ -51,6 +51,13 @@ group. Global selection uses full prefill cost for every backend and retains
 the queue-admission, capacity, and retry-exclusion checks. Stargate still tries
 affinity selection first on each routing attempt.
 
+When an engine reports a positive concurrency limit and has a free request
+slot, Stargate estimates zero queue delay. It counts prefill, decode, and
+pending assignments against that limit. The request's own prefill time still
+contributes to estimated TTFT. Pylon uses the same rule for its local queue
+admission check. Engines with an unknown limit retain the existing queue-delay
+estimate.
+
 The self-managed stack passes
 `addons.llm.requestRouter.loadBalancer` to the request-router chart as
 `llmRequestRouter.loadBalancer`.

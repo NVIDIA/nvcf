@@ -195,8 +195,16 @@ pub enum StatsUpdateSource {
 #[derive(Debug, Clone)]
 pub enum StatsAggregatorUpdate {
     RequestCounters(RequestCounterUpdate),
+    EngineConcurrency(EngineConcurrencyUpdate),
     FinalizeRequest(FinalizeRequestUpdate),
     EnableOpenAiFallback,
+}
+
+#[derive(Debug, Clone)]
+pub struct EngineConcurrencyUpdate {
+    pub(crate) model_id: String,
+    pub(crate) generation: Option<ModelGeneration>,
+    pub(crate) max_engine_concurrency: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1165,6 +1173,37 @@ mod tests {
             .find(|(generation, _)| generation.model_id() == "model-a")
             .expect("model-a stats should publish")
             .1
+    }
+
+    #[test]
+    fn engine_concurrency_is_published_cleared_and_scoped_to_its_generation() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let generation = aggregator.current_generation("model-a").unwrap().clone();
+        let update = |generation, max_engine_concurrency| {
+            StatsAggregatorUpdate::EngineConcurrency(EngineConcurrencyUpdate {
+                model_id: "model-a".to_string(),
+                generation: Some(generation),
+                max_engine_concurrency,
+            })
+        };
+        let stats = published_stats(aggregator.apply_update(update(generation.clone(), Some(25))));
+        assert_eq!(stats.max_engine_concurrency, Some(25));
+        assert!(
+            aggregator
+                .apply_update(update(generation.clone(), Some(25)))
+                .is_empty()
+        );
+        assert!(
+            aggregator
+                .apply_update(update(ModelGeneration::new("model-a", u64::MAX), Some(1)))
+                .is_empty()
+        );
+        assert_eq!(
+            aggregator.snapshot("model-a").max_engine_concurrency,
+            Some(25)
+        );
+        let stats = published_stats(aggregator.apply_update(update(generation, None)));
+        assert_eq!(stats.max_engine_concurrency, None);
     }
 
     fn single_fallback_stats(

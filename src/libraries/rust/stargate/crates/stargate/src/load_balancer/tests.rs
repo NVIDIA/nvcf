@@ -2200,6 +2200,45 @@ fn wait_and_widen_opens_global_buckets_only_after_affinity_deadline() {
 }
 
 #[test]
+fn wait_and_widen_free_slot_removes_queue_delay_but_keeps_request_prefill() {
+    for priority_estimates in [HashMap::new(), HashMap::from([(0, 10_000)])] {
+        let candidate = candidate("free-slot", 1024).with_stats(|stats| {
+            stats.last_mean_input_tps = 8_000.0;
+            stats.queued_input_size = 80_000;
+            stats.num_running_queries = 24;
+            stats.max_engine_concurrency = 25;
+            stats.queue_time_estimate_ms_by_priority = priority_estimates;
+        });
+        let estimated =
+            wait_and_widen_ttft_components(&candidate, Some(8_000), 1.0, 0, false, false);
+        assert_eq!(estimated.queue_ms, 0.0);
+        assert_eq!(estimated.ttft_ms, 1_005.0);
+        let target = target();
+        let request = request(&target, None, Some(8_000));
+        let lb = wait_and_widen_load_balancer(|settings| {
+            settings.max_queue_time_floor_ms = Some(100);
+            settings.max_queue_time_ceil_ms = Some(100);
+            settings.max_queued = Some(1);
+        });
+        assert!(
+            lb.decide(&request, std::slice::from_ref(&candidate))
+                .selected()
+                .is_some()
+        );
+        for (running, capacity) in [(25, 25), (26, 25), (24, 0)] {
+            let mut full = candidate.clone();
+            full.stats.num_running_queries = running;
+            full.stats.max_engine_concurrency = capacity;
+            assert_eq!(
+                wait_and_widen_ttft_components(&full, Some(8_000), 1.0, 0, false, false).queue_ms,
+                10_000.0
+            );
+            assert!(lb.decide(&request, &[full]).selected().is_none());
+        }
+    }
+}
+
+#[test]
 fn wait_and_widen_global_buckets_include_affinity_candidates_at_full_prefill_cost() {
     for ids in [&["a", "b"][..], &["a", "b", "c", "d"][..]] {
         let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {

@@ -1272,7 +1272,8 @@ async fn wait_and_widen_priority_header_uses_matching_queue_estimate() {
             queue_size: u64::from(total_query_input_size > 0),
             queued_input_size: total_query_input_size,
             num_running_queries: u64::from(total_query_input_size > 0),
-            max_engine_concurrency: Some(100),
+            // Unknown capacity keeps this test focused on priority queue estimates.
+            max_engine_concurrency: None,
             total_query_input_size,
             queue_time_estimate_ms_by_priority: Some(priority_queue_estimates),
             ..CurrentModelStats::default()
