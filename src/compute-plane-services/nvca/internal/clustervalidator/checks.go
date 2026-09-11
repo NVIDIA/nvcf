@@ -1137,7 +1137,12 @@ func sweepOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, client kub
 // checkNodeToNode verifies overlay-network connectivity across all schedulable
 // nodes using a DaemonSet-based probe. A server DaemonSet is deployed on every
 // schedulable node; a checker pod on node[0] connects to each server pod IP on
-// nodes[1..N-1]. This validates full-mesh connectivity, not just a single pair.
+// nodes[1..N-1].
+//
+// The topology is a single-source star, not a full mesh: it proves node[0]
+// reaches every other node, which catches a dead overlay and most single-node
+// isolation. It does not prove node[i] reaches node[j] for i,j != 0, and it
+// does not probe the reverse direction back toward node[0].
 //
 // The CLI RBAC bootstrap (Req 3) grants the validator SA DaemonSet create/delete
 // and pod-create before Job submission, so no separate permission gate is needed.
