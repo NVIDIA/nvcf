@@ -47,6 +47,17 @@ templates:
 
 releases:
 
+  # NOTE: every release below depends on cassandra-system/cassandra, and
+  # nats-auth-callout-service depends on nats-system/nats, both defined in
+  # 01-dependencies.yaml.gotmpl. Those edges are already enforced by the
+  # 01-dependencies -> 02-core stage boundary (helmfile.d/*.yaml.gotmpl files
+  # run sequentially under the pinned helmfile v1.1.x), so they are
+  # intentionally not repeated as needs: entries here. Only edges between
+  # releases within this same file are listed explicitly. The same applies to
+  # function-autoscaler in 03-observability.yaml.gotmpl, which depends on
+  # cassandra-system/cassandra and nvcf/api via the 02-core -> 03-observability
+  # stage boundary.
+
   # --- NVCF Services ---
   - name: api-keys
     version: 1.8.0
@@ -67,14 +78,40 @@ releases:
     inherit:
       - template: service
     needs:
+      # Required deployment order: API Keys, ICMS/SIS, Notary, and Helm ReVal
+      # must be up before Cloud Functions (this release), which registers an
+      # OAuth client and base URL with each at startup. Cassandra and NATS
+      # prerequisites are already enforced by the stage boundary between
+      # 01-dependencies.yaml.gotmpl and this file, so they are not repeated
+      # here.
+      - api-keys/api-keys
+      {{- if dig "icms" "enabled" true .Values }}
+      - sis/sis
+      {{- end }}
       # not needed to start, but needed for bootstrapping account which is done with a script in the api helm chart
       - ess/ess-api
+      - nvcf/notary-service
+      - nvcf/reval
 
   - name: nvct-api
     version: 1.6.0
     namespace: nvcf
     inherit:
       - template: service
+    needs:
+      # Required deployment order: Cloud Tasks (this release) registers an
+      # OAuth client and base URL with API Keys, ICMS/SIS, ESS, Notary, and
+      # Helm ReVal, and separately depends on Cloud Functions per the Cloud
+      # Functions -> Cloud Tasks edge. Cassandra prerequisite is already
+      # enforced by the 01-dependencies stage boundary.
+      - api-keys/api-keys
+      {{- if dig "icms" "enabled" true .Values }}
+      - sis/sis
+      {{- end }}
+      - ess/ess-api
+      - nvcf/notary-service
+      - nvcf/reval
+      - nvcf/api
 
   - name: invocation-service
     version: 1.6.1
