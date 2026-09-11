@@ -187,6 +187,7 @@ fn render_report_header(out: &mut String, context: &ReportContext) {
 }
 
 fn render_overview_table(out: &mut String, entries: &[ReportEntry]) {
+    out.push_str("Output goodput and output shares use reported token usage. They are unavailable when a successful response omits usage.\n\n");
     out.push_str("| Algorithm | Admission Mode | Success | Successful RPS | Output Goodput | Avg TTFT | P95 TTFT | Avg TTLT | P95 TTLT | Max TTLT | Total Length | Cluster Equal Balance | Cluster Input-Capacity Balance | Pylon Equal Balance | Pylon Capacity Balance | Cache Hits | Cache Hit Rate | Input Reuse Rate | Reused Input | Prefilled Input | Cache Movement | Cache Evictions | Evicted Tokens | Failure Groups | Fallback Route Choices | KV-Free Fallback Choices | Pylon Rejected | Pylon Disabled | Queue Mismatch Retries | Retry Exhausted |\n");
     out.push_str("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
     for entry in entries {
@@ -661,6 +662,7 @@ mod tests {
                 success_count: 1,
                 input_tokens: 1,
                 output_tokens: 10,
+                observed_output_tokens: Some(10),
                 avg_ttlt_ms: Some(20.0),
                 p95_ttlt_ms: Some(20),
                 cache_hit_rate: Some(1.0),

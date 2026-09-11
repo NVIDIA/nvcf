@@ -25,6 +25,9 @@ use tokio::sync::Semaphore;
 
 use crate::manifest::{Manifest, ManifestRequest};
 
+mod sse;
+use sse::CompletionStream;
+
 #[derive(Debug, Clone)]
 pub struct DriveConfig {
     pub endpoint: String,
@@ -40,7 +43,10 @@ pub struct RequestResult {
     pub routing_key: Option<String>,
     pub cache_affinity_key: Option<String>,
     pub input_tokens: u64,
+    /// Requested output tokens from the workload manifest.
     pub output_tokens: u64,
+    #[serde(default)]
+    pub observed_output_tokens: Option<u64>,
     pub scheduled_offset_ms: u64,
     pub status_code: u16,
     pub selected_backend_id: Option<String>,
@@ -68,6 +74,7 @@ impl RequestResult {
             cache_affinity_key: request.cache_affinity_key,
             input_tokens: request.input_tokens,
             output_tokens: request.output_tokens,
+            observed_output_tokens: None,
             scheduled_offset_ms: request.scheduled_offset_ms,
             status_code: 0,
             selected_backend_id: None,
@@ -85,9 +92,9 @@ impl RequestResult {
         }
     }
 
-    fn finish(mut self, dispatch_time: Instant, error: Option<reqwest::Error>) -> Self {
+    fn finish(mut self, dispatch_time: Instant, error: Option<String>) -> Self {
         self.completion_ms = duration_ms(dispatch_time.elapsed());
-        self.error = error.map(|error| error.to_string());
+        self.error = error;
         self
     }
 }
@@ -172,6 +179,7 @@ async fn execute_request(
         "messages": [{"role": "user", "content": "x".repeat(input_tokens)}],
         "max_tokens": result.output_tokens,
         "stream": true,
+        "stream_options": {"include_usage": true},
     });
 
     // Dispatch timestamps are taken from the same monotonic clock; clamp only to keep malformed
@@ -180,7 +188,7 @@ async fn execute_request(
     result.dispatch_offset_ms = duration_ms(dispatch_time.saturating_duration_since(start));
     let response = match response {
         Ok(response) => response,
-        Err(error) => return result.finish(dispatch_time, Some(error)),
+        Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
     };
 
     result.status_code = response.status().as_u16();
@@ -194,22 +202,48 @@ async fn execute_request(
     result.kv_cache_evicted_tokens = header(response.headers(), "x-kv-cache-evicted-tokens");
     result.response_headers_ms = Some(duration_ms(dispatch_time.elapsed()));
 
+    if !response.status().is_success() {
+        return result.finish(
+            dispatch_time,
+            Some(format!("upstream returned HTTP {}", response.status())),
+        );
+    }
+    let is_sse = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"));
+    if !is_sse {
+        return result.finish(
+            dispatch_time,
+            Some("upstream response is not text/event-stream".into()),
+        );
+    }
     let mut stream = response.bytes_stream();
-    let mut stream_text = String::new();
+    let mut output = CompletionStream::default();
     while let Some(chunk) = stream.next().await {
         let bytes = match chunk {
             Ok(bytes) => bytes,
-            Err(error) => return result.finish(dispatch_time, Some(error)),
+            Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
         };
-        if result.first_output_ms.is_none() && !bytes.is_empty() {
-            stream_text.push_str(&String::from_utf8_lossy(&bytes));
-            if stream_text.contains("\"content\":\"") {
+        let progress = output.push(&bytes);
+        result.observed_output_tokens = output.output_tokens();
+        match progress {
+            Ok(true) if result.first_output_ms.is_none() => {
                 result.first_output_ms = Some(duration_ms(dispatch_time.elapsed()));
             }
+            Ok(_) => {}
+            Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
         }
     }
-
-    result.ok = (200..300).contains(&result.status_code);
+    if !output.is_complete() {
+        return result.finish(
+            dispatch_time,
+            Some("upstream SSE response ended before [DONE]".into()),
+        );
+    }
+    result.ok = true;
     result.finish(dispatch_time, None)
 }
 
@@ -269,6 +303,87 @@ mod tests {
         }
     }
 
+    async fn read_test_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        loop {
+            assert_ne!(socket.read_buf(&mut bytes).await.unwrap(), 0);
+            let Some(header_end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = std::str::from_utf8(&bytes[..header_end]).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or_default();
+            if bytes.len() >= header_end + 4 + length {
+                return bytes;
+            }
+        }
+    }
+
+    async fn drive_test_response(body: &'static str) -> (RequestResult, serde_json::Value) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_test_request(&mut socket).await;
+            let header_end = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let sent: serde_json::Value = serde_json::from_slice(&request[header_end..]).unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            sent
+        });
+        let mut input = request(0, 0);
+        input.output_tokens = 100;
+        let result = execute_request(
+            &reqwest::Client::new(),
+            &endpoint,
+            "model",
+            input,
+            Instant::now(),
+        )
+        .await;
+        (result, server.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn complete_response_records_actual_usage_and_requests_usage_reporting() {
+        let (result, request) = drive_test_response("data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.output_tokens, 100);
+        assert_eq!(result.observed_output_tokens, Some(2));
+        assert!(result.first_output_ms.is_some());
+        assert_eq!(request["max_tokens"], 100);
+        assert_eq!(request["stream_options"]["include_usage"], true);
+    }
+
+    #[tokio::test]
+    async fn empty_and_truncated_success_responses_are_failures() {
+        for body in [
+            "",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+        ] {
+            let (result, _) = drive_test_response(body).await;
+            assert_eq!(result.status_code, 200);
+            assert!(!result.ok);
+            assert!(result.error.unwrap().contains("before [DONE]"));
+        }
+    }
+
     #[tokio::test]
     async fn scheduled_sleep_does_not_hold_concurrency_permit() {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -282,18 +397,7 @@ mod tests {
             for _ in 0..3 {
                 let (mut socket, _) = listener.accept().await.expect("request should connect");
                 tokio::spawn(async move {
-                    let mut bytes = Vec::new();
-                    let mut buffer = [0u8; 1024];
-                    loop {
-                        let read = socket.read(&mut buffer).await.expect("request should read");
-                        if read == 0 {
-                            break;
-                        }
-                        bytes.extend_from_slice(&buffer[..read]);
-                        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-                            break;
-                        }
-                    }
+                    let bytes = read_test_request(&mut socket).await;
 
                     let request = String::from_utf8_lossy(&bytes);
                     let request_id = request
@@ -308,10 +412,13 @@ mod tests {
                         tokio::time::sleep(Duration::from_millis(250)).await;
                     }
 
+                    let body = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}],\"usage\":{\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\nx-inference-server-id: backend-0\r\nx-kv-cache-hit: true\r\nx-kv-cache-reused-input-tokens: 1\r\nx-kv-cache-uncached-input-tokens: 0\r\n\r\n{body}",
+                        body.len()
+                    );
                     socket
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\nx-inference-server-id: backend-0\r\nx-kv-cache-hit: true\r\nx-kv-cache-reused-input-tokens: 1\r\nx-kv-cache-uncached-input-tokens: 0\r\n\r\n",
-                        )
+                        .write_all(response.as_bytes())
                         .await
                         .expect("response should write");
                 });
