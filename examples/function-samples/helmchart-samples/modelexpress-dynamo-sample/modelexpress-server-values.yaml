@@ -1,0 +1,151 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Cluster-admin values for the upstream ModelExpress chart.
+#
+# Apply the CRDs from the v0.4.0 tag first, matching the server pinned below
+# rather than the chart version. See README.md step 1.
+#
+# Then install the upstream chart with this file, once per cluster, before
+# deploying any function that uses ModelExpress:
+#
+#   helm upgrade --install modelexpress modelexpress \
+#     --repo https://helm.ngc.nvidia.com/nvidia/ai-dynamo \
+#     --version 0.5.1 \
+#     --namespace modelexpress --create-namespace \
+#     -f modelexpress-server-values.yaml
+#
+# The only 0.5.1 here is the chart. What runs is ModelExpress 0.4.0.
+#
+# Every value below overrides an upstream default that is unsafe or non-working
+# for a self-managed NVCF compute plane. Do not drop these overrides.
+
+# Pin the server to the client version that ships in the worker image, not to
+# the chart version.
+#
+# nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.1 contains modelexpress 0.4.0, so
+# the server is pinned to 0.4.0 to match it. Chart 0.5.1 is used because it is
+# the published chart, and its image.tag default of "0.3.0" matches neither the
+# chart nor the client, so it must be overridden either way.
+#
+# Matching client and server avoids relying on cross-version interoperability
+# that has no published compatibility statement. Revisit this pin when the
+# worker image ships a newer client.
+image:
+  repository: nvcr.io/nvidia/ai-dynamo/modelexpress-server
+  tag: "0.4.0"
+  pullPolicy: IfNotPresent
+
+# Upstream defaults this to a secret named nvcr-secret and assumes it exists in
+# the release namespace, which makes a default install fail on a cluster that has
+# no such secret.
+#
+# The server image is publicly pullable, verified by pulling
+# modelexpress-server:0.4.0 onto a node with no registry credentials at all, so
+# no secret is needed for it. Set this only if you mirror the image into a
+# private registry, or if you pull other gated NGC content:
+#
+#   kubectl create secret docker-registry nvcr-secret \
+#     --namespace modelexpress \
+#     --docker-server=nvcr.io \
+#     --docker-username='$oauthtoken' \
+#     --docker-password="$NGC_API_KEY"
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  # Required for MX_METADATA_BACKEND=kubernetes. Upstream ships this disabled,
+  # so the server cannot reach its own CRDs until you turn it on. Grants a
+  # namespaced Role only, not a ClusterRole.
+  rbac:
+    enabled: true
+  # Not set on purpose. The chart renders
+  # `automountServiceAccountToken: {{ .Values.serviceAccount.automount | default true }}`,
+  # and Helm's `default` treats `false` as empty, so the chart's own
+  # `automount: false` is inert and the token is always mounted. Setting it here
+  # would imply control that the chart does not actually offer. The token is
+  # required anyway for the kubernetes metadata backend.
+
+# The chart's own defaults cannot start the chart's own image: it sets
+# runAsNonRoot: true in both securityContext blocks and specifies no runAsUser,
+# while the server image runs as root. A default install fails with
+# "container has runAsNonRoot and image will run as root".
+#
+# Rather than dropping to root, pin an explicit non-root UID. fsGroup is what
+# makes the mounted cache volume writable by that UID.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+
+env:
+  MODEL_EXPRESS_SERVER_PORT: "8001"
+  MODEL_EXPRESS_LOGGING_LEVEL: "info"
+  # Not the upstream default of /root, which is unwritable once the server runs
+  # as a non-root UID. Must match persistence.mountPath below.
+  MODEL_EXPRESS_CACHE_DIRECTORY: "/cache"
+  # Required. The server fails to start when this is unset, and upstream leaves
+  # it commented out, so a default install crash-loops.
+  #
+  # "kubernetes" keeps metadata in the ModelMetadata and ModelCacheEntry CRDs
+  # and needs no extra datastore. "redis" is also supported but requires a Redis
+  # you deploy and operate yourself, because the chart bundles no Redis subchart.
+  MX_METADATA_BACKEND: "kubernetes"
+
+# Single writer against a ReadWriteOnce volume. Keep replicaCount at 1 unless
+# you switch to a ReadWriteMany storage class.
+replicaCount: 1
+
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  # Size this to hold every model your workers request, not just one.
+  size: 50Gi
+  # Must match MODEL_EXPRESS_CACHE_DIRECTORY above.
+  mountPath: /cache
+  # Set to a class that exists in your cluster. Empty uses the cluster default.
+  storageClass: ""
+
+# Gated or private model downloads need credentials on the server, because the
+# server performs the initial fetch that peers then replicate from.
+#
+#   kubectl create secret generic hf-token-secret \
+#     --namespace modelexpress --from-literal=HF_TOKEN="$HF_TOKEN"
+extraEnv:
+  - name: HF_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: hf-token-secret
+        key: HF_TOKEN
+        optional: true
+
+service:
+  type: ClusterIP
+  port: 8001
+
+resources:
+  limits:
+    cpu: "2"
+    memory: 4Gi
+    ephemeral-storage: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+    ephemeral-storage: 512Mi
