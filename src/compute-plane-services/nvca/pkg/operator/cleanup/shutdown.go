@@ -223,6 +223,11 @@ func RunShutdownCleanup(ctx context.Context, opts ShutdownHandlerOptions) Shutdo
 		// Use shared cleanup to delete all managed resources
 		if err := CleanupBackendResources(ctx, opts.K8sClient, opts.DynamicClient, nb); err != nil {
 			log.WithError(err).Errorf("Failed to cleanup resources for NVCFBackend %s/%s", nb.Namespace, nb.Name)
+			return ShutdownResponse{
+				Cleanup: true,
+				Message: "failed to cleanup NVCFBackend resources",
+				Error:   err.Error(),
+			}
 		}
 
 		// Remove the finalizer from the NVCFBackend to allow it to be garbage collected
