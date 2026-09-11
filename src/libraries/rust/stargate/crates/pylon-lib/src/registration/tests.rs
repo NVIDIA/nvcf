@@ -1482,3 +1482,58 @@ async fn stop_watched_endpoint_signals_and_awaits_task() {
 
     exited_rx.await.expect("watched endpoint task should exit");
 }
+
+#[test]
+fn registration_failures_keep_causes_and_suppress_repeated_errors_until_recovery() {
+    let target = grpc_endpoint("router.example.test:50071");
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let mut log = super::grpc_endpoint::RegistrationFailureLog::default();
+    let error = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "connection refused",
+    ))
+    .context("open registration channel");
+    log.report(&target, "register_inference_server", error.as_ref());
+    log.report(&target, "register_inference_server", error.as_ref());
+    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 1);
+    log.recovered();
+    log.report(&target, "register_inference_server", error.as_ref());
+    let status = tonic::Status::unauthenticated("authentication failed");
+    log.report(&target, "register_inference_server", &status);
+    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 3);
+    let details: Vec<_> = subscriber
+        .events()
+        .into_iter()
+        .filter_map(|event| event.fields.get("error").cloned())
+        .collect();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("open registration channel")
+                && detail.contains("connection refused"))
+    );
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("Unauthenticated"))
+    );
+}
+
+#[tokio::test]
+async fn registration_token_errors_do_not_expose_secret_file_excerpts() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), br#"{"secret":"do-not-log-this-secret"}"#).unwrap();
+    let provider = stargate_auth::AuthTokenProvider::JsonFile {
+        path: file.path().to_owned(),
+        key: vec!["missing".into()],
+    };
+    let error = super::router_stream::resolve_registration_token(&provider)
+        .await
+        .unwrap_err();
+    let detail = format!("{error:#}");
+    assert!(detail.contains("failed to resolve registration token"));
+    assert!(detail.contains("failed to extract key"));
+    assert!(!detail.contains("do-not-log-this-secret"));
+}
