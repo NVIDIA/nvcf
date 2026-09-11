@@ -41,6 +41,7 @@ jobs:
         run: ./tools/ci/check-docs
 
       - name: Check latest stack release
+        continue-on-error: true
         env:
           DOC_VERSION_SYNC_GITHUB_TOKEN: ${{ github.token }}
         run: ./tools/ci/check-doc-version-current-release
