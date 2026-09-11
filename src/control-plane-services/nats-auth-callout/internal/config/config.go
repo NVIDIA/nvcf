@@ -264,6 +264,10 @@ func GetCurrentConfig() (*Config, error) {
 	var config Config
 	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{
 		Tag: "mapstructure",
+		DecoderConfig: &mapstructure.DecoderConfig{
+			DecodeHook:       defaultDecodeHook(),
+			WeaklyTypedInput: true,
+		},
 	}); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,6 +35,8 @@ service:
   nats_url: "nats://localhost:4222"
   nkey_seed: ""
   nkey_signature: ""
+  plugin_configs: {}
+  account_configs: {}
 server:
   port: "8080"
 logging:
@@ -221,6 +224,59 @@ func TestEnvironmentVariablesWithNestedPluginSlices(t *testing.T) {
 	assert.NoError(t, DecodeConfig(cfg.Service.PluginConfigs["nkey"].Config, &pluginConfig))
 	assert.Equal(t, publicNKey, pluginConfig.NkeyMappings[0].Nkey)
 	assert.Equal(t, "APP", pluginConfig.NkeyMappings[0].Account)
+}
+
+func TestEnvironmentVariablesWithNestedPluginSlicesAndConfigFile(t *testing.T) {
+	defer ResetConfig()
+	setupTestConfig()
+
+	configFile := t.TempDir() + "/config.yaml"
+	err := os.WriteFile(configFile, []byte(`
+server:
+  port: "8080"
+service:
+  name: nvcf-nats-auth-callout-service
+  nats_url: nats://nats.nats-system.svc.cluster.local:4222
+`), 0o600)
+	assert.NoError(t, err)
+
+	const publicNKey = "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_PLUGIN__TYPE", "nkey")
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_NKEY", publicNKey)
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_ACCOUNT", "APP")
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_0_ID", "nkey")
+
+	cfg, err := InitConfig("test", configFile)
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+
+	assert.Equal(t, "nats://nats.nats-system.svc.cluster.local:4222", cfg.Service.NatsURL)
+	assert.Equal(t, "nkey", cfg.Service.PluginConfigs["nkey"].PluginType)
+	assert.Equal(t, "nkey", cfg.Service.AccountConfigs["app"].EnabledPlugins[0].ID)
+}
+
+func TestGetCurrentConfigPreservesNestedPluginSlicesAfterFlagBind(t *testing.T) {
+	defer ResetConfig()
+	setupTestConfig()
+
+	const publicNKey = "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_PLUGIN__TYPE", "nkey")
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_NKEY", publicNKey)
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_ACCOUNT", "APP")
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_0_ID", "nkey")
+
+	_, err := InitConfig("test", "")
+	assert.NoError(t, err)
+
+	cmd := &cobra.Command{Use: "server"}
+	cmd.Flags().String("port", "8080", "")
+	assert.NoError(t, BindFlag("server.port", cmd, "port"))
+
+	cfg, err := GetCurrentConfig()
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+	assert.Equal(t, "nkey", cfg.Service.PluginConfigs["nkey"].PluginType)
+	assert.Equal(t, "nkey", cfg.Service.AccountConfigs["app"].EnabledPlugins[0].ID)
 }
 
 func TestConfigValidation(t *testing.T) {
