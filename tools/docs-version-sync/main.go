@@ -147,16 +147,16 @@ func writeCatalogAfterStackSourceValidation(repoRoot, catalogPath string, catalo
 	return WriteCatalog(catalogPath, catalog)
 }
 
-func setArtifactVersion(catalog *Catalog, name, version string) bool {
+func setArtifactVersionByNameAndType(catalog *Catalog, name string, artifactType ArtifactType, version string) bool {
 	changed := false
 	for i := range catalog.Artifacts {
-		if catalog.Artifacts[i].Name == name {
+		if catalog.Artifacts[i].Name == name && catalog.Artifacts[i].Type == artifactType {
 			catalog.Artifacts[i].Version = version
 			changed = true
 		}
 	}
 	for i := range catalog.SupplementalArtifacts {
-		if catalog.SupplementalArtifacts[i].Name == name {
+		if catalog.SupplementalArtifacts[i].Name == name && catalog.SupplementalArtifacts[i].Type == artifactType {
 			catalog.SupplementalArtifacts[i].Version = version
 			changed = true
 		}

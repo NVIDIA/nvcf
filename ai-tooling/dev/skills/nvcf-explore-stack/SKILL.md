@@ -14,13 +14,13 @@ description: >-
 license: Apache-2.0
 compatibility: Requires a local checkout of the NVCF monorepo with deploy/stacks/self-managed/ and deploy/stacks/nvcf-compute-plane/ present
 author: "nvcf-core-eng <nvcf-core-eng@exchange.nvidia.com>"
-version: "1.1.0"
+version: "1.1.1"
 tags: [nvcf, self-managed, self-hosted, helmfile, deployment, stack-topology]
 tools: [Read, Grep, Glob]
 metadata:
   internal: false
   author: "nvcf-core-eng <nvcf-core-eng@exchange.nvidia.com>"
-  version: "1.1.0"
+  version: "1.1.1"
   tags: [nvcf, self-managed, self-hosted, helmfile, deployment, stack-topology, dependencies, hooks]
   languages: [yaml, markdown]
   frameworks: [helmfile, helm, kubernetes]
@@ -99,5 +99,5 @@ After exploring, suggest the next skill when applicable:
 - `nvcf-self-managed-installation` for installing, upgrading, or tearing down the stack
 - `docs/dev/local-development.md` for k3d / local cluster work
 - `nvcf-self-managed-cli` for `nvcf-cli` usage against an installed stack
-- `docs/AGENTS.md` and `fern/versions/main.yml` for routing the user to a published docs page
+- `docs/AGENTS.md` and `fern/versions/dev.yml` for routing the user to a published docs page
 - `tools/ci/check-doc-version-sync` for keeping the documentation manifest in sync with the docs version catalog

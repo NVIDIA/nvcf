@@ -28,14 +28,14 @@ import (
 )
 
 const (
-	defaultStackProjectID    = 182049
-	defaultComputeProjectID  = 268903
-	defaultPackageName       = "ncp-deploy"
-	defaultStackResourceName = "nvcf-self-managed-stack"
-	computeStackResourceName = "nvcf-compute-plane-stack"
-	defaultStackRegistry     = "staging"
-	defaultCLIRegistry       = defaultStackRegistry
-	defaultCLIVersion        = "0.0.30"
+	defaultStackResourceName       = "nvcf-self-managed-stack"
+	computeStackResourceName       = "nvcf-compute-plane-stack"
+	observabilityStackResourceName = "nvcf-observability-stack"
+	defaultStackRegistry           = "public-resources"
+	defaultCLIRegistry             = defaultStackRegistry
+	defaultImageRegistry           = "public-images"
+	defaultChartRegistry           = "public-helm"
+	defaultCLIVersion              = "0.0.30"
 )
 
 var (
@@ -132,9 +132,6 @@ type StackMetadata struct {
 	Name               string   `yaml:"name"`
 	PublicationVersion string   `yaml:"version"`
 	Registry           string   `yaml:"registry"`
-	GitLabProjectID    int      `yaml:"gitlab_project_id,omitempty"`
-	PackageName        string   `yaml:"package_name,omitempty"`
-	ArtifactsFile      string   `yaml:"artifacts_file,omitempty"`
 	SourceVersion      string   `yaml:"source_version,omitempty"`
 	SourceTag          string   `yaml:"source_tag,omitempty"`
 	SourceCommit       string   `yaml:"source_commit,omitempty"`
@@ -254,6 +251,9 @@ func ValidateCatalog(catalog *Catalog) error {
 		}
 		if strings.TrimSpace(registry.Namespace) == "" {
 			return fmt.Errorf("registry %q has empty namespace", name)
+		}
+		if !isPublicCatalogRegistry(registry) {
+			return fmt.Errorf("registry %q must use a public catalog location", name)
 		}
 	}
 	seenPublications := map[string]struct{}{}
@@ -632,7 +632,7 @@ func (registry Registry) resourceRef(name, version string) string {
 	return fmt.Sprintf("%s/%s:%s", registry.Namespace, name, version)
 }
 
-// BuildCatalogFromArtifacts creates a catalog from a published package inventory.
+// BuildCatalogFromArtifacts creates a catalog from resolved stack artifacts.
 func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) *Catalog {
 	catalog := &Catalog{
 		Version: 1,
@@ -640,16 +640,22 @@ func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) 
 		Registries: map[string]Registry{
 			defaultStackRegistry: {
 				Host:      "nvcr.io",
-				Namespace: "0833294136851237/nvcf-ncp-staging",
+				Namespace: "nvidia/nvcf",
+			},
+			defaultImageRegistry: {
+				Host:      "nvcr.io",
+				Namespace: "nvidia/nvcf",
+			},
+			defaultChartRegistry: {
+				Host:            "https://helm.ngc.nvidia.com",
+				Namespace:       "nvidia/nvcf",
+				RepositoryAlias: "nvcf",
 			},
 		},
 		Stack: StackMetadata{
 			Name:               defaultStackResourceName,
 			PublicationVersion: publicationVersion,
 			Registry:           defaultStackRegistry,
-			GitLabProjectID:    defaultStackProjectID,
-			PackageName:        defaultPackageName,
-			ArtifactsFile:      fmt.Sprintf("artifacts-%s.txt", publicationVersion),
 		},
 		SupplementalArtifacts: []Artifact{
 			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: defaultCLIRegistry, Version: defaultCLIVersion},
@@ -665,6 +671,7 @@ func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) 
 		artifact.Source = ""
 		catalog.Artifacts = append(catalog.Artifacts, artifact)
 	}
+	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	return catalog
 }
@@ -692,10 +699,9 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 	catalog.Stack.SourceTag = base.Stack.SourceTag
 	catalog.Stack.PinSources = append(catalog.Stack.PinSources, base.Stack.PinSources...)
 	catalog.Stack.PinSourceDigest = base.Stack.PinSourceDigest
-
-	manifestNames := map[string]struct{}{}
+	resolvedNames := make(map[string]struct{}, len(catalog.Artifacts))
 	for _, artifact := range catalog.Artifacts {
-		manifestNames[artifact.Name] = struct{}{}
+		resolvedNames[artifact.Name] = struct{}{}
 	}
 
 	seenSupplemental := map[string]struct{}{}
@@ -710,7 +716,7 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 		if _, denied := denylist[artifact.Name]; denied {
 			continue
 		}
-		if _, published := manifestNames[artifact.Name]; published {
+		if _, resolved := resolvedNames[artifact.Name]; resolved {
 			continue
 		}
 		key := artifact.catalogKey()
@@ -722,9 +728,20 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 		seenSupplemental[key] = struct{}{}
 	}
 	catalog.applyVersionOverrides()
+	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	catalog.pruneUnusedRegistries()
 	return catalog
+}
+
+func (catalog *Catalog) markAllUnpublishedAsPending() {
+	artifacts := append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...)
+	artifacts = append(artifacts, catalog.SupplementalArtifacts...)
+	for _, artifact := range artifacts {
+		if _, published := catalog.publicationFor(artifact); !published {
+			catalog.PublicationPending = append(catalog.PublicationPending, artifact.catalogKey())
+		}
+	}
 }
 
 func (catalog *Catalog) reconcilePublicationPending() {
@@ -742,32 +759,11 @@ func (catalog *Catalog) reconcilePublicationPending() {
 			}
 		}
 	}
-	for _, artifact := range artifacts {
-		if !catalog.artifactUsesStagingRegistry(artifact) {
-			continue
-		}
-		if _, published := catalog.publicationFor(artifact); !published {
-			pending[artifact.catalogKey()] = struct{}{}
-		}
-	}
-
 	catalog.PublicationPending = catalog.PublicationPending[:0]
 	for name := range pending {
 		catalog.PublicationPending = append(catalog.PublicationPending, name)
 	}
 	sort.Strings(catalog.PublicationPending)
-}
-
-func (catalog *Catalog) artifactUsesStagingRegistry(artifact Artifact) bool {
-	registry, ok := catalog.Registries[artifact.Registry]
-	if !ok {
-		return false
-	}
-	staging, ok := catalog.Registries[defaultStackRegistry]
-	if !ok {
-		return false
-	}
-	return registry.Host == staging.Host && registry.Namespace == staging.Namespace
 }
 
 func (catalog *Catalog) applyVersionOverrides() {
@@ -862,6 +858,10 @@ func defaultOutputs() []OutputFile {
 				{
 					Marker:   "image-mirroring-compute-stack-snippet",
 					Renderer: "image-mirroring-compute-stack-snippet",
+				},
+				{
+					Marker:   "image-mirroring-observability-stack-snippet",
+					Renderer: "image-mirroring-observability-stack-snippet",
 				},
 				{
 					Marker:   "image-mirroring-cli-snippet",
