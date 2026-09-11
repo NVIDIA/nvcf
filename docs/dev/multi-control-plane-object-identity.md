@@ -50,7 +50,7 @@ consumer.
 | Ingress namespace | Environment-provided Gateway API namespace | Shared or externally managed; never deleted by plane teardown | Shared or external | Golden render and matrix review |
 | cert-manager namespace | `cert-manager` | Shared prerequisite namespace | Shared | Golden render and prereq inventory |
 | Service names | Chart defaults such as `api`, `ess-api`, `grpc-proxy` | Derived only where cross-plane collision exists | Plane | Golden render |
-| ClusterIssuer | `nvcf-openbao-pki` | Deferred to Phase 4; derive from validated control-plane ID before named mode is enabled | Plane | Golden render and exact-name cleanup tests |
+| ClusterIssuer | `nvcf-openbao-pki` | Phase 4H derives the stack-managed issuer as `<owner>-nvcf-openbao-pki` for named mode | Plane | Golden render and exact-name cleanup tests |
 | OpenBao injector webhook | Chart-generated static name | Per-plane webhook object and service reference derived from the named OpenBao fullname | Plane | Phase 4G focused OpenBao render test |
 | Admission webhook namespaceSelector | Broad or environment-provided selector | Match workload namespaces plus control-plane owner | Plane | Webhook section and future Phase 2 render test |
 | Helm hook Jobs | Release/chart names | Release names or hook names derived per plane | Plane | Golden render |
@@ -403,6 +403,40 @@ protect the Kubernetes name-length edge.
 Named mode intentionally remains fail-closed after this phase. The managed
 ClusterIssuer object's own identity and the final shared-prerequisite allowlist
 still need to pass before the object-level block can be removed.
+
+## Phase 4H Managed ClusterIssuer Identity
+
+Phase 4H removes the managed PKI `ClusterIssuer` name collision for named mode.
+
+The default control plane still uses the legacy cluster-wide issuer name:
+`nvcf-openbao-pki`. For a named owner, the stack-managed default issuer is
+derived from the owner instead. With owner `plane-a`, the managed issuer becomes
+`plane-a-nvcf-openbao-pki`. The legacy default is normalized this way even when
+it appears explicitly in inherited named-plane values.
+
+Both sides of the contract use the same effective name:
+
+- the `nvcf-pki` dependency release creates
+  `ClusterIssuer/plane-a-nvcf-openbao-pki`;
+- the LLM request-router Certificate references
+  `ClusterIssuer/plane-a-nvcf-openbao-pki`;
+- the LLM worker gRPC TLS values default to the same issuer name when no
+  explicit issuer override is provided.
+
+If an operator sets a custom external issuer name, the stack keeps that custom
+name. If the stack itself is asked to manage a custom ClusterIssuer for a named
+plane, the name must use the named control-plane prefix so the cluster-scoped
+object cannot collide with another plane. That validation is specifically for
+custom managed issuers; the legacy default issuer name is normalized to the
+derived managed name before validation runs.
+
+The named service-DNS isolation test now also renders the real `nvcf-pki` chart in a
+temporarily unblocked named stack and verifies that the rendered ClusterIssuer
+name, OpenBao backend URL, and request-router issuer references all agree.
+
+Named mode intentionally remains fail-closed after this phase. The remaining
+blocker is the shared-prerequisite allowlist, which must explicitly review
+objects that are supposed to be shared instead of per-plane.
 
 ## Data And Auth Matrix
 

@@ -12,6 +12,7 @@ test_stack_dir="$work_dir/self-managed"
 values_dir="$work_dir/values"
 manifest_dir="$work_dir/manifests"
 owner="plane-a"
+issuer_name="${owner}-nvcf-openbao-pki"
 openbao_name="${owner}-openbao"
 openbao_url="http://${openbao_name}.${owner}-vault-system.svc.cluster.local:8200"
 openbao_addr="${openbao_name}.${owner}-vault-system.svc.cluster.local:8200"
@@ -73,16 +74,37 @@ render_release_values() {
   local state_file="$1"
   local release_name="$2"
   local output_file="$3"
+  shift 3
 
   if ! run_helmfile \
     --file "$test_stack_dir/helmfile.d/$state_file" \
     --selector "name=$release_name" \
+    "$@" \
     write-values \
     --output-file-template "$output_file" >/dev/null; then
     fail "helmfile could not render values for $release_name"
   fi
   test -s "$output_file" ||
     fail "helmfile wrote no values for $release_name"
+}
+
+expect_render_release_values_failure() {
+  local state_file="$1"
+  local release_name="$2"
+  local expected_message="$3"
+  shift 3
+
+  local output
+  if output="$(run_helmfile \
+    --file "$test_stack_dir/helmfile.d/$state_file" \
+    --selector "name=$release_name" \
+    "$@" \
+    write-values \
+    --output-file-template "$values_dir/unexpected-$release_name-values.yaml" 2>&1)"; then
+    fail "helmfile rendered $release_name even though $expected_message was expected"
+  fi
+  grep -Fq -- "$expected_message" <<<"$output" ||
+    fail "helmfile failure for $release_name did not include $expected_message: $output"
 }
 
 render_chart() {
@@ -153,8 +175,18 @@ assert_render_contains "$manifest_dir/api.yaml" \
   "OPENBAO_SERVICE_ADDR=\"$openbao_addr\""
 
 render_release_values "01-dependencies.yaml.gotmpl" "nvcf-pki" "$values_dir/nvcf-pki-values.yaml"
+render_chart "nvcf-pki" "deploy/helm/nvcf-pki" "cert-manager" "$values_dir/nvcf-pki-values.yaml" "$manifest_dir/nvcf-pki.yaml"
+assert_value "$values_dir/nvcf-pki-values.yaml" '.clusterIssuer.name' "$issuer_name"
 assert_value "$values_dir/nvcf-pki-values.yaml" '.clusterIssuer.server' "$openbao_url"
 assert_value "$values_dir/nvcf-pki-values.yaml" '.clusterIssuer.auth.serviceAccount.audience' "$openbao_url"
+assert_value "$manifest_dir/nvcf-pki.yaml" 'select(.kind == "ClusterIssuer") | .metadata.name' "$issuer_name"
+assert_value "$manifest_dir/nvcf-pki.yaml" 'select(.kind == "ClusterIssuer") | .spec.vault.server' "$openbao_url"
+render_release_values \
+  "01-dependencies.yaml.gotmpl" \
+  "nvcf-pki" \
+  "$values_dir/nvcf-pki-explicit-legacy-issuer-values.yaml" \
+  --state-values-set-string addons.llm.pki.issuerName=nvcf-openbao-pki
+assert_value "$values_dir/nvcf-pki-explicit-legacy-issuer-values.yaml" '.clusterIssuer.name' "$issuer_name"
 
 assert_value "$values_dir/admin-issuer-proxy-values.yaml" '.adminIssuerProxy.config.vaultAddr' "$openbao_url"
 assert_value "$values_dir/admin-issuer-proxy-values.yaml" '.adminIssuerProxy.config.vaultAudience' "$openbao_url"
@@ -171,8 +203,38 @@ assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.aut
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.pki.baoService' "$openbao_host"
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.pki.serviceAccountName' "$openbao_initialize_service_account"
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.pki.rootTokenSecretName' "$openbao_root_token_secret"
+assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.certificate.issuerRef.name' "$issuer_name"
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.certificate.dnsNames[0]' "llm-request-router.${owner}-nvcf.svc.cluster.local"
 assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.certificate.dnsNames[1]' "*.llm-request-router-headless.${owner}-nvcf.svc.cluster.local"
+assert_value "$values_dir/llm-request-router-values.yaml" '.llmRequestRouter.grpcTls.issuerRef.name' "$issuer_name"
+assert_value "$manifest_dir/llm-request-router.yaml" 'select(.kind == "Certificate") | .spec.issuerRef.name' "$issuer_name"
+render_release_values \
+  "02-core.yaml.gotmpl" \
+  "llm-request-router" \
+  "$values_dir/llm-request-router-explicit-legacy-issuer-values.yaml" \
+  --state-values-set-string addons.llm.pki.issuerName=nvcf-openbao-pki \
+  --state-values-set-string addons.llm.requestRouter.grpcTls.issuerRef.name=nvcf-openbao-pki
+assert_value "$values_dir/llm-request-router-explicit-legacy-issuer-values.yaml" '.llmRequestRouter.certificate.issuerRef.name' "$issuer_name"
+assert_value "$values_dir/llm-request-router-explicit-legacy-issuer-values.yaml" '.llmRequestRouter.grpcTls.issuerRef.name' "$issuer_name"
+render_release_values \
+  "02-core.yaml.gotmpl" \
+  "llm-request-router" \
+  "$values_dir/llm-request-router-custom-external-issuer-values.yaml" \
+  --state-values-set-string addons.llm.pki.issuerName=external-pki.example.invalid \
+  --state-values-set addons.llm.pki.clusterIssuer.enabled=false
+assert_value "$values_dir/llm-request-router-custom-external-issuer-values.yaml" '.llmRequestRouter.certificate.issuerRef.name' "external-pki.example.invalid"
+expect_render_release_values_failure \
+  "01-dependencies.yaml.gotmpl" \
+  "nvcf-pki" \
+  'addons.llm.pki.issuerName must start with "plane-a-" when managing a named ClusterIssuer' \
+  --state-values-set-string addons.llm.pki.issuerName=custom-managed-pki \
+  --state-values-set addons.llm.pki.clusterIssuer.enabled=true
+expect_render_release_values_failure \
+  "02-core.yaml.gotmpl" \
+  "llm-request-router" \
+  'addons.llm.pki.issuerName must start with "plane-a-" when managing a named ClusterIssuer' \
+  --state-values-set-string addons.llm.pki.issuerName=custom-managed-pki \
+  --state-values-set addons.llm.pki.clusterIssuer.enabled=true
 assert_value "$manifest_dir/llm-request-router.yaml" 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.serviceAccountName' "$openbao_initialize_service_account"
 assert_value "$manifest_dir/llm-request-router.yaml" 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "BAO_SERVICE") | .value' "$openbao_host"
 assert_value "$manifest_dir/llm-request-router.yaml" 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.volumes[] | select(.name == "root-token") | .secret.secretName' "$openbao_root_token_secret"
@@ -189,6 +251,27 @@ assert_value "$manifest_dir/sis.yaml" 'select(.kind == "CronJob" and .metadata.n
 assert_value "$manifest_dir/sis.yaml" 'select(.kind == "CronJob" and .metadata.name == "addons-lls-turn-hmac-rotation") | .spec.jobTemplate.spec.template.spec.volumes[] | select(.name == "root-token") | .secret.secretName' "$openbao_root_token_secret"
 assert_value "$values_dir/function-autoscaler-values.yaml" '.functionautoscaler.volumes[0].projected.sources[0].serviceAccountToken.audience' "$openbao_url"
 
+edge_owner="nvcf"
+edge_issuer_name="${edge_owner}-nvcf-openbao-pki"
+edge_openbao_name="${edge_owner}-openbao"
+edge_openbao_url="http://${edge_openbao_name}.${edge_owner}-vault-system.svc.cluster.local:8200"
+edge_manifest_dir="$work_dir/edge-manifests"
+mkdir -p "$edge_manifest_dir"
+
+owner="$edge_owner"
+render_release_values "01-dependencies.yaml.gotmpl" "nvcf-pki" "$values_dir/nvcf-owner-nvcf-pki-values.yaml"
+render_chart "nvcf-pki" "deploy/helm/nvcf-pki" "cert-manager" "$values_dir/nvcf-owner-nvcf-pki-values.yaml" "$edge_manifest_dir/nvcf-pki.yaml"
+assert_value "$values_dir/nvcf-owner-nvcf-pki-values.yaml" '.clusterIssuer.name' "$edge_issuer_name"
+assert_value "$values_dir/nvcf-owner-nvcf-pki-values.yaml" '.clusterIssuer.server' "$edge_openbao_url"
+assert_value "$edge_manifest_dir/nvcf-pki.yaml" 'select(.kind == "ClusterIssuer") | .metadata.name' "$edge_issuer_name"
+
+render_release_values "02-core.yaml.gotmpl" "llm-request-router" "$values_dir/nvcf-owner-llm-request-router-values.yaml"
+render_chart "llm-request-router" "deploy/helm/llm-request-router/llm-request-router" "${edge_owner}-nvcf" "$values_dir/nvcf-owner-llm-request-router-values.yaml" "$edge_manifest_dir/llm-request-router.yaml"
+assert_value "$values_dir/nvcf-owner-llm-request-router-values.yaml" '.llmRequestRouter.certificate.issuerRef.name' "$edge_issuer_name"
+assert_value "$values_dir/nvcf-owner-llm-request-router-values.yaml" '.llmRequestRouter.grpcTls.issuerRef.name' "$edge_issuer_name"
+assert_value "$edge_manifest_dir/llm-request-router.yaml" 'select(.kind == "Certificate") | .spec.issuerRef.name' "$edge_issuer_name"
+
+owner="plane-a"
 python3 "$repo_root/deploy/stacks/tests/verify-named-control-plane-render-isolation.py" \
   --render "$owner=$manifest_dir" >/dev/null
 

@@ -54,7 +54,7 @@ tolerations:
 {{- end -}}
 {{- $namedControlPlaneObjectIdentitiesReady := false -}}
 {{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) -}}
-{{- fail "named control planes are not enabled yet because object-level identity derivation is not wired; refusing to render until gateway routes, service DNS, OpenBao injector, and ClusterIssuer names are isolated" -}}
+{{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" -}}
 {{- end -}}
 {{- $apiKeysNamespace := printf "%sapi-keys" $controlPlaneNamespacePrefix -}}
 {{- $cassandraNamespace := printf "%scassandra-system" $controlPlaneNamespacePrefix -}}
@@ -85,6 +85,15 @@ tolerations:
 {{- $llmRequestRouterHeadlessWildcardHost := printf "*.llm-request-router-headless.%s.svc.cluster.local" $nvcfNamespace -}}
 {{- $legacyLlmRequestRouterDefaultDnsNames := list "llm-request-router.nvcf.svc.cluster.local" "*.llm-request-router-headless.nvcf.svc.cluster.local" -}}
 {{- $llmRequestRouterDefaultDnsNames := list $llmRequestRouterServiceHost $llmRequestRouterHeadlessWildcardHost -}}
+{{- $legacyPkiIssuerName := "nvcf-openbao-pki" -}}
+{{- $managedPkiIssuerName := $legacyPkiIssuerName -}}
+{{- if ne $controlPlaneOwner "default" -}}
+{{- $managedPkiIssuerName = printf "%s%s" $controlPlaneNamespacePrefix $legacyPkiIssuerName -}}
+{{- end -}}
+{{- $effectivePkiIssuerName := dig "addons" "llm" "pki" "issuerName" $legacyPkiIssuerName .Values -}}
+{{- if and (kindIs "string" $effectivePkiIssuerName) (ne $controlPlaneOwner "default") (eq $effectivePkiIssuerName $legacyPkiIssuerName) -}}
+{{- $effectivePkiIssuerName = $managedPkiIssuerName -}}
+{{- end -}}
 {{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace -}}
 {{- $openBaoServerHost := printf "%s.%s.svc.cluster.local" $openBaoServerName $vaultNamespace -}}
 {{- $openBaoServerAddress := printf "%s:8200" $openBaoServerHost -}}
@@ -1370,6 +1379,13 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  {{- $grpcTlsIssuerRefName := dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values }}
+  {{- if empty $grpcTlsIssuerRefName }}
+  {{- $grpcTlsIssuerRefName = $effectivePkiIssuerName }}
+  {{- end }}
+  {{- if and (kindIs "string" $grpcTlsIssuerRefName) (ne $controlPlaneOwner "default") (eq $grpcTlsIssuerRefName $legacyPkiIssuerName) }}
+  {{- $grpcTlsIssuerRefName = $managedPkiIssuerName }}
+  {{- end }}
   grpcTls:
     enabled: {{ $grpcTlsEnabled }}
     allowInsecureHttp: {{ $grpcTlsAllowInsecureHttp }}
@@ -1379,7 +1395,7 @@ llmRequestRouter:
       {{- dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values | toYaml | nindent 6 }}
     issuerRef:
       kind: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "kind" "" .Values | default (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) | quote }}
-      name: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values | default (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) | quote }}
+      name: {{ $grpcTlsIssuerRefName | quote }}
       {{- with dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "group" "" .Values }}
       group: {{ . | quote }}
       {{- end }}
@@ -1475,7 +1491,7 @@ llmRequestRouter:
        below still renders a Certificate referencing the default issuer. Keep
        this contract identical to the dependency stage. */ -}}
   {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
-  {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+  {{- $issuerName := $effectivePkiIssuerName }}
   {{- if not (kindIs "string" $issuerKind) }}
   {{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
   {{- end }}
@@ -1491,7 +1507,7 @@ llmRequestRouter:
   {{- if gt (len $issuerName) 253 }}
   {{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
   {{- end }}
-  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName $managedPkiIssuerName) }}
   {{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
   {{- if kindIs "map" $pkiValues }}
   {{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
@@ -1507,6 +1523,13 @@ llmRequestRouter:
   {{- end }}
   {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
   {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+  {{- end }}
+  {{- /* The legacy default issuer name is normalized above. This guard covers
+       custom managed issuers, where clusterIssuer.enabled=true asks the stack
+       to create a cluster-scoped object that must not collide across named
+       planes. */ -}}
+  {{- if and $managedIssuer (ne $controlPlaneOwner "default") (not (hasPrefix $controlPlaneNamespacePrefix $issuerName)) }}
+  {{- fail (printf "addons.llm.pki.issuerName must start with %q when managing a named ClusterIssuer" $controlPlaneNamespacePrefix) }}
   {{- end }}
   {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
   {{- if not (kindIs "slice" $dnsNames) }}

@@ -35,7 +35,7 @@ environments:
 {{- end }}
 {{- $namedControlPlaneObjectIdentitiesReady := false }}
 {{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) }}
-{{- fail "named control planes are not enabled yet because object-level identity derivation is not wired; refusing to render until gateway routes, service DNS, OpenBao injector, and ClusterIssuer names are isolated" }}
+{{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" }}
 {{- end }}
 {{- $nvcaOperatorName := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 {{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}

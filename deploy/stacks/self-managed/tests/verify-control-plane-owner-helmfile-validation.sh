@@ -51,10 +51,10 @@ for state in "${states[@]}"; do
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
     >"$work_dir/$state.named-blocked.json" 2>"$named_blocked_log"; then
-    fail "$state rendered named owner before object-level identity derivation was wired"
+    fail "$state rendered named owner before shared prerequisite identities were allowlisted"
   fi
-  if ! grep -q "object-level identity derivation is not wired" "$named_blocked_log"; then
-    fail "$state rejected named owner without the object-level identity message"
+  if ! grep -q "shared prerequisite identities are not allowlisted" "$named_blocked_log"; then
+    fail "$state rejected named owner without the shared prerequisite message"
   fi
 
   max_valid_log="$work_dir/$state.max-valid.log"
@@ -64,10 +64,10 @@ for state in "${states[@]}"; do
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
     >"$work_dir/$state.max-valid.json" 2>"$max_valid_log"; then
-    fail "$state rendered a 30-character named owner before object-level identity derivation was wired"
+    fail "$state rendered a 30-character named owner before shared prerequisite identities were allowlisted"
   fi
-  if ! grep -q "object-level identity derivation is not wired" "$max_valid_log"; then
-    fail "$state rejected 30-character owner before reaching object-level identity validation"
+  if ! grep -q "shared prerequisite identities are not allowlisted" "$max_valid_log"; then
+    fail "$state rejected 30-character owner before reaching shared prerequisite validation"
   fi
 
   for owner in "${invalid_owners[@]}"; do
@@ -164,10 +164,10 @@ if HELMFILE_ENV=base \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
   helmfile --file "$global_state_file" template \
   >"$work_dir/global.named-blocked.yaml" 2>"$global_named_blocked_log"; then
-  fail "global.yaml.gotmpl rendered named owner before object-level identity derivation was wired"
+  fail "global.yaml.gotmpl rendered named owner before shared prerequisite identities were allowlisted"
 fi
-if ! grep -q "object-level identity derivation is not wired" "$global_named_blocked_log"; then
-  fail "global.yaml.gotmpl rejected named owner without the object-level identity message"
+if ! grep -q "shared prerequisite identities are not allowlisted" "$global_named_blocked_log"; then
+  fail "global.yaml.gotmpl rejected named owner without the shared prerequisite message"
 fi
 owner_dependencies="$work_dir/dependencies.owner.json"
 HELMFILE_ENV=base \

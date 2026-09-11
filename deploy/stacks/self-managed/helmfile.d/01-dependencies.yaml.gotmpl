@@ -31,7 +31,7 @@ environments:
 {{- end }}
 {{- $namedControlPlaneObjectIdentitiesReady := false }}
 {{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) }}
-{{- fail "named control planes are not enabled yet because object-level identity derivation is not wired; refusing to render until gateway routes, service DNS, OpenBao injector, and ClusterIssuer names are isolated" }}
+{{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" }}
 {{- end }}
 {{- $natsNamespace := printf "%snats-system" $controlPlaneNamespacePrefix }}
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix }}
@@ -42,8 +42,16 @@ environments:
 {{- $openBaoServerName = printf "%sopenbao" $controlPlaneNamespacePrefix }}
 {{- end }}
 {{- $openBaoServerURL := printf "http://%s.%s.svc.cluster.local:8200" $openBaoServerName $vaultNamespace }}
+{{- $legacyPkiIssuerName := "nvcf-openbao-pki" }}
+{{- $managedPkiIssuerName := $legacyPkiIssuerName }}
+{{- if ne $controlPlaneOwner "default" }}
+{{- $managedPkiIssuerName = printf "%s%s" $controlPlaneNamespacePrefix $legacyPkiIssuerName }}
+{{- end }}
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
-{{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+{{- $issuerName := dig "addons" "llm" "pki" "issuerName" $legacyPkiIssuerName .Values }}
+{{- if and (kindIs "string" $issuerName) (ne $controlPlaneOwner "default") (eq $issuerName $legacyPkiIssuerName) }}
+{{- $issuerName = $managedPkiIssuerName }}
+{{- end }}
 {{- $manageIssuer := false }}
 {{- /* existingSecret hands issuance to the operator, so the stack must not
      create an issuer or require OpenBao for one. Validate the mode here as
@@ -62,7 +70,7 @@ environments:
      wrongly typed values reach these checks. Reject them instead of coercing
      them: a malformed management flag that silently resolves to false skips
      the nvcf-pki release while global.yaml.gotmpl still renders a Certificate
-     referencing ClusterIssuer/nvcf-openbao-pki, which is the dangling-issuer
+     referencing the managed ClusterIssuer, which is the dangling-issuer
      failure this stack exists to prevent. */ -}}
 {{- if not (kindIs "string" $issuerKind) }}
 {{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
@@ -79,7 +87,7 @@ environments:
 {{- if gt (len $issuerName) 253 }}
 {{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
 {{- end }}
-{{- $manageIssuer = and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+{{- $manageIssuer = and (eq $issuerKind "ClusterIssuer") (eq $issuerName $managedPkiIssuerName) }}
 {{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
 {{- if kindIs "map" $pkiValues }}
 {{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
@@ -97,6 +105,12 @@ environments:
 {{- $managedIssuer := and $llmPkiActive $manageIssuer }}
 {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
 {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+{{- end }}
+{{- /* The legacy default issuer name is normalized above. This guard covers
+     custom managed issuers, where clusterIssuer.enabled=true asks the stack to
+     create a cluster-scoped object that must not collide across named planes. */ -}}
+{{- if and $managedIssuer (ne $controlPlaneOwner "default") (not (hasPrefix $controlPlaneNamespacePrefix $issuerName)) }}
+{{- fail (printf "addons.llm.pki.issuerName must start with %q when managing a named ClusterIssuer" $controlPlaneNamespacePrefix) }}
 {{- end }}
 {{- if and $managedIssuer (not (dig "openbao" "enabled" true .Values)) }}
 {{- fail "openbao.enabled must be true when addons.llm.pki.clusterIssuer management is enabled" }}

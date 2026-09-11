@@ -67,10 +67,10 @@ dependencies_named_blocked_log="$work_dir/dependencies.named-blocked.log"
 if NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
   helmfile --file "$dependencies_state" list --skip-charts --output json \
   >"$work_dir/dependencies.named-blocked.json" 2>"$dependencies_named_blocked_log"; then
-  fail "01-dependencies rendered named owner before object-level identity derivation was wired"
+  fail "01-dependencies rendered named owner before shared prerequisite identities were allowlisted"
 fi
-if ! grep -q "object-level identity derivation is not wired" "$dependencies_named_blocked_log"; then
-  fail "01-dependencies rejected named owner without the object-level identity message"
+if ! grep -q "shared prerequisite identities are not allowlisted" "$dependencies_named_blocked_log"; then
+  fail "01-dependencies rejected named owner without the shared prerequisite message"
 fi
 
 dependencies_invalid_log="$work_dir/dependencies.invalid-owner.log"
@@ -98,10 +98,10 @@ named_blocked_log="$work_dir/nvca.named-blocked.log"
 if NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
   helmfile --file "$nvca_state" list --skip-charts --output json \
   >"$work_dir/nvca.named-blocked.json" 2>"$named_blocked_log"; then
-  fail "02-nvca rendered named owner before object-level identity derivation was wired"
+  fail "02-nvca rendered named owner before shared prerequisite identities were allowlisted"
 fi
-if ! grep -q "object-level identity derivation is not wired" "$named_blocked_log"; then
-  fail "02-nvca rejected named owner without the object-level identity message"
+if ! grep -q "shared prerequisite identities are not allowlisted" "$named_blocked_log"; then
+  fail "02-nvca rejected named owner without the shared prerequisite message"
 fi
 
 max_valid_log="$work_dir/nvca.max-valid.log"
@@ -109,10 +109,10 @@ if NVCF_CONTROL_PLANE_OWNER="$max_owner" NVCF_ALPHA_NAMED_CONTROL_PLANE=true hel
   helmfile --file "$nvca_state" list --skip-charts \
   --selector control-plane-owner="$max_owner" --output json \
   >"$work_dir/nvca.max-valid.json" 2>"$max_valid_log"; then
-  fail "02-nvca rendered a 30-character named owner before object-level identity derivation was wired"
+  fail "02-nvca rendered a 30-character named owner before shared prerequisite identities were allowlisted"
 fi
-if ! grep -q "object-level identity derivation is not wired" "$max_valid_log"; then
-  fail "02-nvca rejected 30-character owner before reaching object-level identity validation"
+if ! grep -q "shared prerequisite identities are not allowlisted" "$max_valid_log"; then
+  fail "02-nvca rejected 30-character owner before reaching shared prerequisite validation"
 fi
 
 invalid_owners=(
