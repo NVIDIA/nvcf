@@ -695,10 +695,9 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 	catalog.Stack.SourceTag = base.Stack.SourceTag
 	catalog.Stack.PinSources = append(catalog.Stack.PinSources, base.Stack.PinSources...)
 	catalog.Stack.PinSourceDigest = base.Stack.PinSourceDigest
-
-	manifestNames := map[string]struct{}{}
+	resolvedNames := make(map[string]struct{}, len(catalog.Artifacts))
 	for _, artifact := range catalog.Artifacts {
-		manifestNames[artifact.Name] = struct{}{}
+		resolvedNames[artifact.Name] = struct{}{}
 	}
 
 	seenSupplemental := map[string]struct{}{}
@@ -713,7 +712,7 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 		if _, denied := denylist[artifact.Name]; denied {
 			continue
 		}
-		if _, published := manifestNames[artifact.Name]; published {
+		if _, resolved := resolvedNames[artifact.Name]; resolved {
 			continue
 		}
 		key := artifact.catalogKey()

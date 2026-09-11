@@ -74,15 +74,20 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	base := testCatalog()
 	base.Registries["public-helm"] = Registry{Host: "https://helm.ngc.nvidia.com", Namespace: "nvidia/nvcf", RepositoryAlias: "nvcf"}
 	base.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+	base.Registries["private-images"] = Registry{Host: "nvcr.io", Namespace: "123456789/private"}
 	base.Stack.Registry = "public-resources"
 	base.Denylist = append(base.Denylist, DenylistEntry{Name: "source-chart", Reason: "source-only test chart"})
 	base.Denylist = append(base.Denylist, DenylistEntry{Name: "denied-resource", Reason: "excluded test resource"})
 	base.Artifacts = append(base.Artifacts, Artifact{Name: "stale-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "0.9.0"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "4.5.6"})
+	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-chart", Type: ArtifactTypeChart, Registry: "private-images", Version: "2.3.4"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "denied-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "7.8.9"})
+	base.Manifest.Entries = append(base.Manifest.Entries, ManifestEntry{ArtifactID: "independent-chart", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestOptional, Description: "Installs an independent chart."})
 	base.Publications = []Publication{
 		{Name: "helm-nvcf-llm-request-router", Version: "1.2.3", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 		{Name: "nvca", Version: "6.7.8", Registry: "public-resources"},
+		{Name: "pylon", Version: "3.4.5", Registry: "private-images"},
+		{Name: "independent-chart", Version: "2.3.4", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 		{Name: computeStackResourceName, Version: source.Version, Registry: "public-resources"},
 	}
 
@@ -98,6 +103,10 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	}
 	if _, found := catalog.findArtifact("independent-resource"); !found {
 		t.Fatal("independent resource artifact was not preserved")
+	}
+	independentChart, found := catalog.findArtifact("independent-chart")
+	if !found || independentChart.Registry != defaultChartRegistry {
+		t.Fatalf("independent chart = %#v, want public chart registry", independentChart)
 	}
 	if _, found := catalog.findArtifact("denied-resource"); found {
 		t.Fatal("denylisted supplemental resource was retained")
@@ -124,6 +133,9 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	if distribution != "Publication pending" {
 		t.Fatalf("unpublished pylon distribution = %q, want Publication pending", distribution)
 	}
+	if _, ok := catalog.Registries["private-images"]; ok {
+		t.Fatal("private registry was retained")
+	}
 	nvca, _ := catalog.findArtifact("nvca")
 	distribution, err = catalog.artifactDistribution(nvca)
 	if err != nil {
@@ -132,12 +144,47 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	if distribution != "nvcr.io/nvidia/nvcf/nvca:6.7.8" {
 		t.Fatalf("remapped NVCA distribution = %q", distribution)
 	}
+	nvcaOperator, ok := catalog.findArtifact("nvca-operator")
+	if !ok || nvcaOperator.Version != "5.6.7" {
+		t.Fatalf("NVCA operator inventory artifact = %#v, want version 5.6.7", nvcaOperator)
+	}
 	compute, _ := catalog.findArtifact(computeStackResourceName)
 	if catalog.publicationIsPending(compute) {
 		t.Fatal("compute stack has an exact publication but is marked pending")
 	}
 	if catalog.Stack.PinSourceDigest == "" || strings.Join(catalog.Stack.PinSources, ",") != strings.Join(effectiveStackPinSourcePaths(effectiveStackPins), ",") {
 		t.Fatalf("stack pin metadata = %#v", catalog.Stack)
+	}
+}
+
+func TestBuildCatalogFromResolvedInventoryMaterializesSourceOnlyPin(t *testing.T) {
+	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
+	inventory := testCatalogResolvedInventory(t, source)
+	artifacts := make([]resolvedInventoryArtifact, 0, len(inventory.Artifacts))
+	for _, artifact := range inventory.Artifacts {
+		if artifact.Name != "pylon" {
+			artifacts = append(artifacts, artifact)
+		}
+	}
+	inventory.Artifacts = artifacts
+
+	catalog, err := buildCatalogFromResolvedStackInventory(
+		inventory,
+		stackSourceSnapshot{Release: source, Files: testCatalogPinSourceBytes()},
+		testCatalog(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pylon, found := catalog.findArtifactByNameAndType("pylon", ArtifactTypeImage)
+	if !found {
+		t.Fatal("catalog is missing the source-only pylon pin")
+	}
+	if pylon.Version != "3.4.5" || pylon.Registry != defaultImageRegistry {
+		t.Fatalf("source-only pylon artifact = %#v", pylon)
+	}
+	if !catalog.publicationIsPending(pylon) {
+		t.Fatal("source-only pylon artifact is not publication pending")
 	}
 }
 
@@ -245,7 +292,7 @@ func testCatalogPinSources() map[string]string {
 		"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl":       "  - name: llm-request-router\n    version: 1.2.3\n  - name: ingress\n    version: 2.3.4\n",
 		"deploy/stacks/self-managed/global.yaml.gotmpl":                   "image: nvcr.io/nvidia/nvcf/pylon:3.4.5\n",
 		"deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl": "  - name: nvca-operator\n    version: 4.5.6\n",
-		"deploy/stacks/nvcf-compute-plane/environments/base.yaml":         "  nvcaOperator:\n    imageTag: \"5.6.7\"\n    selfManaged:\n      nvcaVersion: \"6.7.8\"\n",
+		"deploy/stacks/nvcf-compute-plane/environments/base.yaml":         "  nvcaOperator:\n    selfManaged:\n      nvcaVersion: \"6.7.8\"\n",
 	}
 }
 

@@ -54,14 +54,6 @@ var effectiveStackPins = []effectiveStackPin{
 		pattern:              `(?m)^    version:[ \t]*"?([^"\s]+)"?[ \t]*$`,
 	},
 	{
-		artifact:             "nvca-operator",
-		artifactType:         ArtifactTypeImage,
-		path:                 "deploy/stacks/nvcf-compute-plane/environments/base.yaml",
-		blockPattern:         `(?m)^  nvcaOperator:[ \t]*$`,
-		blockBoundaryPattern: `(?m)^  [A-Za-z0-9_-]+:[ \t]*`,
-		pattern:              `(?m)^    imageTag:[ \t]*"([^"]+)"[ \t]*$`,
-	},
-	{
 		artifact:             "nvca",
 		artifactType:         ArtifactTypeImage,
 		path:                 "deploy/stacks/nvcf-compute-plane/environments/base.yaml",

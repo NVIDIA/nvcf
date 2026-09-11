@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 func updateCatalogFromGitHub(repoRoot, sourceRef string, base *Catalog) (*Catalog, error) {
@@ -38,7 +39,10 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 	catalog := BuildCatalogFromArtifactsWithBase(inventory.Source.Version, artifacts, base)
-	retainIndependentResourceArtifacts(catalog)
+	retainIndependentManifestArtifacts(catalog)
+	if err := materializeMissingEffectiveStackPins(catalog, base, snapshot.Files); err != nil {
+		return nil, err
+	}
 	if base != nil {
 		catalog.Stack.Name = base.Stack.Name
 		catalog.Stack.Registry = base.Stack.Registry
@@ -60,8 +64,10 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		// The source release advances both deployment bundles together. Their
 		// public publication status remains independently verified below.
 	}
+	retainCurrentPublications(catalog)
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
+	catalog.pruneUnusedRegistries()
 	if err := ValidateCatalog(catalog); err != nil {
 		return nil, err
 	}
@@ -142,19 +148,64 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 	}
 }
 
-func retainIndependentResourceArtifacts(catalog *Catalog) {
+// retainIndependentManifestArtifacts keeps public add-ons that are documented
+// with the stack but are installed and versioned separately.
+func retainIndependentManifestArtifacts(catalog *Catalog) {
 	denylist := catalog.DenylistMap()
-	resources := catalog.SupplementalArtifacts[:0]
-	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type != ArtifactTypeResource {
-			continue
+	referenced := make(map[string]struct{}, len(catalog.Manifest.Entries))
+	for _, entry := range catalog.Manifest.Entries {
+		if entry.ArtifactID != "" {
+			referenced[entry.ArtifactID] = struct{}{}
 		}
+	}
+	retained := catalog.SupplementalArtifacts[:0]
+	for _, artifact := range catalog.SupplementalArtifacts {
 		if _, denied := denylist[artifact.Name]; denied {
 			continue
 		}
-		resources = append(resources, artifact)
+		_, manifestArtifact := referenced[artifact.catalogKey()]
+		if artifact.Type != ArtifactTypeResource && !manifestArtifact {
+			continue
+		}
+		artifact.Registry = publicRegistryForArtifactType(artifact.Type)
+		retained = append(retained, artifact)
 	}
-	catalog.SupplementalArtifacts = resources
+	catalog.SupplementalArtifacts = retained
+}
+
+// retainCurrentPublications keeps exact public availability records for the
+// versions represented by the refreshed catalog.
+func retainCurrentPublications(catalog *Catalog) {
+	current := make(map[string]struct{}, len(catalog.Artifacts)+len(catalog.SupplementalArtifacts)+1)
+	for _, artifact := range append(append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...), catalog.SupplementalArtifacts...) {
+		current[artifact.Name+":"+artifact.Version] = struct{}{}
+	}
+
+	publications := catalog.Publications[:0]
+	for _, publication := range catalog.Publications {
+		if _, ok := current[publication.Name+":"+publication.Version]; !ok {
+			continue
+		}
+		registry, ok := catalog.Registries[publication.Registry]
+		if !ok || !isPublicCatalogRegistry(registry) {
+			continue
+		}
+		publications = append(publications, publication)
+	}
+	catalog.Publications = publications
+}
+
+func isPublicCatalogRegistry(registry Registry) bool {
+	host := strings.ToLower(strings.TrimSuffix(registry.Host, "/"))
+	namespace := strings.Trim(registry.Namespace, "/")
+	switch host {
+	case "nvcr.io", "https://helm.ngc.nvidia.com":
+		return namespace == "nvidia" || strings.HasPrefix(namespace, "nvidia/")
+	case "docker.io", "ghcr.io", "quay.io", "registry.k8s.io":
+		return true
+	default:
+		return false
+	}
 }
 
 func assignCatalogArtifactIDs(artifacts []Artifact) {
@@ -199,6 +250,56 @@ func effectiveStackPinSourcePaths(pins []effectiveStackPin) []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+// materializeMissingEffectiveStackPins adds source-only pins that do not
+// appear as image fields in rendered Kubernetes manifests.
+func materializeMissingEffectiveStackPins(catalog, base *Catalog, sources map[string][]byte) error {
+	versions, err := extractEffectiveStackPins(sources, effectiveStackPins)
+	if err != nil {
+		return err
+	}
+	for _, pin := range effectiveStackPins {
+		if primaryArtifactExists(catalog, pin.artifact, pin.artifactType) {
+			continue
+		}
+		artifact := Artifact{
+			Name:     pin.artifact,
+			Type:     pin.artifactType,
+			Registry: publicRegistryForArtifactType(pin.artifactType),
+			Version:  versions[pin.artifact],
+		}
+		if base != nil {
+			if baseArtifact, found := base.findArtifactByNameAndType(pin.artifact, pin.artifactType); found {
+				artifact.ID = baseArtifact.ID
+				artifact.RepositoryName = baseArtifact.RepositoryName
+			}
+		}
+		removeSupplementalArtifact(catalog, pin.artifact, pin.artifactType)
+		catalog.Artifacts = append(catalog.Artifacts, artifact)
+	}
+	assignCatalogArtifactIDs(catalog.Artifacts)
+	return nil
+}
+
+func primaryArtifactExists(catalog *Catalog, name string, artifactType ArtifactType) bool {
+	for _, artifact := range catalog.Artifacts {
+		if artifact.Name == name && artifact.Type == artifactType {
+			return true
+		}
+	}
+	return false
+}
+
+func removeSupplementalArtifact(catalog *Catalog, name string, artifactType ArtifactType) {
+	retained := catalog.SupplementalArtifacts[:0]
+	for _, artifact := range catalog.SupplementalArtifacts {
+		if artifact.Name == name && artifact.Type == artifactType {
+			continue
+		}
+		retained = append(retained, artifact)
+	}
+	catalog.SupplementalArtifacts = retained
 }
 
 func validateCatalogEffectiveStackPins(catalog *Catalog, sources map[string][]byte) error {
