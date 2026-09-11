@@ -309,6 +309,9 @@ impl LiveRequestState {
                     let excluded_request = state
                         .requests
                         .get(&required.request_id)
+                        .filter(|record| {
+                            record.instance.as_ref() == Some(&required.request_instance)
+                        })
                         .and_then(|record| match &record.request {
                             LiveRequest::Queue(queue, _) => Some(queue),
                             LiveRequest::Observed(_) => None,
@@ -1002,6 +1005,28 @@ mod tests {
             time_to_first_token: None,
             total_duration: Duration::ZERO,
         }
+    }
+
+    #[test]
+    fn admission_excludes_only_its_own_request_instance() {
+        let live = LiveRequestState::default();
+        live.update_model_throughput("model-a", 100.0);
+        let stale = required("reused-id", 0, 100);
+        let _first = live.track_request(&stale);
+        let current = required("reused-id", 0, 200);
+        let _replacement = live.track_request(&current);
+        let generation = ModelGeneration::new("model-a", 0);
+        let evaluate = |request| {
+            live.evaluate_generation(
+                &PylonQueueMismatchRetryConfig::default(),
+                request,
+                Some(&generation),
+                &headers_with_expected("0"),
+                Some(1),
+            )
+        };
+        assert_eq!(evaluate(&stale).actual_ms(), Some(2000));
+        assert_eq!(evaluate(&current).actual_ms(), Some(0));
     }
 
     #[test]

@@ -3724,6 +3724,7 @@ mod tests {
             2
         );
         let required = |request_id: &str| crate::request_observer::RequiredTunnelHeaders {
+            request_instance: Default::default(),
             request_id: request_id.to_string(),
             routing_key: None,
             model_id: "model-a".to_string(),
