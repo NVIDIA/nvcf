@@ -47,7 +47,7 @@ Use `docs/user/` for top-of-tree customer docs and `docs/dev/` for developer wor
 
 For the maintainer workflow, including automatic stack releases, public
 publication updates, and new artifact registration, see
-`tools/docs-version-sync/README.md`.
+[`tools/docs-version-sync/README.md`](../tools/docs-version-sync/README.md).
 
 The generated tables in `docs/user/manifest.md` use catalog artifacts and
 `manifest.entries` from `docs/version-catalog/main.yaml`. For each entry, set
