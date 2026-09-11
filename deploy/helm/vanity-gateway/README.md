@@ -161,6 +161,9 @@ shadow-b:
 - a route with both legacy form and new form is rejected
 - an entry needs `modelName`; unknown entry keys are rejected
 
+`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
+across all routes.
+
 ## Notes
 
 - The chart version is `0.0.0` in `Chart.yaml`. The release pipeline packages
