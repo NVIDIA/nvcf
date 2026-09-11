@@ -185,12 +185,12 @@ func retainIndependentManifestArtifacts(catalog *Catalog) {
 func retainCurrentPublications(catalog *Catalog) {
 	current := make(map[string]struct{}, len(catalog.Artifacts)+len(catalog.SupplementalArtifacts)+1)
 	for _, artifact := range append(append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...), catalog.SupplementalArtifacts...) {
-		current[artifact.Name+":"+artifact.Version] = struct{}{}
+		current[publicationIdentityKey(artifact.Name, artifact.Type, artifact.Version)] = struct{}{}
 	}
 
 	publications := catalog.Publications[:0]
 	for _, publication := range catalog.Publications {
-		if _, ok := current[publication.Name+":"+publication.Version]; !ok {
+		if _, ok := current[publicationIdentityKey(publication.Name, publication.Type, publication.Version)]; !ok {
 			continue
 		}
 		registry, ok := catalog.Registries[publication.Registry]

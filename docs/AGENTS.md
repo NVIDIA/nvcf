@@ -93,7 +93,8 @@ check. CI runs the offline check before this separate current-release check:
 
 The current-release check does not discover public NGC availability. Keep
 exact public locations in `publications` and mark unavailable versions in
-`publication_pending`.
+`publication_pending`. Identify publication records by `name`, `type`, and
+`version` so charts, images, and resources with the same name remain distinct.
 
 Generated blocks are marked with comments such as:
 

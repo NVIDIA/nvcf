@@ -112,11 +112,12 @@ const (
 )
 
 type Publication struct {
-	Name             string      `yaml:"name"`
-	Version          string      `yaml:"version"`
-	PublishedVersion string      `yaml:"published_version,omitempty"`
-	Registry         string      `yaml:"registry"`
-	ChartFormat      ChartFormat `yaml:"chart_format,omitempty"`
+	Name             string       `yaml:"name"`
+	Type             ArtifactType `yaml:"type"`
+	Version          string       `yaml:"version"`
+	PublishedVersion string       `yaml:"published_version,omitempty"`
+	Registry         string       `yaml:"registry"`
+	ChartFormat      ChartFormat  `yaml:"chart_format,omitempty"`
 }
 
 type VersionOverride struct {
@@ -258,13 +259,18 @@ func ValidateCatalog(catalog *Catalog) error {
 		if strings.TrimSpace(publication.Version) == "" {
 			return fmt.Errorf("publication %s has empty version", publication.Name)
 		}
+		switch publication.Type {
+		case ArtifactTypeImage, ArtifactTypeChart, ArtifactTypeResource:
+		default:
+			return fmt.Errorf("publication %s:%s has unsupported type %q", publication.Name, publication.Version, publication.Type)
+		}
 		if _, ok := catalog.Registries[publication.Registry]; !ok {
 			return fmt.Errorf("publication %s:%s registry %q is not defined", publication.Name, publication.Version, publication.Registry)
 		}
 		if publication.ChartFormat != "" && publication.ChartFormat != ChartFormatHTTP {
 			return fmt.Errorf("publication %s:%s has unsupported chart format %q", publication.Name, publication.Version, publication.ChartFormat)
 		}
-		key := publication.Name + ":" + publication.Version
+		key := publicationIdentityKey(publication.Name, publication.Type, publication.Version)
 		if _, exists := seenPublications[key]; exists {
 			return fmt.Errorf("duplicate publication %s", key)
 		}
@@ -283,9 +289,15 @@ func ValidateCatalog(catalog *Catalog) error {
 			return fmt.Errorf("duplicate version override %s", override.Name)
 		}
 		if versions, published := publicationVersions[override.Name]; published {
-			key := override.Name + ":" + override.Version
-			if _, matches := seenPublications[key]; !matches {
-				return fmt.Errorf("version override %s does not match publication version %s", key, strings.Join(versions, ", "))
+			matches := false
+			for _, version := range versions {
+				if version == override.Version {
+					matches = true
+					break
+				}
+			}
+			if !matches {
+				return fmt.Errorf("version override %s:%s does not match publication version %s", override.Name, override.Version, strings.Join(versions, ", "))
 			}
 		}
 		seenVersionOverrides[override.Name] = struct{}{}
@@ -557,7 +569,7 @@ func (catalog *Catalog) artifactPath(artifact Artifact) (string, error) {
 
 func (catalog *Catalog) publicationFor(artifact Artifact) (Publication, bool) {
 	for _, publication := range catalog.Publications {
-		if publication.Name == artifact.Name && publication.Version == artifact.Version {
+		if publication.Name == artifact.Name && publication.Type == artifact.Type && publication.Version == artifact.Version {
 			return publication, true
 		}
 	}
@@ -711,6 +723,10 @@ func refreshCatalogFromArtifacts(stackVersion string, artifacts []Artifact, base
 
 func artifactNameAndTypeKey(artifact Artifact) string {
 	return artifact.Name + "\x00" + string(artifact.Type)
+}
+
+func publicationIdentityKey(name string, artifactType ArtifactType, version string) string {
+	return name + ":" + string(artifactType) + ":" + version
 }
 
 func (catalog *Catalog) markAllUnpublishedAsPending() {

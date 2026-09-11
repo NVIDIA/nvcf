@@ -83,16 +83,17 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	base.Artifacts = append(base.Artifacts, Artifact{Name: "stale-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "0.9.0"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "4.5.6"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-chart", Type: ArtifactTypeChart, Registry: "private-images", Version: "2.3.4"})
-	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{ID: "nvca-chart", Name: "nvca", Type: ArtifactTypeChart, Registry: "private-images", Version: "4.5.6"})
+	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{ID: "nvca-chart", Name: "nvca", Type: ArtifactTypeChart, Registry: "private-images", Version: "6.7.8"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "denied-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "7.8.9"})
 	base.Manifest.Entries = append(base.Manifest.Entries, ManifestEntry{ArtifactID: "independent-chart", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestOptional, Description: "Installs an independent chart."})
 	base.Manifest.Entries = append(base.Manifest.Entries, ManifestEntry{ArtifactID: "nvca-chart", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestOptional, Description: "Installs a chart that shares an image name."})
 	base.Publications = []Publication{
-		{Name: "helm-nvcf-llm-request-router", Version: "1.2.3", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
-		{Name: "nvca", Version: "6.7.8", Registry: "public-resources"},
-		{Name: "pylon", Version: "3.4.5", Registry: "private-images"},
-		{Name: "independent-chart", Version: "2.3.4", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
-		{Name: computeStackResourceName, Version: source.Version, Registry: "public-resources"},
+		{Name: "helm-nvcf-llm-request-router", Type: ArtifactTypeChart, Version: "1.2.3", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
+		{Name: "nvca", Type: ArtifactTypeImage, Version: "6.7.8", Registry: "public-resources"},
+		{Name: "nvca", Type: ArtifactTypeChart, Version: "6.7.8", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
+		{Name: "pylon", Type: ArtifactTypeImage, Version: "3.4.5", Registry: "private-images"},
+		{Name: "independent-chart", Type: ArtifactTypeChart, Version: "2.3.4", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
+		{Name: computeStackResourceName, Type: ArtifactTypeResource, Version: source.Version, Registry: "public-resources"},
 	}
 
 	catalog, err := buildCatalogFromResolvedStackInventory(inventory, snapshot, base)
@@ -118,6 +119,13 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	sharedNameChart, found := catalog.findArtifactByNameAndType("nvca", ArtifactTypeChart)
 	if !found || sharedNameChart.catalogKey() != "nvca-chart" {
 		t.Fatalf("shared-name chart = %#v, want retained nvca-chart", sharedNameChart)
+	}
+	sharedNameChartDistribution, err := catalog.artifactDistribution(sharedNameChart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sharedNameChartDistribution != "https://helm.ngc.nvidia.com/nvidia/nvcf/nvca:6.7.8" {
+		t.Fatalf("published shared-name chart distribution = %q", sharedNameChartDistribution)
 	}
 	router, ok := catalog.findArtifact("helm-nvcf-llm-request-router")
 	if !ok {

@@ -118,9 +118,9 @@ func TestRenderManifestUsesVerifiedPublicLocations(t *testing.T) {
 		Artifact{Name: "helm-nvcf-nats", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "0.6.1"},
 	)
 	catalog.Publications = []Publication{
-		{Name: "nvcf-grpc-proxy", Version: "1.29.1", Registry: "public-images"},
-		{Name: "helm-nvcf-grpc-proxy", Version: "1.6.7", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
-		{Name: "helm-nvcf-nats", Version: "0.7.1", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
+		{Name: "nvcf-grpc-proxy", Type: ArtifactTypeImage, Version: "1.29.1", Registry: "public-images"},
+		{Name: "helm-nvcf-grpc-proxy", Type: ArtifactTypeChart, Version: "1.6.7", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
+		{Name: "helm-nvcf-nats", Type: ArtifactTypeChart, Version: "0.7.1", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 	}
 	catalog.PublicationPending = []string{"helm-nvcf-nats"}
 	catalog.Manifest.Entries = append(catalog.Manifest.Entries,
@@ -153,6 +153,7 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 	base.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
 	base.Publications = []Publication{{
 		Name:     "nvcf-grpc-proxy",
+		Type:     ArtifactTypeImage,
 		Version:  "1.29.1",
 		Registry: "public-images",
 	}}
@@ -211,8 +212,8 @@ func TestCatalogRefreshMarksChangedVersionsPendingAndKeepsPublishedVersionsPubli
 		Artifact{Name: "verified-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "2.0.0"},
 	)
 	base.Publications = []Publication{
-		{Name: "nvca", Version: "3.2.18", Registry: "public-images"},
-		{Name: "verified-service", Version: "2.0.0", Registry: "public-images"},
+		{Name: "nvca", Type: ArtifactTypeImage, Version: "3.2.18", Registry: "public-images"},
+		{Name: "verified-service", Type: ArtifactTypeImage, Version: "2.0.0", Registry: "public-images"},
 	}
 	base.Manifest.Entries = append(base.Manifest.Entries,
 		ManifestEntry{ArtifactID: "nvca", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "NVCA agent."},
@@ -245,6 +246,7 @@ func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	catalog.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
 	catalog.Publications = []Publication{{
 		Name:             "llm-api-gateway",
+		Type:             ArtifactTypeImage,
 		Version:          "0.3.0",
 		PublishedVersion: "0.3.0-ea",
 		Registry:         "public-images",
@@ -296,6 +298,7 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 			name: "unchanged publication",
 			publication: &Publication{
 				Name:     artifact.Name,
+				Type:     artifact.Type,
 				Version:  artifact.Version,
 				Registry: artifact.Registry,
 			},
@@ -305,6 +308,7 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 			name: "registry remap",
 			publication: &Publication{
 				Name:     artifact.Name,
+				Type:     artifact.Type,
 				Version:  artifact.Version,
 				Registry: "public-mirror",
 			},
@@ -314,6 +318,7 @@ func TestArtifactPathKeepsDigestOnlyForUnchangedReference(t *testing.T) {
 			name: "version remap",
 			publication: &Publication{
 				Name:             artifact.Name,
+				Type:             artifact.Type,
 				Version:          artifact.Version,
 				PublishedVersion: "1.2.3-public",
 				Registry:         artifact.Registry,
@@ -374,6 +379,7 @@ func TestValidateCatalogRejectsPublishedVersionOverrideDrift(t *testing.T) {
 	catalog.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
 	catalog.Publications = []Publication{{
 		Name:     "nvcf_worker_utils",
+		Type:     ArtifactTypeImage,
 		Version:  "2.110.0",
 		Registry: "public-images",
 	}}
@@ -385,6 +391,20 @@ func TestValidateCatalogRejectsPublishedVersionOverrideDrift(t *testing.T) {
 	err := ValidateCatalog(catalog)
 	if err == nil || !strings.Contains(err.Error(), "version override nvcf_worker_utils:2.109.4 does not match publication version 2.110.0") {
 		t.Fatalf("ValidateCatalog error = %v, want publication version drift", err)
+	}
+}
+
+func TestValidateCatalogRejectsPublicationWithoutType(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Publications = []Publication{{
+		Name:     "nvcf-cli",
+		Version:  "1.2.3",
+		Registry: defaultStackRegistry,
+	}}
+
+	err := ValidateCatalog(catalog)
+	if err == nil || !strings.Contains(err.Error(), "has unsupported type") {
+		t.Fatalf("ValidateCatalog error = %v, want missing publication type rejection", err)
 	}
 }
 
@@ -550,7 +570,7 @@ func TestRenderSupplementalStackDownloadsMatchPublicationState(t *testing.T) {
 					published.SupplementalArtifacts[i].Registry = "public-resources"
 				}
 			}
-			published.Publications = []Publication{{Name: tt.artifact, Version: "0.5.0", Registry: "public-resources"}}
+			published.Publications = []Publication{{Name: tt.artifact, Type: ArtifactTypeResource, Version: "0.5.0", Registry: "public-resources"}}
 			for _, renderer := range []struct {
 				name       string
 				versionEnv string
@@ -648,6 +668,7 @@ func TestSyncInlineImageMirroringUsesTraditionalPublicHelmChart(t *testing.T) {
 	)
 	catalog.Publications = []Publication{{
 		Name:        "helm-nvca-operator",
+		Type:        ArtifactTypeChart,
 		Version:     "1.12.7",
 		Registry:    "public-helm",
 		ChartFormat: ChartFormatHTTP,

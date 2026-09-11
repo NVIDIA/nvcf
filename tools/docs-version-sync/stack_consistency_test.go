@@ -554,6 +554,7 @@ func TestValidateCatalogRejectsPublishedArtifactMarkedPending(t *testing.T) {
 	}
 	catalog.Publications = []Publication{{
 		Name:     cli.Name,
+		Type:     cli.Type,
 		Version:  cli.Version,
 		Registry: cli.Registry,
 	}}
