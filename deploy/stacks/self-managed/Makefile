@@ -1,7 +1,14 @@
 # Public developer entry point for the self-managed stack.
+MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+
 include Makefile.dist
 
-.PHONY: test test-published-charts
+.PHONY: test test-published-charts render-local test-local generate-golden test-golden-comparator
+
+GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local
+GOLDEN_RENDER_DIR ?= $(MAKEFILE_DIR)/.golden/out
+GOLDEN_OUTPUT_DIR_TEMPLATE ?= {{ .OutputDir }}/{{ .State.BaseName }}-{{ .Release.Name }}
+
 test:
 	@tests/custom-observability-environment.sh
 	@tests/llm-gateway-auth-transport.sh
@@ -37,3 +44,18 @@ test-published-charts:
 	@tests/gateway-routes-published-chart.sh
 	@tests/openbao-published-chart.sh
 	@tests/cassandra-autoscaler-published-compatibility.sh
+
+render-local:
+	@tests/render-local-golden.sh "$(GOLDEN_RENDER_DIR)" "$(GOLDEN_OUTPUT_DIR_TEMPLATE)"
+
+test-golden-comparator:
+	@tests/verify-golden-detects-change.sh
+
+test-local: render-local test-golden-comparator
+	@tests/verify-render-structure.sh "$(GOLDEN_RENDER_DIR)"
+	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(GOLDEN_RENDER_DIR)"
+
+generate-golden:
+	@tests/render-local-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(GOLDEN_OUTPUT_DIR_TEMPLATE)"
+	@echo ">>> Golden testdata updated at $(GOLDEN_LOCAL_DIR)."
+	@echo "    Review with: git diff -- $(GOLDEN_LOCAL_DIR)"

@@ -1,0 +1,4 @@
+---
+# Source: nvcf-gateway-routes/templates/backendtrafficpolicy-llm-worker-grpc.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0

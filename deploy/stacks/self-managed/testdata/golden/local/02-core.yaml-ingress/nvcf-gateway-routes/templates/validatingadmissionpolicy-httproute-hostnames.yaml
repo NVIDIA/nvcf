@@ -1,0 +1,87 @@
+---
+# Source: nvcf-gateway-routes/templates/validatingadmissionpolicy-httproute-hostnames.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+# Source: nvcf-gateway-routes/templates/validatingadmissionpolicy-httproute-hostnames.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ingress-hostnames-eb238640
+  labels:
+    helm.sh/chart: nvcf-gateway-routes-1.18.1
+    app.kubernetes.io/name: nvcf-gateway-routes
+    app.kubernetes.io/instance: ingress
+    app.kubernetes.io/version: "0.0.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    kubernetes.io/description: Reject HTTPRoutes that reuse NVCF-managed hostnames on the shared Gateway listener.
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - gateway.networking.k8s.io
+        apiVersions:
+          - "*"
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - httproutes
+  matchConditions:
+    - name: targets-shared-listener
+      expression: >-
+        has(object.spec.parentRefs) &&
+        object.spec.parentRefs.exists(parent,
+          (!has(parent.group) || parent.group == "gateway.networking.k8s.io") &&
+          (!has(parent.kind) || parent.kind == "Gateway") &&
+          parent.name == "shared-gateway" &&
+          ((!has(parent.namespace) && request.namespace == "gateway") ||
+           (has(parent.namespace) && parent.namespace == "gateway")) &&
+          (!has(parent.sectionName) || parent.sectionName == "http"))
+  variables:
+    - name: reservedHostnames
+      expression: "{\"*.invocation.localhost\": \"gateway/invocation-service\", \"api-keys.localhost\": \"gateway/api-keys\", \"api.localhost\": \"gateway/nvcf-api\", \"invocation.localhost\": \"gateway/invocation-service\", \"llm.localhost\": \"gateway/llm-api-gateway\", \"reval.localhost\": \"gateway/reval\", \"sis.localhost\": \"gateway/sis\", \"tasks.localhost\": \"gateway/nvct-api\"}"
+    - name: conflictingHostnames
+      expression: >-
+        !has(object.spec.hostnames) ? [] :
+        object.spec.hostnames.filter(hostname,
+          hostname in variables.reservedHostnames &&
+          request.namespace + "/" + object.metadata.name != variables.reservedHostnames[hostname])
+  validations:
+    - expression: variables.conflictingHostnames.size() == 0
+      reason: Invalid
+      messageExpression: >-
+        "hostname \"" + variables.conflictingHostnames[0] +
+        "\" is reserved by NVCF HTTPRoute \"" +
+        variables.reservedHostnames[variables.conflictingHostnames[0]] +
+        "\" on Gateway \"gateway/shared-gateway\" listener \"http\""
+---
+# Source: nvcf-gateway-routes/templates/validatingadmissionpolicy-httproute-hostnames.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ingress-hostnames-eb238640
+  labels:
+    helm.sh/chart: nvcf-gateway-routes-1.18.1
+    app.kubernetes.io/name: nvcf-gateway-routes
+    app.kubernetes.io/instance: ingress
+    app.kubernetes.io/version: "0.0.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  policyName: ingress-hostnames-eb238640
+  validationActions:
+    - Deny

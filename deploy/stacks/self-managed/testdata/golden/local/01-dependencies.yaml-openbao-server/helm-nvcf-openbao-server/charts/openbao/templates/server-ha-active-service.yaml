@@ -1,0 +1,29 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/server-ha-active-service.yaml
+# Service for active OpenBao pod
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao-server-active
+  namespace: vault-system
+  labels:
+    helm.sh/chart: openbao-0.28.3
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+    openbao-active: "true"
+spec:
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+      appProtocol: HTTP
+    - name: https-internal
+      port: 8201
+      targetPort: 8201
+  selector:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    component: server
+    openbao-active: "true"

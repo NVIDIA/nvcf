@@ -1,0 +1,50 @@
+---
+# Source: helm-nvcf-nvct-api/templates/configmap-vault-agent-template.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvct-api-vault-agent-tpl
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-nvct-api-1.6.0
+    app.kubernetes.io/name: helm-nvcf-nvct-api
+    app.kubernetes.io/instance: nvct-api
+    app.kubernetes.io/version: "1.66.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  secrets.json.tmpl: |-
+    {
+      "kv": {
+        "cassandra": {
+          {{- with secret "/services/nvct-api/kv/data/cassandra/creds" }}
+          "username": "{{ .Data.data.username }}",
+          "password": "{{ .Data.data.password }}"
+          {{- end }}
+        },
+        "tokens": {
+        {{- with secret `services/nvcf-api/jwt/sign/nvct-api-nvcf` }}
+          "nvcf": "{{ .Data.token }}",
+        {{- end }}
+        {{- with secret `services/nvcf-api/jwt/sign/nvct-api-notary` }}
+          "notary": "{{ .Data.token }}",
+        {{- end }}
+        {{- with secret `services/sis-api/jwt/sign/nvct-api` }}
+          "icms": "{{ .Data.token }}",
+        {{- end }}
+        {{- with secret `services/ess-api/jwt/sign/nvct-api` }}
+          "ess": "{{ .Data.token }}",
+        {{- end }}
+        {{- with secret `services/api-keys-api/jwt/sign/nvct-api` }}
+          "api-keys": "{{ .Data.token }}",
+        {{- end }}
+        {{- with secret `services/reval/jwt/sign/nvct-api` }}
+          "reval": "{{ .Data.token }}"
+        {{- end }}
+        },
+        "sidecars": {
+          {{- with secret "/services/nvct-api/kv/data/sidecars/image-pull-secret" }}
+          "image-pull-secret": "{{ .Data.data.secret }}"
+          {{- end }}
+        }
+      }
+    }

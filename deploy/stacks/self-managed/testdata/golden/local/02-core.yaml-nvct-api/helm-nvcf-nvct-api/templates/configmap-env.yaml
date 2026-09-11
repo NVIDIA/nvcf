@@ -1,0 +1,19 @@
+---
+# Source: helm-nvcf-nvct-api/templates/configmap-env.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvct-api-env
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-nvct-api-1.6.0
+    app.kubernetes.io/name: helm-nvcf-nvct-api
+    app.kubernetes.io/instance: nvct-api
+    app.kubernetes.io/version: "1.66.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  AWS_REGION: "ncp"
+  HOSTNAME: "nvct-api"
+  MANAGEMENT_TRACING_ENABLED: "false"
+  NVCT_SIDECARS_HOSTNAME: "nvcr.io"
+  NVCT_SIDECARS_REPOSITORY: "nvidia/nvcf"

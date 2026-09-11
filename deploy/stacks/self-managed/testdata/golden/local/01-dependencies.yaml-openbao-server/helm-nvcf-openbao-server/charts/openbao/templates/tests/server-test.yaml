@@ -1,0 +1,47 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/tests/server-test.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: openbao-server-server-test
+  namespace: vault-system
+  annotations:
+    "helm.sh/hook": test
+spec:
+  
+  containers:
+    - name: openbao-server-server-test
+      image: nvcr.io/nvidia/nvcf/nvcf-openbao:2.5.5-nv-1.3.1
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: VAULT_ADDR
+          value: http://openbao-server.vault-system.svc:8200
+        
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Checking for sealed info in 'bao status' output"
+          ATTEMPTS=10
+          n=0
+          until [ "$n" -ge $ATTEMPTS ]
+          do
+            echo "Attempt" $n...
+            bao status -format yaml | grep -E '^sealed: (true|false)' && break
+            n=$((n+1))
+            sleep 5
+          done
+          if [ $n -ge $ATTEMPTS ]; then
+            echo "timed out looking for sealed info in 'bao status' output"
+            exit 1
+          fi
+
+          exit 0
+      volumeMounts:
+        - mountPath: /home/openbao/unseal
+          name: openbao-server-unseal
+  volumes:
+    - name: openbao-server-unseal
+      secret:
+        secretName: openbao-server-unseal
+  restartPolicy: Never
