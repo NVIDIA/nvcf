@@ -193,6 +193,20 @@ pub(super) fn routing_retry_deadline(
     })
 }
 
+pub(super) fn routing_wait_delay(
+    remaining: Duration,
+    deadline: Option<Instant>,
+    now: Instant,
+) -> Option<Duration> {
+    // Recheck capacity while waiting for the next routing phase or bucket.
+    // Timed waits do not need the 1-10 ms generic capacity retry loop.
+    let delay = remaining.min(Duration::from_millis(25));
+    let delay = deadline.map_or(delay, |deadline| {
+        delay.min(deadline.saturating_duration_since(now))
+    });
+    (!delay.is_zero()).then_some(delay)
+}
+
 pub(super) async fn sleep_before_routing_retry(deadline: Option<Instant>) {
     // The retry deadline may pass between checks; clamp elapsed deadlines to no sleep.
     let remaining = deadline.map_or(Duration::ZERO, |deadline| {
@@ -238,6 +252,32 @@ mod tests {
 
     use super::*;
     use crate::load_balancer::LoadBalancerAlgorithm;
+
+    #[test]
+    fn affinity_wait_rechecks_capacity_and_respects_explicit_deadline() {
+        let now = Instant::now();
+        assert_eq!(
+            routing_wait_delay(Duration::from_millis(100), None, now),
+            Some(Duration::from_millis(25))
+        );
+        assert_eq!(
+            routing_wait_delay(Duration::from_millis(5), None, now),
+            Some(Duration::from_millis(5))
+        );
+        assert_eq!(
+            routing_wait_delay(
+                Duration::from_millis(100),
+                Some(now + Duration::from_millis(10)),
+                now
+            ),
+            Some(Duration::from_millis(10))
+        );
+        assert_eq!(
+            routing_wait_delay(Duration::from_millis(100), Some(now), now),
+            None
+        );
+        assert_eq!(routing_wait_delay(Duration::ZERO, None, now), None);
+    }
 
     fn cluster_candidate(cluster_id: &str) -> RoutedClusterSnapshot {
         RoutedClusterSnapshot {

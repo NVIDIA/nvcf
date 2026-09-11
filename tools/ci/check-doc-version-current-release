@@ -16,6 +16,7 @@
 
 set -eu
 
+# Compare the checked-in catalog with the latest stable GitHub stack release.
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 

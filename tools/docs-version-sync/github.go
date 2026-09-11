@@ -136,7 +136,7 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 
 	selected := -1
 	selectedVersion := stableStackVersion{}
-	selectedSourceVersion := ""
+	selectedStackVersion := ""
 	for i := range refs {
 		version, parsed, ok := parseStableStackRef(refs[i].Ref)
 		if !ok {
@@ -145,7 +145,7 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 		if selected == -1 || selectedVersion.less(parsed) {
 			selected = i
 			selectedVersion = parsed
-			selectedSourceVersion = version
+			selectedStackVersion = version
 		}
 	}
 	if selected == -1 {
@@ -156,7 +156,7 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 		return stackSourceRelease{}, fmt.Errorf("resolve stack source ref %s: %w", refs[selected].Ref, err)
 	}
 	return stackSourceRelease{
-		Version: selectedSourceVersion,
+		Version: selectedStackVersion,
 		Tag:     strings.TrimPrefix(refs[selected].Ref, "refs/tags/"),
 		Commit:  commit,
 	}, nil

@@ -66,13 +66,6 @@ func syncClusterManagementSelfManaged(content string, catalog *Catalog) (string,
 	if count == 0 {
 		return "", false, fmt.Errorf("version table for %s not found", chart.Name)
 	}
-	updated, _ = replaceHelmVersionArgument(updated, chart.Name, chart.Version)
-
-	nvca, ok := catalog.findArtifact("nvca")
-	if !ok {
-		return "", false, fmt.Errorf("artifact nvca is required")
-	}
-	updated, count = replaceYAMLStringValue(updated, "nvcaVersion", nvca.Version)
 	return updated, updated != content, nil
 }
 
@@ -96,20 +89,6 @@ func replaceVersionTable(content, chartName, version string) (string, int) {
 	re := regexp.MustCompile(pattern)
 	count := len(re.FindAllStringIndex(content, -1))
 	return re.ReplaceAllString(content, "${1}`"+version+"`${2}"), count
-}
-
-func replaceHelmVersionArgument(content, chartName, version string) (string, int) {
-	pattern := fmt.Sprintf(`(?ms)(oci://[^\s]+/%s\s+\\\n(?:[^\n]*\\\n)*?\s+--version )[^\s\\]+`, regexp.QuoteMeta(chartName))
-	re := regexp.MustCompile(pattern)
-	count := len(re.FindAllStringIndex(content, -1))
-	return re.ReplaceAllString(content, "${1}"+version), count
-}
-
-func replaceYAMLStringValue(content, key, value string) (string, int) {
-	pattern := fmt.Sprintf(`(?m)^(\s+%s:\s*)"[^"]+"`, regexp.QuoteMeta(key))
-	re := regexp.MustCompile(pattern)
-	count := len(re.FindAllStringIndex(content, -1))
-	return re.ReplaceAllString(content, "${1}\""+value+"\""), count
 }
 
 func replaceNVCAOperatorChartPull(content, pullReference, version string) (string, int) {

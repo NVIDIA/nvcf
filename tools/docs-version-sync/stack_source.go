@@ -152,7 +152,7 @@ func validateStackSourceSnapshotWithPins(repoRoot string, catalog *Catalog, pins
 	}
 
 	snapshot, err := loadStackSourceSnapshot(repoRoot, stackSourceRelease{
-		Version: catalog.Stack.SourceVersion,
+		Version: catalog.Stack.Version,
 		Tag:     catalog.Stack.SourceTag,
 		Commit:  catalog.Stack.SourceCommit,
 	}, catalog.Stack.PinSources)
@@ -169,7 +169,7 @@ func validateStackSourceSnapshotWithPins(repoRoot string, catalog *Catalog, pins
 		return err
 	}
 	if digest != catalog.Stack.PinSourceDigest {
-		return fmt.Errorf("effective stack pins have digest %s, want release snapshot %s for source version %s at %s", digest, catalog.Stack.PinSourceDigest, catalog.Stack.SourceVersion, catalog.Stack.SourceCommit)
+		return fmt.Errorf("effective stack pins have digest %s, want release snapshot %s for stack version %s at %s", digest, catalog.Stack.PinSourceDigest, catalog.Stack.Version, catalog.Stack.SourceCommit)
 	}
 	for _, pin := range pins {
 		want := versions[pin.artifact]
