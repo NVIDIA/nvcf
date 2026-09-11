@@ -83,13 +83,19 @@ go run -C tools/docs-version-sync . --target main --update-catalog
 ./tools/ci/check-doc-version-sync
 ```
 
-The first command reads GitHub and writes updates. The second command is an
-offline consistency check. CI runs the offline check before this separate
-network check:
+The first command reads the inventory attached to the latest stable GitHub
+stack release and writes updates. The second command is an offline consistency
+check. CI runs the offline check before this separate current-release check:
 
 ```bash
-./tools/ci/check-doc-version-publication
+./tools/ci/check-doc-version-current-release
 ```
+
+The current-release check does not discover public NGC availability. Keep
+exact public locations in `publications` and mark unavailable versions in
+`publication_pending`. Identify publication records by `name`, `type`, and
+`version` so charts, images, and resources with the same name remain distinct.
+Version overrides also require `name` and `type`.
 
 Generated blocks are marked with comments such as:
 

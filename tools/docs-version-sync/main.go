@@ -113,13 +113,13 @@ func run(args []string) error {
 				return err
 			}
 			if !equal {
-				return fmt.Errorf("%w: %s does not match the resolved GitHub inventory for stack release %s", ErrCheckFailed, relOrAbs(repoRoot, *catalogPath), updated.Stack.PublicationVersion)
+				return fmt.Errorf("%w: %s does not match the resolved GitHub inventory for stack release %s", ErrCheckFailed, relOrAbs(repoRoot, *catalogPath), updated.Stack.Version)
 			}
 		} else {
 			if err := writeCatalogAfterStackSourceValidation(repoRoot, *catalogPath, updated); err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "updated %s for stack publication %s\n", relOrAbs(repoRoot, *catalogPath), updated.Stack.PublicationVersion)
+			fmt.Fprintf(os.Stderr, "updated %s for stack release %s\n", relOrAbs(repoRoot, *catalogPath), updated.Stack.Version)
 		}
 	} else {
 		loaded, err := LoadCatalog(*catalogPath)
@@ -139,7 +139,7 @@ func run(args []string) error {
 
 func writeCatalogAfterStackSourceValidation(repoRoot, catalogPath string, catalog *Catalog) error {
 	if catalog.Stack.SourceCommit == "" {
-		return fmt.Errorf("cannot write updated catalog for stack publication %s without an immutable source snapshot", catalog.Stack.PublicationVersion)
+		return fmt.Errorf("cannot write updated catalog for stack release %s without an immutable source snapshot", catalog.Stack.Version)
 	}
 	if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
 		return fmt.Errorf("validate stack source snapshot: %w", err)
