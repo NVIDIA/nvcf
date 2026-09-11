@@ -164,7 +164,8 @@ pub(super) fn finalize_no_routing_choice(
         NoRoutingFinalization::NoCandidatesNotFound => {
             context
                 .metrics
-                .requests_total(rk_ref, model_id, "", "404")
+                // Unregistered request headers must not create metric series.
+                .requests_total(None, "", "", "404")
                 .inc();
             Ok(no_eligible_candidates_response())
         }
@@ -321,6 +322,35 @@ mod tests {
             failed_cluster_count: 0,
             retry_allowed: true,
         }
+    }
+
+    #[test]
+    fn unknown_targets_share_one_metric_series() {
+        let metrics = StargateMetrics::new().unwrap();
+        for index in 0..128 {
+            let target = RoutingTargetKey::new(
+                Some(format!("unknown-tenant-{index}")),
+                format!("unknown-model-{index}"),
+            );
+            let response = finalize_no_routing_choice(NoRoutingFinalizationContext {
+                metrics: &metrics,
+                target: &target,
+                finalization: NoRoutingFinalization::NoCandidatesNotFound,
+                failed_backend_count: 0,
+                failed_cluster_count: 0,
+                routing_retry_attempts: 0,
+            })
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        let family = metrics
+            .registry()
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "stargate_requests_total")
+            .unwrap();
+        assert_eq!(family.get_metric().len(), 1);
+        assert_eq!(family.get_metric()[0].get_counter().value(), 128.0);
     }
 
     #[test]

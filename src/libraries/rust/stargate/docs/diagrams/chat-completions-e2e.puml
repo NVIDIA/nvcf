@@ -65,6 +65,14 @@ QuicProxy -> TunnelSvr: send_header(\n  x-method: POST,\n  x-path: /v1/chat/comp
 QuicProxy -> TunnelSvr: send_body(request body chunks)
 QuicProxy -> TunnelSvr: finish (half-close)
 
+note over Proxy,QuicProxy
+  Transport failures may be retried before body submission.
+  After submission, a transport failure returns an error:
+  the backend may already have applied the POST.
+  Explicit retryable pylon rejections can still be replayed
+  within the configured retry limits.
+end note
+
 == Upstream ==
 TunnelSvr -> Upstream: POST /v1/chat/completions\n(reconstructed HTTP request)
 Upstream --> TunnelSvr: HTTP 200\nContent-Type: text/event-stream\n\ndata: {"choices":[...]}\ndata: {"choices":[...]}\ndata: [DONE]
