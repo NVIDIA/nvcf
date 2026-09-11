@@ -30,7 +30,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: nvcf-cassandra-migrations
-          image: "nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations:0.17.0"
+          image: "nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations:0.17.5"
           imagePullPolicy: Always
           env:
             - name: CASSANDRA_HOSTS

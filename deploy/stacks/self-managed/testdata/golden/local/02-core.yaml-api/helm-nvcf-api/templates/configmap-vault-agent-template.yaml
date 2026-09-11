@@ -21,10 +21,10 @@ metadata:
   name: nvcf-api-vault-agent-tpl
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-api-1.25.1
+    helm.sh/chart: helm-nvcf-api-1.27.0
     app.kubernetes.io/name: helm-nvcf-api
     app.kubernetes.io/instance: api
-    app.kubernetes.io/version: "1.16.4"
+    app.kubernetes.io/version: "1.18.0"
     app.kubernetes.io/managed-by: Helm
 data:
   secrets.json.tmpl: |-

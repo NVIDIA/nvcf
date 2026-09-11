@@ -22,10 +22,10 @@ metadata:
   name: spot-instance-service-env
   namespace: sis
   labels:
-    helm.sh/chart: helm-nvcf-sis-2.0.0
+    helm.sh/chart: helm-nvcf-sis-2.3.0
     app.kubernetes.io/name: helm-nvcf-sis
     app.kubernetes.io/instance: sis
-    app.kubernetes.io/version: "1.2.2"
+    app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
 data:
   AWS_REGION: "ncp"
@@ -33,4 +33,3 @@ data:
   MANAGEMENT_METRICS_ENABLE_ALL: "false"
   MANAGEMENT_PROMETHEUS_METRICS_EXPORT_ENABLED: "false"
   MANAGEMENT_TRACING_ENABLED: "false"
-  NATS_RECONNECT_ALLOWED: "true"

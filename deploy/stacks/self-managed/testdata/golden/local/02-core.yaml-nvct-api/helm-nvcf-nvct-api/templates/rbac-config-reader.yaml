@@ -6,10 +6,10 @@ metadata:
   name: nvct-api-remote-config-reader
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-nvct-api-1.5.2
+    helm.sh/chart: helm-nvcf-nvct-api-1.6.0
     app.kubernetes.io/name: helm-nvcf-nvct-api
     app.kubernetes.io/instance: nvct-api
-    app.kubernetes.io/version: "1.65.0"
+    app.kubernetes.io/version: "1.66.0"
     app.kubernetes.io/managed-by: Helm
 rules:
   - apiGroups: [""]
@@ -23,10 +23,10 @@ metadata:
   name: nvct-api-remote-config-reader
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-nvct-api-1.5.2
+    helm.sh/chart: helm-nvcf-nvct-api-1.6.0
     app.kubernetes.io/name: helm-nvcf-nvct-api
     app.kubernetes.io/instance: nvct-api
-    app.kubernetes.io/version: "1.65.0"
+    app.kubernetes.io/version: "1.66.0"
     app.kubernetes.io/managed-by: Helm
 subjects:
   - kind: ServiceAccount

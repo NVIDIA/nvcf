@@ -24,7 +24,7 @@ metadata:
   name: allow-routes-to-nvcf
   namespace: nvcf  # Grant is created in the target namespace
   labels:
-    helm.sh/chart: nvcf-gateway-routes-1.17.0
+    helm.sh/chart: nvcf-gateway-routes-1.18.1
     app.kubernetes.io/name: nvcf-gateway-routes
     app.kubernetes.io/instance: ingress
     app.kubernetes.io/version: "0.0.0"

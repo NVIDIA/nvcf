@@ -21,10 +21,10 @@ metadata:
   name: "invocation-service-test-connection"
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-invocation-service-1.6.0
+    helm.sh/chart: helm-nvcf-invocation-service-1.6.1
     app.kubernetes.io/name: helm-nvcf-invocation-service
     app.kubernetes.io/instance: invocation-service
-    app.kubernetes.io/version: "0.12.0"
+    app.kubernetes.io/version: "0.12.1"
     app.kubernetes.io/managed-by: Helm
   annotations:
     "helm.sh/hook": test

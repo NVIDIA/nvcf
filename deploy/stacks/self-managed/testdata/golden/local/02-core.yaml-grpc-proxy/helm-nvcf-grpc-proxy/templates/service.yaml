@@ -20,10 +20,10 @@ metadata:
   name: grpc
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-grpc-proxy-1.7.1
+    helm.sh/chart: helm-nvcf-grpc-proxy-1.7.3
     app.kubernetes.io/name: helm-nvcf-grpc-proxy
     app.kubernetes.io/instance: grpc-proxy
-    app.kubernetes.io/version: "1.33.2"
+    app.kubernetes.io/version: "1.33.4"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: deployment
 spec:

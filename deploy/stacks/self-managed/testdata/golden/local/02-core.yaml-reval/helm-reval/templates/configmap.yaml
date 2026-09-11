@@ -19,10 +19,10 @@ kind: ConfigMap
 metadata:
   name: reval-config
   labels:
-    helm.sh/chart: helm-reval-1.3.8
+    helm.sh/chart: helm-reval-1.4.0
     app.kubernetes.io/name: helm-reval
     app.kubernetes.io/instance: reval
-    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/version: "0.20.2"
     app.kubernetes.io/managed-by: Helm
 data:
   config.yaml: |

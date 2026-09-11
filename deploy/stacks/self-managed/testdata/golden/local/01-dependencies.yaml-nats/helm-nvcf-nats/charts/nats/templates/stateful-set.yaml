@@ -58,7 +58,7 @@ spec:
             secretKeyRef:
               key: user.pub
               name: nats-nkeys
-        image: nvcr.io/nvidia/nvcf/nats-server:2.11.17-alpine3.22
+        image: nvcr.io/nvidia/nvcf/nats-server:2.14.6-alpine3.22
         imagePullPolicy: IfNotPresent
         lifecycle:
           preStop:
@@ -114,7 +114,7 @@ spec:
         - /var/run/nats/nats.pid
         - -config
         - /etc/nats-config/nats.conf
-        image: docker.io/natsio/nats-server-config-reloader:0.23.0
+        image: docker.io/natsio/nats-server-config-reloader:0.24.0
         imagePullPolicy: IfNotPresent
         name: reloader
         volumeMounts:

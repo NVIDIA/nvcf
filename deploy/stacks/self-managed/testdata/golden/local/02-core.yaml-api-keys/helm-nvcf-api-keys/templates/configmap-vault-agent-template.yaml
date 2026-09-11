@@ -21,7 +21,7 @@ metadata:
   name: api-keys-vault-agent-tpl
   namespace: api-keys
   labels:
-    helm.sh/chart: helm-nvcf-api-keys-1.6.0
+    helm.sh/chart: helm-nvcf-api-keys-1.8.0
     app.kubernetes.io/name: helm-nvcf-api-keys
     app.kubernetes.io/instance: api-keys
     app.kubernetes.io/version: "0.0.4"

@@ -20,10 +20,10 @@ metadata:
   name: nvcf-api-account-bootstrap
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-api-1.25.1
+    helm.sh/chart: helm-nvcf-api-1.27.0
     app.kubernetes.io/name: helm-nvcf-api
     app.kubernetes.io/instance: api
-    app.kubernetes.io/version: "1.16.4"
+    app.kubernetes.io/version: "1.18.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: account-bootstrap
   annotations:
@@ -36,10 +36,10 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: helm-nvcf-api-1.25.1
+        helm.sh/chart: helm-nvcf-api-1.27.0
         app.kubernetes.io/name: helm-nvcf-api
         app.kubernetes.io/instance: api
-        app.kubernetes.io/version: "1.16.4"
+        app.kubernetes.io/version: "1.18.0"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/component: account-bootstrap
     spec:
@@ -59,7 +59,7 @@ spec:
           defaultMode: 0755
       containers:
       - name: account-bootstrap-creator
-        image: "docker.io/alpine/k8s:1.36.1"
+        image: "docker.io/alpine/k8s:1.37.0"
         imagePullPolicy: IfNotPresent
         command: ["/bin/bash"]
         args: ["/scripts/account-bootstrap.sh"]

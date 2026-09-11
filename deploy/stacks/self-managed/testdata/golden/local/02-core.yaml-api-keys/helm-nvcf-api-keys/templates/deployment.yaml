@@ -21,7 +21,7 @@ metadata:
   name: api-keys
   namespace: api-keys
   labels:
-    helm.sh/chart: helm-nvcf-api-keys-1.6.0
+    helm.sh/chart: helm-nvcf-api-keys-1.8.0
     app.kubernetes.io/name: helm-nvcf-api-keys
     app.kubernetes.io/instance: api-keys
     app.kubernetes.io/version: "0.0.4"
@@ -44,7 +44,7 @@ spec:
         vault.hashicorp.com/secret-volume-path: "/home/app/vault"
         checksum/config-env: 4c5013931a675adee0d6496c12db07b426f6b99422dc2b76b83993e04bd06fcc
       labels:
-        helm.sh/chart: helm-nvcf-api-keys-1.6.0
+        helm.sh/chart: helm-nvcf-api-keys-1.8.0
         app.kubernetes.io/name: helm-nvcf-api-keys
         app.kubernetes.io/instance: api-keys
         app.kubernetes.io/version: "0.0.4"
@@ -53,7 +53,7 @@ spec:
       serviceAccountName: api-keys-api
       containers:
         - name: helm-nvcf-api-keys
-          image: "nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.8.0"
+          image: "nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.9.1"
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

@@ -20,10 +20,10 @@ metadata:
   name: spot-instance-service-remote-config-reader
   namespace: sis
   labels:
-    helm.sh/chart: helm-nvcf-sis-2.0.0
+    helm.sh/chart: helm-nvcf-sis-2.3.0
     app.kubernetes.io/name: helm-nvcf-sis
     app.kubernetes.io/instance: sis
-    app.kubernetes.io/version: "1.2.2"
+    app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
 rules:
   # list + watch only, and namespace-wide: spring-cloud-kubernetes client-config
@@ -40,10 +40,10 @@ metadata:
   name: spot-instance-service-remote-config-reader
   namespace: sis
   labels:
-    helm.sh/chart: helm-nvcf-sis-2.0.0
+    helm.sh/chart: helm-nvcf-sis-2.3.0
     app.kubernetes.io/name: helm-nvcf-sis
     app.kubernetes.io/instance: sis
-    app.kubernetes.io/version: "1.2.2"
+    app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
 subjects:
   # Intentionally hardcoded: matches the chart's ServiceAccount and the OpenBao

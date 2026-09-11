@@ -20,10 +20,10 @@ kind: Deployment
 metadata:
   name: nats-auth-callout-service-helm-nvcf-nats-auth-callout-service
   labels:
-    helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.1.3
+    helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.2.0
     app.kubernetes.io/name: helm-nvcf-nats-auth-callout-service
     app.kubernetes.io/instance: nats-auth-callout-service
-    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/version: "0.8.3"
     app.kubernetes.io/managed-by: Helm
     kratos_logging: 'true'
     kratos_metrics: 'true'
@@ -37,12 +37,12 @@ spec:
     metadata:
       annotations:
         # Force pod restart when configmap changes
-        checksum/config: 4909d149f403cc8e766701db279a7117c00fb7e1ba4dc0667700266bf42f2914
+        checksum/config: 367d8d16063c6c5127cb19160495e4abd624f8101c2a718d6c4c60f61c8f6c18
       labels:
-        helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.1.3
+        helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.2.0
         app.kubernetes.io/name: helm-nvcf-nats-auth-callout-service
         app.kubernetes.io/instance: nats-auth-callout-service
-        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/version: "0.8.3"
         app.kubernetes.io/managed-by: Helm
         kratos_logging: 'true'
         kratos_metrics: 'true'
@@ -51,7 +51,7 @@ spec:
       imagePullSecrets:
       containers:
         - name: helm-nvcf-nats-auth-callout-service
-          image: ":1.0.0"
+          image: ":0.8.3"
           imagePullPolicy: IfNotPresent
           args:
             - "server"

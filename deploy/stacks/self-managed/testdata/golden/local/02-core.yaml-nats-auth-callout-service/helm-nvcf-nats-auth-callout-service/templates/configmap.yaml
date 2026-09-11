@@ -20,10 +20,10 @@ kind: ConfigMap
 metadata:
   name: nats-auth-callout-service-helm-nvcf-nats-auth-callout-service-config
   labels:
-    helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.1.3
+    helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.2.0
     app.kubernetes.io/name: helm-nvcf-nats-auth-callout-service
     app.kubernetes.io/instance: nats-auth-callout-service
-    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/version: "0.8.3"
     app.kubernetes.io/managed-by: Helm
     kratos_logging: 'true'
     kratos_metrics: 'true'

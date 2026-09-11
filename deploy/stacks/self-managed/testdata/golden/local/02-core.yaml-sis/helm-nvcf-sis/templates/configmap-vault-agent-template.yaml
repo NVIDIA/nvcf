@@ -21,10 +21,10 @@ metadata:
   name: spot-instance-service-vault-agent-tpl
   namespace: sis
   labels:
-    helm.sh/chart: helm-nvcf-sis-2.0.0
+    helm.sh/chart: helm-nvcf-sis-2.3.0
     app.kubernetes.io/name: helm-nvcf-sis
     app.kubernetes.io/instance: sis
-    app.kubernetes.io/version: "1.2.2"
+    app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
 data:
   secrets.json.tmpl: |-
@@ -36,6 +36,11 @@ data:
           "password": "{{ .Data.data.password }}"
           {{- end }}
         },
-        "nkey_seed": "{{ with secret "/services/all/kv/data/nats/creds" }}{{ .Data.data.key }}{{ end }}"
+        "nkey_seed": "{{ with secret "/services/all/kv/data/nats/creds" }}{{ .Data.data.key }}{{ end }}",
+        "tokens": {
+          {{- with secret `services/event-ledger/jwt/sign/sis-api` }}
+          "eventLedger": "{{ .Data.token }}"
+          {{- end }}
+        }
       }
     }

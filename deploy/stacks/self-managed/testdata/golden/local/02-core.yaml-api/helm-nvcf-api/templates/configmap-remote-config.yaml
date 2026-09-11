@@ -20,17 +20,17 @@ metadata:
   name: nvcf-api-remote-config
   namespace: nvcf
   annotations:
-    release-artifact-ess-agent-container-image: "nvcr.io/nvidia/nvcf/ess-agent:1.4.0"
-    release-artifact-init-container-image: "nvcr.io/nvidia/nvcf/nvcf-worker-init-oss:1.2.0"
-    release-artifact-llm-credential-manager-image: "nvcr.io/nvidia/nvcf/nvcf-worker-llm-credentials-oss:1.1.1"
+    release-artifact-ess-agent-container-image: "nvcr.io/nvidia/nvcf/ess-agent:1.4.1"
+    release-artifact-init-container-image: "nvcr.io/nvidia/nvcf/nvcf-worker-init-oss:1.2.1"
+    release-artifact-llm-credential-manager-image: "nvcr.io/nvidia/nvcf/nvcf-worker-llm-credentials-oss:1.1.2"
     release-artifact-llm-router-client-image: "nvcr.io/nvidia/nvcf/pylon:0.15.1"
-    release-artifact-niclls-container-image: "nvcr.io/nvidia/nvcf/nvcf_worker_niclls:2.109.4"
-    release-artifact-utils-container-image-go-image: "nvcr.io/nvidia/nvcf/nvcf-worker-utils-oss:1.0.4"
+    release-artifact-niclls-container-image: "nvcr.io/nvidia/nvcf/nvcf_worker_niclls:2.110.0"
+    release-artifact-utils-container-image-go-image: "nvcr.io/nvidia/nvcf/nvcf-worker-utils-oss:1.2.3"
   labels:
-    helm.sh/chart: helm-nvcf-api-1.25.1
+    helm.sh/chart: helm-nvcf-api-1.27.0
     app.kubernetes.io/name: helm-nvcf-api
     app.kubernetes.io/instance: api
-    app.kubernetes.io/version: "1.16.4"
+    app.kubernetes.io/version: "1.18.0"
     app.kubernetes.io/managed-by: Helm
 data:
   nvcf-api.yaml: |-
@@ -41,13 +41,13 @@ data:
         turn:
           enabled: true
       sidecars:
-        ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.0
+        ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.1
         inference-container: nvcr.io/nvidia/tritonserver:23.04-py3
-        init-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-init-oss:1.2.0
-        llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.1
+        init-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-init-oss:1.2.1
+        llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.2
         llm-router-client-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/pylon:0.15.1
-        niclls-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:2.109.4
+        niclls-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:2.110.0
         otel-collector-container: dummy
         otel-container: dummy
         utils-container-image:
-          go: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-utils-oss:1.0.4
+          go: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-utils-oss:1.2.3

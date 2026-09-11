@@ -21,10 +21,10 @@ metadata:
   name: ess-api-vault-agent-tpl
   namespace: ess
   labels:
-    helm.sh/chart: helm-nvcf-ess-api-1.7.2
+    helm.sh/chart: helm-nvcf-ess-api-1.8.2
     app.kubernetes.io/name: helm-nvcf-ess-api
     app.kubernetes.io/instance: ess-api
-    app.kubernetes.io/version: "0.4.15"
+    app.kubernetes.io/version: "0.5.0"
     app.kubernetes.io/managed-by: Helm
 data:
   secrets.json.tmpl: |-

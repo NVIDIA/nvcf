@@ -21,7 +21,7 @@ metadata:
   name: admin-token-issuer-proxy
   namespace: api-keys
   labels:
-    helm.sh/chart: helm-admin-token-issuer-proxy-1.5.1
+    helm.sh/chart: helm-admin-token-issuer-proxy-1.5.2
     app.kubernetes.io/name: helm-admin-token-issuer-proxy
     app.kubernetes.io/instance: admin-issuer-proxy
     app.kubernetes.io/version: "1.1.1"

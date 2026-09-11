@@ -21,10 +21,10 @@ metadata:
   name: ess-api-deployment
   namespace: ess
   labels:
-    helm.sh/chart: helm-nvcf-ess-api-1.7.2
+    helm.sh/chart: helm-nvcf-ess-api-1.8.2
     app.kubernetes.io/name: helm-nvcf-ess-api
     app.kubernetes.io/instance: ess-api
-    app.kubernetes.io/version: "0.4.15"
+    app.kubernetes.io/version: "0.5.0"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
@@ -73,7 +73,7 @@ spec:
               drop:
               - ALL
             runAsUser: 1000
-          image: "nvcr.io/nvidia/nvcf/nvcf-ess:0.4.15"
+          image: "nvcr.io/nvidia/nvcf/nvcf-ess:0.5.0"
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: vault-config-templates
@@ -94,7 +94,7 @@ spec:
             - name: SPRING_PROFILES_ACTIVE
               value: "ncp-prod"
             - name: JAVA_TOOL_OPTIONS
-              value: "-Dapp.version=0.4.15 "
+              value: "-Dapp.version=0.5.0 "
           
           envFrom:
             - configMapRef:

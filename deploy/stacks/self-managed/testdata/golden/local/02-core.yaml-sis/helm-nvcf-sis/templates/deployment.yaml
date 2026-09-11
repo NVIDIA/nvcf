@@ -21,10 +21,10 @@ metadata:
   name: spot-instance-service
   namespace: sis
   labels:
-    helm.sh/chart: helm-nvcf-sis-2.0.0
+    helm.sh/chart: helm-nvcf-sis-2.3.0
     app.kubernetes.io/name: helm-nvcf-sis
     app.kubernetes.io/instance: sis
-    app.kubernetes.io/version: "1.2.2"
+    app.kubernetes.io/version: "0.7.1"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
@@ -45,7 +45,7 @@ spec:
         vault.hashicorp.com/secret-volume-path: "/home/tomcat/vault-agent/secrets"
         vault.hashicorp.com/agent-inject-secret-vault-secrets.json: "services/all/kv/data/nvcf/sis"
         vault.hashicorp.com/agent-inject-template-file-vault-secrets.json: "/vault/config/templates/secrets.json.tmpl"
-        checksum/config-env: cb3d3d99ef00341f30af376b1fab115c154688012a393a9cd8d84bdf3a31a553
+        checksum/config-env: 5c998a4c015c24d64feaca505078c91f39d8ad1c041967882203df630ca113e5
       labels:
         app.kubernetes.io/name: helm-nvcf-sis
         app.kubernetes.io/instance: sis
@@ -79,7 +79,7 @@ spec:
               drop:
               - ALL
             runAsUser: 1000
-          image: "nvcr.io/nvidia/nvcf/icms-service-oss:1.2.2"
+          image: "nvcr.io/nvidia/nvcf/icms-service-oss:0.7.1"
           imagePullPolicy: IfNotPresent
           lifecycle:
             null

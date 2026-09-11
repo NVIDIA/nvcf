@@ -21,10 +21,10 @@ metadata:
   name: ratelimiter
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-rate-limiter-1.1.0
+    helm.sh/chart: helm-nvcf-rate-limiter-1.2.1
     app.kubernetes.io/name: nvcf-ratelimiter
     app.kubernetes.io/instance: ratelimiter
-    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/version: "1.17.3"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
@@ -68,7 +68,7 @@ spec:
         - name: ratelimiter
           securityContext:
             {}
-          image: "nvcr.io/nvidia/nvcf/nvcf-ratelimiter:1.15.2"
+          image: "nvcr.io/nvidia/nvcf/nvcf-ratelimiter:1.17.3"
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: vault-config-templates

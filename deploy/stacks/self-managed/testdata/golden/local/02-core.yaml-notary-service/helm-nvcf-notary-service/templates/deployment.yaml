@@ -21,10 +21,10 @@ metadata:
   name: notary-service
   namespace: nvcf
   labels:
-    helm.sh/chart: helm-nvcf-notary-service-1.4.2
+    helm.sh/chart: helm-nvcf-notary-service-1.6.0
     app.kubernetes.io/name: helm-nvcf-notary-service
     app.kubernetes.io/instance: notary-service
-    app.kubernetes.io/version: "1.14.0"
+    app.kubernetes.io/version: "1.14.1"
     app.kubernetes.io/managed-by: Helm
 spec:
   replicas: 1
@@ -73,7 +73,7 @@ spec:
               drop:
               - ALL
             runAsUser: 1000
-          image: "nvcr.io/nvidia/nvcf/notary-service:1.14.0"
+          image: "nvcr.io/nvidia/nvcf/nvcf-notary:1.14.1"
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
