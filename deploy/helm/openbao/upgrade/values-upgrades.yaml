@@ -4,7 +4,7 @@
 openbao:
   server:
     image:
-      tag: 2.5.5-nv-1.3.1
+      tag: 2.6.2-nv-1.3.3
 
     # Update auto-unseal sidecar to match server version
     extraContainers:
@@ -52,4 +52,4 @@ openbao:
 
   injector:
     agentImage:
-      tag: 2.5.5-nv-1.3.1
+      tag: 2.6.2-nv-1.3.3
