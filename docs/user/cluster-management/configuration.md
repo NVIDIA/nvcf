@@ -364,22 +364,22 @@ To customize a network policy:
                        - port: 8889
                          protocol: TCP
 
-```
+   ```
 
 2. Apply the configmap:
 
    ```bash
 
    kubectl apply -f patchcm.yaml
-```
+   ```
 
-1. Verify the changes:
+3. Verify the changes:
 
    ```bash
 
    kubectl logs -n nvca-operator -l app.kubernetes.io/name=nvca-operator
 
-```text
+   ```
 
    You should see a message indicating successful patching:
    `configmap patched successfully`

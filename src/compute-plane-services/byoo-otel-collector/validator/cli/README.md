@@ -5,7 +5,7 @@
 > - Only supports the metrics from Grafana Cloud
 > - Only supports the platform metrics (does not include the OTLP metrics collected from users' applications)
 
-### Introduction
+## Introduction
 
 The BYOO Metrics Validator CLI is a tool designed to validate metrics collected by the byoo-otel-collector. It helps ensure that your metrics are being properly collected and reported according to expected specifications.
 
@@ -27,7 +27,7 @@ Key features:
     - [ERROR] Attribute is not in the allow list
     - [ERROR] Required metadata attributes is missing
 
-### Run the validator locally
+## Run the validator locally
 
 Prerequisite
 
@@ -252,7 +252,7 @@ Use customized configuration
 > uv run -m src.validator --config=<file_path> --cloud-provider=non-gfn --wrapper-type=function --workload-type=helm ef5356e3-afe4-47c3-9ad9-7b4402f84456
 ```
 
-### Run the validator through Docker
+## Run the validator through Docker
 
 Prerequisite
 

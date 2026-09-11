@@ -86,10 +86,12 @@ Helmfile `1.3.0+` re-introduced sequential execution via the `--sequential-helmf
 - The `nvcf-self-managed-stack` repository must be downloaded to your local machine (see [download-nvcf-self-managed-stack](./image-mirroring.md)).
 
 <Accordion title="Install helm-diff plugin">
+
 ```bash
 # Install helm-diff plugin (required for helmfile)
 helm plugin install https://github.com/databus23/helm-diff
 ```
+
 </Accordion>
 
 <Warning>
@@ -497,7 +499,7 @@ image:
 <Warning>
 If you have mirrored NVCF artifacts to your own registry (e.g., ECR), update both `helm.sources` and `image` to point to your mirror. See [self-hosted-image-mirroring](./image-mirroring.md) for details on mirroring artifacts.
 
-When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both the control-plane and compute-plane stack resources listed in the [self-hosted-artifact-manifest](./manifest.md).
+When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both core stack resources listed in the [self-hosted-artifact-manifest](./manifest.md). If you deploy shared observability as a standalone stack, mirror the observability stack resource as well.
 
 </Warning>
 
@@ -643,6 +645,7 @@ cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 
 <Accordion title="Configuration Template">
 </Accordion>
+
 ```yaml title="secrets/example-secrets.yaml"
 
 # Required structure for any environment secrets.
@@ -700,7 +703,6 @@ api:
         description: "NGC Helm registry"
 
 ```
-
 
 <Note>
 NVCF supports these registries for function containers (set in

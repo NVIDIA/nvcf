@@ -101,6 +101,7 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 	}
 
 	refused := 0
+	level := ""
 	for _, chart := range charts {
 		var p Plan
 		var err error
@@ -124,6 +125,7 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 				continue
 			}
 			fmt.Fprintf(out, "  %s: %s -> %s (%s)\n", chart.ID, p.Current, version, p.Detail)
+			level = HigherLevel(level, BumpLevel(p.Current, version))
 			if write {
 				if len(chart.ValuesPaths) > 0 {
 					err = ApplyValuesPaths(root, chart.Entry, version, chart.ValuesPaths)
@@ -139,6 +141,11 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 
 	// A refusal is a real finding: the chart wanted a bump and could not take
 	// one safely. Exiting non-zero puts it in front of a person.
+	// One machine-readable line for the workflow: the largest semver step any
+	// chart took. Absent when nothing moved or no version parsed.
+	if level != "" {
+		fmt.Fprintf(out, "bump: %s\n", level)
+	}
 	if refused > 0 {
 		return RefusedExit, nil
 	}

@@ -10,6 +10,7 @@ This is a simple [OpenTelemetry Collector](https://github.com/open-telemetry/ope
 It exports them to local debug logs and [Lightstep](https://docs.lightstep.com/). Note that you'll have to ensure the DCGM scrape target is updated to your cluster's DCGM exporter service name and namespace. Refer to the [NVCF documentation](https://docs.nvidia.com/cloud-functions/user-guide/latest/cloud-function/cluster-management.html) for cluster registration steps.
 
 # Prerequisites
+
 - Have NVCA and NVCA operator running on your cluster.
 - Have the GPU operator running on your cluster with DCGM exporter (only applicable when using Dynamic Instance Configuration, when not using the GPU operator and running with Manual Instance Configuration ignore this prerequisite, and modify the example configuration to remove the DCGM scrape configuration).
 - Have the [Prometheus Operator](https://prometheus-operator.dev/docs/getting-started/installation/) installed on your cluster.

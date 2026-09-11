@@ -18,8 +18,14 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,15 +39,15 @@ func TestTaskCommandStructure(t *testing.T) {
 
 	t.Run("registers all expected subcommands", func(t *testing.T) {
 		expected := map[string]bool{
-			"create":                   false,
-			"list":                     false,
-			"bulk":                     false,
-			"get [taskId]":             false,
-			"delete [taskId]":          false,
-			"cancel [taskId]":          false,
-			"events [taskId]":          false,
-			"results [taskId]":         false,
-			"update-secrets [taskId]":  false,
+			"create":                  false,
+			"list":                    false,
+			"bulk":                    false,
+			"get [taskId]":            false,
+			"delete [taskId]":         false,
+			"cancel [taskId]":         false,
+			"events [taskId]":         false,
+			"results [taskId]":        false,
+			"update-secrets [taskId]": false,
 		}
 		for _, sub := range taskCmd.Commands() {
 			if _, ok := expected[sub.Use]; ok {
@@ -71,6 +77,202 @@ func TestTaskCreateCommandFlagSurface(t *testing.T) {
 			assert.NotNilf(t, taskCreateCmd.Flags().Lookup(name), "task create should expose --%s", name)
 		})
 	}
+}
+
+func TestTaskGetCommandFlagSurface(t *testing.T) {
+	assert.NotNil(t, taskGetCmd.Flags().Lookup("include-secrets"))
+	assert.NotNil(t, taskGetCmd.Flags().Lookup("timeout"))
+}
+
+func TestTaskEventsCommandFlagSurface(t *testing.T) {
+	assert.NotNil(t, taskEventsCmd.Flags().Lookup("limit"))
+	assert.NotNil(t, taskEventsCmd.Flags().Lookup("cursor"))
+	assert.NotNil(t, taskEventsCmd.Flags().Lookup("timeout"))
+}
+
+func TestTaskResultsCommandFlagSurface(t *testing.T) {
+	assert.NotNil(t, taskResultsCmd.Flags().Lookup("limit"))
+	assert.NotNil(t, taskResultsCmd.Flags().Lookup("cursor"))
+	assert.NotNil(t, taskResultsCmd.Flags().Lookup("timeout"))
+}
+
+func TestNewTaskRequestContext(t *testing.T) {
+	t.Run("rejects negative timeout", func(t *testing.T) {
+		_, _, err := newTaskRequestContext(-1)
+		require.Error(t, err)
+	})
+
+	t.Run("rejects timeout that overflows duration", func(t *testing.T) {
+		timeoutSeconds := int64(maxTaskRequestTimeoutSeconds + 1)
+		if int64(int(timeoutSeconds)) != timeoutSeconds {
+			t.Skip("int cannot represent an overflowing time.Duration in seconds")
+		}
+
+		_, _, err := newTaskRequestContext(int(timeoutSeconds))
+		require.Error(t, err)
+	})
+
+	t.Run("uses caller timeout", func(t *testing.T) {
+		start := time.Now()
+		ctx, cancel, err := newTaskRequestContext(1)
+		require.NoError(t, err)
+		defer cancel()
+
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		assert.WithinDuration(t, start.Add(time.Second), deadline, 100*time.Millisecond)
+	})
+
+	t.Run("keeps default timeout", func(t *testing.T) {
+		ctx, cancel, err := newTaskRequestContext(0)
+		require.NoError(t, err)
+		defer cancel()
+
+		_, ok := ctx.Deadline()
+		assert.False(t, ok)
+		assert.NoError(t, ctx.Err())
+		assert.NotEqual(t, context.Canceled, ctx.Err())
+	})
+}
+
+func TestTaskEventsTimeoutCancelsHTTPRequest(t *testing.T) {
+	cancelObserved := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/v1/nvct/tasks/task-test/events", r.URL.Path)
+			select {
+			case <-r.Context().Done():
+				close(cancelObserved)
+				return
+			case <-time.After(5 * time.Second):
+				t.Error("task events request was not canceled")
+			}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	oldCfgFile := cfgFile
+	oldStateManager := configStateManager
+	oldStateManagerKey := configStateManagerKey
+	oldTaskEventsFlags := taskPaginationFlags
+	timeoutFlag := taskEventsCmd.Flags().Lookup("timeout")
+	require.NotNil(t, timeoutFlag)
+	oldTimeoutValue := timeoutFlag.Value.String()
+	oldTimeoutChanged := timeoutFlag.Changed
+	t.Cleanup(func() {
+		cfgFile = oldCfgFile
+		configStateManager = oldStateManager
+		configStateManagerKey = oldStateManagerKey
+		taskPaginationFlags = oldTaskEventsFlags
+		assert.NoError(t, taskEventsCmd.Flags().Set("timeout", oldTimeoutValue))
+		timeoutFlag.Changed = oldTimeoutChanged
+		viper.Reset()
+	})
+
+	viper.Reset()
+	viper.Set("base_nvct_url", server.URL)
+	viper.Set("base_grpc_url", "localhost:50051")
+	viper.Set("api_key", "test-function-api-key")
+	viper.Set("nvct_api_key", "test-task-api-key")
+	cfgFile = filepath.Join(t.TempDir(), "workflow.yaml")
+	configStateManager = nil
+	configStateManagerKey = ""
+	require.NoError(t, taskEventsCmd.Flags().Set("timeout", "1"))
+
+	err := runTaskEvents(taskEventsCmd, []string{"task-test"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-cancelObserved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("task events request cancellation was not observed")
+	}
+}
+
+func TestTaskResultsTimeoutCancelsHTTPRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/v1/nvct/tasks/task-test/results", r.URL.Path)
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(3 * time.Second):
+				t.Error("task results request was not canceled")
+			}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	oldCfgFile := cfgFile
+	oldStateManager := configStateManager
+	oldStateManagerKey := configStateManagerKey
+	oldTaskResultsFlags := taskResultsPaginationFlags
+	t.Cleanup(func() {
+		cfgFile = oldCfgFile
+		configStateManager = oldStateManager
+		configStateManagerKey = oldStateManagerKey
+		taskResultsPaginationFlags = oldTaskResultsFlags
+		viper.Reset()
+	})
+
+	viper.Reset()
+	viper.Set("base_nvct_url", server.URL)
+	viper.Set("base_grpc_url", "localhost:50051")
+	viper.Set("api_key", "test-function-api-key")
+	viper.Set("nvct_api_key", "test-task-api-key")
+	cfgFile = filepath.Join(t.TempDir(), "workflow.yaml")
+	configStateManager = nil
+	configStateManagerKey = ""
+	taskResultsPaginationFlags.timeoutSeconds = 1
+
+	start := time.Now()
+	err := runTaskResults(taskResultsCmd, []string{"task-test"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 2*time.Second)
+}
+
+func TestTaskGetTimeoutCancelsHTTPRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/v1/nvct/tasks/task-test", r.URL.Path)
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(3 * time.Second):
+				t.Error("task get request was not canceled")
+			}
+		},
+	))
+	t.Cleanup(server.Close)
+
+	oldCfgFile := cfgFile
+	oldStateManager := configStateManager
+	oldStateManagerKey := configStateManagerKey
+	oldTaskGetFlags := taskGetFlags
+	t.Cleanup(func() {
+		cfgFile = oldCfgFile
+		configStateManager = oldStateManager
+		configStateManagerKey = oldStateManagerKey
+		taskGetFlags = oldTaskGetFlags
+		viper.Reset()
+	})
+
+	viper.Reset()
+	viper.Set("base_nvct_url", server.URL)
+	viper.Set("base_grpc_url", "localhost:50051")
+	viper.Set("api_key", "test-function-api-key")
+	viper.Set("nvct_api_key", "test-task-api-key")
+	cfgFile = filepath.Join(t.TempDir(), "workflow.yaml")
+	configStateManager = nil
+	configStateManagerKey = ""
+	taskGetFlags.timeoutSeconds = 1
+
+	start := time.Now()
+	err := runTaskGet(taskGetCmd, []string{"task-test"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 2*time.Second)
 }
 
 // --- Helpers ----------------------------------------------------------------

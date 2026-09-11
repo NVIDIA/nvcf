@@ -182,7 +182,7 @@ What if we:
 
 ### Simpler Flow
 
-```
+```text
 CHECKPOINT:
 1. Pod running vLLM
 2. cuda-checkpoint --lock (freeze GPU)

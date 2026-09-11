@@ -18,7 +18,7 @@
 ## @param image.tag NVCA Operator container image tag. This defaults to the chart's appVersion
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
-  repository: ""
+  repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
   tag: ""
   pullPolicy: IfNotPresent
 ## @param nvcaImage.repositoryOverride (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config
@@ -37,7 +37,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.160.0-nv-0.2.4
+  imageTag: 0.160.0-nv-0.2.5
   resources:
     limits:
       cpu: 1000m
@@ -282,7 +282,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.160.0-nv-0.2.4"
+    imageTag: "0.160.0-nv-0.2.5"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -397,7 +397,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.160.0-nv-0.2.4
+    imageTag: 0.160.0-nv-0.2.5
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
@@ -421,7 +421,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.160.0-nv-0.2.4
+    imageTag: 0.160.0-nv-0.2.5
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   icmsServiceURL: "http://icms.example.invalid:8080"
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.

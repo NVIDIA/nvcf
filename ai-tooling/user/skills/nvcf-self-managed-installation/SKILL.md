@@ -398,7 +398,7 @@ format rule below (two of them fail even with the correct key if the format is w
 >    # if NVIDIA Cloud Tasks is enabled, repeat for services/nvct-api/kv/sidecars/image-pull-secret
 >    kubectl rollout restart -n nvcf deploy/nvcf-api   # picks up the new sidecar cred
 >    ```
-
+>
 > Note (multi-org): when pulling from NGC (not a mirror), the user function image and
 > the platform sidecars often live in different nvcr.io orgs, each needing a different
 > key, so the account-bootstrap cred (function image) and the sidecar secret (sidecars)

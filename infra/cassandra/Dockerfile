@@ -1,6 +1,26 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+ARG GOSU_GO_IMAGE=golang:1.27.1-trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728
+
+FROM --platform=$BUILDPLATFORM ${GOSU_GO_IMAGE} AS gosu-builder
+
+ARG TARGETARCH
+
+# Rebuild the same gosu 1.19 source used by the Cassandra base with a current
+# Go toolchain. The immutable source archive is checksum-pinned because the
+# upstream release binaries were built with an older Go standard library.
+ADD --checksum=sha256:33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b \
+    https://github.com/tianon/gosu/archive/6456aaa0f3c854d199d0f037f068eb97515b7513.tar.gz \
+    /tmp/gosu.tar.gz
+RUN mkdir -p /src/gosu /out && \
+    tar -xzf /tmp/gosu.tar.gz --strip-components=1 -C /src/gosu && \
+    cd /src/gosu && \
+    CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" GOTOOLCHAIN=local \
+      go build -mod=readonly -trimpath -buildvcs=false \
+      -ldflags="-d -w" -o /out/gosu . && \
+    go version -m /out/gosu
+
 # yq is used by the chart's conf initContainer to deep-merge cassandra.yaml
 # overrides onto the image default. Fetch it in a native build stage (no
 # emulation) and verify it against a pinned checksum.
@@ -22,14 +42,15 @@ RUN apk add --no-cache curl && \
 # Cassandra 5.0.9 is still the latest supported 5.0 release, but its bundled
 # Jackson and Netty versions can lag security-only patch releases. Download a
 # checksum-pinned replacement set without adding build tools to the final image.
+# The lock pins public Maven Central URLs. A release build can route the same
+# artifact paths through a caching repository manager with
+# --build-arg MAVEN_REPOSITORY_BASE=<base>; checksums are verified either way.
+ARG MAVEN_REPOSITORY_BASE=https://repo.maven.apache.org/maven2
 COPY java-libraries.lock /tmp/java-libraries.lock
-RUN mkdir /tmp/java-libraries && \
-    while read -r checksum url; do \
-      case "${checksum}" in \#*|'') continue ;; esac; \
-      destination="/tmp/java-libraries/${url##*/}"; \
-      curl -fsSLo "${destination}" "${url}" && \
-      printf '%s  %s\n' "${checksum}" "${destination}" | sha256sum -c - || exit 1; \
-    done < /tmp/java-libraries.lock
+COPY scripts/fetch-verified.sh /usr/local/bin/fetch-verified
+COPY scripts/fetch-java-libraries.sh /usr/local/bin/fetch-java-libraries
+RUN MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
+    fetch-java-libraries /tmp/java-libraries.lock /tmp/java-libraries
 
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS exporter-repacker
 RUN apk add --no-cache curl unzip zip
@@ -39,7 +60,11 @@ RUN apk add --no-cache curl unzip zip
 # the agent implementation, manifest, and unrelated dependencies.
 ARG EXPORTER_JAR=files/.gitkeep
 ARG EXPORTER_JAVAAGENT=""
+# Same override as the java-libraries stage; the Netty jars default to Maven
+# Central's canonical host when it is not set.
+ARG MAVEN_REPOSITORY_BASE=""
 COPY ${EXPORTER_JAR} /tmp/exporter-input.jar
+COPY scripts/fetch-verified.sh /usr/local/bin/fetch-verified
 COPY scripts/repack-exporter-netty.sh /usr/local/bin/repack-exporter-netty
 RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
       echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
@@ -49,9 +74,12 @@ RUN if [ -s /tmp/exporter-input.jar ] && [ -z "${EXPORTER_JAVAAGENT}" ]; then \
       echo "EXPORTER_JAR and EXPORTER_JAVAAGENT must be set together" >&2; \
       exit 1; \
     fi && \
+    MAVEN_REPOSITORY_BASE="${MAVEN_REPOSITORY_BASE}" \
     repack-exporter-netty /tmp/exporter-input.jar /tmp/cassandra-exporter-agent.jar
 
 FROM cassandra:5.0.9@sha256:d35e159439b302146f964919904f84fd3c2cebf347272b8cb8c4368c1cf200e5
+
+COPY --from=gosu-builder --chmod=0555 /out/gosu /usr/local/bin/gosu
 
 # Refresh the OpenSSL runtime packages independently of the upstream image
 # rebuild cadence. Fail the build if the Debian repository cannot provide the
@@ -63,6 +91,8 @@ RUN apt-get update && \
     dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libssl3t64)" ge 3.5.7-1~deb13u2 && \
     dpkg --compare-versions "$(dpkg-query -W -f='${Version}' openssl-provider-legacy)" ge 3.5.7-1~deb13u2 && \
     rm -rf /var/lib/apt/lists/* && \
+    gosu --version && \
+    gosu nobody true && \
     rm -f \
       /opt/cassandra/lib/jackson-annotations-*.jar \
       /opt/cassandra/lib/jackson-core-*.jar \

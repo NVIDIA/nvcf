@@ -33,7 +33,7 @@ Receiver side (separate run, GET + extract on the same node):
 | stage | time |
 |---|---|
 | GET from blobstore (4.2 GiB) | 12 s |
-| `zstd -T0 -d -c | tar -xf -` to disk | **70 s** |
+| `zstd -T0 -d -c \| tar -xf -` to disk | **70 s** |
 | **receiver total** | **82 s** |
 
 **Sender 2.9× faster than baseline. Receiver 0.8× slower than baseline

@@ -1,6 +1,7 @@
 # NV Boot Starter JWT
 
 This is a library that allows operations on JWT:
+
 - Signing
 - Verifying signature
 - Encrypt JWE
@@ -94,12 +95,14 @@ When `PrivateJwksString` and `JweKeysMapping` are present, the library registers
 ## Usage
 
 ### Generating keys
+
 - [generate EC (private key)](./src/test/java/com/nvidia/boot/jwt/services/JwtServiceTest.java#L201)
 - [generate AES (symmetric key)](../src/test/java/com/nvidia/boot/jwt/services/JwtServiceTest.java#L220)
 
 ### Getting JwtService
 
 `JwtService` has two dependencies:
+
 - key-set of private keys
 - key type to id mapping
 

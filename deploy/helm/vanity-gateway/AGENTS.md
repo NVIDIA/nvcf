@@ -59,6 +59,7 @@ render checks run by hand:
 
 ```bash
 bash tests/chart-render/verify-llm-gateway-routing.sh
+bash tests/chart-render/verify-shadow-schema.sh
 bash tests/chart-render/verify-servicemonitor-label.sh
 ```
 

@@ -40,7 +40,7 @@ configuration.
 For the full list of options:
 
 ```shell
-$ consul-template -h
+consul-template -h
 ```
 
 Here are a few examples of common integrations on the command line.
@@ -89,7 +89,7 @@ By proxy, this means the configuration is also JSON compatible.
 Instruct Consul Template to use a configuration file with the `-config` flag:
 
 ```shell
-$ consul-template -config "/my/config.hcl"
+consul-template -config "/my/config.hcl"
 ```
 
 This argument may be specified multiple times to load multiple configuration

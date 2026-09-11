@@ -564,7 +564,8 @@ func TestValuesPathBumpsOnlyItsOwnFieldInAMultiImageChart(t *testing.T) {
 		t.Fatalf("plan output did not describe the values-path bump:\n%s", out)
 	}
 	values := f.read(t, "c", "values.yaml")
-	if !strings.Contains(values, "imageTag: \"0.160.0-nv-0.2.4\"") {
+	// The fixture's line is bare, so the bumped line stays bare.
+	if !strings.Contains(values, "imageTag: 0.160.0-nv-0.2.4\n") {
 		t.Fatalf("the declared path did not move:\n%s", values)
 	}
 	if !strings.Contains(values, "tag: \"3.0.0\"") {
@@ -647,7 +648,7 @@ func TestValuesPathDistinguishesRepeatedLeafKeysByFullAncestry(t *testing.T) {
 	if !strings.Contains(values, "otelCollector:\n  imageTag: 0.157.0-nv-0.2.1") {
 		t.Fatalf("the top-level field was not declared, so it must be left alone verbatim:\n%s", values)
 	}
-	if !strings.Contains(values, "    imageTag: \"0.160.0-nv-0.2.4\"") {
+	if !strings.Contains(values, "    imageTag: 0.160.0-nv-0.2.4\n") {
 		t.Fatalf("the declared nested field did not move:\n%s", values)
 	}
 }
@@ -711,5 +712,89 @@ func TestEmptyStringDeployEntryIsRejected(t *testing.T) {
 	f := newFixture(t, `{"services":[{"id":"c","path":"deploy/helm/c","deploys":[""]}]}`)
 	if _, err := LoadMetadata(f.root); err == nil {
 		t.Fatal("an empty string-form deploys entry must fail to decode")
+	}
+}
+
+func TestBumpLevel(t *testing.T) {
+	cases := []struct{ from, to, want string }{
+		{"1.0.0", "1.0.1", "patch"},
+		{"1.0.0", "1.1.0", "minor"},
+		{"1.9.9", "2.0.0", "major"},
+		{"v1.0.0", "1.1.0-rc.1", "minor"},   // v prefix and pre-release suffix are tolerated
+		{"1.0.0", "1.0.0", ""},              // no move
+		{"1.1.0", "1.0.5", ""},              // downgrade is not a level
+		{"latest", "1.0.1", ""},             // floating tag has no level
+		{"1.0", "1.0.1", ""},                // not MAJOR.MINOR.PATCH
+		{"1.0.0", "1.0.1-", ""},             // dangling pre-release separator is not a version
+		{"1.0.0", "1.0.1-rc..1", ""},        // empty pre-release identifier
+		{"1.0.0", "1.0.1+build.7", "patch"}, // build metadata is fine
+	}
+	for _, c := range cases {
+		if got := BumpLevel(c.from, c.to); got != c.want {
+			t.Errorf("BumpLevel(%q, %q) = %q, want %q", c.from, c.to, got, c.want)
+		}
+	}
+	if got := HigherLevel("patch", "minor"); got != "minor" {
+		t.Errorf("HigherLevel(patch, minor) = %q", got)
+	}
+	if got := HigherLevel("major", ""); got != "major" {
+		t.Errorf("HigherLevel(major, \"\") = %q", got)
+	}
+}
+
+func TestRunReportsTheLargestSemverStepTaken(t *testing.T) {
+	for _, c := range []struct{ tag, want string }{
+		{"src/svc/v1.0.1", "bump: patch\n"},
+		{"src/svc/v1.2.0", "bump: minor\n"},
+		{"src/svc/v2.0.0", "bump: major\n"},
+	} {
+		f := full(t)
+		_, out, _ := f.run(t, c.tag, false)
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: output lacks %q:\n%s", c.tag, c.want, out)
+		}
+	}
+	// Nothing moved: no level line, so the workflow does not commit a no-op.
+	f := full(t)
+	_, out, _ := f.run(t, "src/svc/v1.0.0", false)
+	if strings.Contains(out, "bump:") {
+		t.Errorf("no-op run must not report a level:\n%s", out)
+	}
+}
+
+func TestApplyPreservesTheQuotingOfEachLine(t *testing.T) {
+	// nvca-operator vendors its chart and regenerates the tag lines with yq,
+	// which keeps each scalar's existing style. Three of its four otelCollector
+	// tags are bare and one is quoted; the bumper must leave that alone or the
+	// vendor check fails on a quoting-only diff.
+	f := newFixture(t, `{"services":[
+ {"id":"svc","path":"src/svc"},
+ {"id":"mixed","path":"deploy/helm/mixed","deploys":[{"service":"svc","values_paths":["a.imageTag","b.imageTag"]}]},
+ {"id":"bare","path":"deploy/helm/bare","deploys":["svc"]}
+]}`)
+	f.chart(t, "mixed", "1.0.0", "a:\n  imageTag: 1.0.0\nb:\n  imageTag: \"1.0.0\"")
+	// appVersion bare in Chart.yaml, tag bare in values.yaml
+	dir := filepath.Join(f.root, "deploy", "helm", "bare")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: helm-bare\nversion: 0.0.0\nappVersion: 1.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "values.yaml"), []byte("image:\n  tag: 1.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, errOut := f.run(t, "src/svc/v1.0.1", true); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	if got := f.read(t, "mixed", "values.yaml"); got != "a:\n  imageTag: 1.0.1\nb:\n  imageTag: \"1.0.1\"\n" {
+		t.Errorf("values-path quoting not preserved:\n%s", got)
+	}
+	if got := f.read(t, "bare", "Chart.yaml"); !strings.Contains(got, "appVersion: 1.0.1\n") {
+		t.Errorf("bare appVersion was quoted:\n%s", got)
+	}
+	if got := f.read(t, "bare", "values.yaml"); got != "image:\n  tag: 1.0.1\n" {
+		t.Errorf("bare image tag was quoted:\n%s", got)
 	}
 }

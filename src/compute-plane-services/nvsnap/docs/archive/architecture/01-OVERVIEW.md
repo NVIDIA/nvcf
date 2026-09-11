@@ -193,7 +193,7 @@ For multi-process workloads:
 
 2. **Coordinated Checkpoint**:
 
-   ```
+   ```text
    Process 1 ──┐
    Process 2 ──┼──► Barrier ──► Drain NCCL ──► Sync CUDA ──► Checkpoint All
    Process 3 ──┘

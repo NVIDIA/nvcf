@@ -76,7 +76,7 @@ nvcf-cli self-hosted uninstall --no-apply --compute-plane --cluster-name=ncp-loc
 ```
 
 > **`up` vs `add-compute-plane`.** `up` always installs both planes — use it for the *first* install. `add-compute-plane` is the right subcommand any time the control plane is already running and you want to attach an Nth compute cluster.
-
+>
 > **`down` always with `--plan-only` first.** Show the user the `willUninstall.commands[]` array before running for real.
 
 ## Authentication

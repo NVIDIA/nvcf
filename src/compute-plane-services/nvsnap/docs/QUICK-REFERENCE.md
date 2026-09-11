@@ -177,7 +177,7 @@ make deploy-dev
 
 ## Validation Checkpoints
 
-### Phase 0 Complete When:
+### Phase 0 Complete When
 
 - [ ] All binaries build
 - [ ] Tests pass (>80% coverage)
@@ -185,13 +185,13 @@ make deploy-dev
 - [ ] CRDs work
 - [ ] CI is green
 
-### Phase 1 Complete When:
+### Phase 1 Complete When
 
 - [ ] Simple CUDA app checkpoints
 - [ ] Restore succeeds
 - [ ] Works on real GPU
 
-### Phase 4 Complete When:
+### Phase 4 Complete When
 
 - [ ] vLLM TP=4 checkpoints
 - [ ] NCCL reinitializes

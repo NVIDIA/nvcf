@@ -212,6 +212,10 @@ server:
 nvct:
   fqdn: http://localhost:${server.port}
   global-fqdn-grpc: http://localhost:${grpc.server.port}
+  ess:
+    registry-credential-cache:
+      ttl: PT5M
+      max-size: 3072
   sidecars:
     tracing-key: ${kv.worker-tracing}
     hostname: stg.nvcr.io

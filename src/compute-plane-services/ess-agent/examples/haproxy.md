@@ -14,7 +14,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-HAProxy Consul Template Example
+# HAProxy Consul Template Example
+
 -------------------------------
 
 HAProxy is a very common load balancer. You can read more about the HAProxy configuration file syntax in the [HAProxy documentation](http://www.haproxy.org/).

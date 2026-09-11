@@ -16,6 +16,7 @@ All traces, logs and metrics have the following attributes added to their metada
 ## helm
 
 ### nvcf-worker
+
 - nvcf_worker_service_request_total
 - nvcf_worker_service_response_total
 - nvcf_worker_service_stream_streaming_app_ready
@@ -40,17 +41,20 @@ All traces, logs and metrics have the following attributes added to their metada
 - nvcf_worker_service_stream_active
 
 ### nvca
+
 - nvca_instance_type_allocatable
 - nvca_instance_type_capacity
 
 ### kubernetes-cadvisor
 
 #### CPU
+
 - container_cpu_cfs_throttled_periods_total (Only present if container was throttled)
 - container_cpu_cfs_throttled_seconds_total (Only present if container was throttled)
 - container_cpu_usage_seconds_total
 
 #### Memory
+
 - container_memory_cache
 - container_memory_rss
 - container_memory_swap
@@ -60,6 +64,7 @@ All traces, logs and metrics have the following attributes added to their metada
 #### Filesystem
 
 only present if the container is performing IO operations
+
 - container_fs_limit_bytes
 - container_fs_usage_bytes
 - container_fs_reads_total
@@ -70,6 +75,7 @@ only present if the container is performing IO operations
 #### Network
 
 only present if the container is performing network operations
+
 - container_network_receive_bytes_total
 - container_network_receive_errors_total
 - container_network_receive_packets_dropped_total
@@ -84,6 +90,7 @@ only present if the container is performing network operations
 #### deployment
 
 Only present if helm-based function has a deployment k8s object
+
 - kube_deployment_status_condition
 - kube_deployment_status_replicas
 - kube_deployment_status_replicas_available
@@ -95,18 +102,21 @@ Only present if helm-based function has a deployment k8s object
 #### replicaset
 
 Only present if helm-based function has a replicaset k8s object. Please notice that metrics are only available if replicaset had the status in the target metric.
+
 - kube_replicaset_status_replicas
 - kube_replicaset_status_ready_replicas
 
 #### statefulset
 
 Only present if helm-based function has a stateful k8s object
+
 - kube_statefulset_status_replicas
 - kube_statefulset_status_replicas_ready
 
 #### job/cronjob
 
 Only present if the helm-based function has a job/cronjob k8s object. For NVCT only
+
 - kube_job_status_active
 - kube_job_status_failed
 - kube_job_status_succeeded
@@ -115,16 +125,19 @@ Only present if the helm-based function has a job/cronjob k8s object. For NVCT o
 #### configmap
 
 Only present if function has a configmap k8s object
+
 - kube_configmap_created
 
 #### secret
 
 Only present if function has a secret k8s object
+
 - kube_secret_created
 
 #### pod_container
 
 Only present if function has a pod k8s object, NVCF and NVCT. Please notice that metrics are only available if container had the status in the target metric.
+
 - kube_pod_container_info
 - kube_pod_container_resource_limits
 - kube_pod_container_resource_requests (Only present if resources were requested)
@@ -142,6 +155,7 @@ Only present if function has a pod k8s object, NVCF and NVCT. Please notice that
 #### pod_general
 
 Only present if function/task helm deployments, NVCF and NVCT
+
 - kube_pod_info
 - kube_pod_status_reason
 - kube_pod_created (When the workload pod was created)
@@ -151,6 +165,7 @@ Only present if function/task helm deployments, NVCF and NVCT
 #### init_container
 
 Only present if function/task helm defined an init container. Please notice that metrics are only available if init container had the status in the target metric.
+
 - kube_pod_init_container_info
 - kube_pod_init_container_status_ready
 - kube_pod_init_container_status_restarts_total
@@ -164,6 +179,7 @@ Only present if function/task helm defined an init container. Please notice that
 #### GPU
 
 Always present for container and helm, NVCF and NVCT.
+
 - DCGM_FI_DEV_GPU_UTIL
 - DCGM_FI_PROF_PIPE_TENSOR_ACTIVE
 - DCGM_FI_PROF_DRAM_ACTIVE
@@ -179,11 +195,13 @@ Always present for container and helm, NVCF and NVCT.
 ### opentelemetry-collector
 
 Keep all collector self-observability metrics. The final set depends on telemetry received and the exporter configured by each function or task.
+
 - otelcol_.*
 
 ## container
 
 ### nvcf-worker
+
 - nvcf_worker_service_request_total
 - nvcf_worker_service_response_total
 - nvcf_worker_service_stream_streaming_app_ready
@@ -208,17 +226,20 @@ Keep all collector self-observability metrics. The final set depends on telemetr
 - nvcf_worker_service_stream_active
 
 ### nvca
+
 - nvca_instance_type_allocatable
 - nvca_instance_type_capacity
 
 ### kubernetes-cadvisor
 
 #### CPU
+
 - container_cpu_cfs_throttled_periods_total
 - container_cpu_cfs_throttled_seconds_total
 - container_cpu_usage_seconds_total
 
 #### Memory
+
 - container_memory_cache
 - container_memory_rss
 - container_memory_swap
@@ -228,6 +249,7 @@ Keep all collector self-observability metrics. The final set depends on telemetr
 #### Filesystem
 
 only present if the container is performing IO operations
+
 - container_fs_limit_bytes
 - container_fs_usage_bytes
 - container_fs_reads_bytes_total
@@ -238,6 +260,7 @@ only present if the container is performing IO operations
 #### Network
 
 only present if the container is performing network operations
+
 - container_network_receive_bytes_total
 - container_network_receive_errors_total
 - container_network_receive_packets_dropped_total
@@ -252,6 +275,7 @@ only present if the container is performing network operations
 #### pod_container
 
 Only present if function has a pod k8s object, NVCF and NVCT. Please notice that metrics are only available if container had the status in the target metric.
+
 - kube_pod_container_info
 - kube_pod_container_resource_limits
 - kube_pod_container_resource_requests (Only present if resources were requested)
@@ -269,6 +293,7 @@ Only present if function has a pod k8s object, NVCF and NVCT. Please notice that
 ### nvidia-dcgm-exporter
 
 #### GPU
+
 - DCGM_FI_DEV_GPU_UTIL
 - DCGM_FI_PROF_PIPE_TENSOR_ACTIVE
 - DCGM_FI_PROF_DRAM_ACTIVE
@@ -284,4 +309,5 @@ Only present if function has a pod k8s object, NVCF and NVCT. Please notice that
 ### opentelemetry-collector
 
 Keep all collector self-observability metrics. The final set depends on telemetry received and the exporter configured by each function or task.
+
 - otelcol_.*
