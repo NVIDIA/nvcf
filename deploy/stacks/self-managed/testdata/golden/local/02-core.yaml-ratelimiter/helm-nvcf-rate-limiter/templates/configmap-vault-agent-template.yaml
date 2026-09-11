@@ -25,6 +25,7 @@ metadata:
     app.kubernetes.io/instance: ratelimiter
     app.kubernetes.io/version: "1.17.3"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   # Vault Agent template. The injector renders this into
   # /vault/secrets/secrets.json on pod start. rate_limiter.go reads the

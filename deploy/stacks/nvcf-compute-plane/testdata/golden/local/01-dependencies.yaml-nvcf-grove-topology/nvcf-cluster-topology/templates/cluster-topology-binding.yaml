@@ -25,6 +25,7 @@ metadata:
     app.kubernetes.io/instance: nvcf-grove-topology
     app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: shared
 spec:
   levels:
   - domain: "gpuclique"

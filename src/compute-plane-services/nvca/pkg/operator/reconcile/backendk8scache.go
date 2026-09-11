@@ -32,6 +32,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	cmnotel "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel"
 	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -181,6 +182,7 @@ type BackendK8sCache struct {
 	legacyFirstClassConfigWarningMu              sync.Mutex
 	legacyFirstClassConfigWarningResourceVersion string
 	legacyFirstClassConfigWarningSeen            bool
+	controlPlaneIdentity                         controlplane.Identity
 }
 
 // BackendK8sCacheBuilder builds Backendk8sCache and start related K8s
@@ -199,6 +201,7 @@ func NewBackendK8sCacheBuilder() *BackendK8sCacheBuilder {
 			nvcaImageRepo:                defaultNVCAImageRepo,
 			now:                          time.Now,
 			nvcaOperatorVersion:          version.ReleaseString(),
+			controlPlaneIdentity:         controlplane.DefaultIdentity(),
 			dispatchReconcileClusterFunc: func(_ context.Context) {},
 			agentResources:               corev1.ResourceRequirements{},
 			webhookResources:             corev1.ResourceRequirements{},
@@ -391,15 +394,25 @@ func (b *BackendK8sCacheBuilder) WithClusterSource(clusterSource nvcaoptypes.Clu
 	return &next
 }
 
+func (b *BackendK8sCacheBuilder) WithControlPlaneIdentity(identity controlplane.Identity) *BackendK8sCacheBuilder {
+	next := *b
+	next.controlPlaneIdentity = identity
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
 	log := core.GetLogger(ctx)
 	resyncPeriod := b.resyncPeriod
+	if !b.controlPlaneIdentity.Valid() {
+		return nil, nil, fmt.Errorf("invalid control plane identity %q", b.controlPlaneIdentity.String())
+	}
 
 	eventBroadcaster := record.NewBroadcaster()
 
 	c := &BackendK8sCache{
 		resyncPeriod:         resyncPeriod,
 		clients:              b.clients,
+		operatorNamespace:    b.operatorNamespace,
 		eventBroadcaster:     eventBroadcaster,
 		eventRecorder:        eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "nvca-operator"}),
 		systemNamespace:      b.systemNamespace,
@@ -438,10 +451,15 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		taskEnvOverridesB64:                b.taskEnvOverridesB64,
 		identitySource:                     b.identitySource,
 		clusterSource:                      b.clusterSource,
+		controlPlaneIdentity:               b.controlPlaneIdentity,
 	}
 
 	if c.operatorNamespace == "" {
 		c.operatorNamespace = NVCAOperatorNamespace
+	}
+
+	if _, err := c.adoptLegacyControlPlaneObjects(ctx, false); err != nil {
+		return nil, nil, err
 	}
 
 	out := make(chan *core.Event)

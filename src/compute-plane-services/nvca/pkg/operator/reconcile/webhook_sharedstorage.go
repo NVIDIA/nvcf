@@ -19,23 +19,23 @@ package operator
 
 import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
 
-func makeHelmStorageMutatingWebhook(
+func (bc *BackendK8sCache) makeHelmStorageMutatingWebhook(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) admissionregistrationv1.MutatingWebhook {
+) (admissionregistrationv1.MutatingWebhook, error) {
 	st := admissionregistrationv1.NamespacedScope
-	targetLabelSels := makeWorkloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
+	webhookName, err := bc.controlPlaneWebhookName("mutate-helm-storage")
+	if err != nil {
+		return admissionregistrationv1.MutatingWebhook{}, err
+	}
 	return makeMutatingWebhook(
-		"mutate-helm-storage.nvca.nvcf.nvidia.io",
+		webhookName,
 		"/mutate-helm-storage",
-		&metav1.LabelSelector{
-			MatchExpressions: makeLabelSelectorRequirements(targetLabelSels),
-		},
+		bc.workloadNamespaceSelector(WorkloadInstanceTypeValueMiniService),
 		[]admissionregistrationv1.RuleWithOperations{
 			{
 				Rule: admissionregistrationv1.Rule{
@@ -51,5 +51,5 @@ func makeHelmStorageMutatingWebhook(
 			},
 		},
 		nb,
-		webhookCert)
+		webhookCert), nil
 }

@@ -18,12 +18,14 @@ limitations under the License.
 package cmd
 
 import (
+	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/selfhosted/kubectx"
@@ -41,8 +43,8 @@ and 'install --compute-plane' explicitly.`,
 
 // Persistent flags shared by all self-hosted subcommands.
 var (
-	selfHostedControlPlaneStack    string
-	selfHostedComputePlaneStack    string
+	selfHostedControlPlaneStack   string
+	selfHostedComputePlaneStack   string
 	selfHostedEnv                 string
 	selfHostedNoApply             bool
 	selfHostedNonInter            bool
@@ -57,6 +59,7 @@ var (
 	selfHostedRefreshToken        bool
 	selfHostedControlPlaneContext string
 	selfHostedComputePlaneContext string
+	selfHostedControlPlaneID      string
 )
 
 type registerEndpointValues struct {
@@ -80,12 +83,21 @@ type localEndpointDefaults struct {
 }
 
 const (
-	localControlPlaneDomainDefault = "nvcf-control-plane.test"
-	localControlPlaneHTTPPort      = "8080"
-	localControlPlaneNATSPort      = "4222"
-	localInClusterICMSURL          = "http://api.sis.svc.cluster.local:8080"
-	localInClusterReValURL         = "http://reval.nvcf.svc.cluster.local:8080"
-	localInClusterNATSURL          = "nats://nats.nats-system.svc.cluster.local:4222"
+	localControlPlaneDomainDefault  = "nvcf-control-plane.test"
+	localControlPlaneHTTPPort       = "8080"
+	localControlPlaneNATSPort       = "4222"
+	localInClusterICMSURL           = "http://api.sis.svc.cluster.local:8080"
+	localInClusterReValURL          = "http://reval.nvcf.svc.cluster.local:8080"
+	localInClusterNATSURL           = "nats://nats.nats-system.svc.cluster.local:4222"
+	selfHostedDefaultControlPlaneID = "default"
+	selfHostedSharedControlPlaneID  = "shared"
+	// Named installs derive keyspaces as <id>_<legacyKeyspace>;
+	// schema_migrations is the longest legacy name.
+	selfHostedMaxCassandraNameLen  = 48
+	selfHostedSchemaMigrationsName = "schema_migrations"
+	selfHostedMaxControlPlaneIDLen = selfHostedMaxCassandraNameLen - len(selfHostedSchemaMigrationsName) - 1
+	selfHostedControlPlaneOwnerEnv = "NVCF_CONTROL_PLANE_OWNER"
+	selfHostedHelmfileOwnerLabel   = "control-plane-owner"
 )
 
 func init() {
@@ -127,10 +139,65 @@ func init() {
 		"kubeconfig context for control plane (split-cluster mode; pair with --compute-plane-context)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedComputePlaneContext, "compute-plane-context", "",
 		"kubeconfig context for compute plane (split-cluster mode; pair with --control-plane-context)")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedControlPlaneID, "control-plane-id", "",
+		"Control-plane ID for named self-hosted installs (omit for the legacy default control plane)")
 
 	selfHostedCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+		if _, err := selfHostedControlPlaneOwner(); err != nil {
+			return err
+		}
 		return kubectx.ValidateFlags(selfHostedControlPlaneContext, selfHostedComputePlaneContext)
 	}
+}
+
+func selfHostedControlPlaneOwner() (string, error) {
+	if selfHostedControlPlaneID == "" {
+		return selfHostedDefaultControlPlaneID, nil
+	}
+	if err := validateSelfHostedControlPlaneID(selfHostedControlPlaneID); err != nil {
+		return "", fmt.Errorf("invalid --control-plane-id: %w", err)
+	}
+	return selfHostedControlPlaneID, nil
+}
+
+func validateSelfHostedControlPlaneID(id string) error {
+	if id == "" {
+		return fmt.Errorf("control plane ID is required")
+	}
+	if id == selfHostedDefaultControlPlaneID || id == selfHostedSharedControlPlaneID {
+		return fmt.Errorf("control plane ID %q is reserved", id)
+	}
+	if len(id) > selfHostedMaxControlPlaneIDLen {
+		return fmt.Errorf("control plane ID %q exceeds %d characters", id, selfHostedMaxControlPlaneIDLen)
+	}
+	if errs := validation.IsDNS1123Label(id); len(errs) > 0 {
+		return fmt.Errorf("control plane ID %q must be a lowercase DNS label: %s", id, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func selfHostedControlPlaneEnv() ([]string, error) {
+	owner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return nil, err
+	}
+	return []string{selfHostedControlPlaneOwnerEnv + "=" + owner}, nil
+}
+
+func withSelfHostedControlPlaneEnv(extra []string) ([]string, error) {
+	controlPlaneEnv, err := selfHostedControlPlaneEnv()
+	if err != nil {
+		return nil, err
+	}
+	return append(controlPlaneEnv, extra...), nil
+}
+
+func selfHostedHelmfileOwnerSelector() (string, error) {
+	owner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return "", err
+	}
+	return selfHostedHelmfileOwnerLabel + "=" + owner, nil
 }
 
 // resolveICMSURL picks the ICMS endpoint for cluster register, in priority order:

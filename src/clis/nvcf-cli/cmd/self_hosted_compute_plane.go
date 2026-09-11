@@ -123,6 +123,10 @@ func runSelfHostedComputePlaneInstall(c *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolving helm runtime: %w", err)
 	}
 
+	extraEnv, err := withSelfHostedControlPlaneEnv(computePlaneInstallEnv(clusterName, ncaID, filepath.Dir(valuesPath)))
+	if err != nil {
+		return err
+	}
 	return selfhosted.Render(selfhosted.RenderOptions{
 		StackPath:       resolved.Path,
 		Env:             selfHostedEnv,
@@ -132,7 +136,7 @@ func runSelfHostedComputePlaneInstall(c *cobra.Command, _ []string) error {
 		Stdout:          c.OutOrStdout(),
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             c.Context(),
-		ExtraEnv:        computePlaneInstallEnv(clusterName, ncaID, filepath.Dir(valuesPath)),
+		ExtraEnv:        extraEnv,
 	})
 }
 

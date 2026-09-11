@@ -109,6 +109,10 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	if !checkPre && !checkControlPlane && !checkComputePlane && !checkAll {
 		return fmt.Errorf("at least one of --pre, --control-plane, --compute-plane, or --all is required")
 	}
+	controlPlaneOwner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return err
+	}
 
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
 	skipClusterValidation := checkSkipClusterValidation || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION") != ""
@@ -182,7 +186,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	runOnce := func() []selfhosted.CheckResult {
 		var results []selfhosted.CheckResult
 		if checkPre || checkAll {
-			results = append(results, runPreflightByRole(ctx, cfg, sink, clusterValidatorImage)...)
+			results = append(results, runPreflightByRole(ctx, cfg, sink, clusterValidatorImage, controlPlaneOwner)...)
 		}
 		// Inject force-fail seam for tests.
 		if os.Getenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL") != "" {
@@ -299,7 +303,7 @@ func selectCheckRenderer(w io.Writer, wait bool) (progress.EventSink, error) {
 // clusterValidatorImage is the already-resolved validator image (empty when
 // not configured). Resolution happens in the caller so the outer-timeout
 // and stderr-note logic can see the same answer this function does.
-func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, clusterValidatorImage string) []selfhosted.CheckResult {
+func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, clusterValidatorImage, controlPlaneOwner string) []selfhosted.CheckResult {
 	// LocalOnly: skip all cluster probes.
 	if cfg.LocalOnly {
 		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
@@ -337,7 +341,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		)
 		eg, egCtx := errgroup.WithContext(ctx)
 		eg.Go(func() error {
-			rc := selfhosted.RoleConfig{KubeContext: selfHostedControlPlaneContext}
+			rc := selfhosted.RoleConfig{KubeContext: selfHostedControlPlaneContext, ControlPlaneOwner: controlPlaneOwner}
 			cpResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleControlPlane, rc, sink)
 			return nil
 		})
@@ -350,6 +354,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorImage:      clusterValidatorImage,
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+				ControlPlaneOwner:          controlPlaneOwner,
 			}
 			gpuResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleComputePlane, rc, sink)
 			return nil
@@ -358,7 +363,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		return append(cpResults, gpuResults...)
 
 	default: // ModeSingle — no context flags; union both role check sets sequentially.
-		cpRC := selfhosted.RoleConfig{SISURL: icmsURL}
+		cpRC := selfhosted.RoleConfig{SISURL: icmsURL, ControlPlaneOwner: controlPlaneOwner}
 		gpuRC := selfhosted.RoleConfig{
 			SISURL:                     icmsURL,
 			InotifyProber:              inotifyProber,
@@ -366,6 +371,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 			ClusterValidatorImage:      clusterValidatorImage,
 			ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 			ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+			ControlPlaneOwner:          controlPlaneOwner,
 		}
 		cpResults := selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleControlPlane, cpRC, sink)
 		gpuResults := selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleComputePlane, gpuRC, sink)

@@ -110,7 +110,8 @@ func ownerRef(kind, name string) map[string]any {
 func TestMiniServiceMutatingWebhook_MatchConditions(t *testing.T) {
 	bc := &BackendK8sCache{}
 	nb := &nvidiaiov1.NVCFBackend{}
-	whs := bc.makeMiniServiceMutatingWebhooks(nb, WebhookCert{})
+	whs, err := bc.makeMiniServiceMutatingWebhooks(nb, WebhookCert{})
+	require.NoError(t, err)
 
 	require.Len(t, whs, 2, "expected CREATE and UPDATE webhooks")
 	for _, wh := range whs {

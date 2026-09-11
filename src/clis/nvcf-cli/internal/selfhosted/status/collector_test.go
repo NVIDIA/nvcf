@@ -67,8 +67,18 @@ var fixedNow = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 // in their respective namespaces, each with Spec.Replicas=1 and
 // Status.ReadyReplicas=1.
 func buildAllReadyKube(components []ComponentSpec) *fake.Clientset {
+	return buildAllReadyKubeWithOwner(components, "")
+}
+
+func buildAllReadyKubeWithOwner(components []ComponentSpec, owner string) *fake.Clientset {
 	var objs []runtime.Object
 	creationTime := metav1.NewTime(fixedNow.Add(-1 * time.Hour))
+	labels := func() map[string]string {
+		if owner == "" {
+			return nil
+		}
+		return map[string]string{ownerLabel: owner}
+	}
 
 	for _, sp := range components {
 		switch sp.Kind {
@@ -78,6 +88,7 @@ func buildAllReadyKube(components []ComponentSpec) *fake.Clientset {
 					Name:              sp.Resource,
 					Namespace:         sp.Namespace,
 					CreationTimestamp: creationTime,
+					Labels:            labels(),
 				},
 				Spec:   appsv1.DeploymentSpec{Replicas: ptrInt32(1)},
 				Status: appsv1.DeploymentStatus{ReadyReplicas: 1},
@@ -88,6 +99,7 @@ func buildAllReadyKube(components []ComponentSpec) *fake.Clientset {
 					Name:              sp.Resource,
 					Namespace:         sp.Namespace,
 					CreationTimestamp: creationTime,
+					Labels:            labels(),
 				},
 				Spec:   appsv1.StatefulSetSpec{Replicas: ptrInt32(1)},
 				Status: appsv1.StatefulSetStatus{ReadyReplicas: 1},
@@ -301,6 +313,116 @@ func TestCollector_NotFoundComponent(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, ch.Healthy)
 	assert.NotEmpty(t, ch.Message)
+}
+
+func TestCollector_ExpectedOwnerAcceptsMatchingComponentLabels(t *testing.T) {
+	components := []ComponentSpec{
+		{Name: "NVCF API", Namespace: "nvcf", Kind: "deployment", Resource: "nvcf-api"},
+	}
+	kube := buildAllReadyKubeWithOwner(components, "plane-a")
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterName: "ncp-local"}}}
+	sink := &captureSink{}
+
+	coll := &Collector{
+		Kube:          kube,
+		SIS:           sis,
+		SISURL:        "http://sis.example",
+		NCAID:         "test-nca",
+		Cluster:       "ncp-local",
+		Components:    components,
+		ExpectedOwner: "plane-a",
+		NowFunc:       func() time.Time { return fixedNow },
+	}
+
+	require.NoError(t, coll.Collect(context.Background(), sink))
+	snap, ok := sink.events[0].(progress.Snapshot)
+	require.True(t, ok)
+	assert.Equal(t, "healthy", snap.Verdict)
+	ch, ok := sink.events[1].(progress.ComponentHealth)
+	require.True(t, ok)
+	assert.True(t, ch.Healthy)
+	assert.Empty(t, ch.Message)
+}
+
+func TestCollector_ExpectedOwnerRejectsForeignComponentLabels(t *testing.T) {
+	components := []ComponentSpec{
+		{Name: "NVCF API", Namespace: "nvcf", Kind: "deployment", Resource: "nvcf-api"},
+	}
+	kube := buildAllReadyKubeWithOwner(components, "plane-b")
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterName: "ncp-local"}}}
+	sink := &captureSink{}
+
+	coll := &Collector{
+		Kube:          kube,
+		SIS:           sis,
+		SISURL:        "http://sis.example",
+		NCAID:         "test-nca",
+		Cluster:       "ncp-local",
+		Components:    components,
+		ExpectedOwner: "plane-a",
+		NowFunc:       func() time.Time { return fixedNow },
+	}
+
+	require.NoError(t, coll.Collect(context.Background(), sink))
+	snap, ok := sink.events[0].(progress.Snapshot)
+	require.True(t, ok)
+	assert.Equal(t, "degraded", snap.Verdict)
+	ch, ok := sink.events[1].(progress.ComponentHealth)
+	require.True(t, ok)
+	assert.False(t, ch.Healthy)
+	assert.Contains(t, ch.Message, `owned by control plane "plane-b", expected "plane-a"`)
+}
+
+func TestCollector_ExpectedOwnerRejectsSharedComponentLabels(t *testing.T) {
+	components := []ComponentSpec{
+		{Name: "NVCF API", Namespace: "nvcf", Kind: "deployment", Resource: "nvcf-api"},
+	}
+	kube := buildAllReadyKubeWithOwner(components, sharedOwner)
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterName: "ncp-local"}}}
+	sink := &captureSink{}
+
+	coll := &Collector{
+		Kube:          kube,
+		SIS:           sis,
+		SISURL:        "http://sis.example",
+		NCAID:         "test-nca",
+		Cluster:       "ncp-local",
+		Components:    components,
+		ExpectedOwner: "plane-a",
+		NowFunc:       func() time.Time { return fixedNow },
+	}
+
+	require.NoError(t, coll.Collect(context.Background(), sink))
+	ch, ok := sink.events[1].(progress.ComponentHealth)
+	require.True(t, ok)
+	assert.False(t, ch.Healthy)
+	assert.Contains(t, ch.Message, "is shared")
+}
+
+func TestCollector_ExpectedOwnerRejectsMissingComponentLabels(t *testing.T) {
+	components := []ComponentSpec{
+		{Name: "NVCF API", Namespace: "nvcf", Kind: "deployment", Resource: "nvcf-api"},
+	}
+	kube := buildAllReadyKube(components)
+	sis := &fakeSIS{clusters: []client.ICMSCluster{{ClusterName: "ncp-local"}}}
+	sink := &captureSink{}
+
+	coll := &Collector{
+		Kube:          kube,
+		SIS:           sis,
+		SISURL:        "http://sis.example",
+		NCAID:         "test-nca",
+		Cluster:       "ncp-local",
+		Components:    components,
+		ExpectedOwner: "plane-a",
+		NowFunc:       func() time.Time { return fixedNow },
+	}
+
+	require.NoError(t, coll.Collect(context.Background(), sink))
+	ch, ok := sink.events[1].(progress.ComponentHealth)
+	require.True(t, ok)
+	assert.False(t, ch.Healthy)
+	assert.Contains(t, ch.Message, "has no nvcf.nvidia.com/control-plane-owner label")
 }
 
 // controlPlaneOnlyComponents returns the control-plane subset of DefaultComponents.

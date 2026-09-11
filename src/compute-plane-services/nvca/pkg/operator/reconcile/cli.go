@@ -31,6 +31,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	nvversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	cli "github.com/urfave/cli/v2"
 
@@ -356,6 +357,16 @@ func NewOperatorCommand() *cli.Command {
 					" SPIRE is scaffolded in-tree but not yet supported end-to-end.",
 				EnvVars: []string{"NVCA_IDENTITY_SOURCE"},
 			},
+			&cli.StringFlag{
+				Name:    "control-plane-id",
+				Usage:   "Self-managed NVCF control-plane ID. Empty means the legacy default control plane.",
+				EnvVars: []string{"NVCF_CONTROL_PLANE_OWNER"},
+			},
+			&cli.BoolFlag{
+				Name:    "control-plane-adoption-dry-run",
+				Usage:   "Report legacy control-plane objects that would receive an owner label, then exit.",
+				EnvVars: []string{"NVCF_CONTROL_PLANE_ADOPTION_DRY_RUN"},
+			},
 		},
 		Action: func(c *cli.Context) error {
 			err := doAction(c)
@@ -460,6 +471,11 @@ func doAction(c *cli.Context) error {
 		return fmt.Errorf("identity-source is not supported for cluster source %s", clusterSource)
 	}
 
+	controlPlaneIdentity, err := controlplane.IdentityFromConfig(c.String("control-plane-id"))
+	if err != nil {
+		return fmt.Errorf("invalid control-plane-id: %w", err)
+	}
+
 	opts := &AgentOptions{
 		NCAID:                             c.String("nca-id"),
 		KubeConfigPath:                    c.String("kubeconfig"),
@@ -510,11 +526,21 @@ func doAction(c *cli.Context) error {
 		AgentOverrideEnvVars:              agentOverrideEnvVars,
 		VaultOAuthClientMountPathTemplate: vaultOAuthClientMountPathTemplate,
 		IdentitySource:                    identitySource,
+		ControlPlaneIdentity:              controlPlaneIdentity,
 	}
 
 	a, err := NewAgent(ctx, opts)
 	if err != nil {
 		return err
+	}
+
+	if c.Bool("control-plane-adoption-dry-run") {
+		result, err := a.RunControlPlaneAdoption(ctx, true)
+		if err != nil {
+			return err
+		}
+		log.WithField("objects", result.summary()).Info("Control-plane adoption dry-run completed")
+		return nil
 	}
 
 	err = a.Start(ctx)

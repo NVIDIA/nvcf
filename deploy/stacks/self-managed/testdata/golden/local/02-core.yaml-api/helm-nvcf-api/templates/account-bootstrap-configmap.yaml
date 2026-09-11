@@ -27,6 +27,7 @@ metadata:
     app.kubernetes.io/version: "1.18.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: account-bootstrap
+    nvcf.nvidia.com/control-plane-owner: default
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "1"

@@ -44,6 +44,7 @@ func resetUninstallFlags(t *testing.T) {
 		uninstallForceWithRegisteredClusters = false
 		uninstallKeepNamespaces = false
 		uninstallConfirm = false
+		selfHostedControlPlaneID = ""
 		selfHostedUninstallCmd.SetContext(nil)
 	})
 }
@@ -161,5 +162,38 @@ func TestUninstall_ControlPlanePassesHelm4CompatToDestroy(t *testing.T) {
 	body, err := os.ReadFile(helmfileLog)
 	require.NoError(t, err)
 	assert.Contains(t, string(body), filepath.Join(stack, "helmfile.d")+"/")
+	assert.Contains(t, string(body), "--selector control-plane-owner=default")
 	assert.Contains(t, string(body), "--sequential-helmfiles")
+}
+
+func TestUninstall_ControlPlanePassesControlPlaneOwnerEnv(t *testing.T) {
+	resetUninstallFlags(t)
+	t.Setenv("NVCF_CONTROL_PLANE_OWNER", "from-parent")
+
+	_, stack := makeDownStacks(t)
+	helmfileLog := installFakeHelmfile(t)
+
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
+	t.Cleanup(func() { resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver })
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm3Legacy, nil
+	}
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "uninstall",
+		"--control-plane",
+		"--control-plane-stack", stack,
+		"--control-plane-id", "plane-a",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+
+	body, err := os.ReadFile(helmfileLog)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "CONTROL_PLANE_OWNER=plane-a")
+	assert.Contains(t, string(body), "--selector control-plane-owner=plane-a")
+	assert.NotContains(t, string(body), "CONTROL_PLANE_OWNER=from-parent")
 }

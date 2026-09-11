@@ -62,6 +62,38 @@ consumer.
 | NVCA operator CRDs | `nvcfbackends.nvcf.nvidia.com` and NVCA API CRDs | Shared CRDs, never plane-owned | Shared | Prerequisite inventory |
 | Model cache namespace | Existing configured namespace | Per-plane by default, or shared and never deleted | Plane or shared | Matrix review |
 
+## Phase 2 Ownership Audit
+
+Phase 2 adds owner labels and lifecycle guards without changing legacy object
+names. Named-mode namespace derivation is a later phase, so any fixed legacy
+singleton below is either guarded now or explicitly deferred here.
+
+Legacy compatibility intentionally has one narrow exception to the "missing owner
+means do not touch" rule: the default control plane may adopt known legacy
+objects by adding `nvcf.nvidia.com/control-plane-owner=default`. This preserves
+legacy upgrade and teardown behavior for clusters installed before ownership
+labels existed. Named control planes do not get that exception. The CLI mixed-mode
+gate blocks a named install until the legacy default plane has been upgraded and
+those known objects are labelled.
+
+| Surface | Phase 2 Status | Evidence |
+|---|---|---|
+| Workload namespace creation | Plane-scoped. NVCA writes the owner label when it creates or updates a request namespace. | `pkg/operator/reconcile/nvcaagent_reconcile.go` |
+| Workload namespace cleanup | Plane-scoped. Cleanup requires both the workload label and the owner label. Legacy adoption can label old default-plane workload namespaces; named planes do not adopt legacy fixed-name objects. | `pkg/operator/cleanup/cleanup.go`, `pkg/operator/reconcile/control_plane_adoption.go` |
+| Bare workload-label adoption scan | Default-plane adoption may list namespaces with only `nvca.nvcf.nvidia.io/workload-instance-type` to find old workload namespaces created before owner labels existed. That scan is not used by named planes and is not a deletion boundary; deletion still requires the owner label. | `pkg/operator/reconcile/control_plane_adoption.go`, `pkg/operator/cleanup/cleanup.go` |
+| Admission webhook selectors | Plane-scoped. Webhook object names are derived from the plane identity, and namespace selectors require both workload type and owner. | `pkg/operator/reconcile/webhooks.go` |
+| Mirrored image-pull secrets | Plane-scoped. Mirrored secrets carry the owner label, cleanup selects by owner, and foreign or unowned targets are skipped. | `pkg/operator/mirror/controller.go` |
+| Self-managed and compute-plane Helm output | Plane or shared scoped. Post-renderers label rendered objects, and placement tests reject owner labels in selectors and pod-template labels. | `deploy/stacks/*/renderers/control-plane-owner-label.sh`, `deploy/stacks/*/tests/verify-control-plane-owner-label-placement.sh` |
+| Model-cache init namespace | Deferred. It is still the fixed legacy namespace in Phase 2. Default-plane adoption can label existing legacy state; cleanup refuses missing, foreign, or shared owners. Per-plane or shared final semantics must be resolved with Phase 3 namespace derivation before named mode is enabled. | `pkg/storage/controller_modelcache.go`, `pkg/nvca/backendk8scache.go`, `pkg/nvca/backendk8scache_gxcache.go` |
+| Lower NVCA internal workload-label filters | Deferred with model-cache namespace derivation. These filters are inside one agent's own cache/reconcile loop and are not used as a cross-plane deletion or admission boundary in Phase 2. | `pkg/nvca/backendk8scache.go`, `internal/miniservice/reconcile.go` |
+
+### Deferred Phase 3 Risk
+
+The model-cache init namespace is still a fixed legacy singleton in Phase 2.
+Do not enable named control planes broadly until Phase 3 decides whether this
+namespace becomes per-plane or shared and updates creation, cleanup, and webhook
+selectors consistently.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |

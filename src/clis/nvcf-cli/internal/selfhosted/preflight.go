@@ -55,7 +55,7 @@ type CheckResult struct {
 	Message  string
 	Detail   string // optional: short version string or extra context (M+8.11)
 	HintURL  string
-	Err      error // populated only when the check itself failed to execute
+	Err      error  // populated only when the check itself failed to execute
 	Logs     string // optional: full check transcript for --show-logs; not emitted to JSON
 }
 
@@ -289,6 +289,7 @@ type RoleConfig struct {
 	ClusterValidatorImage      string
 	ClusterValidatorPullSecret string
 	ClusterValidatorNoCleanup  bool
+	ControlPlaneOwner          string
 }
 
 // categorySpec groups a set of checks under a named category. Categories run
@@ -398,6 +399,7 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 			rc.ClusterValidatorImage,
 			rc.ClusterValidatorPullSecret,
 			rc.ClusterValidatorNoCleanup,
+			rc.ControlPlaneOwner,
 		))
 	}
 	return cat
@@ -506,7 +508,7 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 // Severity mapping: runner errors (RBAC/pull/timeout) -> warning, since
 // they're operator-fixable infra issues; validator Passed=false ->
 // error (real check failures); Passed=true -> info.
-func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool) binaryCheckSpec {
+func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool, controlPlaneOwner string) binaryCheckSpec {
 	const id = "cluster-validator"
 	return binaryCheckSpec{
 		ID:         id,
@@ -517,10 +519,11 @@ func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret s
 				HintURL: clusterValidatorHintURL,
 			}
 			result := cv(ctx, ClusterValidatorParams{
-				KubeContext: kubeContext,
-				Image:       image,
-				PullSecret:  pullSecret,
-				NoCleanup:   noCleanup,
+				KubeContext:       kubeContext,
+				Image:             image,
+				PullSecret:        pullSecret,
+				NoCleanup:         noCleanup,
+				ControlPlaneOwner: controlPlaneOwner,
 			})
 			r.Logs = result.Logs
 			r.Detail = clusterValidatorDetail(result.JobName)

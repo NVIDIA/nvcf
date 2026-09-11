@@ -5,6 +5,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: shared
   name: kai-config-deployer
   namespace: kai-scheduler
   annotations:

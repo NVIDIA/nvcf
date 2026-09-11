@@ -9,6 +9,12 @@ environments:
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- $pkiEnabled := dig "addons" "llm" "pki" "enabled" false .Values }}
 {{- $llmPkiActive := and $llmEnabled $pkiEnabled }}
+{{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
+{{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
+{{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
+{{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
+{{- end }}
+{{- $sharedControlPlaneOwner := "shared" }}
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
 {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
 {{- $manageIssuer := false }}
@@ -102,6 +108,10 @@ helmDefaults:
 templates:
   dependency: &dependency
     chart: nvcf/helm-nvcf-{{`{{ .Release.Name }}`}}
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
@@ -109,6 +119,7 @@ templates:
     waitForJobs: true
     labels:
       release-group: dependencies
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
 releases:
 
@@ -124,6 +135,12 @@ releases:
     condition: certManager.enabled
     namespace: cert-manager
     <<: *dependency
+    postRendererArgs:
+      - "--owner"
+      - {{ $sharedControlPlaneOwner | quote }}
+    labels:
+      release-group: dependencies
+      control-plane-owner: {{ $sharedControlPlaneOwner | quote }}
 
   - name: openbao-server # this name MUST not change
     version: 0.32.4
@@ -144,6 +161,10 @@ releases:
     chart: nvcf/helm-nvcf-pki
     version: 0.1.0
     namespace: cert-manager
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - clusterIssuer:
           enabled: true
@@ -160,6 +181,7 @@ releases:
     waitForJobs: true
     labels:
       release-group: dependencies
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
     needs:
       - vault-system/openbao-server
 {{- if dig "certManager" "enabled" true .Values }}

@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/instance: dynamo-operator
     app.kubernetes.io/version: "1.4.2"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
 - apiGroups: ["nvidia.com"]
   resources: ["dynamocomponentdeployments", "dynamographdeployments"]

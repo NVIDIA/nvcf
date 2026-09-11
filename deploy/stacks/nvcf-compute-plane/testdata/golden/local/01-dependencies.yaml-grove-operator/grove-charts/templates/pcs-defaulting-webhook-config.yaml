@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/component: operator-pcs-defaulting-webhook
     app.kubernetes.io/name: pcs-defaulting-webhook
     app.kubernetes.io/part-of: grove
+    nvcf.nvidia.com/control-plane-owner: shared
 webhooks:
   - admissionReviewVersions:
       - v1

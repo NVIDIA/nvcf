@@ -18,6 +18,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   # referenced in Values under the key `initDBConfigMap`
   name: cassandra-init-cql
   namespace: cassandra-system

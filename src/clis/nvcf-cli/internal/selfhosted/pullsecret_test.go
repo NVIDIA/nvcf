@@ -144,6 +144,17 @@ func TestWriteDockerConfigSecret_Create(t *testing.T) {
 		"label must be attached so the secret is identifiable as CLI-managed")
 }
 
+func TestWriteDockerConfigSecretForOwner_CreateLabelsOwner(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	cfg := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
+
+	require.NoError(t, writeDockerConfigSecretForOwner(context.Background(), client, "default", "nvcr-pull-secret", cfg, "plane-a"))
+
+	got, err := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a", got.Labels[controlPlaneOwnerLabel])
+}
+
 func TestWriteDockerConfigSecret_Update(t *testing.T) {
 	old := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "stale-key")
 	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "rotated-key")
@@ -164,6 +175,28 @@ func TestWriteDockerConfigSecret_Update(t *testing.T) {
 	assert.Equal(t, fresh, got.Data[corev1.DockerConfigJsonKey], "data must be updated to the fresh body")
 	assert.Equal(t, "preserved", got.Labels["existing-label"], "pre-existing labels must be preserved on update")
 	assert.Equal(t, clusterValidatorAppLabel, got.Labels["app.kubernetes.io/name"], "CLI labels must be added on update")
+}
+
+func TestWriteDockerConfigSecretForOwner_RefusesForeignManagedSecret(t *testing.T) {
+	old := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "old-key")
+	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "fresh-key")
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretName,
+			Namespace: "default",
+			Labels:    clusterValidatorLabelsForOwner("plane-b"),
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: old},
+	})
+
+	err := writeDockerConfigSecretForOwner(context.Background(), client, "default", validatorPullSecretName, fresh, "plane-a")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plane-b")
+
+	got, getErr := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretName, metav1.GetOptions{})
+	require.NoError(t, getErr)
+	assert.Equal(t, old, got.Data[corev1.DockerConfigJsonKey], "foreign owner secret data must not be changed")
 }
 
 // Regression guard for the immutable-Type silent-failure path: a pre-existing
@@ -233,6 +266,44 @@ func TestScanAndMirrorPullSecret_FoundInDefault(t *testing.T) {
 	// Secret in default should not have been duplicated.
 	list, _ := client.CoreV1().Secrets("default").List(context.Background(), metav1.ListOptions{})
 	assert.Len(t, list.Items, 1, "no mirror should happen when the source is already in clusterValidatorNamespace")
+}
+
+func TestScanAndMirrorPullSecretForOwner_AdoptsDefaultManagedSecret(t *testing.T) {
+	cfg := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretName,
+			Namespace: "default",
+			Labels:    clusterValidatorLabels(),
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	})
+
+	name, err := scanAndMirrorPullSecretForOwner(context.Background(), client, "private.registry.test", controlPlaneDefaultOwner)
+	require.NoError(t, err)
+	assert.Equal(t, validatorPullSecretName, name)
+
+	got, getErr := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretName, metav1.GetOptions{})
+	require.NoError(t, getErr)
+	assert.Equal(t, controlPlaneDefaultOwner, got.Labels[controlPlaneOwnerLabel])
+}
+
+func TestScanAndMirrorPullSecretForOwner_RefusesUnownedManagedSecretForNamedPlane(t *testing.T) {
+	cfg := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretName,
+			Namespace: "default",
+			Labels:    clusterValidatorLabels(),
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	})
+
+	_, err := scanAndMirrorPullSecretForOwner(context.Background(), client, "private.registry.test", "plane-a")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "<missing>")
 }
 
 func TestScanAndMirrorPullSecret_FoundInNvcfMirroredToDefault(t *testing.T) {

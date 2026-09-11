@@ -329,6 +329,10 @@ func (r *selfHostedUpRun) runPreflight() (time.Time, error) {
 		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhasePreflight, Err: fmt.Errorf("pre-flight checks failed")}, p1Start)
 		return p1Start, &ExitCodeError{Code: 2, Msg: "pre-flight checks failed"}
 	}
+	if err := checkNamedControlPlaneInstallAllowed(r.ctx, kubectxFor(4)); err != nil {
+		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhasePreflight, Err: err}, p1Start)
+		return p1Start, &ExitCodeError{Code: 2, Msg: err.Error()}
+	}
 	r.emitPhaseDone(1, upPhasePreflight, p1Start)
 	if r.ctx.Err() != nil {
 		return p1Start, r.emitCancellation(2, upPhaseResolve)
@@ -424,8 +428,12 @@ func (r *selfHostedUpRun) applyControlPlane(stackPath string) error {
 	if err := r.ensureLocalImagePullSecrets(kubectxFor(4), 4); err != nil {
 		return r.handleHelmfilePhaseError(4, upPhaseApplyCP, selfhosted.PhaseApplyCP, "prepare image pull secrets", err, p4Start)
 	}
+	extraEnv, err := selfHostedControlPlaneEnv()
+	if err != nil {
+		return err
+	}
 	cancelWatcher, watcherDone := startWatcher(r.ctx, r.sink, 4, upPhaseApplyCP, controlPlaneNamespaces())
-	err := selfhosted.Render(selfhosted.RenderOptions{
+	err = selfhosted.Render(selfhosted.RenderOptions{
 		StackPath:       stackPath,
 		Env:             selfHostedEnv,
 		Apply:           true,
@@ -434,6 +442,7 @@ func (r *selfHostedUpRun) applyControlPlane(stackPath string) error {
 		Stdout:          r.helmfileStdout,
 		Stderr:          r.helmfileStderr,
 		Ctx:             r.ctx,
+		ExtraEnv:        extraEnv,
 	})
 	stopWatcher(cancelWatcher, watcherDone)
 	if err != nil {
@@ -673,8 +682,12 @@ func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClu
 	if err := r.ensureLocalImagePullSecrets(kubectxFor(7), 7); err != nil {
 		return r.handleHelmfilePhaseError(7, upPhaseApplyComputePlane, selfhosted.PhaseApplyCompute, "prepare image pull secrets", err, p7Start)
 	}
+	extraEnv, err := withSelfHostedControlPlaneEnv(registration.computePlaneEnv(filepath.Join(stackPath, "out")))
+	if err != nil {
+		return err
+	}
 	cancelWatcher, watcherDone := startWatcher(r.ctx, r.sink, 7, upPhaseApplyComputePlane, computePlaneNamespaces())
-	err := selfhosted.Render(selfhosted.RenderOptions{
+	err = selfhosted.Render(selfhosted.RenderOptions{
 		StackPath:       stackPath,
 		Env:             selfHostedEnv,
 		Apply:           true,
@@ -683,7 +696,7 @@ func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClu
 		Stdout:          r.helmfileStdout,
 		Stderr:          r.helmfileStderr,
 		Ctx:             r.ctx,
-		ExtraEnv:        registration.computePlaneEnv(filepath.Join(stackPath, "out")),
+		ExtraEnv:        extraEnv,
 	})
 	stopWatcher(cancelWatcher, watcherDone)
 	if err != nil {

@@ -57,13 +57,17 @@ func (bc *BackendK8sCache) setupMiniServiceRBACConfigmap(ctx context.Context, nb
 	if err != nil {
 		return err
 	}
+	labels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build mini service RBAC configmap labels: %w", err)
+	}
 
 	ec := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        MiniServiceRBACConfigmapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      labels,
 		},
 		Data: rbacData,
 	}
@@ -78,19 +82,30 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 	mp := admissionregistrationv1.Equivalent
 	st := admissionregistrationv1.NamespacedScope
 	vpath := "/validate"
-	sport := getWebHooksSvcPort(nb)
 
-	targetLabelSels := makeWorkloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
+	targetLabelSels := bc.workloadNamespaceLabelSelectors(WorkloadInstanceTypeValueMiniService)
 	nsLabelSelReqs := makeLabelSelectorRequirements(targetLabelSels)
+	webhookConfigName, err := bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName)
+	if err != nil {
+		return fmt.Errorf("failed to build mini service validating webhook name: %w", err)
+	}
+	webhookLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build mini service validating webhook labels: %w", err)
+	}
+	validateWebhookName, err := bc.controlPlaneWebhookName("validate-helm-charts")
+	if err != nil {
+		return fmt.Errorf("failed to build mini service validating webhook entry name: %w", err)
+	}
 
 	vw := &admissionregistrationv1.ValidatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   nvcaoptypes.NVCAModuleName,
-			Labels: getAppLabels(),
+			Name:   webhookConfigName,
+			Labels: webhookLabels,
 		},
 		Webhooks: []admissionregistrationv1.ValidatingWebhook{
 			{
-				Name:                    "validate-helm-charts.nvca.nvcf.nvidia.io",
+				Name:                    validateWebhookName,
 				AdmissionReviewVersions: []string{"v1"},
 				FailurePolicy:           &fpt,
 				SideEffects:             &sec,
@@ -98,15 +113,7 @@ func (bc *BackendK8sCache) setupMiniServiceValidatingWebhook(ctx context.Context
 				NamespaceSelector: &metav1.LabelSelector{
 					MatchExpressions: nsLabelSelReqs,
 				},
-				ClientConfig: admissionregistrationv1.WebhookClientConfig{
-					CABundle: webhookCert.CACertBytes,
-					Service: &admissionregistrationv1.ServiceReference{
-						Name:      nvcaoptypes.NVCAModuleName,
-						Namespace: getSystemNamespace(nb),
-						Path:      &vpath,
-						Port:      &sport,
-					},
-				},
+				ClientConfig: makeWebhookClientConfig(nb, webhookCert, vpath),
 				Rules: []admissionregistrationv1.RuleWithOperations{
 					{
 						Rule: admissionregistrationv1.Rule{

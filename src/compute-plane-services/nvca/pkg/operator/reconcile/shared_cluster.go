@@ -19,7 +19,6 @@ package operator
 
 import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
@@ -27,29 +26,26 @@ import (
 func (bc *BackendK8sCache) makeNVCAPodNodeAffinityMutatingWebhook(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) admissionregistrationv1.MutatingWebhook {
+) (admissionregistrationv1.MutatingWebhook, error) {
 	sec := admissionregistrationv1.SideEffectClassNone
 	fpt := admissionregistrationv1.Fail
 	mp := admissionregistrationv1.Equivalent
 	st := admissionregistrationv1.NamespacedScope
 	const whShortName = "mutate-pod-nodeaffinity"
 	whPath := "/" + whShortName
-
-	targetLabelSels := makeWorkloadNamespaceLabelSelectors(
-		WorkloadInstanceTypeValuePodSpec,
-		WorkloadInstanceTypeValueMiniService,
-	)
+	webhookName, err := bc.controlPlaneWebhookName(whShortName)
+	if err != nil {
+		return admissionregistrationv1.MutatingWebhook{}, err
+	}
 
 	return admissionregistrationv1.MutatingWebhook{
-		Name:                    whShortName + ".nvca.nvcf.nvidia.io",
+		Name:                    webhookName,
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           &fpt,
 		SideEffects:             &sec,
 		MatchPolicy:             &mp,
 		ClientConfig:            makeWebhookClientConfig(nb, webhookCert, whPath),
-		NamespaceSelector: &metav1.LabelSelector{
-			MatchExpressions: makeLabelSelectorRequirements(targetLabelSels),
-		},
+		NamespaceSelector:       bc.workloadNamespaceSelector(WorkloadInstanceTypeValuePodSpec, WorkloadInstanceTypeValueMiniService),
 		Rules: []admissionregistrationv1.RuleWithOperations{
 			{
 				Rule: admissionregistrationv1.Rule{
@@ -64,5 +60,5 @@ func (bc *BackendK8sCache) makeNVCAPodNodeAffinityMutatingWebhook(
 				},
 			},
 		},
-	}
+	}, nil
 }

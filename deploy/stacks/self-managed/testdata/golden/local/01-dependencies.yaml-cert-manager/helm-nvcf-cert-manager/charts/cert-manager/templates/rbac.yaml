@@ -13,6 +13,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["issuers", "issuers/status"]
@@ -41,6 +42,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["clusterissuers", "clusterissuers/status"]
@@ -69,6 +71,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates", "certificates/status", "certificaterequests", "certificaterequests/status"]
@@ -106,6 +109,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["acme.cert-manager.io"]
     resources: ["orders", "orders/status"]
@@ -149,6 +153,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   # Use to update challenge resource status
   - apiGroups: ["acme.cert-manager.io"]
@@ -211,6 +216,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates", "certificaterequests"]
@@ -251,6 +257,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
     rbac.authorization.k8s.io/aggregate-to-cluster-reader: "true"
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["clusterissuers"]
@@ -273,6 +280,7 @@ metadata:
     rbac.authorization.k8s.io/aggregate-to-edit: "true"
     rbac.authorization.k8s.io/aggregate-to-admin: "true"
     rbac.authorization.k8s.io/aggregate-to-cluster-reader: "true"
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates", "certificaterequests", "issuers"]
@@ -296,6 +304,7 @@ metadata:
     helm.sh/chart: cert-manager-v1.20.2
     rbac.authorization.k8s.io/aggregate-to-edit: "true"
     rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates", "certificaterequests", "issuers"]
@@ -321,6 +330,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["signers"]
@@ -345,6 +355,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["certificates.k8s.io"]
     resources: ["certificatesigningrequests"]
@@ -373,6 +384,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -395,6 +407,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -417,6 +430,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -439,6 +453,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -461,6 +476,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -483,6 +499,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -505,6 +522,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -527,6 +545,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -564,6 +583,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -587,6 +607,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: [""]
     resources: ["serviceaccounts/token"]
@@ -609,6 +630,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -633,6 +655,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

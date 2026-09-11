@@ -11,6 +11,11 @@ environments:
 {{- if and $helmSourceURL (not (or (hasPrefix "https://" $helmSourceURL) $helmSourceURLIsLoopbackHTTP)) }}
 {{- fail "global.helm.sources.url must use https:// unless it points at local loopback HTTP for tests" }}
 {{- end }}
+{{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
+{{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
+{{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
+{{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
+{{- end }}
 
 repositories:
   - name: nvcf
@@ -40,11 +45,16 @@ helmDefaults:
 templates:
   service: &service
     chart: nvcf/helm-nvcf-{{`{{ .Release.Name }}`}}
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
 releases:
 
@@ -98,10 +108,15 @@ releases:
     version: 1.2.1
     namespace: nvcf
     condition: rateLimiter.enabled
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
     needs:
       - nvcf/api
 
@@ -121,6 +136,10 @@ releases:
     chart: nvcf/helm-admin-token-issuer-proxy
     version: 1.5.2
     namespace: api-keys
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     # Finding #22 (E2E 2026-04-20): admin-issuer-proxy was not installed by
@@ -148,20 +167,30 @@ releases:
     # peers (all other services in this file carry release-group: services).
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   - name: reval
     chart: nvcf/helm-reval
     version: 1.4.0
     namespace: nvcf
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   - name: nats-auth-callout-service
     chart: nvcf/helm-nvcf-nats-auth-callout-service
     version: 1.2.0
     namespace: nats-system
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
       {{- if .Values.global.imagePullSecrets }}
@@ -170,6 +199,7 @@ releases:
       {{- end }}
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   - name: llm-request-router
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
@@ -179,24 +209,34 @@ releases:
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     needs:
       - nvcf/api
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
     version: 1.4.3
     namespace: nvcf
     condition: addons.llm.enabled
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     needs:
       - nvcf/llm-request-router
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   - name: vanity-gateway
     version: 0.4.4
@@ -208,16 +248,22 @@ releases:
       - nvcf/invocation-service
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   - name: nvcf-ui
     chart: nvcf/helm-nvcf-ui
     version: 1.1.2
     namespace: nvcf-ui
     condition: addons.nvcfUi.enabled
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     labels:
       release-group: services
+      control-plane-owner: {{ $controlPlaneOwner | quote }}
 
   # --- Gateway API Ingress ---
   - name: ingress
@@ -234,7 +280,12 @@ releases:
       {{- end }}
     namespace: {{ .Values.ingress.gatewayApi.controllerNamespace }}
     condition: ingress.gatewayApi.enabled
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
     labels:
       release-group: ingress
+      control-plane-owner: {{ $controlPlaneOwner | quote }}

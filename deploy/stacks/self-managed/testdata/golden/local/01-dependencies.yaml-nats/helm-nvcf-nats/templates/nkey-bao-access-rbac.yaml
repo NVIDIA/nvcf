@@ -26,6 +26,8 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: nkey-bao-access
   namespace: nats-system
 rules:
@@ -40,6 +42,8 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: nkey-bao-access
   namespace: nats-system
 subjects:

@@ -6,6 +6,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: shared
   name: crd-upgrader
   namespace: kai-scheduler
   annotations:

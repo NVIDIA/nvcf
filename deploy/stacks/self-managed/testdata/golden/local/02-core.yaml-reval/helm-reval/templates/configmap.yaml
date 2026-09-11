@@ -24,6 +24,7 @@ metadata:
     app.kubernetes.io/instance: reval
     app.kubernetes.io/version: "0.20.2"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 data:
   config.yaml: |
     skip-validate-objects: true

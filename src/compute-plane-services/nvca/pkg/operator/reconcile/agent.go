@@ -29,6 +29,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	cmnotel "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel"
 	cmnsecret "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	nvversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
 	otelattr "go.opentelemetry.io/otel/attribute"
@@ -178,6 +179,9 @@ type AgentOptions struct {
 	// VaultOAuthClientMountPathTemplate is the template for constructing the
 	// Vault OAuth client mount path. Use %s as placeholder for clientID.
 	VaultOAuthClientMountPathTemplate string
+
+	// ControlPlaneIdentity scopes operator-created resources and cleanup.
+	ControlPlaneIdentity controlplane.Identity
 }
 
 type Agent struct {
@@ -243,6 +247,7 @@ func (o *AgentOptions) sanitizedString() string {
 	sanitized.NVCAAgentTolerations = append([]corev1.Toleration(nil), o.NVCAAgentTolerations...)
 	sanitized.NVCASecretMirrorSourceNamespace = o.NVCASecretMirrorSourceNamespace
 	sanitized.NVCASecretMirrorLabelSelector = o.NVCASecretMirrorLabelSelector
+	sanitized.ControlPlaneIdentity = o.ControlPlaneIdentity
 	sanitized.GenerateImagePullSecret = o.GenerateImagePullSecret
 	sanitized.OTelCollectorImageRepo = o.OTelCollectorImageRepo
 	sanitized.OTelCollectorImageTag = o.OTelCollectorImageTag
@@ -273,6 +278,9 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	if opts.SystemNamespace == "" {
 		log.Error("SystemNamespace required for Agent")
 		return nil, errors.New("SystemNamespace required for Agent")
+	}
+	if !opts.ControlPlaneIdentity.Valid() {
+		opts.ControlPlaneIdentity = controlplane.DefaultIdentity()
 	}
 
 	// Validate DDCSIPAllowList if provided
@@ -362,6 +370,28 @@ func (a *Agent) newKubeClients(ctx context.Context, path string) (*kubeclients.K
 	}
 
 	return backendK8sClients, nil
+}
+
+func (a *Agent) RunControlPlaneAdoption(
+	ctx context.Context,
+	dryRun bool,
+) (*controlPlaneAdoptionResult, error) {
+	backendK8sClients, err := a.newKubeClients(ctx, a.KubeConfigPath)
+	if err != nil {
+		return nil, err
+	}
+
+	operatorNamespace := a.SystemNamespace
+	if operatorNamespace == "" {
+		operatorNamespace = NVCAOperatorNamespace
+	}
+
+	bc := &BackendK8sCache{
+		clients:              backendK8sClients,
+		operatorNamespace:    operatorNamespace,
+		controlPlaneIdentity: a.ControlPlaneIdentity,
+	}
+	return bc.adoptLegacyControlPlaneObjects(ctx, dryRun)
 }
 
 // Taken from https://github.com/kubernetes/kubectl/blob/82a943479841e06efdbb8543d28cfcd0c028c8b6/pkg/cmd/util/kubectl_match_version.go#L112-L129
@@ -493,6 +523,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithEnvOverrides(a.FunctionEnvOverridesB64, a.TaskEnvOverridesB64).
 		WithIdentitySource(a.IdentitySource).
 		WithClusterSource(a.ClusterSource).
+		WithControlPlaneIdentity(a.ControlPlaneIdentity).
 		Start(ctx)
 
 	if err != nil {

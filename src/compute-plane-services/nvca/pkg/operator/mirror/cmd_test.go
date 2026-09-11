@@ -18,12 +18,16 @@ limitations under the License.
 package mirror
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"testing"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	cli "github.com/urfave/cli/v2"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -141,6 +145,66 @@ func TestDecodeImagePullSecrets(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestNewRunCommandIncludesControlPlaneIDFlag(t *testing.T) {
+	cmd := NewRunCommand()
+
+	flagNames := map[string]bool{}
+	for _, flag := range cmd.Flags {
+		for _, name := range flag.Names() {
+			flagNames[name] = true
+		}
+	}
+
+	assert.True(t, flagNames["control-plane-id"], "control-plane-id flag should exist")
+}
+
+func TestControlPlaneIdentityFromCLI(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		want      string
+		wantError bool
+	}{
+		{
+			name:  "empty defaults to legacy control plane",
+			value: "",
+			want:  controlplane.DefaultOwner,
+		},
+		{
+			name:  "named control plane",
+			value: "plane-a",
+			want:  "plane-a",
+		},
+		{
+			name:      "reserved shared owner is rejected",
+			value:     controlplane.SharedOwner,
+			wantError: true,
+		},
+		{
+			name:      "invalid DNS label is rejected",
+			value:     "Plane_A",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			set := flag.NewFlagSet("test", flag.ContinueOnError)
+			set.String("control-plane-id", tt.value, "")
+			c := cli.NewContext(&cli.App{}, set, nil)
+			c.Context = context.Background()
+
+			got, err := controlPlaneIdentityFromCLI(c)
+			if tt.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.String())
 		})
 	}
 }

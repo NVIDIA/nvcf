@@ -173,3 +173,26 @@ func TestDestroy_ExtraEnvForwarded(t *testing.T) {
 	assert.Contains(t, recorded.Env, "CLUSTER_ID=foo")
 	assert.Contains(t, recorded.Env, "CLUSTER_NAME=bar")
 }
+
+func TestDestroy_ExtraEnvOverridesParentEnv(t *testing.T) {
+	t.Setenv("NVCF_CONTROL_PLANE_OWNER", "from-parent")
+
+	var recorded *exec.Cmd
+	orig := destroyRunner
+	destroyRunner = func(cmd *exec.Cmd) error { recorded = cmd; return nil }
+	t.Cleanup(func() { destroyRunner = orig })
+
+	opts := DestroyOpts{
+		StackPath: "/stack",
+		Env:       "local",
+		ExtraEnv:  []string{"NVCF_CONTROL_PLANE_OWNER=plane-a"},
+		Stdout:    &bytes.Buffer{},
+		Stderr:    &bytes.Buffer{},
+		Ctx:       context.Background(),
+	}
+	require.NoError(t, Destroy(opts, &discardSink{}))
+
+	require.NotNil(t, recorded.Env)
+	assert.Contains(t, recorded.Env, "NVCF_CONTROL_PLANE_OWNER=plane-a")
+	assert.NotContains(t, recorded.Env, "NVCF_CONTROL_PLANE_OWNER=from-parent")
+}

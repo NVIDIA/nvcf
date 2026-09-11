@@ -26,6 +26,7 @@ metadata:
     app.kubernetes.io/version: "1.33.4"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: deployment
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   type: ClusterIP
   ports:

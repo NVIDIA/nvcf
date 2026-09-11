@@ -11,6 +11,7 @@ metadata:
     app.kubernetes.io/instance: nvct-api
     app.kubernetes.io/version: "1.66.0"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   replicas: 1
   selector:

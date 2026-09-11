@@ -36,6 +36,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/sirupsen/logrus"
 	yamlv3 "gopkg.in/yaml.v3"
@@ -231,13 +232,6 @@ func getRequestsNamespace(nb *nvidiaiov1.NVCFBackend) string {
 	return requestsNamespace
 }
 
-func makeWorkloadNamespaceLabelSelectors(icmsInstanceTypes ...string) map[string][]string {
-	labels := getAppLabels()
-	selVals := make(map[string][]string, len(labels))
-	selVals[nvcatypes.WorkloadInstanceTypeLabel] = icmsInstanceTypes
-	return selVals
-}
-
 func boolPtr(b bool) *bool { return &b }
 
 func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
@@ -248,6 +242,7 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		// so must be managed by it.
 		ManagedbyLabelKey:                   nvcaoptypes.NVCAModuleName,
 		nvcatypes.WorkloadInstanceTypeLabel: WorkloadInstanceTypeValuePodSpec,
+		controlplane.OwnerLabel:             bc.controlPlaneIdentityOrDefault().String(),
 	}
 
 	reqNSObj := &corev1.Namespace{
@@ -292,12 +287,16 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 
 func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
 	systemNamespace := getSystemNamespace(nb)
+	namespaceLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build system namespace labels: %w", err)
+	}
 
 	sysNSObj := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        systemNamespace,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      namespaceLabels,
 		},
 	}
 
@@ -311,7 +310,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 			Name:        systemNamespace,
 			Namespace:   systemNamespace,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      namespaceLabels,
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			ScopeSelector: &corev1.ScopeSelector{
@@ -728,12 +727,16 @@ func (bc *BackendK8sCache) setupOTELConfigSecret(ctx context.Context, nb *nvidia
 func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
 	log := core.GetLogger(ctx)
 	var err error
+	saLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build NVCA service account labels: %w", err)
+	}
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        nvcaoptypes.NVCAModuleName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      saLabels,
 		},
 		AutomountServiceAccountToken: boolPtr(false),
 		ImagePullSecrets:             getImagePullSecretReferences(ctx, nb, bc.generateImagePullSecret, bc.additionalImagePullSecrets),
@@ -748,12 +751,20 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 	readOnlyVerbs := []string{"get", "list", "watch"}
 	crudVerbs := []string{"get", "list", "watch", "create", "update", "delete", "patch"}
 	crudWithCollectionVerbs := []string{"get", "list", "watch", "create", "update", "delete", "deletecollection", "patch"}
+	clusterScopedName, err := bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName)
+	if err != nil {
+		return fmt.Errorf("failed to build NVCA RBAC name: %w", err)
+	}
+	crLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build NVCA cluster role labels: %w", err)
+	}
 
 	cr := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        clusterScopedName,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      crLabels,
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
@@ -800,7 +811,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			{
 				APIGroups:     []string{"admissionregistration.k8s.io"},
 				Resources:     []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"},
-				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
+				ResourceNames: []string{clusterScopedName},
 				Verbs:         []string{"get", "list", "watch"},
 			},
 			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
@@ -957,11 +968,15 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 		return err
 	}
 
+	crbLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build NVCA cluster role binding labels: %w", err)
+	}
 	crb := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        clusterScopedName,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      crbLabels,
 		},
 		Subjects: []rbacv1.Subject{
 			{
@@ -972,7 +987,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 		},
 		RoleRef: rbacv1.RoleRef{
 			Kind:     "ClusterRole",
-			Name:     nvcaoptypes.NVCAModuleName,
+			Name:     clusterScopedName,
 			APIGroup: "rbac.authorization.k8s.io",
 		},
 	}
@@ -2393,6 +2408,10 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 	if ffs := bc.getNVCAFeatureFlags(nb); ffs != "" {
 		featureFlags = strings.Split(ffs, ",")
 	}
+	namespaceLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return cfg, fmt.Errorf("failed to build NVCA agent namespace labels: %w", err)
+	}
 
 	cfg = nvcaconfig.Config{
 		Environment: environment,
@@ -2414,7 +2433,7 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 			AdminAddr:                               fmt.Sprintf("127.0.0.1:%d", nvcaAdminPortHTTP),
 			SystemNamespace:                         systemNamespace,
 			RequestsNamespace:                       requestsNamespace,
-			NamespaceLabels:                         getAppLabels(),
+			NamespaceLabels:                         namespaceLabels,
 			ComputeBackend:                          backendType,
 			HelmRepositoryPrefix:                    bc.helmRepositoryPrefix,
 			HelmReValStageOAuthTokenURL:             effectiveConfig.HelmReValStageOAuthTokenURL,
@@ -2588,23 +2607,55 @@ func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Con
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
 ) error {
+	webhookConfigName, err := bc.controlPlaneResourceName(nvcaoptypes.NVCAModuleName)
+	if err != nil {
+		return fmt.Errorf("failed to build NVCA mutating webhook configuration name: %w", err)
+	}
+	webhookLabels, err := bc.controlPlaneAppLabels()
+	if err != nil {
+		return fmt.Errorf("failed to build NVCA mutating webhook configuration labels: %w", err)
+	}
 	whc := &admissionregistrationv1.MutatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        webhookConfigName,
 			Annotations: getNBAnnotations(nb),
+			Labels:      webhookLabels,
 		},
 	}
 
-	whc.Webhooks = append(whc.Webhooks, bc.makeMiniServiceMutatingWebhooks(nb, webhookCert)...)
-	whc.Webhooks = append(whc.Webhooks, bc.makeNVCAPodNodeAffinityMutatingWebhook(nb, webhookCert))
-	whc.Webhooks = append(whc.Webhooks, bc.makePodEnforcementMutatingWebhooks(nb, webhookCert)...)
-	whc.Webhooks = append(whc.Webhooks,
-		// Note: the helm storage mutating webhook is now just a stub for backwards-compatibility.
-		// The MiniService mutating webhook now handles all storage mutations.
-		// This must be removed in a future release.
-		makeHelmStorageMutatingWebhook(nb, webhookCert),
-		bc.makeHelmPersistentStorageWebhook(nb, webhookCert),
-		makeNVCAMutatingWebhook(nb, webhookCert))
+	miniServiceWebhooks, err := bc.makeMiniServiceMutatingWebhooks(nb, webhookCert)
+	if err != nil {
+		return fmt.Errorf("failed to build mini service mutating webhooks: %w", err)
+	}
+	whc.Webhooks = append(whc.Webhooks, miniServiceWebhooks...)
+	podNodeAffinityWebhook, err := bc.makeNVCAPodNodeAffinityMutatingWebhook(nb, webhookCert)
+	if err != nil {
+		return fmt.Errorf("failed to build pod node affinity mutating webhook: %w", err)
+	}
+	whc.Webhooks = append(whc.Webhooks, podNodeAffinityWebhook)
+	podEnforcementWebhooks, err := bc.makePodEnforcementMutatingWebhooks(nb, webhookCert)
+	if err != nil {
+		return fmt.Errorf("failed to build pod enforcement mutating webhooks: %w", err)
+	}
+	whc.Webhooks = append(whc.Webhooks, podEnforcementWebhooks...)
+	// Note: the helm storage mutating webhook is now just a stub for backwards-compatibility.
+	// The MiniService mutating webhook now handles all storage mutations.
+	// This must be removed in a future release.
+	helmStorageWebhook, err := bc.makeHelmStorageMutatingWebhook(nb, webhookCert)
+	if err != nil {
+		return fmt.Errorf("failed to build Helm storage mutating webhook: %w", err)
+	}
+	whc.Webhooks = append(whc.Webhooks, helmStorageWebhook)
+	helmPersistentStorageWebhook, err := bc.makeHelmPersistentStorageWebhook(nb, webhookCert)
+	if err != nil {
+		return fmt.Errorf("failed to build Helm persistent storage mutating webhook: %w", err)
+	}
+	whc.Webhooks = append(whc.Webhooks, helmPersistentStorageWebhook)
+	nvcaMutatingWebhook, err := bc.makeNVCAMutatingWebhook(nb, webhookCert)
+	if err != nil {
+		return fmt.Errorf("failed to build NVCA mutating webhook: %w", err)
+	}
+	whc.Webhooks = append(whc.Webhooks, nvcaMutatingWebhook)
 
 	return bc.createOrUpdateMutatingWebhookConfiguration(ctx, whc)
 }

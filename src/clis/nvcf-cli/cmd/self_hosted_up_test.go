@@ -64,6 +64,7 @@ func resetUpFlags(t *testing.T) {
 	prevFinalHealth := waitForComputePlaneHealth
 	prevCurrentKubeContext := selfHostedUpCurrentKubeContext
 	prevFetchRootCA := fetchControlPlaneRootCAPEM
+	prevInstallGuardClient := buildKubeClientForSelfHostedInstallGuard
 	waitForComputePlaneHealth = func(context.Context, computePlaneHealthRequest) (computePlaneHealthResult, error) {
 		return computePlaneHealthResult{BackendHealth: "healthy"}, nil
 	}
@@ -86,10 +87,12 @@ func resetUpFlags(t *testing.T) {
 		selfHostedAccessible = false
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
+		selfHostedControlPlaneID = ""
 		selfHostedUpCmd.SetContext(nil)
 		waitForComputePlaneHealth = prevFinalHealth
 		selfHostedUpCurrentKubeContext = prevCurrentKubeContext
 		fetchControlPlaneRootCAPEM = prevFetchRootCA
+		buildKubeClientForSelfHostedInstallGuard = prevInstallGuardClient
 	})
 }
 
@@ -168,6 +171,36 @@ func TestSelfHostedInitArgs_DefaultConfig(t *testing.T) {
 	t.Cleanup(func() { cfgFile = prevCfgFile })
 
 	assert.Equal(t, []string{"init"}, selfHostedInitArgs())
+}
+
+func TestSelfHostedUp_NamedModeBlocksUnadoptedLegacyObjectsDuringPreflight(t *testing.T) {
+	resetUpFlags(t)
+
+	prevPreflight := runUpPreflight
+	t.Cleanup(func() { runUpPreflight = prevPreflight })
+	runUpPreflight = func(_ context.Context, _ selfhosted.PreflightConfig) []selfhosted.CheckResult {
+		return []selfhosted.CheckResult{{ID: "stub", Category: "binaries", Severity: "info", Passed: true, Message: "stub: ok"}}
+	}
+
+	buildKubeClientForSelfHostedInstallGuard = func(kubeContext string) (kubernetes.Interface, error) {
+		assert.Empty(t, kubeContext)
+		return fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvcf"}}), nil
+	}
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "up",
+		"--cluster-name=test",
+		"--control-plane-id", "plane-a",
+	})
+	err := rootCmd.Execute()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot install named control plane \"plane-a\"")
+	assert.Contains(t, err.Error(), "namespace/nvcf")
+	assert.Contains(t, stderr.String(), "[01/8] preflight: failed")
 }
 
 // TestSelfHostedUp_PlainEmitsPhaseLines drives the full orchestrator flow

@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 
 	"nvcf-cli/internal/selfhosted/helmruntime"
 	"nvcf-cli/internal/selfhosted/progress"
@@ -98,8 +99,30 @@ func Destroy(opts DestroyOpts, _ progress.EventSink) error {
 	// Mirror selfhosted.Render's env setup so helmfile templates that read
 	// `requiredEnv "HELMFILE_ENV"` (and any other inherited env like PATH /
 	// KUBECONFIG / KUBE_CONTEXT) work the same way they do for `up`.
-	cmd.Env = append(os.Environ(), "HELMFILE_ENV="+opts.Env)
-	cmd.Env = append(cmd.Env, opts.ExtraEnv...)
+	cmd.Env = destroyCommandEnv(os.Environ(), append([]string{"HELMFILE_ENV=" + opts.Env}, opts.ExtraEnv...)...)
 
 	return destroyRunner(cmd)
+}
+
+func destroyCommandEnv(base []string, overrides ...string) []string {
+	overridden := make(map[string]bool, len(overrides))
+	for _, item := range overrides {
+		if key, ok := destroyEnvKey(item); ok {
+			overridden[key] = true
+		}
+	}
+
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, item := range base {
+		if key, ok := destroyEnvKey(item); ok && overridden[key] {
+			continue
+		}
+		out = append(out, item)
+	}
+	return append(out, overrides...)
+}
+
+func destroyEnvKey(item string) (string, bool) {
+	key, _, ok := strings.Cut(item, "=")
+	return key, ok && key != ""
 }

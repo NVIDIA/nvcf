@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/name: openbao
     app.kubernetes.io/instance: openbao-server
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

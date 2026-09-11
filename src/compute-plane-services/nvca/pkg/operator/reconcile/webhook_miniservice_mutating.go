@@ -19,19 +19,26 @@ package operator
 
 import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
-	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
-) []admissionregistrationv1.MutatingWebhook {
+) ([]admissionregistrationv1.MutatingWebhook, error) {
 	const whPath = "/mutate-miniservice"
+	createWebhookName, err := bc.controlPlaneWebhookName("miniservice-mutate-create")
+	if err != nil {
+		return nil, err
+	}
+	updateWebhookName, err := bc.controlPlaneWebhookName("miniservice-mutate-update")
+	if err != nil {
+		return nil, err
+	}
+
 	rulePodsNamespaced := admissionregistrationv1.Rule{
 		APIGroups:   []string{""},
 		APIVersions: []string{"v1"},
@@ -53,17 +60,13 @@ func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	}
 
 	whCreate := admissionregistrationv1.MutatingWebhook{
-		Name:                    "miniservice-mutate-create.nvca.nvcf.nvidia.io",
+		Name:                    createWebhookName,
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           ptr.To(admissionregistrationv1.Fail),
 		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
 		ClientConfig:            makeWebhookClientConfig(nb, webhookCert, whPath),
-		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{
-				nvcatypes.WorkloadInstanceTypeLabel: nvcatypes.WorkloadInstanceTypeValueMiniService,
-			},
-		},
+		NamespaceSelector:       bc.workloadNamespaceSelector(WorkloadInstanceTypeValueMiniService),
 		Rules: []admissionregistrationv1.RuleWithOperations{
 			{
 				Rule: rulePodsNamespaced,
@@ -76,17 +79,13 @@ func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	}
 
 	whUpdate := admissionregistrationv1.MutatingWebhook{
-		Name:                    "miniservice-mutate-update.nvca.nvcf.nvidia.io",
+		Name:                    updateWebhookName,
 		AdmissionReviewVersions: []string{"v1"},
 		FailurePolicy:           ptr.To(admissionregistrationv1.Ignore),
 		SideEffects:             ptr.To(admissionregistrationv1.SideEffectClassNone),
 		MatchPolicy:             ptr.To(admissionregistrationv1.Exact),
 		ClientConfig:            makeWebhookClientConfig(nb, webhookCert, whPath),
-		NamespaceSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{
-				nvcatypes.WorkloadInstanceTypeLabel: nvcatypes.WorkloadInstanceTypeValueMiniService,
-			},
-		},
+		NamespaceSelector:       bc.workloadNamespaceSelector(WorkloadInstanceTypeValueMiniService),
 		Rules: []admissionregistrationv1.RuleWithOperations{
 			{
 				Rule: rulePodsNamespaced,
@@ -101,5 +100,5 @@ func (bc *BackendK8sCache) makeMiniServiceMutatingWebhooks(
 	return []admissionregistrationv1.MutatingWebhook{
 		whCreate,
 		whUpdate,
-	}
+	}, nil
 }

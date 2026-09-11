@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/component: operator-lease-rolebinding
     app.kubernetes.io/name: grove-operator
     app.kubernetes.io/part-of: grove
+    nvcf.nvidia.com/control-plane-owner: shared
   namespace: 'grove-system'
 roleRef:
   apiGroup: rbac.authorization.k8s.io

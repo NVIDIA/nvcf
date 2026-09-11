@@ -29,6 +29,7 @@ metadata:
     app.kubernetes.io/instance: ingress
     app.kubernetes.io/version: "0.0.0"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   # Allow references FROM traefik-gateway namespace
   from:

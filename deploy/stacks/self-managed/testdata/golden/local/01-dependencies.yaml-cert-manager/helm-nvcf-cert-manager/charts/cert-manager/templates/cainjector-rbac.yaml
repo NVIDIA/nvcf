@@ -26,6 +26,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
@@ -59,6 +60,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -83,6 +85,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 rules:
   # Used for leader election by the controller
   # cert-manager-cainjector-leader-election is used by the CertificateBased injector controller
@@ -113,6 +116,7 @@ metadata:
     app.kubernetes.io/version: "v1.20.2"
     app.kubernetes.io/managed-by: Helm
     helm.sh/chart: cert-manager-v1.20.2
+    nvcf.nvidia.com/control-plane-owner: shared
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

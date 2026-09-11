@@ -26,6 +26,7 @@ metadata:
     app.kubernetes.io/instance: ratelimiter
     app.kubernetes.io/version: "1.17.3"
     app.kubernetes.io/managed-by: Helm
+    nvcf.nvidia.com/control-plane-owner: default
 spec:
   type: ClusterIP
   ports:

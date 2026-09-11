@@ -20,6 +20,9 @@ environments:
 
 ---
 
+{{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
+{{- $sharedControlPlaneOwner := "shared" }}
+
 repositories:
   - name: kai-scheduler
     url: ghcr.io/kai-scheduler/kai-scheduler
@@ -51,6 +54,10 @@ releases:
     chart: kai-scheduler/kai-scheduler
     version: v0.17.1
     namespace: kai-scheduler
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $sharedControlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
       - {{- $kai := dig "kaiScheduler" dict .Values.addons }}
@@ -229,6 +236,7 @@ releases:
               overQuotaWeight: 1
     labels:
       release-group: workers
+      control-plane-owner: {{ $sharedControlPlaneOwner | quote }}
     wait: true
     waitForJobs: true
 
@@ -255,6 +263,10 @@ releases:
     installed: {{ and $topoEnabled $kaiEnabled }}
     chart: ../charts/nvcf-cluster-topology
     namespace: nvca-operator
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $sharedControlPlaneOwner | quote }}
     needs:
       - kai-scheduler/kai-scheduler
     values:
@@ -266,6 +278,7 @@ releases:
           enabled: false
     labels:
       release-group: workers
+      control-plane-owner: {{ $sharedControlPlaneOwner | quote }}
     wait: true
     waitForJobs: true
 
@@ -282,6 +295,10 @@ releases:
     chart: nvidia-ai-dynamo-grove/grove-charts
     version: v0.1.0-alpha.12
     namespace: grove-system
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $sharedControlPlaneOwner | quote }}
     needs:
       - kai-scheduler/kai-scheduler
     values:
@@ -349,6 +366,7 @@ releases:
           enabled: true
     labels:
       release-group: workers
+      control-plane-owner: {{ $sharedControlPlaneOwner | quote }}
     wait: true
     waitForJobs: true
 
@@ -366,6 +384,10 @@ releases:
     installed: {{ and $topoEnabled $groveEnabled }}
     chart: ../charts/nvcf-cluster-topology
     namespace: nvca-operator
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $sharedControlPlaneOwner | quote }}
     needs:
       - grove-system/grove-operator
       - nvca-operator/nvcf-kai-topology
@@ -378,6 +400,7 @@ releases:
           enabled: true
     labels:
       release-group: workers
+      control-plane-owner: {{ $sharedControlPlaneOwner | quote }}
     wait: true
     waitForJobs: true
 
@@ -391,6 +414,10 @@ releases:
     chart: nvidia-ai-dynamo/dynamo-platform
     version: 1.4.2
     namespace: dynamo-system
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $sharedControlPlaneOwner | quote }}
     needs:
       - grove-system/grove-operator
     values:
@@ -479,5 +506,6 @@ releases:
           enabled: true
     labels:
       release-group: workers
+      control-plane-owner: {{ $sharedControlPlaneOwner | quote }}
     wait: true
     waitForJobs: true

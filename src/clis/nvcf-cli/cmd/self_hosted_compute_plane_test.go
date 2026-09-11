@@ -45,6 +45,7 @@ func resetComputePlaneFlags(t *testing.T) {
 	selfHostedICMSURL = ""
 	selfHostedControlPlaneContext = ""
 	selfHostedComputePlaneContext = ""
+	selfHostedControlPlaneID = ""
 	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
 	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
 		return selfhosted.HelmRuntimeHelm3Legacy, nil
@@ -60,6 +61,7 @@ func resetComputePlaneFlags(t *testing.T) {
 		selfHostedICMSURL = ""
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
+		selfHostedControlPlaneID = ""
 		computePlaneInstallValues = ""
 		computePlaneInstallKubeContext = ""
 		computePlaneInstallClusterName = ""

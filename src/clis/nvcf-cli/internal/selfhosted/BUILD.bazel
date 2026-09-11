@@ -19,8 +19,10 @@ go_library(
     name = "selfhosted",
     srcs = [
         "clustervalidator.go",
+        "control_plane_identity.go",
         "helm_runtime.go",
         "inotify_probe.go",
+        "mixed_mode_install.go",
         "orchestrator_errors.go",
         "output.go",
         "preflight.go",
@@ -55,6 +57,7 @@ go_test(
     srcs = [
         "clustervalidator_test.go",
         "inotify_probe_test.go",
+        "mixed_mode_install_test.go",
         "orchestrator_errors_test.go",
         "output_test.go",
         "preflight_test.go",
@@ -72,6 +75,8 @@ go_test(
         "@com_github_masterminds_semver_v3//:semver",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@io_k8s_api//admissionregistration/v1:admissionregistration",
+        "@io_k8s_api//apps/v1:apps",
         "@io_k8s_api//batch/v1:batch",
         "@io_k8s_api//core/v1:core",
         "@io_k8s_api//rbac/v1:rbac",

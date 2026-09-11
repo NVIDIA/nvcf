@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1535,6 +1536,7 @@ func Test_setupNVCARBAC(t *testing.T) {
 		"app.kubernetes.io/instance":   "nvca",
 		"app.kubernetes.io/managed-by": "nvca-operator",
 		"app.kubernetes.io/name":       "nvca",
+		controlplane.OwnerLabel:        controlplane.DefaultOwner,
 	}
 	expAnnotations := map[string]string{
 		"nvcf.nvidia.io/cluster-group": "my-cluster-group",
@@ -1807,6 +1809,7 @@ func Test_setupNVCARBAC_generateImagePullSecretFalse(t *testing.T) {
 		"app.kubernetes.io/instance":   "nvca",
 		"app.kubernetes.io/managed-by": "nvca-operator",
 		"app.kubernetes.io/name":       "nvca",
+		controlplane.OwnerLabel:        controlplane.DefaultOwner,
 	}
 	expAnnotations := map[string]string{
 		"nvcf.nvidia.io/cluster-group": "my-cluster-group",
@@ -1971,6 +1974,7 @@ func Test_setupNVCARBAC_ValidationPolicy(t *testing.T) {
 		"app.kubernetes.io/instance":   "nvca",
 		"app.kubernetes.io/managed-by": "nvca-operator",
 		"app.kubernetes.io/name":       "nvca",
+		controlplane.OwnerLabel:        controlplane.DefaultOwner,
 	}
 	expAnnotations := map[string]string{
 		"nvcf.nvidia.io/cluster-group": "my-cluster-group",
@@ -2205,6 +2209,7 @@ func Test_NVLinkOptimized(t *testing.T) {
 		"app.kubernetes.io/instance":   "nvca",
 		"app.kubernetes.io/managed-by": "nvca-operator",
 		"app.kubernetes.io/name":       "nvca",
+		controlplane.OwnerLabel:        controlplane.DefaultOwner,
 	}
 	expAnnotations := map[string]string{
 		"nvcf.nvidia.io/cluster-group": "my-cluster-group",
@@ -5081,6 +5086,7 @@ func Test_setupAgentConfigConfigMap(t *testing.T) {
     app.kubernetes.io/instance: nvca
     app.kubernetes.io/managed-by: nvca-operator
     app.kubernetes.io/name: nvca
+    nvcf.nvidia.com/control-plane-owner: default
   requestsNamespace: nvcf-backend
   sharedStorage:
     server:

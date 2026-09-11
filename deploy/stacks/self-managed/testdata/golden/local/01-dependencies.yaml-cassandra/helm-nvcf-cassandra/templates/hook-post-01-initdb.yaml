@@ -3,6 +3,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: cassandra-init-script
   namespace: cassandra-system
   annotations:
@@ -174,6 +176,8 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: cassandra-initialize-cluster
   namespace: cassandra-system
   annotations:

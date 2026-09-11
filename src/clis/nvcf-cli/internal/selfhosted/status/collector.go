@@ -24,6 +24,7 @@ package status
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -37,6 +38,8 @@ import (
 const (
 	roleControlPlane = "control-plane"
 	roleComputePlane = "compute-plane"
+	ownerLabel       = "nvcf.nvidia.com/control-plane-owner"
+	sharedOwner      = "shared"
 )
 
 // ClusterLister is the SIS subset the collector needs.
@@ -83,6 +86,12 @@ type Collector struct {
 	// ComputePlaneContext is the kubeconfig context for the compute-plane kube
 	// client. Used to set Context on ClusterRow events for the IsCurrent cluster.
 	ComputePlaneContext string
+
+	// ExpectedOwner is the control-plane owner label value that live workload
+	// objects must carry before their readiness can count for this status view.
+	// Empty preserves the legacy collector behavior for direct callers/tests
+	// that have not opted into the ownership gate.
+	ExpectedOwner string
 
 	NowFunc func() time.Time // clock seam, defaults to time.Now
 }
@@ -324,6 +333,7 @@ func emitStatusEvents(ctx context.Context, sink progress.EventSink, snap progres
 func (c *Collector) probeComponent(ctx context.Context, kube kubernetes.Interface, sp ComponentSpec, now time.Time) (progress.ComponentHealth, error) {
 	var ready, total int32
 	var creationTS time.Time
+	var objectLabels map[string]string
 
 	switch sp.Kind {
 	case "deployment":
@@ -336,6 +346,7 @@ func (c *Collector) probeComponent(ctx context.Context, kube kubernetes.Interfac
 		}
 		ready = d.Status.ReadyReplicas
 		creationTS = d.CreationTimestamp.Time
+		objectLabels = d.Labels
 
 	case "statefulset":
 		s, err := kube.AppsV1().StatefulSets(sp.Namespace).Get(ctx, sp.Resource, metav1.GetOptions{})
@@ -347,9 +358,14 @@ func (c *Collector) probeComponent(ctx context.Context, kube kubernetes.Interfac
 		}
 		ready = s.Status.ReadyReplicas
 		creationTS = s.CreationTimestamp.Time
+		objectLabels = s.Labels
 
 	default:
 		return progress.ComponentHealth{}, fmt.Errorf("unknown component kind %q for %s", sp.Kind, sp.Name)
+	}
+
+	if err := c.validateComponentOwner(sp, objectLabels); err != nil {
+		return progress.ComponentHealth{}, err
 	}
 
 	healthy := ready == total && total > 0
@@ -365,4 +381,24 @@ func (c *Collector) probeComponent(ctx context.Context, kube kubernetes.Interfac
 		UptimeSec: uptime,
 		Healthy:   healthy,
 	}, nil
+}
+
+func (c *Collector) validateComponentOwner(sp ComponentSpec, labels map[string]string) error {
+	expected := strings.TrimSpace(c.ExpectedOwner)
+	if expected == "" {
+		return nil
+	}
+	actual := labels[ownerLabel]
+	if actual == expected {
+		return nil
+	}
+	target := fmt.Sprintf("%s %s/%s", sp.Kind, sp.Namespace, sp.Resource)
+	switch actual {
+	case "":
+		return fmt.Errorf("%s has no %s label; expected control plane %q", target, ownerLabel, expected)
+	case sharedOwner:
+		return fmt.Errorf("%s is shared (%s=%s), not owned by control plane %q", target, ownerLabel, sharedOwner, expected)
+	default:
+		return fmt.Errorf("%s is owned by control plane %q, expected %q", target, actual, expected)
+	}
 }

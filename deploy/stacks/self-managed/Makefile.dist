@@ -16,6 +16,13 @@
 # Helmfile environment to use (maps to environments/<env>.yaml)
 HELMFILE_ENV  ?= default
 
+# Control-plane owner label value used by Helmfile post-renderers. The default
+# preserves the legacy unnamed control plane.
+NVCF_CONTROL_PLANE_OWNER ?= default
+comma := ,
+HELMFILE_CONTROL_PLANE_OWNER_SELECTOR = control-plane-owner=$(NVCF_CONTROL_PLANE_OWNER)
+HELMFILE_DESTROY_SELECTOR = $(HELMFILE_CONTROL_PLANE_OWNER_SELECTOR)$(if $(HELMFILE_SELECTOR),$(comma)$(HELMFILE_SELECTOR),)
+
 # Determine the absolute path of the directory containing this Makefile.
 MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -38,11 +45,21 @@ REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
 # Namespaces created by the NVCF stack (used by destroy target)
-NAMESPACES := cassandra-system nats-system vault-system ncp nvcf api-keys ess sis
+NAMESPACES ?= cassandra-system nats-system vault-system ncp nvcf api-keys ess sis
+SHARED_NAMESPACES ?= cert-manager
+
+# Namespace metadata used by the future plane registry. The chart version is
+# parsed from the primary control-plane API release so it follows helmfile
+# version bumps instead of becoming a second stale constant.
+CONTROL_PLANE_PRIMARY_NAMESPACE ?= nvcf
+CONTROL_PLANE_STACK_NAME ?= self-managed
+CONTROL_PLANE_CHART_VERSION ?= $(shell awk '/^  - name: api$$/ {found=1; next} found && $$1 == "version:" {print $$2; exit}' "$(MAKEFILE_DIR)/helmfile.d/02-core.yaml.gotmpl")
+NVCA_OPERATOR_VERSION ?= not-installed
 
 # Optional kubeconfig file - only used if defined
 KUBECONFIG_FILE ?=
 KUBECONFIG_FLAG = $(if $(KUBECONFIG_FILE),--kubeconfig $(KUBECONFIG_FILE))
+MARK_CONTROL_PLANE_NAMESPACE_ARGS = --owner "$(NVCF_CONTROL_PLANE_OWNER)" --primary-namespace "$(CONTROL_PLANE_PRIMARY_NAMESPACE)" --stack "$(CONTROL_PLANE_STACK_NAME)" --chart-version "$(CONTROL_PLANE_CHART_VERSION)" --nvca-operator-version "$(NVCA_OPERATOR_VERSION)" $(foreach ns,$(NAMESPACES),--namespace "$(ns)") $(foreach ns,$(SHARED_NAMESPACES),--shared-namespace "$(ns)") $(if $(KUBECONFIG_FILE),--kubeconfig "$(KUBECONFIG_FILE)")
 
 # PATH and HELM_PLUGINS override for development mode (when using local binaries)
 # In development, prepend bin/ to PATH so helmfile uses local helm,
@@ -148,28 +165,36 @@ template: clean check-versions
 	@echo ">>> Templating Helmfile..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
+	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
 	@echo "    Output Directory: $(OUTPUT_DIR)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 
 	mkdir -p "$(OUTPUT_DIR)"
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
+	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
 	OUTPUT_DIR="$(OUTPUT_DIR)" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template --output-dir "$(OUTPUT_DIR)" \
 		$(if $(OUTPUT_DIR_TEMPLATE),--output-dir-template '$(OUTPUT_DIR_TEMPLATE)')
 
+	@NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+		$(MAKEFILE_DIR)/renderers/apply-control-plane-owner-labels-to-output-dir.sh "$(OUTPUT_DIR)"
 	@echo ">>> Templating complete. Manifests generated in $(OUTPUT_DIR)"
 
 install: check-versions $(INSTALL_PRE_HOOKS)
 	@echo ">>> Installing Helmfile configuration..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
+	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
+	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
 
+	@$(MAKEFILE_DIR)/renderers/mark-control-plane-namespaces.sh \
+		$(MARK_CONTROL_PLANE_NAMESPACE_ARGS)
 	@echo ">>> Helmfile sync complete."
 
 sync: install
@@ -178,36 +203,48 @@ apply: check-versions $(APPLY_PRE_HOOKS)
 	@echo ">>> Applying Helmfile configuration..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
+	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
+	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
 	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
 
+	@$(MAKEFILE_DIR)/renderers/mark-control-plane-namespaces.sh \
+		$(MARK_CONTROL_PLANE_NAMESPACE_ARGS)
 	@echo ">>> Helmfile apply complete."
 
 destroy: check-versions
 	@echo ">>> Destroying Helmfile releases..."
 	@echo "    Helmfile Directory: helmfile.d/"
 	@echo "    Environment: $(HELMFILE_ENV)"
+	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Destroy Selector: $(HELMFILE_DESTROY_SELECTOR)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig: $(KUBECONFIG_FILE)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) destroy
+	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) --selector "$(HELMFILE_DESTROY_SELECTOR)" destroy
 
 	@echo ">>> Helmfile destroy complete."
 
+ifeq ($(NVCF_CONTROL_PLANE_OWNER),default)
 ifndef HELMFILE_SELECTOR
 	@echo ">>> Deleting namespaces... $(NAMESPACES)"
 	@for ns in $(NAMESPACES); do \
-		if kubectl get namespace "$$ns" >/dev/null 2>&1; then \
-			kubectl delete namespace "$$ns" --wait=true; \
-		fi; \
+		$(MAKEFILE_DIR)/renderers/delete-owned-namespace.sh \
+			--owner "$(NVCF_CONTROL_PLANE_OWNER)" \
+			--namespace "$$ns" \
+			$(if $(KUBECONFIG_FILE),--kubeconfig "$(KUBECONFIG_FILE)"); \
 	done
 	@echo ">>> Namespace cleanup complete."
 else
 	@echo ">>> Skipping namespace cleanup (selector was used)"
+endif
+else
+	@echo ">>> Skipping fixed namespace cleanup for named control-plane owner $(NVCF_CONTROL_PLANE_OWNER)"
 endif
 
 clean:
@@ -234,6 +271,7 @@ help:
 	@echo "  HELMFILE_ENV       Environment name (default: $(HELMFILE_ENV))"
 	@echo "                     Must match a file: environments/<env>.yaml"
 	@echo "  HELMFILE_SELECTOR  Optional release selector (e.g., name=api-keys)"
+	@echo "  NVCF_CONTROL_PLANE_OWNER Owner label value (default: $(NVCF_CONTROL_PLANE_OWNER))"
 	@echo "  KUBECONFIG_FILE    Optional path to kubeconfig file"
 	@echo "  OUTPUT_DIR         Output directory for template (default: ./out)"
 	@echo ""

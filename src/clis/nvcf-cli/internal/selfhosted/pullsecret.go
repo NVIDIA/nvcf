@@ -82,6 +82,15 @@ func resolveValidatorPullSecret(
 	client kubernetes.Interface,
 	provided, image string,
 ) (string, error) {
+	return resolveValidatorPullSecretForOwner(ctx, client, provided, image, "")
+}
+
+func resolveValidatorPullSecretForOwner(
+	ctx context.Context,
+	client kubernetes.Interface,
+	provided, image string,
+	controlPlaneOwner string,
+) (string, error) {
 	if provided != "" {
 		return provided, nil
 	}
@@ -93,13 +102,13 @@ func resolveValidatorPullSecret(
 	scanCtx, cancel := context.WithTimeout(ctx, validatorPullSecretScanTimeout)
 	defer cancel()
 
-	if name, err := scanAndMirrorPullSecret(scanCtx, client, registry); err != nil {
+	if name, err := scanAndMirrorPullSecretForOwner(scanCtx, client, registry, controlPlaneOwner); err != nil {
 		return "", err
 	} else if name != "" {
 		return name, nil
 	}
 
-	if name, err := autoCreatePullSecretFromEnv(scanCtx, client, registry); err != nil {
+	if name, err := autoCreatePullSecretFromEnvForOwner(scanCtx, client, registry, controlPlaneOwner); err != nil {
 		return "", err
 	} else if name != "" {
 		return name, nil
@@ -132,6 +141,15 @@ func parseRegistryFromImage(image string) string {
 // lives elsewhere, so the Job can reference the secret without cross-namespace
 // lookups.
 func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, registry string) (string, error) {
+	return scanAndMirrorPullSecretForOwner(ctx, client, registry, "")
+}
+
+func scanAndMirrorPullSecretForOwner(
+	ctx context.Context,
+	client kubernetes.Interface,
+	registry string,
+	controlPlaneOwner string,
+) (string, error) {
 	for _, ns := range validatorPullSecretSearchNamespaces {
 		// Filter client-side rather than via FieldSelector: server-side
 		// type= selector on Secrets is only honored from k8s 1.27 onward.
@@ -148,6 +166,9 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 				continue
 			}
 			if s.Namespace == clusterValidatorNamespace {
+				if err := ensureValidatorSecretUsableForOwner(ctx, client, &s, controlPlaneOwner); err != nil {
+					return "", err
+				}
 				return s.Name, nil
 			}
 			// Mirror under the validator's well-known name rather than the
@@ -156,7 +177,7 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 			// the destination namespace, and writeDockerConfigSecret's
 			// delete-and-recreate path would otherwise destroy that
 			// secret on type mismatch.
-			if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg); err != nil {
+			if err := writeDockerConfigSecretForOwner(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg, controlPlaneOwner); err != nil {
 				return "", fmt.Errorf("mirror pull secret %s/%s to %s/%s: %w",
 					s.Namespace, s.Name, clusterValidatorNamespace, validatorPullSecretName, err)
 			}
@@ -178,6 +199,15 @@ func dockerConfigHasRegistry(cfg []byte, registry string) bool {
 }
 
 func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interface, registry string) (string, error) {
+	return autoCreatePullSecretFromEnvForOwner(ctx, client, registry, "")
+}
+
+func autoCreatePullSecretFromEnvForOwner(
+	ctx context.Context,
+	client kubernetes.Interface,
+	registry string,
+	controlPlaneOwner string,
+) (string, error) {
 	apiKey := firstNonEmptyEnv(ngcAPIKeyEnvNames...)
 	if apiKey == "" {
 		return "", nil
@@ -186,7 +216,7 @@ func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interfac
 	if err != nil {
 		return "", fmt.Errorf("encode dockerconfigjson for %s: %w", registry, err)
 	}
-	if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg); err != nil {
+	if err := writeDockerConfigSecretForOwner(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg, controlPlaneOwner); err != nil {
 		return "", fmt.Errorf("auto-create pull secret %s/%s: %w",
 			clusterValidatorNamespace, validatorPullSecretName, err)
 	}
@@ -222,7 +252,17 @@ func buildDockerConfigJSON(registry, username, password string) ([]byte, error) 
 // CLI's managed-by labels so a future cleanup path can identify resources
 // to remove.
 func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, namespace, name string, dockerConfig []byte) error {
-	labels := clusterValidatorLabels()
+	return writeDockerConfigSecretForOwner(ctx, client, namespace, name, dockerConfig, "")
+}
+
+func writeDockerConfigSecretForOwner(
+	ctx context.Context,
+	client kubernetes.Interface,
+	namespace, name string,
+	dockerConfig []byte,
+	controlPlaneOwner string,
+) error {
+	labels := clusterValidatorLabelsForOwner(controlPlaneOwner)
 	secrets := client.CoreV1().Secrets(namespace)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -236,6 +276,9 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 	current, err := secrets.Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case err == nil && current.Type == corev1.SecretTypeDockerConfigJson:
+		if err := validateManagedValidatorSecretOwner(current, controlPlaneOwner); err != nil {
+			return err
+		}
 		if current.Data == nil {
 			current.Data = map[string][]byte{}
 		}
@@ -262,6 +305,9 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 					"pass --cluster-validator-pull-secret to choose an explicit secret name",
 				namespace, name, current.Type)
 		}
+		if err := validateManagedValidatorSecretOwner(current, controlPlaneOwner); err != nil {
+			return err
+		}
 		if err := secrets.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete incompatible secret type %s: %w", current.Type, err)
 		}
@@ -284,6 +330,9 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 			return fmt.Errorf("create race left secret %s/%s with type %s, want %s",
 				namespace, name, current.Type, corev1.SecretTypeDockerConfigJson)
 		}
+		if err := validateManagedValidatorSecretOwner(current, controlPlaneOwner); err != nil {
+			return err
+		}
 		if current.Data == nil {
 			current.Data = map[string][]byte{}
 		}
@@ -299,6 +348,69 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 		}
 	}
 	return nil
+}
+
+func ensureValidatorSecretUsableForOwner(
+	ctx context.Context,
+	client kubernetes.Interface,
+	secret *corev1.Secret,
+	controlPlaneOwner string,
+) error {
+	if err := validateManagedValidatorSecretOwner(secret, controlPlaneOwner); err != nil {
+		return err
+	}
+	owner := strings.TrimSpace(controlPlaneOwner)
+	if owner == "" || !isManagedByValidatorCLI(secret) || secret.Labels[controlPlaneOwnerLabel] == owner {
+		return nil
+	}
+	current, err := client.CoreV1().Secrets(secret.Namespace).Get(ctx, secret.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get validator pull secret %s/%s for owner adoption: %w", secret.Namespace, secret.Name, err)
+	}
+	if err := validateManagedValidatorSecretOwner(current, controlPlaneOwner); err != nil {
+		return err
+	}
+	if current.Labels == nil {
+		current.Labels = map[string]string{}
+	}
+	current.Labels[controlPlaneOwnerLabel] = owner
+	if _, err := client.CoreV1().Secrets(secret.Namespace).Update(ctx, current, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("label validator pull secret %s/%s for owner %q: %w", secret.Namespace, secret.Name, owner, err)
+	}
+	return nil
+}
+
+func validateManagedValidatorSecretOwner(s *corev1.Secret, controlPlaneOwner string) error {
+	owner := strings.TrimSpace(controlPlaneOwner)
+	if owner == "" || !isManagedByValidatorCLI(s) {
+		return nil
+	}
+	actual := s.Labels[controlPlaneOwnerLabel]
+	if actual == owner {
+		return nil
+	}
+	if actual == "" && owner == controlPlaneDefaultOwner {
+		return nil
+	}
+	if actual == "" {
+		actual = "<missing>"
+	}
+	return fmt.Errorf(
+		"refusing to reuse %s/%s managed by control plane owner %q; "+
+			"pass --cluster-validator-pull-secret to choose an explicit secret name",
+		s.Namespace, s.Name, actual)
+}
+
+func isManagedByValidatorCLIForOwner(s *corev1.Secret, controlPlaneOwner string) bool {
+	if !isManagedByValidatorCLI(s) {
+		return false
+	}
+	owner := strings.TrimSpace(controlPlaneOwner)
+	if owner == "" {
+		return true
+	}
+	actual := s.Labels[controlPlaneOwnerLabel]
+	return actual == owner || (actual == "" && owner == controlPlaneDefaultOwner)
 }
 
 // isManagedByValidatorCLI reports whether the secret carries the labels

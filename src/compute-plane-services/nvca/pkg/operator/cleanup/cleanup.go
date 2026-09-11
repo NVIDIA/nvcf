@@ -27,9 +27,12 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
@@ -60,6 +63,20 @@ type CleanupOption func(*cleanupOptions) //nolint:revive // exported name is int
 
 // cleanupOptions configures cleanup behavior
 type cleanupOptions struct {
+	controlPlaneIdentity controlplane.Identity
+}
+
+// WithControlPlaneIdentity scopes cleanup to resources owned by one control plane.
+func WithControlPlaneIdentity(identity controlplane.Identity) CleanupOption {
+	return func(opts *cleanupOptions) {
+		opts.controlPlaneIdentity = identity
+	}
+}
+
+func defaultCleanupOptions() *cleanupOptions {
+	return &cleanupOptions{
+		controlPlaneIdentity: controlplane.DefaultIdentity(),
+	}
 }
 
 // BackendNamespaces returns the system and requests namespace names for an NVCFBackend
@@ -87,15 +104,22 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	nb *nvidiaiov1.NVCFBackend,
 	options ...CleanupOption,
 ) error {
-	opts := &cleanupOptions{}
+	opts := defaultCleanupOptions()
 	for _, o := range options {
 		o(opts)
+	}
+	if !opts.controlPlaneIdentity.Valid() {
+		return fmt.Errorf("invalid control plane identity %q", opts.controlPlaneIdentity.String())
 	}
 
 	log := core.GetLogger(ctx)
 	log.Infof("cleaning-up resources for nvcfbackend %v/%v", nb.Namespace, nb.Name)
 
 	systemNS, requestsNS := BackendNamespaces(nb)
+	clusterScopedName, err := controlPlaneResourceName(opts.controlPlaneIdentity, NVCAModuleName)
+	if err != nil {
+		return err
+	}
 
 	// Delete all ICMSRequest CRs (remove finalizers first, then delete)
 	if err := deleteICMSRequests(ctx, dynamicClient, requestsNS); err != nil {
@@ -106,50 +130,50 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	// These are standalone top-level namespaces with no owner references, so they
 	// won't be cleaned up by garbage collection. Normally NVCA's MiniService controller
 	// handles this, but during forced cleanup NVCA is being torn down.
-	if err := deleteWorkloadNamespaces(ctx, k8sClient); err != nil {
+	if err := deleteWorkloadNamespacesForControlPlane(ctx, k8sClient, opts.controlPlaneIdentity); err != nil {
 		log.WithError(err).Warn("failed to delete some workload namespaces")
 	}
 
 	// Cleanup the system namespace
-	err := k8sClient.CoreV1().Namespaces().Delete(ctx, systemNS, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
+	err = deleteNamespaceForControlPlane(ctx, k8sClient, systemNS, opts.controlPlaneIdentity)
+	if err != nil {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", systemNS, err)
 	}
 
 	// Cleanup the requests namespace
-	err = k8sClient.CoreV1().Namespaces().Delete(ctx, requestsNS, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
+	err = deleteNamespaceForControlPlane(ctx, k8sClient, requestsNS, opts.controlPlaneIdentity)
+	if err != nil {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", requestsNS, err)
 	}
 
 	// Cleanup the shared model-cache initialization namespace created by NVCA.
-	err = k8sClient.CoreV1().Namespaces().Delete(ctx, DefaultModelCacheInitNamespace, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
+	err = deleteNamespaceForControlPlane(ctx, k8sClient, DefaultModelCacheInitNamespace, opts.controlPlaneIdentity)
+	if err != nil {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", DefaultModelCacheInitNamespace, err)
 	}
 
 	// Delete ValidatingWebhookConfiguration
-	err = k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete validatingwebhookconfiguration %v, err: %v", NVCAModuleName, err)
+	err = deleteValidatingWebhookConfigurationForControlPlane(ctx, k8sClient, clusterScopedName, opts.controlPlaneIdentity)
+	if err != nil {
+		return fmt.Errorf("failed to delete validatingwebhookconfiguration %v, err: %v", clusterScopedName, err)
 	}
 
 	// Delete MutatingWebhookConfiguration
-	err = k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete mutatingwebhookconfiguration %v, err: %v", NVCAModuleName, err)
+	err = deleteMutatingWebhookConfigurationForControlPlane(ctx, k8sClient, clusterScopedName, opts.controlPlaneIdentity)
+	if err != nil {
+		return fmt.Errorf("failed to delete mutatingwebhookconfiguration %v, err: %v", clusterScopedName, err)
 	}
 
 	// Delete ClusterRole
-	err = k8sClient.RbacV1().ClusterRoles().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete cluster-role %v, err: %v", NVCAModuleName, err)
+	err = deleteClusterRoleForControlPlane(ctx, k8sClient, clusterScopedName, opts.controlPlaneIdentity)
+	if err != nil {
+		return fmt.Errorf("failed to delete cluster-role %v, err: %v", clusterScopedName, err)
 	}
 
 	// Delete ClusterRoleBinding
-	err = k8sClient.RbacV1().ClusterRoleBindings().Delete(ctx, NVCAModuleName, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete cluster-role-bindings %v, err: %v", NVCAModuleName, err)
+	err = deleteClusterRoleBindingForControlPlane(ctx, k8sClient, clusterScopedName, opts.controlPlaneIdentity)
+	if err != nil {
+		return fmt.Errorf("failed to delete cluster-role-bindings %v, err: %v", clusterScopedName, err)
 	}
 
 	// Note: Operator-managed CRDs (ICMSRequest, StorageRequest, MiniServices) have owner references
@@ -640,10 +664,27 @@ const workloadNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-ty
 
 // deleteWorkloadNamespaces lists and deletes all NVCA workload namespaces (sr-*).
 func deleteWorkloadNamespaces(ctx context.Context, k8sClient kubernetes.Interface) error {
+	return deleteWorkloadNamespacesForControlPlane(ctx, k8sClient, controlplane.DefaultIdentity())
+}
+
+func deleteWorkloadNamespacesForControlPlane(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	identity controlplane.Identity,
+) error {
 	log := core.GetLogger(ctx)
 
+	if err := adoptLegacyWorkloadNamespaces(ctx, k8sClient, identity); err != nil {
+		return err
+	}
+
+	selector, err := workloadNamespaceSelector(identity)
+	if err != nil {
+		return err
+	}
+
 	nsList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-		LabelSelector: workloadNamespaceLabelSelector,
+		LabelSelector: selector,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to list workload namespaces: %w", err)
@@ -672,6 +713,210 @@ func deleteWorkloadNamespaces(ctx context.Context, k8sClient kubernetes.Interfac
 		return fmt.Errorf("failed to delete %d workload namespace(s)", len(errs))
 	}
 	return nil
+}
+
+func deleteNamespaceForControlPlane(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	name string,
+	identity controlplane.Identity,
+) error {
+	ns, err := k8sClient.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !canCleanupForControlPlane(ctx, "namespace", name, ns.Labels, identity) {
+		return nil
+	}
+	err = k8sClient.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func deleteValidatingWebhookConfigurationForControlPlane(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	name string,
+	identity controlplane.Identity,
+) error {
+	webhook, err := k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !canCleanupForControlPlane(ctx, "validatingwebhookconfiguration", name, webhook.Labels, identity) {
+		return nil
+	}
+	err = k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func deleteMutatingWebhookConfigurationForControlPlane(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	name string,
+	identity controlplane.Identity,
+) error {
+	webhook, err := k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !canCleanupForControlPlane(ctx, "mutatingwebhookconfiguration", name, webhook.Labels, identity) {
+		return nil
+	}
+	err = k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func deleteClusterRoleForControlPlane(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	name string,
+	identity controlplane.Identity,
+) error {
+	clusterRole, err := k8sClient.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !canCleanupForControlPlane(ctx, "clusterrole", name, clusterRole.Labels, identity) {
+		return nil
+	}
+	err = k8sClient.RbacV1().ClusterRoles().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func deleteClusterRoleBindingForControlPlane(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	name string,
+	identity controlplane.Identity,
+) error {
+	clusterRoleBinding, err := k8sClient.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !canCleanupForControlPlane(ctx, "clusterrolebinding", name, clusterRoleBinding.Labels, identity) {
+		return nil
+	}
+	err = k8sClient.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func controlPlaneResourceName(identity controlplane.Identity, legacyName string) (string, error) {
+	return controlplane.DNSLabelName(identity, legacyName)
+}
+
+func canCleanupForControlPlane(
+	ctx context.Context,
+	resourceKind string,
+	name string,
+	objectLabels map[string]string,
+	identity controlplane.Identity,
+) bool {
+	if controlplane.IsOwnedBy(objectLabels, identity) {
+		return true
+	}
+	if identity.IsDefault() && objectLabels[controlplane.OwnerLabel] == "" {
+		return true
+	}
+
+	core.GetLogger(ctx).WithFields(map[string]interface{}{
+		"resourceKind":         resourceKind,
+		"name":                 name,
+		"controlPlaneIdentity": identity.String(),
+		"objectOwner":          objectLabels[controlplane.OwnerLabel],
+	}).Warn("Skipping cleanup for resource that is not owned by this control plane")
+	return false
+}
+
+func adoptLegacyWorkloadNamespaces(
+	ctx context.Context,
+	k8sClient kubernetes.Interface,
+	identity controlplane.Identity,
+) error {
+	if !identity.Valid() {
+		return fmt.Errorf("invalid control plane identity %q", identity.String())
+	}
+	if !identity.IsDefault() {
+		return nil
+	}
+
+	selector, err := workloadNamespaceLabelExistsSelector()
+	if err != nil {
+		return err
+	}
+	nsList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list legacy workload namespaces: %w", err)
+	}
+
+	for _, ns := range nsList.Items {
+		if ns.Labels[controlplane.OwnerLabel] != "" {
+			continue
+		}
+		updated := ns.DeepCopy()
+		if updated.Labels == nil {
+			updated.Labels = map[string]string{}
+		}
+		updated.Labels[controlplane.OwnerLabel] = identity.String()
+		if _, err := k8sClient.CoreV1().Namespaces().Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("failed to adopt legacy workload namespace %q: %w", ns.Name, err)
+		}
+	}
+	return nil
+}
+
+func workloadNamespaceSelector(identity controlplane.Identity) (string, error) {
+	if !identity.Valid() {
+		return "", fmt.Errorf("invalid control plane identity %q", identity.String())
+	}
+	workloadReq, err := labels.NewRequirement(workloadNamespaceLabelSelector, selection.Exists, nil)
+	if err != nil {
+		return "", err
+	}
+	ownerReq, err := labels.NewRequirement(controlplane.OwnerLabel, selection.Equals, []string{identity.String()})
+	if err != nil {
+		return "", err
+	}
+	return labels.NewSelector().Add(*workloadReq, *ownerReq).String(), nil
+}
+
+func workloadNamespaceLabelExistsSelector() (string, error) {
+	workloadReq, err := labels.NewRequirement(workloadNamespaceLabelSelector, selection.Exists, nil)
+	if err != nil {
+		return "", err
+	}
+	return labels.NewSelector().Add(*workloadReq).String(), nil
 }
 
 // waitForDeploymentRollout waits for a deployment to complete its rollout

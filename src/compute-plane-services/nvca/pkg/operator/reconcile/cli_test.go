@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/controlplane"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cli "github.com/urfave/cli/v2"
@@ -363,6 +364,8 @@ func TestOperatorCommand_NVCAFlags(t *testing.T) {
 	assert.True(t, flagNames["nvca-worker-degradation-period"], "nvca-worker-degradation-period flag should exist")
 	assert.True(t, flagNames["additional-image-pull-secrets-b64"], "additional-image-pull-secrets-b64 flag should exist")
 	assert.True(t, flagNames["agent-override-env-vars-json-b64"], "agent-override-env-vars-json-b64 flag should exist")
+	assert.True(t, flagNames["control-plane-id"], "control-plane-id flag should exist")
+	assert.True(t, flagNames["control-plane-adoption-dry-run"], "control-plane-adoption-dry-run flag should exist")
 
 	// Verify OTel collector flags exist
 	assert.True(t, flagNames["otel-collector-image-repo"], "otel-collector-image-repo flag should exist")
@@ -485,6 +488,8 @@ func createTestCLIContext(ctx context.Context, overrides map[string]interface{})
 		"otel-collector-image-tag":          defaultOTelCollectorImageTag,
 		"otel-collector-resources-b64":      "",
 		"agent-override-env-vars-json-b64":  "",
+		"control-plane-id":                  "",
+		"control-plane-adoption-dry-run":    false,
 	}
 
 	// Apply overrides
@@ -792,6 +797,7 @@ func TestDoAction_AgentOptionsConstruction(t *testing.T) {
 		"enable-gxcache":                   true,
 		"kubeconfig":                       "/path/to/kubeconfig",
 		"k8s-version-override":             "v1.28.0",
+		"control-plane-id":                 "plane-a",
 	})
 
 	// Test the cluster source validation step
@@ -807,6 +813,8 @@ func TestDoAction_AgentOptionsConstruction(t *testing.T) {
 	workloadTolerations, err := decodeTolerations(c.String("workload-tolerations-b64"))
 	require.NoError(t, err)
 	agentTolerations, err := decodeTolerations(c.String("agent-tolerations-b64"))
+	require.NoError(t, err)
+	controlPlaneIdentity, err := controlplane.IdentityFromConfig(c.String("control-plane-id"))
 	require.NoError(t, err)
 
 	// Verify that we can construct AgentOptions with the parsed values
@@ -824,6 +832,7 @@ func TestDoAction_AgentOptionsConstruction(t *testing.T) {
 		NVCAWorkerDegradationPeriod:  c.Duration("nvca-worker-degradation-period"),
 		NVCAWorkloadTolerations:      workloadTolerations,
 		NVCAAgentTolerations:         agentTolerations,
+		ControlPlaneIdentity:         controlPlaneIdentity,
 	}
 
 	// Verify the options were set correctly
@@ -836,6 +845,7 @@ func TestDoAction_AgentOptionsConstruction(t *testing.T) {
 	assert.True(t, opts.NVCACacheMountOptionsEnabled)
 	assert.Equal(t, "rw,noatime", opts.NVCACacheMountOptions)
 	assert.Equal(t, 90*time.Minute, opts.NVCAWorkerDegradationPeriod)
+	assert.Equal(t, "plane-a", opts.ControlPlaneIdentity.String())
 	assert.Equal(t, []corev1.Toleration{{
 		Key:      "nvidia.com/test-workload",
 		Operator: corev1.TolerationOpExists,

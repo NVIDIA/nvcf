@@ -65,6 +65,25 @@ func TestPlan_NoKubeContext(t *testing.T) {
 	assert.Equal(t, "helm uninstall foo -n bar", plan.WillUninstall[0].Command)
 }
 
+func TestPlan_HelmfileSelectorCommand(t *testing.T) {
+	opts := PlanOpts{
+		Plane:       "control-plane",
+		KubeContext: "admin@cp",
+		StackPath:   "/stack",
+		Selector:    "control-plane-owner=plane-a",
+		Releases: []ReleaseRef{
+			{Name: "nvcf-api", Namespace: "nvcf-system"},
+			{Name: "sis", Namespace: "sis-system"},
+		},
+	}
+	plan, err := Plan(opts)
+	require.NoError(t, err)
+
+	require.Len(t, plan.WillUninstall, 2)
+	assert.Equal(t, "helmfile -f /stack/helmfile.d/ --kube-context=admin@cp --selector control-plane-owner=plane-a destroy", plan.WillUninstall[0].Command)
+	assert.Equal(t, plan.WillUninstall[0].Command, plan.WillUninstall[1].Command)
+}
+
 func TestPlan_TotalEstSec(t *testing.T) {
 	opts := PlanOpts{
 		Plane:    "control-plane",

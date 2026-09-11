@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/progress"
 )
 
@@ -341,6 +342,79 @@ func TestCheck_SplitClusterMode(t *testing.T) {
 	}
 	assert.Contains(t, categories, "control-plane-cluster", "expected control-plane-cluster in split mode")
 	assert.Contains(t, categories, "compute-plane-cluster", "expected compute-plane-cluster in split mode")
+}
+
+type checkNoopSink struct{}
+
+func (checkNoopSink) Emit(context.Context, progress.Event) error { return nil }
+func (checkNoopSink) Close() error                               { return nil }
+
+func TestRunPreflightByRole_PassesControlPlaneOwnerToClusterValidator(t *testing.T) {
+	prevCheckPre := checkPre
+	prevCheckAll := checkAll
+	prevCheckComputePlane := checkComputePlane
+	prevCheckSkipInotify := checkSkipInotifyCheck
+	prevControlPlaneContext := selfHostedControlPlaneContext
+	prevComputePlaneContext := selfHostedComputePlaneContext
+	prevICMSURL := selfHostedICMSURL
+	prevPullSecret := checkClusterValidatorPullSecret
+	prevNoCleanup := checkClusterValidatorNoCleanup
+	prevNewClusterValidator := newClusterValidatorForSelfHosted
+	t.Cleanup(func() {
+		checkPre = prevCheckPre
+		checkAll = prevCheckAll
+		checkComputePlane = prevCheckComputePlane
+		checkSkipInotifyCheck = prevCheckSkipInotify
+		selfHostedControlPlaneContext = prevControlPlaneContext
+		selfHostedComputePlaneContext = prevComputePlaneContext
+		selfHostedICMSURL = prevICMSURL
+		checkClusterValidatorPullSecret = prevPullSecret
+		checkClusterValidatorNoCleanup = prevNoCleanup
+		newClusterValidatorForSelfHosted = prevNewClusterValidator
+	})
+
+	checkPre = true
+	checkAll = false
+	checkComputePlane = false
+	checkSkipInotifyCheck = true
+	selfHostedControlPlaneContext = ""
+	selfHostedComputePlaneContext = ""
+	selfHostedICMSURL = ""
+	checkClusterValidatorPullSecret = "pull-secret"
+	checkClusterValidatorNoCleanup = true
+
+	var got *selfhosted.ClusterValidatorParams
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			captured := p
+			got = &captured
+			return selfhosted.ClusterValidatorResult{Passed: true, JobName: "validator-job"}
+		}
+	}
+
+	results := runPreflightByRole(
+		context.Background(),
+		selfhosted.PreflightConfig{},
+		checkNoopSink{},
+		"registry.test/validator:v1",
+		"plane-a",
+	)
+
+	require.NotNil(t, got)
+	assert.Equal(t, "registry.test/validator:v1", got.Image)
+	assert.Equal(t, "pull-secret", got.PullSecret)
+	assert.True(t, got.NoCleanup)
+	assert.Equal(t, "plane-a", got.ControlPlaneOwner)
+	assert.True(t, containsCheckResult(results, "cluster-validator"))
+}
+
+func containsCheckResult(results []selfhosted.CheckResult, id string) bool {
+	for _, r := range results {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // parseJSONLLines splits s into non-empty lines, skips any non-JSON lines
