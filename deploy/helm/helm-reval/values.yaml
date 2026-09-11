@@ -20,7 +20,7 @@ reval:
   image:
     registry: ""
     repository: ""
-    tag: "latest"
+    tag: "0.20.2"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
