@@ -345,12 +345,14 @@ class RenderedStackTests(unittest.TestCase):
                     if value.startswith("--cluster-id=")
                 )
             )
-            self.assertIn("--initial-input-tps=7000", arguments)
+            self.assertFalse(
+                any(value.startswith("--initial-input-tps=") for value in arguments)
+            )
             self.assertIn("--active-canary-interval-ms=0", arguments)
             self.assertIn(
                 "--grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt", arguments
             )
-            self.assertNotIn("--do-calibration", arguments)
+            self.assertIn("--do-calibration", arguments)
             self.assertIn("mockdc-usw2", str(path))
             self.assertEqual(
                 deployment["spec"]["template"]["metadata"]["labels"][
