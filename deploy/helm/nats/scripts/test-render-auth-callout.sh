@@ -81,6 +81,7 @@ assert_contains "$default_render" "nkey_signature:"
 # it at the auth-callout pod's startup from KV.
 assert_not_contains "$default_render" "secrets.json:"
 assert_not_contains "$default_render" "nkey_mappings"
+assert_contains "$default_render" "NKEY_USER_KEY"
 # nkey-bao-access RBAC must grant openbao-migrations read on both the
 # shared-worker Secret and the auth-callout Secret so 19_setup_nats-auth-callout.sh
 # can mirror seeds into KV.

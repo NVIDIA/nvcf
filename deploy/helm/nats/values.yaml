@@ -132,6 +132,8 @@ nats:
             - nkey: << $AUTH_CALLOUT_USER_NKEY >>
         APP:
           jetstream: enabled
+          users:
+            - nkey: << $NKEY_USER_KEY >>
       authorization:
         auth_callout:
           issuer: << $AUTH_CALLOUT_ACCOUNT_NKEY >>
