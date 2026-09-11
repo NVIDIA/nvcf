@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -34,12 +35,22 @@ type Entry struct {
 // decide which values.yaml line belongs to it. A chart with more than one
 // first-party image cannot use that evidence, so a deploy entry may instead
 // be an object naming the exact values.yaml paths (dotted, for example
-// "otelCollector.imageTag") that carry that service's tag. This tool only
-// audits which service ids are declared, so it does not care which shape a
-// given entry takes; UnmarshalJSON exists so decoding either shape succeeds.
+// "otelCollector.imageTag") that carry that service's tag. The object may set
+// values_files for repeated pins in other values files and app_version when the
+// same service owns the chart's appVersion. This tool only audits which service
+// ids are declared, so UnmarshalJSON exists primarily to make both shapes
+// available to that audit.
 type Deploy struct {
 	Service     string
 	ValuesPaths []string
+	ValuesFiles []ValuesFile
+	AppVersion  bool
+}
+
+// ValuesFile names an additional values file and the service-owned paths in it.
+type ValuesFile struct {
+	File  string   `json:"file"`
+	Paths []string `json:"paths"`
 }
 
 func (d *Deploy) UnmarshalJSON(b []byte) error {
@@ -52,8 +63,10 @@ func (d *Deploy) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 	var obj struct {
-		Service     string   `json:"service"`
-		ValuesPaths []string `json:"values_paths"`
+		Service     string       `json:"service"`
+		ValuesPaths []string     `json:"values_paths"`
+		ValuesFiles []ValuesFile `json:"values_files"`
+		AppVersion  bool         `json:"app_version"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return fmt.Errorf("deploys entry: %w", err)
@@ -61,7 +74,19 @@ func (d *Deploy) UnmarshalJSON(b []byte) error {
 	if obj.Service == "" {
 		return fmt.Errorf("deploys entry missing \"service\"")
 	}
-	*d = Deploy{Service: obj.Service, ValuesPaths: obj.ValuesPaths}
+	if len(obj.ValuesPaths) == 0 && len(obj.ValuesFiles) == 0 {
+		return fmt.Errorf("object deploys entry for %s requires values_paths or values_files", obj.Service)
+	}
+	for _, valuesFile := range obj.ValuesFiles {
+		clean := filepath.Clean(valuesFile.File)
+		if filepath.IsAbs(valuesFile.File) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("deploys entry for %s: values_files file %q must be relative to the chart path", obj.Service, valuesFile.File)
+		}
+		if len(valuesFile.Paths) == 0 {
+			return fmt.Errorf("deploys entry for %s: values_files file %q requires paths", obj.Service, valuesFile.File)
+		}
+	}
+	*d = Deploy{Service: obj.Service, ValuesPaths: obj.ValuesPaths, ValuesFiles: obj.ValuesFiles, AppVersion: obj.AppVersion}
 	return nil
 }
 
