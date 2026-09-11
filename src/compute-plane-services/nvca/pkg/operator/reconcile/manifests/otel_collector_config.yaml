@@ -76,6 +76,11 @@ processors:
           tag_name: function_version_id
         - key: task-id
           tag_name: task_id
+        # icms-request-id correlates a Pod back to its ICMSRequest. It is carried
+        # in the Pod event's details (not the context key) so consumers can filter
+        # Pod events by icms_request_id via the /events attribute filter.
+        - key: icms-request-id
+          tag_name: icms_request_id
     pod_association:
       - sources:
           - from: resource_attribute
@@ -88,6 +93,9 @@ processors:
       - set(log.attributes["deployment_id"], resource.attributes["deployment_id"]) where resource.attributes["deployment_id"] != nil
       - set(log.attributes["gpu_specification_id"], resource.attributes["gpu_specification_id"]) where resource.attributes["gpu_specification_id"] != nil
       - set(log.attributes["instance_id"], resource.attributes["k8s.pod.name"]) where resource.attributes["k8s.pod.name"] != nil
+      # Carry icms_request_id into the Pod event so it can be correlated to its
+      # ICMSRequest. It is not a ledger context field, so it lands in event details.
+      - set(log.attributes["icms_request_id"], resource.attributes["icms_request_id"]) where resource.attributes["icms_request_id"] != nil
       - set(log.attributes["namespace"], resource.attributes["function_version_id"]) where resource.attributes["function_version_id"] != nil
       # Tasks are keyed by task-id in FnDs; override function_version_id when present.
       - set(log.attributes["namespace"], resource.attributes["task_id"]) where resource.attributes["task_id"] != nil and resource.attributes["task_id"] != ""
@@ -124,7 +132,10 @@ processors:
     logs:
       log_record:
         - resource.attributes["k8s.object.kind"] != "ICMSRequest"
-        - not(log.attributes["k8s.event.reason"] in ["InstanceCreation", "InstanceStatusUpdate", "InstanceTermination"])
+        - >-
+          log.attributes["k8s.event.reason"] != "InstanceCreation" and
+          log.attributes["k8s.event.reason"] != "InstanceStatusUpdate" and
+          log.attributes["k8s.event.reason"] != "InstanceTermination"
 
   # ICMS lane: lift nvcf.nvidia.io/* annotations stamped by NVCA (via AnnotatedEventf)
   # onto ICMSRequest Events into flat log.attributes so the FnDs exporter can read them.
@@ -133,6 +144,9 @@ processors:
     error_mode: ignore
     log_statements:
       - set(log.attributes["icms_request_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/icms-request-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/icms-request-id"] != nil
+      # resource_id keys the ICMSRequest (resource) lane in the ledger context so
+      # its events are uniquely identified and directly queryable by request id.
+      - set(log.attributes["resource_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/icms-request-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/icms-request-id"] != nil
       - set(log.attributes["namespace"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-version-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-version-id"] != nil
       # Tasks are keyed by task-id in FnDs; override function_version_id when present.
       - set(log.attributes["namespace"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"] != nil and log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"] != ""

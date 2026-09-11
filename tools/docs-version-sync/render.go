@@ -32,34 +32,19 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 	switch renderer {
 	case "manifest-artifact-registry-paths":
 		return renderManifestArtifactRegistryPaths(catalog)
-	case "manifest-deployment-resources":
-		return renderManifestDeploymentResources(catalog)
 	case "image-mirroring-resource-examples":
 		return renderImageMirroringResourceExamples(catalog)
 	case "image-mirroring-stack-snippet":
 		return renderImageMirroringStackSnippet(catalog)
 	case "image-mirroring-compute-stack-snippet":
 		return renderImageMirroringComputeStackSnippet(catalog)
+	case "image-mirroring-observability-stack-snippet":
+		return renderImageMirroringObservabilityStackSnippet(catalog)
 	case "image-mirroring-cli-snippet":
 		return renderImageMirroringCLISnippet(catalog)
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}
-}
-
-func renderManifestDeploymentResources(catalog *Catalog) (string, error) {
-	resources := catalog.resourceArtifacts()
-	var b strings.Builder
-	b.WriteString("| Type | Component Name | Full Path |\n")
-	b.WriteString("| --- | --- | --- |\n")
-	for _, artifact := range resources {
-		path, err := catalog.artifactDistribution(artifact)
-		if err != nil {
-			return "", err
-		}
-		b.WriteString(fmt.Sprintf("| Resource | %s | `%s` |\n", artifact.Name, path))
-	}
-	return b.String(), nil
 }
 
 func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
@@ -74,27 +59,47 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 		}
 	}
 
-	compute, hasComputeStack := catalog.findArtifact(computeStackResourceName)
-	computePending := hasComputeStack && catalog.publicationIsPending(compute)
-	computeRef := ""
-	if hasComputeStack {
-		if compute.Type != ArtifactTypeResource {
-			return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
+	type supplementalStack struct {
+		artifact   Artifact
+		versionEnv string
+		label      string
+		pending    bool
+		ref        string
+	}
+	var supplementalStacks []supplementalStack
+	for _, config := range []struct {
+		name       string
+		versionEnv string
+		label      string
+	}{
+		{name: computeStackResourceName, versionEnv: "COMPUTE_STACK_VERSION", label: "compute-plane"},
+		{name: observabilityStackResourceName, versionEnv: "OBSERVABILITY_STACK_VERSION", label: "observability"},
+	} {
+		artifact, found := catalog.findArtifactByNameAndType(config.name, ArtifactTypeResource)
+		if !found {
+			continue
 		}
-		if !computePending {
-			computeRef, err = catalog.resourceRef(compute)
+		item := supplementalStack{
+			artifact:   artifact,
+			versionEnv: config.versionEnv,
+			label:      config.label,
+			pending:    catalog.publicationIsPending(artifact),
+		}
+		if !item.pending {
+			item.ref, err = catalog.resourceRef(artifact)
 			if err != nil {
 				return "", err
 			}
 		}
+		supplementalStacks = append(supplementalStacks, item)
 	}
 
 	var b strings.Builder
 	b.WriteString("```bash\n")
 	b.WriteString("# Set stack versions\n")
 	b.WriteString(fmt.Sprintf("export STACK_VERSION=%q\n", stack.Version))
-	if hasComputeStack {
-		b.WriteString(fmt.Sprintf("export COMPUTE_STACK_VERSION=%q\n", compute.Version))
+	for _, supplemental := range supplementalStacks {
+		b.WriteString(fmt.Sprintf("export %s=%q\n", supplemental.versionEnv, supplemental.artifact.Version))
 	}
 	b.WriteString("\n")
 	b.WriteString("# Download a specific control-plane stack version\n")
@@ -106,14 +111,14 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 		b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
 	}
 
-	if hasComputeStack {
-		b.WriteString("\n# Download a specific compute-plane stack version\n")
-		if computePending {
-			b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", compute.Name, compute.Version))
+	for _, supplemental := range supplementalStacks {
+		b.WriteString(fmt.Sprintf("\n# Download a specific %s stack version\n", supplemental.label))
+		if supplemental.pending {
+			b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", supplemental.artifact.Name, supplemental.artifact.Version))
 		} else {
-			computeRefWithVersion := strings.Replace(computeRef, compute.Version, "${COMPUTE_STACK_VERSION}", 1)
+			refWithVersion := strings.Replace(supplemental.ref, supplemental.artifact.Version, "${"+supplemental.versionEnv+"}", 1)
 			b.WriteString("ngc registry resource download-version \\\n")
-			b.WriteString(fmt.Sprintf("  %q\n", computeRefWithVersion))
+			b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
 		}
 	}
 
@@ -142,28 +147,38 @@ func renderImageMirroringStackSnippet(catalog *Catalog) (string, error) {
 }
 
 func renderImageMirroringComputeStackSnippet(catalog *Catalog) (string, error) {
-	compute, ok := catalog.findArtifact(computeStackResourceName)
+	return renderImageMirroringSupplementalStackSnippet(catalog, computeStackResourceName, "COMPUTE_VERSION")
+}
+
+func renderImageMirroringObservabilityStackSnippet(catalog *Catalog) (string, error) {
+	return renderImageMirroringSupplementalStackSnippet(catalog, observabilityStackResourceName, "OBSERVABILITY_VERSION")
+}
+
+func renderImageMirroringSupplementalStackSnippet(catalog *Catalog, name, versionEnv string) (string, error) {
+	artifact, ok := catalog.findArtifactByNameAndType(name, ArtifactTypeResource)
 	if !ok {
-		return "", fmt.Errorf("supplemental artifact %s is required", computeStackResourceName)
+		return "", fmt.Errorf("supplemental artifact %s is required", name)
 	}
-	if compute.Type != ArtifactTypeResource {
-		return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
+	if catalog.publicationIsPending(artifact) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", artifact.Name, artifact.Version), nil
 	}
-	if catalog.publicationIsPending(compute) {
-		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", compute.Name, compute.Version), nil
-	}
-	ref, err := catalog.resourceRef(compute)
+	ref, err := catalog.resourceRef(artifact)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("```bash\n# Set the version\nexport COMPUTE_VERSION=%q\n\nngc registry resource download-version %q && \\\n   mkdir -p %s && \\\n   tar -xzf %s_v${COMPUTE_VERSION}/%s-${COMPUTE_VERSION}.tar.gz -C %s && \\\n   rm -rf %s_v${COMPUTE_VERSION}\n```\n",
-		compute.Version,
-		strings.Replace(ref, compute.Version, "${COMPUTE_VERSION}", 1),
-		compute.Name,
-		compute.Name,
-		compute.Name,
-		compute.Name,
-		compute.Name,
+	versionRef := "${" + versionEnv + "}"
+	return fmt.Sprintf("```bash\n# Set the version\nexport %s=%q\n\nngc registry resource download-version %q && \\\n   mkdir -p %s && \\\n   tar -xzf %s_v%s/%s-%s.tar.gz -C %s && \\\n   rm -rf %s_v%s\n```\n",
+		versionEnv,
+		artifact.Version,
+		strings.Replace(ref, artifact.Version, versionRef, 1),
+		artifact.Name,
+		artifact.Name,
+		versionRef,
+		artifact.Name,
+		versionRef,
+		artifact.Name,
+		artifact.Name,
+		versionRef,
 	), nil
 }
 
@@ -194,50 +209,6 @@ func (catalog *Catalog) stackArtifact() Artifact {
 	}
 }
 
-func (catalog *Catalog) artifactTypeLabel(artifact Artifact) string {
-	switch artifact.Type {
-	case ArtifactTypeChart:
-		if publication, ok := catalog.publicationFor(artifact); ok && publication.ChartFormat == ChartFormatHTTP {
-			return "Chart (HTTP)"
-		}
-		return "Chart (OCI)"
-	case ArtifactTypeResource:
-		return "Resource"
-	default:
-		return "Image"
-	}
-}
-
-func (catalog *Catalog) resourceArtifacts() []Artifact {
-	denylist := catalog.DenylistMap()
-	var resources []Artifact
-	if _, denied := denylist[catalog.Stack.Name]; !denied {
-		resources = append(resources, catalog.stackArtifact())
-	}
-	for _, artifact := range catalog.Artifacts {
-		if artifact.Type != ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if artifact.Name == catalog.Stack.Name {
-			continue
-		}
-		resources = append(resources, artifact)
-	}
-	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type != ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		resources = append(resources, artifact)
-	}
-	return resources
-}
-
 func (catalog *Catalog) findArtifact(name string) (Artifact, bool) {
 	if catalog.Stack.Name == name {
 		return catalog.stackArtifact(), true
@@ -249,6 +220,15 @@ func (catalog *Catalog) findArtifact(name string) (Artifact, bool) {
 	}
 	for _, artifact := range catalog.SupplementalArtifacts {
 		if artifact.Name == name {
+			return artifact, true
+		}
+	}
+	return Artifact{}, false
+}
+
+func (catalog *Catalog) findArtifactByNameAndType(name string, artifactType ArtifactType) (Artifact, bool) {
+	for _, artifact := range catalog.findArtifacts(name) {
+		if artifact.Type == artifactType {
 			return artifact, true
 		}
 	}
@@ -271,50 +251,6 @@ func (catalog *Catalog) findArtifacts(name string) []Artifact {
 		}
 	}
 	return artifacts
-}
-
-func (catalog *Catalog) uncategorizedArtifacts(used map[string]struct{}) []Artifact {
-	denylist := catalog.DenylistMap()
-	var artifacts []Artifact
-	for _, artifact := range catalog.Artifacts {
-		if artifact.Type == ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if _, ok := used[artifact.catalogKey()]; ok {
-			continue
-		}
-		artifacts = append(artifacts, artifact)
-	}
-	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type == ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if _, ok := used[artifact.catalogKey()]; ok {
-			continue
-		}
-		artifacts = append(artifacts, artifact)
-	}
-	return artifacts
-}
-
-func (catalog *Catalog) isDenied(name string) bool {
-	_, denied := catalog.DenylistMap()[name]
-	return denied
-}
-
-func appendIfMissing(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
 }
 
 func SyncDocs(repoRoot string, catalog *Catalog, check bool) error {
@@ -417,6 +353,10 @@ func markerSyntaxes(marker string) []markerSyntax {
 		{
 			Begin: fmt.Sprintf("{/* docs-version-sync:BEGIN %s */}", marker),
 			End:   fmt.Sprintf("{/* docs-version-sync:END %s */}", marker),
+		},
+		{
+			Begin: fmt.Sprintf("{/*docs-version-sync:BEGIN %s*/}", marker),
+			End:   fmt.Sprintf("{/*docs-version-sync:END %s*/}", marker),
 		},
 		{
 			Begin:  fmt.Sprintf("<!-- docs-version-sync:BEGIN %s -->", marker),

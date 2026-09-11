@@ -222,7 +222,7 @@ running Helmfile.
 
 | Chart | `helm-nvca-operator` |
 | --- | --- |
-| Version | `1.21.3` |
+| Version | `1.24.0` |
 | Namespace | `nvca-operator` |
 | Depends on | All control-plane services and gateway must be running |
 
@@ -483,7 +483,7 @@ export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonp
 echo "Gateway Address: $GATEWAY_ADDR"
 ```
 
-2. Generate an admin token:
+1. Generate an admin token:
 
 ```bash
 # Generate an admin API token
@@ -494,7 +494,7 @@ export NVCF_TOKEN=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/admin/keys" \
 echo "Token generated: ${NVCF_TOKEN:0:20}..."
 ```
 
-3. Create, deploy, and invoke a test function:
+1. Create, deploy, and invoke a test function:
 
 ```bash
 # Create a test function

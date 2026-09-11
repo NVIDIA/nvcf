@@ -22,12 +22,10 @@ import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
 import lombok.Builder;
-import lombok.extern.slf4j.Slf4j;
 
-@Slf4j
 @Builder
-@Schema(description = "Request to update the number of workers for a version")
+@Schema(description = "Request to roll over workers for a deployment")
 public record RolloverRequest(
-        @Schema(description = "Rollover specs with GPU, instance-type, num-instances.")
-        @NotEmpty @NotNull List<@Valid RolloverSpecificationDto> rollOverSpecifications) {
+        @Schema(description = "GPU specifications and instance counts to roll over")
+        @NotEmpty List<@NotNull @Valid RolloverSpecificationDto> rolloverSpecifications) {
 }

@@ -145,11 +145,17 @@ fn observed_runtime(
 async fn recv_terminal_observation(
     rx: &flume::Receiver<crate::RequestObservationEvent>,
 ) -> crate::RequestObservation {
+    recv_terminal_event(rx).await.into_observation()
+}
+
+async fn recv_terminal_event(
+    rx: &flume::Receiver<crate::RequestObservationEvent>,
+) -> crate::RequestObservationEvent {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            let observation = rx.recv_async().await.unwrap().into_observation();
-            if observation.is_terminal() {
-                break observation;
+            let event = rx.recv_async().await.unwrap();
+            if event.observation().is_terminal() {
+                break event;
             }
         }
     })
@@ -254,10 +260,61 @@ async fn observed_tunnel_for(
     RawTunnelTest,
     flume::Receiver<crate::RequestObservationEvent>,
 ) {
+    observed_tunnel_for_mode(app, false).await
+}
+
+async fn calibrating_tunnel_for(
+    app: Router,
+) -> (
+    RawTunnelTest,
+    flume::Receiver<crate::RequestObservationEvent>,
+) {
+    observed_tunnel_for_mode(app, true).await
+}
+
+async fn observed_tunnel_for_mode(
+    app: Router,
+    output_token_calibration_enabled: bool,
+) -> (
+    RawTunnelTest,
+    flume::Receiver<crate::RequestObservationEvent>,
+) {
     let (runtime_state, observations) = observed_runtime(16);
+    let runtime_state = if output_token_calibration_enabled {
+        runtime_state.with_single_pylon_output_token_calibration()
+    } else {
+        runtime_state
+    };
     let mut config = test_tunnel_config_for(app).await;
     config.forwarding.runtime_state = runtime_state;
     (RawTunnelTest::start(config).await, observations)
+}
+
+async fn observe_calibration_stream(
+    app: Router,
+    path: &'static str,
+    request_id: &str,
+) -> crate::RequestObservationEvent {
+    let (model, request_body) = match path {
+        "/v1/chat/completions" => (
+            "model-stream",
+            br#"{"messages":[],"stream":true}"#.as_slice(),
+        ),
+        "/v1/responses" => (
+            "model-responses",
+            br#"{"input":"hello","stream":true}"#.as_slice(),
+        ),
+        _ => panic!("unsupported calibration test path: {path}"),
+    };
+    let (mut tunnel, rx) = calibrating_tunnel_for(app).await;
+    tunnel
+        .send_json(path, model, request_id, request_body)
+        .await;
+    tunnel.response_head(StatusCode::OK).await;
+    tunnel.drain().await;
+    let event = recv_terminal_event(&rx).await;
+    tunnel.shutdown().await;
+    event
 }
 
 fn assert_error_source(error: &TunnelError, expected: &str) {
@@ -357,6 +414,7 @@ fn reverse_tunnel_app_from_config_preserves_forwarding_settings() {
     config.forwarding.runtime_state = runtime_state.clone();
     config.forwarding.retry.local_connect_failures_retryable = true;
     config.forwarding.queue_mismatch_retry.enabled = false;
+    config.forwarding.force_chat_completions_include_usage = true;
     config.forwarding.metrics = Some(metrics.clone());
 
     let app = TunnelServerApp::from_reverse_config(config);
@@ -369,6 +427,7 @@ fn reverse_tunnel_app_from_config_preserves_forwarding_settings() {
     assert_eq!(app.output_chunk_timeout, Duration::from_millis(77));
     assert!(app.retry.local_connect_failures_retryable);
     assert!(!app.queue_mismatch_retry.enabled);
+    assert!(app.force_chat_completions_include_usage);
     assert!(Arc::ptr_eq(
         app.metrics.as_ref().expect("metrics should be retained"),
         &metrics
@@ -2104,7 +2163,7 @@ async fn quic_tunnel_emits_request_observation_for_streaming_responses() {
     assert_eq!(observation.request_id, "req-responses-observed");
     assert_eq!(observation.model_id, "model-responses");
     assert_eq!(observation.input_tokens, 11);
-    assert_eq!(observation.output_messages, 2);
+    assert_eq!(observation.output_messages, 1);
     assert_eq!(observation.output_tokens, 2);
     assert!(observation.output_tokens_explicit);
     assert!(observation.output_tokens_from_chunk_usage);
@@ -2253,17 +2312,377 @@ async fn quic_tunnel_counts_terminal_only_usage_tokens() {
     tunnel.response_head(StatusCode::OK).await;
     tunnel.drain().await;
 
-    let observation = recv_terminal_observation(&rx).await;
+    let event = recv_terminal_event(&rx).await;
+    let observation = event.observation();
     assert_eq!(observation.request_id, "req-terminal-usage");
     assert_eq!(observation.model_id, "model-terminal-usage");
     assert_eq!(observation.input_tokens, 13);
-    assert_eq!(observation.output_messages, 3);
+    assert_eq!(observation.output_messages, 2);
     assert_eq!(observation.output_tokens, 7);
     assert!(observation.output_tokens_explicit);
     assert!(observation.output_tokens_from_chunk_usage);
     assert_eq!(observation.state, RequestObservationState::Complete);
+    let facts = event.output_calibration();
+    assert!(facts.raw_output_units > 0);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(7));
+    assert!(!facts.calibration_ineligible);
+    assert_eq!(facts.reasoning_tokens, None);
 
     tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_retains_split_usage_safety_details_for_calibration() {
+    let app = sse_app(
+        "/v1/chat/completions",
+        &[
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello world"}}],"usage":{"prompt_tokens":13,"completion_tokens_details":{"reasoning_tokens":2,"rejected_prediction_tokens":1}}}"#,
+            r#"{"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":7}}"#,
+            "[DONE]",
+        ],
+    );
+    let event = observe_calibration_stream(app, "/v1/chat/completions", "req-split-usage").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 7);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(7));
+    assert_eq!(facts.reasoning_tokens, Some(2));
+    assert!(facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_marks_reasoning_summaries_calibration_ineligible() {
+    let app = sse_app(
+        "/v1/responses",
+        &[
+            r#"{"type":"response.reasoning_summary_text.delta","delta":"Reasoning summary"}"#,
+            r#"{"type":"response.completed","response":{"usage":{"output_tokens":4,"output_tokens_details":{"reasoning_tokens":3}}}}"#,
+        ],
+    );
+    let event = observe_calibration_stream(app, "/v1/responses", "req-reasoning-summary").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 4);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(4));
+    assert_eq!(facts.reasoning_tokens, Some(3));
+    assert!(!facts.reasoning_text_observed);
+    assert!(facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_accepts_emitted_reasoning_text_for_calibration() {
+    let app = sse_app(
+        "/v1/responses",
+        &[
+            r#"{"type":"response.reasoning_text.delta","delta":"Visible reasoning"}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"reasoning"}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"reasoning"}],"usage":{"output_tokens":5,"output_tokens_details":{"reasoning_tokens":3}}}}"#,
+        ],
+    );
+    let event = observe_calibration_stream(app, "/v1/responses", "req-visible-reasoning").await;
+    let facts = event.output_calibration();
+
+    assert_eq!(event.observation().output_tokens, 5);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(5));
+    assert_eq!(facts.reasoning_tokens, Some(3));
+    assert!(facts.reasoning_output_observed);
+    assert!(facts.reasoning_text_observed);
+    assert!(!facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_marks_mixed_text_and_tool_lifecycle_calibration_ineligible() {
+    let app = sse_app(
+        "/v1/responses",
+        &[
+            r#"{"type":"response.output_text.delta","delta":"Visible answer"}"#,
+            r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"call-1","call_id":"call-1","name":"lookup","arguments":""}}"#,
+            r#"{"type":"response.completed","response":{"usage":{"output_tokens":5}}}"#,
+        ],
+    );
+    let event = observe_calibration_stream(app, "/v1/responses", "req-mixed-tool-output").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 5);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(5));
+    assert!(facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_retains_hidden_reasoning_evidence_without_usage_details() {
+    let app = sse_app(
+        "/v1/responses",
+        &[
+            r#"{"type":"response.output_item.added","item":{"type":"reasoning","id":"reasoning-1","summary":[]}}"#,
+            r#"{"type":"response.output_text.delta","delta":"Visible answer"}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"reasoning"},{"type":"message"}],"usage":{"output_tokens":5}}}"#,
+        ],
+    );
+    let event = observe_calibration_stream(app, "/v1/responses", "req-hidden-reasoning-item").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 5);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(5));
+    assert_eq!(facts.reasoning_tokens, None);
+    assert!(facts.reasoning_output_observed);
+    assert!(!facts.reasoning_text_observed);
+    assert!(!facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_keeps_terminal_message_output_calibration_eligible() {
+    let app = sse_app(
+        "/v1/responses",
+        &[
+            r#"{"type":"response.created","response":{"output":[]}}"#,
+            r#"{"type":"response.in_progress","response":{"output":[]}}"#,
+            r#"{"type":"response.output_item.added","item":{"type":"message"}}"#,
+            r#"{"type":"response.content_part.added","part":{"type":"output_text","text":"","annotations":[]}}"#,
+            r#"{"type":"response.output_text.delta","delta":"Visible answer"}"#,
+            r#"{"type":"response.output_text.done","text":"Visible answer"}"#,
+            r#"{"type":"response.content_part.done","part":{"type":"output_text","text":"Visible answer","annotations":[]}}"#,
+            r#"{"type":"response.output_item.done","item":{"type":"message"}}"#,
+            r#"{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Visible answer","annotations":[]}]}],"usage":{"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0}}}}"#,
+        ],
+    );
+    let event =
+        observe_calibration_stream(app, "/v1/responses", "req-terminal-message-output").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 5);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(5));
+    assert!(!facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_marks_conflicting_event_identifiers_calibration_ineligible() {
+    for (case, body) in [
+        (
+            "json-output",
+            r#"event: response.content_part.done
+data: {"type":"response.output_text.delta","delta":"Visible answer"}
+
+data: {"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5}}}
+
+"#,
+        ),
+        (
+            "sse-output",
+            r#"data: {"type":"response.output_text.delta","delta":"Visible answer"}
+
+event: response.output_text.delta
+data: {"type":"response.content_part.done","delta":"ignored"}
+
+data: {"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5}}}
+
+"#,
+        ),
+    ] {
+        let app = raw_sse_app("/v1/responses", body);
+        let request_id = format!("req-conflicting-event-identifiers-{case}");
+        let event = observe_calibration_stream(app, "/v1/responses", &request_id).await;
+        let facts = event.output_calibration();
+        assert_eq!(event.observation().output_tokens, 5, "case: {case}");
+        assert_eq!(facts.exact_output_tokens_baseline, Some(5), "case: {case}");
+        assert!(facts.calibration_ineligible, "case: {case}");
+        assert!(facts.raw_output_units > 0, "case: {case}");
+    }
+}
+
+#[tokio::test]
+async fn quic_tunnel_requires_safe_finish_reason_for_every_chat_choice() {
+    for (case, body, expected_ineligible) in [
+        (
+            "safe",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+            false,
+        ),
+        (
+            "missing",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+            true,
+        ),
+        (
+            "partial-multi-choice",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible"},"finish_reason":null},{"index":1,"delta":{"content":" answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+            true,
+        ),
+        (
+            "post-finish-output",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+            true,
+        ),
+        (
+            "duplicate-finish",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+            true,
+        ),
+    ] {
+        let app = raw_sse_app("/v1/chat/completions", body);
+        let request_id = format!("req-finish-evidence-{case}");
+        let event = observe_calibration_stream(app, "/v1/chat/completions", &request_id).await;
+        let facts = event.output_calibration();
+        assert_eq!(event.observation().output_tokens, 5, "case: {case}");
+        assert_eq!(facts.exact_output_tokens_baseline, Some(5), "case: {case}");
+        assert_eq!(
+            facts.calibration_ineligible, expected_ineligible,
+            "case: {case}"
+        );
+        assert!(facts.raw_output_units > 0, "case: {case}");
+    }
+}
+
+#[tokio::test]
+async fn quic_tunnel_binds_calibration_evidence_to_stream_protocol() {
+    for (case, path, body) in [
+        (
+            "chat-on-responses",
+            "/v1/responses",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":"stop"}],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+        ),
+        (
+            "responses-on-chat",
+            "/v1/chat/completions",
+            r#"data: {"type":"response.output_text.delta","delta":"Visible answer"}
+
+data: {"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0}}}}
+
+"#,
+        ),
+        (
+            "chat-usage-on-response-event",
+            "/v1/responses",
+            r#"data: {"type":"response.output_text.delta","delta":"Visible answer"}
+
+data: {"type":"response.completed","usage":{"completion_tokens":5},"response":{"output":[{"type":"message"}]}}
+
+"#,
+        ),
+        (
+            "chat-done-on-responses",
+            "/v1/responses",
+            r#"data: {"type":"response.output_text.delta","delta":"Visible answer"}
+
+data: {"type":"response.in_progress","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0}}}}
+
+data: [DONE]
+
+"#,
+        ),
+    ] {
+        let app = raw_sse_app(path, body);
+        let request_id = format!("req-protocol-{case}");
+        let event = observe_calibration_stream(app, path, &request_id).await;
+        let facts = event.output_calibration();
+        assert_eq!(event.observation().output_tokens, 5, "case: {case}");
+        assert_eq!(facts.exact_output_tokens_baseline, Some(5), "case: {case}");
+        assert!(facts.calibration_ineligible, "case: {case}");
+        assert!(facts.raw_output_units > 0, "case: {case}");
+    }
+}
+
+#[tokio::test]
+async fn quic_tunnel_marks_regressing_exact_usage_calibration_ineligible() {
+    let app = raw_sse_app(
+        "/v1/chat/completions",
+        r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":null}],"output_tokens_so_far":10}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"completion_tokens":8}}
+
+data: [DONE]
+
+"#,
+    );
+    let event =
+        observe_calibration_stream(app, "/v1/chat/completions", "req-regressing-exact-usage").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 10);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(10));
+    assert!(facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_marks_unknown_response_events_calibration_ineligible() {
+    let app = raw_sse_app(
+        "/v1/responses",
+        r#"data: {"type":"response.output_text.delta","delta":"Visible answer"}
+
+data: {"type":"response.future.delta","delta":"unrecognized output"}
+
+data: {"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"output_tokens":5}}}
+
+"#,
+    );
+    let event =
+        observe_calibration_stream(app, "/v1/responses", "req-unknown-response-event").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 5);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(5));
+    assert!(facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
+}
+
+#[tokio::test]
+async fn quic_tunnel_marks_responses_named_done_calibration_ineligible() {
+    let app = raw_sse_app(
+        "/v1/responses",
+        r#"data: {"type":"response.output_text.delta","delta":"Visible answer"}
+
+data: {"type":"response.in_progress","response":{"usage":{"output_tokens":5}}}
+
+event: response.completed
+data: [DONE]
+
+"#,
+    );
+    let event = observe_calibration_stream(app, "/v1/responses", "req-responses-named-done").await;
+    let facts = event.output_calibration();
+    assert_eq!(event.observation().output_tokens, 5);
+    assert_eq!(facts.exact_output_tokens_baseline, Some(5));
+    assert!(facts.calibration_ineligible);
+    assert!(facts.raw_output_units > 0);
 }
 
 #[tokio::test]

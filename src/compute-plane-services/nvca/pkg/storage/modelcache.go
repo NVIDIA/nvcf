@@ -96,6 +96,16 @@ const (
 	// lease. It is the PVC analogue of the primaryPVLabelKey marker.
 	cachePopulatedLabelKey   = fqdnPrefix + "/modelcache-populated"
 	cachePopulatedLabelValue = "true"
+	// ModelCachePopulatedLabelKey and ModelCachePopulatedLabelValue expose the
+	// populated marker to the agent, whose regular-workflow shared claim uses
+	// the same label so one definition of "populated" serves both workflows.
+	ModelCachePopulatedLabelKey   = cachePopulatedLabelKey
+	ModelCachePopulatedLabelValue = cachePopulatedLabelValue
+	// ModelCacheWriterPVCUIDAnnotationKey, on a writer Job's pod template,
+	// records the UID of the claim the Job populated. A completed Job only
+	// proves the claim it wrote to is populated, not a later claim of the same
+	// name.
+	ModelCacheWriterPVCUIDAnnotationKey = fqdnPrefix + "/model-cache-writer-pvc-uid"
 
 	// The annotation applied to primary PV's that denotes the last time
 	// a function or task referenced it.
@@ -260,8 +270,11 @@ func (r *Reconciler) doModelCacheSharedFS(ctx context.Context,
 	if err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
 	}
-	sharedSC := HelmCacheSharedStorageClassName
-	rwPVC.Spec.StorageClassName = &sharedSC
+	// The writer lands on the model cache class like every other backend. The
+	// class that selected this path, nvcf-miniservice-sc, is only how legacy
+	// selection detects an operator-provided shared filesystem; provisioning on
+	// it would strand the cache when a cluster has only the model cache class.
+	r.applyModelCacheStorageClass(ctx, rwPVC)
 
 	// Gate on the durable populated marker, mirroring the NVMesh/Samba
 	// getPrimaryPV gate. Shared storage shares data across namespaces natively

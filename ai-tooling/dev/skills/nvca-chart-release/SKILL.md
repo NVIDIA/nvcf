@@ -40,7 +40,15 @@ Propagates Helm chart changes through the native monorepo paths:
    NVCA_OPERATOR_VERSION=<operator-image-tag>
    NVCA_VERSION=<agent-image-tag>
    NVCA_SHARED_STORAGE_IMAGE_TAG=<shared-storage-tag>
+   NVCA_OTEL_COLLECTOR_IMAGE_TAG=<byoo-otel-collector-image-tag>
    ```
+
+   `NVCA_OTEL_COLLECTOR_IMAGE_TAG` is normally left alone: it moves on its own
+   when `byoo-otel-collector` releases, driven by `tools/chart-version-bumper`
+   against the vendored chart directly rather than through this source-first
+   flow. Set it explicitly only when vendoring by hand; otherwise pass the
+   value already committed in `deploy/helm/nvca-operator/nvca-operator/values.yaml`
+   (`otelCollector.imageTag`) so an unrelated vendor run does not revert it.
 
 4. Vendor and validate from `deploy/helm/nvca-operator`:
 

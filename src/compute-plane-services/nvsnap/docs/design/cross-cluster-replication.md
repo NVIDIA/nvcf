@@ -35,7 +35,7 @@ wrong shape for it.
 
 A capture's content hash (`checkpointstore.HashInput`) is:
 
-```
+```text
 imageDigest + modelID + engineCompatFlags + cudaDriverMajor
             + gpuComputeCapability + captureFormatVersion
 ```
@@ -55,7 +55,7 @@ PVC. L2 remains the universal *local* read/fan-out tier on every cluster.
 
 ### Tiers (restore cascade)
 
-```
+```text
 L1  same-node hostPath cache
 L2  local-zone per-capture PVC (ROX fan-out)         <- unchanged, the speed tier
 L3  same-cluster peer agent (HTTP)                    <- unchanged

@@ -45,6 +45,10 @@ Use `docs/user/` for top-of-tree customer docs and `docs/dev/` for developer wor
 
 ### Artifact manifest
 
+For the maintainer workflow, including automatic stack releases, public
+publication updates, and new artifact registration, see
+[`tools/docs-version-sync/README.md`](../tools/docs-version-sync/README.md).
+
 The generated tables in `docs/user/manifest.md` use catalog artifacts and
 `manifest.entries` from `docs/version-catalog/main.yaml`. For each entry, set
 its deployment plane, kind, requirement, public-safe description, and public
@@ -72,15 +76,30 @@ NVIDIA Cloud Functions glyphs inside green icon boxes must stay white in both mo
 Before finishing SVG changes, render light and dark previews for every changed SVG and compare them together for consistent background tone, panel contrast, connector contrast, text readability, and accent brightness.
 
 Use `--update-catalog` only when synchronizing artifact versions and registry
-paths from the latest stack manifest. Presentation-only changes to
+paths from the latest stable GitHub stack release. Presentation-only changes to
 `manifest.entries` use the regeneration command above.
 
-To synchronize the catalog and generated blocks:
+To synchronize the catalog and generated blocks from the latest stable GitHub
+stack release:
 
 ```bash
 go run -C tools/docs-version-sync . --target main --update-catalog
 ./tools/ci/check-doc-version-sync
 ```
+
+The first command reads the inventory attached to the latest stable GitHub
+stack release and writes updates. The second command is an offline consistency
+check. CI runs the offline check before this separate current-release check:
+
+```bash
+./tools/ci/check-doc-version-current-release
+```
+
+The current-release check does not discover public NGC availability. Keep
+exact public locations in `publications` and mark unavailable versions in
+`publication_pending`. Identify publication records by `name`, `type`, and
+`version` so charts, images, and resources with the same name remain distinct.
+Version overrides also require `name` and `type`.
 
 Generated blocks are marked with comments such as:
 

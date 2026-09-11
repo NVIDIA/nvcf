@@ -28,6 +28,24 @@ rust_library(
     deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
 )
 
+# Cargo unifies the dev-dependency feature for cross-crate tests. Bazel needs
+# a separate test-only crate so production targets do not expose the helper.
+rust_library(
+    name = "pylon-lib-test-support",
+    testonly = True,
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_features = ["test-support"],
+    crate_name = "pylon_lib",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = [
+        "//src/libraries/rust/stargate/crates/pylon:__pkg__",
+        "//src/libraries/rust/stargate/crates/stargate:__pkg__",
+    ],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
 rust_test(
     name = "pylon-lib_test",
     crate = ":pylon-lib",

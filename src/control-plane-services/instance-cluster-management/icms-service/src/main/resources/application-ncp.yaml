@@ -107,24 +107,37 @@ icms:
       client-id: unused      # Override the inherited ${kv.oauth2.*} expression from application.yaml
       client-secret: unused
 
-  # Self-hosted NVCF has no NGC / FNDS upstream.
+  # Self-hosted NVCF has no NGC upstream.
   ngc:
     enabled: false
+
+  # FNDS messages are off by default; the self-managed stack turns them on via
+  # env vars (ICMS_FNDS_MESSAGES_ENABLED etc., see sis.env in global.yaml.gotmpl)
+  # only when the optional event-ledger addon (addons.eventLedger.enabled) is
+  # deployed. When enabled, auth uses a static Vault-signed token
+  # (icms.fnds.static.token, rendered by the vault-agent template from
+  # services/event-ledger/jwt/sign/sis-api) rather than the OAuth2
+  # client-credentials flow used against the real NGC/FNDS upstream, matching
+  # the self-hosted pattern used by nvcf-api and nvct-api.
   fnds_messages_enabled: false
   fnds_messages_v1_enabled: false
   fnds_messages_v2_enabled: false
+  fnds_messages_v3_enabled: false
+  fnds:
+    fnds-base-url: http://event-ledger.nvcf.svc.cluster.local:8080
+    static:
+      token: ${kv.tokens.eventLedger}
 
   instance-listing-api-enabled: true
 
   nats:
-    nats-enabled: true
+    enabled: true
     nats-url: nats://nats.nats-system.svc.cluster.local:4222
     create-nats-streams: true
-    create-nats-consumers: false
     connection-timeout: 10s
     ping-interval: 5s
     reconnect-wait: 100ms
-    reconnect-allowed: false
+    unlimited-reconnects: false
     force-reconnect-flush: 5s
     delay-between-messages: 100ms
     message-ttl: 96h

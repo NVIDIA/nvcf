@@ -69,6 +69,25 @@ pub(super) enum FinalRetryDisposition {
     PayloadTooLarge(Option<String>),
 }
 
+impl FinalRetryDisposition {
+    pub(super) fn label(&self) -> &'static str {
+        match self {
+            Self::PassThrough => "pass_through",
+            Self::Exhausted(_) => "retry_exhausted",
+            Self::ReplayIncomplete(_) => "replay_incomplete",
+            Self::PayloadTooLarge(_) => "payload_too_large",
+        }
+    }
+
+    pub(super) fn retry_reason(&self) -> Option<&str> {
+        match self {
+            Self::PassThrough => None,
+            Self::Exhausted(reason) | Self::ReplayIncomplete(reason) => Some(reason),
+            Self::PayloadTooLarge(reason) => reason.as_deref(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum UpstreamRetry {
     AlternateBackend(String),
@@ -201,7 +220,7 @@ fn retry_reason_from_headers(headers: &HeaderMap) -> String {
         .to_owned()
 }
 
-fn header_str<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
+pub(super) fn header_str<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
     headers.get(name)?.to_str().ok()
 }
 

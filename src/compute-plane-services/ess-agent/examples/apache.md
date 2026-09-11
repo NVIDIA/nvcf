@@ -14,12 +14,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-Apache Consul Template Example
-------------------------------
+# Apache Consul Template Example
+
 Apache httpd is a popular web server. You can read more about the Apache httpd configuration file syntax in the [Apache httpd documentation](https://httpd.apache.org/docs/).
 
-
 ## Reverse Proxy based on Service Tags
+
 Here is an example template for rendering part of an Apache httpd configuration file that is responsible for configuring a reverse proxy with dynamic end points based on service tags with Consul Template:
 
 ```liquid

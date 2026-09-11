@@ -420,14 +420,13 @@ icms:
     DUMMY_GPU_5: dgpu5
 
   nats:
-    nats-enabled: false
+    enabled: false
     nats-url: nats://localhost:4222
     create-nats-streams: true
-    create-nats-consumers: false
     connection-timeout: 10s
     ping-interval: 5s
     reconnect-wait: 100ms
-    reconnect-allowed: false
+    unlimited-reconnects: false
     force-reconnect-flush: 5s
     delay-between-messages: 100ms
     message-ttl: 96h
@@ -623,12 +622,12 @@ icms:
   queue-creation-per-instance-type-enabled: true
   fail-instance-creation-for-closed-requests: false
   state-request-deletion-task-enabled: true
+  cluster-by-id-reads-enabled: true
 
   nats:
     # Should be disabled to verify success of backward compatible integration test
-    nats-enabled: false
+    enabled: false
     create-nats-streams: true
-    create-nats-consumers: true
 
   aws:
     region: us-east-1

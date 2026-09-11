@@ -1,0 +1,21 @@
+# SHA-256 and Maven Central URL for Cassandra migrations dependency overlays.
+# Jackson annotations follows the upstream family's major.minor versioning.
+53ca085f4a150f703f49e1aabd935bd03b43e1ea3d55d135438292af22cef56b  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar
+4b40a06396f239f8de2da57419adde6e94e5edc18a2171d471ea05eeed4e5c2d  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-core/2.21.4/jackson-core-2.21.4.jar
+3888e9e69ab66fbacaacc9aea0e9ffbf15368288e4aca468b024dba11c09fbf9  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.21.4/jackson-databind-2.21.4.jar
+d1ac4b98b70304e56448423589fde5e775b100889643ad1ead62cc7811633684  https://repo.maven.apache.org/maven2/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.21.4/jackson-datatype-jsr310-2.21.4.jar
+3c21d10662148be5e1dc37adea6866faf0e43096a2174c2ef12a4553b45c3af2  https://repo.maven.apache.org/maven2/io/netty/netty-all/4.1.137.Final/netty-all-4.1.137.Final.jar
+f474b14c7734f15e0540394cb6f39d67777b7581a42919e4ac89d253d4efd929  https://repo.maven.apache.org/maven2/io/netty/netty-buffer/4.1.137.Final/netty-buffer-4.1.137.Final.jar
+9987b6a660b0a6b1f0d791485dae33180b3d1c63687c006fe6d3fd025e9e3798  https://repo.maven.apache.org/maven2/io/netty/netty-codec/4.1.137.Final/netty-codec-4.1.137.Final.jar
+d31926b01adcc07af86f5e27b81b6d6c115df17d366e835d1fc3f5a1924e7e52  https://repo.maven.apache.org/maven2/io/netty/netty-common/4.1.137.Final/netty-common-4.1.137.Final.jar
+d0e4c6ee4779f59f6ab2fb5d388e4f57147c82270164b37945764bb9bda96a44  https://repo.maven.apache.org/maven2/io/netty/netty-handler/4.1.137.Final/netty-handler-4.1.137.Final.jar
+843de10c4cef34cbc1a5344090f1b57db532fbebf141559862da675f6b656df4  https://repo.maven.apache.org/maven2/io/netty/netty-handler-proxy/4.1.137.Final/netty-handler-proxy-4.1.137.Final.jar
+6a85347e2d598d28da934cc4d8f68b9990ab7052d8366876b820adfa9a5a81df  https://repo.maven.apache.org/maven2/io/netty/netty-handler-ssl-ocsp/4.1.137.Final/netty-handler-ssl-ocsp-4.1.137.Final.jar
+b4cf2aeedd9fc7c8c439bbfe574f63cfe5b83392e88bbc07ca0e8424b7cff955  https://repo.maven.apache.org/maven2/io/netty/netty-resolver/4.1.137.Final/netty-resolver-4.1.137.Final.jar
+6251adc2a2921572382732a2db188d4f4f2251fd6ebb49c5d44bbf33d6bfb1a7  https://repo.maven.apache.org/maven2/io/netty/netty-transport/4.1.137.Final/netty-transport-4.1.137.Final.jar
+55049554b799dc8e53bf234fffa36e001f7b5b65c32994b9bd59fc6356f1c52f  https://repo.maven.apache.org/maven2/io/netty/netty-transport-classes-epoll/4.1.137.Final/netty-transport-classes-epoll-4.1.137.Final.jar
+88d0ac216f9c7be690a9d0157778570d6f4c61f885863da1fccec7fcaee35557  https://repo.maven.apache.org/maven2/io/netty/netty-transport-classes-kqueue/4.1.137.Final/netty-transport-classes-kqueue-4.1.137.Final.jar
+b2eb04dbb6ec6cc8fc00aed37bb86b7aed1ccb87722eda44c90652a7d41fbdfe  https://repo.maven.apache.org/maven2/io/netty/netty-transport-native-epoll/4.1.137.Final/netty-transport-native-epoll-4.1.137.Final.jar
+82fb63a2dc90c0bddb81e04065a1c06fb4c5be722ad5d64b46491daf8b6f9a01  https://repo.maven.apache.org/maven2/io/netty/netty-transport-native-epoll/4.1.137.Final/netty-transport-native-epoll-4.1.137.Final-linux-aarch_64.jar
+185db6053e0e9573d36fa4eb6567b26139afaa4daa7bf5a068e661568304542b  https://repo.maven.apache.org/maven2/io/netty/netty-transport-native-epoll/4.1.137.Final/netty-transport-native-epoll-4.1.137.Final-linux-x86_64.jar
+8056e7637f9948f953314894cf995ab664711b66c73c4cd5b593ae84f0b1048c  https://repo.maven.apache.org/maven2/io/netty/netty-transport-native-unix-common/4.1.137.Final/netty-transport-native-unix-common-4.1.137.Final.jar

@@ -32,6 +32,31 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/models"
 )
 
+func TestVaultClientSendsVaultTokenHeader(t *testing.T) {
+	const token = "test-vault-token"
+
+	receivedToken := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedToken <- r.Header.Get("X-Vault-Token")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"token":"signed-token"}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewVaultClient(server.URL)
+	if err != nil {
+		t.Fatalf("NewVaultClient() returned an unexpected error: %v", err)
+	}
+	client.SetToken(token)
+
+	if _, err := client.SignToken(t.Context(), "services/example/jwt/sign", "admin-issuer-proxy"); err != nil {
+		t.Fatalf("SignToken() returned an unexpected error: %v", err)
+	}
+	if got := <-receivedToken; got != token {
+		t.Error("X-Vault-Token does not match the configured token")
+	}
+}
+
 func TestVaultClientHelpers(t *testing.T) {
 	t.Run("DecodeJWTClaims success", func(t *testing.T) {
 		claims := models.JWTClaims{

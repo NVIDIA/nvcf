@@ -334,10 +334,10 @@
           "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         },
         "imageEdits": {
-          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
+          "$ref": "#/definitions/openAIMultipartEndpointRoutes"
         },
         "imageVariations": {
-          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
+          "$ref": "#/definitions/openAIMultipartEndpointRoutes"
         }
       },
       "additionalProperties": {
@@ -348,6 +348,12 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/openAIModelRoute"
+      }
+    },
+    "openAIMultipartEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAIMultipartModelRoute"
       }
     },
     "openAIModelRoute": {
@@ -404,7 +410,86 @@
         "modelName",
         "functionID"
       ],
+      "$comment": "The gateway reads the shadows key and the legacy shadow keys in any letter case, so the shadows rules use (?i) patterns. That flag is Go regexp syntax, which Helm uses; ECMA-262 validators do not accept it. The legacy keys keep the exact-name checks above so their behavior is unchanged.",
+      "patternProperties": {
+        "^(?i)shadows$": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadowTarget"
+          }
+        }
+      },
+      "if": {
+        "$comment": "True when at least one key is spelled shadows in any case.",
+        "not": {
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?i)shadows$"
+            }
+          }
+        }
+      },
+      "then": {
+        "$comment": "A route uses shadows or the legacy shadow keys, never both, in any spelling.",
+        "propertyNames": {
+          "not": {
+            "pattern": "^(?i)shadow(modelname|modelnames|percentage|samplingmethod|cancelonclientdisconnect)$"
+          }
+        }
+      },
       "additionalProperties": true
+    },
+    "openAIMultipartModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAINonLLMModelRoute"
+        },
+        {
+          "type": "object",
+          "$comment": "Shadow replay rewrites JSON bodies, so the gateway rejects shadows on multipart image routes. An empty list is accepted, as in the gateway.",
+          "patternProperties": {
+            "^(?i)shadows$": {
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+    "shadowSamplingMethod": {
+      "type": "string",
+      "enum": [
+        "",
+        "random",
+        "perBearerKey"
+      ]
+    },
+    "shadowTarget": {
+      "type": "object",
+      "$comment": "Entry keys match in any letter case, as in the gateway. The not/propertyNames pair requires a modelName key in some spelling, since required is exact-match.",
+      "patternProperties": {
+        "^(?i)modelname$": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "^(?i)percentage$": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "^(?i)samplingmethod$": {
+          "$ref": "#/definitions/shadowSamplingMethod"
+        },
+        "^(?i)cancelonclientdisconnect$": {
+          "type": "boolean"
+        }
+      },
+      "not": {
+        "propertyNames": {
+          "not": {
+            "pattern": "^(?i)modelname$"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "vanityRoutes": {
       "type": "object",

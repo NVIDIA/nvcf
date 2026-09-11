@@ -194,7 +194,7 @@ func TestCatalogRefreshPreservesManifestMetadata(t *testing.T) {
 		Description: "Routes OpenAI-compatible LLM requests.",
 	}}}
 
-	updated := BuildCatalogFromArtifactsWithBase("0.6.0-rc.99", base.Artifacts, base)
+	updated := refreshCatalogFromArtifacts("0.6.0-rc.99", base.Artifacts, base)
 	if len(updated.Manifest.Entries) != 1 || updated.Manifest.Entries[0].ArtifactID != "llm-api-gateway" {
 		t.Fatalf("manifest metadata = %#v, want preserved entry", updated.Manifest)
 	}
@@ -248,7 +248,7 @@ func TestManifestMetadataClassifiesAllArtifacts(t *testing.T) {
 	}
 
 	sort.Strings(eaCVE)
-	wantEACVE := []string{"bitnami-cassandra", "nvcf-cassandra-migrations"}
+	wantEACVE := []string{"nvcf-cassandra-migrations"}
 	if strings.Join(eaCVE, ",") != strings.Join(wantEACVE, ",") {
 		t.Fatalf("EA-CVE entries = %v, want %v", eaCVE, wantEACVE)
 	}

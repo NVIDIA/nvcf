@@ -18,7 +18,7 @@
 ## @param image.tag NVCA Operator container image tag. This defaults to the chart's appVersion
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
-  repository: ""
+  repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
   tag: ""
   pullPolicy: IfNotPresent
 ## @param nvcaImage.repositoryOverride (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config
@@ -37,7 +37,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.157.9
+  imageTag: 0.160.0-nv-0.2.5
   resources:
     limits:
       cpu: 1000m
@@ -96,7 +96,86 @@ nvcaHelmRepositoryPrefix: ""
 enableGXCache: true
 ## @param ddcsIPAllowList provides comma separated CIDR ranges to allowList
 ddcsIPAllowList: ""
+## @section BYOO Configuration
+## @param byoo.resources Resource requests and limits for the BYOO OTel collector container. Leave unset to keep the agent's built-in defaults.
+## @param byoo.logChunking.maxPayloadBytes Maximum log chunk payload size in bytes. Zero disables the override.
+## @param byoo.logChunking.dryRun Record chunking metrics without modifying log payloads.
+## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
+## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead. Leave unset to keep the agent's built-in defaults.
+## @param byoo.fluentbit.resources Resource requests and limits for the BYOO FluentBit container. Leave unset to keep the agent's built-in defaults.
+byoo:
+  resources: {}
+  logChunking:
+    maxPayloadBytes: 0
+    dryRun: false
+  otelCollector: {}
+  additionalResourceOverhead: {}
+  fluentbit:
+    resources: {}
+## @param utils.resources Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.
+utils:
+  resources:
+    cpu: "4"
+    memory: 4Gi
+## @section Storage Configuration
+## @param storage.sharedStorage.server.image Image for the shared-storage pod's SMB container. Leave unset to keep the agent's built-in default.
+## @param storage.sharedStorage.server.resources Resource requests and limits for the shared-storage pod's SMB container. Leave unset to keep the agent's built-in defaults.
+## @param storage.sharedStorage.taskData.storageClassName Storage class for task data. Falls back to ephemeral storage if unset.
+## @param storage.sharedStorage.taskData.mountOptions Mount options for the provisioned task data PV.
+## @param storage.sharedStorage.taskData.storageCapacity Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.
+## @param storage.internalPersistentStorage.storageClassName Storage class for the Internal Persistent Storage (IPS) PVC.
+## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).
+storage:
+  sharedStorage:
+    server:
+      image: ""
+      resources: {}
+    taskData:
+      storageClassName: ""
+      mountOptions: []
+      storageCapacity: ""
+  internalPersistentStorage:
+    storageClassName: ""
+    hardResourceQuota: {}
+## @section Worker/Agent Behavior Configuration
+## @param worker.minHealthcheckRefreshWait Minimum wait between internal healthchecker refresh calls. Leave unset to keep the agent's built-in default.
+## @param worker.staticGPUCapacity Static override of GPU capacity used for registration. Zero disables the override.
+## @param worker.computeBackend Selects the compute backend. Leave unset to keep the agent's built-in default.
+## @param worker.requestsNamespace Namespace NVCA creates request-scoped resources in. Leave unset to keep the agent's built-in default.
+## @param worker.namespaceLabels Labels applied to namespaces NVCA creates.
+## @param worker.featureFlags Feature flags enabled on the NVCA agent.
+## @param worker.skipSelfDestruct Skip self-destruct even if ICMS sends SELF_DESTRUCT.
+## @param worker.forceSelfDestruct Force self-destruct mode for testing.
+## @param worker.csiVolumeMountOptions CSI PVC mount options for provisioned volumes.
+## @param worker.timeouts.credRenewInterval Interval between credential renewal attempts. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.heartbeatInterval Interval between agent heartbeats. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.syncQueueInterval Interval between queue sync polls. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.syncRequestStatusInterval Interval between request status syncs. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.syncAcknowledgeRequestInterval Interval between request acknowledgement syncs. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.periodicInstanceStatusInterval Interval between periodic instance status reports. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.icmsRequestAckInterval Interval between ICMS request acknowledgement polls. Leave unset to keep the agent's built-in default.
+## @param worker.timeouts.icmsRequestAckRetryTimeout Timeout for retrying ICMS request acknowledgement. Leave unset to keep the agent's built-in default.
+worker:
+  minHealthcheckRefreshWait: ""
+  staticGPUCapacity: 0
+  computeBackend: ""
+  requestsNamespace: ""
+  namespaceLabels: {}
+  featureFlags: []
+  skipSelfDestruct: false
+  forceSelfDestruct: false
+  csiVolumeMountOptions: []
+  timeouts:
+    credRenewInterval: ""
+    heartbeatInterval: ""
+    syncQueueInterval: ""
+    syncRequestStatusInterval: ""
+    syncAcknowledgeRequestInterval: ""
+    periodicInstanceStatusInterval: ""
+    icmsRequestAckInterval: ""
+    icmsRequestAckRetryTimeout: ""
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
+## @description agentConfig.mergeConfig is deprecated for BYOO, storage, and worker settings. Use the top-level byoo/storage/worker values instead.
 agentConfig:
   mergeConfig: |-
     cluster:
@@ -108,7 +187,7 @@ agentConfig:
   #   agent:
   #     logLevel: debug
   #
-  # BYOO metric subset example:
+  # Legacy BYOO example (deprecated):
   #
   # mergeConfig: |
   #   agent:
@@ -203,7 +282,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.157.0-nv-0.2.1"
+    imageTag: "0.160.0-nv-0.2.5"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -245,17 +324,15 @@ agent:
       cpu: 100m
       memory: 200Mi
 ## @section Webhook Container Resource configuration
-## @param webhook.resources.limits.cpu CPU limit for the nvca webhook container
 ## @param webhook.resources.limits.memory Memory limit for the nvca webhook container
 ## @param webhook.resources.requests.cpu CPU request for the nvca webhook container
 ## @param webhook.resources.requests.memory Memory request for the nvca webhook container
 webhook:
   resources:
     limits:
-      cpu: 200m
       memory: 200Mi
     requests:
-      cpu: 50m
+      cpu: 500m
       memory: 50Mi
 ## @section NGC Configuration
 
@@ -320,7 +397,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.157.9
+    imageTag: 0.160.0-nv-0.2.5
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
@@ -344,7 +421,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.157.9
+    imageTag: 0.160.0-nv-0.2.5
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   icmsServiceURL: "http://icms.example.invalid:8080"
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.

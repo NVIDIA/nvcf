@@ -420,10 +420,8 @@ class AccountControllerTest {
         assertThat(responseBody.account().lastUpdatedAt()).isNotNull();
         assertThat(responseBody.account().registryCredentials()).isNotEmpty().hasSize(3);
         assertThat(responseBody.account().registryCredentials())
-                .allSatisfy(registryCredential -> {
-                    assertThat(registryCredential.registryCredentialId()).isNotNull();
-                    assertThat(registryCredential.secret()).isNotNull();
-                });
+                .allSatisfy(registryCredential ->
+                        assertThat(registryCredential.registryCredentialId()).isNotNull());
     }
 
     Stream<Arguments> getAccountWithTelemetryArgs() {

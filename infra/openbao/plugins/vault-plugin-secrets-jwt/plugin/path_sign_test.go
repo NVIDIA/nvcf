@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/go-test/deep"
 	"github.com/hashicorp/vault/sdk/logical"
-	"gopkg.in/square/go-jose.v2/jwt"
 )
 
 func getSignedTokenWithClaims(b *backend, storage *logical.Storage, role string, claims map[string]interface{}, headers map[string]interface{}, claimsDest interface{}, headersDest map[string]interface{}) error {
@@ -56,7 +56,7 @@ func getSignedTokenWithClaims(b *backend, storage *logical.Storage, role string,
 		return fmt.Errorf("token was %T, not a string", rawToken)
 	}
 
-	token, err := jwt.ParseSigned(strToken)
+	token, err := jwt.ParseSigned(strToken, allowedSignatureAlgorithms)
 	if err != nil {
 		return fmt.Errorf("error parsing jwt: %s", err)
 	}
@@ -115,7 +115,7 @@ func getSignedTokenWithoutClaims(b *backend, storage *logical.Storage, role stri
 		return fmt.Errorf("token was %T, not a string", rawToken)
 	}
 
-	token, err := jwt.ParseSigned(strToken)
+	token, err := jwt.ParseSigned(strToken, allowedSignatureAlgorithms)
 	if err != nil {
 		return fmt.Errorf("error parsing jwt: %s", err)
 	}

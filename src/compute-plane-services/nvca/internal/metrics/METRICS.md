@@ -579,6 +579,7 @@ rate(nvca_k8s_api_failure_total[5m]) > 0.1
 **Note:** This metric uses the storage labels (excluding `nvca_nca_id`) for backwards compatibility with storage metrics.
 
 **Failure Reasons:**
+
 | Reason | Description |
 |--------|-------------|
 | `cache_spec_invalid` | Spec validation failures (missing fields, decode errors) |
@@ -1295,7 +1296,9 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
     summary: High rate of workload translation errors
 ```
 
+```yaml
 # High workload failure rate
+
 - alert: HighWorkloadFailureRate
   expr: |
     sum(rate(nvca_workload_result_total{workload_status="failure"}[5m])) /
@@ -1305,12 +1308,14 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
     summary: More than 10% of workloads are failing
 
 # Spike in no-capacity failures
+
 - alert: NoCapacityFailureSpike
   expr: |
     rate(nvca_workload_result_total{failure_category="no_capacity"}[5m]) > 0.05
   for: 10m
   annotations:
     summary: High rate of workload failures due to no capacity
+
 ```
 
 ### Warning Alerts

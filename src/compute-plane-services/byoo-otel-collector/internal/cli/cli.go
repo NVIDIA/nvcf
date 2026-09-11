@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +36,48 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelconfig"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/secrets"
 )
+
+const (
+	otelCollectorConfigFlag       = "--config"
+	otelCollectorFeatureGatesFlag = "--feature-gates"
+
+	// ottl.functions.enableLambda is required by the rendered metrics pipeline,
+	// which filters empty attribute values with an OTTL lambda. The gate is
+	// alpha, so a collector upgrade that removes it will fail the runtime
+	// startup check in CI rather than in a deployment.
+	otelCollectorFeatureGates = "ottl.functions.enableLambda"
+)
+
+// hasFlag reports whether args already carries flag, in either the
+// "--flag value" or "--flag=value" form.
+func hasFlag(args []string, flag string) bool {
+	prefix := flag + "="
+	for _, arg := range args {
+		if arg == flag || strings.HasPrefix(arg, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// otelCollectorArgs completes the argument list passed to the collector.
+//
+// A caller-supplied --config wins: adding a second one would make the collector
+// merge both sources rather than use theirs.
+//
+// The feature gate is different, and is appended unconditionally. The rendered
+// metrics pipeline filters empty attribute values with an OTTL lambda, which the
+// collector rejects at config-parse time unless ottl.functions.enableLambda is
+// enabled, so skipping it when the caller passes gates of their own would leave
+// the collector unable to start. --feature-gates accumulates across repeated
+// flags, so a caller's gates survive alongside this one and a duplicate is
+// harmless.
+func otelCollectorArgs(args []string, otelConfigPath string) []string {
+	if !hasFlag(args, otelCollectorConfigFlag) {
+		args = append(args, otelCollectorConfigFlag, otelConfigPath)
+	}
+	return append(args, otelCollectorFeatureGatesFlag, otelCollectorFeatureGates)
+}
 
 // processWaiter is the subset of *os.Process used by runSecretsCheckLoop, extracted so tests
 // can exercise the wait-error logging without spawning a real OS process.
@@ -179,12 +221,7 @@ func NewCommand() *cobra.Command {
 			}
 
 			// run the otel-collector
-			// check if the config flag is already present in the args
-			configFlag := "--config"
-			configFlagExists := slices.Contains(args, configFlag)
-			if !configFlagExists {
-				args = append(args, configFlag, otelConfigPath)
-			}
+			args = otelCollectorArgs(args, otelConfigPath)
 			otelCollectorProc, err := otelcollector.RunOtelCollector(args)
 			if err != nil {
 				return err

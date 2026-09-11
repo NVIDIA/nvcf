@@ -201,3 +201,15 @@ func repoRoot(t *testing.T) string {
 	t.Fatalf("could not find %s above the test directory", MetadataPath)
 	return ""
 }
+
+func TestEmptyStringDeployEntryIsRejected(t *testing.T) {
+	// Mirrors the same fix in tools/chart-version-bumper/metadata.go:
+	// json.Unmarshal decodes "" into a Go string without error, so the
+	// string-form branch must reject it explicitly rather than silently
+	// producing a Deploy with no service id.
+	var m Metadata
+	err := json.Unmarshal([]byte(`{"services":[{"id":"c","path":"deploy/helm/c","deploys":[""]}]}`), &m)
+	if err == nil {
+		t.Fatal("an empty string-form deploys entry must fail to decode")
+	}
+}

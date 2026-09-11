@@ -122,7 +122,7 @@ rust_test(
     # Test target needs the workspace-local deps in addition to the
     # third-party dev deps. `pylon-lib` is a dev-dependency only here.
     deps = _WORKSPACE_DEPS + [
-        "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib",
+        "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib-test-support",
     ] + all_crate_deps(normal_dev = True),
 )
 

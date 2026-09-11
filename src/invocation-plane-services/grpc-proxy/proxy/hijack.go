@@ -168,6 +168,12 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 		zap.L().Error("failed to register worker", zap.Error(err))
 		_ = spanError(span, err)
 		_ = conn.Close()
+	} else {
+		// Only once a worker is actually attached is this request no longer
+		// queued. Dropping the record on the failure path above would leave
+		// work in the queue that nothing remembers, so a shutdown could never
+		// purge it, which is the state this change exists to avoid.
+		s.pendingWork.Delete(parsedRequestId)
 	}
 
 	// workers can't reconnect to the client if their connection drops because the client has

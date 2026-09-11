@@ -55,10 +55,25 @@ environments:
 {{- toYaml $featureGateValues -}}
 {{- end -}}
 
+{{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
+{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
+{{- fail "global.helm.sources.url must use https://" }}
+{{- end }}
+
 repositories:
   - name: nvcf
+{{- if $helmSourceURL }}
+    url: {{ $helmSourceURL | quote }}
+    {{- if dig "global" "helm" "sources" "username" "" .Values }}
+    username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
+    {{- end }}
+    {{- if dig "global" "helm" "sources" "password" "" .Values }}
+    password: {{ dig "global" "helm" "sources" "password" "" .Values | quote }}
+    {{- end }}
+{{- else }}
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
     oci: true
+{{- end }}
 
 helmDefaults:
   createNamespace: true
@@ -163,10 +178,10 @@ helmDefaults:
 releases:
 
   - name: nvca-operator
-    # Released chart from nvca-operator-deploy. Compute-plane base values own
-    # the operator and NVCA versions used by this stack.
+    # The chart appVersion owns the operator image version. Compute-plane base
+    # values own the NVCA application version used by this stack.
     chart: nvcf/helm-nvca-operator
-    version: 1.21.3
+    version: 1.24.0
     namespace: nvca-operator
     values:
       - ../global.yaml.gotmpl
@@ -193,6 +208,12 @@ releases:
         imagePullSecrets:
         {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
         {{- end }}
+        otelCollector:
+          enabled: {{ $otelCollectorEnabled }}
+          imageRepository: {{ $otelCollectorImageRepository | quote }}
+          {{- with dig "imageTag" "" $otelCollector }}
+          imageTag: {{ . | quote }}
+          {{- end }}
         {{- /* Self-hosted clusters supply their own registry credentials through
                global.imagePullSecrets and have no NGC service key to derive one
                from, so the chart's generated pull secret is disabled here. The

@@ -30,6 +30,7 @@ User says NVCA stopped authenticating, or PSAT auth is 401-ing against ICMS. The
 ## If rotation doesn't fix it
 
 The auth failure may be at a different layer — check:
+
 - NATS auth-callout health (`kubectl logs -n nats-system -l app=nats-auth-callout-service`)
 - Cluster row exists in `cluster_oidc_by_cluster_id` Cassandra table
 - `helm-reval-service` configmap has `authz.oidc.enabled=true`

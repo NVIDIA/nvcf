@@ -1,18 +1,20 @@
 # uvloop 0.21.0 Post-Restore Analysis
 
 ## Version Info
+
 - **uvloop**: 0.21.0
 - **Python**: 3.12
 - **Location**: `/usr/local/lib/python3.12/dist-packages/uvloop/`
 
 ## Key Files
+
 - `handles/process.pyx` - UVProcess class (crash location)
 - `handles/handle.pyx` - UVHandle base class
 - `loop.pyx` - Main event loop
 
 ## The Crash Site
 
-The crash is in `UVProcess.__init` (or more precisely, in the `_init` method). 
+The crash is in `UVProcess.__init` (or more precisely, in the `_init` method).
 
 ### Key Code Path
 
@@ -41,6 +43,7 @@ cdef class UVProcess(UVHandle):
 ### The Stale Pointer Problem
 
 After CRIU restore, `self._handle` may point to:
+
 1. An old `uv_process_t` that was freed/invalid
 2. Memory that was reallocated for something else
 3. A valid-looking but semantically stale handle

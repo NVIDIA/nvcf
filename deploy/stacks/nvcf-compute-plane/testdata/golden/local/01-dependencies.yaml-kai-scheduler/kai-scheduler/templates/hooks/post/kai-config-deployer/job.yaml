@@ -23,7 +23,7 @@ spec:
         - name: nvcr-pull-secret
       containers:
       - name: deployer
-        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.16.7"
+        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1"
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false

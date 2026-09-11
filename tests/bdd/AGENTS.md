@@ -145,6 +145,14 @@ logic into `dsl/`.
   Do not introduce blanket `helm list`-based uninstall or namespace
   deletion that catches topology infrastructure (`eg` in
   `envoy-gateway-system`, the namespace itself, `cert-manager`).
+  Multi-cluster stack cleanup must also apply the worker release and
+  namespace allow-lists on `k3d-ncp-local-cp`: feature Backgrounds
+  create `nvca-operator` (and its pull secret) on the control-plane
+  context, not only on compute clusters. Artifact cleanup must remove
+  Helmfile render trees under each stack `out/` directory and
+  generated values under
+  `deploy/stacks/nvcf-compute-plane/registration/`, not only
+  root-level `out/*.yaml`.
 
 ## CLI vs Helmfile install paths
 
