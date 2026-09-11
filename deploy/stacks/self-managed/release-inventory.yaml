@@ -2,5 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 schemaVersion: 1
-# The release workflow authenticates to its chart source before rendering.
+# NVCA is released independently and is not mirrored into the composite stack's
+# release chart repository. Render the pinned chart from its immutable public
+# GitHub release tag, then report the public self-managed catalog destination.
+sourceCharts:
+  helm-nvca-operator:
+    tagPrefix: deploy/helm/nvca-operator/v
+    path: deploy/helm/nvca-operator/nvca-operator
+# The release workflow authenticates before evaluating the remaining charts and
+# permits states that contain only third-party or local charts.
 publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf

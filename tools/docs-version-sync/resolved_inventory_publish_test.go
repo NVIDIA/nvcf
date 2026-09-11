@@ -6,8 +6,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -80,19 +82,29 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
-	repo := t.TempDir()
-	writeFile(t, filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath)), "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\n")
-	for _, state := range resolvedInventoryStates {
-		writeFile(t, filepath.Join(repo, filepath.FromSlash(state.path)), "releases: []\n")
+	repo := initTestGitRepo(t)
+	writeFile(t, filepath.Join(repo, "deploy/helm/nvca-operator/nvca-operator/Chart.yaml"), "apiVersion: v2\nname: helm-nvca-operator\nversion: 0.0.0\n")
+	writeFile(t, filepath.Join(repo, "deploy/helm/nvca-operator/nvca-operator/templates/pod.yaml"), "kind: Pod\n")
+	if _, err := gitOutput(repo, "add", "--all"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(repo, "commit", "-m", "nvca chart fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitOutput(repo, "tag", "deploy/helm/nvca-operator/v1.0.0"); err != nil {
+		t.Fatal(err)
 	}
 
-	source := stackSourceRelease{
-		Version: "1.2.3",
-		Tag:     stackTagPrefix + "1.2.3",
-		Commit:  strings.Repeat("b", 40),
+	stackFiles := map[string]string{
+		resolvedInventoryConfigPath: "schemaVersion: 1\npublishedChartRepository: " + testPublishedChartRepository + "\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/nvca-operator/nvca-operator\n",
 	}
+	for _, state := range resolvedInventoryStates {
+		stackFiles[state.path] = "releases: []\n"
+	}
+	stackFiles["deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl"] = "releases:\n  - name: nvca-operator\n    chart: nvcf/helm-nvca-operator\n    version: 1.0.0\n"
+	source := commitTestStackSource(t, repo, "1.2.3", stackFiles)
 	runner := &fakeResolvedInventoryRunner{t: t}
-	inventory, err := collectResolvedStackInventory(repo, source, runner)
+	inventory, err := collectResolvedStackInventory(repo, "", source, runner)
 	if err != nil {
 		t.Fatalf("collectResolvedStackInventory failed: %v", err)
 	}
@@ -110,8 +122,8 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	if runner.templateCalls != len(resolvedInventoryStates) {
 		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(resolvedInventoryStates))
 	}
-	if runner.prepareCalls != 2 {
-		t.Fatalf("repository preparation calls = %d, want source and public repository preparation", runner.prepareCalls)
+	if runner.prepareCalls != 3 {
+		t.Fatalf("repository preparation calls = %d, want source and two public repository preparations", runner.prepareCalls)
 	}
 	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
 	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {
@@ -158,18 +170,41 @@ func TestParseResolvedInventoryHelmSource(t *testing.T) {
 func TestLoadResolvedInventoryConfig(t *testing.T) {
 	repo := t.TempDir()
 	configPath := filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath))
-	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\n")
-	config, err := loadResolvedInventoryConfig(repo)
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/nvca-operator/nvca-operator\n")
+	config, err := loadResolvedInventoryConfig(repo, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.PublishedChartRepository != testPublishedChartRepository {
 		t.Fatalf("published repository = %q", config.PublishedChartRepository)
 	}
+	if got := config.SourceCharts["helm-nvca-operator"].TagPrefix; got != "deploy/helm/nvca-operator/v" {
+		t.Fatalf("NVCA source chart tag prefix = %q", got)
+	}
 
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: oci://registry.example.test/charts\n")
-	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "resolved HTTPS repository") {
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "resolved HTTPS repository") {
 		t.Fatalf("non-HTTPS repository error = %v", err)
+	}
+
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator\n    path: deploy/helm/nvca-operator/nvca-operator\n")
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "ending in /v") {
+		t.Fatalf("invalid source chart tag prefix error = %v", err)
+	}
+
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/other/nvca-operator\n")
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "path must be within") {
+		t.Fatalf("invalid source chart path error = %v", err)
+	}
+
+	externalConfig := filepath.Join(t.TempDir(), "release-inventory.yaml")
+	writeFile(t, externalConfig, "schemaVersion: 1\npublishedChartRepository: https://helm.example.test/external\n")
+	external, err := loadResolvedInventoryConfig(repo, externalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if external.PublishedChartRepository != "https://helm.example.test/external" {
+		t.Fatalf("external published repository = %q", external.PublishedChartRepository)
 	}
 }
 
@@ -201,6 +236,56 @@ func TestResolvedInventoryRepositoryCommandsAuthenticatesNVCFRegistry(t *testing
 	}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestValidateResolvedInventoryRenderRepository(t *testing.T) {
+	source := resolvedInventoryHelmSource{Registry: "registry.example.test", Repository: "release/charts"}
+	tests := []struct {
+		name         string
+		repositories map[string]helmfileRepository
+		wantErr      string
+	}{
+		{
+			name: "third-party repositories only",
+			repositories: map[string]helmfileRepository{
+				"third-party": {Name: "third-party", URL: "https://charts.example.test"},
+			},
+		},
+		{
+			name: "matching NVCF repository",
+			repositories: map[string]helmfileRepository{
+				"nvcf": {Name: "nvcf", URL: "registry.example.test/release/charts", OCI: true},
+			},
+		},
+		{
+			name: "NVCF repository must use OCI",
+			repositories: map[string]helmfileRepository{
+				"nvcf": {Name: "nvcf", URL: "https://charts.example.test"},
+			},
+			wantErr: "must use OCI",
+		},
+		{
+			name: "NVCF repository must match release source",
+			repositories: map[string]helmfileRepository{
+				"nvcf": {Name: "nvcf", URL: "registry.example.test/other/charts", OCI: true},
+			},
+			wantErr: "does not match",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateResolvedInventoryRenderRepository(test.repositories, source)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -257,6 +342,13 @@ func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repos
 		runner.operations = append(runner.operations, "prepare-public")
 		return nil
 	}
+	if repository, ok := repositories["third-party"]; ok {
+		if len(repositories) != 1 || repository.OCI || repository.URL != "https://third-party.example.test" {
+			runner.t.Fatalf("third-party repositories = %#v", repositories)
+		}
+		runner.operations = append(runner.operations, "prepare-public")
+		return nil
+	}
 	runner.t.Fatalf("unexpected repositories = %#v", repositories)
 	return nil
 }
@@ -280,7 +372,38 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	case "list":
 		return mustJSON(runner.t, releases), nil
 	case "build":
-		built := "repositories:\n  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"
+		if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/helmfile.d/02-") {
+			raw, err := os.ReadFile(stateFile)
+			if err != nil {
+				runner.t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "chart: nvcf/helm-nvca-operator") || !strings.Contains(string(raw), "-source-charts") {
+				runner.t.Fatalf("NVCA state did not use the materialized source chart:\n%s", raw)
+			}
+			chartValue := ""
+			for _, line := range strings.Split(string(raw), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "chart: ") {
+					chartValue = strings.TrimPrefix(strings.TrimSpace(line), "chart: ")
+				}
+			}
+			chartPath, err := strconv.Unquote(chartValue)
+			if err != nil {
+				runner.t.Fatalf("unquote materialized chart path %q: %v", chartValue, err)
+			}
+			metadata, err := os.ReadFile(filepath.Join(chartPath, "Chart.yaml"))
+			if err != nil {
+				runner.t.Fatal(err)
+			}
+			if !strings.Contains(string(metadata), "version: \"1.0.0\"") {
+				runner.t.Fatalf("materialized chart did not use pinned version:\n%s", metadata)
+			}
+		}
+		built := "repositories:\n"
+		if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/helmfile.d/01-") {
+			built += "  - name: third-party\n    url: https://third-party.example.test\n    oci: false\n"
+		} else {
+			built += "  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"
+		}
 		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") {
 			built += "  - name: public\n    url: https://charts.example.test\n    oci: false\n"
 		}
@@ -288,6 +411,9 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	case "template":
 		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") && !runner.publicPrepared {
 			runner.t.Fatal("Helmfile template ran before public repository preparation")
+		}
+		if !containsArgument(args, "--skip-tests") {
+			runner.t.Fatalf("Helmfile template included test hooks: %v", args)
 		}
 		runner.templateCalls++
 		outputDir := argumentAfter(runner.t, args, "--output-dir")
@@ -324,14 +450,19 @@ func fakeResolvedInventoryReleases(stateFile string, full bool) []helmfileReleas
 		return []helmfileRelease{release("otel-collector")}
 	case strings.Contains(slashPath, "nvcf-compute-plane/helmfile.d/01-"):
 		releases := []helmfileRelease{release("kai-scheduler")}
+		releases[0].Chart = "third-party/kai-scheduler"
 		if full {
-			releases = append(releases, release("grove-operator"))
+			grove := release("grove-operator")
+			grove.Chart = "third-party/grove-operator"
+			releases = append(releases, grove)
 		} else {
 			releases[0].Enabled = false
 		}
 		return releases
 	case strings.Contains(slashPath, "nvcf-compute-plane/helmfile.d/02-"):
-		return []helmfileRelease{release("nvca-operator")}
+		nvca := release("nvca-operator")
+		nvca.Chart = "nvcf/helm-nvca-operator"
+		return []helmfileRelease{nvca}
 	default:
 		panic("unexpected state " + stateFile)
 	}
@@ -365,6 +496,15 @@ func argumentAfter(t *testing.T, args []string, flag string) string {
 	}
 	t.Fatalf("missing %s in %v", flag, args)
 	return ""
+}
+
+func containsArgument(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }
 
 func environmentValue(env []string, name string) string {

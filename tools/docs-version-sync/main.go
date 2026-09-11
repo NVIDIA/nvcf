@@ -41,6 +41,7 @@ func run(args []string) error {
 	updateCatalog := flags.Bool("update-catalog", false, "fetch the resolved GitHub stack inventory and update the catalog")
 	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
 	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
+	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
 	stackSourceTag := flags.String("stack-source-tag", "", "immutable self-managed stack source tag for inventory generation")
 	stackSourceCommit := flags.String("stack-source-commit", "", "immutable self-managed stack source commit for inventory generation")
 
@@ -69,14 +70,18 @@ func run(args []string) error {
 		if !filepath.IsAbs(outputPath) {
 			outputPath = filepath.Join(repoRoot, outputPath)
 		}
-		return writeResolvedStackInventory(repoRoot, outputPath, stackSourceRelease{
+		configPath := *inventoryConfig
+		if configPath != "" && !filepath.IsAbs(configPath) {
+			configPath = filepath.Join(repoRoot, configPath)
+		}
+		return writeResolvedStackInventory(repoRoot, outputPath, configPath, stackSourceRelease{
 			Version: *stackVersion,
 			Tag:     *stackSourceTag,
 			Commit:  *stackSourceCommit,
 		})
 	}
-	if *stackSourceTag != "" || *stackSourceCommit != "" {
-		return fmt.Errorf("--stack-source-tag and --stack-source-commit require --generate-stack-inventory")
+	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" {
+		return fmt.Errorf("--stack-source-tag, --stack-source-commit, and --inventory-config require --generate-stack-inventory")
 	}
 	if *catalogPath == "" {
 		*catalogPath = filepath.Join(repoRoot, "docs", "version-catalog", *target+".yaml")

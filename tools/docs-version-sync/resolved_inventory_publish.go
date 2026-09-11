@@ -4,6 +4,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -196,8 +198,14 @@ type localChartMetadata struct {
 }
 
 type resolvedInventoryConfig struct {
-	SchemaVersion            int    `yaml:"schemaVersion"`
-	PublishedChartRepository string `yaml:"publishedChartRepository"`
+	SchemaVersion            int                                     `yaml:"schemaVersion"`
+	PublishedChartRepository string                                  `yaml:"publishedChartRepository"`
+	SourceCharts             map[string]resolvedInventorySourceChart `yaml:"sourceCharts"`
+}
+
+type resolvedInventorySourceChart struct {
+	TagPrefix string `yaml:"tagPrefix"`
+	Path      string `yaml:"path"`
 }
 
 type resolvedInventoryHelmSource struct {
@@ -209,11 +217,11 @@ func (source resolvedInventoryHelmSource) reference() string {
 	return source.Registry + "/" + source.Repository
 }
 
-func writeResolvedStackInventory(repoRoot, outputPath string, source stackSourceRelease) error {
+func writeResolvedStackInventory(repoRoot, outputPath, configPath string, source stackSourceRelease) error {
 	if err := verifyResolvedInventoryCheckout(repoRoot, source); err != nil {
 		return err
 	}
-	inventory, err := collectResolvedStackInventory(repoRoot, source, execResolvedInventoryCommandRunner{})
+	inventory, err := collectResolvedStackInventory(repoRoot, configPath, source, execResolvedInventoryCommandRunner{})
 	if err != nil {
 		return err
 	}
@@ -255,7 +263,7 @@ func verifyResolvedInventoryCheckout(repoRoot string, source stackSourceRelease)
 	return nil
 }
 
-func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, runner resolvedInventoryCommandRunner) (resolvedStackInventory, error) {
+func collectResolvedStackInventory(repoRoot, configPath string, source stackSourceRelease, runner resolvedInventoryCommandRunner) (resolvedStackInventory, error) {
 	tempRoot, err := os.MkdirTemp("", "nvcf-resolved-stack-inventory-")
 	if err != nil {
 		return resolvedStackInventory{}, err
@@ -266,7 +274,7 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 	if err := copyResolvedInventoryInputs(repoRoot, copiedRepoRoot); err != nil {
 		return resolvedStackInventory{}, err
 	}
-	config, err := loadResolvedInventoryConfig(copiedRepoRoot)
+	config, err := loadResolvedInventoryConfig(copiedRepoRoot, configPath)
 	if err != nil {
 		return resolvedStackInventory{}, err
 	}
@@ -291,9 +299,11 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 			ManifestByRelease: map[string][]byte{},
 		}
 	}
+	usedSourceCharts := map[string]struct{}{}
 	for stateIndex, state := range resolvedInventoryStates {
 		stateFile := filepath.Join(copiedRepoRoot, filepath.FromSlash(state.path))
-		releases, manifests, err := collectResolvedInventoryState(
+		releases, manifests, stateSourceCharts, err := collectResolvedInventoryState(
+			repoRoot,
 			copiedRepoRoot,
 			stateFile,
 			filepath.Join(tempRoot, "rendered", fmt.Sprintf("%02d", stateIndex)),
@@ -302,11 +312,15 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 			env,
 			renderSource,
 			config.PublishedChartRepository,
+			config.SourceCharts,
 			ngcAPIKey,
 			runner,
 		)
 		if err != nil {
 			return resolvedStackInventory{}, fmt.Errorf("collect %s: %w", state.path, err)
+		}
+		for _, chart := range stateSourceCharts {
+			usedSourceCharts[chart] = struct{}{}
 		}
 		plane := planes[state.plane]
 		var existing []helmfileRelease
@@ -326,6 +340,11 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 				return resolvedStackInventory{}, fmt.Errorf("duplicate %s release %s across Helmfile states", state.plane, release)
 			}
 			plane.ManifestByRelease[release] = manifest
+		}
+	}
+	for chart := range config.SourceCharts {
+		if _, used := usedSourceCharts[chart]; !used {
+			return resolvedStackInventory{}, fmt.Errorf("source chart %s is not used by any resolved Helmfile state", chart)
 		}
 	}
 
@@ -381,8 +400,11 @@ func copyResolvedInventoryStack(source, destination string) error {
 	})
 }
 
-func loadResolvedInventoryConfig(repoRoot string) (resolvedInventoryConfig, error) {
-	raw, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(resolvedInventoryConfigPath)))
+func loadResolvedInventoryConfig(repoRoot, configPath string) (resolvedInventoryConfig, error) {
+	if configPath == "" {
+		configPath = filepath.Join(repoRoot, filepath.FromSlash(resolvedInventoryConfigPath))
+	}
+	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return resolvedInventoryConfig{}, fmt.Errorf("read resolved inventory config: %w", err)
 	}
@@ -407,7 +429,42 @@ func loadResolvedInventoryConfig(repoRoot string) (resolvedInventoryConfig, erro
 		!strings.HasPrefix(repository, "https://") || strings.ContainsAny(repository, "{}$?#") {
 		return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory publishedChartRepository must be a resolved HTTPS repository without a trailing slash")
 	}
+	for name, sourceChart := range config.SourceCharts {
+		if !validResolvedInventoryChartName(name) {
+			return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory source chart name %q is invalid", name)
+		}
+		if !strings.HasSuffix(sourceChart.TagPrefix, "/v") {
+			return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory source chart %s tagPrefix must be a repository-relative path ending in /v", name)
+		}
+		componentPath := strings.TrimSuffix(sourceChart.TagPrefix, "/v")
+		if !validResolvedInventoryRepoPath(componentPath) {
+			return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory source chart %s tagPrefix must be a repository-relative path ending in /v", name)
+		}
+		if !validResolvedInventoryRepoPath(sourceChart.Path) ||
+			(sourceChart.Path != componentPath && !strings.HasPrefix(sourceChart.Path, componentPath+"/")) {
+			return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory source chart %s path must be within %s", name, componentPath)
+		}
+	}
 	return config, nil
+}
+
+func validResolvedInventoryChartName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		character := name[index]
+		if character != '-' && (character < 'a' || character > 'z') && (character < '0' || character > '9') {
+			return false
+		}
+	}
+	return name[0] != '-' && name[len(name)-1] != '-'
+}
+
+func validResolvedInventoryRepoPath(value string) bool {
+	return value != "" && value != "." && value != ".." && !strings.HasPrefix(value, "-") &&
+		!filepath.IsAbs(value) && filepath.ToSlash(filepath.Clean(value)) == value && !strings.HasPrefix(value, "../") &&
+		!strings.ContainsAny(value, "{}$?#@ 	\r\n")
 }
 
 func parseResolvedInventoryHelmSource(raw string) (resolvedInventoryHelmSource, error) {
@@ -538,6 +595,7 @@ func setResolvedInventoryEnvironment(env []string, values map[string]string) []s
 }
 
 func collectResolvedInventoryState(
+	sourceRepoRoot string,
 	copiedRepoRoot string,
 	stateFile string,
 	renderDir string,
@@ -546,33 +604,45 @@ func collectResolvedInventoryState(
 	env []string,
 	renderSource resolvedInventoryHelmSource,
 	publishedChartRepository string,
+	sourceCharts map[string]resolvedInventorySourceChart,
 	ngcAPIKey string,
 	runner resolvedInventoryCommandRunner,
-) ([]helmfileRelease, map[string][]byte, error) {
+) ([]helmfileRelease, map[string][]byte, []string, error) {
 	baseOverrides := append(append([]string{}, resolvedInventoryCommonOverrides...), state.baseOverrides...)
 	fullOverrides := append(append([]string{}, baseOverrides...), state.fullOverrides...)
 	baseList, err := runResolvedInventoryHelmfile(runner, filepath.Dir(stateFile), env, stateFile, baseOverrides, "list", "--output", "json")
 	if err != nil {
-		return nil, nil, fmt.Errorf("list default releases: %w", err)
+		return nil, nil, nil, fmt.Errorf("list default releases: %w", err)
 	}
 	fullList, err := runResolvedInventoryHelmfile(runner, filepath.Dir(stateFile), env, stateFile, fullOverrides, "list", "--output", "json")
 	if err != nil {
-		return nil, nil, fmt.Errorf("list releases with optional components: %w", err)
+		return nil, nil, nil, fmt.Errorf("list releases with optional components: %w", err)
+	}
+	usedSourceCharts, err := materializeResolvedInventorySourceCharts(
+		sourceRepoRoot,
+		stateFile,
+		renderDir+"-source-charts",
+		source,
+		fullList,
+		sourceCharts,
+	)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	built, err := runResolvedInventoryHelmfile(runner, filepath.Dir(stateFile), env, stateFile, fullOverrides, "build")
 	if err != nil {
-		return nil, nil, fmt.Errorf("build resolved Helmfile state: %w", err)
+		return nil, nil, nil, fmt.Errorf("build resolved Helmfile state: %w", err)
 	}
 	repositories, err := parseHelmfileRepositories(built)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := validateResolvedInventoryRenderRepository(repositories, renderSource); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	releases, err := mergeAndResolveHelmfileReleases(copiedRepoRoot, stateFile, source, baseList, fullList, repositories, publishedChartRepository)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	publicRepositories := make(map[string]helmfileRepository, len(repositories))
 	for name, repository := range repositories {
@@ -582,12 +652,12 @@ func collectResolvedInventoryState(
 	}
 	if len(publicRepositories) != 0 {
 		if err := runner.PrepareRepositories(env, publicRepositories, ngcAPIKey); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
 	if err := os.MkdirAll(renderDir, 0o755); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if _, err := runResolvedInventoryHelmfile(
 		runner,
@@ -597,21 +667,189 @@ func collectResolvedInventoryState(
 		fullOverrides,
 		"template",
 		"--include-crds",
+		"--skip-tests",
 		"--output-dir", renderDir,
 		"--output-dir-template", "{{ .OutputDir }}/{{ .Release.Name }}",
 	); err != nil {
-		return nil, nil, fmt.Errorf("render releases: %w", err)
+		return nil, nil, nil, fmt.Errorf("render releases: %w", err)
 	}
 
 	manifests := make(map[string][]byte, len(releases))
 	for _, release := range releases {
 		manifest, err := readRenderedReleaseManifest(filepath.Join(renderDir, release.Name))
 		if err != nil {
-			return nil, nil, fmt.Errorf("read rendered release %s: %w", release.Name, err)
+			return nil, nil, nil, fmt.Errorf("read rendered release %s: %w", release.Name, err)
 		}
 		manifests[release.Name] = manifest
 	}
-	return releases, manifests, nil
+	return releases, manifests, usedSourceCharts, nil
+}
+
+func materializeResolvedInventorySourceCharts(
+	repoRoot string,
+	stateFile string,
+	chartRoot string,
+	stackSource stackSourceRelease,
+	fullRaw []byte,
+	sourceCharts map[string]resolvedInventorySourceChart,
+) ([]string, error) {
+	if len(sourceCharts) == 0 {
+		return nil, nil
+	}
+	releases, err := decodeHelmfileReleaseList(fullRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse releases for source chart rendering: %w", err)
+	}
+	var used []string
+	for _, release := range releases {
+		alias, name, found := strings.Cut(release.Chart, "/")
+		if !found || alias != "nvcf" {
+			continue
+		}
+		sourceChart, configured := sourceCharts[name]
+		if !configured {
+			continue
+		}
+		if release.Version == "" {
+			return nil, fmt.Errorf("source chart %s release %s has no version", name, release.Name)
+		}
+		if !validStackVersion(release.Version) {
+			return nil, fmt.Errorf("source chart %s release %s version %q is not semantic", name, release.Name, release.Version)
+		}
+		tag := sourceChart.TagPrefix + release.Version
+		if _, err := gitOutput(repoRoot, "merge-base", "--is-ancestor", tag, stackSource.Commit); err != nil {
+			return nil, fmt.Errorf("source chart %s tag %s is not an ancestor of stack commit %s: %w", name, tag, stackSource.Commit, err)
+		}
+		chartPath := filepath.Join(chartRoot, name, release.Version)
+		if err := extractResolvedInventoryGitChart(repoRoot, tag, sourceChart.Path, chartPath); err != nil {
+			return nil, fmt.Errorf("extract source chart %s from %s: %w", name, tag, err)
+		}
+		if err := setResolvedInventorySourceChartVersion(chartPath, name, release.Version); err != nil {
+			return nil, fmt.Errorf("set source chart %s version: %w", name, err)
+		}
+		if err := replaceResolvedInventoryStateChart(stateFile, name, chartPath); err != nil {
+			return nil, err
+		}
+		used = append(used, name)
+	}
+	return used, nil
+}
+
+func extractResolvedInventoryGitChart(repoRoot, tag, sourcePath, destination string) error {
+	raw, err := gitOutput(repoRoot, "archive", "--format=tar", tag, "--", sourcePath)
+	if err != nil {
+		return err
+	}
+	prefix := sourcePath + "/"
+	reader := tar.NewReader(bytes.NewReader(raw))
+	fileCount := 0
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if header.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+		name := strings.TrimSuffix(header.Name, "/")
+		if header.Typeflag == tar.TypeDir && (name == sourcePath || strings.HasPrefix(sourcePath+"/", name+"/")) {
+			continue
+		}
+		if !strings.HasPrefix(name, prefix) {
+			return fmt.Errorf("archive entry %s is outside source path %s", header.Name, sourcePath)
+		}
+		rel := strings.TrimPrefix(name, prefix)
+		if rel == "" || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || filepath.ToSlash(filepath.Clean(rel)) != rel {
+			return fmt.Errorf("archive entry %s has an invalid relative path", header.Name)
+		}
+		target := filepath.Join(destination, filepath.FromSlash(rel))
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, header.FileInfo().Mode().Perm()); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, header.FileInfo().Mode().Perm())
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(file, reader)
+			closeErr := file.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			fileCount++
+		default:
+			return fmt.Errorf("archive entry %s has unsupported type %d", header.Name, header.Typeflag)
+		}
+	}
+	if fileCount == 0 {
+		return fmt.Errorf("chart source path %s is empty", sourcePath)
+	}
+	return nil
+}
+
+func setResolvedInventorySourceChartVersion(chartPath, wantName, version string) error {
+	metadataPath := filepath.Join(chartPath, "Chart.yaml")
+	raw, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return err
+	}
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("chart metadata must contain one YAML mapping")
+	}
+	mapping := document.Content[0]
+	name := ""
+	versionNode := (*yaml.Node)(nil)
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		switch mapping.Content[index].Value {
+		case "name":
+			name = mapping.Content[index+1].Value
+		case "version":
+			versionNode = mapping.Content[index+1]
+		}
+	}
+	if name != wantName {
+		return fmt.Errorf("chart metadata name is %q, want %q", name, wantName)
+	}
+	if versionNode == nil {
+		return fmt.Errorf("chart metadata has no version")
+	}
+	versionNode.Value = version
+	versionNode.Tag = "!!str"
+	versionNode.Style = yaml.DoubleQuotedStyle
+	updated, err := yaml.Marshal(&document)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(metadataPath, updated, 0o644)
+}
+
+func replaceResolvedInventoryStateChart(stateFile, chartName, chartPath string) error {
+	raw, err := os.ReadFile(stateFile)
+	if err != nil {
+		return err
+	}
+	needle := "chart: nvcf/" + chartName
+	if count := bytes.Count(raw, []byte(needle)); count != 1 {
+		return fmt.Errorf("resolved %d %s chart references in %s; want exactly one", count, chartName, stateFile)
+	}
+	replacement := "chart: " + strconv.Quote(filepath.ToSlash(chartPath))
+	updated := bytes.Replace(raw, []byte(needle), []byte(replacement), 1)
+	return os.WriteFile(stateFile, updated, 0o644)
 }
 
 func runResolvedInventoryHelmfile(
@@ -703,7 +941,10 @@ func mergeAndResolveHelmfileReleases(
 func validateResolvedInventoryRenderRepository(repositories map[string]helmfileRepository, source resolvedInventoryHelmSource) error {
 	repository, ok := repositories["nvcf"]
 	if !ok {
-		return fmt.Errorf("built Helmfile state has no nvcf repository")
+		// Some states contain only third-party or local charts and therefore do
+		// not declare the NVCF repository. Chart alias validation below still
+		// rejects any release that refers to an undeclared repository.
+		return nil
 	}
 	if !repository.OCI {
 		return fmt.Errorf("built Helmfile nvcf repository must use OCI for release inventory rendering")
