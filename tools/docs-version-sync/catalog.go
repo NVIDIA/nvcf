@@ -28,14 +28,12 @@ import (
 )
 
 const (
-	defaultStackResourceName       = "nvcf-self-managed-stack"
+	controlStackResourceName       = "nvcf-self-managed-stack"
 	computeStackResourceName       = "nvcf-compute-plane-stack"
 	observabilityStackResourceName = "nvcf-observability-stack"
 	defaultStackRegistry           = "public-resources"
-	defaultCLIRegistry             = defaultStackRegistry
 	defaultImageRegistry           = "public-images"
 	defaultChartRegistry           = "public-helm"
-	defaultCLIVersion              = "0.0.30"
 )
 
 var (
@@ -127,16 +125,15 @@ type VersionOverride struct {
 	Source  string `yaml:"source,omitempty"`
 }
 
-// StackMetadata identifies the independently versioned publication inventory and source release.
+// StackMetadata identifies the stack release and its immutable source snapshot.
 type StackMetadata struct {
-	Name               string   `yaml:"name"`
-	PublicationVersion string   `yaml:"version"`
-	Registry           string   `yaml:"registry"`
-	SourceVersion      string   `yaml:"source_version,omitempty"`
-	SourceTag          string   `yaml:"source_tag,omitempty"`
-	SourceCommit       string   `yaml:"source_commit,omitempty"`
-	PinSources         []string `yaml:"pin_sources,omitempty"`
-	PinSourceDigest    string   `yaml:"pin_source_digest,omitempty"`
+	Name            string   `yaml:"name"`
+	Version         string   `yaml:"version"`
+	Registry        string   `yaml:"registry"`
+	SourceTag       string   `yaml:"source_tag,omitempty"`
+	SourceCommit    string   `yaml:"source_commit,omitempty"`
+	PinSources      []string `yaml:"pin_sources,omitempty"`
+	PinSourceDigest string   `yaml:"pin_source_digest,omitempty"`
 }
 
 type DenylistEntry struct {
@@ -158,10 +155,6 @@ type Artifact struct {
 	RepositoryName string       `yaml:"repository_name,omitempty"`
 	Version        string       `yaml:"version"`
 	Digest         string       `yaml:"digest,omitempty"`
-	Source         string       `yaml:"source,omitempty"`
-
-	registryHost      string
-	registryNamespace string
 }
 
 type OutputFile struct {
@@ -310,24 +303,23 @@ func ValidateCatalog(catalog *Catalog) error {
 	if strings.TrimSpace(catalog.Stack.Name) == "" {
 		return fmt.Errorf("stack name cannot be empty")
 	}
-	if strings.TrimSpace(catalog.Stack.PublicationVersion) == "" {
-		return fmt.Errorf("stack publication version cannot be empty")
+	if strings.TrimSpace(catalog.Stack.Version) == "" {
+		return fmt.Errorf("stack version cannot be empty")
 	}
 	if _, ok := catalog.Registries[catalog.Stack.Registry]; !ok {
 		return fmt.Errorf("stack registry %q is not defined", catalog.Stack.Registry)
 	}
-	hasSourceVersion := strings.TrimSpace(catalog.Stack.SourceVersion) != ""
 	hasSourceTag := strings.TrimSpace(catalog.Stack.SourceTag) != ""
 	hasSourceCommit := strings.TrimSpace(catalog.Stack.SourceCommit) != ""
 	hasPinSources := len(catalog.Stack.PinSources) != 0
 	hasPinSourceDigest := strings.TrimSpace(catalog.Stack.PinSourceDigest) != ""
-	if (hasSourceVersion || hasSourceTag || hasSourceCommit || hasPinSources || hasPinSourceDigest) && (!hasSourceVersion || !hasSourceTag || !hasSourceCommit || !hasPinSources || !hasPinSourceDigest) {
-		return fmt.Errorf("stack source snapshot must set source_version, source_tag, source_commit, pin_sources, and pin_source_digest together")
+	if (hasSourceTag || hasSourceCommit || hasPinSources || hasPinSourceDigest) && (!hasSourceTag || !hasSourceCommit || !hasPinSources || !hasPinSourceDigest) {
+		return fmt.Errorf("stack source snapshot must set source_tag, source_commit, pin_sources, and pin_source_digest together")
 	}
 	if hasSourceCommit {
-		wantSourceTag := "deploy/stacks/self-managed/v" + catalog.Stack.SourceVersion
+		wantSourceTag := "deploy/stacks/self-managed/v" + catalog.Stack.Version
 		if catalog.Stack.SourceTag != wantSourceTag {
-			return fmt.Errorf("stack source_tag must be %s for source version %s", wantSourceTag, catalog.Stack.SourceVersion)
+			return fmt.Errorf("stack source_tag must be %s for stack version %s", wantSourceTag, catalog.Stack.Version)
 		}
 		if !fullLowercaseCommitSHARe.MatchString(catalog.Stack.SourceCommit) {
 			return fmt.Errorf("stack source_commit must be a full lowercase commit SHA")
@@ -632,8 +624,8 @@ func (registry Registry) resourceRef(name, version string) string {
 	return fmt.Sprintf("%s/%s:%s", registry.Namespace, name, version)
 }
 
-// BuildCatalogFromArtifacts creates a catalog from resolved stack artifacts.
-func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) *Catalog {
+// newCatalogFromArtifacts creates a catalog from resolved stack artifacts.
+func newCatalogFromArtifacts(stackVersion string, artifacts []Artifact) *Catalog {
 	catalog := &Catalog{
 		Version: 1,
 		Target:  "main",
@@ -653,32 +645,22 @@ func BuildCatalogFromArtifacts(publicationVersion string, artifacts []Artifact) 
 			},
 		},
 		Stack: StackMetadata{
-			Name:               defaultStackResourceName,
-			PublicationVersion: publicationVersion,
-			Registry:           defaultStackRegistry,
-		},
-		SupplementalArtifacts: []Artifact{
-			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: defaultCLIRegistry, Version: defaultCLIVersion},
+			Name:     controlStackResourceName,
+			Version:  stackVersion,
+			Registry: defaultStackRegistry,
 		},
 		Outputs: defaultOutputs(),
 	}
 
-	for i := range artifacts {
-		artifact := artifacts[i]
-		if artifact.Registry == "" {
-			artifact.Registry = catalog.registryKeyFor(artifact.registryHost, artifact.registryNamespace)
-		}
-		artifact.Source = ""
-		catalog.Artifacts = append(catalog.Artifacts, artifact)
-	}
+	catalog.Artifacts = append(catalog.Artifacts, artifacts...)
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	return catalog
 }
 
-// BuildCatalogFromArtifactsWithBase refreshes an existing catalog from a published package inventory.
-func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Artifact, base *Catalog) *Catalog {
-	catalog := BuildCatalogFromArtifacts(publicationVersion, artifacts)
+// refreshCatalogFromArtifacts retains catalog-owned metadata around a resolved stack inventory.
+func refreshCatalogFromArtifacts(stackVersion string, artifacts []Artifact, base *Catalog) *Catalog {
+	catalog := newCatalogFromArtifacts(stackVersion, artifacts)
 	if base == nil {
 		return catalog
 	}
@@ -693,15 +675,9 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 	catalog.PublicationPending = append(catalog.PublicationPending, base.PublicationPending...)
 	catalog.Denylist = append(catalog.Denylist, base.Denylist...)
 	catalog.Manifest = base.Manifest
-	// A package refresh does not identify a new GitHub source release.
-	catalog.Stack.SourceVersion = base.Stack.SourceVersion
-	catalog.Stack.SourceCommit = base.Stack.SourceCommit
-	catalog.Stack.SourceTag = base.Stack.SourceTag
-	catalog.Stack.PinSources = append(catalog.Stack.PinSources, base.Stack.PinSources...)
-	catalog.Stack.PinSourceDigest = base.Stack.PinSourceDigest
-	resolvedNames := make(map[string]struct{}, len(catalog.Artifacts))
+	resolvedArtifacts := make(map[string]struct{}, len(catalog.Artifacts))
 	for _, artifact := range catalog.Artifacts {
-		resolvedNames[artifact.Name] = struct{}{}
+		resolvedArtifacts[artifactNameAndTypeKey(artifact)] = struct{}{}
 	}
 
 	seenSupplemental := map[string]struct{}{}
@@ -710,20 +686,19 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 	}
 	denylist := catalog.DenylistMap()
 	for _, artifact := range append(append([]Artifact{}, base.Artifacts...), base.SupplementalArtifacts...) {
-		if artifact.Name == "" || artifact.Name == defaultStackResourceName || artifact.Name == "nvcf-cli" {
+		if artifact.Name == "" || artifact.Name == controlStackResourceName {
 			continue
 		}
 		if _, denied := denylist[artifact.Name]; denied {
 			continue
 		}
-		if _, resolved := resolvedNames[artifact.Name]; resolved {
+		if _, resolved := resolvedArtifacts[artifactNameAndTypeKey(artifact)]; resolved {
 			continue
 		}
 		key := artifact.catalogKey()
 		if _, exists := seenSupplemental[key]; exists {
 			continue
 		}
-		artifact.Source = ""
 		catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts, artifact)
 		seenSupplemental[key] = struct{}{}
 	}
@@ -732,6 +707,10 @@ func BuildCatalogFromArtifactsWithBase(publicationVersion string, artifacts []Ar
 	catalog.reconcilePublicationPending()
 	catalog.pruneUnusedRegistries()
 	return catalog
+}
+
+func artifactNameAndTypeKey(artifact Artifact) string {
+	return artifact.Name + "\x00" + string(artifact.Type)
 }
 
 func (catalog *Catalog) markAllUnpublishedAsPending() {
@@ -800,39 +779,6 @@ func (catalog *Catalog) pruneUnusedRegistries() {
 			delete(catalog.Registries, key)
 		}
 	}
-}
-
-func (catalog *Catalog) registryKeyFor(host, namespace string) string {
-	if host == "" || namespace == "" {
-		return defaultStackRegistry
-	}
-	for key, registry := range catalog.Registries {
-		if registry.Host == host && registry.Namespace == namespace {
-			return key
-		}
-	}
-
-	base := sanitizeRegistryKey(namespace)
-	key := base
-	for i := 2; ; i++ {
-		if _, exists := catalog.Registries[key]; !exists {
-			catalog.Registries[key] = Registry{Host: host, Namespace: namespace}
-			return key
-		}
-		key = fmt.Sprintf("%s-%d", base, i)
-	}
-}
-
-var registryKeyRe = regexp.MustCompile(`[^a-z0-9-]+`)
-
-func sanitizeRegistryKey(namespace string) string {
-	key := strings.ToLower(strings.ReplaceAll(namespace, "/", "-"))
-	key = registryKeyRe.ReplaceAllString(key, "-")
-	key = strings.Trim(key, "-")
-	if key == "" {
-		return "registry"
-	}
-	return key
 }
 
 func defaultOutputs() []OutputFile {

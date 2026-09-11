@@ -38,7 +38,7 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 	if err != nil {
 		return nil, err
 	}
-	catalog := BuildCatalogFromArtifactsWithBase(inventory.Source.Version, artifacts, base)
+	catalog := refreshCatalogFromArtifacts(inventory.Source.Version, artifacts, base)
 	retainIndependentManifestArtifacts(catalog)
 	if err := materializeMissingEffectiveStackPins(catalog, base, snapshot.Files); err != nil {
 		return nil, err
@@ -48,7 +48,6 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		catalog.Stack.Registry = base.Stack.Registry
 		catalog.Registries[base.Stack.Registry] = base.Registries[base.Stack.Registry]
 	}
-	catalog.Stack.SourceVersion = inventory.Source.Version
 	catalog.Stack.SourceTag = inventory.Source.Tag
 	catalog.Stack.SourceCommit = inventory.Source.Commit
 	catalog.Stack.PinSources = effectiveStackPinSourcePaths(effectiveStackPins)

@@ -24,7 +24,7 @@ import (
 	"testing"
 )
 
-func TestRenderManifestDeploymentResources(t *testing.T) {
+func TestRenderManifestArtifactRegistryPaths(t *testing.T) {
 	catalog := testCatalog()
 	got, err := Render("manifest-artifact-registry-paths", catalog)
 	if err != nil {
@@ -157,7 +157,7 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 		Registry: "public-images",
 	}}
 
-	updated := BuildCatalogFromArtifactsWithBase("0.6.0-rc.99", []Artifact{{
+	updated := refreshCatalogFromArtifacts("0.6.0-rc.99", []Artifact{{
 		Name:     "nvcf-grpc-proxy",
 		Type:     ArtifactTypeImage,
 		Registry: defaultImageRegistry,
@@ -180,14 +180,13 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 	}
 }
 
-func TestCatalogRefreshWithoutBaseRendersUnverifiedArtifactsAsPending(t *testing.T) {
-	catalog := BuildCatalogFromArtifactsWithBase("0.9.1", []Artifact{
+func TestCatalogConstructionWithoutBaseRendersUnverifiedArtifactsAsPending(t *testing.T) {
+	catalog := refreshCatalogFromArtifacts("0.9.1", []Artifact{
 		{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.21.3"},
 		{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.2.19"},
 	}, nil)
 	catalog.Manifest.Entries = []ManifestEntry{
-		{ArtifactID: defaultStackResourceName, Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Control-plane stack."},
-		{ArtifactID: "nvcf-cli", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "CLI."},
+		{ArtifactID: controlStackResourceName, Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Control-plane stack."},
 		{ArtifactID: "helm-nvca-operator", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestRequired, Description: "NVCA chart."},
 		{ArtifactID: "nvca", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "NVCA agent."},
 	}
@@ -196,7 +195,7 @@ func TestCatalogRefreshWithoutBaseRendersUnverifiedArtifactsAsPending(t *testing
 	if err != nil {
 		t.Fatalf("Render failed: %v", err)
 	}
-	for _, name := range []string{defaultStackResourceName, "nvcf-cli", "helm-nvca-operator", "nvca"} {
+	for _, name := range []string{controlStackResourceName, "helm-nvca-operator", "nvca"} {
 		row := manifestRow(t, got, name)
 		if !strings.Contains(row, "`Publication pending`") {
 			t.Errorf("%s row does not mark the unverified artifact pending: %s", name, row)
@@ -220,7 +219,7 @@ func TestCatalogRefreshMarksChangedVersionsPendingAndKeepsPublishedVersionsPubli
 		ManifestEntry{ArtifactID: "verified-service", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Published service."},
 	)
 
-	catalog := BuildCatalogFromArtifactsWithBase("0.6.0", []Artifact{
+	catalog := refreshCatalogFromArtifacts("0.6.0", []Artifact{
 		{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.2.19"},
 		{Name: "verified-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "2.0.0"},
 	}, base)
@@ -229,7 +228,7 @@ func TestCatalogRefreshMarksChangedVersionsPendingAndKeepsPublishedVersionsPubli
 		t.Fatalf("Render failed: %v", err)
 	}
 
-	for _, name := range []string{defaultStackResourceName, computeStackResourceName, observabilityStackResourceName, "nvcf-cli", "nvca"} {
+	for _, name := range []string{controlStackResourceName, computeStackResourceName, observabilityStackResourceName, "nvcf-cli", "nvca"} {
 		row := manifestRow(t, got, name)
 		if !strings.Contains(row, "`Publication pending`") {
 			t.Errorf("%s row does not mark the unverified artifact pending: %s", name, row)
@@ -347,7 +346,7 @@ func TestCatalogRefreshAppliesVersionOverrides(t *testing.T) {
 		Version: "2.109.4",
 		Source:  "helm-nvcf-api:1.22.5",
 	}}
-	updated := BuildCatalogFromArtifactsWithBase("0.6.0-rc.99", []Artifact{{
+	updated := refreshCatalogFromArtifacts("0.6.0-rc.99", []Artifact{{
 		Name:     "nvcf_worker_utils",
 		Type:     ArtifactTypeImage,
 		Registry: defaultImageRegistry,
@@ -580,34 +579,7 @@ func TestRenderSupplementalStackDownloadsMatchPublicationState(t *testing.T) {
 	}
 }
 
-func TestSyncInlineSelfManagedNVCAOperatorVersions(t *testing.T) {
-	catalog := testCatalog()
-	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
-		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.0.0-rc.11"},
-		Artifact{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.9.0"},
-	)
-	content := "| **Chart** | `helm-nvca-operator` |\n| --- | --- |\n| **Version** | `1.6.7` |\n\n" +
-		"selfManaged:\n  nvcaVersion: \"3.0.0-rc.3\"  # NVCA agent version to deploy\n\n" +
-		"helm upgrade --install nvca-operator \\\n" +
-		"  oci://nvcr.io/nvidia/nvcf/helm-nvca-operator \\\n" +
-		"  --namespace nvca-operator --create-namespace \\\n" +
-		"  --version 1.6.7\n"
-
-	got, changed, err := SyncInlineVersions("docs/user/cluster-management/self-managed.md", content, catalog)
-	if err != nil {
-		t.Fatalf("SyncInlineVersions failed: %v", err)
-	}
-	if !changed {
-		t.Fatal("SyncInlineVersions reported no change")
-	}
-	for _, want := range []string{"`1.9.0`", `nvcaVersion: "3.0.0-rc.11"`, "--version 1.9.0"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("updated content missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestSyncInlineSelfManagedNVCAOperatorPlainVersionTable(t *testing.T) {
+func TestSyncInlineSelfManagedNVCAOperatorVersionTable(t *testing.T) {
 	catalog := testCatalog()
 	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
 		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "3.0.0-rc.11"},
@@ -902,9 +874,9 @@ func testCatalog() *Catalog {
 			},
 		},
 		Stack: StackMetadata{
-			Name:               "nvcf-self-managed-stack",
-			PublicationVersion: "0.5.0",
-			Registry:           defaultStackRegistry,
+			Name:     "nvcf-self-managed-stack",
+			Version:  "0.5.0",
+			Registry: defaultStackRegistry,
 		},
 		Denylist: []DenylistEntry{
 			{Name: "nvcf-base", Reason: "managed separately"},

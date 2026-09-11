@@ -32,8 +32,6 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 	switch renderer {
 	case "manifest-artifact-registry-paths":
 		return renderManifestArtifactRegistryPaths(catalog)
-	case "manifest-deployment-resources":
-		return renderManifestDeploymentResources(catalog)
 	case "image-mirroring-resource-examples":
 		return renderImageMirroringResourceExamples(catalog)
 	case "image-mirroring-stack-snippet":
@@ -47,21 +45,6 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}
-}
-
-func renderManifestDeploymentResources(catalog *Catalog) (string, error) {
-	resources := catalog.resourceArtifacts()
-	var b strings.Builder
-	b.WriteString("| Type | Component Name | Full Path |\n")
-	b.WriteString("| --- | --- | --- |\n")
-	for _, artifact := range resources {
-		path, err := catalog.artifactDistribution(artifact)
-		if err != nil {
-			return "", err
-		}
-		b.WriteString(fmt.Sprintf("| Resource | %s | `%s` |\n", artifact.Name, path))
-	}
-	return b.String(), nil
 }
 
 func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
@@ -222,52 +205,8 @@ func (catalog *Catalog) stackArtifact() Artifact {
 		Name:     catalog.Stack.Name,
 		Type:     ArtifactTypeResource,
 		Registry: catalog.Stack.Registry,
-		Version:  catalog.Stack.PublicationVersion,
+		Version:  catalog.Stack.Version,
 	}
-}
-
-func (catalog *Catalog) artifactTypeLabel(artifact Artifact) string {
-	switch artifact.Type {
-	case ArtifactTypeChart:
-		if publication, ok := catalog.publicationFor(artifact); ok && publication.ChartFormat == ChartFormatHTTP {
-			return "Chart (HTTP)"
-		}
-		return "Chart (OCI)"
-	case ArtifactTypeResource:
-		return "Resource"
-	default:
-		return "Image"
-	}
-}
-
-func (catalog *Catalog) resourceArtifacts() []Artifact {
-	denylist := catalog.DenylistMap()
-	var resources []Artifact
-	if _, denied := denylist[catalog.Stack.Name]; !denied {
-		resources = append(resources, catalog.stackArtifact())
-	}
-	for _, artifact := range catalog.Artifacts {
-		if artifact.Type != ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if artifact.Name == catalog.Stack.Name {
-			continue
-		}
-		resources = append(resources, artifact)
-	}
-	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type != ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		resources = append(resources, artifact)
-	}
-	return resources
 }
 
 func (catalog *Catalog) findArtifact(name string) (Artifact, bool) {
@@ -312,50 +251,6 @@ func (catalog *Catalog) findArtifacts(name string) []Artifact {
 		}
 	}
 	return artifacts
-}
-
-func (catalog *Catalog) uncategorizedArtifacts(used map[string]struct{}) []Artifact {
-	denylist := catalog.DenylistMap()
-	var artifacts []Artifact
-	for _, artifact := range catalog.Artifacts {
-		if artifact.Type == ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if _, ok := used[artifact.catalogKey()]; ok {
-			continue
-		}
-		artifacts = append(artifacts, artifact)
-	}
-	for _, artifact := range catalog.SupplementalArtifacts {
-		if artifact.Type == ArtifactTypeResource {
-			continue
-		}
-		if _, denied := denylist[artifact.Name]; denied {
-			continue
-		}
-		if _, ok := used[artifact.catalogKey()]; ok {
-			continue
-		}
-		artifacts = append(artifacts, artifact)
-	}
-	return artifacts
-}
-
-func (catalog *Catalog) isDenied(name string) bool {
-	_, denied := catalog.DenylistMap()[name]
-	return denied
-}
-
-func appendIfMissing(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
 }
 
 func SyncDocs(repoRoot string, catalog *Catalog, check bool) error {

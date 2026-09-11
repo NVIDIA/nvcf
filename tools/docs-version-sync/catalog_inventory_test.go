@@ -58,7 +58,7 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 			t.Errorf("GitHub path %s was not requested", path)
 		}
 	}
-	if catalog.Stack.SourceVersion != release.Version || catalog.Stack.SourceTag != release.Tag || catalog.Stack.SourceCommit != release.Commit {
+	if catalog.Stack.Version != release.Version || catalog.Stack.SourceTag != release.Tag || catalog.Stack.SourceCommit != release.Commit {
 		t.Fatalf("stack source metadata = %#v, want %+v", catalog.Stack, release)
 	}
 	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
@@ -83,8 +83,10 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	base.Artifacts = append(base.Artifacts, Artifact{Name: "stale-service", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "0.9.0"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "4.5.6"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "independent-chart", Type: ArtifactTypeChart, Registry: "private-images", Version: "2.3.4"})
+	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{ID: "nvca-chart", Name: "nvca", Type: ArtifactTypeChart, Registry: "private-images", Version: "4.5.6"})
 	base.SupplementalArtifacts = append(base.SupplementalArtifacts, Artifact{Name: "denied-resource", Type: ArtifactTypeResource, Registry: "public-resources", Version: "7.8.9"})
 	base.Manifest.Entries = append(base.Manifest.Entries, ManifestEntry{ArtifactID: "independent-chart", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestOptional, Description: "Installs an independent chart."})
+	base.Manifest.Entries = append(base.Manifest.Entries, ManifestEntry{ArtifactID: "nvca-chart", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestOptional, Description: "Installs a chart that shares an image name."})
 	base.Publications = []Publication{
 		{Name: "helm-nvcf-llm-request-router", Version: "1.2.3", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 		{Name: "nvca", Version: "6.7.8", Registry: "public-resources"},
@@ -112,6 +114,10 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	}
 	if _, found := catalog.findArtifact("denied-resource"); found {
 		t.Fatal("denylisted supplemental resource was retained")
+	}
+	sharedNameChart, found := catalog.findArtifactByNameAndType("nvca", ArtifactTypeChart)
+	if !found || sharedNameChart.catalogKey() != "nvca-chart" {
+		t.Fatalf("shared-name chart = %#v, want retained nvca-chart", sharedNameChart)
 	}
 	router, ok := catalog.findArtifact("helm-nvcf-llm-request-router")
 	if !ok {
