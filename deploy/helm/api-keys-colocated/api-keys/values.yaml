@@ -72,6 +72,9 @@ apikeys:
     initialDelaySeconds: 5
     timeoutSeconds: 1
 
+  vault:
+    audience: http://openbao-server.vault-system.svc.cluster.local:8200
+
   resources:
     limits:
       cpu: 200m

@@ -50,8 +50,8 @@ consumer.
 | Ingress namespace | Environment-provided Gateway API namespace | Shared or externally managed; never deleted by plane teardown | Shared or external | Golden render and matrix review |
 | cert-manager namespace | `cert-manager` | Shared prerequisite namespace | Shared | Golden render and prereq inventory |
 | Service names | Chart defaults such as `api`, `ess-api`, `grpc-proxy` | Derived only where cross-plane collision exists | Plane | Golden render |
-| ClusterIssuer | `nvcf-openbao-pki` | Deferred to Phase 4; derive from validated control-plane ID before named mode is enabled | Plane | Golden render and exact-name cleanup tests |
-| OpenBao injector webhook | Chart-generated static name | Per-plane webhook object and service reference | Plane | Webhook section and future Phase 2 render test |
+| ClusterIssuer | `nvcf-openbao-pki` | Phase 4H derives the stack-managed issuer as `<owner>-nvcf-openbao-pki` for named mode | Plane | Golden render and exact-name cleanup tests |
+| OpenBao injector webhook | Chart-generated static name | Per-plane webhook object and service reference derived from the named OpenBao fullname | Plane | Phase 4G focused OpenBao render test |
 | Admission webhook namespaceSelector | Broad or environment-provided selector | Match workload namespaces plus control-plane owner | Plane | Webhook section and future Phase 2 render test |
 | Helm hook Jobs | Release/chart names | Release names or hook names derived per plane | Plane | Golden render |
 | Hook RBAC | Cluster-scoped, release-derived | Derived per plane; never shared between planes | Plane | Golden render |
@@ -59,7 +59,7 @@ consumer.
 | ReferenceGrants | Static names in backend namespaces | Derived when granting cross-namespace access for a named plane | Plane | Golden render |
 | Mirrored workload secrets | Worker namespace secret names | Adopt or label only names expected by the current identity | Plane | Future Phase 2 startup-convergence tests |
 | Workload namespaces | Created by NVCA | Label/adopt expected current-plane namespaces before informer processing | Plane | Future Phase 2 fake-client tests |
-| NVCA operator CRDs | `nvcfbackends.nvcf.nvidia.com` and NVCA API CRDs | Shared CRDs, never plane-owned | Shared | Prerequisite inventory |
+| NVCA operator CRDs | `nvcfbackends.nvcf.nvidia.io` and NVCA API CRDs | Shared CRDs, never plane-owned | Shared | Prerequisite inventory |
 | Model cache namespace | Existing configured namespace | Per-plane by default, or shared and never deleted | Plane or shared | Matrix review |
 
 ## Phase 2 Ownership Audit
@@ -113,9 +113,9 @@ The helper contract is intentionally simple:
   when the control-plane ID is at the maximum supported length.
 
 Phase 3 wires Helmfile templates and service URLs to that naming rule while
-preserving the legacy render output. The Helmfile namespace prefix is still an
-empty literal in this phase; Phase 4 must plumb the validated control-plane ID
-into those templates before named mode can install.
+preserving the legacy render output. Phase 4B then plumbs the validated
+control-plane owner into the Helmfile namespace prefix so named renders use the
+same rule that the Go helper already tests.
 
 ClusterIssuer naming is intentionally still legacy-fixed in Phase 3. Phase 4
 must derive the default issuer name and update the managed-issuer detection
@@ -161,6 +161,353 @@ compute-plane render still belongs to local or credentialed test runs because
 that stack resolves published chart dependencies from external repositories and
 registries.
 
+## Phase 4A Alpha Named-Mode Gate
+
+Phase 4A adds an explicit alpha opt-in before any named control plane can be
+requested. It also keeps named mode fail-closed while the remaining named-mode
+identity work is wired.
+
+Legacy/default mode does not need this opt-in and must keep rendering exactly as
+before. A user-provided `--control-plane-id` requires
+`--alpha-named-control-plane` in the CLI. Direct stack users must set
+`NVCF_ALPHA_NAMED_CONTROL_PLANE=true` when they set `NVCF_CONTROL_PLANE_OWNER`
+to any value other than `default`, and the stack must still fail if a named
+owner would render before all required identity derivation is complete.
+
+This guard is present in every stack file that declares the namespace prefix,
+including self-managed `global.yaml.gotmpl` and the compute-plane dependencies
+state. That keeps direct single-file Helmfile invocations from bypassing the
+fail-closed rule.
+
+This gate deliberately does not make named mode usable yet. It prevents both
+accidental use and unsafe direct use while the remaining Phase 4 subphases make
+object namespaces, service DNS names, ClusterIssuer names, gateway routes,
+OpenBao injector objects, and auth/data identities safe.
+
+## Phase 4B Named Namespace Derivation
+
+Phase 4B wires the stack namespace prefix to the validated control-plane owner,
+but keeps named mode fail-closed at the object-render layer.
+
+The legacy `default` owner still uses an empty prefix, so default renders keep
+their historical namespace names. A named owner such as `plane-a`, with
+`NVCF_ALPHA_NAMED_CONTROL_PLANE=true`, computes the prefix `plane-a-`.
+
+Examples:
+
+- self-managed `nvcf` becomes `plane-a-nvcf`;
+- self-managed `api-keys` becomes `plane-a-api-keys`;
+- self-managed `cassandra-system` becomes `plane-a-cassandra-system`;
+- compute-plane `nvca-operator` becomes `plane-a-nvca-operator`.
+
+Shared prerequisite namespaces stay unprefixed. Examples include
+`cert-manager`, `kai-scheduler`, `grove-system`, and `dynamo-system`.
+
+The namespace-derivation fail-closed guard remains in every prefix-declaring
+template as a tripwire. For a valid named owner it no longer fires because the
+prefix is non-empty. If a later refactor accidentally clears that prefix while
+named mode is requested, the render fails before it can write objects into
+legacy namespaces.
+
+Phase 4B also adds a second fail-closed guard for object-level identity
+derivation. That guard blocks named renders until gateway routes,
+ReferenceGrants, service DNS defaults, OpenBao injector cluster-scoped objects,
+and ClusterIssuer naming are all isolated. This is required because a Helmfile
+release namespace alone does not guarantee that every Kubernetes object rendered
+by that release stays out of legacy namespaces.
+
+The CLI validates `--control-plane-id` and the alpha opt-in, but still refuses
+named IDs with the same object-level identity message until the later Phase 4
+subphases remove this temporary block.
+
+Named namespace cleanup remains conservative in this phase. The Makefile
+teardown path still destroys Helm releases with the named owner selector, but it
+does not delete named namespaces until the shared prerequisite lifecycle is wired
+later in Phase 4.
+
+## Phase 4C Named Render Isolation Checker
+
+Phase 4C adds the object-level render checker that later Phase 4 work must pass
+before the named-mode block is removed.
+
+The checker parses rendered YAML instead of grepping raw text. It fails a named
+render when it finds any of these unsafe identities:
+
+- an object namespace, `Namespace`, gateway backend reference, RoleBinding
+  subject, or other `namespace` field that still points at a legacy plane-owned
+  namespace such as `nvcf`, `api-keys`, `sis`, or `vault-system`;
+- an in-cluster service DNS name that still points at a legacy plane-owned
+  namespace, such as `openbao-server.vault-system.svc.cluster.local`;
+- a gateway route in any unprefixed namespace whose name is not derived from the
+  control-plane owner, unless that exact route identity is explicitly allowed as
+  shared;
+- any cluster-scoped object that is not derived from the control-plane owner,
+  unless that exact object identity is explicitly allowed as shared;
+- the same Kubernetes object identity appearing in two named renders, unless
+  that exact object identity is explicitly allowed as shared.
+
+This phase intentionally keeps named mode fail-closed. The checker has synthetic
+positive and negative tests now; later Phase 4 subphases must run it against real
+named renders after each object-level leak class is fixed.
+
+The cluster-scoped, unprefixed gateway-route, and duplicate-identity rules are
+intentionally allowlist-based. A `shared` owner label is not enough by itself,
+because a chart could accidentally mark a colliding object as shared. Truly
+shared identities, such as shared prerequisite CRDs, webhook RBAC, or a shared
+gateway route, must be passed with `--allow-shared-identity` or listed in a
+committed `--allow-shared-identity-file` when the real named-render gate is
+enabled. Duplicate identities across two named renders use the same rule, even
+when both objects are labelled `shared`.
+
+## Phase 4D Gateway Route Identity
+
+Phase 4D wires the self-managed stack to pass owner-derived gateway route
+identities when a named control plane is rendered.
+
+For the legacy `default` owner, the stack still leaves the gateway-routes chart
+defaults in control where possible, so the default render stays byte-identical.
+For a named owner such as `plane-a`, the stack passes values like these into the
+gateway-routes chart:
+
+- route names such as `plane-a-nvcf-api`, `plane-a-api-keys`, and
+  `plane-a-grpc`;
+- route backend namespaces such as `plane-a-nvcf`, `plane-a-api-keys`,
+  `plane-a-sis`, `plane-a-nats-system`, and `plane-a-nvcf-ui`;
+- optional route names for gRPC, worker, NATS, LLM, vanity-gateway, ESS, UI,
+  and event-ledger routes.
+
+The gateway-routes chart also derives ReferenceGrant names and target namespaces
+from those route values. For example, a named API keys route renders
+`ReferenceGrant/plane-a-api-keys/allow-httproute-to-plane-a-api-keys` instead of
+writing `ReferenceGrant/api-keys/allow-httproute-to-api-keys`.
+
+Named mode intentionally remains fail-closed after this phase. Gateway route
+identity is one leak class; service DNS, OpenBao injector cluster-scoped
+objects, and ClusterIssuer identity still need to pass the Phase 4C checker
+before the block can be removed.
+
+## Phase 4E Admin And NATS Identity References
+
+Phase 4E removes two remaining object-level references that still pointed at
+legacy identities after the gateway-routes chart was fixed.
+
+The admin-token-issuer-proxy chart renders its own HTTPRoute outside the
+gateway-routes chart. For a named owner, the self-managed stack now passes a
+prefixed `fullnameOverride`, so that chart renders objects such as
+`HTTPRoute/gateway/plane-a-admin-token-issuer-proxy` and a backend reference to
+`Service/plane-a-api-keys/plane-a-admin-token-issuer-proxy`. The same derived
+name also feeds the `nvcf-ui` control-plane health endpoint so the health check
+does not point at the old service name inside the named namespace.
+
+The NATS chart already had a value for the OpenBao migration ServiceAccount
+namespace. For a named owner, the self-managed stack now passes the derived
+vault namespace, so the `nkey-bao-access` RoleBinding subject points at
+`plane-a-vault-system` instead of `vault-system`.
+
+Named mode intentionally remains fail-closed after this phase. Service DNS,
+OpenBao injector cluster-scoped objects, ClusterIssuer identity, and the final
+shared-prerequisite allowlist still need to pass before the object-level block
+can be removed.
+
+## Phase 4F Service DNS Identity
+
+Phase 4F removes the rendered service DNS references that still pointed at
+legacy plane-owned namespaces in named mode.
+
+The self-managed stack now derives the common in-cluster service addresses from
+the owner-derived namespaces before passing values into the service charts. For
+a named owner such as `plane-a`, rendered values now point at addresses such as:
+
+- `plane-a-openbao.plane-a-vault-system.svc.cluster.local:8200`;
+- `api.plane-a-nvcf.svc.cluster.local:9090`;
+- `api-keys.plane-a-api-keys.svc.cluster.local:8080`;
+- `nats.plane-a-nats-system.svc.cluster.local:4222`;
+- `llm-request-router.plane-a-nvcf.svc.cluster.local:8000`.
+
+Several charts now expose the OpenBao token audience or bootstrap OpenBao
+address as values instead of hardcoding the legacy namespace. The legacy chart
+defaults remain the same, and the stack only overrides them for named owners, so
+the default golden render stays byte-identical.
+
+The LLM request-router certificate DNS defaults are also translated for named
+owners when the operator has not supplied custom DNS names. This keeps the
+fail-closed PKI check from Phase 3 while preventing the default
+`llm-request-router.nvcf.svc.cluster.local` DNS names from leaking into a named
+render.
+
+A focused `service-dns-named-isolation.sh` test temporarily unblocks named mode
+in a copied stack, renders the affected charts, checks the important derived
+values directly, and then runs the Phase 4C object-level isolation checker over
+the rendered manifests. After this phase, the service-DNS class passes that
+checker in the full named render.
+
+Named mode intentionally remains fail-closed after this phase. OpenBao injector
+cluster-scoped objects, ClusterIssuer identity, and the final shared-prerequisite
+allowlist still need to pass before the object-level block can be removed.
+
+## Phase 4G OpenBao Injector Identity
+
+Phase 4G removes the OpenBao injector cluster-scoped object collisions for named
+mode.
+
+The upstream OpenBao chart derives the injector names from the same
+`fullnameOverride` used by the server. For the legacy `default` owner, the stack
+continues to rely on the chart default `openbao-server`, preserving objects such
+as `MutatingWebhookConfiguration/openbao-server-agent-injector-cfg`.
+
+For a named owner, the stack now passes a shorter named OpenBao fullname:
+`<owner>-openbao`. The shorter base name is deliberate. A 30-character control
+plane ID plus the upstream `-agent-injector-svc` suffix would exceed the
+63-character Service name limit if the base name stayed `openbao-server`.
+
+With owner `plane-a`, the rendered OpenBao dependency now uses identities such
+as:
+
+- `Service/plane-a-vault-system/plane-a-openbao-agent-injector-svc`;
+- `Deployment/plane-a-vault-system/plane-a-openbao-agent-injector`;
+- `MutatingWebhookConfiguration/plane-a-openbao-agent-injector-cfg`;
+- `ClusterRole/plane-a-openbao-agent-injector-clusterrole`;
+- `ClusterRoleBinding/plane-a-openbao-agent-injector-binding`;
+- `StatefulSet/plane-a-vault-system/plane-a-openbao`.
+
+Because the server fullname changes too, the stack also derives the named-mode
+OpenBao service DNS, unseal secret volume, auto-unseal sidecar mount, UI health
+inventory, migration job service address, and HA raft peer addresses from the
+same fullname. This keeps the server, injector, hooks, and migration job pointed
+at the same named OpenBao installation.
+
+Phase 4G also follows that renamed OpenBao identity through the downstream
+consumers that reference OpenBao-managed objects:
+
+- the NATS nkey RoleBinding subject now points at the named OpenBao initialize
+  ServiceAccount;
+- the LLM request-router PKI migration hook now uses the named OpenBao service,
+  initialize ServiceAccount, and root-token Secret;
+- the LLS/SIS HMAC migration and rotation hooks now use the named OpenBao
+  service, initialize ServiceAccount, root-token Secret, and vault namespace;
+- the managed PKI release now points at the named OpenBao service URL for its
+  backend `server` and service-account-token `audience` values.
+
+The Phase 4C isolation checker now also rejects known stale legacy object
+references, such as `openbao-server-root-token` or
+`admin-token-issuer-proxy.<named-namespace>.svc`, inside named renders. This
+catches same-namespace stale references that are not visible from namespace-only
+or duplicate-identity checks.
+
+A focused `openbao-injector-named-isolation.sh` test temporarily unblocks named
+mode in a copied stack, renders the real OpenBao dependency chart, checks the
+values and rendered manifests, and runs the Phase 4C isolation checker on that
+OpenBao render. The test covers both `plane-a` and a 30-character owner to
+protect the Kubernetes name-length edge.
+
+Named mode intentionally remains fail-closed after this phase. The managed
+ClusterIssuer object's own identity and the final shared-prerequisite allowlist
+still need to pass before the object-level block can be removed.
+
+## Phase 4H Managed ClusterIssuer Identity
+
+Phase 4H removes the managed PKI `ClusterIssuer` name collision for named mode.
+
+The default control plane still uses the legacy cluster-wide issuer name:
+`nvcf-openbao-pki`. For a named owner, the stack-managed default issuer is
+derived from the owner instead. With owner `plane-a`, the managed issuer becomes
+`plane-a-nvcf-openbao-pki`. The legacy default is normalized this way even when
+it appears explicitly in inherited named-plane values.
+
+Both sides of the contract use the same effective name:
+
+- the `nvcf-pki` dependency release creates
+  `ClusterIssuer/plane-a-nvcf-openbao-pki`;
+- the LLM request-router Certificate references
+  `ClusterIssuer/plane-a-nvcf-openbao-pki`;
+- the LLM worker gRPC TLS values default to the same issuer name when no
+  explicit issuer override is provided.
+
+If an operator sets a custom external issuer name, the stack keeps that custom
+name. If the stack itself is asked to manage a custom ClusterIssuer for a named
+plane, the name must use the named control-plane prefix so the cluster-scoped
+object cannot collide with another plane. That validation is specifically for
+custom managed issuers; the legacy default issuer name is normalized to the
+derived managed name before validation runs.
+
+The named service-DNS isolation test now also renders the real `nvcf-pki` chart in a
+temporarily unblocked named stack and verifies that the rendered ClusterIssuer
+name, OpenBao backend URL, and request-router issuer references all agree.
+
+Named mode intentionally remains fail-closed after this phase. The remaining
+blocker is the shared-prerequisite allowlist, which must explicitly review
+objects that are supposed to be shared instead of per-plane.
+
+## Phase 4I Shared Prerequisite Allowlist And Named Render Gate
+
+Phase 4I removes the final stack render block for alpha named control planes.
+A named owner such as `plane-a` can now render when
+`NVCF_ALPHA_NAMED_CONTROL_PLANE=true` is set.
+
+The block is removed only after the shared prerequisites are made explicit. Each
+stack has a committed allowlist of Kubernetes object identities that are
+expected to be the same across two named renders:
+
+- self-managed:
+  `deploy/stacks/self-managed/tests/named-control-plane-shared-identities.txt`;
+- compute-plane:
+  `deploy/stacks/nvcf-compute-plane/tests/named-control-plane-shared-identities.txt`.
+
+These files are intentionally exact lists, not broad patterns. An object marked
+with the `shared` owner label is still rejected by the named-render isolation
+checker unless its exact identity appears in the relevant allowlist. Every
+allowlist entry must also match a rendered object, so stale or over-broad entries
+fail the check instead of silently remaining trusted. This keeps new shared
+objects reviewable when chart versions change.
+
+Both stack `test-local` targets now render two named owners, `plane-a` and
+`plane-b`, then run the Phase 4C isolation checker over both outputs with the
+stack's allowlist. That real-render check catches:
+
+- objects rendered into legacy plane-owned namespaces;
+- service DNS names pointing at legacy plane-owned namespaces;
+- stale references to legacy plane-owned object names such as `openbao-server`;
+- unprefixed gateway routes in shared namespaces;
+- cluster-scoped objects that are neither owner-prefixed nor explicitly
+  allowlisted as shared;
+- duplicate object identities across two named renders that are not explicitly
+  allowlisted.
+
+The compute-plane stack also protects the currently pinned released
+`helm-nvca-operator` chart. The local chart source now renders the
+`ResourceQuota` into `.Release.Namespace`, and the stack post-renderer rewrites
+the same ResourceQuota namespace for the pinned chart if a named owner is used.
+The NVCFBackend CRD is installed once by a shared prerequisite release and is
+removed from the per-plane NVCA operator render by both the local chart value and
+the post-renderer shim for the pinned chart. The stack also rewrites exact legacy
+local control-plane endpoints in the NVCA registration values to the named
+in-cluster service DNS names.
+
+Before compute-plane `install` or `apply`, the stack also runs a small adoption
+step for the existing `nvcfbackends.nvcf.nvidia.io` CRD. This protects upgrades
+from older default-plane installs where the CRD was owned by the `nvca-operator`
+Helm release. The adoption step marks the live CRD with
+`helm.sh/resource-policy=keep`, moves its Helm ownership metadata to the shared
+`nvcf-nvca-crds` release in `nvcf-shared`, and refuses to touch the CRD if it is
+owned by an unexpected Helm release. The `keep` annotation is important because
+the old release stops rendering the CRD after this phase, and Helm must skip
+deleting the live CRD during that upgrade.
+
+The CLI now allows `--control-plane-id` together with
+`--alpha-named-control-plane` for the explicit install/profile/register flow.
+Generated control-plane profiles use named in-cluster endpoints, compute-plane
+registration values use named local in-cluster endpoints, and root-CA sourcing
+defaults to the named OpenBao service, namespace, and root-token Secret.
+
+The one-shot `self-hosted up` shortcut remains blocked for named control planes.
+That command still bundles local install, profile generation, registration,
+watching, and image-pull secret preparation into one workflow, and the named
+path should use the explicit commands until that shortcut is audited end to end.
+
+Named namespace cleanup is still conservative. Helm releases are selected by the
+named owner, but namespace deletion for named owners remains deferred until the
+shared-prerequisite lifecycle has a dedicated cleanup policy.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |
@@ -187,7 +534,7 @@ cluster-scoped objects Helm does not manage after install.
 | cert-manager | CustomResourceDefinition | `clusterissuers.cert-manager.io` | `shared` |
 | cert-manager | CustomResourceDefinition | `issuers.cert-manager.io` | `shared` |
 | cert-manager | CustomResourceDefinition | `orders.acme.cert-manager.io` | `shared` |
-| NVCA operator | CustomResourceDefinition | `nvcfbackends.nvcf.nvidia.com` | `shared` |
+| NVCA operator | CustomResourceDefinition | `nvcfbackends.nvcf.nvidia.io` | `shared` |
 | Gateway API | CustomResourceDefinition | External prerequisite in this repo snapshot; the self-managed stack renders Gateway routes but does not install a managed Gateway API CRD inventory here | `shared` |
 
 ## Phase 0 Verification

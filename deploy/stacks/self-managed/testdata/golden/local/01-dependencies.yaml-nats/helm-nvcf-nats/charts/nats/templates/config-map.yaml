@@ -6,7 +6,12 @@ data:
     {
       "accounts": {
         "APP": {
-          "jetstream": "enabled"
+          "jetstream": "enabled",
+          "users": [
+            {
+              "nkey": $NKEY_USER_KEY
+            }
+          ]
         },
         "AUTH": {
           "users": [

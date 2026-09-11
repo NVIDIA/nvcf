@@ -103,6 +103,10 @@ func runControlPlaneProfileExport(c *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(c.ErrOrStderr(), ">>> Resolving stack: %s\n", stackDescriptor(resolved))
 
+	controlPlaneOwner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return err
+	}
 	path, err := writeControlPlaneProfile(controlPlaneProfileWriteRequest{
 		Ctx:                 c.Context(),
 		StackPath:           resolved.Path,
@@ -110,6 +114,7 @@ func runControlPlaneProfileExport(c *cobra.Command, _ []string) error {
 		NCAID:               controlPlaneProfileExportNCAID,
 		Region:              controlPlaneProfileExportRegion,
 		Env:                 selfHostedEnv,
+		ControlPlaneOwner:   controlPlaneOwner,
 		ControlPlaneContext: selfHostedControlPlaneContext,
 		ComputePlaneContext: selfHostedComputePlaneContext,
 		ICMSURL:             selfHostedICMSURL,

@@ -18,6 +18,10 @@ command -v helmfile >/dev/null 2>&1 || fail "helmfile is required"
 
 max_owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 too_long_owner="${max_owner}a"
+expected_primary_chart_version="$(awk '/^  - name: api$/ {found=1; next} found && $1 == "version:" {print $2; exit}' "$stack_dir/helmfile.d/02-core.yaml.gotmpl")"
+if [ -z "$expected_primary_chart_version" ]; then
+  fail "could not parse expected primary chart version"
+fi
 states=(
   "01-dependencies.yaml.gotmpl"
   "02-core.yaml.gotmpl"
@@ -31,22 +35,44 @@ invalid_owners=(
 
 for state in "${states[@]}"; do
   state_file="$stack_dir/helmfile.d/$state"
-  valid_log="$work_dir/$state.valid.log"
+  if ! grep -Fq '$controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner' "$state_file"; then
+    fail "$state does not derive namespace prefix from the control-plane owner"
+  fi
+
+  default_log="$work_dir/$state.default.log"
   if ! HELMFILE_ENV=base \
-    NVCF_CONTROL_PLANE_OWNER=plane-a \
+    NVCF_CONTROL_PLANE_OWNER=default \
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
-    >"$work_dir/$state.valid.json" 2>"$valid_log"; then
-    fail "$state rejected valid owner plane-a: $(tr '\n' ' ' <"$valid_log")"
+    >"$work_dir/$state.default.json" 2>"$default_log"; then
+    fail "$state rejected default owner: $(tr '\n' ' ' <"$default_log")"
+  fi
+
+  named_log="$work_dir/$state.named.log"
+  if HELMFILE_ENV=base \
+    NVCF_CONTROL_PLANE_OWNER=plane-a \
+    NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+    HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile --file "$state_file" list --skip-charts --output json \
+    >"$work_dir/$state.named.json" 2>"$named_log"; then
+    if grep -Eq '"namespace":[[:space:]]*"(api-keys|cassandra-system|ess|nats-system|nvcf|nvcf-ui|sis|vault-system)"' "$work_dir/$state.named.json"; then
+      fail "$state rendered named owner into a legacy plane-owned release namespace"
+    fi
+  else
+    fail "$state rejected named owner with alpha opt-in: $(tr '\n' ' ' <"$named_log")"
   fi
 
   max_valid_log="$work_dir/$state.max-valid.log"
   if ! HELMFILE_ENV=base \
     NVCF_CONTROL_PLANE_OWNER="$max_owner" \
+    NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
     >"$work_dir/$state.max-valid.json" 2>"$max_valid_log"; then
-    fail "$state rejected 30-character owner: $(tr '\n' ' ' <"$max_valid_log")"
+    fail "$state rejected valid 30-character owner with alpha opt-in: $(tr '\n' ' ' <"$max_valid_log")"
+  fi
+  if grep -Eq '"namespace":[[:space:]]*"(api-keys|cassandra-system|ess|nats-system|nvcf|nvcf-ui|sis|vault-system)"' "$work_dir/$state.max-valid.json"; then
+    fail "$state rendered 30-character named owner into a legacy plane-owned release namespace"
   fi
 
   for owner in "${invalid_owners[@]}"; do
@@ -62,14 +88,95 @@ for state in "${states[@]}"; do
       fail "$state rejected $owner without the owner validation message"
     fi
   done
+
+  alpha_log="$work_dir/$state.alpha-missing.log"
+  if HELMFILE_ENV=base \
+    NVCF_CONTROL_PLANE_OWNER=plane-a \
+    HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile --file "$state_file" list --skip-charts --output json \
+    >"$work_dir/$state.alpha-missing.json" 2>"$alpha_log"; then
+    fail "$state accepted named owner without alpha opt-in"
+  fi
+  if ! grep -q "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required" "$alpha_log"; then
+    fail "$state rejected missing alpha opt-in without the alpha validation message"
+  fi
+
+  bad_alpha_log="$work_dir/$state.bad-alpha.log"
+  if HELMFILE_ENV=base \
+    NVCF_CONTROL_PLANE_OWNER=plane-a \
+    NVCF_ALPHA_NAMED_CONTROL_PLANE=yes \
+    HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile --file "$state_file" list --skip-charts --output json \
+    >"$work_dir/$state.bad-alpha.json" 2>"$bad_alpha_log"; then
+    fail "$state accepted invalid alpha opt-in value"
+  fi
+  if ! grep -q "NVCF_ALPHA_NAMED_CONTROL_PLANE must be true or false" "$bad_alpha_log"; then
+    fail "$state rejected invalid alpha opt-in without the alpha validation message"
+  fi
 done
 
-owner_dependencies="$work_dir/dependencies.owner.json"
-HELMFILE_ENV=base \
+global_chart_dir="$work_dir/global-guard-chart"
+global_state_file="$work_dir/global-guard.yaml.gotmpl"
+mkdir -p "$global_chart_dir/templates"
+if ! grep -Fq '$controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner' "$stack_dir/global.yaml.gotmpl"; then
+  fail "global.yaml.gotmpl does not derive namespace prefix from the control-plane owner"
+fi
+cat >"$global_chart_dir/Chart.yaml" <<'YAML'
+apiVersion: v2
+name: global-guard
+version: 0.1.0
+YAML
+cat >"$global_chart_dir/templates/configmap.yaml" <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: global-guard
+data:
+  ok: "true"
+YAML
+cat >"$global_state_file" <<YAML
+environments:
+  default:
+    values:
+      - $stack_dir/environments/base.yaml
+      - $stack_dir/testdata/environments/local.yaml
+
+---
+
+releases:
+  - name: global-guard
+    chart: $global_chart_dir
+    values:
+      - $stack_dir/global.yaml.gotmpl
+YAML
+
+global_alpha_log="$work_dir/global.alpha-missing.log"
+if HELMFILE_ENV=base \
   NVCF_CONTROL_PLANE_OWNER=plane-a \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile --file "$global_state_file" template \
+  >"$work_dir/global.alpha-missing.yaml" 2>"$global_alpha_log"; then
+  fail "global.yaml.gotmpl accepted named owner without alpha opt-in"
+fi
+if ! grep -q "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required" "$global_alpha_log"; then
+  fail "global.yaml.gotmpl rejected missing alpha opt-in without the alpha validation message"
+fi
+
+global_named_log="$work_dir/global.named.log"
+if ! HELMFILE_ENV=base \
+  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile --file "$global_state_file" template \
+  >"$work_dir/global.named.yaml" 2>"$global_named_log"; then
+  fail "global.yaml.gotmpl rejected named owner with alpha opt-in: $(tr '\n' ' ' <"$global_named_log")"
+fi
+owner_dependencies="$work_dir/dependencies.owner.json"
+HELMFILE_ENV=base \
+  NVCF_CONTROL_PLANE_OWNER=default \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
   helmfile --file "$stack_dir/helmfile.d/01-dependencies.yaml.gotmpl" \
-  list --skip-charts --selector control-plane-owner=plane-a --output json \
+  list --skip-charts --selector control-plane-owner=default --output json \
   >"$owner_dependencies"
 if grep -Eq '"name":[[:space:]]*"cert-manager"' "$owner_dependencies"; then
   fail "owner selector included shared cert-manager release"
@@ -80,7 +187,7 @@ fi
 
 shared_dependencies="$work_dir/dependencies.shared.json"
 HELMFILE_ENV=base \
-  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_CONTROL_PLANE_OWNER=default \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
   helmfile --file "$stack_dir/helmfile.d/01-dependencies.yaml.gotmpl" \
   list --skip-charts --selector control-plane-owner=shared --output json \
@@ -96,7 +203,7 @@ install_plan="$work_dir/make-install.txt"
 make -n -C "$stack_dir" install \
   DEV_MODE=1 \
   HELMFILE_ENV=base \
-  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_CONTROL_PLANE_OWNER=default \
   >"$install_plan" 2>&1
 if ! grep -Fq 'renderers/mark-control-plane-namespaces.sh' "$install_plan"; then
   fail "make install did not mark control-plane namespaces"
@@ -107,7 +214,7 @@ fi
 if ! grep -Fq -- '--stack "self-managed"' "$install_plan"; then
   fail "make install did not include the self-managed stack annotation"
 fi
-if ! grep -Fq -- '--chart-version "1.25.1"' "$install_plan"; then
+if ! grep -Fq -- "--chart-version \"$expected_primary_chart_version\"" "$install_plan"; then
   fail "make install did not parse the primary chart version"
 fi
 if ! grep -Fq -- '--nvca-operator-version "not-installed"' "$install_plan"; then
@@ -117,11 +224,25 @@ if ! grep -Fq -- '--shared-namespace "cert-manager"' "$install_plan"; then
   fail "make install did not include the shared cert-manager namespace"
 fi
 
+named_install_plan="$work_dir/make-install-named.txt"
+make -n -C "$stack_dir" install \
+  DEV_MODE=1 \
+  HELMFILE_ENV=base \
+  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+  >"$named_install_plan" 2>&1
+if ! grep -Fq -- '--primary-namespace "plane-a-nvcf"' "$named_install_plan"; then
+  fail "make install did not identify plane-a-nvcf as the named primary namespace"
+fi
+if ! grep -Fq -- '--namespace "plane-a-cassandra-system"' "$named_install_plan"; then
+  fail "make install did not include the named Cassandra namespace"
+fi
+
 apply_plan="$work_dir/make-apply.txt"
 make -n -C "$stack_dir" apply \
   DEV_MODE=1 \
   HELMFILE_ENV=base \
-  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_CONTROL_PLANE_OWNER=default \
   >"$apply_plan" 2>&1
 if ! grep -Fq 'renderers/mark-control-plane-namespaces.sh' "$apply_plan"; then
   fail "make apply did not mark control-plane namespaces"
@@ -131,23 +252,27 @@ destroy_plan="$work_dir/make-destroy.txt"
 make -n -C "$stack_dir" destroy \
   DEV_MODE=1 \
   HELMFILE_ENV=base \
-  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_CONTROL_PLANE_OWNER=default \
   >"$destroy_plan" 2>&1
-if ! grep -Fq -- '--selector "control-plane-owner=plane-a" destroy' "$destroy_plan"; then
+if ! grep -Fq -- '--selector "control-plane-owner=default" destroy' "$destroy_plan"; then
   fail "make destroy did not pass the owner selector"
 fi
-if ! grep -Fq 'Skipping fixed namespace cleanup for named control-plane owner plane-a' "$destroy_plan"; then
-  fail "make destroy did not skip fixed namespace cleanup for named owners"
+if ! grep -Fq 'renderers/delete-owned-namespace.sh' "$destroy_plan"; then
+  fail "make destroy did not use owner-aware namespace cleanup"
 fi
 
-default_destroy_plan="$work_dir/make-destroy-default.txt"
+named_destroy_plan="$work_dir/make-destroy-named.txt"
 make -n -C "$stack_dir" destroy \
   DEV_MODE=1 \
   HELMFILE_ENV=base \
-  NVCF_CONTROL_PLANE_OWNER=default \
-  >"$default_destroy_plan" 2>&1
-if ! grep -Fq 'renderers/delete-owned-namespace.sh' "$default_destroy_plan"; then
-  fail "make destroy did not use owner-aware namespace cleanup"
+  NVCF_CONTROL_PLANE_OWNER=plane-a \
+  NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
+  >"$named_destroy_plan" 2>&1
+if ! grep -Fq -- '--selector "control-plane-owner=plane-a" destroy' "$named_destroy_plan"; then
+  fail "make destroy did not pass the named owner selector"
+fi
+if ! grep -Fq 'Skipping named namespace cleanup until shared prerequisite lifecycle is wired' "$named_destroy_plan"; then
+  fail "make destroy did not defer named namespace cleanup"
 fi
 
 echo "verify-control-plane-owner-helmfile-validation: all checks passed"

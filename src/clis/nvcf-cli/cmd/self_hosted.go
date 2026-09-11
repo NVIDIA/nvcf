@@ -57,6 +57,7 @@ var (
 	selfHostedPlain               bool
 	selfHostedAccessible          bool
 	selfHostedRefreshToken        bool
+	selfHostedAlphaNamedPlane     bool
 	selfHostedControlPlaneContext string
 	selfHostedComputePlaneContext string
 	selfHostedControlPlaneID      string
@@ -93,11 +94,12 @@ const (
 	selfHostedSharedControlPlaneID  = "shared"
 	// Named installs derive keyspaces as <id>_<legacyKeyspace>;
 	// schema_migrations is the longest legacy name.
-	selfHostedMaxCassandraNameLen  = 48
-	selfHostedSchemaMigrationsName = "schema_migrations"
-	selfHostedMaxControlPlaneIDLen = selfHostedMaxCassandraNameLen - len(selfHostedSchemaMigrationsName) - 1
-	selfHostedControlPlaneOwnerEnv = "NVCF_CONTROL_PLANE_OWNER"
-	selfHostedHelmfileOwnerLabel   = "control-plane-owner"
+	selfHostedMaxCassandraNameLen       = 48
+	selfHostedSchemaMigrationsName      = "schema_migrations"
+	selfHostedMaxControlPlaneIDLen      = selfHostedMaxCassandraNameLen - len(selfHostedSchemaMigrationsName) - 1
+	selfHostedControlPlaneOwnerEnv      = "NVCF_CONTROL_PLANE_OWNER"
+	selfHostedAlphaNamedControlPlaneEnv = "NVCF_ALPHA_NAMED_CONTROL_PLANE"
+	selfHostedHelmfileOwnerLabel        = "control-plane-owner"
 )
 
 func init() {
@@ -135,6 +137,8 @@ func init() {
 		"Plain output without spinners; verbose state markers (for screen readers)")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedRefreshToken, "refresh-token", false,
 		"Re-mint the admin token via API Keys, bypassing any cached fingerprint")
+	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedAlphaNamedPlane, "alpha-named-control-plane", false,
+		"Enable alpha named self-hosted control-plane mode (required with --control-plane-id)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedControlPlaneContext, "control-plane-context", "",
 		"kubeconfig context for control plane (split-cluster mode; pair with --compute-plane-context)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedComputePlaneContext, "compute-plane-context", "",
@@ -156,6 +160,9 @@ func selfHostedControlPlaneOwner() (string, error) {
 	}
 	if err := validateSelfHostedControlPlaneID(selfHostedControlPlaneID); err != nil {
 		return "", fmt.Errorf("invalid --control-plane-id: %w", err)
+	}
+	if !selfHostedAlphaNamedPlane {
+		return "", fmt.Errorf("--control-plane-id is alpha; pass --alpha-named-control-plane to enable named self-hosted control planes")
 	}
 	return selfHostedControlPlaneID, nil
 }
@@ -181,7 +188,14 @@ func selfHostedControlPlaneEnv() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []string{selfHostedControlPlaneOwnerEnv + "=" + owner}, nil
+	alphaNamedMode := "false"
+	if owner != selfHostedDefaultControlPlaneID && selfHostedAlphaNamedPlane {
+		alphaNamedMode = "true"
+	}
+	return []string{
+		selfHostedControlPlaneOwnerEnv + "=" + owner,
+		selfHostedAlphaNamedControlPlaneEnv + "=" + alphaNamedMode,
+	}, nil
 }
 
 func withSelfHostedControlPlaneEnv(extra []string) ([]string, error) {
@@ -356,15 +370,32 @@ func resolveRegisterEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURL
 	}
 }
 
-func resolveNVCAEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURLOverride string) registerEndpointValues {
+func controlPlaneNamespacePrefix(controlPlaneOwner string) string {
+	if controlPlaneOwner == "" || controlPlaneOwner == selfHostedDefaultControlPlaneID || controlPlaneOwner == selfHostedSharedControlPlaneID {
+		return ""
+	}
+	return controlPlaneOwner + "-"
+}
+
+func controlPlaneInClusterEndpointValues(controlPlaneOwner string) registerEndpointValues {
+	prefix := controlPlaneNamespacePrefix(controlPlaneOwner)
+	return registerEndpointValues{
+		ICMSServiceURL:  fmt.Sprintf("http://api.%ssis.svc.cluster.local:8080", prefix),
+		ReValServiceURL: fmt.Sprintf("http://reval.%snvcf.svc.cluster.local:8080", prefix),
+		NATSURL:         fmt.Sprintf("nats://nats.%snats-system.svc.cluster.local:4222", prefix),
+	}
+}
+
+func resolveNVCAEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURLOverride, controlPlaneOwner string) registerEndpointValues {
 	if strings.EqualFold(env, "local") && kubectx.SelectMode(controlCtx, computeCtx) == kubectx.ModeSingle {
-		natsURL := localInClusterNATSURL
+		endpoints := controlPlaneInClusterEndpointValues(controlPlaneOwner)
+		natsURL := endpoints.NATSURL
 		if natsURLOverride != "" || os.Getenv("NVCF_NATS_URL") != "" {
-			natsURL = resolveNATSURL(natsURLOverride, localInClusterICMSURL)
+			natsURL = resolveNATSURL(natsURLOverride, endpoints.ICMSServiceURL)
 		}
 		return registerEndpointValues{
-			ICMSServiceURL:  localInClusterICMSURL,
-			ReValServiceURL: localInClusterReValURL,
+			ICMSServiceURL:  endpoints.ICMSServiceURL,
+			ReValServiceURL: endpoints.ReValServiceURL,
 			NATSURL:         natsURL,
 		}
 	}

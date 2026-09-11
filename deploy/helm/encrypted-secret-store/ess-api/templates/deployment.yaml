@@ -67,7 +67,7 @@ spec:
               - serviceAccountToken:
                   path: token
                   expirationSeconds: 3600
-                  audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                  audience: {{ required "ess.vault.audience must be set (the OpenBao JWT audience)" .Values.ess.vault.audience }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -119,4 +119,3 @@ spec:
           startupProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-

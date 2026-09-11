@@ -78,6 +78,11 @@ podDisruptionBudget:
   # Accepts an integer or a percentage string from 0% to 100%.
   minAvailable: ""
   maxUnavailable: ""
+## @param crds.nvcfBackend.enabled Render the NVCFBackend CRD with this release.
+## Disable this when the CRD is installed by a shared prerequisite release.
+crds:
+  nvcfBackend:
+    enabled: true
 
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator

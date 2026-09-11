@@ -20,6 +20,7 @@ package plugins
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -62,12 +63,7 @@ func (pm *Manager) Authenticate(ctx context.Context, request *types.Request) (*t
 		return nil, types.NewAuthError(types.ErrTypeInvalidRequest, "plugin name not specified", 400)
 	}
 
-	// Create plugin key with account.
-	pluginKey := PluginKey{
-		AccountName: request.Account,
-		PluginName:  pluginName,
-	}
-	plugin, exists := pm.plugins[pluginKey]
+	plugin, exists := pm.lookupPlugin(request.Account, pluginName)
 	if !exists {
 		return nil, types.NewAuthError(types.ErrTypePluginError, fmt.Sprintf("plugin %s not found for account %s", pluginName, request.Account), 404)
 	}
@@ -92,6 +88,25 @@ func (pm *Manager) Authenticate(ctx context.Context, request *types.Request) (*t
 	return result, nil
 }
 
+func (pm *Manager) lookupPlugin(accountName, pluginName string) (types.AuthPlugin, bool) {
+	pluginKey := PluginKey{
+		AccountName: accountName,
+		PluginName:  pluginName,
+	}
+	plugin, exists := pm.plugins[pluginKey]
+	if exists {
+		return plugin, true
+	}
+
+	lowerAccountName := strings.ToLower(accountName)
+	if lowerAccountName == accountName {
+		return nil, false
+	}
+	pluginKey.AccountName = lowerAccountName
+	plugin, exists = pm.plugins[pluginKey]
+	return plugin, exists
+}
+
 // initializePlugins initializes all plugins based on current configuration.
 func (pm *Manager) initializePlugins() {
 	// Build plugin map
@@ -100,6 +115,7 @@ func (pm *Manager) initializePlugins() {
 	// Collect all plugins from all accounts
 	for accountName, account := range pm.config.AccountConfigs {
 		for _, plugin := range account.EnabledPlugins {
+			pluginAccountName := accountName
 			alias := plugin.Alias
 			if alias == "" {
 				alias = plugin.ID // Default to plugin ID if no alias
@@ -107,10 +123,10 @@ func (pm *Manager) initializePlugins() {
 			if plugin.ID == "nkey" {
 				// the nkey plugin maintains its own internal account list and is special cased.
 				// we don't know the account name until the nkey is looked up by the plugin.
-				accountName = ""
+				pluginAccountName = ""
 			}
 			pluginKey := PluginKey{
-				AccountName: accountName,
+				AccountName: pluginAccountName,
 				PluginName:  alias,
 			}
 
@@ -118,7 +134,7 @@ func (pm *Manager) initializePlugins() {
 			pluginConfig, pluginFound := pm.config.PluginConfigs[plugin.ID]
 			if !pluginFound {
 				pm.logger.Error("Plugin configuration not found",
-					zap.String("account", accountName),
+					zap.String("account", pluginAccountName),
 					zap.String("plugin", plugin.ID),
 				)
 				continue
@@ -128,7 +144,7 @@ func (pm *Manager) initializePlugins() {
 			pluginInstance, err := pm.createPlugin(pluginConfig.PluginType, pluginConfig.Config)
 			if err != nil {
 				pm.logger.Error("failed to create plugin",
-					zap.String("account", accountName),
+					zap.String("account", pluginAccountName),
 					zap.String("plugin", plugin.ID),
 					zap.String("config_key", plugin.ID),
 					zap.String("type", pluginConfig.PluginType),
@@ -140,7 +156,7 @@ func (pm *Manager) initializePlugins() {
 			pluginMap[pluginKey] = pluginInstance
 
 			pm.logger.Info("Plugin created",
-				zap.String("account", accountName),
+				zap.String("account", pluginAccountName),
 				zap.String("plugin", plugin.ID),
 				zap.String("alias", alias),
 				zap.String("config_key", plugin.ID),

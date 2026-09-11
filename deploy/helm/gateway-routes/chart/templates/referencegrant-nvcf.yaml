@@ -14,14 +14,17 @@
 # limitations under the License.
 
 {{- if .Values.nvcfGatewayRoutes.enabled }}
+{{- $targetNamespace := .Values.nvcfGatewayRoutes.routes.nvcfApi.backend.namespace }}
+{{/* This grant covers several NVCF routes into one namespace, so derive its
+     name from the target namespace. Single-route grants use their route name. */}}
 ---
 # ReferenceGrant allows HTTPRoutes and GRPCRoutes in traefik-gateway namespace
 # to reference Services in nvcf namespace (for api, invocation-service, grpc)
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-routes-to-nvcf
-  namespace: nvcf  # Grant is created in the target namespace
+  name: allow-routes-to-{{ $targetNamespace }}
+  namespace: {{ $targetNamespace }}  # Grant is created in the target namespace
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
 spec:
@@ -41,4 +44,3 @@ spec:
     - group: ""
       kind: Service
 {{- end }}
-

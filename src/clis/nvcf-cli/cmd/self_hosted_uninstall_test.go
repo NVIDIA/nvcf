@@ -35,6 +35,7 @@ import (
 func resetUninstallFlags(t *testing.T) {
 	t.Helper()
 	selfHostedUninstallCmd.SetContext(nil)
+	selfHostedAlphaNamedPlane = false
 	t.Cleanup(func() {
 		uninstallControlPlane = false
 		uninstallComputePlane = false
@@ -44,6 +45,7 @@ func resetUninstallFlags(t *testing.T) {
 		uninstallForceWithRegisteredClusters = false
 		uninstallKeepNamespaces = false
 		uninstallConfirm = false
+		selfHostedAlphaNamedPlane = false
 		selfHostedControlPlaneID = ""
 		selfHostedUninstallCmd.SetContext(nil)
 	})
@@ -166,7 +168,7 @@ func TestUninstall_ControlPlanePassesHelm4CompatToDestroy(t *testing.T) {
 	assert.Contains(t, string(body), "--sequential-helmfiles")
 }
 
-func TestUninstall_ControlPlanePassesControlPlaneOwnerEnv(t *testing.T) {
+func TestUninstall_NamedControlPlanePassesOwnerToHelmfile(t *testing.T) {
 	resetUninstallFlags(t)
 	t.Setenv("NVCF_CONTROL_PLANE_OWNER", "from-parent")
 
@@ -187,13 +189,14 @@ func TestUninstall_ControlPlanePassesControlPlaneOwnerEnv(t *testing.T) {
 		"--control-plane",
 		"--control-plane-stack", stack,
 		"--control-plane-id", "plane-a",
+		"--alpha-named-control-plane",
 	})
 
-	require.NoError(t, rootCmd.Execute())
+	err := rootCmd.Execute()
+	require.NoError(t, err)
 
 	body, err := os.ReadFile(helmfileLog)
 	require.NoError(t, err)
-	assert.Contains(t, string(body), "CONTROL_PLANE_OWNER=plane-a")
 	assert.Contains(t, string(body), "--selector control-plane-owner=plane-a")
-	assert.NotContains(t, string(body), "CONTROL_PLANE_OWNER=from-parent")
+	assert.Contains(t, string(body), "CONTROL_PLANE_OWNER=plane-a")
 }

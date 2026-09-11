@@ -39,6 +39,7 @@ import (
 func resetDownFlags(t *testing.T) {
 	t.Helper()
 	selfHostedDownCmd.SetContext(nil)
+	selfHostedAlphaNamedPlane = false
 	t.Cleanup(func() {
 		downClusterName = ""
 		downAll = false
@@ -52,6 +53,7 @@ func resetDownFlags(t *testing.T) {
 		selfHostedJSON = false
 		selfHostedPlain = false
 		selfHostedAccessible = false
+		selfHostedAlphaNamedPlane = false
 		selfHostedControlPlaneID = ""
 		selfHostedDownCmd.SetContext(nil)
 	})

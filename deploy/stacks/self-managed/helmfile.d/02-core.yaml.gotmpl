@@ -13,10 +13,27 @@ environments:
 {{- end }}
 {{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
 {{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
+{{- $alphaNamedControlPlane := env "NVCF_ALPHA_NAMED_CONTROL_PLANE" | default "false" }}
 {{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 30) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 30 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
+{{- if not (has $alphaNamedControlPlane (list "true" "false")) }}
+{{- fail (printf "NVCF_ALPHA_NAMED_CONTROL_PLANE must be true or false, got %q" $alphaNamedControlPlane) }}
+{{- end }}
+{{- if and (ne $controlPlaneOwner "default") (ne $alphaNamedControlPlane "true") }}
+{{- fail "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required when NVCF_CONTROL_PLANE_OWNER is a named control plane" }}
+{{- end }}
 {{- $controlPlaneNamespacePrefix := "" }}
+{{- if ne $controlPlaneOwner "default" }}
+{{- $controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner }}
+{{- end }}
+{{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") }}
+{{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" }}
+{{- end }}
+{{- $namedControlPlaneObjectIdentitiesReady := true }}
+{{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) }}
+{{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" }}
+{{- end }}
 {{- $apiKeysNamespace := printf "%sapi-keys" $controlPlaneNamespacePrefix }}
 {{- $essNamespace := printf "%sess" $controlPlaneNamespacePrefix }}
 {{- $natsNamespace := printf "%snats-system" $controlPlaneNamespacePrefix }}
@@ -24,6 +41,9 @@ environments:
 {{- $nvcfUiNamespace := printf "%snvcf-ui" $controlPlaneNamespacePrefix }}
 {{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix }}
 {{- $ingressNamespace := .Values.ingress.gatewayApi.controllerNamespace }}
+{{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace }}
+{{- $natsAuthCalloutSecretName := dig "nats" "authCallout" "secretName" "nats-auth-callout-nkeys" .Values }}
+{{- $sisNatsAuthorizeURL := printf "http://api.%s.svc.cluster.local:8080/v1/nvca/nats-authorize" $sisNamespace }}
 
 repositories:
   - name: nvcf
@@ -201,6 +221,45 @@ releases:
       - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
+      - image:
+          repository: {{ printf "%s/%s/nvcf-nats-auth-callout-service" .Values.global.image.registry .Values.global.image.repository | quote }}
+      - serviceConfig:
+          service:
+            nats_url: {{ $natsServiceURL | quote }}
+      - extraEnvs:
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED
+            valueFrom:
+              secretKeyRef:
+                name: {{ $natsAuthCalloutSecretName | quote }}
+                key: nkey_seed
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SIGNATURE
+            valueFrom:
+              secretKeyRef:
+                name: {{ $natsAuthCalloutSecretName | quote }}
+                key: nkey_signature
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_PLUGIN__TYPE
+            value: nkey
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_NKEY
+            valueFrom:
+              secretKeyRef:
+                name: nats-nkeys
+                key: user.pub
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_ACCOUNT
+            value: APP
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_PLUGIN__TYPE
+            value: webhook
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_CONFIG_URL
+            value: {{ $sisNatsAuthorizeURL | quote }}
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_CONFIG_TIMEOUT
+            value: 5s
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_WEBHOOK_CONFIG_RETRY__ATTEMPTS
+            value: "1"
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_0_ID
+            value: nkey
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_1_ID
+            value: webhook
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_1_ALIAS
+            value: oidc
       {{- if .Values.global.imagePullSecrets }}
       - imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}

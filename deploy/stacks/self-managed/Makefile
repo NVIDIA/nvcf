@@ -3,7 +3,7 @@ MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 include Makefile.dist
 
-.PHONY: test test-published-charts render-local test-local generate-golden test-golden-comparator test-render-structure test-render-structure-detects-violations test-control-plane-owner-label-renderer test-control-plane-owner-label-placement test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-golden-diff
+.PHONY: test test-published-charts render-local test-local generate-golden test-golden-comparator test-render-structure test-render-structure-detects-violations test-named-control-plane-render-isolation test-named-control-plane-render-isolation-detects-violations test-control-plane-owner-label-renderer test-control-plane-owner-label-placement test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-golden-diff test-nats-auth-callout-service-wiring
 
 GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local
 GOLDEN_RENDER_DIR ?= $(MAKEFILE_DIR)/.golden/out
@@ -17,6 +17,10 @@ test:
 	@tests/llm-servicemonitor-defaults.sh
 	@tests/gateway-routes-local-chart.sh
 	@tests/gateway-routes-enable-wiring.sh
+	@tests/gateway-routes-named-isolation.sh
+	@tests/admin-nats-named-isolation.sh
+	@tests/service-dns-named-isolation.sh
+	@tests/openbao-injector-named-isolation.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh
@@ -34,6 +38,7 @@ test:
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
+	@tests/nats-auth-callout-service-wiring.sh
 	@tests/notary-image-repository.sh
 
 test-published-charts:
@@ -56,6 +61,12 @@ test-render-structure: render-local
 test-render-structure-detects-violations:
 	@tests/verify-render-structure-detects-violations.sh
 
+test-named-control-plane-render-isolation-detects-violations:
+	@tests/verify-named-control-plane-render-isolation-detects-violations.sh
+
+test-named-control-plane-render-isolation:
+	@tests/verify-named-control-plane-render-isolation-local.sh
+
 test-control-plane-owner-label-renderer:
 	@tests/verify-control-plane-owner-label-renderer.sh
 
@@ -77,7 +88,10 @@ test-control-plane-owner-namespace-marker:
 test-control-plane-owner-label-golden-diff:
 	@tests/verify-control-plane-owner-label-golden-diff.sh "$(GOLDEN_LOCAL_DIR)"
 
-test-local: test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker render-local test-golden-comparator test-render-structure-detects-violations test-render-structure
+test-nats-auth-callout-service-wiring:
+	@tests/nats-auth-callout-service-wiring.sh
+
+test-local: test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-named-control-plane-render-isolation-detects-violations test-named-control-plane-render-isolation render-local test-golden-comparator test-render-structure-detects-violations test-render-structure
 	@tests/verify-control-plane-owner-label-placement.sh "$(GOLDEN_RENDER_DIR)"
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(GOLDEN_RENDER_DIR)"
 

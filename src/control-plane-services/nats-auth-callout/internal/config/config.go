@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -182,6 +183,10 @@ func InitConfig(serviceName string, customConfigPaths ...string) (*Config, error
 	var config Config
 	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{
 		Tag: "mapstructure",
+		DecoderConfig: &mapstructure.DecoderConfig{
+			DecodeHook:       defaultDecodeHook(),
+			WeaklyTypedInput: true,
+		},
 	}); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
@@ -259,6 +264,10 @@ func GetCurrentConfig() (*Config, error) {
 	var config Config
 	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{
 		Tag: "mapstructure",
+		DecoderConfig: &mapstructure.DecoderConfig{
+			DecodeHook:       defaultDecodeHook(),
+			WeaklyTypedInput: true,
+		},
 	}); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}

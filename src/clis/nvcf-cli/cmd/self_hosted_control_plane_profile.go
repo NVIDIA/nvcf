@@ -46,6 +46,7 @@ type controlPlaneProfileWriteRequest struct {
 	NCAID               string
 	Region              string
 	Env                 string
+	ControlPlaneOwner   string
 	ControlPlaneContext string
 	ComputePlaneContext string
 	ICMSURL             string
@@ -75,7 +76,8 @@ func writeControlPlaneProfile(req controlPlaneProfileWriteRequest) (string, erro
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			rootCAPEM, err = fetchControlPlaneRootCAPEM(ctx, req.ControlPlaneContext)
+			controlPlaneOwner := defaultString(req.ControlPlaneOwner, selfHostedDefaultControlPlaneID)
+			rootCAPEM, err = fetchControlPlaneRootCAPEM(ctx, req.ControlPlaneContext, controlPlaneOwner)
 			if err != nil {
 				return "", err
 			}
@@ -157,8 +159,8 @@ func controlPlaneProfilePath(stackPath string) string {
 	return filepath.Join(stackPath, "out", controlPlaneProfileFileName)
 }
 
-var fetchControlPlaneRootCAPEM = func(ctx context.Context, kctx string) (string, error) {
-	cfg := controlPlaneRootCAOpenBaoConfig(kctx)
+var fetchControlPlaneRootCAPEM = func(ctx context.Context, kctx, controlPlaneOwner string) (string, error) {
+	cfg := controlPlaneRootCAOpenBaoConfig(kctx, controlPlaneOwner)
 	pem, err := openbao.NewClient(cfg, nil).ReadPKICertificatePEM(ctx, controlPlaneRootPKIPath())
 	if errors.Is(err, openbao.ErrPKICertificateNotFound) {
 		return "", nil
@@ -169,13 +171,21 @@ var fetchControlPlaneRootCAPEM = func(ctx context.Context, kctx string) (string,
 	return strings.TrimSpace(pem), nil
 }
 
-func controlPlaneRootCAOpenBaoConfig(kctx string) *openbao.Config {
+func controlPlaneRootCAOpenBaoConfig(kctx, controlPlaneOwner string) *openbao.Config {
+	prefix := controlPlaneNamespacePrefix(controlPlaneOwner)
+	openBaoName := "openbao-server"
+	if prefix != "" {
+		openBaoName = prefix + "openbao"
+	}
+	openBaoNamespace := prefix + "vault-system"
+	openBaoSecretName := openBaoName + "-root-token"
+	clusterNamespace := prefix + "nvcf"
 	return &openbao.Config{
-		OpenBaoURL:        defaultString(firstNonEmptyEnv("NVCF_OPENBAO_URL", "OPENBAO_URL", "VAULT_ADDR", "BAO_ADDR"), "http://openbao-server.vault-system.svc.cluster.local:8200"),
-		OpenBaoNamespace:  defaultString(os.Getenv("NVCF_OPENBAO_NAMESPACE"), "vault-system"),
-		OpenBaoSecretName: defaultString(os.Getenv("NVCF_OPENBAO_SECRET_NAME"), "openbao-server-root-token"),
+		OpenBaoURL:        defaultString(firstNonEmptyEnv("NVCF_OPENBAO_URL", "OPENBAO_URL", "VAULT_ADDR", "BAO_ADDR"), fmt.Sprintf("http://%s.%s.svc.cluster.local:8200", openBaoName, openBaoNamespace)),
+		OpenBaoNamespace:  defaultString(os.Getenv("NVCF_OPENBAO_NAMESPACE"), openBaoNamespace),
+		OpenBaoSecretName: defaultString(os.Getenv("NVCF_OPENBAO_SECRET_NAME"), openBaoSecretName),
 		KubeContext:       kctx,
-		ClusterNamespace:  defaultString(os.Getenv("NVCF_CLUSTER_NAMESPACE"), "nvcf"),
+		ClusterNamespace:  defaultString(os.Getenv("NVCF_CLUSTER_NAMESPACE"), clusterNamespace),
 		UtilityImage:      defaultString(os.Getenv("NVCF_CLUSTER_UTILITY_IMAGE"), "curlimages/curl:latest"),
 	}
 }
@@ -202,6 +212,8 @@ func applyControlPlaneRootCATrust(doc *controlplaneprofile.ControlPlaneProfile, 
 }
 
 func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplaneprofile.ControlPlaneProfile {
+	controlPlaneOwner := defaultString(req.ControlPlaneOwner, selfHostedDefaultControlPlaneID)
+	inClusterEndpoints := controlPlaneInClusterEndpointValues(controlPlaneOwner)
 	icmsURL := resolveProfileICMSURL(req.ICMSURL, req.Env, req.StackDomain)
 	computeEndpoints := resolveRegisterEndpointValues(req.Env, req.ControlPlaneContext, req.ComputePlaneContext, icmsURL, req.NATSURL)
 	gatewayHTTP := resolveProfileGatewayHTTPURL(req.Env, icmsURL)
@@ -228,9 +240,9 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 			Region:      defaultString(req.Region, "us-west-1"),
 			Endpoints: controlplaneprofile.Endpoints{
 				InCluster: controlplaneprofile.EndpointScope{
-					ICMSURL:  "http://api.sis.svc.cluster.local:8080",
-					ReValURL: "http://reval.nvcf.svc.cluster.local:8080",
-					NATSURL:  "nats://nats.nats-system.svc.cluster.local:4222",
+					ICMSURL:  inClusterEndpoints.ICMSServiceURL,
+					ReValURL: inClusterEndpoints.ReValServiceURL,
+					NATSURL:  inClusterEndpoints.NATSURL,
 				},
 				ComputeReachable: controlplaneprofile.EndpointScope{
 					ICMSURL:  computeEndpoints.ICMSServiceURL,

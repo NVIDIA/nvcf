@@ -36,6 +36,7 @@ kind: ConfigMap
 metadata:
   name: nvca
 YAML
+touch "$work_dir/02-nvca.yaml-nvca-operator/templates/empty.yaml"
 
 NVCF_CONTROL_PLANE_OWNER=plane-a "$helper" "$work_dir" >/dev/null
 
@@ -52,5 +53,9 @@ actual_plane="$(
 )"
 [[ "$actual_plane" == "plane-a" ]] ||
   fail "expected nvca file owner to be plane-a, got $actual_plane"
+
+if [[ -e "$work_dir/02-nvca.yaml-nvca-operator/templates/empty.yaml" ]]; then
+  fail "expected empty rendered YAML files to be removed"
+fi
 
 echo "verify-control-plane-owner-output-dir-env: all checks passed"

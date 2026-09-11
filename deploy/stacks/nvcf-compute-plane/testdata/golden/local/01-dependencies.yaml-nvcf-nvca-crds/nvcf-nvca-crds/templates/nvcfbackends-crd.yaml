@@ -1,0 +1,56 @@
+---
+# Source: nvcf-nvca-crds/templates/nvcfbackends-crd.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nvcfbackends.nvcf.nvidia.io
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/name: nvcf-nvca-crds
+    app.kubernetes.io/instance: "nvcf-nvca-crds"
+    app.kubernetes.io/managed-by: "Helm"
+    helm.sh/chart: "nvcf-nvca-crds-0.1.0"
+    nvcf.nvidia.com/control-plane-owner: shared
+spec:
+  group: nvcf.nvidia.io
+  names:
+    kind: NVCFBackend
+    listKind: NVCFBackendList
+    plural: nvcfbackends
+    singular: nvcfbackend
+  scope: Namespaced
+  versions:
+  - name: v1
+    additionalPrinterColumns:
+      - name: Age
+        jsonPath: .metadata.creationTimestamp
+        description: Age of this resource
+        type: date
+      - name: Version
+        jsonPath: .status.version
+        type: string
+        description: Current version of the backend
+      - name: Health
+        jsonPath: .status.agentStatus
+        description: Health status of the backend
+        type: string
+    schema:
+      openAPIV3Schema:
+        properties:
+          spec:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

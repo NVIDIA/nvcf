@@ -109,4 +109,4 @@ spec:
               - serviceAccountToken:
                   path: token
                   expirationSeconds: 3600
-                  audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                  audience: {{ required "apikeys.vault.audience must be set (the OpenBao JWT audience)" .Values.apikeys.vault.audience }}

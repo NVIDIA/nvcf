@@ -20,7 +20,7 @@
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-httproute-to-ess
+  name: allow-httproute-to-{{ .Values.nvcfGatewayRoutes.routes.ess.name }}
   namespace: {{ .Values.nvcfGatewayRoutes.routes.ess.backend.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}

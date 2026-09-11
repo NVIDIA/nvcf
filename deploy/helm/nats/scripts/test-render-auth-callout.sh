@@ -57,6 +57,21 @@ assert_not_contains() {
   fi
 }
 
+assert_resource_field() {
+  file=$1
+  kind=$2
+  name=$3
+  namespace=$4
+  expression=$5
+  expected=$6
+
+  actual=$(yq -r "select(.kind == \"$kind\" and .metadata.name == \"$name\" and .metadata.namespace == \"$namespace\") | $expression" "$file")
+  if [ "$actual" != "$expected" ]; then
+    echo "expected $kind/$namespace/$name $expression to be $expected, got $actual" >&2
+    return 1
+  fi
+}
+
 default_render="$tmpdir/default.yaml"
 render > "$default_render"
 assert_contains "$default_render" "# Source: helm-nvcf-nats/templates/nats-auth-callout-nkeys-secret.yaml"
@@ -66,6 +81,7 @@ assert_contains "$default_render" "nkey_signature:"
 # it at the auth-callout pod's startup from KV.
 assert_not_contains "$default_render" "secrets.json:"
 assert_not_contains "$default_render" "nkey_mappings"
+assert_contains "$default_render" "NKEY_USER_KEY"
 # nkey-bao-access RBAC must grant openbao-migrations read on both the
 # shared-worker Secret and the auth-callout Secret so 19_setup_nats-auth-callout.sh
 # can mirror seeds into KV.
@@ -92,3 +108,9 @@ render --set nats.authCallout.secretName=custom-auth-callout-nkeys > "$custom_re
 assert_contains "$custom_render" "name: custom-auth-callout-nkeys"
 assert_contains "$custom_render" "- custom-auth-callout-nkeys"
 assert_not_contains "$custom_render" "name: nats-auth-callout-nkeys"
+
+custom_openbao_namespace_render="$tmpdir/custom-openbao-namespace.yaml"
+render --set nats.rbac.openbao.namespace=plane-a-vault-system > "$custom_openbao_namespace_render"
+assert_resource_field "$custom_openbao_namespace_render" RoleBinding nkey-bao-access "$namespace" '.subjects[0].namespace' plane-a-vault-system
+
+echo "nats-auth-callout-render: all checks passed"

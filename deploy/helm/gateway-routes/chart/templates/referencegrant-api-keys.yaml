@@ -20,8 +20,8 @@
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
-  name: allow-httproute-to-api-keys
-  namespace: api-keys  # Grant is created in the target namespace
+  name: allow-httproute-to-{{ .Values.nvcfGatewayRoutes.routes.apiKeys.name }}
+  namespace: {{ .Values.nvcfGatewayRoutes.routes.apiKeys.backend.namespace }}  # Grant is created in the target namespace
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
 spec:
@@ -35,5 +35,4 @@ spec:
     - group: ""
       kind: Service
 {{- end }}
-
 

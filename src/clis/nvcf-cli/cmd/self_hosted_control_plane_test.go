@@ -158,8 +158,9 @@ func TestControlPlaneProfileExportCommandRecreatesProfileFromOpenBao(t *testing.
 	require.NoError(t, err)
 
 	prevFetch := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx, controlPlaneOwner string) (string, error) {
 		assert.Equal(t, "cp-context", kctx)
+		assert.Equal(t, selfHostedDefaultControlPlaneID, controlPlaneOwner)
 		return rootCA, nil
 	}
 	t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
@@ -201,6 +202,47 @@ func TestControlPlaneProfileExportCommandRecreatesProfileFromOpenBao(t *testing.
 	assert.Equal(t, "nats://nats.localhost:4222", result.Profile.ControlPlane.Endpoints.ComputeReachable.NATSURL)
 }
 
+func TestControlPlaneProfileExportCommandPassesNamedOwnerToRootCAFetch(t *testing.T) {
+	resetControlPlaneProfileValidateCommand(t)
+	resetViperForProfileTest(t)
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	rootCA := controlPlaneProfileTestCertPEM(t)
+
+	prevFetch := fetchControlPlaneRootCAPEM
+	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx, controlPlaneOwner string) (string, error) {
+		assert.Equal(t, "cp-context", kctx)
+		assert.Equal(t, "plane-a", controlPlaneOwner)
+		return rootCA, nil
+	}
+	t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted",
+		"--control-plane-stack", stackDir,
+		"--env", "local",
+		"--control-plane-context", "cp-context",
+		"--compute-plane-context", "compute-context",
+		"--control-plane-id", "plane-a",
+		"--alpha-named-control-plane",
+		"--icms-url", "http://sis.localhost:8080",
+		"control-plane", "profile", "export",
+		"--cluster-name", "nvcf-cp",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	body, err := os.ReadFile(filepath.Join(stackDir, "out", controlPlaneProfileFileName))
+	require.NoError(t, err)
+	result, err := controlplaneprofile.ParseAndValidate(body, controlplaneprofile.ValidateOptions{Require: controlplaneprofile.RequireBoth})
+	require.NoError(t, err)
+	assert.Equal(t, "http://api.plane-a-sis.svc.cluster.local:8080", result.Profile.ControlPlane.Endpoints.InCluster.ICMSURL)
+	assert.Equal(t, "http://reval.plane-a-nvcf.svc.cluster.local:8080", result.Profile.ControlPlane.Endpoints.InCluster.ReValURL)
+	assert.Equal(t, "nats://nats.plane-a-nats-system.svc.cluster.local:4222", result.Profile.ControlPlane.Endpoints.InCluster.NATSURL)
+	assert.Equal(t, strings.TrimSpace(rootCA), strings.TrimSpace(result.Profile.ManagementTLS.CABundlePEM))
+}
+
 func TestControlPlaneProfileExportCommandUsesSelectedEnvironmentDomain(t *testing.T) {
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
@@ -235,7 +277,7 @@ func TestControlPlaneProfileExportCommandUsesSelectedEnvironmentDomain(t *testin
 			}
 
 			prevFetch := fetchControlPlaneRootCAPEM
-			fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+			fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 				return "", nil
 			}
 			t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
@@ -305,7 +347,7 @@ icms_host: sis.config.example.test
 	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "qa.yaml"), []byte("global:\n  domain: stack.example.test\n"), 0o600))
 
 	prevFetch := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 		return "", nil
 	}
 	t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
@@ -345,6 +387,20 @@ func TestParseControlPlaneProfileRequireModeAcceptsAny(t *testing.T) {
 
 func resetControlPlaneProfileValidateCommand(t *testing.T) {
 	t.Helper()
+	controlPlaneProfileValidateFile = ""
+	controlPlaneProfileValidateRequire = ""
+	controlPlaneProfileExportCluster = ""
+	controlPlaneProfileExportNCAID = "nvcf-default"
+	controlPlaneProfileExportRegion = "us-west-1"
+	selfHostedControlPlaneStack = ""
+	selfHostedComputePlaneStack = ""
+	selfHostedEnv = "local"
+	selfHostedICMSURL = ""
+	selfHostedNATSURL = ""
+	selfHostedControlPlaneContext = ""
+	selfHostedComputePlaneContext = ""
+	selfHostedControlPlaneID = ""
+	selfHostedAlphaNamedPlane = false
 	t.Cleanup(func() {
 		rootCmd.SetOut(os.Stdout)
 		rootCmd.SetErr(os.Stderr)
@@ -361,6 +417,8 @@ func resetControlPlaneProfileValidateCommand(t *testing.T) {
 		selfHostedNATSURL = ""
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
+		selfHostedControlPlaneID = ""
+		selfHostedAlphaNamedPlane = false
 	})
 }
 
@@ -422,9 +480,38 @@ func TestBuildControlPlaneProfile_LocalK3DKeepsServicePrefixedHosts(t *testing.T
 	assert.Equal(t, "reval.localhost", got.ControlPlane.Hosts.ReVal)
 	assert.Equal(t, "nats.localhost", got.ControlPlane.Hosts.NATS)
 	assert.Equal(t, "invocation.localhost", got.ControlPlane.Hosts.Invocation)
+	assert.Equal(t, "http://api.sis.svc.cluster.local:8080", got.ControlPlane.Endpoints.InCluster.ICMSURL)
+	assert.Equal(t, "http://reval.nvcf.svc.cluster.local:8080", got.ControlPlane.Endpoints.InCluster.ReValURL)
+	assert.Equal(t, "nats://nats.nats-system.svc.cluster.local:4222", got.ControlPlane.Endpoints.InCluster.NATSURL)
 	assert.Equal(t, "http://sis.localhost:8080", got.ControlPlane.Endpoints.ComputeReachable.ICMSURL)
 	assert.Equal(t, "http://reval.localhost:8080", got.ControlPlane.Endpoints.ComputeReachable.ReValURL)
 	assert.Equal(t, "nats://nats.localhost:4222", got.ControlPlane.Endpoints.ComputeReachable.NATSURL)
+}
+
+func TestBuildControlPlaneProfile_NamedOwnerPrefixesInClusterEndpoints(t *testing.T) {
+	resetViperForProfileTest(t)
+	t.Setenv("API_HOST", "")
+	t.Setenv("API_KEYS_HOST", "")
+	t.Setenv("INVOKE_HOST", "")
+	t.Setenv("NVCF_ICMS_HOST", "")
+	t.Setenv("NVCF_REVAL_HOST", "")
+	t.Setenv("NVCF_NATS_HOST", "")
+	t.Setenv("NVCF_BASE_HTTP_URL", "")
+	t.Setenv("NVCF_BASE_GRPC_URL", "")
+
+	got := buildControlPlaneProfile(controlPlaneProfileWriteRequest{
+		ClusterName:       "ncp-local",
+		NCAID:             "nvcf-default",
+		Region:            "us-west-1",
+		Env:               "local",
+		ControlPlaneOwner: "plane-a",
+		ICMSURL:           "http://sis.localhost:8080",
+	})
+
+	assert.Equal(t, "http://api.plane-a-sis.svc.cluster.local:8080", got.ControlPlane.Endpoints.InCluster.ICMSURL)
+	assert.Equal(t, "http://reval.plane-a-nvcf.svc.cluster.local:8080", got.ControlPlane.Endpoints.InCluster.ReValURL)
+	assert.Equal(t, "nats://nats.plane-a-nats-system.svc.cluster.local:4222", got.ControlPlane.Endpoints.InCluster.NATSURL)
+	assert.Equal(t, "http://sis.localhost:8080", got.ControlPlane.Endpoints.ComputeReachable.ICMSURL)
 }
 
 func TestBuildControlPlaneProfile_GatewayOnlyDNSKeepsDialURLsSeparateFromRoutingHosts(t *testing.T) {
@@ -472,8 +559,9 @@ func TestWriteControlPlaneProfileSourcesOpenBaoRootCA(t *testing.T) {
 	require.NoError(t, err)
 
 	prevFetch := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(_ context.Context, kctx, controlPlaneOwner string) (string, error) {
 		assert.Equal(t, "cp-context", kctx)
+		assert.Equal(t, selfHostedDefaultControlPlaneID, controlPlaneOwner)
 		return rootCA, nil
 	}
 	t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
@@ -500,6 +588,35 @@ func TestWriteControlPlaneProfileSourcesOpenBaoRootCA(t *testing.T) {
 	assert.Equal(t, controlplaneprofile.TrustModeBundle, result.Profile.TransportTLS.TrustMode)
 	assert.Equal(t, strings.TrimSpace(rootCA), strings.TrimSpace(result.Profile.TransportTLS.TrustBundlePEM))
 	assert.Equal(t, wantFingerprint, result.Profile.TransportTLS.TrustBundleFingerprint)
+}
+
+func TestControlPlaneRootCAOpenBaoConfigUsesNamedOwnerDefaults(t *testing.T) {
+	for _, name := range []string{
+		"NVCF_OPENBAO_URL",
+		"OPENBAO_URL",
+		"VAULT_ADDR",
+		"BAO_ADDR",
+		"NVCF_OPENBAO_NAMESPACE",
+		"NVCF_OPENBAO_SECRET_NAME",
+		"NVCF_CLUSTER_NAMESPACE",
+		"NVCF_CLUSTER_UTILITY_IMAGE",
+	} {
+		t.Setenv(name, "")
+	}
+
+	legacy := controlPlaneRootCAOpenBaoConfig("cp-context", selfHostedDefaultControlPlaneID)
+	assert.Equal(t, "http://openbao-server.vault-system.svc.cluster.local:8200", legacy.OpenBaoURL)
+	assert.Equal(t, "vault-system", legacy.OpenBaoNamespace)
+	assert.Equal(t, "openbao-server-root-token", legacy.OpenBaoSecretName)
+	assert.Equal(t, "nvcf", legacy.ClusterNamespace)
+	assert.Equal(t, "cp-context", legacy.KubeContext)
+
+	named := controlPlaneRootCAOpenBaoConfig("cp-context", "plane-a")
+	assert.Equal(t, "http://plane-a-openbao.plane-a-vault-system.svc.cluster.local:8200", named.OpenBaoURL)
+	assert.Equal(t, "plane-a-vault-system", named.OpenBaoNamespace)
+	assert.Equal(t, "plane-a-openbao-root-token", named.OpenBaoSecretName)
+	assert.Equal(t, "plane-a-nvcf", named.ClusterNamespace)
+	assert.Equal(t, "cp-context", named.KubeContext)
 }
 
 func TestWriteControlPlaneProfileSourcesRootCAOnlyWhenLLMPKIEnabled(t *testing.T) {
@@ -581,7 +698,7 @@ func TestWriteControlPlaneProfileSourcesRootCAOnlyWhenLLMPKIEnabled(t *testing.T
 
 			fetched := false
 			prevFetch := fetchControlPlaneRootCAPEM
-			fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+			fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 				fetched = true
 				return "", nil
 			}

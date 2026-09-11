@@ -24,7 +24,38 @@ tolerations:
 {{- end -}}
 {{- end -}}
 
+{{- define "nvcf.prefixedObjectName" -}}
+{{- $prefix := .prefix | default "" -}}
+{{- $name := .name | toString -}}
+{{- if and $prefix (not (hasPrefix $prefix $name)) -}}
+{{- printf "%s%s" $prefix $name -}}
+{{- else -}}
+{{- $name -}}
+{{- end -}}
+{{- end -}}
+
+{{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" -}}
+{{- $alphaNamedControlPlane := env "NVCF_ALPHA_NAMED_CONTROL_PLANE" | default "false" -}}
+{{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 30) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) -}}
+{{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 30 characters other than shared, got %q" $controlPlaneOwner) -}}
+{{- end -}}
+{{- if not (has $alphaNamedControlPlane (list "true" "false")) -}}
+{{- fail (printf "NVCF_ALPHA_NAMED_CONTROL_PLANE must be true or false, got %q" $alphaNamedControlPlane) -}}
+{{- end -}}
+{{- if and (ne $controlPlaneOwner "default") (ne $alphaNamedControlPlane "true") -}}
+{{- fail "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required when NVCF_CONTROL_PLANE_OWNER is a named control plane" -}}
+{{- end -}}
 {{- $controlPlaneNamespacePrefix := "" -}}
+{{- if ne $controlPlaneOwner "default" -}}
+{{- $controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner -}}
+{{- end -}}
+{{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") -}}
+{{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" -}}
+{{- end -}}
+{{- $namedControlPlaneObjectIdentitiesReady := true -}}
+{{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) -}}
+{{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" -}}
+{{- end -}}
 {{- $apiKeysNamespace := printf "%sapi-keys" $controlPlaneNamespacePrefix -}}
 {{- $cassandraNamespace := printf "%scassandra-system" $controlPlaneNamespacePrefix -}}
 {{- $essNamespace := printf "%sess" $controlPlaneNamespacePrefix -}}
@@ -34,23 +65,49 @@ tolerations:
 {{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix -}}
 {{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix -}}
 {{- $certManagerNamespace := "cert-manager" -}}
-{{- $apiGrpcServiceURL := printf "http://api.%s.svc.cluster.local:9090" $nvcfNamespace -}}
+{{- $adminIssuerProxyName := include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" "admin-token-issuer-proxy") -}}
+{{- $openBaoServerName := "openbao-server" -}}
+{{- if ne $controlPlaneOwner "default" -}}
+{{- $openBaoServerName = include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" "openbao") -}}
+{{- end -}}
+{{- $openBaoServerImageTag := dig "openbao" "server" "image" "tag" "" .Values | default "2.5.5-nv-1.3.1" -}}
+{{- $openBaoUnsealVolumeName := printf "%s-unseal" $openBaoServerName -}}
+{{- $openBaoInitializeServiceAccountName := printf "%s-initialize-cluster" $openBaoServerName -}}
+{{- $openBaoRootTokenSecretName := printf "%s-root-token" $openBaoServerName -}}
+{{- $apiGrpcServiceAddress := printf "api.%s.svc.cluster.local:9090" $nvcfNamespace -}}
+{{- $apiGrpcServiceURL := printf "http://%s" $apiGrpcServiceAddress -}}
+{{- $apiKeysServiceMetadataURL := printf "http://api-keys.%s.svc.cluster.local:8080/v1/services" $apiKeysNamespace -}}
 {{- $cassandraContactPoints := printf "cassandra.%s.svc.cluster.local" $cassandraNamespace -}}
 {{- $invocationServiceURL := printf "http://invocation.%s.svc.cluster.local:8080" $nvcfNamespace -}}
 {{- $llmApiGatewayServiceURL := printf "http://llm-api-gateway.%s.svc.cluster.local:8080" $nvcfNamespace -}}
 {{- $llmRequestRouterServiceHost := printf "llm-request-router.%s.svc.cluster.local" $nvcfNamespace -}}
+{{- $llmRequestRouterServiceURL := printf "http://%s:8000" $llmRequestRouterServiceHost -}}
 {{- $llmRequestRouterHeadlessWildcardHost := printf "*.llm-request-router-headless.%s.svc.cluster.local" $nvcfNamespace -}}
+{{- $legacyLlmRequestRouterDefaultDnsNames := list "llm-request-router.nvcf.svc.cluster.local" "*.llm-request-router-headless.nvcf.svc.cluster.local" -}}
 {{- $llmRequestRouterDefaultDnsNames := list $llmRequestRouterServiceHost $llmRequestRouterHeadlessWildcardHost -}}
+{{- $legacyPkiIssuerName := "nvcf-openbao-pki" -}}
+{{- $managedPkiIssuerName := $legacyPkiIssuerName -}}
+{{- if ne $controlPlaneOwner "default" -}}
+{{- $managedPkiIssuerName = printf "%s%s" $controlPlaneNamespacePrefix $legacyPkiIssuerName -}}
+{{- end -}}
+{{- $effectivePkiIssuerName := dig "addons" "llm" "pki" "issuerName" $legacyPkiIssuerName .Values -}}
+{{- if and (kindIs "string" $effectivePkiIssuerName) (ne $controlPlaneOwner "default") (eq $effectivePkiIssuerName $legacyPkiIssuerName) -}}
+{{- $effectivePkiIssuerName = $managedPkiIssuerName -}}
+{{- end -}}
 {{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace -}}
-{{- $openBaoServerURL := printf "http://openbao-server.%s.svc.cluster.local:8200" $vaultNamespace -}}
+{{- $openBaoServerHost := printf "%s.%s.svc.cluster.local" $openBaoServerName $vaultNamespace -}}
+{{- $openBaoServerAddress := printf "%s:8200" $openBaoServerHost -}}
+{{- $openBaoServerURL := printf "http://%s" $openBaoServerAddress -}}
+{{- $openBaoRaftConfig := printf "ui = true\nstorage \"raft\" {\n  path = \"/openbao/data/\"\n  retry_join {\n    leader_api_addr = \"http://%s-0.%s-internal:8200\"\n  }\n  retry_join {\n    leader_api_addr = \"http://%s-1.%s-internal:8200\"\n  }\n  retry_join {\n    leader_api_addr = \"http://%s-2.%s-internal:8200\"\n  }\n}\nlistener \"tcp\" {\n    tls_disable = 1\n    address = \"[::]:8200\"\n    cluster_address = \"[::]:8201\"\n\n    custom_response_headers {\n      \"default\" = {\n        \"X-Custom-Header\" = [\"HOSTNAME\"],\n      },\n    }\n}\nplugin_directory = \"/openbao/plugins/\"\nservice_registration \"kubernetes\" {}\n# Disable standby reads introduced in v2.5.0. Without this, standby\n# nodes serve reads locally with eventual consistency, which causes the\n# JWT secrets plugin to lose lease state after issuance.\ndisable_standby_reads = true\n" $openBaoServerName $openBaoServerName $openBaoServerName $openBaoServerName $openBaoServerName $openBaoServerName -}}
 {{- $rateLimiterServiceURL := printf "http://ratelimiter.%s.svc.cluster.local:7777" $nvcfNamespace -}}
-{{- $adminIssuerProxyHealthEndpoint := printf "admin-token-issuer-proxy.%s.svc.cluster.local:8080/healthz" $apiKeysNamespace -}}
+{{- $rateLimiterJwksURL := printf "%s/v1/services/ratelimiter-api/jwt/jwks" $openBaoServerURL -}}
+{{- $adminIssuerProxyHealthEndpoint := printf "%s.%s.svc.cluster.local:8080/healthz" $adminIssuerProxyName $apiKeysNamespace -}}
 {{- $llmRequestRouterHealthzEndpoint := printf "%s:8000/healthz" $llmRequestRouterServiceHost -}}
 {{- $llmRequestRouterReadyzEndpoint := printf "%s:8000/readyz" $llmRequestRouterServiceHost -}}
 {{- $natsAuthCalloutHealthEndpoint := printf "nvcf-nats-auth-callout-service.%s.svc.cluster.local:8080/health" $natsNamespace -}}
 {{- $natsHeadlessHealthEndpoint := printf "nats-headless.%s.svc.cluster.local:8222/healthz?js-server-only" $natsNamespace -}}
 {{- $notaryHealthEndpoint := printf "notary.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
-{{- $openBaoHealthEndpoint := printf "openbao-server.%s.svc.cluster.local:8200/v1/sys/health?standbyok=true" $vaultNamespace -}}
+{{- $openBaoHealthEndpoint := printf "%s/v1/sys/health?standbyok=true" $openBaoServerAddress -}}
 {{- $rateLimiterHealthEndpoint := printf "ratelimiter.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
 {{- $revalHealthEndpoint := printf "reval.%s.svc.cluster.local:8082/healthz" $nvcfNamespace -}}
 
@@ -144,6 +201,9 @@ openbao:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
   {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  fullnameOverride: {{ $openBaoServerName }}
+  {{- end }}
   migrations:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -215,6 +275,51 @@ openbao:
     {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
     {{- . | nindent 4 }}
     {{- end }}
+    {{- if ne $controlPlaneOwner "default" }}
+    volumes:
+      - name: {{ $openBaoUnsealVolumeName }}
+        secret:
+          secretName: {{ $openBaoUnsealVolumeName }}
+    volumeMounts:
+      - name: {{ $openBaoUnsealVolumeName }}
+        mountPath: /home/openbao/unseal
+    extraContainers:
+      - name: auto-unseal-sidecar
+        image: "{{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-openbao:{{ $openBaoServerImageTag }}"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        volumeMounts:
+          - name: {{ $openBaoUnsealVolumeName }}
+            mountPath: /vault/userconfig/unseal
+            readOnly: true
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Starting auto-unseal monitor..."
+            echo http://$HOSTNAME:8200
+            export BAO_ADDR=http://$HOSTNAME:8200
+            while true; do
+              if [ -f /vault/userconfig/unseal/unseal_key ]; then
+                UNSEAL_KEY=$(cat /vault/userconfig/unseal/unseal_key)
+                if [ ! -z "$UNSEAL_KEY" ]; then
+                    echo "Unsealing OpenBao..."
+                    bao operator unseal $UNSEAL_KEY
+                    sleep 60
+                    echo "OpenBao unsealed"
+                else
+                  echo "Unseal key is empty, waiting..."
+                fi
+              else
+                echo "Unseal key file not found, waiting..."
+              fi
+              sleep 10
+            done
+    {{- end }}
 
     dataStorage:
       {{- if .Values.global.storageClass }}
@@ -226,6 +331,11 @@ openbao:
       {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      raft:
+        config: |
+          {{- $openBaoRaftConfig | nindent 10 }}
       {{- end }}
 
 nats:
@@ -263,6 +373,12 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
+  {{- if ne $controlPlaneOwner "default" }}
+  rbac:
+    openbao:
+      namespace: {{ $vaultNamespace }}
+      serviceAccountName: {{ $openBaoInitializeServiceAccountName }}
+  {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
   {{- if or $natsNs $natsTol }}
@@ -332,6 +448,10 @@ apikeys:
   startupProbe:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  vault:
+    audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
   {{- with dig "apikeys" "env" dict .Values }}
   env:
     {{- toYaml . | nindent 4 }}
@@ -355,6 +475,9 @@ natsAuthCalloutService:
 {{- $nvcfWorkerServiceURL := dig "nvcfServiceURL" "" $workerEndpoints }}
 {{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
+{{- if and (ne $controlPlaneOwner "default") (eq $grpcProxyNVCFGrpcServiceURL "") }}
+{{- $grpcProxyNVCFGrpcServiceURL = $apiGrpcServiceURL }}
+{{- end }}
 {{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default $natsServiceURL }}
 {{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
@@ -547,6 +670,10 @@ api:
       repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
       tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.37.0" | quote }}
       pullPolicy: IfNotPresent
+    {{- if ne $controlPlaneOwner "default" }}
+    openbaoServiceAddress: {{ $openBaoServerAddress | quote }}
+    openbaoAudience: {{ $openBaoServerURL | quote }}
+    {{- end }}
 
     registryCredentials: []
 
@@ -615,6 +742,16 @@ api:
   {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
     {{- toYaml $apiEnv | nindent 4 }}
+  {{- if ne $controlPlaneOwner "default" }}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
 
 invocation:
   {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
@@ -631,6 +768,11 @@ invocation:
   {{- if .Values.rateLimiter.enabled }}
   {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
   {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" $rateLimiterServiceURL }}
+  {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  {{- $_ := set $invocationEnv "NATS_PROPERTIES__NATS_ADDRESS" $natsServiceURL }}
+  {{- $_ := set $invocationEnv "NVCF_API_ADDRESS" $apiGrpcServiceURL }}
+  {{- $_ := set $invocationEnv "REGIONAL_NVCF_API_GRPC_ADDRESS" $apiGrpcServiceURL }}
   {{- end }}
   {{- with $invocationWorkerBaseURL }}
   {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
@@ -659,6 +801,16 @@ invocation:
 
   env:
     {{- toYaml $invocationEnv | nindent 4 }}
+  {{- if ne $controlPlaneOwner "default" }}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
   {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
   tracing:
     baggageAttributeAllowlist:
@@ -712,6 +864,16 @@ nvctApi:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
 
 grpcproxy:
   fullnameOverride: grpc-proxy
@@ -730,6 +892,10 @@ grpcproxy:
   {{- end }}
   {{- with $grpcProxyWorkerConnectBaseURL }}
   workerConnectBaseURL: {{ . | quote }}
+  {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  vault:
+    audience: {{ $openBaoServerURL | quote }}
   {{- end }}
 
   env:
@@ -754,6 +920,19 @@ grpcproxy:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+{{- $configuredRateLimiterEnv := dig "rateLimiter" "env" dict .Values }}
+{{- if not (kindIs "map" $configuredRateLimiterEnv) }}
+{{- fail "rateLimiter.env must be a map" }}
+{{- end }}
+{{- $rateLimiterEnv := dict }}
+{{- if ne $controlPlaneOwner "default" }}
+{{- $_ := set $rateLimiterEnv "NVCF_API_URL" $apiGrpcServiceURL }}
+{{- $_ := set $rateLimiterEnv "OAUTH2_JWKS_URL" $rateLimiterJwksURL }}
+{{- end }}
+{{- if .Values.global.observability.tracing.enabled }}
+{{- $_ := set $rateLimiterEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (printf "%s://%s:%v" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+{{- end }}
+{{- $rateLimiterEnv = mergeOverwrite $rateLimiterEnv (deepCopy $configuredRateLimiterEnv) }}
 rateLimiter:
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -767,9 +946,19 @@ rateLimiter:
     {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
   {{- end }}
   replicaCount: {{ .Values.rateLimiter.replicaCount }}
-  {{- if .Values.global.observability.tracing.enabled }}
+  {{- if $rateLimiterEnv }}
   env:
-    OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    {{- toYaml $rateLimiterEnv | nindent 4 }}
+  {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  volumes:
+    - name: openbao-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: {{ $openBaoServerURL | quote }}
   {{- end }}
   {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
@@ -798,6 +987,10 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  vault:
+    audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
   {{- with dig "ess" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
@@ -825,6 +1018,16 @@ notary:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
 
 sis:
   fullnameOverride: spot-instance-service
@@ -848,6 +1051,9 @@ sis:
   # LLS/TURN HMAC rotation configuration
   lls:
     enabled: {{ dig "addons" "lls" "enabled" false .Values }}
+    {{- if ne $controlPlaneOwner "default" }}
+    namespace: {{ $vaultNamespace }}
+    {{- end }}
     hmacRotation:
       image:
         registry: {{ .Values.global.image.registry }}
@@ -855,6 +1061,11 @@ sis:
         {{- if dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
         tag: {{ dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
         {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      baoService: {{ $openBaoServerHost | quote }}
+      serviceAccountName: {{ $openBaoInitializeServiceAccountName | quote }}
+      rootTokenSecretName: {{ $openBaoRootTokenSecretName | quote }}
+      {{- end }}
 
   env:
     # Observability
@@ -864,9 +1075,13 @@ sis:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  vault:
+    audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
 
 adminIssuerProxy:
-  fullnameOverride: admin-token-issuer-proxy
+  fullnameOverride: {{ $adminIssuerProxyName }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -877,6 +1092,12 @@ adminIssuerProxy:
     {{- with dig "adminIssuerProxy" "image" "tag" nil .Values }}
     tag: {{ . | quote }}
     {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  config:
+    vaultAddr: {{ $openBaoServerURL | quote }}
+    vaultAudience: {{ $openBaoServerURL | quote }}
+    serviceMetadataURL: {{ $apiKeysServiceMetadataURL | quote }}
+  {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -967,6 +1188,16 @@ functionautoscaler:
     {{- end }}
   env:
     {{- toYaml $functionAutoscalerEnv | nindent 4 }}
+  {{- if ne $controlPlaneOwner "default" }}
+  volumes:
+    - name: token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: {{ $openBaoServerURL | quote }}
+  {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1025,8 +1256,26 @@ llmApiGateway:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- $configuredLlmApiGatewayConfig := dig "llmApiGateway" "config" dict .Values }}
+  {{- if not (kindIs "map" $configuredLlmApiGatewayConfig) }}
+  {{- fail "llmApiGateway.config must be a map" }}
+  {{- end }}
+  {{- $llmApiGatewayConfig := dict }}
+  {{- $_ := set $llmApiGatewayConfig "nvcfGrpcInsecure" (dig "addons" "llm" "gateway" "auth" "grpcInsecure" true .Values) }}
+  {{- if ne $controlPlaneOwner "default" }}
+  {{- $_ := set $llmApiGatewayConfig "requestRouterUrl" $llmRequestRouterServiceURL }}
+  {{- $_ := set $llmApiGatewayConfig "nvcfGrpcAddr" $apiGrpcServiceAddress }}
+  {{- end }}
+  {{- $llmApiGatewayConfig = mergeOverwrite $llmApiGatewayConfig (deepCopy $configuredLlmApiGatewayConfig) }}
+  {{- if $llmApiGatewayConfig }}
   config:
-    nvcfGrpcInsecure: {{ dig "addons" "llm" "gateway" "auth" "grpcInsecure" true .Values }}
+    {{- toYaml $llmApiGatewayConfig | nindent 4 }}
+  {{- end }}
+  {{- if ne $controlPlaneOwner "default" }}
+  vault:
+    audience: {{ $openBaoServerURL | quote }}
+    vaultAddress: {{ $openBaoServerURL | quote }}
+  {{- end }}
   metrics:
     enabled: {{ dig "addons" "llm" "gateway" "metrics" "enabled" true .Values }}
     serviceMonitor:
@@ -1084,6 +1333,13 @@ llmRequestRouter:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
   readiness:
     warmupMs: {{ dig "addons" "llm" "requestRouter" "readiness" "warmupMs" 60000 .Values }}
+  {{- if ne $controlPlaneOwner "default" }}
+  auth:
+    workerAuthEndpoint: {{ $apiGrpcServiceURL | quote }}
+  vault:
+    audience: {{ $openBaoServerURL | quote }}
+    vaultAddress: {{ $openBaoServerURL | quote }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -1123,6 +1379,13 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  {{- $grpcTlsIssuerRefName := dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values }}
+  {{- if empty $grpcTlsIssuerRefName }}
+  {{- $grpcTlsIssuerRefName = $effectivePkiIssuerName }}
+  {{- end }}
+  {{- if and (kindIs "string" $grpcTlsIssuerRefName) (ne $controlPlaneOwner "default") (eq $grpcTlsIssuerRefName $legacyPkiIssuerName) }}
+  {{- $grpcTlsIssuerRefName = $managedPkiIssuerName }}
+  {{- end }}
   grpcTls:
     enabled: {{ $grpcTlsEnabled }}
     allowInsecureHttp: {{ $grpcTlsAllowInsecureHttp }}
@@ -1132,7 +1395,7 @@ llmRequestRouter:
       {{- dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values | toYaml | nindent 6 }}
     issuerRef:
       kind: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "kind" "" .Values | default (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) | quote }}
-      name: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values | default (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) | quote }}
+      name: {{ $grpcTlsIssuerRefName | quote }}
       {{- with dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "group" "" .Values }}
       group: {{ . | quote }}
       {{- end }}
@@ -1197,6 +1460,9 @@ llmRequestRouter:
   {{- if eq (len $existingSecretDnsNames) 0 }}
   {{- $existingSecretDnsNames = $llmRequestRouterDefaultDnsNames }}
   {{- end }}
+  {{- if and (ne $controlPlaneOwner "default") (deepEqual $existingSecretDnsNames $legacyLlmRequestRouterDefaultDnsNames) }}
+  {{- $existingSecretDnsNames = $llmRequestRouterDefaultDnsNames }}
+  {{- end }}
   {{- if not (deepEqual $existingSecretDnsNames $llmRequestRouterDefaultDnsNames) }}
   {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate; only the unchanged stable-base defaults are allowed when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
@@ -1225,7 +1491,7 @@ llmRequestRouter:
        below still renders a Certificate referencing the default issuer. Keep
        this contract identical to the dependency stage. */ -}}
   {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
-  {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+  {{- $issuerName := $effectivePkiIssuerName }}
   {{- if not (kindIs "string" $issuerKind) }}
   {{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
   {{- end }}
@@ -1241,7 +1507,7 @@ llmRequestRouter:
   {{- if gt (len $issuerName) 253 }}
   {{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
   {{- end }}
-  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName $managedPkiIssuerName) }}
   {{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
   {{- if kindIs "map" $pkiValues }}
   {{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
@@ -1258,9 +1524,19 @@ llmRequestRouter:
   {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
   {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
   {{- end }}
+  {{- /* The legacy default issuer name is normalized above. This guard covers
+       custom managed issuers, where clusterIssuer.enabled=true asks the stack
+       to create a cluster-scoped object that must not collide across named
+       planes. */ -}}
+  {{- if and $managedIssuer (ne $controlPlaneOwner "default") (not (hasPrefix $controlPlaneNamespacePrefix $issuerName)) }}
+  {{- fail (printf "addons.llm.pki.issuerName must start with %q when managing a named ClusterIssuer" $controlPlaneNamespacePrefix) }}
+  {{- end }}
   {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
   {{- if not (kindIs "slice" $dnsNames) }}
   {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.enabled is true" }}
+  {{- end }}
+  {{- if and (ne $controlPlaneOwner "default") (deepEqual $dnsNames $legacyLlmRequestRouterDefaultDnsNames) }}
+  {{- $dnsNames = $llmRequestRouterDefaultDnsNames }}
   {{- end }}
   {{- if eq (len $dnsNames) 0 }}
   {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
@@ -1294,6 +1570,11 @@ llmRequestRouter:
       repository: {{ dig "addons" "llm" "pki" "image" "repository" (printf "%s/nvcf-openbao-migrations" .Values.global.image.repository) .Values | quote }}
       tag: {{ $pkiImageTag | quote }}
       pullPolicy: {{ dig "addons" "llm" "pki" "image" "pullPolicy" "IfNotPresent" .Values | quote }}
+    {{- if ne $controlPlaneOwner "default" }}
+    baoService: {{ $openBaoServerHost | quote }}
+    serviceAccountName: {{ $openBaoInitializeServiceAccountName | quote }}
+    rootTokenSecretName: {{ $openBaoRootTokenSecretName | quote }}
+    {{- end }}
     {{- if .Values.global.imagePullSecrets }}
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
@@ -1508,12 +1789,12 @@ nvcfUi:
           - {{ $natsHeadlessHealthEndpoint }}
       {{- end }}
       {{- if dig "openbao" "enabled" true .Values }}
-      - name: openbao-server
+      - name: {{ $openBaoServerName }}
         namespace: {{ $vaultNamespace }}
         endpoints:
           - {{ $openBaoHealthEndpoint }}
         k8s_workloads:
-          - name: openbao-server-agent-injector
+          - name: {{ $openBaoServerName }}-agent-injector
             type: deployment
       {{- end }}
       {{- if dig "cassandra" "enabled" true .Values }}
@@ -1578,19 +1859,47 @@ nvcfGatewayRoutes:
     {{- end }}
   routes:
     nvcfApi:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvcfApi" "name" "nvcf-api" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" "name" "api" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
       grpc:
         enabled: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "enabled" false .Values }}
+        {{- if ne $controlPlaneOwner "default" }}
+        name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "name" "nvcf-api-grpc" .Values)) }}
+        backend:
+          name: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "backend" "name" "api" .Values }}
+          namespace: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+          port: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "backend" "port" 9090 .Values }}
+        {{- end }}
         {{- with $nvcfApiGrpcRouteHostnames }}
         hostnames:
           {{- toYaml . | nindent 10 }}
         {{- end }}
     nvctApi:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvctApi" "name" "nvct-api" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" "name" "nvct-api" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
       grpc:
         enabled: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "enabled" false .Values }}
+        {{- if ne $controlPlaneOwner "default" }}
+        name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "name" "nvct-api-grpc" .Values)) }}
+        backend:
+          name: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "backend" "name" "nvct-api" .Values }}
+          namespace: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+          port: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "backend" "port" 9090 .Values }}
+        {{- end }}
         {{- with $nvctApiGrpcRouteHostnames }}
         hostnames:
           {{- toYaml . | nindent 10 }}
@@ -1608,12 +1917,26 @@ nvcfGatewayRoutes:
       {{- if hasKey $apiKeysRoute "enabled" }}
       enabled: {{ $apiKeysRoute.enabled }}
       {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "name" "api-keys" $apiKeysRoute)) }}
+      backend:
+        name: {{ dig "backend" "name" "api-keys" $apiKeysRoute }}
+        namespace: {{ dig "backend" "namespace" $apiKeysNamespace $apiKeysRoute | default $apiKeysNamespace }}
+        port: {{ dig "backend" "port" 8080 $apiKeysRoute }}
+      {{- end }}
       routeAnnotations:
         {{ dig "routeAnnotations" dict $apiKeysRoute | toYaml | nindent 8 | trim }}
     sis:
       {{- $sisRoute := dig "ingress" "gatewayApi" "routes" "sis" dict .Values }}
       {{- if hasKey $sisRoute "enabled" }}
       enabled: {{ $sisRoute.enabled }}
+      {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "name" "sis" $sisRoute)) }}
+      backend:
+        name: {{ dig "backend" "name" "api" $sisRoute }}
+        namespace: {{ dig "backend" "namespace" $sisNamespace $sisRoute | default $sisNamespace }}
+        port: {{ dig "backend" "port" 8080 $sisRoute }}
       {{- end }}
       routeAnnotations:
         {{ dig "routeAnnotations" dict $sisRoute | toYaml | nindent 8 | trim }}
@@ -1622,13 +1945,40 @@ nvcfGatewayRoutes:
       {{- if hasKey $revalRoute "enabled" }}
       enabled: {{ $revalRoute.enabled }}
       {{- end }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "name" "reval" $revalRoute)) }}
+      backend:
+        name: {{ dig "backend" "name" "reval" $revalRoute }}
+        namespace: {{ dig "backend" "namespace" $nvcfNamespace $revalRoute | default $nvcfNamespace }}
+        port: {{ dig "backend" "port" 8080 $revalRoute }}
+      {{- end }}
       routeAnnotations:
         {{ dig "routeAnnotations" dict $revalRoute | toYaml | nindent 8 | trim }}
     invocation:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "invocation" "name" "invocation-service" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "invocation" "backend" "name" "invocation" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "invocation" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "invocation" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    {{- if ne $controlPlaneOwner "default" }}
+    llmApiGateway:
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "llmApiGateway" "name" "llm-api-gateway" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "backend" "name" "llm-api-gateway" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "backend" "port" 8080 .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "llmApiGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    {{- end }}
     llmInvocation:
       enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "llmInvocation" "name" "llm-invocation" .Values)) }}
+      {{- end }}
       backend:
         name: llm-api-gateway
         namespace: {{ $nvcfNamespace }}
@@ -1637,11 +1987,14 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "llmInvocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     vanityGateway:
       enabled: {{ dig "addons" "vanityGateway" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "vanityGateway" "name" "vanity-gateway" .Values)) }}
+      {{- end }}
       hostnames:
         {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "hostnames" (list) .Values | default (list (printf "vanity.%s" .Values.global.domain)) | toYaml | nindent 8 | trim }}
       backend:
         name: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "name" "vanity-gateway" .Values }}
-        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" $nvcfNamespace .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
         port: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "port" 8080 .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
@@ -1650,30 +2003,69 @@ nvcfGatewayRoutes:
     # nvcf-ui namespace, nvcf-ui.<domain>).
     nvcfUi:
       enabled: {{ dig "addons" "nvcfUi" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nvcfUi" "name" "nvcf-ui" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "backend" "name" "nvcf-ui" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "backend" "namespace" $nvcfUiNamespace .Values | default $nvcfUiNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "backend" "port" 8300 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     eventLedger:
       enabled: {{ dig "addons" "eventLedger" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "eventLedger" "name" "event-ledger" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "backend" "name" "event-ledger" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "grpc" "name" "grpc" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "grpc" "backend" "name" "grpc" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "grpc" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "grpc" "backend" "port" 10081 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpcWorker:
       enabled: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "enabled" false .Values }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "grpcWorker" "name" "grpc-worker" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "backend" "name" "grpc" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "backend" "namespace" $nvcfNamespace .Values | default $nvcfNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "backend" "port" 10086 .Values }}
+      {{- end }}
       listenerName: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "listenerName" "worker-tcp" .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     nats:
       enabled: {{ $natsRouteEnabled }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "nats" "name" "nats" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "nats" "backend" "name" "nats" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "nats" "backend" "namespace" $natsNamespace .Values | default $natsNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "nats" "backend" "port" 4222 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nats" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     llmWorker:
       enabled: {{ $llmWorkerRouteEnabled }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "llmWorker" "name" "llm-worker" .Values)) }}
+      {{- end }}
       {{- if $llmWorkerRouteEnabled }}
+      {{- $llmWorkerBackendNamespace := dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "namespace" "" .Values }}
       backend:
         name: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "name" "llm-request-router-backend-router" .Values }}
-        namespace: {{ required "ingress.gatewayApi.routes.llmWorker.backend.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.routes.llmWorker.backend.namespace }}
+        namespace: {{ if ne $controlPlaneOwner "default" }}{{ $llmWorkerBackendNamespace | default $nvcfNamespace }}{{ else }}{{ required "ingress.gatewayApi.routes.llmWorker.backend.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" $llmWorkerBackendNamespace }}{{ end }}
         grpcPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "grpcPort" 50071 .Values }}
         quicPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "quicPort" 50072 .Values }}
       {{- end }}
@@ -1683,6 +2075,13 @@ nvcfGatewayRoutes:
     # defaults); only the enable flag and annotations are environment-driven.
     ess:
       enabled: {{ $essRouteEnabled }}
+      {{- if ne $controlPlaneOwner "default" }}
+      name: {{ include "nvcf.prefixedObjectName" (dict "prefix" $controlPlaneNamespacePrefix "name" (dig "ingress" "gatewayApi" "routes" "ess" "name" "ess" .Values)) }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "ess" "backend" "name" "ess-api" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "ess" "backend" "namespace" $essNamespace .Values | default $essNamespace }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "ess" "backend" "port" 8080 .Values }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "ess" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
   podMonitors:

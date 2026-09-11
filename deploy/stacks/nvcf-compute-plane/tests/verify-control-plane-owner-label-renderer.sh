@@ -55,6 +55,27 @@ metadata:
     nvcf.nvidia.com/control-plane-owner: stale
     app.kubernetes.io/name: third
 ---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: nvca-operator
+  namespace: nvca-operator
+spec: {}
+---
+# Source: nvcf-nvca-crds/templates/nvcfbackends-crd.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nvcfbackends.nvcf.nvidia.io
+spec: {}
+---
+# Source: helm-nvca-operator/templates/crds/nvidia.io_nvcfbackends_crd.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nvcfbackends.nvcf.nvidia.io
+spec: {}
+---
 apiVersion: scheduling.run.ai/v2
 kind: Queue
 metadata:
@@ -93,16 +114,37 @@ YAML
 
 "$renderer" --owner plane-a <"$input" >"$output"
 
-for object_name in first second third fourth nvca-operator; do
+for object in ConfigMap/first Secret/second ServiceAccount/third ResourceQuota/nvca-operator CustomResourceDefinition/nvcfbackends.nvcf.nvidia.io Queue/fourth Deployment/nvca-operator; do
+  object_kind="${object%%/*}"
+  object_name="${object#*/}"
   actual="$(
+    OBJECT_KIND="$object_kind" \
     OWNER_LABEL="$owner_label" yq ea -r '
-      select(.metadata.name == "'"$object_name"'") |
+      select(.kind == strenv(OBJECT_KIND) and .metadata.name == "'"$object_name"'") |
       .metadata.labels[strenv(OWNER_LABEL)]
     ' "$output"
   )"
   [[ "$actual" == "plane-a" ]] ||
-    fail "expected $object_name owner label to be plane-a, got $actual"
+    fail "expected $object owner label to be plane-a, got $actual"
 done
+
+crd_count="$(
+  yq ea -r '
+    select(.kind == "CustomResourceDefinition" and .metadata.name == "nvcfbackends.nvcf.nvidia.io") |
+    .metadata.name
+  ' "$output" | wc -l | tr -d ' '
+)"
+[[ "$crd_count" == "1" ]] ||
+  fail "expected only the shared nvcfbackends CRD to remain after rendering, got $crd_count"
+
+rq_namespace="$(
+  yq ea -r '
+    select(.kind == "ResourceQuota" and .metadata.name == "nvca-operator") |
+    .metadata.namespace
+  ' "$output"
+)"
+[[ "$rq_namespace" == "plane-a-nvca-operator" ]] ||
+  fail "expected nvca-operator ResourceQuota namespace to be plane-a-nvca-operator, got $rq_namespace"
 
 leaked="$(
   OWNER_LABEL="$owner_label" yq ea -r '

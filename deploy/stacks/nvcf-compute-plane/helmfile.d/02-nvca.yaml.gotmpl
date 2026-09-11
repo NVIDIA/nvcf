@@ -16,10 +16,27 @@ environments:
 
 {{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
 {{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
+{{- $alphaNamedControlPlane := env "NVCF_ALPHA_NAMED_CONTROL_PLANE" | default "false" }}
 {{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 30) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
 {{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 30 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
+{{- if not (has $alphaNamedControlPlane (list "true" "false")) }}
+{{- fail (printf "NVCF_ALPHA_NAMED_CONTROL_PLANE must be true or false, got %q" $alphaNamedControlPlane) }}
+{{- end }}
+{{- if and (ne $controlPlaneOwner "default") (ne $alphaNamedControlPlane "true") }}
+{{- fail "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required when NVCF_CONTROL_PLANE_OWNER is a named control plane" }}
+{{- end }}
 {{- $controlPlaneNamespacePrefix := "" }}
+{{- if ne $controlPlaneOwner "default" }}
+{{- $controlPlaneNamespacePrefix = printf "%s-" $controlPlaneOwner }}
+{{- end }}
+{{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") }}
+{{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" }}
+{{- end }}
+{{- $namedControlPlaneObjectIdentitiesReady := true }}
+{{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) }}
+{{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" }}
+{{- end }}
 {{- $nvcaOperatorName := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 {{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 
@@ -65,8 +82,9 @@ environments:
 {{- end -}}
 
 {{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
-{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
-{{- fail "global.helm.sources.url must use https://" }}
+{{- $helmSourceURLIsLoopbackHTTP := or (hasPrefix "http://127.0.0.1:" $helmSourceURL) (hasPrefix "http://localhost:" $helmSourceURL) }}
+{{- if and $helmSourceURL (not (or (hasPrefix "https://" $helmSourceURL) $helmSourceURLIsLoopbackHTTP)) }}
+{{- fail "global.helm.sources.url must use https:// unless it points at local loopback HTTP for tests" }}
 {{- end }}
 
 repositories:
@@ -121,6 +139,23 @@ helmDefaults:
 {{- end }}
 {{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
 {{- $selfManaged := dig "selfManaged" dict $nvcaOp }}
+{{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix }}
+{{- $nvcfNamespace := printf "%snvcf" $controlPlaneNamespacePrefix }}
+{{- $natsNamespace := printf "%snats-system" $controlPlaneNamespacePrefix }}
+{{- $icmsServiceURL := dig "icmsServiceURL" "" $selfManaged }}
+{{- $revalServiceURL := dig "revalServiceURL" "" $selfManaged }}
+{{- $natsURL := dig "natsURL" "" $selfManaged }}
+{{- if ne $controlPlaneOwner "default" }}
+{{-   if eq $icmsServiceURL "http://api.sis.svc.cluster.local:8080" }}
+{{-     $icmsServiceURL = printf "http://api.%s.svc.cluster.local:8080" $sisNamespace }}
+{{-   end }}
+{{-   if eq $revalServiceURL "http://reval.nvcf.svc.cluster.local:8080" }}
+{{-     $revalServiceURL = printf "http://reval.%s.svc.cluster.local:8080" $nvcfNamespace }}
+{{-   end }}
+{{-   if eq $natsURL "nats://nats.nats-system.svc.cluster.local:4222" }}
+{{-     $natsURL = printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace }}
+{{-   end }}
+{{- end }}
 {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
 {{- $otelCollectorEnabled := dig "enabled" false $otelCollector }}
 {{- $defaultOTelCollectorImageRepository := printf "%s/%s/nvcf-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
@@ -221,6 +256,9 @@ releases:
         imagePullSecrets:
         {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
         {{- end }}
+        crds:
+          nvcfBackend:
+            enabled: false
         otelCollector:
           enabled: {{ $otelCollectorEnabled }}
           imageRepository: {{ $otelCollectorImageRepository | quote }}
@@ -243,19 +281,19 @@ releases:
           {{- with dig "nvcaVersion" "" $selfManaged }}
           nvcaVersion: {{ . | quote }}
           {{- end }}
-          {{- with dig "icmsServiceURL" "" $selfManaged }}
+          {{- with $icmsServiceURL }}
           icmsServiceURL: {{ . | quote }}
           {{- end }}
           {{- with dig "icmsServiceHostHeaderOverride" "" $selfManaged }}
           icmsServiceHostHeaderOverride: {{ . | quote }}
           {{- end }}
-          {{- with dig "revalServiceURL" "" $selfManaged }}
+          {{- with $revalServiceURL }}
           revalServiceURL: {{ . | quote }}
           {{- end }}
           {{- with dig "revalServiceHostHeaderOverride" "" $selfManaged }}
           revalServiceHostHeaderOverride: {{ . | quote }}
           {{- end }}
-          {{- with dig "natsURL" "" $selfManaged }}
+          {{- with $natsURL }}
           natsURL: {{ . | quote }}
           {{- end }}
           {{- with dig "natsHostOverride" "" $selfManaged }}

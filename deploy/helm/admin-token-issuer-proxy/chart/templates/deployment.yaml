@@ -82,7 +82,7 @@ spec:
             - serviceAccountToken:
                 path: token
                 expirationSeconds: 3600
-                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                audience: {{ .Values.adminIssuerProxy.config.vaultAudience | default .Values.adminIssuerProxy.config.vaultAddr }}
       {{- with .Values.adminIssuerProxy.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

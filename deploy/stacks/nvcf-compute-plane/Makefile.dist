@@ -16,6 +16,7 @@ HELMFILE_ENV  ?= default
 # Control-plane owner label value used by Helmfile post-renderers. The default
 # preserves the legacy unnamed control plane.
 NVCF_CONTROL_PLANE_OWNER ?= default
+NVCF_ALPHA_NAMED_CONTROL_PLANE ?= false
 comma := ,
 HELMFILE_CONTROL_PLANE_OWNER_SELECTOR = control-plane-owner=$(NVCF_CONTROL_PLANE_OWNER)
 HELMFILE_DESTROY_SELECTOR = $(HELMFILE_CONTROL_PLANE_OWNER_SELECTOR)$(if $(HELMFILE_SELECTOR),$(comma)$(HELMFILE_SELECTOR),)
@@ -42,18 +43,22 @@ REQUIRED_HELMFILE_MAJOR := 1
 REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
-# Namespaces owned by the plane-specific compute-plane stack. The prefix is
-# empty until named-mode namespace derivation is enabled, so legacy installs
-# keep the same names. Scheduler and topology add-ons are shared prerequisites
-# and are not removed by ordinary plane teardown.
-CONTROL_PLANE_NAMESPACE_PREFIX :=
+# Namespaces owned by the plane-specific compute-plane stack. The default owner
+# keeps legacy names; named owners use <owner>-prefixed namespaces. Scheduler
+# and topology add-ons are shared prerequisites and are not removed by ordinary
+# plane teardown.
+CONTROL_PLANE_NAMESPACE_PREFIX := $(if $(filter-out default,$(NVCF_CONTROL_PLANE_OWNER)),$(NVCF_CONTROL_PLANE_OWNER)-,)
 NVCA_OPERATOR_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)nvca-operator
+NVCF_SHARED_NAMESPACE := nvcf-shared
 KAI_SCHEDULER_NAMESPACE := kai-scheduler
 GROVE_SYSTEM_NAMESPACE := grove-system
 DYNAMO_SYSTEM_NAMESPACE := dynamo-system
 KAI_RESOURCE_RESERVATION_NAMESPACE := kai-resource-reservation
 NAMESPACES ?= $(NVCA_OPERATOR_NAMESPACE)
-SHARED_NAMESPACES ?= $(KAI_SCHEDULER_NAMESPACE) $(GROVE_SYSTEM_NAMESPACE) $(DYNAMO_SYSTEM_NAMESPACE) $(KAI_RESOURCE_RESERVATION_NAMESPACE)
+SHARED_NAMESPACES ?= $(NVCF_SHARED_NAMESPACE) $(KAI_SCHEDULER_NAMESPACE) $(GROVE_SYSTEM_NAMESPACE) $(DYNAMO_SYSTEM_NAMESPACE) $(KAI_RESOURCE_RESERVATION_NAMESPACE)
+NVCA_BACKEND_CRD_NAME := nvcfbackends.nvcf.nvidia.io
+NVCA_CRD_SHARED_RELEASE := nvcf-nvca-crds
+NVCA_CRD_LEGACY_RELEASE := nvca-operator
 
 # Namespace metadata used by the future plane registry. Values are parsed from
 # the helmfile/base defaults so chart and NVCA version bumps do not need to be
@@ -71,6 +76,7 @@ KUBECONFIG_FLAG = $(if $(KUBECONFIG_FILE),--kubeconfig $(KUBECONFIG_FILE))
 COMPUTE_KUBE_CONTEXT ?=
 HELMFILE_KUBE_CONTEXT_FLAG = $(if $(COMPUTE_KUBE_CONTEXT),--kube-context "$(COMPUTE_KUBE_CONTEXT)")
 KUBECTL_CONTEXT_FLAG = $(if $(COMPUTE_KUBE_CONTEXT),--context "$(COMPUTE_KUBE_CONTEXT)")
+ADOPT_NVCA_CRD_ARGS = --crd-name "$(NVCA_BACKEND_CRD_NAME)" --shared-release "$(NVCA_CRD_SHARED_RELEASE)" --shared-namespace "$(NVCF_SHARED_NAMESPACE)" --legacy-release "$(NVCA_CRD_LEGACY_RELEASE)" $(if $(KUBECONFIG_FILE),--kubeconfig "$(KUBECONFIG_FILE)") $(if $(COMPUTE_KUBE_CONTEXT),--context "$(COMPUTE_KUBE_CONTEXT)")
 MARK_CONTROL_PLANE_NAMESPACE_ARGS = --owner "$(NVCF_CONTROL_PLANE_OWNER)" --primary-namespace "$(CONTROL_PLANE_PRIMARY_NAMESPACE)" --stack "$(CONTROL_PLANE_STACK_NAME)" --chart-version "$(CONTROL_PLANE_CHART_VERSION)" --nvca-operator-version "$(NVCA_OPERATOR_VERSION)" $(foreach ns,$(NAMESPACES),--namespace "$(ns)") $(foreach ns,$(SHARED_NAMESPACES),--shared-namespace "$(ns)") $(if $(KUBECONFIG_FILE),--kubeconfig "$(KUBECONFIG_FILE)") $(if $(COMPUTE_KUBE_CONTEXT),--context "$(COMPUTE_KUBE_CONTEXT)")
 
 # PATH and HELM_PLUGINS override for development mode (when using local binaries)
@@ -85,7 +91,7 @@ INSTALL_PRE_HOOKS ?=
 APPLY_PRE_HOOKS ?=
 
 # --- Targets ---
-.PHONY: check-versions check-cluster-name template install sync apply destroy clean register-cluster help
+.PHONY: check-versions check-cluster-name adopt-nvca-crd-ownership template install sync apply destroy clean register-cluster help
 .DEFAULT_GOAL := help
 
 # --- Prerequisite Checks ---
@@ -175,6 +181,10 @@ endif
 
 # --- Core Targets ---
 
+adopt-nvca-crd-ownership:
+	@$(MAKEFILE_DIR)/renderers/adopt-nvca-crd-ownership.sh \
+		$(ADOPT_NVCA_CRD_ARGS)
+
 # Optional override for helmfile's --output-dir-template. Empty by default, so
 # helmfile's own default applies and rendered output keeps its usual layout.
 # The repo's golden-file tests set this to strip the {{ .State.AbsPathSHA1 }}
@@ -192,6 +202,7 @@ template: clean check-versions check-cluster-name
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Cluster:     $(CLUSTER_NAME)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	@echo "    Output:      $(OUTPUT_DIR)"
 	@echo "    Values:      $(REGISTRATION_VALUES_DIR)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
@@ -202,6 +213,7 @@ template: clean check-versions check-cluster-name
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
@@ -222,6 +234,7 @@ install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
 	@echo ">>> Installing compute-plane for cluster '$(CLUSTER_NAME)'..."
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
 	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
@@ -229,8 +242,12 @@ install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
 	mkdir -p "$(OUTPUT_DIR)"
 	cp $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml $(OUTPUT_DIR)/
 
+	@$(MAKEFILE_DIR)/renderers/adopt-nvca-crd-ownership.sh \
+		$(ADOPT_NVCA_CRD_ARGS)
+
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
@@ -251,6 +268,7 @@ apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
 	@echo ">>> Applying compute-plane for cluster '$(CLUSTER_NAME)'..."
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
 	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
@@ -258,8 +276,12 @@ apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
 	mkdir -p "$(OUTPUT_DIR)"
 	cp $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml $(OUTPUT_DIR)/
 
+	@$(MAKEFILE_DIR)/renderers/adopt-nvca-crd-ownership.sh \
+		$(ADOPT_NVCA_CRD_ARGS)
+
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
@@ -273,6 +295,7 @@ destroy: check-versions check-cluster-name
 	@echo ">>> Destroying compute-plane releases for cluster '$(CLUSTER_NAME)'..."
 	@echo "    Environment: $(HELMFILE_ENV)"
 	@echo "    Control Plane Owner: $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo "    Alpha Named Control Plane: $(NVCF_ALPHA_NAMED_CONTROL_PLANE)"
 	@echo "    Destroy Selector: $(HELMFILE_DESTROY_SELECTOR)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
 	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
@@ -280,6 +303,7 @@ destroy: check-versions check-cluster-name
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	NVCF_CONTROL_PLANE_OWNER="$(NVCF_CONTROL_PLANE_OWNER)" \
+	NVCF_ALPHA_NAMED_CONTROL_PLANE="$(NVCF_ALPHA_NAMED_CONTROL_PLANE)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
@@ -302,7 +326,7 @@ else
 	@echo ">>> Skipping namespace cleanup (selector was used)"
 endif
 else
-	@echo ">>> Skipping fixed namespace cleanup for named control-plane owner $(NVCF_CONTROL_PLANE_OWNER)"
+	@echo ">>> Skipping named namespace cleanup until shared prerequisite lifecycle is wired for owner $(NVCF_CONTROL_PLANE_OWNER)"
 endif
 
 clean:
@@ -388,6 +412,8 @@ help:
 	@echo "Configuration:"
 	@echo "  HELMFILE_ENV       Environment name (default: $(HELMFILE_ENV))"
 	@echo "  HELMFILE_SELECTOR  Optional release selector (e.g., name=nvca-operator)"
+	@echo "  NVCF_CONTROL_PLANE_OWNER Owner label value (default: $(NVCF_CONTROL_PLANE_OWNER))"
+	@echo "  NVCF_ALPHA_NAMED_CONTROL_PLANE Set true to enable alpha named control-plane mode"
 	@echo "  KUBECONFIG_FILE    Path to kubeconfig file (pass to all targets in"
 	@echo "                     multi-cluster setups so registration reads JWKS"
 	@echo "                     from the correct cluster)"

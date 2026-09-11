@@ -24,7 +24,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: fc8b653c304c95facbf672a443988f1a06f93bd30d9e8a5f9e57d76b8d8ab9c6
+        checksum/config: 3bbf2df00caec5cff9091081ba8730dd1e15496cc40652c1c2763da54227f6df
       labels:
         app.kubernetes.io/component: nats
         app.kubernetes.io/instance: nats

@@ -43,6 +43,7 @@ func resetComputePlaneFlags(t *testing.T) {
 	selfHostedComputePlaneStack = ""
 	selfHostedNoApply = false
 	selfHostedICMSURL = ""
+	selfHostedAlphaNamedPlane = false
 	selfHostedControlPlaneContext = ""
 	selfHostedComputePlaneContext = ""
 	selfHostedControlPlaneID = ""
@@ -59,6 +60,7 @@ func resetComputePlaneFlags(t *testing.T) {
 		selfHostedComputePlaneStack = ""
 		selfHostedNoApply = false
 		selfHostedICMSURL = ""
+		selfHostedAlphaNamedPlane = false
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
 		selfHostedControlPlaneID = ""

@@ -47,6 +47,7 @@ data:
       port: "8080"
     service:
       name: nvcf-nats-auth-callout-service
+      nats_url: nats://nats.nats-system.svc.cluster.local:4222
     tracing:
       lightstep:
         compression: gzip
