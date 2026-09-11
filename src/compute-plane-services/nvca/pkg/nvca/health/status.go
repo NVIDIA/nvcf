@@ -285,7 +285,10 @@ func (c *BackendStatusCache) publishRefresh(
 			continue
 		}
 
-		core.GetLogger(ctx).WithError(res.err).
+		// No WithError: the failure itself is logged per refresh where the
+		// getter is called, returned in the aggregate, and carried on the
+		// component below. This records the transition, not the error again.
+		core.GetLogger(ctx).
 			WithField("getter", res.name).
 			WithField("consecutive_failures", h.consecutiveFails).
 			Error("Component status unavailable past the refresh tolerance, reporting unhealthy")
