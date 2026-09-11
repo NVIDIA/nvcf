@@ -77,7 +77,8 @@ RUN apt-get update && \
       /opt/cassandra/lib/jackson-annotations-*.jar \
       /opt/cassandra/lib/jackson-core-*.jar \
       /opt/cassandra/lib/jackson-databind-*.jar \
-      /opt/cassandra/lib/jackson-datatype-jsr310-*.jar
+      /opt/cassandra/lib/jackson-datatype-jsr310-*.jar \
+      /opt/cassandra/lib/netty-*-4.1.130.Final*.jar
 
 COPY --from=migrate-builder --chmod=0555 /out/migrate /usr/bin/migrate
 COPY --from=kubectl-downloader --chmod=0555 /out/kubectl /usr/local/bin/kubectl
