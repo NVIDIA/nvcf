@@ -151,6 +151,19 @@ if run_helper \
 fi
 grep -Fq -- "owner must be default" "$err" || fail "invalid owner error did not explain owner validation"
 
+too_long_owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+err="$work_dir/too-long-owner.err"
+if run_helper \
+  --owner "$too_long_owner" \
+  --primary-namespace primary-owned \
+  --stack nvcf-compute-plane \
+  --chart-version 1.21.8 \
+  --nvca-operator-version 3.3.2 \
+  2>"$err"; then
+  fail "owner longer than 30 characters should not be accepted"
+fi
+grep -Fq -- "up to 30 characters" "$err" || fail "too-long owner error did not explain the 30-character limit"
+
 run_helper \
   --owner plane-a \
   --primary-namespace primary-owned \

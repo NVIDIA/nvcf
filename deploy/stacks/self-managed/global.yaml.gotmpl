@@ -24,6 +24,36 @@ tolerations:
 {{- end -}}
 {{- end -}}
 
+{{- $controlPlaneNamespacePrefix := "" -}}
+{{- $apiKeysNamespace := printf "%sapi-keys" $controlPlaneNamespacePrefix -}}
+{{- $cassandraNamespace := printf "%scassandra-system" $controlPlaneNamespacePrefix -}}
+{{- $essNamespace := printf "%sess" $controlPlaneNamespacePrefix -}}
+{{- $natsNamespace := printf "%snats-system" $controlPlaneNamespacePrefix -}}
+{{- $nvcfNamespace := printf "%snvcf" $controlPlaneNamespacePrefix -}}
+{{- $nvcfUiNamespace := printf "%snvcf-ui" $controlPlaneNamespacePrefix -}}
+{{- $sisNamespace := printf "%ssis" $controlPlaneNamespacePrefix -}}
+{{- $vaultNamespace := printf "%svault-system" $controlPlaneNamespacePrefix -}}
+{{- $certManagerNamespace := "cert-manager" -}}
+{{- $apiGrpcServiceURL := printf "http://api.%s.svc.cluster.local:9090" $nvcfNamespace -}}
+{{- $cassandraContactPoints := printf "cassandra.%s.svc.cluster.local" $cassandraNamespace -}}
+{{- $invocationServiceURL := printf "http://invocation.%s.svc.cluster.local:8080" $nvcfNamespace -}}
+{{- $llmApiGatewayServiceURL := printf "http://llm-api-gateway.%s.svc.cluster.local:8080" $nvcfNamespace -}}
+{{- $llmRequestRouterServiceHost := printf "llm-request-router.%s.svc.cluster.local" $nvcfNamespace -}}
+{{- $llmRequestRouterHeadlessWildcardHost := printf "*.llm-request-router-headless.%s.svc.cluster.local" $nvcfNamespace -}}
+{{- $llmRequestRouterDefaultDnsNames := list $llmRequestRouterServiceHost $llmRequestRouterHeadlessWildcardHost -}}
+{{- $natsServiceURL := printf "nats://nats.%s.svc.cluster.local:4222" $natsNamespace -}}
+{{- $openBaoServerURL := printf "http://openbao-server.%s.svc.cluster.local:8200" $vaultNamespace -}}
+{{- $rateLimiterServiceURL := printf "http://ratelimiter.%s.svc.cluster.local:7777" $nvcfNamespace -}}
+{{- $adminIssuerProxyHealthEndpoint := printf "admin-token-issuer-proxy.%s.svc.cluster.local:8080/healthz" $apiKeysNamespace -}}
+{{- $llmRequestRouterHealthzEndpoint := printf "%s:8000/healthz" $llmRequestRouterServiceHost -}}
+{{- $llmRequestRouterReadyzEndpoint := printf "%s:8000/readyz" $llmRequestRouterServiceHost -}}
+{{- $natsAuthCalloutHealthEndpoint := printf "nvcf-nats-auth-callout-service.%s.svc.cluster.local:8080/health" $natsNamespace -}}
+{{- $natsHeadlessHealthEndpoint := printf "nats-headless.%s.svc.cluster.local:8222/healthz?js-server-only" $natsNamespace -}}
+{{- $notaryHealthEndpoint := printf "notary.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
+{{- $openBaoHealthEndpoint := printf "openbao-server.%s.svc.cluster.local:8200/v1/sys/health?standbyok=true" $vaultNamespace -}}
+{{- $rateLimiterHealthEndpoint := printf "ratelimiter.%s.svc.cluster.local:8080/health" $nvcfNamespace -}}
+{{- $revalHealthEndpoint := printf "reval.%s.svc.cluster.local:8082/healthz" $nvcfNamespace -}}
+
 cassandra:
   global:
     {{- if .Values.global.imagePullSecrets }}
@@ -165,8 +195,8 @@ openbao:
       {{- range $expr := $matchExpressions }}
       {{- if and (eq (dig "key" "" $expr) "kubernetes.io/metadata.name") (eq (dig "operator" "" $expr) "In") }}
       {{- $values := dig "values" list $expr }}
-      {{- if not (has "nvcf-ui" $values) }}
-      {{- $_ := set $expr "values" (append $values "nvcf-ui") }}
+      {{- if not (has $nvcfUiNamespace $values) }}
+      {{- $_ := set $expr "values" (append $values $nvcfUiNamespace) }}
       {{- end }}
       {{- end }}
       {{- end }}
@@ -326,7 +356,7 @@ natsAuthCalloutService:
 {{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
 {{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
-{{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default "nats://nats.nats-system.svc.cluster.local:4222" }}
+{{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default $natsServiceURL }}
 {{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
 {{- /* In-cluster ESS base URL for the API's/NVCT's own ESS calls. Defaults to
        the worker-advertised ESS URL so existing installs are unchanged; set it
@@ -340,7 +370,7 @@ natsAuthCalloutService:
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
-{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- $llmRequestRouterDefaultAddress := printf "%s:%v" $llmRequestRouterServiceHost $llmRequestRouterGrpcPort }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
 {{- if hasPrefix "https://" $llmRequestRouterWorkerAuthority }}
@@ -600,7 +630,7 @@ invocation:
   {{- end }}
   {{- if .Values.rateLimiter.enabled }}
   {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
-  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" "http://ratelimiter.nvcf.svc.cluster.local:7777" }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" $rateLimiterServiceURL }}
   {{- end }}
   {{- with $invocationWorkerBaseURL }}
   {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
@@ -717,7 +747,7 @@ grpcproxy:
     {{- end }}
     {{- if .Values.rateLimiter.enabled }}
     RATE_LIMIT_ENABLED: "true"
-    RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+    RATE_LIMIT_ADDR: {{ $rateLimiterServiceURL | quote }}
     {{- end }}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
@@ -905,9 +935,9 @@ functionautoscaler:
         "CONFIG" "/etc/server/config/settings-local.yaml"
         "SECRETS_PATH" "/vault/secrets/secrets.json"
         "REGION" (dig "functionAutoscaler" "region" "local" .Values)
-        "CASSANDRA__CONTACT_POINTS" (dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values)
+        "CASSANDRA__CONTACT_POINTS" (dig "functionAutoscaler" "cassandra" "contactPoints" "" .Values | default $cassandraContactPoints)
         "CASSANDRA__IS_DEVELOPMENT" (printf "%v" (dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values))
-        "NVCF_API__NVCF_API_GRPC_ADDRESS" (dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values)
+        "NVCF_API__NVCF_API_GRPC_ADDRESS" (dig "functionAutoscaler" "nvcfApi" "grpcAddress" "" .Values | default $apiGrpcServiceURL)
         "NVCF_API__DISABLE_AUTH" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values))
         "NVCF_API__DRY_RUN" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values))
         "TIMESERIES_DB__TIMESERIES_DB_URL" (required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint)
@@ -923,7 +953,7 @@ functionautoscaler:
   {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__CLIENT_PRIVATE_KEY_PATH" . }}
   {{- end }}
   {{- $functionAutoscalerEnv = mergeOverwrite $functionAutoscalerEnv (deepCopy $configuredFunctionAutoscalerEnv) }}
-  namespace: nvcf
+  namespace: {{ $nvcfNamespace }}
   fullnameOverride: function-autoscaler
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -1164,8 +1194,10 @@ llmRequestRouter:
   {{- if not (kindIs "slice" $existingSecretDnsNames) }}
   {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
-  {{- $defaultManagedDnsNames := list "llm-request-router.nvcf.svc.cluster.local" "*.llm-request-router-headless.nvcf.svc.cluster.local" }}
-  {{- if and (gt (len $existingSecretDnsNames) 0) (not (deepEqual $existingSecretDnsNames $defaultManagedDnsNames)) }}
+  {{- if eq (len $existingSecretDnsNames) 0 }}
+  {{- $existingSecretDnsNames = $llmRequestRouterDefaultDnsNames }}
+  {{- end }}
+  {{- if not (deepEqual $existingSecretDnsNames $llmRequestRouterDefaultDnsNames) }}
   {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate; only the unchanged stable-base defaults are allowed when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
   {{- $existingSecretAllowedDomains := dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
@@ -1227,6 +1259,9 @@ llmRequestRouter:
   {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
   {{- end }}
   {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
+  {{- if not (kindIs "slice" $dnsNames) }}
+  {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.enabled is true" }}
+  {{- end }}
   {{- if eq (len $dnsNames) 0 }}
   {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
   {{- end }}
@@ -1252,7 +1287,7 @@ llmRequestRouter:
   {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.1" }}
   pki:
     enabled: true
-    namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
+    namespace: {{ dig "addons" "llm" "pki" "namespace" $vaultNamespace .Values | quote }}
     allowedDomains: {{ $allowedDomains | quote }}
     image:
       registry: {{ dig "addons" "llm" "pki" "image" "registry" .Values.global.image.registry .Values | quote }}
@@ -1287,8 +1322,8 @@ vanityGateway:
     pullPolicy: {{ dig "addons" "vanityGateway" "image" "pullPolicy" "IfNotPresent" .Values }}
   config:
     mappingPath: {{ dig "addons" "vanityGateway" "config" "mappingPath" "/etc/vanity-gateway/config/config.yaml" .Values | quote }}
-    nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "http://invocation.nvcf.svc.cluster.local:8080" .Values | quote }}
-    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "http://llm-api-gateway.nvcf.svc.cluster.local:8080" .Values | quote }}
+    nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "" .Values | default $invocationServiceURL | quote }}
+    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "" .Values | default $llmApiGatewayServiceURL | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     otelExporterOtlpEndpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
     {{- else }}
@@ -1358,15 +1393,15 @@ vanityGateway:
      component endpoints track any operator override; the dict defaults fill the
      usual case where a route pins no explicit backend. merge lets a partial
      override (e.g. namespace only) keep the remaining default fields. */}}
-{{- $nvcfApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" dict .Values)) (dict "name" "api" "namespace" "nvcf" "port" 8080) }}
-{{- $nvctApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" dict .Values)) (dict "name" "nvct-api" "namespace" "nvcf" "port" 8080) }}
-{{- $sisBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "sis" "backend" dict .Values)) (dict "name" "api" "namespace" "sis" "port" 8080) }}
-{{- $grpcBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "grpc" "backend" dict .Values)) (dict "name" "grpc" "namespace" "nvcf" "port" 10081) }}
-{{- $invocationBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "invocation" "backend" dict .Values)) (dict "name" "invocation" "namespace" "nvcf" "port" 8080) }}
-{{- $llmApiGatewayBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "llmInvocation" "backend" dict .Values)) (dict "name" "llm-api-gateway" "namespace" "nvcf" "port" 8080) }}
-{{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" "nvcf" "port" 8080) }}
-{{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" "ess" "port" 8080) }}
-{{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
+{{- $nvcfApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" dict .Values)) (dict "name" "api" "namespace" $nvcfNamespace "port" 8080) }}
+{{- $nvctApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" dict .Values)) (dict "name" "nvct-api" "namespace" $nvcfNamespace "port" 8080) }}
+{{- $sisBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "sis" "backend" dict .Values)) (dict "name" "api" "namespace" $sisNamespace "port" 8080) }}
+{{- $grpcBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "grpc" "backend" dict .Values)) (dict "name" "grpc" "namespace" $nvcfNamespace "port" 10081) }}
+{{- $invocationBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "invocation" "backend" dict .Values)) (dict "name" "invocation" "namespace" $nvcfNamespace "port" 8080) }}
+{{- $llmApiGatewayBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "llmInvocation" "backend" dict .Values)) (dict "name" "llm-api-gateway" "namespace" $nvcfNamespace "port" 8080) }}
+{{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" $nvcfNamespace "port" 8080) }}
+{{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" $essNamespace "port" 8080) }}
+{{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" $apiKeysNamespace "port" 8080) }}
 {{/* openbao-migrations image tag: 0.19.1 is the floor. An operator may pin a
      newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
      than the floor is ignored (the migrations job needs >= 0.19.1). */}}
@@ -1407,18 +1442,18 @@ nvcfUi:
         endpoints:
           - {{ printf "%s.%s.svc.cluster.local:%v/health" $nvctApiBackend.name $nvctApiBackend.namespace $nvctApiBackend.port }}
       - name: notary-service
-        namespace: nvcf
+        namespace: {{ $nvcfNamespace }}
         endpoints:
-          - notary.nvcf.svc.cluster.local:8080/health
+          - {{ $notaryHealthEndpoint }}
       - name: grpc-proxy
         namespace: {{ $grpcBackend.namespace }}
         endpoints:
           - {{ printf "%s.%s.svc.cluster.local:%v/health" $grpcBackend.name $grpcBackend.namespace $grpcBackend.port }}
       {{- if dig "rateLimiter" "enabled" false .Values }}
       - name: ratelimiter
-        namespace: nvcf
+        namespace: {{ $nvcfNamespace }}
         endpoints:
-          - ratelimiter.nvcf.svc.cluster.local:8080/health
+          - {{ $rateLimiterHealthEndpoint }}
       {{- end }}
       {{- if dig "addons" "llm" "enabled" false .Values }}
       - name: llm-api-gateway
@@ -1427,15 +1462,15 @@ nvcfUi:
           - {{ printf "%s.%s.svc.cluster.local:%v/healthz" $llmApiGatewayBackend.name $llmApiGatewayBackend.namespace $llmApiGatewayBackend.port }}
           - {{ printf "%s.%s.svc.cluster.local:%v/readyz" $llmApiGatewayBackend.name $llmApiGatewayBackend.namespace $llmApiGatewayBackend.port }}
       - name: llm-request-router
-        namespace: nvcf
+        namespace: {{ $nvcfNamespace }}
         endpoints:
-          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
-          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
+          - {{ $llmRequestRouterHealthzEndpoint }}
+          - {{ $llmRequestRouterReadyzEndpoint }}
       {{- end }}
       - name: reval
-        namespace: nvcf
+        namespace: {{ $nvcfNamespace }}
         endpoints:
-          - reval.nvcf.svc.cluster.local:8082/healthz
+          - {{ $revalHealthEndpoint }}
       - name: invocation-service
         namespace: {{ $invocationBackend.namespace }}
         endpoints:
@@ -1459,38 +1494,38 @@ nvcfUi:
         endpoints:
           - {{ printf "%s.%s.svc.cluster.local:%v/health" $apiKeysBackend.name $apiKeysBackend.namespace $apiKeysBackend.port }}
       - name: admin-issuer-proxy
-        namespace: api-keys
+        namespace: {{ $apiKeysNamespace }}
         endpoints:
-          - admin-token-issuer-proxy.api-keys.svc.cluster.local:8080/healthz
+          - {{ $adminIssuerProxyHealthEndpoint }}
       - name: nats-auth-callout-service
-        namespace: nats-system
+        namespace: {{ $natsNamespace }}
         endpoints:
-          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/health
+          - {{ $natsAuthCalloutHealthEndpoint }}
       {{- if dig "nats" "enabled" true .Values }}
       - name: nats
-        namespace: nats-system
+        namespace: {{ $natsNamespace }}
         endpoints:
-          - nats-headless.nats-system.svc.cluster.local:8222/healthz?js-server-only
+          - {{ $natsHeadlessHealthEndpoint }}
       {{- end }}
       {{- if dig "openbao" "enabled" true .Values }}
       - name: openbao-server
-        namespace: vault-system
+        namespace: {{ $vaultNamespace }}
         endpoints:
-          - openbao-server.vault-system.svc.cluster.local:8200/v1/sys/health?standbyok=true
+          - {{ $openBaoHealthEndpoint }}
         k8s_workloads:
           - name: openbao-server-agent-injector
             type: deployment
       {{- end }}
       {{- if dig "cassandra" "enabled" true .Values }}
       - name: cassandra
-        namespace: cassandra-system
+        namespace: {{ $cassandraNamespace }}
         k8s_workloads:
           - name: cassandra
             type: statefulset
       {{- end }}
       {{- if dig "certManager" "enabled" true .Values }}
       - name: cert-manager
-        namespace: cert-manager
+        namespace: {{ $certManagerNamespace }}
         k8s_workloads:
           - name: cert-manager
             type: deployment
@@ -1596,7 +1631,7 @@ nvcfGatewayRoutes:
       enabled: {{ dig "addons" "llm" "enabled" false .Values }}
       backend:
         name: llm-api-gateway
-        namespace: nvcf
+        namespace: {{ $nvcfNamespace }}
         port: 8080
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "llmInvocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
@@ -1606,7 +1641,7 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "hostnames" (list) .Values | default (list (printf "vanity.%s" .Values.global.domain)) | toYaml | nindent 8 | trim }}
       backend:
         name: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "name" "vanity-gateway" .Values }}
-        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" "nvcf" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" $nvcfNamespace .Values }}
         port: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "port" 8080 .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}

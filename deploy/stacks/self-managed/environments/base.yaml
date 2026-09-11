@@ -80,7 +80,7 @@ global:
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
     # Optional LLM request-router address override advertised to LLM worker
-    # sidecars. Empty uses llm-request-router.nvcf.svc.cluster.local:50071.
+    # sidecars. Empty uses the derived in-cluster request-router Service.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
@@ -162,10 +162,12 @@ functionAutoscaler:
   env: {}
   region: local
   cassandra:
-    contactPoints: cassandra.cassandra-system.svc.cluster.local
+    # Empty uses the derived in-cluster Cassandra Service.
+    contactPoints: ""
     isDevelopment: false
   nvcfApi:
-    grpcAddress: http://api.nvcf.svc.cluster.local:9090
+    # Empty uses the derived in-cluster API gRPC Service.
+    grpcAddress: ""
     # Self-managed auth uses the OpenBao-rendered bearer token.
     disableAuth: false
     dryRun: false
@@ -183,8 +185,7 @@ api:
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
   # global.workerEndpoints.essServiceURL. In split-plane deployments that value
   # is the public ESS URL for remote workers, so set this to the in-cluster
-  # ess-api Service to keep control-plane ESS calls off the public edge, e.g.
-  # http://ess-api.ess.svc.cluster.local:8080. The worker alias
+  # ess-api Service to keep control-plane ESS calls off the public edge. The worker alias
   # (NVCF_ESS_WORKER_BASE_URL) stays on essServiceURL.
   essBaseURL: ""
   remoteConfig:
@@ -494,8 +495,9 @@ addons:
       pullPolicy: IfNotPresent
     config:
       mappingPath: /etc/vanity-gateway/config/config.yaml
-      nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
-      llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
+      # Empty values use the derived in-cluster backend Services.
+      nvcfApiEndpoint: ""
+      llmGatewayEndpoint: ""
       # Empty by default because the Vanity Gateway chart does not create Vault
       # Agent injection. Set this only when another component mounts the secrets
       # file into the pod.

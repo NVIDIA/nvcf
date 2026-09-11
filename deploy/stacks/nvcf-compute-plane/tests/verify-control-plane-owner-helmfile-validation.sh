@@ -31,6 +31,9 @@ helmfile_env() {
 
 command -v helmfile >/dev/null 2>&1 || fail "helmfile is required"
 
+max_owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+too_long_owner="${max_owner}a"
+
 mkdir -p "$stack_dir"
 cp -R "$source_stack_dir/helmfile.d" "$stack_dir/"
 cp -R "$source_stack_dir/environments" "$stack_dir/"
@@ -54,10 +57,18 @@ if ! grep -Eq '"name":[[:space:]]*"nvca-operator"' "$work_dir/nvca.valid.json"; 
   fail "owner selector did not include nvca-operator release"
 fi
 
+max_valid_log="$work_dir/nvca.max-valid.log"
+if ! NVCF_CONTROL_PLANE_OWNER="$max_owner" helmfile_env \
+  helmfile --file "$nvca_state" list --skip-charts \
+  --selector control-plane-owner="$max_owner" --output json \
+  >"$work_dir/nvca.max-valid.json" 2>"$max_valid_log"; then
+  fail "02-nvca rejected 30-character owner: $(tr '\n' ' ' <"$max_valid_log")"
+fi
+
 invalid_owners=(
   "shared"
   "PlaneA"
-  "control-plane-id-that-is-too-long"
+  "$too_long_owner"
 )
 
 for owner in "${invalid_owners[@]}"; do

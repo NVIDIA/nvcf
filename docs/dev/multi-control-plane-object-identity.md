@@ -50,7 +50,7 @@ consumer.
 | Ingress namespace | Environment-provided Gateway API namespace | Shared or externally managed; never deleted by plane teardown | Shared or external | Golden render and matrix review |
 | cert-manager namespace | `cert-manager` | Shared prerequisite namespace | Shared | Golden render and prereq inventory |
 | Service names | Chart defaults such as `api`, `ess-api`, `grpc-proxy` | Derived only where cross-plane collision exists | Plane | Golden render |
-| ClusterIssuer | `nvcf-openbao-pki` | Derived from validated control-plane ID | Plane | Golden render and exact-name cleanup tests |
+| ClusterIssuer | `nvcf-openbao-pki` | Deferred to Phase 4; derive from validated control-plane ID before named mode is enabled | Plane | Golden render and exact-name cleanup tests |
 | OpenBao injector webhook | Chart-generated static name | Per-plane webhook object and service reference | Plane | Webhook section and future Phase 2 render test |
 | Admission webhook namespaceSelector | Broad or environment-provided selector | Match workload namespaces plus control-plane owner | Plane | Webhook section and future Phase 2 render test |
 | Helm hook Jobs | Release/chart names | Release names or hook names derived per plane | Plane | Golden render |
@@ -93,6 +93,73 @@ The model-cache init namespace is still a fixed legacy singleton in Phase 2.
 Do not enable named control planes broadly until Phase 3 decides whether this
 namespace becomes per-plane or shared and updates creation, cleanup, and webhook
 selectors consistently.
+
+## Phase 3 Namespace Derivation Contract
+
+Phase 3 routes namespace and service DNS identities through one naming contract.
+Go callers use the shared helper in
+`src/libraries/go/lib/pkg/types/controlplane`. Helmfile templates cannot import
+that Go package directly, so the stack templates currently mirror the same
+legacy-compatible naming rule.
+
+The helper contract is intentionally simple:
+
+- The default identity keeps every legacy namespace name unchanged.
+- A named identity prefixes each known stack namespace with the validated
+  control-plane ID.
+- In-cluster service DNS uses the derived namespace while keeping the legacy
+  service name.
+- All derived namespace names must remain valid Kubernetes DNS labels, including
+  when the control-plane ID is at the maximum supported length.
+
+Phase 3 wires Helmfile templates and service URLs to that naming rule while
+preserving the legacy render output. The Helmfile namespace prefix is still an
+empty literal in this phase; Phase 4 must plumb the validated control-plane ID
+into those templates before named mode can install.
+
+ClusterIssuer naming is intentionally still legacy-fixed in Phase 3. Phase 4
+must derive the default issuer name and update the managed-issuer detection
+together, because the current detection still keys on exact
+`ClusterIssuer/nvcf-openbao-pki`.
+
+Managed LLM router PKI DNS names are also intentionally legacy-explicit in
+Phase 3. `environments/base.yaml` still lists the legacy service DNS names so
+the existing fail-closed PKI guard keeps default installs working without
+silently inventing certificate names. Phase 4 must add a named-mode derivation
+path for those DNS names without weakening that guard. A named render must not
+leave legacy service DNS such as `llm-request-router.nvcf.svc.cluster.local` or
+`*.llm-request-router-headless.nvcf.svc.cluster.local` in generated certificate
+configuration.
+
+## Render Structure Guard
+
+Both self-managed and compute-plane local render tests run a parser-based
+structure guard before comparing against golden files.
+
+The guard checks rendered Kubernetes manifests for:
+
+- valid YAML documents;
+- glued YAML separators from missing document breaks;
+- `apiVersion`, `kind`, and `metadata.name` on every Kubernetes object;
+- Kubernetes object names over 253 characters;
+- namespace fields that are not valid Kubernetes DNS labels or are over 63
+  characters;
+- Kyverno `Policy` and `ClusterPolicy` rule names over 63 characters.
+
+The compute-plane render output also contains `*-values.yaml` handoff files.
+Those files are values input, not Kubernetes manifests, so the guard skips them.
+
+This Phase 3 guard keeps the legacy render safe while names are being routed
+through derivation helpers. The future two-plane named render check still belongs
+to Phase 4, once the control-plane ID is user-settable through the stack values.
+
+CI coverage is asymmetric by design in Phase 3. The self-managed CI job runs a
+fresh local render and compares it with golden output. The compute-plane CI job
+runs the static stack tests plus the structure guard against committed golden
+fixtures, but it does not perform a fresh compute-plane render. A full
+compute-plane render still belongs to local or credentialed test runs because
+that stack resolves published chart dependencies from external repositories and
+registries.
 
 ## Data And Auth Matrix
 

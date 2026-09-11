@@ -22,6 +22,11 @@ environments:
 
 {{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
 {{- $sharedControlPlaneOwner := "shared" }}
+{{- $controlPlaneNamespacePrefix := "" }}
+{{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
+{{- $kaiSchedulerNamespace := "kai-scheduler" }}
+{{- $groveSystemNamespace := "grove-system" }}
+{{- $dynamoSystemNamespace := "dynamo-system" }}
 
 repositories:
   - name: kai-scheduler
@@ -53,7 +58,7 @@ releases:
     condition: addons.kaiScheduler.enabled
     chart: kai-scheduler/kai-scheduler
     version: v0.17.1
-    namespace: kai-scheduler
+    namespace: {{ $kaiSchedulerNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
@@ -262,13 +267,13 @@ releases:
     {{- end }}
     installed: {{ and $topoEnabled $kaiEnabled }}
     chart: ../charts/nvcf-cluster-topology
-    namespace: nvca-operator
+    namespace: {{ $nvcaOperatorNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
       - {{ $sharedControlPlaneOwner | quote }}
     needs:
-      - kai-scheduler/kai-scheduler
+      - {{ $kaiSchedulerNamespace }}/kai-scheduler
     values:
       - topologies:
         {{- toYaml (dig "topologyAwareScheduling" "topologies" list .Values.addons) | nindent 10 }}
@@ -294,13 +299,13 @@ releases:
     # does not support.
     chart: nvidia-ai-dynamo-grove/grove-charts
     version: v0.1.0-alpha.12
-    namespace: grove-system
+    namespace: {{ $groveSystemNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
       - {{ $sharedControlPlaneOwner | quote }}
     needs:
-      - kai-scheduler/kai-scheduler
+      - {{ $kaiSchedulerNamespace }}/kai-scheduler
     values:
       - ../global.yaml.gotmpl
       - replicaCount: 1
@@ -383,14 +388,14 @@ releases:
     {{- $groveEnabled := dig "groveOperator" "enabled" false .Values.addons }}
     installed: {{ and $topoEnabled $groveEnabled }}
     chart: ../charts/nvcf-cluster-topology
-    namespace: nvca-operator
+    namespace: {{ $nvcaOperatorNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
       - {{ $sharedControlPlaneOwner | quote }}
     needs:
-      - grove-system/grove-operator
-      - nvca-operator/nvcf-kai-topology
+      - {{ $groveSystemNamespace }}/grove-operator
+      - {{ $nvcaOperatorNamespace }}/nvcf-kai-topology
     values:
       - topologies:
         {{- toYaml (dig "topologyAwareScheduling" "topologies" list .Values.addons) | nindent 10 }}
@@ -413,13 +418,13 @@ releases:
     condition: addons.dynamoOperator.enabled
     chart: nvidia-ai-dynamo/dynamo-platform
     version: 1.4.2
-    namespace: dynamo-system
+    namespace: {{ $dynamoSystemNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
       - {{ $sharedControlPlaneOwner | quote }}
     needs:
-      - grove-system/grove-operator
+      - {{ $groveSystemNamespace }}/grove-operator
     values:
       - ../global.yaml.gotmpl
       - dynamo-operator:

@@ -42,16 +42,23 @@ REQUIRED_HELMFILE_MAJOR := 1
 REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
-# Namespaces owned by the plane-specific compute-plane stack. Scheduler and
-# topology add-ons are shared prerequisites and are not removed by ordinary
-# plane teardown.
-NAMESPACES ?= nvca-operator
-SHARED_NAMESPACES ?= kai-scheduler grove-system dynamo-system kai-resource-reservation
+# Namespaces owned by the plane-specific compute-plane stack. The prefix is
+# empty until named-mode namespace derivation is enabled, so legacy installs
+# keep the same names. Scheduler and topology add-ons are shared prerequisites
+# and are not removed by ordinary plane teardown.
+CONTROL_PLANE_NAMESPACE_PREFIX :=
+NVCA_OPERATOR_NAMESPACE := $(CONTROL_PLANE_NAMESPACE_PREFIX)nvca-operator
+KAI_SCHEDULER_NAMESPACE := kai-scheduler
+GROVE_SYSTEM_NAMESPACE := grove-system
+DYNAMO_SYSTEM_NAMESPACE := dynamo-system
+KAI_RESOURCE_RESERVATION_NAMESPACE := kai-resource-reservation
+NAMESPACES ?= $(NVCA_OPERATOR_NAMESPACE)
+SHARED_NAMESPACES ?= $(KAI_SCHEDULER_NAMESPACE) $(GROVE_SYSTEM_NAMESPACE) $(DYNAMO_SYSTEM_NAMESPACE) $(KAI_RESOURCE_RESERVATION_NAMESPACE)
 
 # Namespace metadata used by the future plane registry. Values are parsed from
 # the helmfile/base defaults so chart and NVCA version bumps do not need to be
 # copied into a second constant.
-CONTROL_PLANE_PRIMARY_NAMESPACE ?= nvca-operator
+CONTROL_PLANE_PRIMARY_NAMESPACE ?= $(NVCA_OPERATOR_NAMESPACE)
 CONTROL_PLANE_STACK_NAME ?= nvcf-compute-plane
 CONTROL_PLANE_CHART_VERSION ?= $(shell awk '/^  - name: nvca-operator$$/ {found=1; next} found && $$1 == "version:" {print $$2; exit}' "$(MAKEFILE_DIR)/helmfile.d/02-nvca.yaml.gotmpl")
 NVCA_OPERATOR_VERSION ?= $(shell awk '/^[[:space:]]+nvcaVersion:/ {gsub(/"/, "", $$2); print $$2; exit}' "$(MAKEFILE_DIR)/environments/base.yaml")

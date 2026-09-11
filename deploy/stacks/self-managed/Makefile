@@ -3,7 +3,7 @@ MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 include Makefile.dist
 
-.PHONY: test test-published-charts render-local test-local generate-golden test-golden-comparator test-control-plane-owner-label-renderer test-control-plane-owner-label-placement test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-golden-diff
+.PHONY: test test-published-charts render-local test-local generate-golden test-golden-comparator test-render-structure test-render-structure-detects-violations test-control-plane-owner-label-renderer test-control-plane-owner-label-placement test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-golden-diff
 
 GOLDEN_LOCAL_DIR ?= $(MAKEFILE_DIR)/testdata/golden/local
 GOLDEN_RENDER_DIR ?= $(MAKEFILE_DIR)/.golden/out
@@ -50,6 +50,12 @@ render-local:
 test-golden-comparator:
 	@tests/verify-golden-detects-change.sh
 
+test-render-structure: render-local
+	@tests/verify-render-structure.sh "$(GOLDEN_RENDER_DIR)"
+
+test-render-structure-detects-violations:
+	@tests/verify-render-structure-detects-violations.sh
+
 test-control-plane-owner-label-renderer:
 	@tests/verify-control-plane-owner-label-renderer.sh
 
@@ -71,8 +77,7 @@ test-control-plane-owner-namespace-marker:
 test-control-plane-owner-label-golden-diff:
 	@tests/verify-control-plane-owner-label-golden-diff.sh "$(GOLDEN_LOCAL_DIR)"
 
-test-local: test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker render-local test-golden-comparator
-	@tests/verify-render-structure.sh "$(GOLDEN_RENDER_DIR)"
+test-local: test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker render-local test-golden-comparator test-render-structure-detects-violations test-render-structure
 	@tests/verify-control-plane-owner-label-placement.sh "$(GOLDEN_RENDER_DIR)"
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(GOLDEN_RENDER_DIR)"
 

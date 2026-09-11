@@ -16,9 +16,12 @@ environments:
 
 {{- $controlPlaneOwnerRenderer := "../renderers/control-plane-owner-label.sh" }}
 {{- $controlPlaneOwner := env "NVCF_CONTROL_PLANE_OWNER" | default "default" }}
-{{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 32) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
-{{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 32 characters other than shared, got %q" $controlPlaneOwner) }}
+{{- if or (eq $controlPlaneOwner "shared") (gt (len $controlPlaneOwner) 30) (not (regexMatch "^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$" $controlPlaneOwner)) }}
+{{- fail (printf "NVCF_CONTROL_PLANE_OWNER must be default or a lowercase DNS label up to 30 characters other than shared, got %q" $controlPlaneOwner) }}
 {{- end }}
+{{- $controlPlaneNamespacePrefix := "" }}
+{{- $nvcaOperatorName := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
+{{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
 
 {{- /*
   nvca-operator.featureGateValues normalizes a selfManaged feature gate list.
@@ -188,7 +191,7 @@ releases:
     # values own the NVCA application version used by this stack.
     chart: nvcf/helm-nvca-operator
     version: 1.24.0
-    namespace: nvca-operator
+    namespace: {{ $nvcaOperatorNamespace }}
     postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
     postRendererArgs:
       - "--owner"
@@ -229,6 +232,7 @@ releases:
                from, so the chart's generated pull secret is disabled here. The
                chart default stays enabled for ngc-managed installs, which rely
                on it being generated from ngcConfig.serviceKey. */}}
+        fullnameOverride: {{ $nvcaOperatorName | quote }}
         generateImagePullSecret: false
         ngcConfig:
           clusterSource: self-managed

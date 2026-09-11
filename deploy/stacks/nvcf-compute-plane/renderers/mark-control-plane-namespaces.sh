@@ -87,8 +87,8 @@ done
 [[ -n "$chart_version" ]] || usage
 [[ -n "$nvca_operator_version" ]] || usage
 
-if [[ "$owner" == "shared" || ${#owner} -gt 32 || ! "$owner" =~ ^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$ ]]; then
-  fail "owner must be default or a lowercase DNS label up to 32 characters other than shared, got $owner"
+if [[ "$owner" == "shared" || ${#owner} -gt 30 || ! "$owner" =~ ^(default|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$ ]]; then
+  fail "owner must be default or a lowercase DNS label up to 30 characters other than shared, got $owner"
 fi
 
 owner_jsonpath="{.metadata.labels.nvcf\\.nvidia\\.com/control-plane-owner}"
