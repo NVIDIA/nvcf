@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -81,7 +82,7 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
 	repo := t.TempDir()
-	writeFile(t, filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath)), "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\n")
+	writeFile(t, filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath)), "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: nvcr.io/nvidia/nvcf-byoc\n")
 	for _, state := range resolvedInventoryStates {
 		writeFile(t, filepath.Join(repo, filepath.FromSlash(state.path)), "releases: []\n")
 	}
@@ -110,10 +111,10 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	if runner.templateCalls != len(resolvedInventoryStates) {
 		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(resolvedInventoryStates))
 	}
-	if runner.prepareCalls != 3 {
-		t.Fatalf("repository preparation calls = %d, want source and two public repository preparations", runner.prepareCalls)
+	if runner.prepareCalls != 4 {
+		t.Fatalf("repository preparation calls = %d, want two sources and two public repository preparations", runner.prepareCalls)
 	}
-	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
+	wantPrefix := []string{"prepare-source", "prepare-source", "list", "list", "build", "prepare-public", "template"}
 	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("operation prefix = %v, want %v", runner.operations, wantPrefix)
 	}
@@ -158,7 +159,7 @@ func TestParseResolvedInventoryHelmSource(t *testing.T) {
 func TestLoadResolvedInventoryConfig(t *testing.T) {
 	repo := t.TempDir()
 	configPath := filepath.Join(repo, filepath.FromSlash(resolvedInventoryConfigPath))
-	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\n")
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: nvcr.io/nvidia/nvcf-byoc\n")
 	config, err := loadResolvedInventoryConfig(repo)
 	if err != nil {
 		t.Fatal(err)
@@ -166,10 +167,58 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	if config.PublishedChartRepository != testPublishedChartRepository {
 		t.Fatalf("published repository = %q", config.PublishedChartRepository)
 	}
+	if got := config.RenderChartRepositoryOverrides["nvcf-compute-plane"]; got != "nvcr.io/nvidia/nvcf-byoc" {
+		t.Fatalf("compute-plane render repository = %q", got)
+	}
 
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: oci://registry.example.test/charts\n")
 	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "resolved HTTPS repository") {
 		t.Fatalf("non-HTTPS repository error = %v", err)
+	}
+
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  unknown-stack: registry.example.test/charts\n")
+	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "unknown stack") {
+		t.Fatalf("unknown override stack error = %v", err)
+	}
+
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nrenderChartRepositoryOverrides:\n  nvcf-compute-plane: https://registry.example.test/charts\n")
+	if _, err := loadResolvedInventoryConfig(repo); err == nil || !strings.Contains(err.Error(), "without credentials or a URL scheme") {
+		t.Fatalf("invalid override repository error = %v", err)
+	}
+}
+
+func TestPrepareResolvedInventoryEnvironmentWritesStackRenderSources(t *testing.T) {
+	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
+	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
+	repo := t.TempDir()
+	config := resolvedInventoryConfig{
+		RenderChartRepositoryOverrides: map[string]string{
+			"nvcf-compute-plane": "nvcr.io/nvidia/nvcf-byoc",
+		},
+	}
+
+	_, sources, _, err := prepareResolvedInventoryEnvironment(repo, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sources["self-managed"].reference(); got != "registry.example.test/release/charts" {
+		t.Fatalf("self-managed render source = %q", got)
+	}
+	if got := sources["nvcf-compute-plane"].reference(); got != "nvcr.io/nvidia/nvcf-byoc" {
+		t.Fatalf("compute-plane render source = %q", got)
+	}
+	for stack, want := range map[string]string{
+		"self-managed":       "repository: release/charts",
+		"observability":      "repository: release/charts",
+		"nvcf-compute-plane": "repository: nvidia/nvcf-byoc",
+	} {
+		raw, err := os.ReadFile(filepath.Join(repo, "deploy", "stacks", stack, "environments", "inventory.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("%s inventory environment = %s, want %q", stack, raw, want)
+		}
 	}
 }
 
@@ -277,12 +326,12 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 type fakeResolvedInventoryRunner struct {
-	t              *testing.T
-	prepareCalls   int
-	templateCalls  int
-	sourcePrepared bool
-	publicPrepared bool
-	operations     []string
+	t               *testing.T
+	prepareCalls    int
+	templateCalls   int
+	preparedSources map[string]bool
+	publicPrepared  bool
+	operations      []string
 }
 
 func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repositories map[string]helmfileRepository, ngcAPIKey string) error {
@@ -292,10 +341,14 @@ func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repos
 		runner.t.Fatalf("NGC API key = %q", ngcAPIKey)
 	}
 	if repository, ok := repositories["nvcf"]; ok {
-		if len(repositories) != 1 || !repository.OCI || repository.URL != "registry.example.test/release/charts" {
+		if len(repositories) != 1 || !repository.OCI ||
+			(repository.URL != "registry.example.test/release/charts" && repository.URL != "nvcr.io/nvidia/nvcf-byoc") {
 			runner.t.Fatalf("source repositories = %#v", repositories)
 		}
-		runner.sourcePrepared = true
+		if runner.preparedSources == nil {
+			runner.preparedSources = map[string]bool{}
+		}
+		runner.preparedSources[repository.URL] = true
 		runner.operations = append(runner.operations, "prepare-source")
 		return nil
 	}
@@ -328,8 +381,12 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	}
 	stateFile := argumentAfter(runner.t, args, "--file")
 	action := resolvedInventoryAction(args)
-	if (action == "list" || action == "build") && !runner.sourcePrepared {
-		runner.t.Fatalf("Helmfile %s ran before source-registry authentication", action)
+	expectedSource := "registry.example.test/release/charts"
+	if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/") {
+		expectedSource = "nvcr.io/nvidia/nvcf-byoc"
+	}
+	if (action == "list" || action == "build") && !runner.preparedSources[expectedSource] {
+		runner.t.Fatalf("Helmfile %s ran before source-registry authentication for %s", action, expectedSource)
 	}
 	runner.operations = append(runner.operations, action)
 	releases := fakeResolvedInventoryReleases(stateFile, hasResolvedInventoryFullOverrides(args))
@@ -341,7 +398,7 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 		if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/helmfile.d/01-") {
 			built += "  - name: third-party\n    url: https://third-party.example.test\n    oci: false\n"
 		} else {
-			built += "  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"
+			built += "  - name: nvcf\n    url: " + expectedSource + "\n    oci: true\n"
 		}
 		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") {
 			built += "  - name: public\n    url: https://charts.example.test\n    oci: false\n"

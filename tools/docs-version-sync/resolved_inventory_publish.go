@@ -33,6 +33,7 @@ var resolvedInventoryCommonOverrides = []string{
 }
 
 type resolvedInventoryState struct {
+	stack         string
 	plane         string
 	path          string
 	baseOverrides []string
@@ -41,6 +42,7 @@ type resolvedInventoryState struct {
 
 var resolvedInventoryStates = []resolvedInventoryState{
 	{
+		stack: "self-managed",
 		plane: "control-plane",
 		path:  "deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl",
 		fullOverrides: []string{
@@ -48,6 +50,7 @@ var resolvedInventoryStates = []resolvedInventoryState{
 		},
 	},
 	{
+		stack: "self-managed",
 		plane: "control-plane",
 		path:  "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
 		fullOverrides: []string{
@@ -57,10 +60,12 @@ var resolvedInventoryStates = []resolvedInventoryState{
 		},
 	},
 	{
+		stack: "self-managed",
 		plane: "observability",
 		path:  "deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl",
 	},
 	{
+		stack: "observability",
 		plane: "observability",
 		path:  "deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl",
 		baseOverrides: []string{
@@ -68,6 +73,7 @@ var resolvedInventoryStates = []resolvedInventoryState{
 		},
 	},
 	{
+		stack: "nvcf-compute-plane",
 		plane: "compute-plane",
 		path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",
 		fullOverrides: []string{
@@ -78,6 +84,7 @@ var resolvedInventoryStates = []resolvedInventoryState{
 		},
 	},
 	{
+		stack: "nvcf-compute-plane",
 		plane: "compute-plane",
 		path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
 	},
@@ -196,8 +203,9 @@ type localChartMetadata struct {
 }
 
 type resolvedInventoryConfig struct {
-	SchemaVersion            int    `yaml:"schemaVersion"`
-	PublishedChartRepository string `yaml:"publishedChartRepository"`
+	SchemaVersion                  int               `yaml:"schemaVersion"`
+	PublishedChartRepository       string            `yaml:"publishedChartRepository"`
+	RenderChartRepositoryOverrides map[string]string `yaml:"renderChartRepositoryOverrides"`
 }
 
 type resolvedInventoryHelmSource struct {
@@ -270,18 +278,26 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 	if err != nil {
 		return resolvedStackInventory{}, err
 	}
-	env, renderSource, ngcAPIKey, err := prepareResolvedInventoryEnvironment(copiedRepoRoot)
+	env, renderSources, ngcAPIKey, err := prepareResolvedInventoryEnvironment(copiedRepoRoot, config)
 	if err != nil {
 		return resolvedStackInventory{}, err
 	}
-	if err := runner.PrepareRepositories(env, map[string]helmfileRepository{
-		"nvcf": {
-			Name: "nvcf",
-			URL:  renderSource.reference(),
-			OCI:  true,
-		},
-	}, ngcAPIKey); err != nil {
-		return resolvedStackInventory{}, fmt.Errorf("authenticate release chart registry: %w", err)
+	preparedRegistries := map[string]struct{}{}
+	for _, stack := range resolvedInventoryStackNames() {
+		renderSource := renderSources[stack]
+		if _, prepared := preparedRegistries[renderSource.Registry]; prepared {
+			continue
+		}
+		if err := runner.PrepareRepositories(env, map[string]helmfileRepository{
+			"nvcf": {
+				Name: "nvcf",
+				URL:  renderSource.reference(),
+				OCI:  true,
+			},
+		}, ngcAPIKey); err != nil {
+			return resolvedStackInventory{}, fmt.Errorf("authenticate release chart registry for %s: %w", stack, err)
+		}
+		preparedRegistries[renderSource.Registry] = struct{}{}
 	}
 
 	planes := make(map[string]*resolvedInventoryPlaneInput, len(resolvedStackPlanes))
@@ -292,6 +308,10 @@ func collectResolvedStackInventory(repoRoot string, source stackSourceRelease, r
 		}
 	}
 	for stateIndex, state := range resolvedInventoryStates {
+		renderSource, ok := renderSources[state.stack]
+		if !ok {
+			return resolvedStackInventory{}, fmt.Errorf("render chart repository is not configured for stack %s", state.stack)
+		}
 		stateFile := filepath.Join(copiedRepoRoot, filepath.FromSlash(state.path))
 		releases, manifests, err := collectResolvedInventoryState(
 			copiedRepoRoot,
@@ -407,7 +427,32 @@ func loadResolvedInventoryConfig(repoRoot string) (resolvedInventoryConfig, erro
 		!strings.HasPrefix(repository, "https://") || strings.ContainsAny(repository, "{}$?#") {
 		return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory publishedChartRepository must be a resolved HTTPS repository without a trailing slash")
 	}
+	validStacks := make(map[string]struct{}, len(resolvedInventoryStackNames()))
+	for _, stack := range resolvedInventoryStackNames() {
+		validStacks[stack] = struct{}{}
+	}
+	for stack, raw := range config.RenderChartRepositoryOverrides {
+		if _, ok := validStacks[stack]; !ok {
+			return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory renderChartRepositoryOverrides contains unknown stack %s", stack)
+		}
+		if _, err := parseResolvedInventoryHelmSource(raw); err != nil {
+			return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory render chart repository for %s: %w", stack, err)
+		}
+	}
 	return config, nil
+}
+
+func resolvedInventoryStackNames() []string {
+	stacks := make(map[string]struct{})
+	for _, state := range resolvedInventoryStates {
+		stacks[state.stack] = struct{}{}
+	}
+	names := make([]string, 0, len(stacks))
+	for stack := range stacks {
+		names = append(names, stack)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func parseResolvedInventoryHelmSource(raw string) (resolvedInventoryHelmSource, error) {
@@ -430,79 +475,88 @@ func parseResolvedInventoryHelmSource(raw string) (resolvedInventoryHelmSource, 
 	return resolvedInventoryHelmSource{Registry: registry, Repository: repository}, nil
 }
 
-func prepareResolvedInventoryEnvironment(copiedRepoRoot string) ([]string, resolvedInventoryHelmSource, string, error) {
+func prepareResolvedInventoryEnvironment(copiedRepoRoot string, config resolvedInventoryConfig) ([]string, map[string]resolvedInventoryHelmSource, string, error) {
 	ngcAPIKey := strings.TrimSpace(os.Getenv("NVCF_RELEASE_NGC_API_KEY"))
 	if ngcAPIKey == "" {
 		ngcAPIKey = strings.TrimSpace(os.Getenv("NGC_API_KEY"))
 	}
 	if ngcAPIKey == "" {
-		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("NVCF_RELEASE_NGC_API_KEY is required to render release charts")
+		return nil, nil, "", fmt.Errorf("NVCF_RELEASE_NGC_API_KEY is required to render release charts")
 	}
-	renderSource, err := parseResolvedInventoryHelmSource(os.Getenv("NVCF_RELEASE_HELM_REGISTRY"))
+	defaultRenderSource, err := parseResolvedInventoryHelmSource(os.Getenv("NVCF_RELEASE_HELM_REGISTRY"))
 	if err != nil {
-		return nil, resolvedInventoryHelmSource{}, "", err
+		return nil, nil, "", err
 	}
-	values, err := yaml.Marshal(map[string]any{
-		"global": map[string]any{
-			"domain": "inventory.example.invalid",
-			"helm": map[string]any{
-				"sources": map[string]any{
-					"registry":   renderSource.Registry,
-					"repository": renderSource.Repository,
-				},
-			},
-			"image": map[string]any{
-				"registry":   "nvcr.io",
-				"repository": "nvidia/nvcf",
-			},
-		},
-		"ingress": map[string]any{
-			"gatewayApi": map[string]any{
-				"controllerNamespace": "gateway-system",
-				"gateways": map[string]any{
-					"grpc": map[string]any{
-						"name":      "inventory-grpc",
-						"namespace": "gateway-system",
-					},
-					"shared": map[string]any{
-						"name":      "inventory-shared",
-						"namespace": "gateway-system",
+	renderSources := make(map[string]resolvedInventoryHelmSource, len(resolvedInventoryStackNames()))
+	for _, stack := range resolvedInventoryStackNames() {
+		renderSource := defaultRenderSource
+		if override, ok := config.RenderChartRepositoryOverrides[stack]; ok {
+			renderSource, err = parseResolvedInventoryHelmSource(override)
+			if err != nil {
+				return nil, nil, "", fmt.Errorf("parse render chart repository for %s: %w", stack, err)
+			}
+		}
+		renderSources[stack] = renderSource
+		values, err := yaml.Marshal(map[string]any{
+			"global": map[string]any{
+				"domain": "inventory.example.invalid",
+				"helm": map[string]any{
+					"sources": map[string]any{
+						"registry":   renderSource.Registry,
+						"repository": renderSource.Repository,
 					},
 				},
+				"image": map[string]any{
+					"registry":   "nvcr.io",
+					"repository": "nvidia/nvcf",
+				},
 			},
-		},
-	})
-	if err != nil {
-		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("marshal inventory-only stack environment: %w", err)
-	}
-	for _, stack := range []string{"self-managed", "nvcf-compute-plane", "observability"} {
+			"ingress": map[string]any{
+				"gatewayApi": map[string]any{
+					"controllerNamespace": "gateway-system",
+					"gateways": map[string]any{
+						"grpc": map[string]any{
+							"name":      "inventory-grpc",
+							"namespace": "gateway-system",
+						},
+						"shared": map[string]any{
+							"name":      "inventory-shared",
+							"namespace": "gateway-system",
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("marshal inventory-only stack environment for %s: %w", stack, err)
+		}
 		environmentPath := filepath.Join(copiedRepoRoot, "deploy", "stacks", stack, "environments", "inventory.yaml")
 		if err := os.MkdirAll(filepath.Dir(environmentPath), 0o755); err != nil {
-			return nil, resolvedInventoryHelmSource{}, "", err
+			return nil, nil, "", err
 		}
 		if err := os.WriteFile(environmentPath, values, 0o600); err != nil {
-			return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("write %s inventory-only stack environment: %w", stack, err)
+			return nil, nil, "", fmt.Errorf("write %s inventory-only stack environment: %w", stack, err)
 		}
 	}
 	secretsPath := filepath.Join(copiedRepoRoot, "deploy", "stacks", "self-managed", "secrets", "inventory-secrets.yaml")
 	if err := os.MkdirAll(filepath.Dir(secretsPath), 0o755); err != nil {
-		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("create inventory-only stack secrets directory: %w", err)
+		return nil, nil, "", fmt.Errorf("create inventory-only stack secrets directory: %w", err)
 	}
 	if err := os.WriteFile(secretsPath, []byte("{}\n"), 0o600); err != nil {
-		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("write inventory-only stack secrets: %w", err)
+		return nil, nil, "", fmt.Errorf("write inventory-only stack secrets: %w", err)
 	}
 	registrationDir := filepath.Join(copiedRepoRoot, "deploy", "stacks", "nvcf-compute-plane", "inventory-registration")
 	if err := os.MkdirAll(registrationDir, 0o755); err != nil {
-		return nil, resolvedInventoryHelmSource{}, "", err
+		return nil, nil, "", err
 	}
 	registration := []byte("clusterName: inventory\nclusterID: 00000000-0000-0000-0000-000000000001\nclusterGroupID: 00000000-0000-0000-0000-000000000002\nncaID: inventory\nregion: inventory\nselfManaged:\n  identitySource: psat\n  icmsServiceURL: http://icms.example.invalid:8080\n  revalServiceURL: http://reval.example.invalid:8080\n  natsURL: nats://nats.example.invalid:4222\n")
 	if err := os.WriteFile(filepath.Join(registrationDir, "inventory-register-values.yaml"), registration, 0o600); err != nil {
-		return nil, resolvedInventoryHelmSource{}, "", fmt.Errorf("write inventory-only registration values: %w", err)
+		return nil, nil, "", fmt.Errorf("write inventory-only registration values: %w", err)
 	}
 	helmRoot := filepath.Join(copiedRepoRoot, ".helm")
 	for _, path := range []string{filepath.Join(helmRoot, "cache"), filepath.Join(helmRoot, "config"), filepath.Join(helmRoot, "data")} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
-			return nil, resolvedInventoryHelmSource{}, "", err
+			return nil, nil, "", err
 		}
 	}
 	env := append([]string{}, os.Environ()...)
@@ -515,7 +569,7 @@ func prepareResolvedInventoryEnvironment(copiedRepoRoot string) ([]string, resol
 		"NCA_ID":           "inventory",
 		"OUTPUT_DIR":       registrationDir,
 	})
-	return env, renderSource, ngcAPIKey, nil
+	return env, renderSources, ngcAPIKey, nil
 }
 
 func setResolvedInventoryEnvironment(env []string, values map[string]string) []string {
