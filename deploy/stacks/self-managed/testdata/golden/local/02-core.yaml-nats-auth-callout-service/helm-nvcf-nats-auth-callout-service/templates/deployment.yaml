@@ -52,7 +52,7 @@ spec:
       imagePullSecrets:
       containers:
         - name: helm-nvcf-nats-auth-callout-service
-          image: ":0.8.3"
+          image: "nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service:0.8.3"
           imagePullPolicy: IfNotPresent
           args:
             - "server"

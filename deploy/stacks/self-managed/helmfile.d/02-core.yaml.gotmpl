@@ -218,6 +218,8 @@ releases:
       - {{ $controlPlaneOwner | quote }}
     values:
       - ../global.yaml.gotmpl
+      - image:
+          repository: {{ printf "%s/%s/nvcf-nats-auth-callout-service" .Values.global.image.registry .Values.global.image.repository | quote }}
       {{- if .Values.global.imagePullSecrets }}
       - imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
