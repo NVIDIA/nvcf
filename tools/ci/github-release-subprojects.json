@@ -231,12 +231,32 @@
       "id": "cassandra",
       "path": "deploy/helm/cassandra",
       "service_name": "helm-nvcf-cassandra",
-      "legacy_tag_prefix": "helm-nvcf-cassandra-v"
+      "legacy_tag_prefix": "helm-nvcf-cassandra-v",
+      "deploys": [
+        {
+          "service": "cassandra-image",
+          "values_paths": [
+            "cassandra.image.tag"
+          ],
+          "app_version": true
+        },
+        {
+          "service": "cassandra-migrations",
+          "values_paths": [
+            "cassandra.migrations.image.tag"
+          ]
+        }
+      ]
     },
     {
       "id": "cassandra-image",
       "path": "infra/cassandra",
-      "service_name": "nvcf-cassandra"
+      "service_name": "nvcf-cassandra",
+      "artifact_version": {
+        "source_file": "Dockerfile",
+        "source_pattern": "(?m)^FROM cassandra:(?P<upstream>[0-9]+\\.[0-9]+\\.[0-9]+)@sha256:",
+        "format": "${upstream}-nv-${release}"
+      }
     },
     {
       "id": "api-keys-colocated",
@@ -248,12 +268,42 @@
       "id": "openbao",
       "path": "deploy/helm/openbao",
       "service_name": "helm-nvcf-openbao-server",
-      "legacy_tag_prefix": "helm-nvcf-openbao-server-v"
+      "legacy_tag_prefix": "helm-nvcf-openbao-server-v",
+      "deploys": [
+        {
+          "service": "openbao-image",
+          "values_paths": [
+            "openbao.server.image.tag",
+            "openbao.injector.agentImage.tag"
+          ],
+          "values_files": [
+            {
+              "file": "upgrade/values-upgrades.yaml",
+              "paths": [
+                "openbao.server.image.tag",
+                "openbao.injector.agentImage.tag"
+              ]
+            }
+          ],
+          "app_version": true
+        },
+        {
+          "service": "openbao-migrations",
+          "values_paths": [
+            "openbao.migrations.image.tag"
+          ]
+        }
+      ]
     },
     {
       "id": "openbao-image",
       "path": "infra/openbao",
-      "service_name": "nvcf-openbao"
+      "service_name": "nvcf-openbao",
+      "artifact_version": {
+        "source_file": "Dockerfile",
+        "source_pattern": "(?m)^ARG BAO_VERSION=(?P<upstream>[0-9]+\\.[0-9]+\\.[0-9]+)$",
+        "format": "${upstream}-nv-${release}"
+      }
     },
     {
       "id": "cert-manager",

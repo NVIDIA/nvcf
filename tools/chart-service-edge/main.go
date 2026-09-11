@@ -33,6 +33,11 @@
 //
 //	"deploys": ["<service id>", ...]
 //
+// A multi-image chart instead uses an object with values_paths to identify the
+// exact fields owned by each service. It can use values_files for repeated pins
+// in additional values files and sets app_version when that service also owns
+// Chart.yaml's appVersion.
+//
 // listing the release-metadata ids of the services whose images it ships. A
 // chart that ships no first-party image (an upstream dependency, or resources
 // only) declares "deploys": [] to say so deliberately.

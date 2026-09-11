@@ -213,3 +213,11 @@ func TestEmptyStringDeployEntryIsRejected(t *testing.T) {
 		t.Fatal("an empty string-form deploys entry must fail to decode")
 	}
 }
+
+func TestObjectDeployRequiresValuesPaths(t *testing.T) {
+	var m Metadata
+	err := json.Unmarshal([]byte(`{"services":[{"id":"c","path":"deploy/helm/c","deploys":[{"service":"svc"}]}]}`), &m)
+	if err == nil {
+		t.Fatal("an object deploy without values_paths must fail to decode")
+	}
+}
