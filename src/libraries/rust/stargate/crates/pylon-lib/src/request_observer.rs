@@ -165,6 +165,7 @@ enum ChatChoiceState {
 pub(crate) struct RequestObserver {
     endpoint: RequestObservationEndpoint,
     request_id: String,
+    request_instance: crate::runtime_state::RequestInstance,
     started_at: Instant,
     routing_key: Option<String>,
     model_id: String,
@@ -186,9 +187,11 @@ impl RequestObserver {
         generation: Option<ModelGeneration>,
         runtime_state: PylonRuntimeState,
     ) -> Self {
+        runtime_state.begin_request(&required, generation.as_ref());
         let priority = required.queue_priority();
         let RequiredTunnelHeaders {
             request_id,
+            request_instance,
             routing_key,
             model_id,
             priority: _,
@@ -199,6 +202,7 @@ impl RequestObserver {
         let mut observer = Self {
             endpoint,
             request_id,
+            request_instance,
             started_at: accepted_at,
             routing_key,
             model_id,
@@ -541,6 +545,7 @@ impl RequestObserver {
         self.runtime_state.observe_request_for_generation(
             RequestObservationEvent {
                 observation,
+                request_instance: Some(self.request_instance.clone()),
                 generation: self.generation.clone(),
                 changed_generations: Vec::new(),
                 input_interval,
@@ -710,6 +715,35 @@ mod tests {
 
     fn test_observer(request_id: &str, runtime_state: PylonRuntimeState) -> RequestObserver {
         RequestObserver::new(&request_headers(request_id, 42), runtime_state).unwrap()
+    }
+
+    #[test]
+    fn replaced_observer_cannot_change_the_current_request_instance() {
+        let runtime = PylonRuntimeState::new(InferenceServerStatus::Active, &["model-a".into()]);
+        let generation = runtime.current_generation("model-a");
+        let make_observer = |input_tokens| {
+            RequestObserver::from_required(
+                RequestObservationEndpoint::ChatCompletions,
+                validate_required_tunnel_headers(&request_headers("reused-id", input_tokens))
+                    .unwrap(),
+                generation.clone(),
+                runtime.clone(),
+            )
+        };
+        let mut first = make_observer(100);
+        let mut replacement = make_observer(20);
+        replacement.submit_now();
+        let expected = runtime.snapshot_live_model("model-a");
+        first.submit_now();
+        first.observe_output_message();
+        first.cancel();
+        assert_eq!(runtime.snapshot_live_model("model-a"), expected);
+        assert_eq!(expected.num_running_queries, 1);
+        replacement.cancel();
+        assert_eq!(
+            runtime.snapshot_live_model("model-a").num_running_queries,
+            0
+        );
     }
 
     #[test]
@@ -898,6 +932,7 @@ mod tests {
 
     fn embeddings_required_headers() -> RequiredTunnelHeaders {
         RequiredTunnelHeaders {
+            request_instance: Default::default(),
             request_id: "req-embeddings-terminal".to_string(),
             routing_key: Some("rk-1".to_string()),
             model_id: "model-embed".to_string(),
@@ -1146,6 +1181,7 @@ mod tests {
             .checked_sub(Duration::from_secs(10))
             .expect("test acceptance time should be representable");
         let required = RequiredTunnelHeaders {
+            request_instance: Default::default(),
             request_id: "req-upstream-completion".to_string(),
             routing_key: Some("rk-1".to_string()),
             model_id: "model-a".to_string(),

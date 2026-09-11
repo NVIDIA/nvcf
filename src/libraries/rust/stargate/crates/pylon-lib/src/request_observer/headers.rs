@@ -60,6 +60,7 @@ impl MissingRequiredHeaderError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RequiredTunnelHeaders {
     pub request_id: String,
+    pub request_instance: crate::runtime_state::RequestInstance,
     pub routing_key: Option<String>,
     pub model_id: String,
     pub priority: Option<u32>,
@@ -88,6 +89,7 @@ pub(crate) fn validate_required_tunnel_headers(
     let priority = parse_optional_numeric_header(request_headers, HEADER_PRIORITY)?;
     Ok(RequiredTunnelHeaders {
         request_id,
+        request_instance: Default::default(),
         routing_key,
         model_id,
         priority,

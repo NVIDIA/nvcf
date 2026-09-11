@@ -212,6 +212,7 @@ pub(super) async fn send_completion_request(
         TunnelRequestObserver::accepted(
             RequestObservationEndpoint::ChatCompletions,
             RequiredTunnelHeaders {
+                request_instance: Default::default(),
                 request_id: request_id.clone(),
                 routing_key: None,
                 model_id: model_id.to_string(),

@@ -82,6 +82,18 @@ impl ModelGeneration {
     }
 }
 
+/// Identifies one local request lifetime independently of the caller's request ID.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RequestInstance(Arc<()>);
+
+impl PartialEq for RequestInstance {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RequestInstance {}
+
 #[derive(Clone, Debug, Default)]
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
@@ -94,6 +106,7 @@ pub struct PylonRuntimeState {
 #[derive(Clone, Debug)]
 pub struct RequestObservationEvent {
     pub(crate) observation: RequestObservation,
+    pub(crate) request_instance: Option<RequestInstance>,
     pub(crate) generation: Option<ModelGeneration>,
     pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) input_interval: Option<RequestInputInterval>,
@@ -443,6 +456,7 @@ impl PylonRuntimeState {
         let request_input_tokens = observation.input_tokens;
         self.observe_request_for_generation(
             RequestObservationEvent {
+                request_instance: None,
                 observation,
                 generation,
                 changed_generations: Vec::new(),
@@ -460,7 +474,11 @@ impl PylonRuntimeState {
         event: RequestObservationEvent,
         request_input_tokens: u64,
     ) {
-        let event = self.transition_request_observation_for_generation(event, request_input_tokens);
+        let Some(event) =
+            self.transition_request_observation_for_generation(event, request_input_tokens)
+        else {
+            return;
+        };
         if let Some(tx) = &self.observation_tx
             && let Err(error) = tx.try_send(event)
         {
@@ -502,6 +520,7 @@ impl PylonRuntimeState {
         let request_input_tokens = observation.input_tokens;
         self.transition_request_observation_for_generation(
             RequestObservationEvent {
+                request_instance: None,
                 observation,
                 generation: Some(generation),
                 changed_generations: Vec::new(),
@@ -512,13 +531,14 @@ impl PylonRuntimeState {
             },
             request_input_tokens,
         )
+        .expect("test observation must target a current generation")
     }
 
     fn transition_request_observation_for_generation(
         &self,
         mut event: RequestObservationEvent,
         request_input_tokens: u64,
-    ) -> RequestObservationEvent {
+    ) -> Option<RequestObservationEvent> {
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
         // currency check would let a retired generation reinsert queue state.
@@ -536,7 +556,7 @@ impl PylonRuntimeState {
                     current_generation = ?current_generation,
                     "dropping request observation from a retired model generation"
                 );
-                return event;
+                return None;
             }
         }
         let mut live_observation = event.observation.clone();
@@ -544,14 +564,15 @@ impl PylonRuntimeState {
         let transition = self.live_requests.transition_generation_observation_with(
             &live_observation,
             event.generation.as_ref(),
+            event.request_instance.as_ref(),
             |transition| {
                 if let Some(metrics) = &self.metrics {
                     metrics.observe_request_transition(&event.observation, transition);
                 }
             },
-        );
+        )?;
         event.changed_generations = transition.changed_generations;
-        event
+        Some(event)
     }
 
     pub(crate) fn update_request_active_output_tps(
@@ -608,6 +629,19 @@ impl PylonRuntimeState {
             .track_generation_request(required, generation)
     }
 
+    pub(crate) fn begin_request(
+        &self,
+        required: &RequiredTunnelHeaders,
+        generation: Option<&ModelGeneration>,
+    ) {
+        let Some(generation) = generation else { return };
+        let advertised = self.advertised.lock();
+        if advertised.current(generation).is_some() {
+            self.live_requests
+                .begin_request(required, generation.clone());
+        }
+    }
+
     pub(crate) fn track_generation_request(
         &self,
         required: &RequiredTunnelHeaders,
@@ -616,14 +650,12 @@ impl PylonRuntimeState {
         let generation = generation?;
         let advertised = self.advertised.lock();
         advertised.current(generation)?;
-        Some(
-            self.live_requests
-                .track_generation_request(required, generation.clone()),
-        )
+        self.live_requests.track_existing_request(required)
     }
 
+    #[cfg(test)]
     pub(crate) fn finish_queue_request(&self, request_id: &str) {
-        self.live_requests.finish_queue_request(request_id);
+        self.live_requests.finish_queue_request(request_id, None);
     }
 
     #[cfg(test)]
@@ -692,10 +724,11 @@ mod tests {
         runtime_state: &PylonRuntimeState,
         observation: RequestObservation,
         generation: ModelGeneration,
-    ) -> RequestObservationEvent {
+    ) -> Option<RequestObservationEvent> {
         let request_input_tokens = observation.input_tokens;
         runtime_state.transition_request_observation_for_generation(
             RequestObservationEvent {
+                request_instance: None,
                 observation,
                 generation: Some(generation),
                 changed_generations: Vec::new(),
@@ -942,14 +975,15 @@ mod tests {
         assert!(runtime_state.publish_generation(&first));
 
         let mut first_observation = observation("req-first", "model-a", None);
-        transition_for_generation(&runtime_state, first_observation.clone(), first.clone());
+        transition_for_generation(&runtime_state, first_observation.clone(), first.clone())
+            .unwrap();
         assert_eq!(runtime_state.snapshot_live_model("model-a").queue_size, 1);
 
         assert!(runtime_state.retire_generation(&first).is_some());
         assert!(runtime_state.begin_generation(replacement.clone()));
         assert!(runtime_state.publish_generation(&replacement));
         first_observation.state = RequestObservationState::Complete;
-        transition_for_generation(&runtime_state, first_observation, first);
+        assert!(transition_for_generation(&runtime_state, first_observation, first).is_none());
 
         assert_eq!(
             runtime_state.snapshot_live_model("model-a"),
@@ -974,7 +1008,7 @@ mod tests {
 
         let mut stale = observation("req-first", "model-a", Some("rk-a"));
         stale.state = RequestObservationState::Failed;
-        transition_for_generation(&runtime_state, stale, first);
+        assert!(transition_for_generation(&runtime_state, stale, first).is_none());
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(
