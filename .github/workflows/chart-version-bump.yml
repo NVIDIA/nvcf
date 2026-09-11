@@ -227,14 +227,24 @@ jobs:
           # push. force-with-lease turns that into a rejected push rather than
           # a silent overwrite; re-fetching and rebasing recovers instead of
           # dropping this bump on the floor.
+          #
+          # Budgeted by wall clock, not by a fixed attempt count. This
+          # repository's own release history has produced bursts of up to 23
+          # service releases and 13 chart releases within a few minutes of
+          # each other (see NVIDIA/nvcf#1762), so a small fixed retry count
+          # would still fail under a burst this repository has already
+          # produced. A time budget scales with however large the next burst
+          # turns out to be instead of hard-coding today's observed maximum.
+          deadline=$(($(date +%s) + 300))
           attempt=0
           until git push --force-with-lease origin "${branch}"; do
             attempt=$((attempt + 1))
-            if [ "${attempt}" -ge 5 ]; then
-              echo "push kept losing the race against another release after ${attempt} attempts" >&2
+            if [ "$(date +%s)" -ge "${deadline}" ]; then
+              echo "push kept losing the race against another release past the 5 minute retry budget (attempt ${attempt})" >&2
               exit 1
             fi
             echo "push raced with another release on the shared branch, retrying (attempt ${attempt})" >&2
+            sleep "$(((RANDOM % 5) + 1))"
             git fetch origin "${branch}"
             git rebase "origin/${branch}"
           done
