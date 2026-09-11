@@ -69,10 +69,15 @@ environments:
 {{- fail "openbao.enabled must be true when addons.llm.pki.clusterIssuer management is enabled" }}
 {{- end }}
 
+{{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
+{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
+{{- fail "global.helm.sources.url must use https://" }}
+{{- end }}
+
 repositories:
   - name: nvcf
-{{- if dig "global" "helm" "sources" "url" "" .Values }}
-    url: {{ .Values.global.helm.sources.url | quote }}
+{{- if $helmSourceURL }}
+    url: {{ $helmSourceURL | quote }}
     {{- if dig "global" "helm" "sources" "username" "" .Values }}
     username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
     {{- end }}
@@ -162,7 +167,7 @@ releases:
 {{- end }}
 
   - name: cassandra
-    version: 0.20.3
+    version: 0.21.0
     condition: cassandra.enabled # From defaults.yaml or env overrides
     namespace: cassandra-system
     <<: *dependency # Inherits base values from the dependency template

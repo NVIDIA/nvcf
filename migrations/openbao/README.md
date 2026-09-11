@@ -16,6 +16,13 @@ This repository ships:
 - An example Kubernetes Job manifest (`job.yaml`)
 - A Docker-based integration test for the helper functions (`tests/`)
 
+## Releases
+
+Release-worthy changes under `migrations/openbao` publish the
+`nvcf-openbao-migrations` image. GitHub source releases use tags in the
+`migrations/openbao/vX.Y.Z` stream. Each release rebuilds both supported
+architectures from the source and dependency pins in this directory.
+
 ## Prerequisites
 
 - A reachable OpenBao or Vault deployment (the entrypoint waits for the service to become healthy and locates the leader before applying migrations)

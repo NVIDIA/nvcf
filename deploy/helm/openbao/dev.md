@@ -1,11 +1,14 @@
+<!-- markdownlint-disable-next-line MD041 -->
 ## Commands
 
 ### Deployment
+
 - `deploy.sh`:
 
 - `cleanup.sh`:
 
 ### Admin Setup
+
 - `admin/setup.sh`:
 
 - `admin/setup.sh --cleanup`:

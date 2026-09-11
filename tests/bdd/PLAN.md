@@ -197,6 +197,7 @@ original order. Repeated options and empty values are preserved.
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
 | `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
+| `Then DNS name {string} should resolve within {string} seconds` | Waits for the explicit DNS name to resolve through the host resolver within the explicit timeout. `${VAR}` interpolation applies to the name and timeout. Resolution must remain successful for three consecutive checks. Failures report the unresolved name and timeout without printing resolver output. |
 | `Then the function selected by NVCF CLI should have no scheduled compute-plane instances using context {string} and kubeconfig {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then reads `cluster agent list-functions --json` with the explicit compute-plane context and kubeconfig. The compute-plane CLI lists only scheduled functions, so no matching row and a matching row reporting zero instances both satisfy the assertion. |
 | `Then the function selected by NVCF CLI should report {string} compute-plane instances with status {string} using context {string} and kubeconfig {string} within {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then polls `cluster agent get-function --json` with the explicit compute-plane context and kubeconfig until the reported instance count matches and that many instances report the visible status, compared case-insensitively. The expected count, status, and timeout stay visible. Each attempt is a separate runner invocation, so every poll is logged. |
 
@@ -245,31 +246,31 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
 
 - `self-hosted up`:
 
-  ```
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain up --cluster-name <name> --region us-west-1 --nca-id nvcf-default
   ```
 
 - `self-hosted install --control-plane` (multi-cluster):
 
-  ```
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain --control-plane-context k3d-<cp> --compute-plane-context k3d-<compute> install --control-plane --cluster-name <cp> --region us-west-1 --nca-id nvcf-default
   ```
 
 - `self-hosted control-plane profile validate`:
 
-  ```
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain control-plane profile validate --file <profile-path> --require in-cluster
   ```
 
 - `self-hosted compute-plane register`:
 
-  ```
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
 
 - Helmfile control-plane profile handoff (single cluster):
 
-  ```
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
   make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
   ```
@@ -280,7 +281,7 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
   pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
 
-  ```
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
   ```
 

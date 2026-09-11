@@ -861,7 +861,7 @@ Mitigations:
 
 #### SGLang
 
-```
+```text
 Status: 📋 Planned
 
 Expected Challenges:
@@ -877,7 +877,7 @@ Testing Plan:
 
 #### TensorRT-LLM
 
-```
+```text
 Status: 📋 Planned
 
 Expected Challenges:
@@ -893,7 +893,7 @@ Testing Plan:
 
 #### Text Generation Inference (TGI)
 
-```
+```text
 Status: 📋 Planned
 
 Expected Challenges:

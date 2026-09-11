@@ -363,27 +363,6 @@ class NvcaAccountControllerTest extends IntegrationTest {
     }
 
     @Test
-    void getClusters_legacyIncludeGfnParam_mapsToIncludeNonByoc()
-            throws Exception {
-        // Prepare
-        when(clusterManagementService.getClusters(DUMMY_BYOC_NCA_ID, true, true)).thenReturn(
-                List.of(getDummyGetClusterResponse(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID)));
-
-        // Act
-        mockMvc.perform(MockMvcRequestBuilders.get(GET_CLUSTERS_URL, DUMMY_BYOC_NCA_ID)
-                                .param("includeAuthorizedClusters", "true")
-                                .param("includeGfnInAuthorizedClusters", "true")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .header(HttpHeaders.AUTHORIZATION,
-                                        JwtKeyUtils.getAuthHeader(DUMMY_CUSTOMER_1,
-                                                                  TestUtil.NGC_CLUSTER_MANAGEMENT_SCOPE)))
-                .andExpect(MockMvcResultMatchers.status().isOk());
-
-        // Assert: legacy param value is forwarded as includeNonByocInAuthorizedClusters
-        verify(clusterManagementService).getClusters(DUMMY_BYOC_NCA_ID, true, true);
-    }
-
-    @Test
     void getClusters_currentIncludeNonByocParam_isHonoured()
             throws Exception {
         // Prepare

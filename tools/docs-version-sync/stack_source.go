@@ -15,6 +15,7 @@ import (
 
 type effectiveStackPin struct {
 	artifact             string
+	artifactType         ArtifactType
 	path                 string
 	blockPattern         string
 	blockBoundaryPattern string
@@ -24,6 +25,7 @@ type effectiveStackPin struct {
 var effectiveStackPins = []effectiveStackPin{
 	{
 		artifact:             "helm-nvcf-llm-request-router",
+		artifactType:         ArtifactTypeChart,
 		path:                 "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
 		blockPattern:         `(?m)^  - name: llm-request-router[ \t]*$`,
 		blockBoundaryPattern: `(?m)^  -[ \t]+`,
@@ -31,32 +33,29 @@ var effectiveStackPins = []effectiveStackPin{
 	},
 	{
 		artifact:             "nvcf-gateway-routes",
+		artifactType:         ArtifactTypeChart,
 		path:                 "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
 		blockPattern:         `(?m)^  - name: ingress[ \t]*$`,
 		blockBoundaryPattern: `(?m)^  -[ \t]+`,
 		pattern:              `(?m)^    version:[ \t]*"?([^"\s]+)"?[ \t]*$`,
 	},
 	{
-		artifact: "pylon",
-		path:     "deploy/stacks/self-managed/global.yaml.gotmpl",
-		pattern:  `pylon:([0-9][^"\s]*)`,
+		artifact:     "pylon",
+		artifactType: ArtifactTypeImage,
+		path:         "deploy/stacks/self-managed/global.yaml.gotmpl",
+		pattern:      `pylon:([0-9][^"\s]*)`,
 	},
 	{
 		artifact:             "helm-nvca-operator",
+		artifactType:         ArtifactTypeChart,
 		path:                 "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
 		blockPattern:         `(?m)^  - name: nvca-operator[ \t]*$`,
 		blockBoundaryPattern: `(?m)^  -[ \t]+`,
 		pattern:              `(?m)^    version:[ \t]*"?([^"\s]+)"?[ \t]*$`,
 	},
 	{
-		artifact:             "nvca-operator",
-		path:                 "deploy/stacks/nvcf-compute-plane/environments/base.yaml",
-		blockPattern:         `(?m)^  nvcaOperator:[ \t]*$`,
-		blockBoundaryPattern: `(?m)^  [A-Za-z0-9_-]+:[ \t]*`,
-		pattern:              `(?m)^    imageTag:[ \t]*"([^"]+)"[ \t]*$`,
-	},
-	{
 		artifact:             "nvca",
+		artifactType:         ArtifactTypeImage,
 		path:                 "deploy/stacks/nvcf-compute-plane/environments/base.yaml",
 		blockPattern:         `(?m)^  nvcaOperator:[ \t]*$`,
 		blockBoundaryPattern: `(?m)^  [A-Za-z0-9_-]+:[ \t]*`,
@@ -174,7 +173,7 @@ func validateStackSourceSnapshotWithPins(repoRoot string, catalog *Catalog, pins
 	}
 	for _, pin := range pins {
 		want := versions[pin.artifact]
-		artifact, ok := catalog.findArtifact(pin.artifact)
+		artifact, ok := catalog.findArtifactByNameAndType(pin.artifact, pin.artifactType)
 		if !ok {
 			return fmt.Errorf("catalog is missing stack-pinned artifact %s", pin.artifact)
 		}

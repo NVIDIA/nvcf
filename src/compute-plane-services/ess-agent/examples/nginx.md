@@ -14,7 +14,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-nginx Consul Template Example
+# nginx Consul Template Example
+
 -----------------------------
 
 nginx is popular open source web server, reverse proxy, and load balancer. You can read more about nginx's configuration file syntax in the [nginx documentation](https://nginx.org/en/docs/).

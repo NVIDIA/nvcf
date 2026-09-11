@@ -15,6 +15,13 @@ configuration, and `openbao` user. It replaces `/usr/bin/bao` with a binary
 built from the matching official distribution source. See
 `OPENBAO_PROVENANCE.md` for the source identity and dependency floors.
 
+## Releases
+
+Release-worthy changes under `infra/openbao` publish the `nvcf-openbao`
+image. GitHub source releases use tags in the `infra/openbao/vX.Y.Z` stream.
+Each release rebuilds both supported architectures from the source and
+dependency pins in this directory.
+
 ## Plugin binaries
 
 The image expects an OS-specific plugin binary at build time, placed at:

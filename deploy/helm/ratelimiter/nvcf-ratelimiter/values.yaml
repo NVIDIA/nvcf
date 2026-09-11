@@ -45,7 +45,7 @@ rateLimiter:
     # Image name is chart-owned and appended to registry/repository.
     name: "nvcf-ratelimiter"
     pullPolicy: IfNotPresent
-    tag: "1.15.2"
+    tag: "1.17.3"
 
   imagePullSecrets: []
 

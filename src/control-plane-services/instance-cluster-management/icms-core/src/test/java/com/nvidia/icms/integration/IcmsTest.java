@@ -106,8 +106,8 @@ public class IcmsTest extends IntegrationTest {
     public static final String CLUSTER_CREATE_REQUEST_PATH = "requests/cluster_create_request.json";
     public static final String REGISTER_CLUSTER_REQUEST_PATH =
             "requests/register_cluster_request.json";
-    public static final String SSA_CLIENT_ID_1 = "nvssa-stg-dummy_1";
-    public static final String SSA_CLIENT_ID_2 = "nvssa-stg-dummy_2";
+    public static final String OAUTH_CLIENT_ID_1 = "nvssa-stg-dummy_1";
+    public static final String OAUTH_CLIENT_ID_2 = "nvssa-stg-dummy_2";
 
     @Autowired
     private MockMvc mockMvc;
@@ -131,7 +131,7 @@ public class IcmsTest extends IntegrationTest {
 
     @Test
     void testMultipleTerminationQueue() throws Exception {
-        String clusterId1 = createCluster("cluster1", "dummy_nca_id_1", SSA_CLIENT_ID_1);
+        String clusterId1 = createCluster("cluster1", "dummy_nca_id_1", OAUTH_CLIENT_ID_1);
         NvcaRegistrationResponse registrationResponse1 = registerCluster(clusterId1);
         validateRegistrationResonse(registrationResponse1);
         var clusterCreationQueues1 =
@@ -139,7 +139,7 @@ public class IcmsTest extends IntegrationTest {
         var terminationQueue1 = registrationResponse1.getCredentials().getTerminationQueue();
         sendClusterHeartbeat("requests/cluster_heartbeat.json", clusterId1);
 
-        String clusterId2 = createCluster("cluster2", "dummy_nca_id_2", SSA_CLIENT_ID_2);
+        String clusterId2 = createCluster("cluster2", "dummy_nca_id_2", OAUTH_CLIENT_ID_2);
         NvcaRegistrationResponse registrationResponse2 = registerCluster(clusterId2);
         validateRegistrationResonse(registrationResponse2);
         var clusterCreationQueues2 =
@@ -175,7 +175,7 @@ public class IcmsTest extends IntegrationTest {
 
     @Test
     void testRequestInstances() throws Exception {
-        String clusterId = createCluster("cluster4", "dummy_nca_id_1", SSA_CLIENT_ID_1);
+        String clusterId = createCluster("cluster4", "dummy_nca_id_1", OAUTH_CLIENT_ID_1);
         NvcaRegistrationResponse registrationResponse = registerCluster(clusterId);
         validateRegistrationResonse(registrationResponse);
         sendClusterHeartbeat("requests/cluster_heartbeat.json", clusterId);
@@ -430,11 +430,11 @@ public class IcmsTest extends IntegrationTest {
                 "${clusterName}", clusterName).replace("${ncaId}", ncaId)
                 .replace("${oAuthClientId}", oAuthClientId);
 
-        String ssaAuthHeader = getAuthHeader(ncaId, TestUtil.NGC_CLUSTER_MANAGEMENT_SCOPE);
+        String authHeader = getAuthHeader(ncaId, TestUtil.NGC_CLUSTER_MANAGEMENT_SCOPE);
         MvcResult mvcResult = mockMvc.perform(
                         MockMvcRequestBuilders.post(ClUSTER_CREATION_URL, ncaId)
                                 .contentType(MediaType.APPLICATION_JSON).content(request)
-                                .header(HttpHeaders.AUTHORIZATION, ssaAuthHeader))
+                                .header(HttpHeaders.AUTHORIZATION, authHeader))
                 .andExpect(MockMvcResultMatchers.status().isOk()).andReturn();
         return objectMapper.readValue(mvcResult.getResponse().getContentAsString(),
                                       ObjectNode.class).get("clusterId").stringValue();

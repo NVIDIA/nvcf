@@ -249,7 +249,7 @@ class ClusterCreationServiceTest {
     }
 
     @Test
-    void clusterCreation_createsNewClusterInNewClusterGroup_withoutSsaClientGeneratesClusetrId_Success() {
+    void clusterCreation_createsNewClusterInNewClusterGroup_withoutOAuthClientGeneratesClusterId_Success() {
 
         // Prepare
         ClusterCreationRequest clusterCreationRequest = dummyCreateNewClusterRequest(
@@ -358,7 +358,7 @@ class ClusterCreationServiceTest {
     }
 
     @Test
-    void clusterCreation_createsNewClusterInNewClusterGroup_withSsaClientIdUsedByAnotherCluster_throwsError() {
+    void clusterCreation_createsNewClusterInNewClusterGroup_withOAuthClientIdUsedByAnotherCluster_throwsError() {
 
         // Prepare
         ClusterCreationRequest clusterCreationRequest = dummyCreateNewClusterRequest(
@@ -1341,7 +1341,7 @@ class ClusterCreationServiceTest {
     }
 
     @Test
-    void validateAuthorizedNcaIdsForExternalCluster_ssaWithWildcard_success() {
+    void validateAuthorizedNcaIdsForExternalCluster_oAuthClientWithWildcard_success() {
         // Act & Assert - Should not throw (OAuth cluster with wildcard is allowed)
         Assertions.assertDoesNotThrow(() -> ClusterCreationService.validateAuthorizedNcaIdsForExternalCluster(
                 Set.of("*"), "oauth-client-id"));

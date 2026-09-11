@@ -55,10 +55,25 @@ environments:
 {{- toYaml $featureGateValues -}}
 {{- end -}}
 
+{{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
+{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
+{{- fail "global.helm.sources.url must use https://" }}
+{{- end }}
+
 repositories:
   - name: nvcf
+{{- if $helmSourceURL }}
+    url: {{ $helmSourceURL | quote }}
+    {{- if dig "global" "helm" "sources" "username" "" .Values }}
+    username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
+    {{- end }}
+    {{- if dig "global" "helm" "sources" "password" "" .Values }}
+    password: {{ dig "global" "helm" "sources" "password" "" .Values | quote }}
+    {{- end }}
+{{- else }}
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
     oci: true
+{{- end }}
 
 helmDefaults:
   createNamespace: true

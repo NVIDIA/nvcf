@@ -10,13 +10,8 @@ import (
 	"strings"
 )
 
-// nextPageFromHeaders returns the next page declared by GitLab or RFC 8288 headers.
+// nextPageFromHeaders returns the next page declared by RFC 8288 Link headers.
 func nextPageFromHeaders(headers http.Header) (int, bool) {
-	if value := strings.TrimSpace(headers.Get("X-Next-Page")); value != "" {
-		if page, err := strconv.Atoi(value); err == nil && page > 0 {
-			return page, true
-		}
-	}
 	for _, header := range headers.Values("Link") {
 		for _, link := range strings.Split(header, ",") {
 			parts := strings.Split(link, ";")

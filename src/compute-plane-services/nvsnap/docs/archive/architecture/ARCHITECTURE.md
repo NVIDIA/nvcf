@@ -20,10 +20,9 @@ NVSNAP is a production-grade GPU checkpoint/restore system for Kubernetes that e
 1. [The Hard Problems](#the-hard-problems)
 2. [Architecture Overview](#architecture-overview)
 3. [Core Technical Approach](#core-technical-approach)
-4. [Component Deep Dive](#component-deep-dive)
-5. [Multi-Process GPU Workloads (vLLM)](#multi-process-gpu-workloads-vllm)
-6. [Implementation Phases](#implementation-phases)
-7. [Testing Strategy](#testing-strategy)
+4. [Multi-Process GPU Workloads (vLLM)](#multi-process-gpu-workloads-vllm)
+5. [Implementation Phases](#implementation-phases)
+6. [Testing Strategy](#testing-strategy)
 
 ---
 

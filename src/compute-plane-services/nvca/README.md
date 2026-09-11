@@ -189,7 +189,7 @@ at — CI fills these from vault-fetched tokens.
 
 ### Envtest
 
-Some tests in the NVCA repository require [envtest]() to run.
+Some tests in the NVCA repository require [envtest](https://book.kubebuilder.io/reference/envtest.html) to run.
 The [`setup_envtest`](./scripts/setup_envtest) script will do this automatically, in both CI and on `make test`.
 
 To configure VSCode or clones like Cursor so you can run these tests directly in your editor,

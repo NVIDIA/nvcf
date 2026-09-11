@@ -17,7 +17,6 @@
 package com.nvidia.icms.service;
 
 import static com.nvidia.icms.util.TestUtil.DUMMY_CONTAINER_IMAGE;
-import static com.nvidia.icms.util.TestUtil.DUMMY_CREATION_QUEUE_URL;
 import static com.nvidia.icms.util.TestUtil.DUMMY_CUSTOMER_ID;
 import static com.nvidia.icms.util.TestUtil.DUMMY_ENVIRONMENT_VALUE;
 import static com.nvidia.icms.util.TestUtil.DUMMY_ERROR_SOURCE;
@@ -35,13 +34,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import tools.jackson.databind.ObjectMapper;
 import com.nvidia.icms.configuration.aws.AwsConfigurationProperties;
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.configuration.byoc.ByocConfigurationProperties;
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
@@ -63,30 +61,21 @@ import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.outbound.nats.NatsMessageSenderClient;
 import com.nvidia.icms.outbound.sqs.SqsMessageSenderClient;
 import com.nvidia.icms.service.metrics.InstanceErrorMetricsService;
-import com.nvidia.icms.service.createInstances.RequestInstanceDestination;
-import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
-import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import com.nvidia.icms.service.scheduled.gpuusage.GpuUsageEventService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
 import com.nvidia.icms.util.TestUtil;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import java.util.UUID;
-import java.util.stream.Stream;
 
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.Arguments;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;

@@ -40,6 +40,12 @@ jobs:
       - name: Run docs validation
         run: ./tools/ci/check-docs
 
+      - name: Check latest stack publication
+        continue-on-error: true
+        env:
+          DOC_VERSION_SYNC_GITHUB_TOKEN: ${{ github.token }}
+        run: ./tools/ci/check-doc-version-publication
+
   go-lib-codegen:
     name: go-lib codegen
     runs-on: ubuntu-latest

@@ -3,11 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 
@@ -584,6 +588,303 @@ def create_release(tag, title, notes, draft, dry_run):
     return True
 
 
+def publish_release(tag, dry_run):
+    """Publish a draft GitHub release after its required assets are present."""
+    if dry_run:
+        print(f"[github-release] dry-run: would publish GitHub release {tag}")
+        return
+    run(["gh", "release", "edit", tag, "--draft=false"])
+    print(f"[github-release] published GitHub release {tag}")
+
+
+def release_asset_service(metadata, tag, root):
+    matches = []
+    for service in metadata.get("services", []):
+        asset_name = str(service.get("resolved_inventory_asset") or "").strip()
+        if asset_name and Path(asset_name).name != asset_name:
+            raise SystemExit(f"{service.get('id', 'service')}: resolved_inventory_asset must be a file name")
+        if asset_name and version_from_tag(service, tag, root):
+            matches.append(service)
+    if len(matches) > 1:
+        raise SystemExit(f"release tag {tag} matches more than one resolved inventory publisher")
+    return matches[0] if matches else None
+
+
+def release_chart_service(metadata, tag, root):
+    """Resolve the single Helm chart service represented by a release tag."""
+    matches = []
+    for service in metadata.get("services", []):
+        service_path = str(service.get("path") or "").strip("/")
+        if service_path.startswith("deploy/helm/") and version_from_tag(service, tag, root):
+            matches.append(service)
+    if len(matches) > 1:
+        raise SystemExit(f"release tag {tag} matches more than one Helm chart publisher")
+    if matches:
+        return matches[0]
+    if tag.startswith("deploy/helm/"):
+        raise SystemExit(
+            f"Helm chart release tag {tag} has no matching service in the release metadata"
+        )
+    return None
+
+
+def release_chart_directory(root, service):
+    """Locate a service's owning chart and verify its configured release name."""
+    service_dir = root / service["path"]
+    candidates = []
+    if service_dir.is_dir():
+        for candidate in sorted(service_dir.rglob("Chart.yaml")):
+            relative = candidate.relative_to(service_dir)
+            # A vendored dependency under charts/ is part of the owning chart,
+            # not another package released by the service tag.
+            if "charts" not in relative.parts[:-1]:
+                candidates.append(candidate.parent)
+    if len(candidates) != 1:
+        rendered = ", ".join(str(path.relative_to(root)) for path in candidates) or "none"
+        raise SystemExit(
+            f"{service['id']}: expected exactly one release Chart.yaml under "
+            f"{service['path']}, found {rendered}"
+        )
+
+    chart_dir = candidates[0]
+    match = re.search(
+        r"^name:\s*['\"]?([^\s#'\"]+)",
+        (chart_dir / "Chart.yaml").read_text(),
+        flags=re.MULTILINE,
+    )
+    chart_name = match.group(1) if match else ""
+    if chart_name != service["service_name"]:
+        raise SystemExit(
+            f"{service['id']}: Chart.yaml name {chart_name or '<missing>'!r} does not match "
+            f"release service_name {service['service_name']!r}"
+        )
+    return chart_dir
+
+
+def helm_registry_settings():
+    """Load and validate the OCI registry path and API key used for publication."""
+    registry = os.environ.get("NVCF_RELEASE_HELM_REGISTRY", "").strip().rstrip("/")
+    registry = registry.removeprefix("oci://")
+    api_key = os.environ.get("NVCF_RELEASE_NGC_API_KEY", "")
+    if not registry or not api_key:
+        raise SystemExit(
+            "chart publishing requires NVCF_RELEASE_HELM_REGISTRY and "
+            "NVCF_RELEASE_NGC_API_KEY"
+        )
+    if not re.fullmatch(r"[A-Za-z0-9.-]+(?:/[A-Za-z0-9._-]+)*", registry):
+        raise SystemExit(f"invalid Helm registry path: {registry!r}")
+    return registry, api_key
+
+
+def helm_registry_login(registry, api_key):
+    """Authenticate Helm to the registry host without exposing the API key."""
+    host = registry.split("/", 1)[0]
+    result = subprocess.run(
+        ["helm", "registry", "login", host, "-u", "$oauthtoken", "--password-stdin"],
+        input=api_key,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.stdout.write(result.stdout or "")
+        raise SystemExit(f"Helm registry login failed for {host}")
+
+
+def package_release_chart(chart_dir, version, output_dir):
+    """Build chart dependencies and package an isolated copy at the tag version."""
+    staged_chart = output_dir / "source" / chart_dir.name
+    staged_chart.parent.mkdir(parents=True)
+    shutil.copytree(chart_dir, staged_chart)
+    if re.search(
+        r"^[ \t]*dependencies\s*:",
+        (staged_chart / "Chart.yaml").read_text(),
+        flags=re.MULTILINE,
+    ):
+        if not (staged_chart / "Chart.lock").is_file():
+            raise SystemExit(f"{chart_dir}: dependencies require Chart.lock")
+        run(["helm", "dependency", "build", str(staged_chart)])
+
+    package_dir = output_dir / "package"
+    package_dir.mkdir()
+    run(["helm", "package", str(staged_chart), "--version", version, "--destination", str(package_dir)])
+    packages = list(package_dir.glob("*.tgz"))
+    if len(packages) != 1:
+        raise SystemExit(f"expected one packaged Helm chart, found {len(packages)}")
+    return packages[0]
+
+
+def pull_release_chart(registry, chart_name, version, output_dir):
+    """Pull a published chart version and return Helm's result and downloaded archives."""
+    output_dir.mkdir()
+    result = subprocess.run(
+        [
+            "helm",
+            "pull",
+            f"oci://{registry}/{chart_name}",
+            "--version",
+            version,
+            "--destination",
+            str(output_dir),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    packages = list(output_dir.glob("*.tgz"))
+    return result.returncode, result.stdout or "", packages
+
+
+def helm_archive_signature(path):
+    """Describe archive content while ignoring gzip and tar timestamp differences."""
+    signature = {}
+    with tarfile.open(path, "r:gz") as archive:
+        for member in archive.getmembers():
+            if member.isfile():
+                source = archive.extractfile(member)
+                if source is None:
+                    raise SystemExit(f"could not read {member.name} from {path}")
+                content = hashlib.sha256(source.read()).hexdigest()
+            else:
+                content = member.linkname if member.issym() or member.islnk() else ""
+            signature[member.name] = (member.type, member.mode, content)
+    return signature
+
+
+def missing_helm_chart_output(output):
+    """Return whether Helm's output specifically reports an absent OCI artifact."""
+    lowered = output.lower()
+    return any(phrase in lowered for phrase in ("manifest unknown", "status code: 404"))
+
+
+def publish_release_chart(root, service, version, dry_run):
+    """Publish a chart once, accepting only an identical existing immutable version."""
+    source_root = Path(os.environ.get("NVCF_RELEASE_SOURCE_ROOT") or root)
+    chart_dir = release_chart_directory(source_root, service)
+    chart_name = service["service_name"]
+    if dry_run:
+        print(
+            f"[github-release] dry-run: would publish {chart_name}:{version} "
+            f"from {chart_dir.relative_to(source_root)}"
+        )
+        return
+
+    registry, api_key = helm_registry_settings()
+    with tempfile.TemporaryDirectory(prefix="nvcf-release-chart-") as tmp:
+        package_root = Path(tmp)
+        local_package = package_release_chart(chart_dir, version, package_root)
+        helm_registry_login(registry, api_key)
+        status, output, remote_packages = pull_release_chart(
+            registry, chart_name, version, package_root / "published"
+        )
+        if status == 0:
+            if len(remote_packages) != 1:
+                raise SystemExit(
+                    f"expected one downloaded {chart_name}:{version} archive, "
+                    f"found {len(remote_packages)}"
+                )
+            if helm_archive_signature(local_package) != helm_archive_signature(remote_packages[0]):
+                raise SystemExit(
+                    f"refusing to replace existing Helm chart {chart_name}:{version} "
+                    "with different content"
+                )
+            print(f"[github-release] Helm chart {chart_name}:{version} is already published unchanged")
+            return
+        if not missing_helm_chart_output(output):
+            sys.stdout.write(output)
+            raise SystemExit(f"could not determine whether Helm chart {chart_name}:{version} exists")
+
+        run(["helm", "push", str(local_package), f"oci://{registry}"])
+        print(f"[github-release] published Helm chart {chart_name}:{version} to {registry}")
+
+
+def validate_resolved_stack_inventory(path, tag, version, commit):
+    try:
+        with Path(path).open() as source:
+            inventory = json.load(source)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"resolved stack inventory is not valid JSON: {exc}") from exc
+    if not isinstance(inventory, dict) or inventory.get("schema_version") != 1:
+        raise SystemExit("resolved stack inventory must use schema_version 1")
+    expected_source = {"version": version, "tag": tag, "commit": commit}
+    if inventory.get("source") != expected_source:
+        raise SystemExit(
+            f"resolved stack inventory source is {inventory.get('source')!r}, want {expected_source!r}"
+        )
+    if not inventory.get("releases") or not inventory.get("artifacts"):
+        raise SystemExit("resolved stack inventory must contain releases and artifacts")
+
+
+def generate_resolved_stack_inventory(root, tag, version, commit, output_path):
+    run(
+        [
+            "go",
+            "run",
+            ".",
+            "--generate-stack-inventory",
+            str(output_path),
+            "--stack-version",
+            version,
+            "--stack-source-tag",
+            tag,
+            "--stack-source-commit",
+            commit,
+        ],
+        cwd=root / "tools" / "docs-version-sync",
+    )
+    validate_resolved_stack_inventory(output_path, tag, version, commit)
+
+
+def publish_resolved_stack_inventory(tag, asset_path):
+    asset_path = Path(asset_path)
+    existing = set(
+        run(
+            ["gh", "release", "view", tag, "--json", "assets", "--jq", ".assets[].name"],
+            capture=True,
+        ).splitlines()
+    )
+    if asset_path.name not in existing:
+        run(["gh", "release", "upload", tag, str(asset_path)])
+        print(f"[github-release] uploaded {asset_path.name} to {tag}")
+        return
+
+    with tempfile.TemporaryDirectory(prefix="nvcf-existing-release-asset-") as tmp:
+        run(
+            [
+                "gh",
+                "release",
+                "download",
+                tag,
+                "--pattern",
+                asset_path.name,
+                "--dir",
+                tmp,
+            ]
+        )
+        published_path = Path(tmp) / asset_path.name
+        if published_path.read_bytes() != asset_path.read_bytes():
+            raise SystemExit(
+                f"GitHub release {tag} already has a different {asset_path.name}; "
+                "refusing to replace an immutable inventory"
+            )
+    print(f"[github-release] GitHub release {tag} already has the identical {asset_path.name}")
+
+
+def delete_release_after_inventory_failure(tag):
+    try:
+        run(["gh", "release", "delete", tag, "--yes"])
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"[github-release] WARNING: failed to remove incomplete GitHub release {tag}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    print(f"[github-release] removed incomplete GitHub release {tag}")
+    return True
+
+
 def repo_slug():
     slug = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if slug:
@@ -1113,6 +1414,7 @@ def release_branch(parsed):
 
 
 def tag_release(args):
+    """Publish artifacts and a GitHub release for an existing release tag."""
     root = repo_root()
     metadata = load_metadata(root, args.metadata)
     tag = args.tag or os.environ.get("GITHUB_REF_NAME", "")
@@ -1141,7 +1443,36 @@ def tag_release(args):
         f"version={parsed['version']} release_branch={branch} "
         f"auto_tagging_enabled={str(auto_tagging_enabled).lower()}"
     )
-    create_release(tag, tag, notes, draft=draft, dry_run=dry_run)
+    chart_service = release_chart_service(metadata, tag, root)
+    if chart_service:
+        publish_release_chart(root, chart_service, parsed["version"], dry_run)
+
+    asset_service = release_asset_service(metadata, tag, root)
+    if not asset_service:
+        create_release(tag, tag, notes, draft=draft, dry_run=dry_run)
+        return
+
+    asset_name = asset_service["resolved_inventory_asset"]
+    if dry_run:
+        print(f"[github-release] dry-run: would generate and upload {asset_name} for {tag}")
+        create_release(tag, tag, notes, draft=True, dry_run=True)
+        if not draft:
+            publish_release(tag, dry_run=True)
+        return
+
+    commit = tag_sha(root, tag)
+    with tempfile.TemporaryDirectory(prefix="nvcf-resolved-stack-inventory-") as tmp:
+        asset_path = Path(tmp) / asset_name
+        generate_resolved_stack_inventory(root, tag, parsed["version"], commit, asset_path)
+        created = create_release(tag, tag, notes, draft=True, dry_run=False)
+        try:
+            publish_resolved_stack_inventory(tag, asset_path)
+        except (Exception, SystemExit):
+            if created:
+                delete_release_after_inventory_failure(tag)
+            raise
+        if not draft:
+            publish_release(tag, dry_run=False)
 
 
 def fetch_semantic_release_notes(root):

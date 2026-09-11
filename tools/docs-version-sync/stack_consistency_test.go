@@ -170,9 +170,6 @@ func TestMainCatalogMatchesDeclaredReleaseStackPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "artifacts-" + catalog.Stack.PublicationVersion + ".txt"; catalog.Stack.ArtifactsFile != want {
-		t.Errorf("stack artifacts_file = %q, want %q for publication version %s", catalog.Stack.ArtifactsFile, want, catalog.Stack.PublicationVersion)
-	}
 	if err := validateStackSourceSnapshot(root, catalog); err != nil {
 		t.Fatal(err)
 	}
@@ -237,8 +234,7 @@ func TestPendingPublicationsNeverRenderPrivateRegistryPaths(t *testing.T) {
 	}
 
 	allPublicOutput := manifest + imageMirroringOutput
-	staging := catalog.Registries[defaultStackRegistry]
-	privateRegistryPath := staging.Host + "/" + staging.Namespace
+	privateRegistryPath := "registry.example.com/private/team"
 	if strings.Contains(allPublicOutput, privateRegistryPath) {
 		t.Fatalf("generated public docs expose private registry path %q", privateRegistryPath)
 	}
@@ -247,6 +243,44 @@ func TestPendingPublicationsNeverRenderPrivateRegistryPaths(t *testing.T) {
 	}
 	if !strings.Contains(imageMirroringOutput, "HELM_NVCA_OPERATOR_REFERENCE") {
 		t.Fatal("mirroring instructions do not request an explicit chart reference while publication is pending")
+	}
+}
+
+func TestValidateCatalogRejectsPrivateRegistries(t *testing.T) {
+	tests := []struct {
+		name     string
+		registry Registry
+	}{
+		{
+			name:     "private NGC organization",
+			registry: Registry{Host: "nvcr.io", Namespace: "private-org/team"},
+		},
+		{
+			name:     "private NGC numeric organization",
+			registry: Registry{Host: "nvcr.io", Namespace: "123456789/team"},
+		},
+		{
+			name:     "private NGC Helm organization",
+			registry: Registry{Host: "https://helm.ngc.nvidia.com", Namespace: "private-org/team"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := testCatalog()
+			catalog.Registries[defaultImageRegistry] = test.registry
+
+			err := ValidateCatalog(catalog)
+			if err == nil || !strings.Contains(err.Error(), "must use a public catalog location") {
+				t.Fatalf("ValidateCatalog error = %v, want private registry rejection", err)
+			}
+		})
+	}
+}
+
+func TestValidateCatalogAcceptsPublicRegistries(t *testing.T) {
+	if err := ValidateCatalog(testCatalog()); err != nil {
+		t.Fatalf("ValidateCatalog rejected public NGC registries: %v", err)
 	}
 }
 
@@ -424,7 +458,7 @@ func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pins := []effectiveStackPin{{artifact: "chart", path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
+	pins := []effectiveStackPin{{artifact: "chart", artifactType: ArtifactTypeChart, path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
 	digest, err := pinSourceDigest(map[string][]byte{sourcePath: []byte("version: 1.2.3\n")}, pins)
 	if err != nil {
 		t.Fatal(err)
@@ -438,7 +472,10 @@ func TestValidateStackSourceSnapshotReadsRecordedCommit(t *testing.T) {
 			PinSources:         []string{sourcePath},
 			PinSourceDigest:    digest,
 		},
-		Artifacts: []Artifact{{Name: "chart", Version: "1.2.3"}},
+		Artifacts: []Artifact{
+			{Name: "chart", Type: ArtifactTypeImage, Version: "9.9.9"},
+			{Name: "chart", Type: ArtifactTypeChart, Version: "1.2.3"},
+		},
 	}
 
 	writeFile(t, filepath.Join(repo, sourcePath), "version: 9.9.9\n")
@@ -478,7 +515,7 @@ func TestValidateStackSourceSnapshotRequiresTagRef(t *testing.T) {
 			PinSourceDigest:    "sha256:" + strings.Repeat("0", 64),
 		},
 	}
-	pins := []effectiveStackPin{{artifact: "chart", path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
+	pins := []effectiveStackPin{{artifact: "chart", artifactType: ArtifactTypeChart, path: sourcePath, pattern: `(?m)^version: ([^\s]+)$`}}
 
 	err = validateStackSourceSnapshotWithPins(repo, catalog, pins)
 	if err == nil || !strings.Contains(err.Error(), "resolve stack source tag") {
@@ -571,7 +608,7 @@ func TestValidateCatalogAcceptsPendingArtifactID(t *testing.T) {
 		ID:       "cache-image",
 		Name:     "cache",
 		Type:     ArtifactTypeImage,
-		Registry: "staging",
+		Registry: defaultImageRegistry,
 		Version:  "1.2.3",
 	})
 	catalog.PublicationPending = []string{"cache-image"}

@@ -168,7 +168,7 @@ Stage 5d.1 unblocks the demo. Stage 5d.2 unblocks production. Stage 5d.3 keeps t
 
 ## Capture flow
 
-```
+```text
 T=0      nvsnap-server triggers checkpoint via nvsnap-agent on node A
 T=0      Agent: quiesce + cuda Lock + CRIU dump → /var/lib/nvsnap/checkpoints/<id>/
                                                   [~150 s frozen on vllm-small]
@@ -200,7 +200,7 @@ window to ~180 s.
 
 ## Restore flow
 
-```
+```text
 1. Restore request lands on node B (nvsnap-server picks node).
 2. nvsnap-server: GET /api/v1/checkpoints/<id>/sources
      → {

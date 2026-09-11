@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -39,8 +38,12 @@ func run(args []string) error {
 	target := flags.String("target", "main", "documentation target to render")
 	catalogPath := flags.String("catalog", "", "version catalog path")
 	check := flags.Bool("check", false, "fail if generated docs differ from checked-in marker blocks")
-	updateCatalog := flags.Bool("update-catalog", false, "fetch the stack artifact list from GitLab and update the catalog")
-	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch when updating the catalog")
+	updateCatalog := flags.Bool("update-catalog", false, "fetch the resolved GitHub stack inventory and update the catalog")
+	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
+	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
+	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
+	stackSourceTag := flags.String("stack-source-tag", "", "immutable self-managed stack source tag for inventory generation")
+	stackSourceCommit := flags.String("stack-source-commit", "", "immutable self-managed stack source commit for inventory generation")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -56,6 +59,30 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *inventoryOutput != "" {
+		if *updateCatalog || *check {
+			return fmt.Errorf("--generate-stack-inventory cannot be combined with --update-catalog or --check")
+		}
+		if *stackVersion == "" || *stackSourceTag == "" || *stackSourceCommit == "" {
+			return fmt.Errorf("--generate-stack-inventory requires --stack-version, --stack-source-tag, and --stack-source-commit")
+		}
+		outputPath := *inventoryOutput
+		if !filepath.IsAbs(outputPath) {
+			outputPath = filepath.Join(repoRoot, outputPath)
+		}
+		configPath := *inventoryConfig
+		if configPath != "" && !filepath.IsAbs(configPath) {
+			configPath = filepath.Join(repoRoot, configPath)
+		}
+		return writeResolvedStackInventory(repoRoot, outputPath, configPath, stackSourceRelease{
+			Version: *stackVersion,
+			Tag:     *stackSourceTag,
+			Commit:  *stackSourceCommit,
+		})
+	}
+	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" {
+		return fmt.Errorf("--stack-source-tag, --stack-source-commit, and --inventory-config require --generate-stack-inventory")
+	}
 	if *catalogPath == "" {
 		*catalogPath = filepath.Join(repoRoot, "docs", "version-catalog", *target+".yaml")
 	}
@@ -69,7 +96,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		updated, err := updateCatalogFromGitLab(*stackVersion, base)
+		updated, err := updateCatalogFromGitHub(repoRoot, *stackVersion, base)
 		if err != nil {
 			return err
 		}
@@ -86,7 +113,7 @@ func run(args []string) error {
 				return err
 			}
 			if !equal {
-				return fmt.Errorf("%w: %s does not match latest %s artifact manifest for stack publication %s", ErrCheckFailed, relOrAbs(repoRoot, *catalogPath), defaultPackageName, updated.Stack.PublicationVersion)
+				return fmt.Errorf("%w: %s does not match the resolved GitHub inventory for stack release %s", ErrCheckFailed, relOrAbs(repoRoot, *catalogPath), updated.Stack.PublicationVersion)
 			}
 		} else {
 			if err := writeCatalogAfterStackSourceValidation(repoRoot, *catalogPath, updated); err != nil {
@@ -120,91 +147,16 @@ func writeCatalogAfterStackSourceValidation(repoRoot, catalogPath string, catalo
 	return WriteCatalog(catalogPath, catalog)
 }
 
-func updateCatalogFromGitLab(stackVersion string, base *Catalog) (*Catalog, error) {
-	client, err := NewGitLabClientFromEnvironment()
-	if err != nil {
-		return nil, err
-	}
-	if stackVersion == "" {
-		version, err := client.LatestStackVersion(defaultStackProjectID, defaultPackageName)
-		if err != nil {
-			return nil, err
-		}
-		stackVersion = version
-	}
-	rawArtifacts, err := client.FetchArtifactList(defaultStackProjectID, defaultPackageName, stackVersion)
-	if err != nil {
-		return nil, err
-	}
-	denylistSource := base
-	if denylistSource == nil {
-		denylistSource = BuildCatalogFromArtifacts(stackVersion, nil)
-	}
-	artifacts, err := ParseArtifactList(strings.NewReader(rawArtifacts), denylistSource.DenylistMap())
-	if err != nil {
-		return nil, err
-	}
-	catalog := BuildCatalogFromArtifactsWithBase(stackVersion, artifacts, base)
-	if err := syncComputeStackPackageVersion(client, catalog); err != nil {
-		return nil, err
-	}
-	catalog.reconcilePublicationPending()
-	if err := ValidateCatalog(catalog); err != nil {
-		return nil, err
-	}
-	return catalog, nil
-}
-
-func syncComputeStackPackageVersion(client *GitLabClient, catalog *Catalog) error {
-	compute, ok := catalog.findArtifact(computeStackResourceName)
-	if !ok {
-		return nil
-	}
-	projectID, err := computeStackProjectID()
-	if err != nil {
-		return err
-	}
-	version, err := client.LatestGenericPackageVersion(projectID, computeStackResourceName)
-	if err != nil {
-		return fmt.Errorf("discover latest compute-plane stack package: %w", err)
-	}
-	if !setArtifactVersion(catalog, computeStackResourceName, version) {
-		return fmt.Errorf("artifact %s is required", computeStackResourceName)
-	}
-	if version != compute.Version {
-		updated, _ := catalog.findArtifact(computeStackResourceName)
-		if _, published := catalog.publicationFor(updated); !published {
-			catalog.PublicationPending = append(catalog.PublicationPending, updated.catalogKey())
-		}
-	}
-	return nil
-}
-
-func computeStackProjectID() (int, error) {
-	for _, envName := range []string{"DOC_VERSION_SYNC_COMPUTE_GITLAB_PROJECT_ID", "CI_PROJECT_ID"} {
-		value := strings.TrimSpace(os.Getenv(envName))
-		if value == "" {
-			continue
-		}
-		projectID, err := strconv.Atoi(value)
-		if err != nil {
-			return 0, fmt.Errorf("parse %s: %w", envName, err)
-		}
-		return projectID, nil
-	}
-	return defaultComputeProjectID, nil
-}
-
-func setArtifactVersion(catalog *Catalog, name, version string) bool {
+func setArtifactVersionByNameAndType(catalog *Catalog, name string, artifactType ArtifactType, version string) bool {
 	changed := false
 	for i := range catalog.Artifacts {
-		if catalog.Artifacts[i].Name == name {
+		if catalog.Artifacts[i].Name == name && catalog.Artifacts[i].Type == artifactType {
 			catalog.Artifacts[i].Version = version
 			changed = true
 		}
 	}
 	for i := range catalog.SupplementalArtifacts {
-		if catalog.SupplementalArtifacts[i].Name == name {
+		if catalog.SupplementalArtifacts[i].Name == name && catalog.SupplementalArtifacts[i].Type == artifactType {
 			catalog.SupplementalArtifacts[i].Version = version
 			changed = true
 		}
