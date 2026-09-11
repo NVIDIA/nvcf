@@ -622,6 +622,7 @@ pub(crate) fn stats_collector_config_from_args(
 ) -> StatsCollectorConfig {
     StatsCollectorConfig {
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
+        fallback_max_engine_concurrency: args.max_engine_concurrency,
         // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
         // real upstreams usually do not, so polling is explicit.
         kv_cache_stats_url: args.kv_cache_stats_path.as_deref().map(|path| {
@@ -2055,6 +2056,42 @@ mod tests {
         runtime.shutdown().await;
         upstream.shutdown().await;
         control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn concurrency_fallback_is_in_the_first_registration_without_a_stats_endpoint() {
+        let upstream = TestUpstream::spawn(false).await;
+        for mode in [EngineStatsStreamMode::Off, EngineStatsStreamMode::Auto] {
+            let mut control_plane = TestControlPlane::spawn().await;
+            let mut args = runtime_args(
+                &upstream.base_url,
+                control_plane.addr,
+                &["model-a", "model-b"],
+                &["--max-engine-concurrency", "25"],
+            );
+            args.engine_stats_stream = mode;
+            let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+            let runtime = start_pylon_runtime(&args, &plan)
+                .await
+                .expect("pylon startup should succeed without engine stats");
+
+            let registration = control_plane.first_registration().await;
+            for model_id in ["model-a", "model-b"] {
+                assert_eq!(
+                    registration.models[model_id]
+                        .stats
+                        .as_ref()
+                        .expect("first registration should contain stats")
+                        .max_engine_concurrency,
+                    25,
+                    "{model_id} should advertise the fallback in {mode} mode"
+                );
+            }
+            runtime.shutdown().await;
+            control_plane.shutdown().await;
+        }
+        assert_eq!(upstream.calibration_requests.load(Ordering::SeqCst), 0);
+        upstream.shutdown().await;
     }
 
     #[test]
