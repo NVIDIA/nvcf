@@ -31,5 +31,11 @@ rust_binary(
 rust_test(
     name = "stargate-bench_test",
     crate = ":stargate-bench",
+    data = ["//src/libraries/rust/stargate:benches"],
+    # Scenario lookup uses the manifest's ancestors. Resolve it within the
+    # test's runfiles tree instead of the build sandbox's source directory.
+    rustc_env = {
+        "CARGO_MANIFEST_DIR": "src/libraries/rust/stargate/crates/stargate-bench",
+    },
     deps = all_crate_deps(normal_dev = True),
 )
