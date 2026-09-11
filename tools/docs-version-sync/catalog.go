@@ -251,6 +251,9 @@ func ValidateCatalog(catalog *Catalog) error {
 		if strings.TrimSpace(registry.Namespace) == "" {
 			return fmt.Errorf("registry %q has empty namespace", name)
 		}
+		if !isPublicCatalogRegistry(registry) {
+			return fmt.Errorf("registry %q must use a public catalog location", name)
+		}
 	}
 	seenPublications := map[string]struct{}{}
 	publicationVersions := map[string][]string{}

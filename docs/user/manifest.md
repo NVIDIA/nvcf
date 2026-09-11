@@ -65,8 +65,8 @@ default to their upstream Docker Hub source:
 
 | Value | Default image |
 | --- | --- |
-| `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.23.0` |
-| `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.36.1` |
+| `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.24.0` |
+| `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.37.0` |
 
 A public-catalog install needs no configuration for these two images. Verify
 that your cluster can reach Docker Hub. If your egress to Docker Hub is
@@ -86,14 +86,14 @@ nats:
     image:
       registry: <your-registry>
       repository: <your-repository>/nats-server-config-reloader
-      tag: "0.23.0"
+      tag: "0.24.0"
 
 api:
   accountBootstrap:
     image:
       registry: <your-registry>
       repository: <your-repository>/alpine-k8s
-      tag: "1.36.1"
+      tag: "1.37.0"
 ```
 
 ### Override the Cassandra images

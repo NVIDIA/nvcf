@@ -242,12 +242,12 @@ func TestCatalogRefreshMarksChangedVersionsPendingAndKeepsPublishedVersionsPubli
 
 func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	catalog := testCatalog()
-	catalog.Registries["ea-images"] = Registry{Host: "nvcr.io", Namespace: "example/public-preview"}
+	catalog.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
 	catalog.Publications = []Publication{{
 		Name:             "llm-api-gateway",
 		Version:          "0.3.0",
 		PublishedVersion: "0.3.0-ea",
-		Registry:         "ea-images",
+		Registry:         "public-images",
 	}}
 
 	raw, err := MarshalCatalog(catalog)
@@ -269,7 +269,7 @@ func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("artifactPath failed: %v", err)
 	}
-	if want := "nvcr.io/example/public-preview/llm-api-gateway:0.3.0-ea"; got != want {
+	if want := "nvcr.io/nvidia/nvcf/llm-api-gateway:0.3.0-ea"; got != want {
 		t.Fatalf("artifactPath = %q, want %q", got, want)
 	}
 }

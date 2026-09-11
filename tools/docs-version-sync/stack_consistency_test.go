@@ -246,6 +246,44 @@ func TestPendingPublicationsNeverRenderPrivateRegistryPaths(t *testing.T) {
 	}
 }
 
+func TestValidateCatalogRejectsPrivateRegistries(t *testing.T) {
+	tests := []struct {
+		name     string
+		registry Registry
+	}{
+		{
+			name:     "private NGC organization",
+			registry: Registry{Host: "nvcr.io", Namespace: "private-org/team"},
+		},
+		{
+			name:     "private NGC numeric organization",
+			registry: Registry{Host: "nvcr.io", Namespace: "123456789/team"},
+		},
+		{
+			name:     "private NGC Helm organization",
+			registry: Registry{Host: "https://helm.ngc.nvidia.com", Namespace: "private-org/team"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := testCatalog()
+			catalog.Registries[defaultImageRegistry] = test.registry
+
+			err := ValidateCatalog(catalog)
+			if err == nil || !strings.Contains(err.Error(), "must use a public catalog location") {
+				t.Fatalf("ValidateCatalog error = %v, want private registry rejection", err)
+			}
+		})
+	}
+}
+
+func TestValidateCatalogAcceptsPublicRegistries(t *testing.T) {
+	if err := ValidateCatalog(testCatalog()); err != nil {
+		t.Fatalf("ValidateCatalog rejected public NGC registries: %v", err)
+	}
+}
+
 func TestCatalogRefreshPreservesPublicationPending(t *testing.T) {
 	base := testCatalog()
 	base.PublicationPending = []string{"nvcf-self-managed-stack", "nvcf-cli"}
