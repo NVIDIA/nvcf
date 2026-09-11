@@ -37,7 +37,7 @@ invocation:
     registry: "" # must be supplied
     repository: "" # must be supplied
     pullPolicy: IfNotPresent
-    tag: "0.12.0"
+    tag: "0.12.1"
 
   podAnnotations: {}
   podLabels: {}
