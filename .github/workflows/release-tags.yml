@@ -59,7 +59,7 @@ jobs:
   # work.
   service-release:
     name: service release automation
-    if: github.ref_type != 'tag' && inputs.inventory_tag == ''
+    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || inputs.inventory_tag == '')
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
@@ -179,13 +179,6 @@ jobs:
             --stack-version "${version}" \
             --stack-source-tag "${INVENTORY_TAG}" \
             --stack-source-commit "${commit}"
-
-      - name: Upload validated inventory
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: self-managed-inventory-preflight
-          path: ${{ runner.temp }}/nvcf-self-managed-stack-inventory.json
-          if-no-files-found: error
 
   tag-release-notes:
     name: tag release notes
