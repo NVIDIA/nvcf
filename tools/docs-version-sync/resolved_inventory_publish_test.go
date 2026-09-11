@@ -182,6 +182,15 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 		t.Fatalf("NVCA source chart tag prefix = %q", got)
 	}
 
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/nvca-operator/nvca-operator\n    renderValues:\n      image.repository: nvcr.io/nvidia/nvcf/nvca\n")
+	config, err = loadResolvedInventoryConfig(repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.SourceCharts["helm-nvca-operator"].RenderValues["image.repository"]; got != "nvcr.io/nvidia/nvcf/nvca" {
+		t.Fatalf("NVCA render value = %q", got)
+	}
+
 	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: oci://registry.example.test/charts\n")
 	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "resolved HTTPS repository") {
 		t.Fatalf("non-HTTPS repository error = %v", err)
@@ -197,6 +206,11 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 		t.Fatalf("invalid source chart path error = %v", err)
 	}
 
+	writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/nvca-operator/nvca-operator\n    renderValues:\n      image..repository: nvcr.io/nvidia/nvcf/nvca\n")
+	if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), "render value name") {
+		t.Fatalf("invalid render value name error = %v", err)
+	}
+
 	externalConfig := filepath.Join(t.TempDir(), "release-inventory.yaml")
 	writeFile(t, externalConfig, "schemaVersion: 1\npublishedChartRepository: https://helm.example.test/external\n")
 	external, err := loadResolvedInventoryConfig(repo, externalConfig)
@@ -205,6 +219,88 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	}
 	if external.PublishedChartRepository != "https://helm.example.test/external" {
 		t.Fatalf("external published repository = %q", external.PublishedChartRepository)
+	}
+}
+
+func TestReplaceResolvedInventoryStateChart(t *testing.T) {
+	chartPath := filepath.Join(t.TempDir(), "helm-nvcf-invocation-service", "1.6.1")
+	quotedChartPath := strconv.Quote(filepath.ToSlash(chartPath))
+	tests := []struct {
+		name         string
+		raw          string
+		renderValues map[string]string
+		want         string
+	}{
+		{
+			name: "explicit chart",
+			raw:  "releases:\n  - name: invocation-service\n    chart: nvcf/helm-nvcf-invocation-service\n    version: 1.6.1\n",
+			want: "releases:\n  - name: invocation-service\n    chart: " + quotedChartPath + "\n    version: 1.6.1\n",
+		},
+		{
+			name: "quoted chart",
+			raw:  "releases:\n  - name: invocation-service\n    chart: \"nvcf/helm-nvcf-invocation-service\"\n    version: 1.6.1\n",
+			want: "releases:\n  - name: invocation-service\n    chart: " + quotedChartPath + "\n    version: 1.6.1\n",
+		},
+		{
+			name:         "explicit chart with render values",
+			raw:          "releases:\n  - name: invocation-service\n    chart: nvcf/helm-nvcf-invocation-service\n    version: 1.6.1\n",
+			renderValues: map[string]string{"image.repository": "nvcr.io/nvidia/nvcf/nvcf-invocation-service"},
+			want:         "releases:\n  - name: invocation-service\n    set:\n      - name: \"image.repository\"\n        value: \"nvcr.io/nvidia/nvcf/nvcf-invocation-service\"\n    chart: " + quotedChartPath + "\n    version: 1.6.1\n",
+		},
+		{
+			name: "inherited chart",
+			raw:  "templates:\n  service: &service\n    chart: nvcf/helm-nvcf-{{ .Release.Name }}\nreleases:\n  - name: invocation-service\n    version: 1.6.1\n    inherit:\n      - template: service\n",
+			want: "templates:\n  service: &service\n    chart: nvcf/helm-nvcf-{{ .Release.Name }}\nreleases:\n  - name: invocation-service\n    chart: " + quotedChartPath + "\n    version: 1.6.1\n    inherit:\n      - template: service\n",
+		},
+		{
+			name:         "inherited chart with render values",
+			raw:          "templates:\n  service: &service\n    chart: nvcf/helm-nvcf-{{ .Release.Name }}\nreleases:\n  - name: invocation-service\n    version: 1.6.1\n    inherit:\n      - template: service\n",
+			renderValues: map[string]string{"image.repository": "nvcr.io/nvidia/nvcf/nvcf-invocation-service"},
+			want:         "templates:\n  service: &service\n    chart: nvcf/helm-nvcf-{{ .Release.Name }}\nreleases:\n  - name: invocation-service\n    set:\n      - name: \"image.repository\"\n        value: \"nvcr.io/nvidia/nvcf/nvcf-invocation-service\"\n    chart: " + quotedChartPath + "\n    version: 1.6.1\n    inherit:\n      - template: service\n",
+		},
+		{
+			name:         "existing set sequence",
+			raw:          "releases:\n  - name: invocation-service\n    chart: \"nvcf/helm-nvcf-invocation-service\"\n    set:\n      - name: \"existing.value\"\n        value: \"preserved\"\n    version: 1.6.1\n",
+			renderValues: map[string]string{"image.repository": "nvcr.io/nvidia/nvcf/nvcf-invocation-service"},
+			want:         "releases:\n  - name: invocation-service\n    chart: " + quotedChartPath + "\n    set:\n      - name: \"existing.value\"\n        value: \"preserved\"\n      - name: \"image.repository\"\n        value: \"nvcr.io/nvidia/nvcf/nvcf-invocation-service\"\n    version: 1.6.1\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateFile := filepath.Join(t.TempDir(), "state.yaml.gotmpl")
+			writeFile(t, stateFile, test.raw)
+			if err := replaceResolvedInventoryStateChart(
+				stateFile,
+				"invocation-service",
+				"helm-nvcf-invocation-service",
+				chartPath,
+				test.renderValues,
+			); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(stateFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != test.want {
+				t.Fatalf("updated Helmfile state:\n%s\nwant:\n%s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestReplaceResolvedInventoryStateChartRejectsAmbiguousRelease(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.yaml.gotmpl")
+	writeFile(t, stateFile, "releases:\n  - name: invocation-service\n  - name: invocation-service\n")
+	err := replaceResolvedInventoryStateChart(
+		stateFile,
+		"invocation-service",
+		"helm-nvcf-invocation-service",
+		filepath.Join(t.TempDir(), "chart"),
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "2 invocation-service release entries") {
+		t.Fatalf("ambiguous release error = %v", err)
 	}
 }
 
