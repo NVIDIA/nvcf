@@ -4,7 +4,7 @@
 # Benchmark harness. Not packaged into an OCI image.
 
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
 # Workspace-local Cargo deps (own-workspace `workspace = true`).
 _WORKSPACE_DEPS = [
@@ -26,4 +26,10 @@ rust_binary(
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
     deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate-bench_test",
+    crate = ":stargate-bench",
+    deps = all_crate_deps(normal_dev = True),
 )
