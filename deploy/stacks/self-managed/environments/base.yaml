@@ -281,9 +281,7 @@ cassandra:
   resourcesPreset: "xlarge"
   migrations:
     image:
-      # 0.17.3 includes the current NVCT task schema while preserving the
-      # legacy tables required by the published function autoscaler 1.21.0.
-      tag: 0.17.3
+      tag: 0.17.5
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
