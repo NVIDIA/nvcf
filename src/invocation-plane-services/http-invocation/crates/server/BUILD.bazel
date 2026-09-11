@@ -8,21 +8,33 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//rules/oci:defs.bzl", "rust_oci_image")
 
-# Stamp the real release version into the binary. The legacy Dockerfile did
-# this via the CICD_NEXT_VERSION build-arg -> build.rs -> CARGO_PKG_VERSION; the
-# Bazel build dropped it, so binaries self-reported the placeholder version
-# (e.g. `server --version`, startup logs, and the OTel service.version resource
-# attribute all showed 0.0.0-dev regardless of the released image tag).
-# tools/workspace_status.sh emits STABLE_VERSION; expand_template substitutes it
-# on `--stamp` (release) builds and falls back to 0.0.0-dev otherwise. The file
-# is fed to the Rust targets via rustc_env_files so env!("CARGO_PKG_VERSION")
-# resolves to the release version.
+# Stamp the real release version and commit into the binary. The legacy
+# Dockerfile did this via the CICD_NEXT_VERSION build-arg -> build.rs ->
+# CARGO_PKG_VERSION; the Bazel build dropped it, so binaries self-reported the
+# placeholder version (e.g. `server --version`, startup logs, and the OTel
+# service.version resource attribute all showed 0.0.0-dev regardless of the
+# released image tag). tools/workspace_status.sh emits
+# STABLE_VERSION/STABLE_GIT_COMMIT_FULL; expand_template substitutes them on
+# `--stamp` (release) builds and falls back to dev defaults otherwise. The
+# file is fed to the Rust targets via rustc_env_files so
+# env!("CARGO_PKG_VERSION") resolves to the release version and the GET /info
+# handler's NVCF_GIT_COMMIT (via option_env!, see the shared nvcf-info crate)
+# resolves to the real commit.
 expand_template(
     name = "version_env",
     out = "version.env",
-    stamp_substitutions = {"{VERSION}": "{{STABLE_VERSION}}"},
-    substitutions = {"{VERSION}": "0.0.0-dev"},
-    template = ["CARGO_PKG_VERSION={VERSION}"],
+    stamp_substitutions = {
+        "{VERSION}": "{{STABLE_VERSION}}",
+        "{GIT_COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}",
+    },
+    substitutions = {
+        "{VERSION}": "0.0.0-dev",
+        "{GIT_COMMIT}": "unknown",
+    },
+    template = [
+        "CARGO_PKG_VERSION={VERSION}",
+        "NVCF_GIT_COMMIT={GIT_COMMIT}",
+    ],
 )
 
 # build.rs uses tonic-build + prost-build to compile crates/server/proto/*.proto.
@@ -77,7 +89,10 @@ rust_library(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     rustc_env_files = [":version_env"],
     visibility = ["//visibility:public"],
-    deps = [":build_script"] + all_crate_deps(normal = True),
+    deps = [
+        ":build_script",
+        "//src/libraries/rust/nvcf-info:nvcf-info-invocation",
+    ] + all_crate_deps(normal = True),
 )
 
 rust_binary(

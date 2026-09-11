@@ -144,6 +144,7 @@ pub async fn app(
         )
         .layer(axum_mw::from_fn(nvcf_mw::auth::auth_middleware)) // Everything above this layer will require auth DON'T MOVE IT
         .route("/health", get(routes::get_health)) // Needs to be ahead of other layers to avoid auth, and after metrics layer to get recorded
+        .route("/info", get(routes::get_info)) // unauthenticated, same as /health above
         .layer(CorsLayer::very_permissive().max_age(Duration::from_secs(86400))) // only on the path based router. for full path passthrough we send the OPTIONS and all other requests all the way to the worker.
         .layer(
             PrometheusMetricLayerBuilder::new()
