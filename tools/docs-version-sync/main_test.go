@@ -503,12 +503,26 @@ func TestRenderImageMirroringCLIContentMatchesPublicationState(t *testing.T) {
 
 func TestRenderSupplementalStackDownloadsMatchPublicationState(t *testing.T) {
 	tests := []struct {
-		name     string
-		artifact string
-		renderer string
+		name                       string
+		artifact                   string
+		renderer                   string
+		resourceExamplesVersionEnv string
+		snippetVersionEnv          string
 	}{
-		{name: "compute", artifact: computeStackResourceName, renderer: "image-mirroring-compute-stack-snippet"},
-		{name: "observability", artifact: observabilityStackResourceName, renderer: "image-mirroring-observability-stack-snippet"},
+		{
+			name:                       "compute",
+			artifact:                   computeStackResourceName,
+			renderer:                   "image-mirroring-compute-stack-snippet",
+			resourceExamplesVersionEnv: "COMPUTE_STACK_VERSION",
+			snippetVersionEnv:          "COMPUTE_VERSION",
+		},
+		{
+			name:                       "observability",
+			artifact:                   observabilityStackResourceName,
+			renderer:                   "image-mirroring-observability-stack-snippet",
+			resourceExamplesVersionEnv: "OBSERVABILITY_STACK_VERSION",
+			snippetVersionEnv:          "OBSERVABILITY_VERSION",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -538,13 +552,26 @@ func TestRenderSupplementalStackDownloadsMatchPublicationState(t *testing.T) {
 				}
 			}
 			published.Publications = []Publication{{Name: tt.artifact, Version: "0.5.0", Registry: "public-resources"}}
-			for _, renderer := range []string{"image-mirroring-resource-examples", tt.renderer} {
-				t.Run(renderer+"-published", func(t *testing.T) {
-					got, err := Render(renderer, published)
+			for _, renderer := range []struct {
+				name       string
+				versionEnv string
+				multiline  bool
+			}{
+				{name: "image-mirroring-resource-examples", versionEnv: tt.resourceExamplesVersionEnv, multiline: true},
+				{name: tt.renderer, versionEnv: tt.snippetVersionEnv},
+			} {
+				t.Run(renderer.name+"-published", func(t *testing.T) {
+					got, err := Render(renderer.name, published)
 					if err != nil {
 						t.Fatalf("Render failed: %v", err)
 					}
-					if !strings.Contains(got, "ngc registry resource download-version") || !strings.Contains(got, "nvidia/nvcf/"+tt.artifact) {
+					separator := ""
+					if renderer.multiline {
+						separator = "\\\n  "
+					}
+					want := "ngc registry resource download-version " + separator +
+						"\"nvidia/nvcf/" + tt.artifact + ":${" + renderer.versionEnv + "}\""
+					if !strings.Contains(got, want) {
 						t.Fatalf("published %s omits its public download command:\n%s", tt.artifact, got)
 					}
 				})

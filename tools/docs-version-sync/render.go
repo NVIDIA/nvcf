@@ -92,12 +92,9 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 		{name: computeStackResourceName, versionEnv: "COMPUTE_STACK_VERSION", label: "compute-plane"},
 		{name: observabilityStackResourceName, versionEnv: "OBSERVABILITY_STACK_VERSION", label: "observability"},
 	} {
-		artifact, found := catalog.findArtifact(config.name)
+		artifact, found := catalog.findArtifactByNameAndType(config.name, ArtifactTypeResource)
 		if !found {
 			continue
-		}
-		if artifact.Type != ArtifactTypeResource {
-			return "", fmt.Errorf("%s must be a resource artifact", config.name)
 		}
 		item := supplementalStack{
 			artifact:   artifact,
@@ -175,12 +172,9 @@ func renderImageMirroringObservabilityStackSnippet(catalog *Catalog) (string, er
 }
 
 func renderImageMirroringSupplementalStackSnippet(catalog *Catalog, name, versionEnv string) (string, error) {
-	artifact, ok := catalog.findArtifact(name)
+	artifact, ok := catalog.findArtifactByNameAndType(name, ArtifactTypeResource)
 	if !ok {
 		return "", fmt.Errorf("supplemental artifact %s is required", name)
-	}
-	if artifact.Type != ArtifactTypeResource {
-		return "", fmt.Errorf("%s must be a resource artifact", name)
 	}
 	if catalog.publicationIsPending(artifact) {
 		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", artifact.Name, artifact.Version), nil

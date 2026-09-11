@@ -61,7 +61,7 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 	}
 
 	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
-		if !setArtifactVersion(catalog, name, inventory.Source.Version) {
+		if !setArtifactVersionByNameAndType(catalog, name, ArtifactTypeResource, inventory.Source.Version) {
 			catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts, Artifact{
 				Name:     name,
 				Type:     ArtifactTypeResource,

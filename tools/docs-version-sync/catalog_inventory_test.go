@@ -166,6 +166,37 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	}
 }
 
+func TestStackResourceVersionUpdateIgnoresSameNameImage(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Artifacts = append(catalog.Artifacts, Artifact{
+		ID:       observabilityStackResourceName + "-image",
+		Name:     observabilityStackResourceName,
+		Type:     ArtifactTypeImage,
+		Registry: defaultImageRegistry,
+		Version:  "9.9.9",
+	})
+
+	if !setArtifactVersionByNameAndType(catalog, observabilityStackResourceName, ArtifactTypeResource, "0.6.0") {
+		t.Fatal("observability stack resource was not updated")
+	}
+	image, ok := catalog.findArtifactByNameAndType(observabilityStackResourceName, ArtifactTypeImage)
+	if !ok || image.Version != "9.9.9" {
+		t.Fatalf("same-name image = %#v, want unchanged version 9.9.9", image)
+	}
+	resource, ok := catalog.findArtifactByNameAndType(observabilityStackResourceName, ArtifactTypeResource)
+	if !ok || resource.Version != "0.6.0" {
+		t.Fatalf("observability stack resource = %#v, want version 0.6.0", resource)
+	}
+
+	got, err := Render("image-mirroring-observability-stack-snippet", catalog)
+	if err != nil {
+		t.Fatalf("render observability stack snippet: %v", err)
+	}
+	if !strings.Contains(got, `export OBSERVABILITY_VERSION="0.6.0"`) {
+		t.Fatalf("renderer did not select the resource artifact:\n%s", got)
+	}
+}
+
 func TestBuildCatalogFromResolvedInventoryMaterializesSourceOnlyPin(t *testing.T) {
 	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
 	inventory := testCatalogResolvedInventory(t, source)
