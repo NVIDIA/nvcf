@@ -161,6 +161,14 @@ shadow-b:
 - a route with both legacy form and new form is rejected
 - an entry needs `modelName`; unknown entry keys are rejected
 
+The legacy route-level fields `shadowModelName`, `shadowModelNames`,
+`shadowPercentage`, `shadowSamplingMethod`, and `shadowCancelOnClientDisconnect`
+keep working unchanged; they apply one policy to every target on the route.
+
+Each shadow target is resolved from the same model table and routed by its own
+`functionType`, so a shadow of an LLM model reaches the LLM Gateway, and an LLM
+model may shadow a model served by the invocation service.
+
 `vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
 across all routes.
 
