@@ -37,6 +37,7 @@ func TestRenderManifestDeploymentResources(t *testing.T) {
 		"| `llm-request-router` | `0.2.0` | Optional |",
 		"| `nvcf-self-managed-stack` | `0.5.0` |",
 		"| `nvcf-compute-plane-stack` | `0.5.0` |",
+		"| `nvcf-observability-stack` | `0.5.0` |",
 		"| `nvcf-cli` | `0.0.30` |",
 	}
 	for _, want := range wantLines {
@@ -228,7 +229,7 @@ func TestCatalogRefreshMarksChangedVersionsPendingAndKeepsPublishedVersionsPubli
 		t.Fatalf("Render failed: %v", err)
 	}
 
-	for _, name := range []string{defaultStackResourceName, computeStackResourceName, "nvcf-cli", "nvca"} {
+	for _, name := range []string{defaultStackResourceName, computeStackResourceName, observabilityStackResourceName, "nvcf-cli", "nvca"} {
 		row := manifestRow(t, got, name)
 		if !strings.Contains(row, "`Publication pending`") {
 			t.Errorf("%s row does not mark the unverified artifact pending: %s", name, row)
@@ -418,6 +419,12 @@ func TestRenderImageMirroringResourceExamples(t *testing.T) {
 	if !strings.Contains(got, `nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}`) {
 		t.Fatalf("resource examples missing compute stack ref:\n%s", got)
 	}
+	if !strings.Contains(got, `export OBSERVABILITY_STACK_VERSION="0.5.0"`) {
+		t.Fatalf("resource examples missing observability stack version:\n%s", got)
+	}
+	if !strings.Contains(got, `nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_STACK_VERSION}`) {
+		t.Fatalf("resource examples missing observability stack ref:\n%s", got)
+	}
 	for _, stale := range []string{"resource list", "Download latest", ":*"} {
 		if strings.Contains(got, stale) {
 			t.Fatalf("resource examples contain unqualified latest-version guidance %q:\n%s", stale, got)
@@ -446,6 +453,16 @@ func TestRenderImageMirroringSnippets(t *testing.T) {
 	}
 	if !strings.Contains(computeStack, `nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}`) {
 		t.Fatalf("compute stack snippet missing resource path:\n%s", computeStack)
+	}
+	observabilityStack, err := Render("image-mirroring-observability-stack-snippet", catalog)
+	if err != nil {
+		t.Fatalf("render observability stack snippet: %v", err)
+	}
+	if !strings.Contains(observabilityStack, `export OBSERVABILITY_VERSION="0.5.0"`) {
+		t.Fatalf("observability stack snippet missing version:\n%s", observabilityStack)
+	}
+	if !strings.Contains(observabilityStack, `nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_VERSION}`) {
+		t.Fatalf("observability stack snippet missing resource path:\n%s", observabilityStack)
 	}
 
 	cli, err := Render("image-mirroring-cli-snippet", catalog)
@@ -484,40 +501,53 @@ func TestRenderImageMirroringCLIContentMatchesPublicationState(t *testing.T) {
 	}
 }
 
-func TestRenderComputeStackDownloadsMatchPublicationState(t *testing.T) {
-	pending := testCatalog()
-	pending.PublicationPending = []string{computeStackResourceName}
-	for _, renderer := range []string{"image-mirroring-resource-examples", "image-mirroring-compute-stack-snippet"} {
-		t.Run(renderer+"-pending", func(t *testing.T) {
-			got, err := Render(renderer, pending)
-			if err != nil {
-				t.Fatalf("Render failed: %v", err)
-			}
-			if strings.Contains(got, "nvcf-compute-plane-stack:${") {
-				t.Fatalf("pending compute stack renders a download command:\n%s", got)
-			}
-			if !strings.Contains(got, "Publication pending: nvcf-compute-plane-stack 0.5.0 is not yet available for download") {
-				t.Fatalf("pending compute stack lacks publication status:\n%s", got)
-			}
-		})
+func TestRenderSupplementalStackDownloadsMatchPublicationState(t *testing.T) {
+	tests := []struct {
+		name     string
+		artifact string
+		renderer string
+	}{
+		{name: "compute", artifact: computeStackResourceName, renderer: "image-mirroring-compute-stack-snippet"},
+		{name: "observability", artifact: observabilityStackResourceName, renderer: "image-mirroring-observability-stack-snippet"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pending := testCatalog()
+			pending.PublicationPending = []string{tt.artifact}
+			for _, renderer := range []string{"image-mirroring-resource-examples", tt.renderer} {
+				t.Run(renderer+"-pending", func(t *testing.T) {
+					got, err := Render(renderer, pending)
+					if err != nil {
+						t.Fatalf("Render failed: %v", err)
+					}
+					if strings.Contains(got, tt.artifact+":${") {
+						t.Fatalf("pending %s renders a download command:\n%s", tt.artifact, got)
+					}
+					want := "Publication pending: " + tt.artifact + " 0.5.0 is not yet available for download"
+					if !strings.Contains(got, want) {
+						t.Fatalf("pending %s lacks publication status:\n%s", tt.artifact, got)
+					}
+				})
+			}
 
-	published := testCatalog()
-	published.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
-	for i := range published.SupplementalArtifacts {
-		if published.SupplementalArtifacts[i].Name == computeStackResourceName {
-			published.SupplementalArtifacts[i].Registry = "public-resources"
-		}
-	}
-	published.Publications = []Publication{{Name: computeStackResourceName, Version: "0.5.0", Registry: "public-resources"}}
-	for _, renderer := range []string{"image-mirroring-resource-examples", "image-mirroring-compute-stack-snippet"} {
-		t.Run(renderer+"-published", func(t *testing.T) {
-			got, err := Render(renderer, published)
-			if err != nil {
-				t.Fatalf("Render failed: %v", err)
+			published := testCatalog()
+			published.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+			for i := range published.SupplementalArtifacts {
+				if published.SupplementalArtifacts[i].Name == tt.artifact {
+					published.SupplementalArtifacts[i].Registry = "public-resources"
+				}
 			}
-			if !strings.Contains(got, "ngc registry resource download-version") || !strings.Contains(got, "nvidia/nvcf/nvcf-compute-plane-stack") {
-				t.Fatalf("published compute stack omits its public download command:\n%s", got)
+			published.Publications = []Publication{{Name: tt.artifact, Version: "0.5.0", Registry: "public-resources"}}
+			for _, renderer := range []string{"image-mirroring-resource-examples", tt.renderer} {
+				t.Run(renderer+"-published", func(t *testing.T) {
+					got, err := Render(renderer, published)
+					if err != nil {
+						t.Fatalf("Render failed: %v", err)
+					}
+					if !strings.Contains(got, "ngc registry resource download-version") || !strings.Contains(got, "nvidia/nvcf/"+tt.artifact) {
+						t.Fatalf("published %s omits its public download command:\n%s", tt.artifact, got)
+					}
+				})
 			}
 		})
 	}
@@ -858,6 +888,7 @@ func testCatalog() *Catalog {
 		},
 		SupplementalArtifacts: []Artifact{
 			{Name: "nvcf-compute-plane-stack", Type: ArtifactTypeResource, Registry: defaultStackRegistry, Version: "0.5.0"},
+			{Name: "nvcf-observability-stack", Type: ArtifactTypeResource, Registry: defaultStackRegistry, Version: "0.5.0"},
 			{Name: "nvcf-cli", Type: ArtifactTypeResource, Registry: defaultStackRegistry, Version: "0.0.30"},
 			{Name: "llm-api-gateway", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "0.3.0"},
 			{Name: "llm-request-router", Type: ArtifactTypeImage, Registry: defaultImageRegistry, RepositoryName: "stargate", Version: "0.2.0"},
@@ -865,6 +896,7 @@ func testCatalog() *Catalog {
 		Manifest: ManifestMetadata{Entries: []ManifestEntry{
 			{ArtifactID: "nvcf-self-managed-stack", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Control-plane deployment bundle."},
 			{ArtifactID: "nvcf-compute-plane-stack", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Compute-plane deployment bundle."},
+			{ArtifactID: "nvcf-observability-stack", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Observability deployment bundle."},
 			{ArtifactID: "nvcf-cli", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "NVCF command-line interface."},
 			{ArtifactID: "llm-api-gateway", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestOptional, Description: "Routes LLM API requests."},
 			{ArtifactID: "llm-request-router", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestOptional, Description: "Routes LLM worker requests."},

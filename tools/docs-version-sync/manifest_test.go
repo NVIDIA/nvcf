@@ -110,6 +110,7 @@ func TestRenderManifestTable(t *testing.T) {
 		"`nvcf-cassandra-migrations`",
 		"`nvcf-self-managed-stack`",
 		"`nvcf-compute-plane-stack`",
+		"`nvcf-observability-stack`",
 		"`nvcf-cli`",
 	} {
 		if !strings.Contains(got, want) {

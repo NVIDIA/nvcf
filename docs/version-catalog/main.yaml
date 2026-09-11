@@ -130,6 +130,7 @@ publication_pending:
   - nvcf-invocation-service
   - nvcf-nats-auth-callout-service
   - nvcf-notary
+  - nvcf-observability-stack
   - nvcf-openbao
   - nvcf-openbao-migrations
   - nvcf-otel-collector
@@ -730,6 +731,12 @@ manifest:
       plane: shared
       kind: resource
       description: Provides the Helmfile bundle for compute-plane deployment.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane
+    - artifact_id: nvcf-observability-stack
+      plane: shared
+      kind: resource
+      description: Provides the Helmfile bundle for standalone observability deployment.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability
     - artifact_id: nvcf-cli
       plane: shared
       kind: resource
@@ -1129,6 +1136,10 @@ supplemental_artifacts:
     type: resource
     registry: public-resources
     version: 0.16.1
+  - name: nvcf-observability-stack
+    type: resource
+    registry: public-resources
+    version: 0.16.1
   - name: nvcf-observability-reference-stack
     type: chart
     registry: public-helm
@@ -1164,6 +1175,8 @@ outputs:
         renderer: image-mirroring-stack-snippet
       - marker: image-mirroring-compute-stack-snippet
         renderer: image-mirroring-compute-stack-snippet
+      - marker: image-mirroring-observability-stack-snippet
+        renderer: image-mirroring-observability-stack-snippet
       - marker: image-mirroring-cli-snippet
         renderer: image-mirroring-cli-snippet
   - path: docs/user/cluster-management/self-managed.md

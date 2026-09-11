@@ -40,6 +40,8 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 		return renderImageMirroringStackSnippet(catalog)
 	case "image-mirroring-compute-stack-snippet":
 		return renderImageMirroringComputeStackSnippet(catalog)
+	case "image-mirroring-observability-stack-snippet":
+		return renderImageMirroringObservabilityStackSnippet(catalog)
 	case "image-mirroring-cli-snippet":
 		return renderImageMirroringCLISnippet(catalog)
 	default:
@@ -74,27 +76,50 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 		}
 	}
 
-	compute, hasComputeStack := catalog.findArtifact(computeStackResourceName)
-	computePending := hasComputeStack && catalog.publicationIsPending(compute)
-	computeRef := ""
-	if hasComputeStack {
-		if compute.Type != ArtifactTypeResource {
-			return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
+	type supplementalStack struct {
+		artifact   Artifact
+		versionEnv string
+		label      string
+		pending    bool
+		ref        string
+	}
+	var supplementalStacks []supplementalStack
+	for _, config := range []struct {
+		name       string
+		versionEnv string
+		label      string
+	}{
+		{name: computeStackResourceName, versionEnv: "COMPUTE_STACK_VERSION", label: "compute-plane"},
+		{name: observabilityStackResourceName, versionEnv: "OBSERVABILITY_STACK_VERSION", label: "observability"},
+	} {
+		artifact, found := catalog.findArtifact(config.name)
+		if !found {
+			continue
 		}
-		if !computePending {
-			computeRef, err = catalog.resourceRef(compute)
+		if artifact.Type != ArtifactTypeResource {
+			return "", fmt.Errorf("%s must be a resource artifact", config.name)
+		}
+		item := supplementalStack{
+			artifact:   artifact,
+			versionEnv: config.versionEnv,
+			label:      config.label,
+			pending:    catalog.publicationIsPending(artifact),
+		}
+		if !item.pending {
+			item.ref, err = catalog.resourceRef(artifact)
 			if err != nil {
 				return "", err
 			}
 		}
+		supplementalStacks = append(supplementalStacks, item)
 	}
 
 	var b strings.Builder
 	b.WriteString("```bash\n")
 	b.WriteString("# Set stack versions\n")
 	b.WriteString(fmt.Sprintf("export STACK_VERSION=%q\n", stack.Version))
-	if hasComputeStack {
-		b.WriteString(fmt.Sprintf("export COMPUTE_STACK_VERSION=%q\n", compute.Version))
+	for _, supplemental := range supplementalStacks {
+		b.WriteString(fmt.Sprintf("export %s=%q\n", supplemental.versionEnv, supplemental.artifact.Version))
 	}
 	b.WriteString("\n")
 	b.WriteString("# Download a specific control-plane stack version\n")
@@ -106,14 +131,14 @@ func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 		b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
 	}
 
-	if hasComputeStack {
-		b.WriteString("\n# Download a specific compute-plane stack version\n")
-		if computePending {
-			b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", compute.Name, compute.Version))
+	for _, supplemental := range supplementalStacks {
+		b.WriteString(fmt.Sprintf("\n# Download a specific %s stack version\n", supplemental.label))
+		if supplemental.pending {
+			b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", supplemental.artifact.Name, supplemental.artifact.Version))
 		} else {
-			computeRefWithVersion := strings.Replace(computeRef, compute.Version, "${COMPUTE_STACK_VERSION}", 1)
+			refWithVersion := strings.Replace(supplemental.ref, supplemental.artifact.Version, "${"+supplemental.versionEnv+"}", 1)
 			b.WriteString("ngc registry resource download-version \\\n")
-			b.WriteString(fmt.Sprintf("  %q\n", computeRefWithVersion))
+			b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
 		}
 	}
 
@@ -142,28 +167,41 @@ func renderImageMirroringStackSnippet(catalog *Catalog) (string, error) {
 }
 
 func renderImageMirroringComputeStackSnippet(catalog *Catalog) (string, error) {
-	compute, ok := catalog.findArtifact(computeStackResourceName)
+	return renderImageMirroringSupplementalStackSnippet(catalog, computeStackResourceName, "COMPUTE_VERSION")
+}
+
+func renderImageMirroringObservabilityStackSnippet(catalog *Catalog) (string, error) {
+	return renderImageMirroringSupplementalStackSnippet(catalog, observabilityStackResourceName, "OBSERVABILITY_VERSION")
+}
+
+func renderImageMirroringSupplementalStackSnippet(catalog *Catalog, name, versionEnv string) (string, error) {
+	artifact, ok := catalog.findArtifact(name)
 	if !ok {
-		return "", fmt.Errorf("supplemental artifact %s is required", computeStackResourceName)
+		return "", fmt.Errorf("supplemental artifact %s is required", name)
 	}
-	if compute.Type != ArtifactTypeResource {
-		return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
+	if artifact.Type != ArtifactTypeResource {
+		return "", fmt.Errorf("%s must be a resource artifact", name)
 	}
-	if catalog.publicationIsPending(compute) {
-		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", compute.Name, compute.Version), nil
+	if catalog.publicationIsPending(artifact) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", artifact.Name, artifact.Version), nil
 	}
-	ref, err := catalog.resourceRef(compute)
+	ref, err := catalog.resourceRef(artifact)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("```bash\n# Set the version\nexport COMPUTE_VERSION=%q\n\nngc registry resource download-version %q && \\\n   mkdir -p %s && \\\n   tar -xzf %s_v${COMPUTE_VERSION}/%s-${COMPUTE_VERSION}.tar.gz -C %s && \\\n   rm -rf %s_v${COMPUTE_VERSION}\n```\n",
-		compute.Version,
-		strings.Replace(ref, compute.Version, "${COMPUTE_VERSION}", 1),
-		compute.Name,
-		compute.Name,
-		compute.Name,
-		compute.Name,
-		compute.Name,
+	versionRef := "${" + versionEnv + "}"
+	return fmt.Sprintf("```bash\n# Set the version\nexport %s=%q\n\nngc registry resource download-version %q && \\\n   mkdir -p %s && \\\n   tar -xzf %s_v%s/%s-%s.tar.gz -C %s && \\\n   rm -rf %s_v%s\n```\n",
+		versionEnv,
+		artifact.Version,
+		strings.Replace(ref, artifact.Version, versionRef, 1),
+		artifact.Name,
+		artifact.Name,
+		versionRef,
+		artifact.Name,
+		versionRef,
+		artifact.Name,
+		artifact.Name,
+		versionRef,
 	), nil
 }
 

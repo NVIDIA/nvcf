@@ -28,13 +28,14 @@ import (
 )
 
 const (
-	defaultStackResourceName = "nvcf-self-managed-stack"
-	computeStackResourceName = "nvcf-compute-plane-stack"
-	defaultStackRegistry     = "public-resources"
-	defaultCLIRegistry       = defaultStackRegistry
-	defaultImageRegistry     = "public-images"
-	defaultChartRegistry     = "public-helm"
-	defaultCLIVersion        = "0.0.30"
+	defaultStackResourceName       = "nvcf-self-managed-stack"
+	computeStackResourceName       = "nvcf-compute-plane-stack"
+	observabilityStackResourceName = "nvcf-observability-stack"
+	defaultStackRegistry           = "public-resources"
+	defaultCLIRegistry             = defaultStackRegistry
+	defaultImageRegistry           = "public-images"
+	defaultChartRegistry           = "public-helm"
+	defaultCLIVersion              = "0.0.30"
 )
 
 var (
@@ -857,6 +858,10 @@ func defaultOutputs() []OutputFile {
 				{
 					Marker:   "image-mirroring-compute-stack-snippet",
 					Renderer: "image-mirroring-compute-stack-snippet",
+				},
+				{
+					Marker:   "image-mirroring-observability-stack-snippet",
+					Renderer: "image-mirroring-observability-stack-snippet",
 				},
 				{
 					Marker:   "image-mirroring-cli-snippet",

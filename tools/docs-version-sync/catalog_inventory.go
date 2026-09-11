@@ -60,10 +60,18 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 
-	if setArtifactVersion(catalog, computeStackResourceName, inventory.Source.Version) {
-		// The source release advances both deployment bundles together. Their
-		// public publication status remains independently verified below.
+	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
+		if !setArtifactVersion(catalog, name, inventory.Source.Version) {
+			catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts, Artifact{
+				Name:     name,
+				Type:     ArtifactTypeResource,
+				Registry: defaultStackRegistry,
+				Version:  inventory.Source.Version,
+			})
+		}
 	}
+	// The source release advances all deployment bundles together. Their public
+	// publication status remains independently verified below.
 	retainCurrentPublications(catalog)
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()

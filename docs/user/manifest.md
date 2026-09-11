@@ -10,9 +10,9 @@ NVCF deployment. Artifacts are grouped by deployment plane and type.
 <Warning>
 Artifact version compatibility
 
-Newer artifact versions might be available. NVCF self-managed stack and
-compute-plane stack releases are QA-qualified as umbrella releases with the
-specific versions shown on this page. Use these versions together. NVIDIA
+Newer artifact versions might be available. NVCF self-managed, compute-plane,
+and observability stack releases are QA-qualified as umbrella releases with
+the specific versions shown on this page. Use these versions together. NVIDIA
 cannot guarantee compatibility when you substitute other artifact versions.
 
 </Warning>
@@ -268,7 +268,8 @@ These Early Access artifacts have known CVE impact. Use only the QA-qualified ve
 | Artifact | Version | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- |
 | `nvcf-cli` | `1.16.2` | Manages functions, deployments, and clusters from the command line. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
-| `nvcf-compute-plane-stack` | `0.16.1` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` |  |
+| `nvcf-compute-plane-stack` | `0.16.1` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
+| `nvcf-observability-stack` | `0.16.1` | Provides the Helmfile bundle for standalone observability deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability) |
 | `nvcf-self-managed-stack` | `0.16.1` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 
 {/*docs-version-sync:END manifest-artifact-registry-paths*/}

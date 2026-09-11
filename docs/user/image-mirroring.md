@@ -1,6 +1,6 @@
 # Image Mirroring
 
-All required self-hosted NVCF artifacts (see [self-hosted-artifact-manifest](./manifest.md)) must be available to be pulled by pods in your Kubernetes cluster for a successful installation using the split stack bundles (`nvcf-self-managed-stack` for control plane and `nvcf-compute-plane-stack` for compute plane). This page provides examples on how to pull artifacts from NGC and push them to your desired registry.
+All required self-hosted NVCF artifacts (see [self-hosted-artifact-manifest](./manifest.md)) must be available to be pulled by pods in your Kubernetes cluster. The deployment bundles are `nvcf-self-managed-stack` for the control plane, `nvcf-compute-plane-stack` for the compute plane, and `nvcf-observability-stack` for standalone shared observability. This page provides examples on how to pull artifacts from NGC and push them to your desired registry.
 
 <Note>
 **Mirroring images is not the same as configuring image pull secrets.** This page covers how to copy NVCF artifacts into your registry. If your registry is private, Kubernetes also needs credentials to pull those images at runtime. For instructions on configuring image pull secrets for the NVCF control plane pods, see [control-plane-image-pull-secrets](./helmfile-installation.md) in the installation guide.
@@ -197,12 +197,16 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 # Set stack versions
 export STACK_VERSION="0.16.1"
 export COMPUTE_STACK_VERSION="0.16.1"
+export OBSERVABILITY_STACK_VERSION="0.16.1"
 
 # Download a specific control-plane stack version
 # Publication pending: nvcf-self-managed-stack 0.16.1 is not yet available for download.
 
 # Download a specific compute-plane stack version
 # Publication pending: nvcf-compute-plane-stack 0.16.1 is not yet available for download.
+
+# Download a specific observability stack version
+# Publication pending: nvcf-observability-stack 0.16.1 is not yet available for download.
 ```
 
 {/*docs-version-sync:END image-mirroring-resource-examples*/}
@@ -253,9 +257,36 @@ Download and extract:
 {/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
 
 <Note>
-Use both stack bundles for split-stack local and self-managed installs:
+Use both core stack bundles for split-stack local and self-managed installs:
 `nvcf-self-managed-stack` for the control plane and
 `nvcf-compute-plane-stack` for compute-plane components.
+
+</Note>
+
+### Downloading `nvcf-observability-stack`
+
+The `nvcf-observability-stack` repository contains Helmfile configurations for
+deploying shared observability components as a standalone stack.
+
+<Warning>
+Use the observability stack version shown in the artifact manifest. The stack
+and its listed artifact versions are QA-qualified together.
+
+</Warning>
+
+Download and extract:
+
+{/*docs-version-sync:BEGIN image-mirroring-observability-stack-snippet*/}
+
+```bash
+# Publication pending: nvcf-observability-stack 0.16.1 is not yet available for download.
+```
+
+{/*docs-version-sync:END image-mirroring-observability-stack-snippet*/}
+
+<Note>
+Use this bundle when shared observability is deployed separately from the
+control-plane and compute-plane stacks.
 
 </Note>
 

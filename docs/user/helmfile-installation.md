@@ -499,7 +499,7 @@ image:
 <Warning>
 If you have mirrored NVCF artifacts to your own registry (e.g., ECR), update both `helm.sources` and `image` to point to your mirror. See [self-hosted-image-mirroring](./image-mirroring.md) for details on mirroring artifacts.
 
-When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both the control-plane and compute-plane stack resources listed in the [self-hosted-artifact-manifest](./manifest.md).
+When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both core stack resources listed in the [self-hosted-artifact-manifest](./manifest.md). If you deploy shared observability as a standalone stack, mirror the observability stack resource as well.
 
 </Warning>
 

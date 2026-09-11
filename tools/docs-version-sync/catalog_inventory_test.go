@@ -61,9 +61,11 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 	if catalog.Stack.SourceVersion != release.Version || catalog.Stack.SourceTag != release.Tag || catalog.Stack.SourceCommit != release.Commit {
 		t.Fatalf("stack source metadata = %#v, want %+v", catalog.Stack, release)
 	}
-	compute, ok := catalog.findArtifact(computeStackResourceName)
-	if !ok || compute.Version != release.Version {
-		t.Fatalf("compute stack = %#v, want release version %s", compute, release.Version)
+	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
+		artifact, ok := catalog.findArtifact(name)
+		if !ok || artifact.Version != release.Version {
+			t.Fatalf("%s = %#v, want release version %s", name, artifact, release.Version)
+		}
 	}
 }
 
@@ -151,6 +153,13 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	compute, _ := catalog.findArtifact(computeStackResourceName)
 	if catalog.publicationIsPending(compute) {
 		t.Fatal("compute stack has an exact publication but is marked pending")
+	}
+	observability, ok := catalog.findArtifact(observabilityStackResourceName)
+	if !ok || observability.Version != source.Version {
+		t.Fatalf("observability stack = %#v, want release version %s", observability, source.Version)
+	}
+	if !catalog.publicationIsPending(observability) {
+		t.Fatal("observability stack without an exact publication is not marked pending")
 	}
 	if catalog.Stack.PinSourceDigest == "" || strings.Join(catalog.Stack.PinSources, ",") != strings.Join(effectiveStackPinSourcePaths(effectiveStackPins), ",") {
 		t.Fatalf("stack pin metadata = %#v", catalog.Stack)
