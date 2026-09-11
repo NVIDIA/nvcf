@@ -1421,6 +1421,19 @@ class GithubReleaseTest(unittest.TestCase):
             workflow.index("Validate tag and create release notes"),
         )
 
+    def test_stack_inventory_preflight_renders_without_release_publication(self):
+        workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
+        self.assertIn("inventory_tag:", workflow)
+        self.assertIn("name: self-managed inventory preflight", workflow)
+        self.assertIn("inputs.inventory_tag != ''", workflow)
+        self.assertIn('token: ${{ github.token }}', workflow)
+        self.assertIn("Render tagged inventory without publishing", workflow)
+        self.assertIn("--generate-stack-inventory", workflow)
+        self.assertIn("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", workflow)
+        preflight = workflow.index("inventory-preflight:")
+        tag_release = workflow.index("tag-release-notes:")
+        self.assertNotIn("github-release tag", workflow[preflight:tag_release])
+
     def publish_and_capture_comments(self, version):
         """Publish a tag for `version` from a release branch, recording any comments.
 

@@ -703,7 +703,10 @@ func mergeAndResolveHelmfileReleases(
 func validateResolvedInventoryRenderRepository(repositories map[string]helmfileRepository, source resolvedInventoryHelmSource) error {
 	repository, ok := repositories["nvcf"]
 	if !ok {
-		return fmt.Errorf("built Helmfile state has no nvcf repository")
+		// Some states contain only third-party or local charts and therefore do
+		// not declare the NVCF repository. Chart alias validation below still
+		// rejects any release that refers to an undeclared repository.
+		return nil
 	}
 	if !repository.OCI {
 		return fmt.Errorf("built Helmfile nvcf repository must use OCI for release inventory rendering")

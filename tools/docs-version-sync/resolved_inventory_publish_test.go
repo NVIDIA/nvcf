@@ -110,8 +110,8 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	if runner.templateCalls != len(resolvedInventoryStates) {
 		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(resolvedInventoryStates))
 	}
-	if runner.prepareCalls != 2 {
-		t.Fatalf("repository preparation calls = %d, want source and public repository preparation", runner.prepareCalls)
+	if runner.prepareCalls != 3 {
+		t.Fatalf("repository preparation calls = %d, want source and two public repository preparations", runner.prepareCalls)
 	}
 	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
 	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {
@@ -204,6 +204,56 @@ func TestResolvedInventoryRepositoryCommandsAuthenticatesNVCFRegistry(t *testing
 	}
 }
 
+func TestValidateResolvedInventoryRenderRepository(t *testing.T) {
+	source := resolvedInventoryHelmSource{Registry: "registry.example.test", Repository: "release/charts"}
+	tests := []struct {
+		name         string
+		repositories map[string]helmfileRepository
+		wantErr      string
+	}{
+		{
+			name: "third-party repositories only",
+			repositories: map[string]helmfileRepository{
+				"third-party": {Name: "third-party", URL: "https://charts.example.test"},
+			},
+		},
+		{
+			name: "matching NVCF repository",
+			repositories: map[string]helmfileRepository{
+				"nvcf": {Name: "nvcf", URL: "registry.example.test/release/charts", OCI: true},
+			},
+		},
+		{
+			name: "NVCF repository must use OCI",
+			repositories: map[string]helmfileRepository{
+				"nvcf": {Name: "nvcf", URL: "https://charts.example.test"},
+			},
+			wantErr: "must use OCI",
+		},
+		{
+			name: "NVCF repository must match release source",
+			repositories: map[string]helmfileRepository{
+				"nvcf": {Name: "nvcf", URL: "registry.example.test/other/charts", OCI: true},
+			},
+			wantErr: "does not match",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateResolvedInventoryRenderRepository(test.repositories, source)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestReadRenderedReleaseManifestIsDeterministic(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "z.yaml"), "kind: Service\n")
@@ -257,6 +307,13 @@ func (runner *fakeResolvedInventoryRunner) PrepareRepositories(_ []string, repos
 		runner.operations = append(runner.operations, "prepare-public")
 		return nil
 	}
+	if repository, ok := repositories["third-party"]; ok {
+		if len(repositories) != 1 || repository.OCI || repository.URL != "https://third-party.example.test" {
+			runner.t.Fatalf("third-party repositories = %#v", repositories)
+		}
+		runner.operations = append(runner.operations, "prepare-public")
+		return nil
+	}
 	runner.t.Fatalf("unexpected repositories = %#v", repositories)
 	return nil
 }
@@ -280,7 +337,12 @@ func (runner *fakeResolvedInventoryRunner) Output(_ string, env []string, args .
 	case "list":
 		return mustJSON(runner.t, releases), nil
 	case "build":
-		built := "repositories:\n  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"
+		built := "repositories:\n"
+		if strings.Contains(filepath.ToSlash(stateFile), "nvcf-compute-plane/helmfile.d/01-") {
+			built += "  - name: third-party\n    url: https://third-party.example.test\n    oci: false\n"
+		} else {
+			built += "  - name: nvcf\n    url: registry.example.test/release/charts\n    oci: true\n"
+		}
 		if strings.Contains(filepath.ToSlash(stateFile), "self-managed/helmfile.d/01-") {
 			built += "  - name: public\n    url: https://charts.example.test\n    oci: false\n"
 		}
@@ -324,8 +386,11 @@ func fakeResolvedInventoryReleases(stateFile string, full bool) []helmfileReleas
 		return []helmfileRelease{release("otel-collector")}
 	case strings.Contains(slashPath, "nvcf-compute-plane/helmfile.d/01-"):
 		releases := []helmfileRelease{release("kai-scheduler")}
+		releases[0].Chart = "third-party/kai-scheduler"
 		if full {
-			releases = append(releases, release("grove-operator"))
+			grove := release("grove-operator")
+			grove.Chart = "third-party/grove-operator"
+			releases = append(releases, grove)
 		} else {
 			releases[0].Enabled = false
 		}
