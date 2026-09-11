@@ -18,20 +18,56 @@ limitations under the License.
 package config
 
 import (
+	"fmt"
+	"reflect"
+	"strconv"
+
 	"github.com/go-viper/mapstructure/v2"
 )
+
+func numericMapToSliceHook(from reflect.Type, to reflect.Type, data any) (any, error) {
+	if to.Kind() != reflect.Slice || from.Kind() != reflect.Map || from.Key().Kind() != reflect.String {
+		return data, nil
+	}
+
+	value := reflect.ValueOf(data)
+	out := make([]any, value.Len())
+	seen := make([]bool, value.Len())
+	for _, key := range value.MapKeys() {
+		index, err := strconv.Atoi(key.String())
+		if err != nil {
+			return data, nil
+		}
+		if index < 0 || index >= value.Len() {
+			return nil, fmt.Errorf("numeric map key %q is not a contiguous slice index", key.String())
+		}
+		out[index] = value.MapIndex(key).Interface()
+		seen[index] = true
+	}
+	for index, ok := range seen {
+		if !ok {
+			return nil, fmt.Errorf("numeric map is missing contiguous slice index %d", index)
+		}
+	}
+	return out, nil
+}
+
+func defaultDecodeHook() mapstructure.DecodeHookFunc {
+	return mapstructure.ComposeDecodeHookFunc(
+		numericMapToSliceHook,
+		mapstructure.StringToTimeDurationHookFunc(), // "1h" → time.Hour
+		mapstructure.StringToSliceHookFunc(","),     // "a,b,c" → []string{"a","b","c"}
+	)
+}
 
 // DecodeConfig unmarshals any input into a target struct using mapstructure.
 // Uses permissive parsing - ignores extra keys in input for easier migration.
 func DecodeConfig(input any, output any) error {
 	config := &mapstructure.DecoderConfig{
 		WeaklyTypedInput: true,
-		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			mapstructure.StringToTimeDurationHookFunc(), // "1h" → time.Hour
-			mapstructure.StringToSliceHookFunc(","),     // "a,b,c" → []string{"a","b","c"}
-		),
-		Result:      output,
-		ErrorUnused: false,
+		DecodeHook:       defaultDecodeHook(),
+		Result:           output,
+		ErrorUnused:      false,
 	}
 
 	decoder, err := mapstructure.NewDecoder(config)
@@ -47,12 +83,9 @@ func DecodeConfig(input any, output any) error {
 func DecodeConfigStrict(input any, output any) error {
 	config := &mapstructure.DecoderConfig{
 		WeaklyTypedInput: true,
-		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			mapstructure.StringToTimeDurationHookFunc(),
-			mapstructure.StringToSliceHookFunc(","),
-		),
-		Result:      output,
-		ErrorUnused: true, // Error if input has extra keys
+		DecodeHook:       defaultDecodeHook(),
+		Result:           output,
+		ErrorUnused:      true, // Error if input has extra keys
 	}
 
 	decoder, err := mapstructure.NewDecoder(config)

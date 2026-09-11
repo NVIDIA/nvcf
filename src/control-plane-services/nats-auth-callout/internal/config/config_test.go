@@ -195,6 +195,34 @@ func TestEnvironmentVariablesWithEscapedSnakeCase(t *testing.T) {
 	assert.Equal(t, 4096, cfg.Tracing.Lightstep.MaxQueueSize)
 }
 
+func TestEnvironmentVariablesWithNestedPluginSlices(t *testing.T) {
+	defer ResetConfig()
+	setupTestConfig()
+
+	const publicNKey = "UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_PLUGIN__TYPE", "nkey")
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_NKEY", publicNKey)
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_ACCOUNT", "APP")
+	t.Setenv("NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_0_ID", "nkey")
+
+	cfg, err := InitConfig("test", "")
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+
+	assert.Equal(t, "nkey", cfg.Service.PluginConfigs["nkey"].PluginType)
+	assert.Equal(t, "nkey", cfg.Service.AccountConfigs["app"].EnabledPlugins[0].ID)
+
+	var pluginConfig struct {
+		NkeyMappings []struct {
+			Nkey    string `mapstructure:"nkey"`
+			Account string `mapstructure:"account"`
+		} `mapstructure:"nkey_mappings"`
+	}
+	assert.NoError(t, DecodeConfig(cfg.Service.PluginConfigs["nkey"].Config, &pluginConfig))
+	assert.Equal(t, publicNKey, pluginConfig.NkeyMappings[0].Nkey)
+	assert.Equal(t, "APP", pluginConfig.NkeyMappings[0].Account)
+}
+
 func TestConfigValidation(t *testing.T) {
 	tests := []struct {
 		name        string
