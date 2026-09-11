@@ -18,6 +18,10 @@ command -v helmfile >/dev/null 2>&1 || fail "helmfile is required"
 
 max_owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 too_long_owner="${max_owner}a"
+expected_primary_chart_version="$(awk '/^  - name: api$/ {found=1; next} found && $1 == "version:" {print $2; exit}' "$stack_dir/helmfile.d/02-core.yaml.gotmpl")"
+if [ -z "$expected_primary_chart_version" ]; then
+  fail "could not parse expected primary chart version"
+fi
 states=(
   "01-dependencies.yaml.gotmpl"
   "02-core.yaml.gotmpl"
@@ -44,30 +48,31 @@ for state in "${states[@]}"; do
     fail "$state rejected default owner: $(tr '\n' ' ' <"$default_log")"
   fi
 
-  named_blocked_log="$work_dir/$state.named-blocked.log"
+  named_log="$work_dir/$state.named.log"
   if HELMFILE_ENV=base \
     NVCF_CONTROL_PLANE_OWNER=plane-a \
     NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
-    >"$work_dir/$state.named-blocked.json" 2>"$named_blocked_log"; then
-    fail "$state rendered named owner before shared prerequisite identities were allowlisted"
-  fi
-  if ! grep -q "shared prerequisite identities are not allowlisted" "$named_blocked_log"; then
-    fail "$state rejected named owner without the shared prerequisite message"
+    >"$work_dir/$state.named.json" 2>"$named_log"; then
+    if grep -Eq '"namespace":[[:space:]]*"(api-keys|cassandra-system|ess|nats-system|nvcf|nvcf-ui|sis|vault-system)"' "$work_dir/$state.named.json"; then
+      fail "$state rendered named owner into a legacy plane-owned release namespace"
+    fi
+  else
+    fail "$state rejected named owner with alpha opt-in: $(tr '\n' ' ' <"$named_log")"
   fi
 
   max_valid_log="$work_dir/$state.max-valid.log"
-  if HELMFILE_ENV=base \
+  if ! HELMFILE_ENV=base \
     NVCF_CONTROL_PLANE_OWNER="$max_owner" \
     NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
     HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
     helmfile --file "$state_file" list --skip-charts --output json \
     >"$work_dir/$state.max-valid.json" 2>"$max_valid_log"; then
-    fail "$state rendered a 30-character named owner before shared prerequisite identities were allowlisted"
+    fail "$state rejected valid 30-character owner with alpha opt-in: $(tr '\n' ' ' <"$max_valid_log")"
   fi
-  if ! grep -q "shared prerequisite identities are not allowlisted" "$max_valid_log"; then
-    fail "$state rejected 30-character owner before reaching shared prerequisite validation"
+  if grep -Eq '"namespace":[[:space:]]*"(api-keys|cassandra-system|ess|nats-system|nvcf|nvcf-ui|sis|vault-system)"' "$work_dir/$state.max-valid.json"; then
+    fail "$state rendered 30-character named owner into a legacy plane-owned release namespace"
   fi
 
   for owner in "${invalid_owners[@]}"; do
@@ -157,17 +162,14 @@ if ! grep -q "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required" "$global_alpha_lo
   fail "global.yaml.gotmpl rejected missing alpha opt-in without the alpha validation message"
 fi
 
-global_named_blocked_log="$work_dir/global.named-blocked.log"
-if HELMFILE_ENV=base \
+global_named_log="$work_dir/global.named.log"
+if ! HELMFILE_ENV=base \
   NVCF_CONTROL_PLANE_OWNER=plane-a \
   NVCF_ALPHA_NAMED_CONTROL_PLANE=true \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
   helmfile --file "$global_state_file" template \
-  >"$work_dir/global.named-blocked.yaml" 2>"$global_named_blocked_log"; then
-  fail "global.yaml.gotmpl rendered named owner before shared prerequisite identities were allowlisted"
-fi
-if ! grep -q "shared prerequisite identities are not allowlisted" "$global_named_blocked_log"; then
-  fail "global.yaml.gotmpl rejected named owner without the shared prerequisite message"
+  >"$work_dir/global.named.yaml" 2>"$global_named_log"; then
+  fail "global.yaml.gotmpl rejected named owner with alpha opt-in: $(tr '\n' ' ' <"$global_named_log")"
 fi
 owner_dependencies="$work_dir/dependencies.owner.json"
 HELMFILE_ENV=base \
@@ -212,7 +214,7 @@ fi
 if ! grep -Fq -- '--stack "self-managed"' "$install_plan"; then
   fail "make install did not include the self-managed stack annotation"
 fi
-if ! grep -Fq -- '--chart-version "1.25.1"' "$install_plan"; then
+if ! grep -Fq -- "--chart-version \"$expected_primary_chart_version\"" "$install_plan"; then
   fail "make install did not parse the primary chart version"
 fi
 if ! grep -Fq -- '--nvca-operator-version "not-installed"' "$install_plan"; then

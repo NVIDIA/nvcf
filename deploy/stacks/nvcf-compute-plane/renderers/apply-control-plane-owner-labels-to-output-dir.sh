@@ -39,7 +39,11 @@ for file in "${manifest_files[@]}"; do
   owner="$(owner_for_file "$file")"
   tmp_file="$(mktemp)"
   "$renderer" --owner "$owner" <"$file" >"$tmp_file"
-  mv "$tmp_file" "$file"
+  if [[ -s "$tmp_file" ]]; then
+    mv "$tmp_file" "$file"
+  else
+    rm -f "$tmp_file" "$file"
+  fi
 done
 
 echo "apply-control-plane-owner-labels-to-output-dir: labelled ${#manifest_files[@]} rendered manifest files"

@@ -275,6 +275,16 @@ func (r *selfHostedUpRun) run() error {
 }
 
 func validateSelfHostedUpLocalK3DMode() error {
+	owner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return err
+	}
+	if owner != selfHostedDefaultControlPlaneID {
+		return &ExitCodeError{
+			Code: 3,
+			Msg:  "self-hosted up does not support --control-plane-id yet; use control-plane profile export, compute-plane register, and compute-plane install for named control planes",
+		}
+	}
 	if !strings.EqualFold(selfHostedEnv, "local") {
 		return &ExitCodeError{
 			Code: 3,
@@ -456,6 +466,10 @@ func (r *selfHostedUpRun) applyControlPlane(stackPath string) error {
 }
 
 func (r *selfHostedUpRun) writeControlPlaneProfile(stackPath string) error {
+	controlPlaneOwner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return err
+	}
 	path, err := writeControlPlaneProfile(controlPlaneProfileWriteRequest{
 		Ctx:                 r.ctx,
 		StackPath:           stackPath,
@@ -463,6 +477,7 @@ func (r *selfHostedUpRun) writeControlPlaneProfile(stackPath string) error {
 		NCAID:               upNCAID,
 		Region:              upRegion,
 		Env:                 selfHostedEnv,
+		ControlPlaneOwner:   controlPlaneOwner,
 		ControlPlaneContext: selfHostedControlPlaneContext,
 		ComputePlaneContext: selfHostedComputePlaneContext,
 		ICMSURL:             resolveICMSURL(selfHostedICMSURL),
@@ -654,7 +669,11 @@ func isHTTP401Err(err error) bool {
 }
 
 func (r *selfHostedUpRun) writeRegistrationValues(stackPath, icmsURL string, registration upClusterRegistration, p6Start time.Time) error {
-	endpoints := resolveNVCAEndpointValues(selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL, selfHostedNATSURL)
+	controlPlaneOwner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return err
+	}
+	endpoints := resolveNVCAEndpointValues(selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL, selfHostedNATSURL, controlPlaneOwner)
 	if err := writeRegisterValuesYAML(registerValuesWriteRequest{
 		StackPath:      stackPath,
 		ClusterName:    upClusterName,

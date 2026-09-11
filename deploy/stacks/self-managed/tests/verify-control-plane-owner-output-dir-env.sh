@@ -36,6 +36,7 @@ kind: ConfigMap
 metadata:
   name: cert-manager
 YAML
+touch "$work_dir/02-core.yaml-api/templates/empty.yaml"
 
 NVCF_CONTROL_PLANE_OWNER=plane-a "$helper" "$work_dir" >/dev/null
 
@@ -52,5 +53,9 @@ actual_shared="$(
 )"
 [[ "$actual_shared" == "shared" ]] ||
   fail "expected cert-manager owner to stay shared, got $actual_shared"
+
+if [[ -e "$work_dir/02-core.yaml-api/templates/empty.yaml" ]]; then
+  fail "expected empty rendered YAML files to be removed"
+fi
 
 echo "verify-control-plane-owner-output-dir-env: all checks passed"

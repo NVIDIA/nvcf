@@ -26,6 +26,8 @@ trap cleanup EXIT
 
 manifest_ngc_managed="${tmp_dir}/manifest-ngc-managed.yaml"
 manifest_self_managed="${tmp_dir}/manifest-self-managed.yaml"
+manifest_custom_namespace="${tmp_dir}/manifest-custom-namespace.yaml"
+manifest_crd_disabled="${tmp_dir}/manifest-crd-disabled.yaml"
 
 # Render with default values (ngc-managed)
 helm template nvca-operator "${repo_root}/nvca-operator" \
@@ -42,6 +44,17 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   --set-string selfManaged.revalServiceURL=http://reval.example.invalid:8080 \
   --set-string selfManaged.natsURL=nats://nats.example.invalid:4222 \
   > "${manifest_self_managed}"
+
+helm template nvca-operator "${repo_root}/nvca-operator" \
+  --namespace plane-a-nvca-operator \
+  --values "${repo_root}/nvca-operator/values.yaml" \
+  > "${manifest_custom_namespace}"
+
+helm template nvca-operator "${repo_root}/nvca-operator" \
+  --namespace nvca-operator \
+  --values "${repo_root}/nvca-operator/values.yaml" \
+  --set crds.nvcfBackend.enabled=false \
+  > "${manifest_crd_disabled}"
 
 # --- ngc-managed assertions ---
 
@@ -102,6 +115,46 @@ helm_managed_data_sm="$(
 )"
 if [[ "${helm_managed_data_sm}" != "0" ]]; then
   echo "expected nvcfbackend-helm-managed to have empty data for self-managed, got ${helm_managed_data_sm} keys" >&2
+  exit 1
+fi
+
+resource_quota_namespace="$(
+  yq -r 'select(.kind == "ResourceQuota" and .metadata.name == "nvca-operator") |
+    .metadata.namespace' \
+    "${manifest_custom_namespace}"
+)"
+if [[ "${resource_quota_namespace}" != "plane-a-nvca-operator" ]]; then
+  echo "expected ResourceQuota namespace to follow the release namespace, got '${resource_quota_namespace}'" >&2
+  exit 1
+fi
+
+crd_default_count="$(
+  yq -r 'select(.kind == "CustomResourceDefinition" and .metadata.name == "nvcfbackends.nvcf.nvidia.io") |
+    .metadata.name' \
+    "${manifest_ngc_managed}" | wc -l | tr -d ' '
+)"
+if [[ "${crd_default_count}" != "1" ]]; then
+  echo "expected NVCFBackend CRD to render by default, got ${crd_default_count}" >&2
+  exit 1
+fi
+
+crd_resource_policy="$(
+  yq -r 'select(.kind == "CustomResourceDefinition" and .metadata.name == "nvcfbackends.nvcf.nvidia.io") |
+    .metadata.annotations."helm.sh/resource-policy"' \
+    "${manifest_ngc_managed}"
+)"
+if [[ "${crd_resource_policy}" != "keep" ]]; then
+  echo "expected NVCFBackend CRD to carry helm.sh/resource-policy=keep, got '${crd_resource_policy}'" >&2
+  exit 1
+fi
+
+crd_disabled_count="$(
+  yq -r 'select(.kind == "CustomResourceDefinition" and .metadata.name == "nvcfbackends.nvcf.nvidia.io") |
+    .metadata.name' \
+    "${manifest_crd_disabled}" | wc -l | tr -d ' '
+)"
+if [[ "${crd_disabled_count}" != "0" ]]; then
+  echo "expected NVCFBackend CRD to be omitted when crds.nvcfBackend.enabled=false, got ${crd_disabled_count}" >&2
   exit 1
 fi
 

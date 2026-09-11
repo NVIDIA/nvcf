@@ -1,0 +1,5 @@
+apiVersion: v2
+description: Shared NVCF compute-plane CRDs installed once per cluster
+name: nvcf-nvca-crds
+type: application
+version: 0.1.0

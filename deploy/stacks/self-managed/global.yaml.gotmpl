@@ -52,7 +52,7 @@ tolerations:
 {{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") -}}
 {{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" -}}
 {{- end -}}
-{{- $namedControlPlaneObjectIdentitiesReady := false -}}
+{{- $namedControlPlaneObjectIdentitiesReady := true -}}
 {{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) -}}
 {{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" -}}
 {{- end -}}

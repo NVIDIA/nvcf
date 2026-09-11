@@ -59,7 +59,7 @@ consumer.
 | ReferenceGrants | Static names in backend namespaces | Derived when granting cross-namespace access for a named plane | Plane | Golden render |
 | Mirrored workload secrets | Worker namespace secret names | Adopt or label only names expected by the current identity | Plane | Future Phase 2 startup-convergence tests |
 | Workload namespaces | Created by NVCA | Label/adopt expected current-plane namespaces before informer processing | Plane | Future Phase 2 fake-client tests |
-| NVCA operator CRDs | `nvcfbackends.nvcf.nvidia.com` and NVCA API CRDs | Shared CRDs, never plane-owned | Shared | Prerequisite inventory |
+| NVCA operator CRDs | `nvcfbackends.nvcf.nvidia.io` and NVCA API CRDs | Shared CRDs, never plane-owned | Shared | Prerequisite inventory |
 | Model cache namespace | Existing configured namespace | Per-plane by default, or shared and never deleted | Plane or shared | Matrix review |
 
 ## Phase 2 Ownership Audit
@@ -438,6 +438,76 @@ Named mode intentionally remains fail-closed after this phase. The remaining
 blocker is the shared-prerequisite allowlist, which must explicitly review
 objects that are supposed to be shared instead of per-plane.
 
+## Phase 4I Shared Prerequisite Allowlist And Named Render Gate
+
+Phase 4I removes the final stack render block for alpha named control planes.
+A named owner such as `plane-a` can now render when
+`NVCF_ALPHA_NAMED_CONTROL_PLANE=true` is set.
+
+The block is removed only after the shared prerequisites are made explicit. Each
+stack has a committed allowlist of Kubernetes object identities that are
+expected to be the same across two named renders:
+
+- self-managed:
+  `deploy/stacks/self-managed/tests/named-control-plane-shared-identities.txt`;
+- compute-plane:
+  `deploy/stacks/nvcf-compute-plane/tests/named-control-plane-shared-identities.txt`.
+
+These files are intentionally exact lists, not broad patterns. An object marked
+with the `shared` owner label is still rejected by the named-render isolation
+checker unless its exact identity appears in the relevant allowlist. Every
+allowlist entry must also match a rendered object, so stale or over-broad entries
+fail the check instead of silently remaining trusted. This keeps new shared
+objects reviewable when chart versions change.
+
+Both stack `test-local` targets now render two named owners, `plane-a` and
+`plane-b`, then run the Phase 4C isolation checker over both outputs with the
+stack's allowlist. That real-render check catches:
+
+- objects rendered into legacy plane-owned namespaces;
+- service DNS names pointing at legacy plane-owned namespaces;
+- stale references to legacy plane-owned object names such as `openbao-server`;
+- unprefixed gateway routes in shared namespaces;
+- cluster-scoped objects that are neither owner-prefixed nor explicitly
+  allowlisted as shared;
+- duplicate object identities across two named renders that are not explicitly
+  allowlisted.
+
+The compute-plane stack also protects the currently pinned released
+`helm-nvca-operator` chart. The local chart source now renders the
+`ResourceQuota` into `.Release.Namespace`, and the stack post-renderer rewrites
+the same ResourceQuota namespace for the pinned chart if a named owner is used.
+The NVCFBackend CRD is installed once by a shared prerequisite release and is
+removed from the per-plane NVCA operator render by both the local chart value and
+the post-renderer shim for the pinned chart. The stack also rewrites exact legacy
+local control-plane endpoints in the NVCA registration values to the named
+in-cluster service DNS names.
+
+Before compute-plane `install` or `apply`, the stack also runs a small adoption
+step for the existing `nvcfbackends.nvcf.nvidia.io` CRD. This protects upgrades
+from older default-plane installs where the CRD was owned by the `nvca-operator`
+Helm release. The adoption step marks the live CRD with
+`helm.sh/resource-policy=keep`, moves its Helm ownership metadata to the shared
+`nvcf-nvca-crds` release in `nvcf-shared`, and refuses to touch the CRD if it is
+owned by an unexpected Helm release. The `keep` annotation is important because
+the old release stops rendering the CRD after this phase, and Helm must skip
+deleting the live CRD during that upgrade.
+
+The CLI now allows `--control-plane-id` together with
+`--alpha-named-control-plane` for the explicit install/profile/register flow.
+Generated control-plane profiles use named in-cluster endpoints, compute-plane
+registration values use named local in-cluster endpoints, and root-CA sourcing
+defaults to the named OpenBao service, namespace, and root-token Secret.
+
+The one-shot `self-hosted up` shortcut remains blocked for named control planes.
+That command still bundles local install, profile generation, registration,
+watching, and image-pull secret preparation into one workflow, and the named
+path should use the explicit commands until that shortcut is audited end to end.
+
+Named namespace cleanup is still conservative. Helm releases are selected by the
+named owner, but namespace deletion for named owners remains deferred until the
+shared-prerequisite lifecycle has a dedicated cleanup policy.
+
 ## Data And Auth Matrix
 
 | Surface | Current Legacy Identity | Named-Plane Target | Notes |
@@ -464,7 +534,7 @@ cluster-scoped objects Helm does not manage after install.
 | cert-manager | CustomResourceDefinition | `clusterissuers.cert-manager.io` | `shared` |
 | cert-manager | CustomResourceDefinition | `issuers.cert-manager.io` | `shared` |
 | cert-manager | CustomResourceDefinition | `orders.acme.cert-manager.io` | `shared` |
-| NVCA operator | CustomResourceDefinition | `nvcfbackends.nvcf.nvidia.com` | `shared` |
+| NVCA operator | CustomResourceDefinition | `nvcfbackends.nvcf.nvidia.io` | `shared` |
 | Gateway API | CustomResourceDefinition | External prerequisite in this repo snapshot; the self-managed stack renders Gateway routes but does not install a managed Gateway API CRD inventory here | `shared` |
 
 ## Phase 0 Verification

@@ -60,7 +60,7 @@ include Makefile.dist
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-placement test-render-structure test-render-structure-detects-violations test-named-control-plane-render-isolation-detects-violations test-nvca-entrypoints test-nvca-derived-object-names test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-control-plane-owner-label-placement test-nvca-crd-ownership-migration test-render-structure test-render-structure-detects-violations test-named-control-plane-render-isolation test-named-control-plane-render-isolation-detects-violations test-nvca-entrypoints test-nvca-derived-object-names test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -199,6 +199,9 @@ test-control-plane-owner-namespace-marker:
 test-control-plane-owner-label-placement: render-local
 	@tests/verify-control-plane-owner-label-placement.sh "$(DIST_DIR)/out"
 
+test-nvca-crd-ownership-migration:
+	@tests/verify-nvca-crd-ownership-migration.sh
+
 test-render-structure: render-local
 	@tests/verify-render-structure.sh "$(DIST_DIR)/out"
 
@@ -207,6 +210,9 @@ test-render-structure-detects-violations:
 
 test-named-control-plane-render-isolation-detects-violations:
 	@tests/verify-named-control-plane-render-isolation-detects-violations.sh
+
+test-named-control-plane-render-isolation:
+	@tests/verify-named-control-plane-render-isolation-local.sh
 
 test-nvca-entrypoints: render-local
 	@tests/nvca-entrypoints.sh "$(DIST_DIR)/out"
@@ -217,7 +223,7 @@ test-compare-golden:
 test-nvca-derived-object-names:
 	@tests/nvca-derived-object-names.sh
 
-test-local: test-observability-profile test-register-cluster test-kube-context test-compare-golden test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-render-structure-detects-violations test-named-control-plane-render-isolation-detects-violations test-nvca-derived-object-names test-render-structure test-nvca-entrypoints test-control-plane-owner-label-placement
+test-local: test-observability-profile test-register-cluster test-kube-context test-compare-golden test-control-plane-owner-label-renderer test-control-plane-owner-output-dir-env test-control-plane-owner-helmfile-validation test-control-plane-owner-namespace-delete test-control-plane-owner-namespace-marker test-nvca-crd-ownership-migration test-render-structure-detects-violations test-named-control-plane-render-isolation-detects-violations test-named-control-plane-render-isolation test-nvca-derived-object-names test-render-structure test-nvca-entrypoints test-control-plane-owner-label-placement
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local

@@ -334,4 +334,98 @@ END {
     process_env()
   }
 }
+' |
+awk -v owner="$owner" -v legacy_namespace="nvca-operator" '
+function flush_doc(  i, target_namespace) {
+  if (doc_len == 0) {
+    return
+  }
+
+  target_namespace = legacy_namespace
+  if (owner != "default" && owner != "shared" && seen_resourcequota && seen_legacy_name && seen_legacy_namespace) {
+    target_namespace = owner "-" legacy_namespace
+  }
+
+  for (i = 1; i <= doc_len; i++) {
+    if (target_namespace != legacy_namespace && doc[i] ~ /^  namespace:[[:space:]]*nvca-operator[[:space:]]*$/) {
+      print "  namespace: " target_namespace
+    } else {
+      print doc[i]
+    }
+  }
+
+  delete doc
+  doc_len = 0
+  seen_resourcequota = 0
+  seen_legacy_name = 0
+  seen_legacy_namespace = 0
+}
+
+{
+  if ($0 ~ /^---[[:space:]]*$/) {
+    flush_doc()
+    print
+    next
+  }
+
+  doc_len++
+  doc[doc_len] = $0
+  if ($0 ~ /^kind:[[:space:]]*ResourceQuota[[:space:]]*$/) {
+    seen_resourcequota = 1
+  }
+  if ($0 ~ /^  name:[[:space:]]*nvca-operator[[:space:]]*$/) {
+    seen_legacy_name = 1
+  }
+  if ($0 ~ /^  namespace:[[:space:]]*nvca-operator[[:space:]]*$/) {
+    seen_legacy_namespace = 1
+  }
+}
+
+END {
+  flush_doc()
+}
+' |
+awk '
+function flush_doc(  i) {
+  if (doc_len == 0) {
+    return
+  }
+
+  if (!(seen_nvca_operator_crd_source && seen_crd && seen_nvcfbackend_name)) {
+    for (i = 1; i <= doc_len; i++) {
+      print doc[i]
+    }
+  }
+
+  delete doc
+  doc_len = 0
+  seen_nvca_operator_crd_source = 0
+  seen_crd = 0
+  seen_nvcfbackend_name = 0
+}
+
+{
+  if ($0 ~ /^---[[:space:]]*$/) {
+    flush_doc()
+    doc_len = 1
+    doc[doc_len] = $0
+    next
+  }
+
+  doc_len++
+  doc[doc_len] = $0
+  if ($0 ~ /^# Source: (helm-)?nvca-operator\/templates\/crds\/nvidia\.io_nvcfbackends_crd\.yaml[[:space:]]*$/) {
+    seen_nvca_operator_crd_source = 1
+  }
+  if ($0 ~ /^kind:[[:space:]]*CustomResourceDefinition[[:space:]]*$/) {
+    seen_crd = 1
+  }
+  if ($0 ~ /^  name:[[:space:]]*nvcfbackends\.nvcf\.nvidia\.io[[:space:]]*$/) {
+    seen_nvcfbackend_name = 1
+  }
+}
+
+END {
+  flush_doc()
+}
 '

@@ -198,8 +198,10 @@ def check_legacy_namespace_reference(obj, field_path, value, errors):
     )
 
 
-def check_service_dns(obj, field_path, value, errors):
+def check_service_dns(obj, field_path, value, allowed_shared_identities, errors):
     if not isinstance(value, str):
+        return
+    if obj.identity in allowed_shared_identities:
         return
     for match in SERVICE_DNS_RE.finditer(value):
         service = match.group("service")
@@ -222,8 +224,10 @@ def check_service_dns(obj, field_path, value, errors):
                     )
 
 
-def check_known_legacy_object_reference(obj, field_path, value, errors):
+def check_known_legacy_object_reference(obj, field_path, value, allowed_shared_identities, errors):
     if not isinstance(value, str):
+        return
+    if obj.identity in allowed_shared_identities:
         return
     reference_keys = {
         "configMapName",
@@ -345,8 +349,8 @@ def check_object(obj, allowed_shared_identities, errors):
     for field_path, key, value in walk(obj.doc, []):
         if key == "namespace":
             check_legacy_namespace_reference(obj, field_path, value, errors)
-        check_service_dns(obj, field_path, value, errors)
-        check_known_legacy_object_reference(obj, field_path, value, errors)
+        check_service_dns(obj, field_path, value, allowed_shared_identities, errors)
+        check_known_legacy_object_reference(obj, field_path, value, allowed_shared_identities, errors)
 
 
 def load_render(owner, render_dir, errors):
@@ -420,6 +424,14 @@ def check_duplicate_identities(objects, allowed_identities, errors):
         )
 
 
+def check_unused_allowed_shared_identities(objects, allowed_identities, errors):
+    rendered_identities = {obj.identity for obj in objects}
+    for identity in sorted(allowed_identities - rendered_identities):
+        errors.append(
+            f"shared allowlist entry {identity} did not match any rendered object"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="verify named control-plane renders do not reuse legacy object identities"
@@ -461,6 +473,7 @@ def main():
         objects.extend(render_objects)
 
     check_duplicate_identities(objects, allowed_shared_identities, errors)
+    check_unused_allowed_shared_identities(objects, allowed_shared_identities, errors)
 
     if errors:
         for error in errors:

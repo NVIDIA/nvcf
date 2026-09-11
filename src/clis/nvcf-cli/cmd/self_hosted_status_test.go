@@ -191,7 +191,7 @@ func TestStatusCmd_RendererSelection(t *testing.T) {
 	assert.Contains(t, output, `"components"`, "composed snapshot should include components array")
 }
 
-func TestStatusCmd_NamedControlPlaneStopsBeforeCollector(t *testing.T) {
+func TestStatusCmd_NamedControlPlanePassesOwnerToCollector(t *testing.T) {
 	resetStatusFlags(t)
 	fc := &fakeCollector{}
 	prev := newStatusCollector
@@ -214,7 +214,7 @@ func TestStatusCmd_NamedControlPlaneStopsBeforeCollector(t *testing.T) {
 	})
 
 	err := rootCmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
-	assert.Empty(t, gotOwner)
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a", gotOwner)
+	assert.Equal(t, 1, fc.collectCount())
 }

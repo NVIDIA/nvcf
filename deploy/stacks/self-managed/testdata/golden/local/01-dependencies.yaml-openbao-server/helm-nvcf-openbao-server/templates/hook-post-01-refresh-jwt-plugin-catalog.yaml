@@ -17,6 +17,8 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
+  labels:
+    nvcf.nvidia.com/control-plane-owner: default
   name: openbao-server-refresh-jwt-plugin-catalog
   namespace: vault-system
   annotations:

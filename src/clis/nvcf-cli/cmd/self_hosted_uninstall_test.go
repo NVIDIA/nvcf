@@ -168,7 +168,7 @@ func TestUninstall_ControlPlanePassesHelm4CompatToDestroy(t *testing.T) {
 	assert.Contains(t, string(body), "--sequential-helmfiles")
 }
 
-func TestUninstall_NamedControlPlaneStopsBeforeHelmfile(t *testing.T) {
+func TestUninstall_NamedControlPlanePassesOwnerToHelmfile(t *testing.T) {
 	resetUninstallFlags(t)
 	t.Setenv("NVCF_CONTROL_PLANE_OWNER", "from-parent")
 
@@ -193,11 +193,10 @@ func TestUninstall_NamedControlPlaneStopsBeforeHelmfile(t *testing.T) {
 	})
 
 	err := rootCmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
+	require.NoError(t, err)
 
 	body, err := os.ReadFile(helmfileLog)
-	if err == nil {
-		assert.Empty(t, string(body))
-	}
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "--selector control-plane-owner=plane-a")
+	assert.Contains(t, string(body), "CONTROL_PLANE_OWNER=plane-a")
 }

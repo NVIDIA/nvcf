@@ -34,6 +34,15 @@ command -v helmfile >/dev/null 2>&1 || fail "helmfile is required"
 
 max_owner="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 too_long_owner="${max_owner}a"
+expected_nvca_chart_version="$(awk '/^  - name: nvca-operator$/ {found=1; next} found && $1 == "version:" {print $2; exit}' "$source_stack_dir/helmfile.d/02-nvca.yaml.gotmpl")"
+expected_nvca_operator_version="$(awk '/^[[:space:]]+nvcaVersion:/ {gsub(/"/, "", $2); print $2; exit}' "$source_stack_dir/environments/base.yaml")"
+
+if [ -z "$expected_nvca_chart_version" ]; then
+  fail "could not parse expected nvca-operator chart version"
+fi
+if [ -z "$expected_nvca_operator_version" ]; then
+  fail "could not parse expected NVCA operator version"
+fi
 
 mkdir -p "$stack_dir"
 cp -R "$source_stack_dir/helmfile.d" "$stack_dir/"
@@ -63,14 +72,14 @@ if ! grep -q "NVCF_ALPHA_NAMED_CONTROL_PLANE=true is required" "$dependencies_al
   fail "01-dependencies rejected missing alpha opt-in without the alpha validation message"
 fi
 
-dependencies_named_blocked_log="$work_dir/dependencies.named-blocked.log"
-if NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
+dependencies_named_log="$work_dir/dependencies.named.log"
+if ! NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
   helmfile --file "$dependencies_state" list --skip-charts --output json \
-  >"$work_dir/dependencies.named-blocked.json" 2>"$dependencies_named_blocked_log"; then
-  fail "01-dependencies rendered named owner before shared prerequisite identities were allowlisted"
+  >"$work_dir/dependencies.named.json" 2>"$dependencies_named_log"; then
+  fail "01-dependencies rejected named owner with alpha opt-in: $(tr '\n' ' ' <"$dependencies_named_log")"
 fi
-if ! grep -q "shared prerequisite identities are not allowlisted" "$dependencies_named_blocked_log"; then
-  fail "01-dependencies rejected named owner without the shared prerequisite message"
+if grep -Eq '"namespace":[[:space:]]*"nvca-operator"' "$work_dir/dependencies.named.json"; then
+  fail "01-dependencies rendered named owner into the legacy nvca-operator namespace"
 fi
 
 dependencies_invalid_log="$work_dir/dependencies.invalid-owner.log"
@@ -94,25 +103,25 @@ if ! grep -Eq '"name":[[:space:]]*"nvca-operator"' "$work_dir/nvca.default.json"
   fail "owner selector did not include nvca-operator release"
 fi
 
-named_blocked_log="$work_dir/nvca.named-blocked.log"
-if NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
+named_log="$work_dir/nvca.named.log"
+if ! NVCF_CONTROL_PLANE_OWNER=plane-a NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
   helmfile --file "$nvca_state" list --skip-charts --output json \
-  >"$work_dir/nvca.named-blocked.json" 2>"$named_blocked_log"; then
-  fail "02-nvca rendered named owner before shared prerequisite identities were allowlisted"
+  >"$work_dir/nvca.named.json" 2>"$named_log"; then
+  fail "02-nvca rejected named owner with alpha opt-in: $(tr '\n' ' ' <"$named_log")"
 fi
-if ! grep -q "shared prerequisite identities are not allowlisted" "$named_blocked_log"; then
-  fail "02-nvca rejected named owner without the shared prerequisite message"
+if ! grep -Eq '"namespace":[[:space:]]*"plane-a-nvca-operator"' "$work_dir/nvca.named.json"; then
+  fail "02-nvca did not render nvca-operator into the named namespace"
 fi
 
 max_valid_log="$work_dir/nvca.max-valid.log"
-if NVCF_CONTROL_PLANE_OWNER="$max_owner" NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
+if ! NVCF_CONTROL_PLANE_OWNER="$max_owner" NVCF_ALPHA_NAMED_CONTROL_PLANE=true helmfile_env \
   helmfile --file "$nvca_state" list --skip-charts \
   --selector control-plane-owner="$max_owner" --output json \
   >"$work_dir/nvca.max-valid.json" 2>"$max_valid_log"; then
-  fail "02-nvca rendered a 30-character named owner before shared prerequisite identities were allowlisted"
+  fail "02-nvca rejected valid 30-character owner with alpha opt-in: $(tr '\n' ' ' <"$max_valid_log")"
 fi
-if ! grep -q "shared prerequisite identities are not allowlisted" "$max_valid_log"; then
-  fail "02-nvca rejected 30-character owner before reaching shared prerequisite validation"
+if ! grep -Eq '"namespace":[[:space:]]*"'"$max_owner"'-nvca-operator"' "$work_dir/nvca.max-valid.json"; then
+  fail "02-nvca did not render 30-character owner into the named namespace"
 fi
 
 invalid_owners=(
@@ -192,16 +201,25 @@ make -n -C "$source_stack_dir" install \
 if ! grep -Fq 'renderers/mark-control-plane-namespaces.sh' "$install_plan"; then
   fail "make install did not mark control-plane namespaces"
 fi
+if ! grep -Fq 'renderers/adopt-nvca-crd-ownership.sh' "$install_plan"; then
+  fail "make install did not run the NVCA CRD ownership migration before Helmfile sync"
+fi
+if ! grep -Fq -- '--shared-namespace "nvcf-shared"' "$install_plan"; then
+  fail "make install did not pass the shared CRD namespace to the migration"
+fi
+if ! grep -Fq -- '--shared-release "nvcf-nvca-crds"' "$install_plan"; then
+  fail "make install did not pass the shared CRD release name to the migration"
+fi
 if ! grep -Fq -- '--primary-namespace "nvca-operator"' "$install_plan"; then
   fail "make install did not identify nvca-operator as the primary namespace"
 fi
 if ! grep -Fq -- '--stack "nvcf-compute-plane"' "$install_plan"; then
   fail "make install did not include the nvcf-compute-plane stack annotation"
 fi
-if ! grep -Fq -- '--chart-version "1.21.8"' "$install_plan"; then
+if ! grep -Fq -- "--chart-version \"$expected_nvca_chart_version\"" "$install_plan"; then
   fail "make install did not parse the nvca-operator chart version"
 fi
-if ! grep -Fq -- '--nvca-operator-version "3.3.2"' "$install_plan"; then
+if ! grep -Fq -- "--nvca-operator-version \"$expected_nvca_operator_version\"" "$install_plan"; then
   fail "make install did not parse the nvca-operator version"
 fi
 if ! grep -Fq -- '--shared-namespace "kai-scheduler"' "$install_plan"; then
@@ -232,6 +250,12 @@ make -n -C "$source_stack_dir" apply \
   >"$apply_plan" 2>&1
 if ! grep -Fq 'renderers/mark-control-plane-namespaces.sh' "$apply_plan"; then
   fail "make apply did not mark control-plane namespaces"
+fi
+if ! grep -Fq 'renderers/adopt-nvca-crd-ownership.sh' "$apply_plan"; then
+  fail "make apply did not run the NVCA CRD ownership migration before Helmfile apply"
+fi
+if ! grep -Fq -- '--shared-release "nvcf-nvca-crds"' "$apply_plan"; then
+  fail "make apply did not pass the shared CRD release name to the migration"
 fi
 
 destroy_plan="$work_dir/make-destroy.txt"

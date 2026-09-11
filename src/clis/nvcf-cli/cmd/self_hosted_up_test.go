@@ -72,7 +72,7 @@ func resetUpFlags(t *testing.T) {
 	selfHostedUpCurrentKubeContext = func() (string, error) {
 		return "k3d-ncp-local", nil
 	}
-	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 		return "", nil
 	}
 	t.Cleanup(func() {
@@ -175,7 +175,7 @@ func TestSelfHostedInitArgs_DefaultConfig(t *testing.T) {
 	assert.Equal(t, []string{"init"}, selfHostedInitArgs())
 }
 
-func TestSelfHostedUp_NamedModeStopsBeforePreflight(t *testing.T) {
+func TestSelfHostedUp_NamedModeUsesExplicitInstallFlow(t *testing.T) {
 	resetUpFlags(t)
 
 	prevPreflight := runUpPreflight
@@ -204,7 +204,8 @@ func TestSelfHostedUp_NamedModeStopsBeforePreflight(t *testing.T) {
 	err := rootCmd.Execute()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
+	assert.Contains(t, err.Error(), "self-hosted up does not support --control-plane-id yet")
+	assert.Contains(t, err.Error(), "control-plane profile export")
 	assert.False(t, preflightCalled)
 	assert.False(t, guardCalled)
 	assert.NotContains(t, stderr.String(), "[01/8] preflight")

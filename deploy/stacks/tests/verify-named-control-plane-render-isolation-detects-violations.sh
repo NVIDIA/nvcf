@@ -166,6 +166,11 @@ expect_pass "two good named renders with shared CRD" \
   --render "plane-a=$good_a" \
   --render "plane-b=$good_b" \
   --allow-shared-identity "$shared_crd_identity"
+expect_fail "unused shared allowlist identity" \
+  "shared allowlist entry ConfigMap/cert-manager/not-rendered did not match any rendered object" \
+  --render "plane-a=$good_a" \
+  --allow-shared-identity "$shared_crd_identity" \
+  --allow-shared-identity ConfigMap/cert-manager/not-rendered
 
 wrong_owner="$work_dir/wrong-owner"
 mkdir -p "$wrong_owner"
@@ -277,6 +282,24 @@ YAML
 expect_fail "legacy object reference in named namespace" \
   "legacy plane-owned object reference openbao-server-root-token" \
   --render "plane-a=$legacy_object_reference"
+
+allowlisted_shared_reference="$work_dir/allowlisted-shared-reference"
+mkdir -p "$allowlisted_shared_reference"
+cat >"$allowlisted_shared_reference/shared.yaml" <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shared-settings
+  namespace: cert-manager
+  labels:
+    nvcf.nvidia.com/control-plane-owner: shared
+data:
+  rootTokenSecretName: openbao-server-root-token
+  issuerServer: "http://openbao-server.plane-a-vault-system.svc.cluster.local:8200"
+YAML
+expect_pass "allowlisted shared object may carry legacy-looking references" \
+  --render "plane-a=$allowlisted_shared_reference" \
+  --allow-shared-identity ConfigMap/cert-manager/shared-settings
 
 legacy_subject_name="$work_dir/legacy-subject-name"
 mkdir -p "$legacy_subject_name"

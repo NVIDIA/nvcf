@@ -60,7 +60,7 @@ func TestSelfHostedControlPlaneIdentity_DefaultsToLegacy(t *testing.T) {
 	assert.Equal(t, "default", identity)
 }
 
-func TestSelfHostedControlPlaneIdentity_BlocksNamedIDUntilObjectIdentityDerivation(t *testing.T) {
+func TestSelfHostedControlPlaneIdentity_AcceptsNamedIDWithAlphaFlag(t *testing.T) {
 	prev := selfHostedControlPlaneID
 	prevAlpha := selfHostedAlphaNamedPlane
 	t.Cleanup(func() {
@@ -70,9 +70,9 @@ func TestSelfHostedControlPlaneIdentity_BlocksNamedIDUntilObjectIdentityDerivati
 	selfHostedControlPlaneID = "plane-a"
 	selfHostedAlphaNamedPlane = true
 
-	_, err := selfHostedControlPlaneOwner()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
+	identity, err := selfHostedControlPlaneOwner()
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a", identity)
 }
 
 func TestSelfHostedControlPlaneIdentity_RejectsNamedIDWithoutAlphaFlag(t *testing.T) {
@@ -118,10 +118,9 @@ func TestSelfHostedControlPlaneIdentity_RejectsIDsThatExceedCassandraBudget(t *t
 	selfHostedAlphaNamedPlane = true
 
 	selfHostedControlPlaneID = strings.Repeat("a", selfHostedMaxControlPlaneIDLen)
-	_, err := selfHostedControlPlaneOwner()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
-	assert.NotContains(t, err.Error(), "invalid --control-plane-id")
+	identity, err := selfHostedControlPlaneOwner()
+	require.NoError(t, err)
+	assert.Equal(t, strings.Repeat("a", selfHostedMaxControlPlaneIDLen), identity)
 
 	for _, length := range []int{selfHostedMaxControlPlaneIDLen + 1, 32} {
 		t.Run(fmt.Sprintf("length %d", length), func(t *testing.T) {
@@ -147,6 +146,21 @@ func TestSelfHostedControlPlaneEnv(t *testing.T) {
 	env, err := selfHostedControlPlaneEnv()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"NVCF_CONTROL_PLANE_OWNER=default", "NVCF_ALPHA_NAMED_CONTROL_PLANE=false"}, env)
+}
+
+func TestSelfHostedControlPlaneEnv_NamedOwnerEnablesAlphaEnv(t *testing.T) {
+	prev := selfHostedControlPlaneID
+	prevAlpha := selfHostedAlphaNamedPlane
+	t.Cleanup(func() {
+		selfHostedControlPlaneID = prev
+		selfHostedAlphaNamedPlane = prevAlpha
+	})
+	selfHostedControlPlaneID = "plane-a"
+	selfHostedAlphaNamedPlane = true
+
+	env, err := selfHostedControlPlaneEnv()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"NVCF_CONTROL_PLANE_OWNER=plane-a", "NVCF_ALPHA_NAMED_CONTROL_PLANE=true"}, env)
 }
 
 func TestWithSelfHostedControlPlaneEnv(t *testing.T) {
@@ -193,21 +207,6 @@ func TestSelfHostedFlags_NamedControlPlaneRequiresAlphaFlag(t *testing.T) {
 	err := rootCmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--alpha-named-control-plane")
-}
-
-func TestSelfHostedFlags_NamedControlPlaneAlphaRequiresObjectIdentityDerivation(t *testing.T) {
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--local-only", "--control-plane-id=plane-a", "--alpha-named-control-plane"})
-	t.Cleanup(func() {
-		rootCmd.SetArgs(nil)
-		selfHostedControlPlaneID = ""
-		selfHostedAlphaNamedPlane = false
-		checkPre = false
-		checkLocalOnly = false
-	})
-
-	err := rootCmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
 }
 
 func TestSelfHostedFlags_OnlyOneContextErrors(t *testing.T) {
@@ -384,11 +383,27 @@ func TestResolveNVCAEndpointValues_LocalSingleUsesInClusterEndpoints(t *testing.
 		"",
 		"http://sis.localhost:8080",
 		"",
+		selfHostedDefaultControlPlaneID,
 	)
 
 	assert.Equal(t, "http://api.sis.svc.cluster.local:8080", got.ICMSServiceURL)
 	assert.Equal(t, "http://reval.nvcf.svc.cluster.local:8080", got.ReValServiceURL)
 	assert.Equal(t, "nats://nats.nats-system.svc.cluster.local:4222", got.NATSURL)
+}
+
+func TestResolveNVCAEndpointValues_LocalSingleUsesNamedInClusterEndpoints(t *testing.T) {
+	got := resolveNVCAEndpointValues(
+		"local",
+		"",
+		"",
+		"http://sis.localhost:8080",
+		"",
+		"plane-a",
+	)
+
+	assert.Equal(t, "http://api.plane-a-sis.svc.cluster.local:8080", got.ICMSServiceURL)
+	assert.Equal(t, "http://reval.plane-a-nvcf.svc.cluster.local:8080", got.ReValServiceURL)
+	assert.Equal(t, "nats://nats.plane-a-nats-system.svc.cluster.local:4222", got.NATSURL)
 }
 
 func TestResolveRegisterEndpointValues_LocalSplitKeepsExplicitExternalDomain(t *testing.T) {

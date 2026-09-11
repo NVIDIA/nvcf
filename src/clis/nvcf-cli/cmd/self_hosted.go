@@ -18,7 +18,6 @@ limitations under the License.
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -101,7 +100,6 @@ const (
 	selfHostedControlPlaneOwnerEnv      = "NVCF_CONTROL_PLANE_OWNER"
 	selfHostedAlphaNamedControlPlaneEnv = "NVCF_ALPHA_NAMED_CONTROL_PLANE"
 	selfHostedHelmfileOwnerLabel        = "control-plane-owner"
-	selfHostedNamedControlPlaneBlocked  = "named self-hosted control planes are not enabled yet; object-level identity derivation must be wired before using --control-plane-id"
 )
 
 func init() {
@@ -166,7 +164,7 @@ func selfHostedControlPlaneOwner() (string, error) {
 	if !selfHostedAlphaNamedPlane {
 		return "", fmt.Errorf("--control-plane-id is alpha; pass --alpha-named-control-plane to enable named self-hosted control planes")
 	}
-	return "", errors.New(selfHostedNamedControlPlaneBlocked)
+	return selfHostedControlPlaneID, nil
 }
 
 func validateSelfHostedControlPlaneID(id string) error {
@@ -372,15 +370,32 @@ func resolveRegisterEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURL
 	}
 }
 
-func resolveNVCAEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURLOverride string) registerEndpointValues {
+func controlPlaneNamespacePrefix(controlPlaneOwner string) string {
+	if controlPlaneOwner == "" || controlPlaneOwner == selfHostedDefaultControlPlaneID || controlPlaneOwner == selfHostedSharedControlPlaneID {
+		return ""
+	}
+	return controlPlaneOwner + "-"
+}
+
+func controlPlaneInClusterEndpointValues(controlPlaneOwner string) registerEndpointValues {
+	prefix := controlPlaneNamespacePrefix(controlPlaneOwner)
+	return registerEndpointValues{
+		ICMSServiceURL:  fmt.Sprintf("http://api.%ssis.svc.cluster.local:8080", prefix),
+		ReValServiceURL: fmt.Sprintf("http://reval.%snvcf.svc.cluster.local:8080", prefix),
+		NATSURL:         fmt.Sprintf("nats://nats.%snats-system.svc.cluster.local:4222", prefix),
+	}
+}
+
+func resolveNVCAEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURLOverride, controlPlaneOwner string) registerEndpointValues {
 	if strings.EqualFold(env, "local") && kubectx.SelectMode(controlCtx, computeCtx) == kubectx.ModeSingle {
-		natsURL := localInClusterNATSURL
+		endpoints := controlPlaneInClusterEndpointValues(controlPlaneOwner)
+		natsURL := endpoints.NATSURL
 		if natsURLOverride != "" || os.Getenv("NVCF_NATS_URL") != "" {
-			natsURL = resolveNATSURL(natsURLOverride, localInClusterICMSURL)
+			natsURL = resolveNATSURL(natsURLOverride, endpoints.ICMSServiceURL)
 		}
 		return registerEndpointValues{
-			ICMSServiceURL:  localInClusterICMSURL,
-			ReValServiceURL: localInClusterReValURL,
+			ICMSServiceURL:  endpoints.ICMSServiceURL,
+			ReValServiceURL: endpoints.ReValServiceURL,
 			NATSURL:         natsURL,
 		}
 	}

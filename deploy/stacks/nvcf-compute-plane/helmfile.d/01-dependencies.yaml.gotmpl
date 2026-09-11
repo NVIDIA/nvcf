@@ -40,11 +40,12 @@ environments:
 {{- if and (ne $controlPlaneOwner "default") (eq $controlPlaneNamespacePrefix "") }}
 {{- fail "named control planes are not enabled yet because namespace derivation is not wired; refusing to render named objects into legacy namespaces" }}
 {{- end }}
-{{- $namedControlPlaneObjectIdentitiesReady := false }}
+{{- $namedControlPlaneObjectIdentitiesReady := true }}
 {{- if and (ne $controlPlaneOwner "default") (not $namedControlPlaneObjectIdentitiesReady) }}
 {{- fail "named control planes are not enabled yet because shared prerequisite identities are not allowlisted; refusing to render until shared objects are reviewed explicitly" }}
 {{- end }}
 {{- $nvcaOperatorNamespace := printf "%snvca-operator" $controlPlaneNamespacePrefix }}
+{{- $nvcfSharedNamespace := "nvcf-shared" }}
 {{- $kaiSchedulerNamespace := "kai-scheduler" }}
 {{- $groveSystemNamespace := "grove-system" }}
 {{- $dynamoSystemNamespace := "dynamo-system" }}
@@ -69,6 +70,22 @@ helmDefaults:
     - "--dry-run=server"
 
 releases:
+
+  - name: nvcf-nvca-crds
+    # Shared CRD release. The per-plane nvca-operator release must not own
+    # this CRD, otherwise installing or uninstalling one plane can break the
+    # other planes on the same compute cluster.
+    chart: ../charts/nvcf-nvca-crds
+    namespace: {{ $nvcfSharedNamespace }}
+    postRenderer: {{ $controlPlaneOwnerRenderer | quote }}
+    postRendererArgs:
+      - "--owner"
+      - {{ $sharedControlPlaneOwner | quote }}
+    labels:
+      release-group: workers
+      control-plane-owner: {{ $sharedControlPlaneOwner | quote }}
+    wait: true
+    waitForJobs: true
 
   - name: kai-scheduler
     # Required by grove-operator and dynamo-operator. Release name and namespace

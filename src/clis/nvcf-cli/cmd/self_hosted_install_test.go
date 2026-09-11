@@ -57,7 +57,7 @@ func resetInstallFlags(t *testing.T) {
 		return selfhosted.HelmRuntimeHelm3Legacy, nil
 	}
 	prevFetchRootCA := fetchControlPlaneRootCAPEM
-	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 		return "", nil
 	}
 	t.Cleanup(func() {
@@ -131,7 +131,7 @@ func TestSelfHostedInstall_ControlPlanePassesDefaultControlPlaneEnv(t *testing.T
 	assert.Contains(t, stdout.String(), "owner=default alpha=false")
 }
 
-func TestSelfHostedInstall_ControlPlaneNamedNoApplyStopsBeforeMixedModeGuard(t *testing.T) {
+func TestSelfHostedInstall_ControlPlaneNamedNoApplySkipsMixedModeGuard(t *testing.T) {
 	resetInstallFlags(t)
 	selfHostedControlPlaneID = "plane-a"
 	selfHostedAlphaNamedPlane = true
@@ -152,7 +152,8 @@ func TestSelfHostedInstall_ControlPlaneNamedNoApplyStopsBeforeMixedModeGuard(t *
 		0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
 
-	rootCmd.SetOut(&bytes.Buffer{})
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
 	rootCmd.SetArgs([]string{
 		"self-hosted", "install", "--control-plane",
 		"--control-plane-stack", stackDir,
@@ -161,12 +162,12 @@ func TestSelfHostedInstall_ControlPlaneNamedNoApplyStopsBeforeMixedModeGuard(t *
 		"--no-apply",
 	})
 	err := rootCmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
+	require.NoError(t, err)
 	assert.False(t, called)
+	assert.Contains(t, stdout.String(), "kind: ConfigMap")
 }
 
-func TestSelfHostedInstall_ControlPlaneNamedModeStopsBeforeLegacyAdoptionGate(t *testing.T) {
+func TestSelfHostedInstall_ControlPlaneNamedModeUsesLegacyAdoptionGate(t *testing.T) {
 	resetInstallFlags(t)
 	selfHostedToken = "test-token"
 
@@ -192,8 +193,8 @@ func TestSelfHostedInstall_ControlPlaneNamedModeStopsBeforeLegacyAdoptionGate(t 
 	err := rootCmd.Execute()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
-	assert.False(t, called)
+	assert.Contains(t, err.Error(), "legacy NVCF objects are missing")
+	assert.True(t, called)
 }
 
 func TestSelfHostedInstall_ControlPlane_Helm4AppliesStateFilesSequentially(t *testing.T) {
@@ -394,38 +395,54 @@ func TestSelfHostedInstall_ComputePlane_RegistersAndRenders(t *testing.T) {
 	assert.Contains(t, string(registerValues), "natsURL: nats://nats.nats-system.svc.cluster.local:4222")
 }
 
-func TestSelfHostedInstall_ComputePlaneNamedModeStopsBeforeRegister(t *testing.T) {
+func TestSelfHostedInstall_ComputePlaneNamedModeRegistersAndRenders(t *testing.T) {
 	resetInstallFlags(t)
 	fakeCC := &fakeClusterClient{resp: &selfhosted.RegisterResponse{ClusterID: "id-A", ClusterGroupID: "grp-A"}}
 	prevClientFactory := newClusterClientForSelfHosted
 	t.Cleanup(func() { newClusterClientForSelfHosted = prevClientFactory })
 	newClusterClientForSelfHosted = func(string) (selfhosted.ClusterClient, error) { return fakeCC, nil }
 
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		return "https://k8s.example/.well-known/oidc", `{"keys":[]}`, "psat", nil
+	}
+
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	fakeBin := filepath.Join(t.TempDir(), "helmfile")
+	require.NoError(t, os.WriteFile(fakeBin,
+		[]byte("#!/bin/sh\nprintf 'owner=%s alpha=%s cluster=%s\\n' \"$NVCF_CONTROL_PLANE_OWNER\" \"$NVCF_ALPHA_NAMED_CONTROL_PLANE\" \"$CLUSTER_NAME\"\n"),
+		0o755))
+	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
 
 	guardCalled := false
 	buildKubeClientForSelfHostedInstallGuard = func(kubeContext string) (kubernetes.Interface, error) {
 		guardCalled = true
-		return fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "nvca-operator"}}), nil
+		return fake.NewSimpleClientset(), nil
 	}
 
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
 	rootCmd.SetArgs([]string{
 		"self-hosted",
-		"--control-plane-context=admin@cp",
-		"--compute-plane-context=admin@gpu1",
 		"install", "--compute-plane", "--cluster-name=ncp-A",
 		"--compute-plane-stack", stackDir,
 		"--control-plane-id", "plane-a",
 		"--alpha-named-control-plane",
 		"--icms-url=http://sis.localhost:8080",
+		"--no-apply",
 	})
-	err := rootCmd.Execute()
+	require.NoError(t, rootCmd.Execute())
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "object-level identity derivation")
-	assert.False(t, guardCalled)
-	assert.Equal(t, 0, fakeCC.registerCalls)
+	assert.True(t, guardCalled)
+	assert.Equal(t, 1, fakeCC.registerCalls)
+	assert.Contains(t, stdout.String(), "owner=plane-a alpha=true cluster=ncp-A")
+	registerValues, err := os.ReadFile(filepath.Join(stackDir, "out", "ncp-A-register-values.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(registerValues), "icmsServiceURL: http://api.plane-a-sis.svc.cluster.local:8080")
+	assert.Contains(t, string(registerValues), "revalServiceURL: http://reval.plane-a-nvcf.svc.cluster.local:8080")
+	assert.Contains(t, string(registerValues), "natsURL: nats://nats.plane-a-nats-system.svc.cluster.local:4222")
 }
 
 func TestSelfHostedInstall_ComputePlane_AppliesByDefault(t *testing.T) {

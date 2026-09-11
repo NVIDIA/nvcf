@@ -146,6 +146,10 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 	}
 
 	if installControlPlane {
+		controlPlaneOwner, err := selfHostedControlPlaneOwner()
+		if err != nil {
+			return err
+		}
 		if !selfHostedNoApply {
 			if err := checkNamedControlPlaneInstallAllowed(c.Context(), selfHostedControlPlaneContext); err != nil {
 				return err
@@ -171,6 +175,7 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 			NCAID:               installNCAID,
 			Region:              installRegion,
 			Env:                 selfHostedEnv,
+			ControlPlaneOwner:   controlPlaneOwner,
 			ControlPlaneContext: selfHostedControlPlaneContext,
 			ComputePlaneContext: selfHostedComputePlaneContext,
 			ICMSURL:             resolveICMSURL(selfHostedICMSURL),
@@ -242,7 +247,11 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(c.ErrOrStderr(), ">>> Cluster registered: clusterId=%s clusterGroupId=%s\n", resp.ClusterID, resp.ClusterGroupID)
 
-	endpoints := resolveNVCAEndpointValues(selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL, selfHostedNATSURL)
+	controlPlaneOwner, err := selfHostedControlPlaneOwner()
+	if err != nil {
+		return err
+	}
+	endpoints := resolveNVCAEndpointValues(selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL, selfHostedNATSURL, controlPlaneOwner)
 	if err := writeRegisterValuesYAML(registerValuesWriteRequest{
 		StackPath:      resolved.Path,
 		ClusterName:    installClusterName,
