@@ -79,5 +79,20 @@ assert_yaml_value "$manifest_file" \
 assert_yaml_value "$manifest_file" \
   'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SIGNATURE") | .valueFrom.secretKeyRef.key' \
   nkey_signature "NKey signature Secret key"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_PLUGIN__TYPE") | .value' \
+  nkey "NKey plugin type"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_NKEY") | .valueFrom.secretKeyRef.name' \
+  nats-nkeys "shared worker public NKey Secret name"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_NKEY") | .valueFrom.secretKeyRef.key' \
+  user.pub "shared worker public NKey Secret key"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_ACCOUNT") | .value' \
+  APP "shared worker NKey account mapping"
+assert_yaml_value "$manifest_file" \
+  'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_0_ID") | .value' \
+  nkey "APP enabled NKey plugin"
 
 echo "nats-auth-callout-service-wiring: OK"

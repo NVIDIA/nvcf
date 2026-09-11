@@ -98,6 +98,17 @@ spec:
                 secretKeyRef:
                   key: nkey_signature
                   name: nats-auth-callout-nkeys
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_PLUGIN__TYPE
+              value: nkey
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_NKEY
+              valueFrom:
+                secretKeyRef:
+                  key: user.pub
+                  name: nats-nkeys
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_PLUGIN__CONFIGS_NKEY_CONFIG_NKEY__MAPPINGS_0_ACCOUNT
+              value: APP
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_ACCOUNT__CONFIGS_APP_ENABLED__PLUGINS_0_ID
+              value: nkey
 
             # Metrics Configuration
             - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED
