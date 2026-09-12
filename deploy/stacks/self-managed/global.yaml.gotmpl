@@ -1372,6 +1372,9 @@ vanityGateway:
      than the floor is ignored (the migrations job needs >= 0.19.5). */}}
 {{- $nvcfUiOpenbaoMigrationsTag := "0.19.5" }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
+{{- if and $nvcfUiMigrationsTagOverride (not (regexMatch "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$" $nvcfUiMigrationsTagOverride)) }}
+{{- fail "addons.nvcfUi.openbaoMigrations.image.tag must be a valid OCI image tag" }}
+{{- end }}
 {{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.19.5" $nvcfUiMigrationsTagOverride) }}
 {{- $nvcfUiOpenbaoMigrationsTag = $nvcfUiMigrationsTagOverride }}
 {{- end }}
