@@ -33,6 +33,7 @@ import (
 // to the Ledger before its first write so suite teardown can restore.
 func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
+	ctx.Step(`^I write yaml file "([^"]*)" with values:$`, sc.iWriteYAMLFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
 	ctx.Step(`^I prepare Helmfile environment "([^"]*)" for stack "([^"]*)" from fixture "([^"]*)" with values:$`, sc.iPrepareHelmfileEnvironment)
 	ctx.Step(`^I prepare self-managed secrets file "([^"]*)" from template "([^"]*)" using the current NGC registry credential$`, sc.iPrepareSelfManagedSecretsFile)
@@ -79,6 +80,31 @@ func (sc *ScenarioContext) iCopyFile(src, dest string) error {
 		return err
 	}
 	return copyFile(resolvedSrc, resolvedDest)
+}
+
+// iWriteYAMLFile creates a new YAML file from the supplied table of
+// dotted-path/value rows. The step refuses to overwrite an existing
+// file; use I update yaml file for that. The destination is recorded
+// with the Ledger before the write so suite teardown removes it. YAML
+// construction stays in dsl.RenderYAMLFromKeys; this handler owns only
+// path resolution, the existence check, and the write.
+func (sc *ScenarioContext) iWriteYAMLFile(path string, table *godog.Table) error {
+	resolved := sc.resolvePath(dsl.Interpolate(path))
+	if _, err := os.Stat(resolved); err == nil {
+		return fmt.Errorf("write yaml %s: file already exists (use I update yaml file to modify)", resolved)
+	}
+	keys, err := tableToKeyValuePairs(table)
+	if err != nil {
+		return err
+	}
+	body, err := dsl.RenderYAMLFromKeys(keys)
+	if err != nil {
+		return fmt.Errorf("write yaml %s: %w", resolved, err)
+	}
+	if err := sc.Suite.Ledger.Snapshot(resolved); err != nil {
+		return err
+	}
+	return writeNewFile(resolved, body)
 }
 
 // iUpdateYAMLFile applies the supplied table of dotted-path/value rows
@@ -205,6 +231,28 @@ func copyFile(src, dest string) error {
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
 		return fmt.Errorf("copy: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", dest, err)
+	}
+	return nil
+}
+
+// writeNewFile creates dest with mode 0644, creating parent directories
+// as needed. O_EXCL guarantees the write never clobbers a file that
+// appeared between the caller's existence check and this call, and the
+// Close error is checked so a flush failure surfaces.
+func writeNewFile(dest string, body []byte) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dest), err)
+	}
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", dest, err)
+	}
+	if _, err := out.Write(body); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("write %s: %w", dest, err)
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", dest, err)

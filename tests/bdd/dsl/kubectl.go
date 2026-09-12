@@ -118,15 +118,38 @@ func KubernetesResourceAbsent(raw string, resource KubernetesResource) error {
 	return nil
 }
 
+// KubernetesWorkload identifies one rollout-capable workload by kind, name,
+// and namespace.
+type KubernetesWorkload struct {
+	Kind      string
+	Name      string
+	Namespace string
+}
+
 // KubernetesDeploymentRolloutCommand builds an explicit-context rollout wait
 // for one deployment.
 func KubernetesDeploymentRolloutCommand(name, namespace, kubeContext, timeout string) (string, error) {
-	target, err := resolveKubernetesWaitTarget("deployment", name, namespace, kubeContext, timeout)
+	return KubernetesWorkloadRolloutCommand(
+		KubernetesWorkload{Kind: "deployment", Name: name, Namespace: namespace},
+		kubeContext,
+		timeout,
+	)
+}
+
+// KubernetesWorkloadRolloutCommand builds an explicit-context rollout wait
+// for one workload. The kind is lowercased and passed through without an
+// allowlist, so every kind kubectl rollout status accepts works.
+func KubernetesWorkloadRolloutCommand(workload KubernetesWorkload, kubeContext, timeout string) (string, error) {
+	kind := strings.ToLower(strings.TrimSpace(Interpolate(workload.Kind)))
+	if kind == "" {
+		return "", fmt.Errorf("kubernetes workload kind is empty")
+	}
+	target, err := resolveKubernetesWaitTarget(kind, workload.Name, workload.Namespace, kubeContext, timeout)
 	if err != nil {
 		return "", err
 	}
 	return strings.Join([]string{
-		"kubectl", "rollout", "status", quoteCommandArg("deployment/" + target.name),
+		"kubectl", "rollout", "status", quoteCommandArg(kind + "/" + target.name),
 		"-n", quoteCommandArg(target.namespace),
 		"--context", quoteCommandArg(target.kubeContext),
 		quoteCommandArg("--timeout=" + target.timeout),

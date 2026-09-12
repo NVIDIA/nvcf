@@ -1309,6 +1309,8 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 			" pylon_reverse_tunnel_connected 'at least' 3"
 		grpcCertificateCommand = "kubectl --context k3d-ncp-local-cp get certificate llm-request-router-grpc-tls" +
 			" -n envoy-gateway-system -o jsonpath={.spec.dnsNames}"
+		endpointDiscoveryCommand = "kubectl --context k3d-ncp-local-compute-1 get endpoints llm-request-router" +
+			" --namespace nvcf --output jsonpath={.subsets[0].addresses[0].ip}"
 		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
 			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-multiregion\"}]}' --timeout 120"
@@ -1333,6 +1335,10 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		grpcCertificateCommand: {
 			ExitCode: 0,
 			Stdout:   "[llm-request-router.nvcf.svc.cluster.local region-b-watch.nvcf.svc.cluster.local]",
+		},
+		endpointDiscoveryCommand: {
+			ExitCode: 0,
+			Stdout:   "192.0.2.10",
 		},
 		pylonMetricsCommand: {
 			ExitCode: 0,
@@ -1380,6 +1386,7 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	}
 	for _, command := range []string{
 		grpcCertificateCommand,
+		endpointDiscoveryCommand,
 		regionAWatchCommand,
 		regionBWatchCommand,
 		pylonMetricsCommand,
@@ -1388,8 +1395,103 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 			t.Fatalf("exact multi-region observation command was not invoked: %s", command)
 		}
 	}
-	if !commandRanThatContainsAll(
-		suite.Runner.(*fakeRunner).runs,
+	runs := suite.Runner.(*fakeRunner).runs
+
+	// Region B base values export (the jq pipeline that captures Region A config).
+	if !commandRanThatContainsAll(runs,
+		"helm --kube-context k3d-ncp-local-cp get values llm-request-router",
+		"region-a-base-values.json",
+	) {
+		t.Fatal("Region A base values export was not invoked")
+	}
+
+	// Region B helm install references both the base values and the
+	// DSL-generated override file.
+	if !commandRanThatContainsAll(runs,
+		"upgrade --install llm-request-router-region-b",
+		"region-a-base-values.json",
+		"region-b-values.yaml",
+	) {
+		t.Fatal("Region B helm install was not invoked with both base and override values")
+	}
+
+	// The override file was written by the I write yaml file step and
+	// should contain the visible table values.
+	regionBValuesPath := filepath.Join(suite.Config.RepoRoot, "tests", "bdd", "out", "region-b-values.yaml")
+	regionBValues, err := os.ReadFile(regionBValuesPath)
+	if err != nil {
+		t.Fatalf("read region-b-values.yaml: %v", err)
+	}
+	for _, want := range []string{
+		"fullnameOverride: llm-request-router-region-b",
+		"kind: StatefulSet",
+		"headlessName: llm-request-router-region-b-headless",
+		"pylonGrpcDialAddress: https://region-b-watch.nvcf.svc.cluster.local:50071",
+		"mode: existingSecret",
+		"secretName: stargate-quic-tls",
+	} {
+		if !strings.Contains(string(regionBValues), want) {
+			t.Fatalf("region-b-values.yaml missing %q:\n%s", want, regionBValues)
+		}
+	}
+	// Boolean and collection values must be emitted as native YAML
+	// types so Helm evaluates them correctly (string "false" is truthy
+	// in Go templates). MatchYAMLSubtree compares parsed values, so a
+	// missing key, a quoted "false", or a "[]" string all fail here.
+	for _, typed := range []struct {
+		key  string
+		want string
+	}{
+		{key: "llmRequestRouter.backendRouter.enabled", want: "true"},
+		{key: "llmRequestRouter.serviceAccount.create", want: "false"},
+		{key: "llmRequestRouter.pki.enabled", want: "false"},
+		{key: "llmRequestRouter.certificate.enabled", want: "false"},
+		{key: "llmRequestRouter.discovery.remoteWatchUrls", want: "[]"},
+	} {
+		if err := dsl.MatchYAMLSubtree(regionBValuesPath, typed.key, typed.want, dsl.MatchExact); err != nil {
+			t.Fatalf("region-b-values.yaml %s is not the native value %s: %v\n%s", typed.key, typed.want, err, regionBValues)
+		}
+	}
+
+	// Gateway resources (GRPCRoute, BackendTrafficPolicy, ReferenceGrant
+	// visible in the feature file docstring) are applied from a rendered
+	// manifest file under OutDir against the control-plane context.
+	if !commandRanThatContainsAll(appliedManifestBodies(t, runs, "k3d-ncp-local-cp"),
+		"kind: GRPCRoute",
+		"kind: BackendTrafficPolicy",
+		"kind: ReferenceGrant",
+	) {
+		t.Fatal("Region B gateway resources were not applied to the control-plane cluster")
+	}
+
+	// Watch alias applied to both clusters with the DSL-interpolated
+	// control-plane IP (no envsubst dependency). Each apply must carry
+	// both the Service and the Endpoints resource; a name and IP alone
+	// would also match an unrelated resource.
+	for _, cluster := range []struct {
+		context string
+		label   string
+	}{
+		{context: "k3d-ncp-local-cp", label: "control-plane"},
+		{context: "k3d-ncp-local-compute-1", label: "compute"},
+	} {
+		if !commandRanThatContainsAll(appliedManifestBodies(t, runs, cluster.context),
+			"kind: Service",
+			"kind: Endpoints",
+			"name: region-b-watch",
+			"ip: 192.0.2.10",
+		) {
+			t.Fatalf("Region B watch alias Service and Endpoints were not applied to the %s cluster", cluster.label)
+		}
+	}
+
+	if !commandRanThatContains(runs, "rollout status statefulset/llm-request-router-region-b") {
+		t.Fatal("Region B StatefulSet rollout wait was not invoked")
+	}
+	if !commandRanThatContains(runs, "rollout status deployment/llm-request-router-region-b-backend-router") {
+		t.Fatal("Region B backend-router Deployment rollout wait was not invoked")
+	}
+	if !commandRanThatContainsAll(runs,
 		"function create --name bdd-registration-multiregion",
 		"--function-type LLM",
 		"--llm-model",
@@ -2494,6 +2596,9 @@ func commandRanExactly(runs []string, want string) bool {
 	return false
 }
 
+// commandRanThatContainsAll reports whether a single recorded command
+// contains every needle. Matching within one command, rather than across
+// the whole recording, ties related arguments to the same invocation.
 func commandRanThatContainsAll(runs []string, needles ...string) bool {
 	for _, run := range runs {
 		matched := true
@@ -2510,6 +2615,30 @@ func commandRanThatContainsAll(runs []string, needles ...string) bool {
 	return false
 }
 
+// appliedManifestBodies returns the contents of every manifest file that an
+// explicit-context kubectl apply consumed against kubeContext. Manifest steps
+// write their rendered body under OutDir and pass the path on argv, so the
+// recorded command alone does not show the applied resources.
+func appliedManifestBodies(t *testing.T, runs []string, kubeContext string) []string {
+	t.Helper()
+	prefix := "kubectl --context " + kubeContext + " apply -f "
+	var bodies []string
+	for _, run := range runs {
+		if !strings.HasPrefix(run, prefix) {
+			continue
+		}
+		path := strings.Trim(strings.TrimPrefix(run, prefix), "'")
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read applied manifest %s: %v", path, err)
+		}
+		bodies = append(bodies, string(body))
+	}
+	return bodies
+}
+
+// assertFileContains fails the test unless the file at path contains every
+// needle. It is used to check handoff artifacts written by file steps.
 func assertFileContains(t *testing.T, path string, needles ...string) {
 	t.Helper()
 	content, err := os.ReadFile(path)
