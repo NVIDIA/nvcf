@@ -270,6 +270,10 @@ spec:
     image: nvcr.io/0651155215864979/ncp-dev/stargate-client:0.4.0
     imagePullPolicy: IfNotPresent
     name: llm-worker
+    ports:
+    - containerPort: 9089
+      name: worker-metrics
+      protocol: TCP
     resources:
       limits:
         cpu: "1"

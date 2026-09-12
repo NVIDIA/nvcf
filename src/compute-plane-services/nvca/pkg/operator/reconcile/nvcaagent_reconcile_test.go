@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
@@ -2479,6 +2480,7 @@ func TestGetInternalPersistentStorageConfig(t *testing.T) {
 	}
 }
 
+// TestGetNetworkPoliciesDataEmptyDDCSIPList verifies generated network policies without DDCS CIDRs.
 func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	expNPNames := []string{
 		EgressNetworkPolicyNameKey,
@@ -2501,7 +2503,15 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	got, err := bc.getNetworkPoliciesData(newTestContext(), nb)
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
-	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
+	assertNetworkPolicyAllowsTCPPort(
+		t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, intstr.FromInt32(8888),
+	)
+	assertNetworkPolicyAllowsTCPPort(
+		t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, intstr.FromString("worker-metrics"),
+	)
+	assertNetworkPolicyOmitsTCPPort(
+		t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, intstr.FromInt32(9089),
+	)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {
@@ -2511,6 +2521,7 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols.yaml"))), stripSPDXHeaders(b.String()))
 }
 
+// TestGetNetworkPoliciesDataWithDDCSIPList verifies generated network policies with DDCS CIDRs.
 func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	expNPNames := []string{
 		EgressNetworkPolicyNameKey,
@@ -2534,7 +2545,15 @@ func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	got, err := bc.getNetworkPoliciesData(newTestContext(), nb)
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
-	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
+	assertNetworkPolicyAllowsTCPPort(
+		t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, intstr.FromInt32(8888),
+	)
+	assertNetworkPolicyAllowsTCPPort(
+		t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, intstr.FromString("worker-metrics"),
+	)
+	assertNetworkPolicyOmitsTCPPort(
+		t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, intstr.FromInt32(9089),
+	)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {
@@ -2544,7 +2563,8 @@ func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols_with_ddcs.yaml"))), stripSPDXHeaders(b.String()))
 }
 
-func assertNetworkPolicyAllowsTCPPort(t *testing.T, policyYAML, policyName string, port int32) {
+// assertNetworkPolicyAllowsTCPPort verifies a policy allows a numeric or named TCP destination port.
+func assertNetworkPolicyAllowsTCPPort(t *testing.T, policyYAML, policyName string, port intstr.IntOrString) {
 	t.Helper()
 
 	var policy netv1.NetworkPolicy
@@ -2556,13 +2576,38 @@ func assertNetworkPolicyAllowsTCPPort(t *testing.T, policyYAML, policyName strin
 			if networkPolicyPort.Port == nil || networkPolicyPort.Protocol == nil {
 				continue
 			}
-			if networkPolicyPort.Port.IntVal == port && *networkPolicyPort.Protocol == corev1.ProtocolTCP {
+			if *networkPolicyPort.Port == port && *networkPolicyPort.Protocol == corev1.ProtocolTCP {
 				return
 			}
 		}
 	}
 
-	assert.Failf(t, "missing TCP port", "%s should allow TCP port %d", policyName, port)
+	assert.Failf(t, "missing TCP port", "%s should allow TCP port %q", policyName, port.String())
+}
+
+// assertNetworkPolicyOmitsTCPPort verifies a policy does not explicitly declare a numeric or named TCP port.
+func assertNetworkPolicyOmitsTCPPort(t *testing.T, policyYAML, policyName string, port intstr.IntOrString) {
+	t.Helper()
+
+	var policy netv1.NetworkPolicy
+	require.NoError(t, yaml.Unmarshal([]byte(policyYAML), &policy))
+	require.Equal(t, policyName, policy.Name)
+
+	for _, ingressRule := range policy.Spec.Ingress {
+		for _, networkPolicyPort := range ingressRule.Ports {
+			if networkPolicyPort.Port == nil {
+				continue
+			}
+			protocol := corev1.ProtocolTCP
+			if networkPolicyPort.Protocol != nil {
+				protocol = *networkPolicyPort.Protocol
+			}
+			assert.Falsef(t,
+				*networkPolicyPort.Port == port && protocol == corev1.ProtocolTCP,
+				"%s should not explicitly declare TCP port %q", policyName, port.String(),
+			)
+		}
+	}
 }
 
 func TestGetEffectiveK8sNetworkCIDRs(t *testing.T) {
