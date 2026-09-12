@@ -140,12 +140,17 @@ persistentVolumeClaim:
   sizeProxyGB: 200
   # Container cache volume size (Gi).
   sizeGB: 100
-  # Cleanup watermark percentage (keep this much free on the proxy cache
-  # volume): eviction starts when the volume passes (100 - freeProxyPct)
-  # percent usage, i.e. 15 means evict at 85 percent full. This is the only
-  # space-based eviction trigger; there is no per-zone max_size because a
+  # Cleanup watermark percentage: eviction starts when usage passes
+  # (100 - freeProxyPct) percent, i.e. 15 means evict at 85 percent full.
+  # On a PersistentVolume this is an nginx min_free watermark on the volume
+  # and the only space-based trigger; there is no per-zone max_size because a
   # deployment serves either s3 or ngc/hf traffic, and a per-zone split would
-  # strand the idle zone's share of the volume.
+  # strand the idle zone's share of the volume. With storageClassName
+  # "emptydir" the directory shares the node's ephemeral-storage filesystem,
+  # so min_free cannot see the cache's own usage; each zone then also gets a
+  # max_size of (100 - freeProxyPct) percent of sizeProxyGB (sizeGB for the
+  # container zone), so nginx evicts before kubelet reaches the emptyDir
+  # sizeLimit and evicts the pod.
   freeProxyPct: 15
 
 # Service configuration.
