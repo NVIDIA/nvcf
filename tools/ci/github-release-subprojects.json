@@ -137,13 +137,6 @@
       ]
     },
     {
-      "id": "state-metrics-helm",
-      "path": "deploy/helm/state-metrics",
-      "service_name": "helm-nvcf-state-metrics",
-      "initial_version": "1.0.2",
-      "deploys": []
-    },
-    {
       "id": "nats-auth-callout",
       "path": "src/control-plane-services/nats-auth-callout",
       "service_name": "nvcf-nats-auth-callout-service",

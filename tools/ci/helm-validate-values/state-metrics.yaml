@@ -1,5 +1,0 @@
-# CI-only values for Helm lint and render validation.
-stateMetrics:
-  image:
-    registry: example.com
-    repository: nvcf/nvcf-state-metrics-service
