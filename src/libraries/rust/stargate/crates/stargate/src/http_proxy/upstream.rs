@@ -15,7 +15,7 @@
 
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use stargate_protocol::common::is_hop_by_hop_header;
+use stargate_protocol::common::end_to_end_headers;
 use stargate_protocol::tunnel_contract::{
     HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
     HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
@@ -122,21 +122,20 @@ pub(super) fn headers_for_upstream_attempt(
 }
 
 fn should_forward_header(name: &HeaderName) -> bool {
-    !is_hop_by_hop_header(name)
-        && !matches!(
-            name.as_str(),
-            "host"
-                | HEADER_ROUTING_METHOD
-                | HEADER_STARGATE_RETRYABLE
-                | HEADER_STARGATE_RETRY_REASON
-                | HEADER_STARGATE_RETRY_AFTER_MS
-                | HEADER_STARGATE_EXPECTED_QUEUE_MS
-                | HEADER_STARGATE_ERROR_CODE
-        )
+    !matches!(
+        name.as_str(),
+        "host"
+            | HEADER_ROUTING_METHOD
+            | HEADER_STARGATE_RETRYABLE
+            | HEADER_STARGATE_RETRY_REASON
+            | HEADER_STARGATE_RETRY_AFTER_MS
+            | HEADER_STARGATE_EXPECTED_QUEUE_MS
+            | HEADER_STARGATE_ERROR_CODE
+    )
 }
 
 pub(super) fn copy_forwardable_headers(from: &HeaderMap, to: &mut HeaderMap) {
-    for (name, value) in from {
+    for (name, value) in end_to_end_headers(from) {
         if should_forward_header(name) {
             to.append(name, value.clone());
         }
@@ -168,7 +167,8 @@ mod tests {
     #[test]
     fn prepare_forwarded_headers_strips_internal_proxy_headers() {
         let source = headers([
-            ("connection", "close"),
+            ("connection", "x-private-hop"),
+            ("x-private-hop", "private"),
             ("host", "example.test"),
             ("x-routing-method", "random"),
             (HEADER_STARGATE_ERROR_CODE, "no_eligible_candidates"),
@@ -179,6 +179,7 @@ mod tests {
         let forwarded = prepare_forwarded_headers(&source);
 
         assert!(!forwarded.contains_key("connection"));
+        assert!(!forwarded.contains_key("x-private-hop"));
         assert!(!forwarded.contains_key("host"));
         assert!(!forwarded.contains_key("x-routing-method"));
         assert!(!forwarded.contains_key(HEADER_STARGATE_ERROR_CODE));
@@ -205,6 +206,8 @@ mod tests {
     #[test]
     fn copy_forwardable_headers_strips_internal_retry_headers() {
         let upstream = headers([
+            ("connection", "x-private-hop"),
+            ("x-private-hop", "private"),
             (HEADER_STARGATE_ERROR_CODE, "no_eligible_candidates"),
             (HEADER_STARGATE_RETRYABLE, "true"),
             (HEADER_STARGATE_RETRY_REASON, "retryable_proxy_error"),
@@ -216,6 +219,8 @@ mod tests {
         let mut downstream = HeaderMap::new();
         copy_forwardable_headers(&upstream, &mut downstream);
 
+        assert!(!downstream.contains_key("x-private-hop"));
+        assert!(!downstream.contains_key("connection"));
         assert!(!downstream.contains_key(HEADER_STARGATE_ERROR_CODE));
         assert!(!downstream.contains_key(HEADER_STARGATE_RETRYABLE));
         assert!(!downstream.contains_key(HEADER_STARGATE_RETRY_REASON));

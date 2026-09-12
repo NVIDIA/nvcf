@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use axum::http::HeaderName;
 use futures::future;
 use quinn::Connection;
-use stargate_protocol::common::is_hop_by_hop_header;
+use stargate_protocol::common::{end_to_end_headers, is_hop_by_hop_header};
 use tracing::warn;
 
 use super::body::{OpenStreamingRequest, OpenStreamingRequestInner};
@@ -84,7 +84,7 @@ impl Http3ConnectionHandle {
             .uri(uri)
             .body(())
             .context("build h3 request")?;
-        for (name, value) in &request.headers {
+        for (name, value) in end_to_end_headers(&request.headers) {
             if should_forward_h3_tunnel_request_header(name) {
                 h3_request.headers_mut().append(name, value.clone());
             }

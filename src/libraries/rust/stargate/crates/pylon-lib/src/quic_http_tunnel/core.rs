@@ -25,7 +25,7 @@ use reqwest::header::{
 };
 use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
-use stargate_protocol::common::is_hop_by_hop_header;
+use stargate_protocol::common::{end_to_end_headers, is_hop_by_hop_header};
 use stargate_protocol::tunnel_contract::{
     HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
     HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
@@ -965,7 +965,7 @@ async fn send_upstream_request(
         Span::none()
     };
     let mut upstream_headers = HeaderMap::with_capacity(request_headers.len());
-    for (name, value) in request_headers {
+    for (name, value) in end_to_end_headers(request_headers) {
         if should_forward_header(name, &app.retry) {
             upstream_headers.append(name, value.clone());
         }
@@ -1213,7 +1213,7 @@ pub(super) fn build_response_headers(
             );
         }
     }
-    for (name, value) in response_headers {
+    for (name, value) in end_to_end_headers(response_headers) {
         if should_forward_response_header(name, retry) {
             header_frame.append(name, value.clone());
         }
@@ -1402,6 +1402,71 @@ mod tests {
     use crate::test_support::TestHttpServer;
 
     use super::*;
+
+    #[tokio::test]
+    async fn upstream_forwarding_removes_connection_options_in_both_directions() {
+        let server = TestHttpServer::spawn(Router::new().route(
+            "/probe",
+            axum::routing::get(|headers: HeaderMap| async move {
+                assert!(!headers.contains_key("x-request-hop"));
+                assert_eq!(headers["x-kept"], "request");
+                (
+                    [
+                        ("connection", "x-response-hop"),
+                        ("x-response-hop", "private"),
+                        ("x-kept", "response"),
+                    ],
+                    "ok",
+                )
+            }),
+        ))
+        .await;
+        let app = TunnelServerApp::new(
+            "test-backend".into(),
+            server.as_str().into(),
+            TunnelForwardingConfig::default(),
+        );
+        let headers = HeaderMap::from_iter([
+            (
+                HeaderName::from_static("connection"),
+                HeaderValue::from_static("x-request-hop"),
+            ),
+            (
+                HeaderName::from_static("x-request-hop"),
+                HeaderValue::from_static("private"),
+            ),
+            (
+                HeaderName::from_static("x-kept"),
+                HeaderValue::from_static("request"),
+            ),
+        ]);
+        let response = send_upstream_request(
+            &app,
+            None,
+            UpstreamRequestParts {
+                method: Method::GET,
+                path_and_query: "/probe",
+                headers: &headers,
+                body: Vec::new(),
+                health_request: true,
+                priority: None,
+            },
+        )
+        .await
+        .unwrap();
+        let forwarded = build_response_headers(
+            response.status(),
+            response.headers(),
+            &app.retry,
+            None,
+            "test-backend",
+        )
+        .unwrap();
+        assert!(!forwarded.contains_key("connection"));
+        assert!(!forwarded.contains_key("x-response-hop"));
+        assert_eq!(forwarded["x-kept"], "response");
+        server.shutdown().await;
+    }
 
     #[test]
     fn classifies_sse_delivery_backpressure_as_downstream_failure() {

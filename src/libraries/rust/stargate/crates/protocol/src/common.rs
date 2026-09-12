@@ -14,7 +14,22 @@
 // limitations under the License.
 
 use crate::ProtocolError;
-use http::{HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
+
+/// Excludes fixed hop-by-hop fields and every field nominated by `Connection`.
+pub fn end_to_end_headers(
+    headers: &HeaderMap,
+) -> impl Iterator<Item = (&HeaderName, &HeaderValue)> {
+    let connection_options: Vec<HeaderName> = headers
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .filter_map(|name| HeaderName::from_bytes(name.trim_ascii()).ok())
+        .collect();
+    headers
+        .iter()
+        .filter(move |(name, _)| !is_hop_by_hop_header(name) && !connection_options.contains(name))
+}
 
 pub fn is_hop_by_hop_header(name: &HeaderName) -> bool {
     matches!(
@@ -124,6 +139,29 @@ pub fn valid_last_mean_input_tps(last_mean_input_tps: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn end_to_end_headers_honor_all_connection_options_and_preserve_repeated_fields() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "connection",
+            HeaderValue::from_static("X-First, keep-alive"),
+        );
+        headers.append(
+            "connection",
+            HeaderValue::from_static(" x-second , X-FIRST "),
+        );
+        headers.insert("x-first", HeaderValue::from_static("private"));
+        headers.insert("x-second", HeaderValue::from_static("private"));
+        headers.insert("keep-alive", HeaderValue::from_static("timeout=5"));
+        headers.append("set-cookie", HeaderValue::from_static("a=1"));
+        headers.append("set-cookie", HeaderValue::from_static("b=2"));
+        let forwarded: HeaderMap = end_to_end_headers(&headers)
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        assert_eq!(forwarded.len(), 2);
+        assert_eq!(forwarded.get_all("set-cookie").iter().count(), 2);
+    }
 
     #[test]
     fn hop_by_hop_header_policy_is_case_insensitive() {
