@@ -55,7 +55,7 @@ releases:
       - template: service
 
   - name: sis
-    version: 2.3.0
+    version: 2.4.0
     namespace: sis
     inherit:
       - template: service
@@ -174,7 +174,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.13.3
+    version: 1.14.0
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
