@@ -314,6 +314,10 @@ impl TunnelRequestLifecycle {
         required: RequiredTunnelHeaders,
         generation: Option<ModelGeneration>,
     ) -> Self {
+        if observation_endpoint.is_none() {
+            app.runtime_state
+                .begin_request(&required, generation.as_ref());
+        }
         let observer = observation_endpoint.map(|endpoint| {
             TunnelRequestObserver::accepted(
                 endpoint,
@@ -332,11 +336,14 @@ impl TunnelRequestLifecycle {
             model_label: request_headers[HEADER_MODEL].clone(),
         });
 
+        let queue_request = app
+            .runtime_state
+            .track_generation_request(&required, generation.as_ref());
         Self {
             required,
             generation,
             observer,
-            queue_request: None,
+            queue_request,
             quality_check,
         }
     }
@@ -374,16 +381,14 @@ impl TunnelRequestLifecycle {
             "evaluated local queue mismatch admission"
         );
         if !matches!(decision, QueueAdmissionDecision::Rejected { .. }) {
-            self.queue_request = app
-                .runtime_state
-                .track_generation_request(required, self.generation.as_ref());
             return None;
         }
 
-        // Observers are created before admission so body validation and terminal
-        // accounting keep their existing order. Remove the queue projection before
-        // sending the rejection; fail() clears the observed lifecycle projection.
-        app.runtime_state.finish_queue_request(&required.request_id);
+        // Release only this request's queue projection before reporting rejection.
+        // The observer's terminal transition clears its observed projection.
+        if let Some(guard) = self.queue_request.as_mut() {
+            guard.finish();
+        }
         self.fail();
         Some(decision)
     }
@@ -1629,6 +1634,7 @@ mod tests {
         app.force_chat_completions_include_usage = true;
         app.runtime_state.update_model_throughput("model-a", 100.0);
         let _queued_request = app.runtime_state.track_request(&RequiredTunnelHeaders {
+            request_instance: Default::default(),
             request_id: "req-already-queued".to_string(),
             routing_key: None,
             model_id: "model-a".to_string(),

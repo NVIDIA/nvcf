@@ -802,6 +802,7 @@ mod tests {
         let request_input_tokens = observation.input_tokens;
         runtime_state.observe_request_for_generation(
             crate::runtime_state::RequestObservationEvent {
+                request_instance: None,
                 observation,
                 generation,
                 changed_generations: Vec::new(),
@@ -2252,6 +2253,7 @@ mod tests {
         );
         let _queued =
             runtime_state.track_request(&crate::request_observer::RequiredTunnelHeaders {
+                request_instance: Default::default(),
                 request_id: "req-queued-after-fallback-samples".to_string(),
                 routing_key: None,
                 model_id: "model-a".to_string(),
@@ -3674,6 +3676,7 @@ mod tests {
         assert_eq!(stats.last_mean_input_tps, 2_200.0);
         let _queued = collector.runtime_state.track_request(
             &crate::request_observer::RequiredTunnelHeaders {
+                request_instance: Default::default(),
                 request_id: "req-queued".to_string(),
                 routing_key: None,
                 model_id: "model-a".to_string(),
@@ -3721,6 +3724,7 @@ mod tests {
             2
         );
         let required = |request_id: &str| crate::request_observer::RequiredTunnelHeaders {
+            request_instance: Default::default(),
             request_id: request_id.to_string(),
             routing_key: None,
             model_id: "model-a".to_string(),

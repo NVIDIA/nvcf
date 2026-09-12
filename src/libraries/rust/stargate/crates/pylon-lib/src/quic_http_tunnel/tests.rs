@@ -775,6 +775,7 @@ async fn start_queue_mismatch_test_tunnel(
         .forwarding
         .runtime_state
         .track_request(&RequiredTunnelHeaders {
+            request_instance: Default::default(),
             request_id: "req-already-queued".to_string(),
             routing_key: Some("rk-1".to_string()),
             model_id: "model-a".to_string(),

@@ -24,7 +24,7 @@ use stargate_protocol::common::{
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS;
 
 use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
-use crate::runtime_state::ModelGeneration;
+use crate::runtime_state::{ModelGeneration, RequestInstance};
 
 pub(crate) const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
 
@@ -55,8 +55,14 @@ pub(crate) struct LiveRequestState {
 
 #[derive(Debug, Default)]
 struct QueueAdmissionState {
-    requests: HashMap<String, LiveRequest>,
+    requests: HashMap<String, LiveRequestRecord>,
     models: HashMap<ModelGeneration, QueueModelState>,
+}
+
+#[derive(Debug)]
+struct LiveRequestRecord {
+    instance: Option<RequestInstance>,
+    request: LiveRequest,
 }
 
 #[derive(Debug, Default)]
@@ -155,6 +161,7 @@ pub(crate) struct QueueModelSnapshot {
 pub(crate) struct QueueTrackedRequestGuard {
     live_requests: LiveRequestState,
     request_id: String,
+    instance: RequestInstance,
     finished: bool,
 }
 
@@ -221,7 +228,7 @@ impl LiveRequestState {
             .lock()
             .requests
             .get(request_id)
-            .map(|request| request.generation().clone())
+            .map(|record| record.request.generation().clone())
     }
 
     pub(crate) fn update_generation_throughput(
@@ -247,7 +254,7 @@ impl LiveRequestState {
         let request_ids = state
             .requests
             .iter()
-            .filter(|(_, request)| request.generation() == generation)
+            .filter(|(_, record)| record.request.generation() == generation)
             .map(|(request_id, _)| request_id.clone())
             .collect::<Vec<_>>();
         for request_id in request_ids {
@@ -302,7 +309,10 @@ impl LiveRequestState {
                     let excluded_request = state
                         .requests
                         .get(&required.request_id)
-                        .and_then(|request| match request {
+                        .filter(|record| {
+                            record.instance.as_ref() == Some(&required.request_instance)
+                        })
+                        .and_then(|record| match &record.request {
                             LiveRequest::Queue(queue, _) => Some(queue),
                             LiveRequest::Observed(_) => None,
                         })
@@ -343,11 +353,11 @@ impl LiveRequestState {
         self.track_generation_request(required, ModelGeneration::new(required.model_id.clone(), 0))
     }
 
-    pub(crate) fn track_generation_request(
+    pub(crate) fn begin_request(
         &self,
         required: &RequiredTunnelHeaders,
         generation: ModelGeneration,
-    ) -> QueueTrackedRequestGuard {
+    ) {
         let request_id = required.request_id.clone();
         let request = TrackedPromptRequest {
             generation,
@@ -360,12 +370,40 @@ impl LiveRequestState {
             let mut state = self.inner.lock();
             let observed = state
                 .remove_request(&request_id)
-                .and_then(|(_, request)| request.into_observed());
-            state.insert_request(request_id.clone(), LiveRequest::Queue(request, observed));
+                .and_then(|(_, request)| request.request.into_observed());
+            state.insert_request(
+                request_id,
+                LiveRequest::Queue(request, observed),
+                Some(required.request_instance.clone()),
+            );
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn track_generation_request(
+        &self,
+        required: &RequiredTunnelHeaders,
+        generation: ModelGeneration,
+    ) -> QueueTrackedRequestGuard {
+        self.begin_request(required, generation);
+        self.request_guard(required)
+    }
+
+    pub(crate) fn track_existing_request(
+        &self,
+        required: &RequiredTunnelHeaders,
+    ) -> Option<QueueTrackedRequestGuard> {
+        self.inner
+            .lock()
+            .owns_instance(&required.request_id, &required.request_instance)
+            .then(|| self.request_guard(required))
+    }
+
+    fn request_guard(&self, required: &RequiredTunnelHeaders) -> QueueTrackedRequestGuard {
         QueueTrackedRequestGuard {
             live_requests: self.clone(),
-            request_id,
+            request_id: required.request_id.clone(),
+            instance: required.request_instance.clone(),
             finished: false,
         }
     }
@@ -390,22 +428,30 @@ impl LiveRequestState {
         observe: impl FnOnce(&RequestObservationTransition),
     ) -> RequestObservationTransition {
         let generation = ModelGeneration::new(observation.model_id.clone(), 0);
-        self.transition_generation_observation_with(observation, Some(&generation), observe)
+        self.transition_generation_observation_with(observation, Some(&generation), None, observe)
+            .unwrap()
     }
 
     pub(crate) fn transition_generation_observation_with(
         &self,
         observation: &RequestObservation,
         generation: Option<&ModelGeneration>,
+        instance: Option<&RequestInstance>,
         observe: impl FnOnce(&RequestObservationTransition),
-    ) -> RequestObservationTransition {
+    ) -> Option<RequestObservationTransition> {
         let _order = self.observation_order.lock();
-        let transition = self
-            .inner
-            .lock()
-            .transition_observation(observation, generation);
+        let transition = {
+            let mut state = self.inner.lock();
+            if let Some(instance) = instance
+                && generation.is_some()
+                && !state.owns_instance(&observation.request_id, instance)
+            {
+                return None;
+            }
+            state.transition_observation(observation, generation, instance)
+        };
         observe(&transition);
-        transition
+        Some(transition)
     }
 
     pub(crate) fn update_active_output_tps(
@@ -418,24 +464,44 @@ impl LiveRequestState {
             .update_active_output_tps(request_id, active_chat_output_tps)
     }
 
-    pub(crate) fn finish_queue_request(&self, request_id: &str) {
+    pub(crate) fn finish_queue_request(
+        &self,
+        request_id: &str,
+        instance: Option<&RequestInstance>,
+    ) {
         let mut state = self.inner.lock();
-        if let Some((request_id, request)) = state.remove_request(request_id)
-            && let Some(observed) = request.into_observed()
+        if instance.is_some_and(|instance| !state.owns_instance(request_id, instance)) {
+            return;
+        }
+        if let Some((request_id, record)) = state.remove_request(request_id)
+            && let Some(observed) = record.request.into_observed()
         {
-            state.insert_request(request_id, LiveRequest::Observed(observed));
+            state.insert_request(request_id, LiveRequest::Observed(observed), record.instance);
         }
     }
 }
 
 impl QueueAdmissionState {
+    fn owns_instance(&self, request_id: &str, instance: &RequestInstance) -> bool {
+        self.requests
+            .get(request_id)
+            .is_some_and(|record| record.instance.as_ref() == Some(instance))
+    }
+
     fn transition_observation(
         &mut self,
         observation: &RequestObservation,
         generation: Option<&ModelGeneration>,
+        instance: Option<&RequestInstance>,
     ) -> RequestObservationTransition {
+        let prior = self.remove_request(&observation.request_id);
+        let instance = instance.cloned().or_else(|| {
+            prior
+                .as_ref()
+                .and_then(|(_, record)| record.instance.clone())
+        });
         let (request_id, prior_queue, prior_observed) =
-            match self.remove_request(&observation.request_id) {
+            match prior.map(|(id, record)| (id, record.request)) {
                 Some((request_id, LiveRequest::Queue(queue, observed))) => {
                     (request_id, Some(queue), observed)
                 }
@@ -493,6 +559,7 @@ impl QueueAdmissionState {
                         },
                         Some(current.clone()),
                     ),
+                    instance,
                 );
                 Some(current)
             }
@@ -513,14 +580,28 @@ impl QueueAdmissionState {
         request_id: &str,
         active_chat_output_tps: Option<f64>,
     ) -> Option<String> {
-        let (request_id, mut request) = self.remove_request(request_id)?;
-        let model_id = request.update_active_output_tps(active_chat_output_tps);
-        self.insert_request(request_id, request);
+        let (request_id, mut record) = self.remove_request(request_id)?;
+        let model_id = record
+            .request
+            .update_active_output_tps(active_chat_output_tps);
+        self.insert_request(request_id, record.request, record.instance);
         model_id
     }
 
-    fn advance_request_phase(&mut self, request_id: &str, next_phase: TrackedPromptPhase) {
-        let Some(LiveRequest::Queue(request, _)) = self.requests.get_mut(request_id) else {
+    fn advance_request_phase(
+        &mut self,
+        request_id: &str,
+        instance: &RequestInstance,
+        next_phase: TrackedPromptPhase,
+    ) {
+        if !self.owns_instance(request_id, instance) {
+            return;
+        }
+        let Some(LiveRequest::Queue(request, _)) = self
+            .requests
+            .get_mut(request_id)
+            .map(|record| &mut record.request)
+        else {
             return;
         };
         if next_phase <= request.phase {
@@ -535,15 +616,21 @@ impl QueueAdmissionState {
         request.phase = next_phase;
     }
 
-    fn remove_request(&mut self, request_id: &str) -> Option<(String, LiveRequest)> {
-        let (request_id, request) = self.requests.remove_entry(request_id)?;
-        self.adjust_live_request(&request, -1);
-        Some((request_id, request))
+    fn remove_request(&mut self, request_id: &str) -> Option<(String, LiveRequestRecord)> {
+        let (request_id, record) = self.requests.remove_entry(request_id)?;
+        self.adjust_live_request(&record.request, -1);
+        Some((request_id, record))
     }
 
-    fn insert_request(&mut self, request_id: String, request: LiveRequest) {
+    fn insert_request(
+        &mut self,
+        request_id: String,
+        request: LiveRequest,
+        instance: Option<RequestInstance>,
+    ) {
         self.adjust_live_request(&request, 1);
-        self.requests.insert(request_id, request);
+        self.requests
+            .insert(request_id, LiveRequestRecord { instance, request });
     }
 
     fn adjust_live_request(&mut self, request: &LiveRequest, delta: i8) {
@@ -786,17 +873,26 @@ impl TrackedPromptPhase {
 impl QueueTrackedRequestGuard {
     pub(crate) fn on_backend_submission(&mut self) {
         let mut state = self.live_requests.inner.lock();
-        state.advance_request_phase(&self.request_id, TrackedPromptPhase::InputProcessing);
+        state.advance_request_phase(
+            &self.request_id,
+            &self.instance,
+            TrackedPromptPhase::InputProcessing,
+        );
     }
 
     pub(crate) fn observe_output(&mut self) {
         let mut state = self.live_requests.inner.lock();
-        state.advance_request_phase(&self.request_id, TrackedPromptPhase::OutputGeneration);
+        state.advance_request_phase(
+            &self.request_id,
+            &self.instance,
+            TrackedPromptPhase::OutputGeneration,
+        );
     }
 
     pub(crate) fn finish(&mut self) {
         if !self.finished {
-            self.live_requests.finish_queue_request(&self.request_id);
+            self.live_requests
+                .finish_queue_request(&self.request_id, Some(&self.instance));
             self.finished = true;
         }
     }
@@ -840,7 +936,7 @@ mod tests {
                 .lock()
                 .requests
                 .values()
-                .filter(|request| matches!(request, LiveRequest::Queue(..)))
+                .filter(|record| matches!(record.request, LiveRequest::Queue(..)))
                 .count()
         }
     }
@@ -856,6 +952,7 @@ mod tests {
         input_tokens: u64,
     ) -> RequiredTunnelHeaders {
         RequiredTunnelHeaders {
+            request_instance: Default::default(),
             request_id: request_id.to_string(),
             routing_key: None,
             model_id: model_id.to_string(),
@@ -907,6 +1004,49 @@ mod tests {
             time_to_first_output: None,
             time_to_first_token: None,
             total_duration: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn admission_excludes_only_its_own_request_instance() {
+        let live = LiveRequestState::default();
+        live.update_model_throughput("model-a", 100.0);
+        let stale = required("reused-id", 0, 100);
+        let _first = live.track_request(&stale);
+        let current = required("reused-id", 0, 200);
+        let _replacement = live.track_request(&current);
+        let generation = ModelGeneration::new("model-a", 0);
+        let evaluate = |request| {
+            live.evaluate_generation(
+                &PylonQueueMismatchRetryConfig::default(),
+                request,
+                Some(&generation),
+                &headers_with_expected("0"),
+                Some(1),
+            )
+        };
+        assert_eq!(evaluate(&stale).actual_ms(), Some(2000));
+        assert_eq!(evaluate(&current).actual_ms(), Some(0));
+    }
+
+    #[test]
+    fn stale_guards_cannot_advance_or_remove_reused_request_ids() {
+        for replacement_model in ["model-a", "model-b"] {
+            let live = LiveRequestState::default();
+            let mut first = live.track_request(&required_for_model("same-id", "model-a", 0, 100));
+            let replacement =
+                live.track_request(&required_for_model("same-id", replacement_model, 1, 20));
+            let expected = live.snapshot_model(replacement_model);
+            first.on_backend_submission();
+            first.observe_output();
+            drop(first);
+            assert_eq!(live.snapshot_model(replacement_model), expected);
+            assert_eq!(expected.num_running_queries, 1);
+            drop(replacement);
+            assert_eq!(
+                live.snapshot_model(replacement_model).num_running_queries,
+                0
+            );
         }
     }
 
