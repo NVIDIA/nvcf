@@ -409,22 +409,25 @@ func ApplyValuesPaths(root string, chart Entry, version string, paths []string, 
 	if err != nil {
 		return err
 	}
-	updates := make([]fileUpdate, 0, len(specs)+1)
-	for _, spec := range specs {
-		b, err := os.ReadFile(spec.path)
+	groups := groupDeclaredValuesSpecs(specs)
+	updates := make([]fileUpdate, 0, len(groups)+1)
+	for _, group := range groups {
+		b, err := os.ReadFile(group.path)
 		if err != nil {
-			return fmt.Errorf("read %s: %w", spec.path, err)
+			return fmt.Errorf("read %s: %w", group.path, err)
 		}
 		lines := strings.Split(string(b), "\n")
-		for _, path := range spec.paths {
-			line, _, err := resolveValuesPath(lines, path)
-			if err != nil {
-				return fmt.Errorf("%s: %w", spec.path, err)
+		for _, spec := range group.specs {
+			for _, path := range spec.paths {
+				line, _, err := resolveValuesPath(lines, path)
+				if err != nil {
+					return fmt.Errorf("%s: %w", group.path, err)
+				}
+				m := scalarValueRE.FindStringSubmatch(lines[line])
+				lines[line] = m[1] + scalarLike(lines[line][len(m[1]):], version) + m[3]
 			}
-			m := scalarValueRE.FindStringSubmatch(lines[line])
-			lines[line] = m[1] + scalarLike(lines[line][len(m[1]):], version) + m[3]
 		}
-		update, err := prepareFileUpdate(spec.path, b, strings.Join(lines, "\n"))
+		update, err := prepareFileUpdate(group.path, b, strings.Join(lines, "\n"))
 		if err != nil {
 			return err
 		}
@@ -460,6 +463,28 @@ func ApplyValuesPaths(root string, chart Entry, version string, paths []string, 
 	}
 	updates = append([]fileUpdate{chartUpdate}, updates...)
 	return commitFileUpdates(updates)
+}
+
+type declaredValuesGroup struct {
+	path  string
+	specs []declaredValuesSpec
+}
+
+// groupDeclaredValuesSpecs ensures multiple declarations resolving to the
+// same file are applied to one buffer and committed as one file update.
+func groupDeclaredValuesSpecs(specs []declaredValuesSpec) []declaredValuesGroup {
+	var groups []declaredValuesGroup
+	groupIndex := make(map[string]int)
+	for _, spec := range specs {
+		index, ok := groupIndex[spec.path]
+		if !ok {
+			index = len(groups)
+			groupIndex[spec.path] = index
+			groups = append(groups, declaredValuesGroup{path: spec.path})
+		}
+		groups[index].specs = append(groups[index].specs, spec)
+	}
+	return groups
 }
 
 type fileUpdate struct {

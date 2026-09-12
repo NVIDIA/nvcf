@@ -623,6 +623,26 @@ func TestValuesPathsAllMoveTogether(t *testing.T) {
 	}
 }
 
+func TestPrimaryAndAdditionalPathsForTheSameValuesFileMerge(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{
+	   "service":"svc",
+	   "values_paths":["a.tag"],
+	   "values_files":[{"file":"values.yaml","paths":["b.tag"]}]
+	 }]}
+	]}`)
+	f.chart(t, "c", "0.0.0", "a:\n  tag: 1.0.0\nb:\n  tag: 1.0.0")
+
+	if code, _, errOut := f.run(t, "src/svc/v2.0.0", true); code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s", code, errOut)
+	}
+	values := f.read(t, "c", "values.yaml")
+	if strings.Count(values, "tag: 2.0.0") != 2 {
+		t.Fatalf("both declarations targeting values.yaml must be preserved:\n%s", values)
+	}
+}
+
 func TestCommitFileUpdatesRollsBackAfterALaterFailure(t *testing.T) {
 	f := newFixture(t, `{"services":[]}`)
 	first := filepath.Join(f.root, "first.yaml")
