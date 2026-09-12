@@ -1448,18 +1448,18 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		}
 	}
 
-	// Gateway resources applied inline (GRPCRoute, BackendTrafficPolicy,
-	// ReferenceGrant visible in the feature file docstring).
-	if !commandRanThatContainsAll(runs,
-		"kubectl --context k3d-ncp-local-cp apply -f -",
+	// Gateway resources (GRPCRoute, BackendTrafficPolicy, ReferenceGrant
+	// visible in the feature file docstring) are applied from a rendered
+	// manifest file under OutDir against the control-plane context.
+	if !commandRanThatContainsAll(appliedManifestBodies(t, runs, "k3d-ncp-local-cp"),
 		"kind: GRPCRoute",
 		"kind: BackendTrafficPolicy",
 		"kind: ReferenceGrant",
 	) {
-		t.Fatal("Region B gateway resources were not applied inline")
+		t.Fatal("Region B gateway resources were not applied to the control-plane cluster")
 	}
 
-	// Watch alias applied inline to both clusters with DSL-interpolated
+	// Watch alias applied to both clusters with the DSL-interpolated
 	// control-plane IP (no envsubst dependency). Each apply must carry
 	// both the Service and the Endpoints resource; a name and IP alone
 	// would also match an unrelated resource.
@@ -1470,8 +1470,7 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		{context: "k3d-ncp-local-cp", label: "control-plane"},
 		{context: "k3d-ncp-local-compute-1", label: "compute"},
 	} {
-		if !commandRanThatContainsAll(runs,
-			"kubectl --context "+cluster.context+" apply -f -",
+		if !commandRanThatContainsAll(appliedManifestBodies(t, runs, cluster.context),
 			"kind: Service",
 			"kind: Endpoints",
 			"name: region-b-watch",
@@ -2606,6 +2605,28 @@ func commandRanThatContainsAll(runs []string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+// appliedManifestBodies returns the contents of every manifest file that an
+// explicit-context kubectl apply consumed against kubeContext. Manifest steps
+// write their rendered body under OutDir and pass the path on argv, so the
+// recorded command alone does not show the applied resources.
+func appliedManifestBodies(t *testing.T, runs []string, kubeContext string) []string {
+	t.Helper()
+	prefix := "kubectl --context " + kubeContext + " apply -f "
+	var bodies []string
+	for _, run := range runs {
+		if !strings.HasPrefix(run, prefix) {
+			continue
+		}
+		path := strings.Trim(strings.TrimPrefix(run, prefix), "'")
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read applied manifest %s: %v", path, err)
+		}
+		bodies = append(bodies, string(body))
+	}
+	return bodies
 }
 
 func assertFileContains(t *testing.T, path string, needles ...string) {
