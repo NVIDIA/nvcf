@@ -40,6 +40,10 @@ impl RawQuicConnectionHandle {
         self.connection.stable_id()
     }
 
+    pub(super) fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
+        self.connection.close(error_code, reason);
+    }
+
     #[cfg(test)]
     pub(super) fn connection(&self) -> &Connection {
         &self.connection
