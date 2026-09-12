@@ -822,9 +822,11 @@ type ArtifactDto struct {
 
 // LLMConfigDto represents LLM routing metadata for a model artifact
 type LLMConfigDto struct {
-	URIs           []string `json:"uris,omitempty"`
-	TokenRateLimit *string  `json:"tokenRateLimit,omitempty"`
-	RoutingMethod  *string  `json:"routingMethod,omitempty"`
+	URIs                 []string `json:"uris,omitempty"`
+	TokenRateLimit       *string  `json:"tokenRateLimit,omitempty"`
+	InputTokenRateLimit  *string  `json:"inputTokenRateLimit,omitempty"`
+	OutputTokenRateLimit *string  `json:"outputTokenRateLimit,omitempty"`
+	RoutingMethod        *string  `json:"routingMethod,omitempty"`
 }
 
 // LLMInvocationConfigDto represents function-level LLM invocation configuration.
@@ -1220,8 +1222,10 @@ type ModelUpdateDto struct {
 
 // LLMConfigUpdateDto represents mutable LLM config fields.
 type LLMConfigUpdateDto struct {
-	TokenRateLimit *string `json:"tokenRateLimit,omitempty"`
-	RoutingMethod  *string `json:"routingMethod,omitempty"`
+	TokenRateLimit       *string `json:"tokenRateLimit,omitempty"`
+	InputTokenRateLimit  *string `json:"inputTokenRateLimit,omitempty"`
+	OutputTokenRateLimit *string `json:"outputTokenRateLimit,omitempty"`
+	RoutingMethod        *string `json:"routingMethod,omitempty"`
 }
 
 // UpdateGpuSpecification updates a single GPU specification of an existing

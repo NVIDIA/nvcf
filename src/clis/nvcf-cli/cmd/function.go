@@ -376,9 +376,11 @@ type ArtifactConfig struct {
 
 // LLMConfigInput represents LLM routing metadata in CLI configuration
 type LLMConfigInput struct {
-	URIs           []string `json:"uris,omitempty"`
-	TokenRateLimit *string  `json:"tokenRateLimit,omitempty"`
-	RoutingMethod  *string  `json:"routingMethod,omitempty"`
+	URIs                 []string `json:"uris,omitempty"`
+	TokenRateLimit       *string  `json:"tokenRateLimit,omitempty"`
+	InputTokenRateLimit  *string  `json:"inputTokenRateLimit,omitempty"`
+	OutputTokenRateLimit *string  `json:"outputTokenRateLimit,omitempty"`
+	RoutingMethod        *string  `json:"routingMethod,omitempty"`
 }
 
 // LLMInvocationConfigInput represents function-level LLM invocation configuration.
@@ -456,8 +458,10 @@ type ModelUpdateConfig struct {
 
 // LLMConfigUpdateInput represents mutable LLM routing fields.
 type LLMConfigUpdateInput struct {
-	TokenRateLimit *string `json:"tokenRateLimit,omitempty"`
-	RoutingMethod  *string `json:"routingMethod,omitempty"`
+	TokenRateLimit       *string `json:"tokenRateLimit,omitempty"`
+	InputTokenRateLimit  *string `json:"inputTokenRateLimit,omitempty"`
+	OutputTokenRateLimit *string `json:"outputTokenRateLimit,omitempty"`
+	RoutingMethod        *string `json:"routingMethod,omitempty"`
 }
 
 // ============================================================================
@@ -679,7 +683,7 @@ func parseLLMModelString(s string) (ArtifactConfig, error) {
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 		switch key {
-		case "name", "uris", "routingMethod", "tokenRateLimit":
+		case "name", "uris", "routingMethod", "tokenRateLimit", "inputTokenRateLimit", "outputTokenRateLimit":
 			fields[key] = value
 		default:
 			return ArtifactConfig{}, fmt.Errorf("unknown llm model field %q", key)
@@ -700,16 +704,24 @@ func parseLLMModelString(s string) (ArtifactConfig, error) {
 	if err != nil {
 		return ArtifactConfig{}, err
 	}
-	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", fields["tokenRateLimit"]); err != nil {
+		return ArtifactConfig{}, err
+	}
+	if err := validateLLMTokenRateLimit("inputTokenRateLimit", fields["inputTokenRateLimit"]); err != nil {
+		return ArtifactConfig{}, err
+	}
+	if err := validateLLMTokenRateLimit("outputTokenRateLimit", fields["outputTokenRateLimit"]); err != nil {
 		return ArtifactConfig{}, err
 	}
 
 	return ArtifactConfig{
 		Name: name,
 		LLMConfig: &LLMConfigInput{
-			URIs:           uris,
-			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
-			RoutingMethod:  optionalString(routingMethod),
+			URIs:                 uris,
+			TokenRateLimit:       optionalString(fields["tokenRateLimit"]),
+			InputTokenRateLimit:  optionalString(fields["inputTokenRateLimit"]),
+			OutputTokenRateLimit: optionalString(fields["outputTokenRateLimit"]),
+			RoutingMethod:        optionalString(routingMethod),
 		},
 	}, nil
 }
@@ -728,7 +740,7 @@ func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
 		switch key {
-		case "name", "routingMethod", "tokenRateLimit":
+		case "name", "routingMethod", "tokenRateLimit", "inputTokenRateLimit", "outputTokenRateLimit":
 			fields[key] = value
 		default:
 			return ModelUpdateConfig{}, fmt.Errorf("unknown llm model update field %q", key)
@@ -744,19 +756,31 @@ func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
 	if err != nil {
 		return ModelUpdateConfig{}, err
 	}
-	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", fields["tokenRateLimit"]); err != nil {
+		return ModelUpdateConfig{}, err
+	}
+	if err := validateLLMTokenRateLimit("inputTokenRateLimit", fields["inputTokenRateLimit"]); err != nil {
+		return ModelUpdateConfig{}, err
+	}
+	if err := validateLLMTokenRateLimit("outputTokenRateLimit", fields["outputTokenRateLimit"]); err != nil {
 		return ModelUpdateConfig{}, err
 	}
 
 	update := ModelUpdateConfig{
 		ModelName: name,
 		LLMConfig: &LLMConfigUpdateInput{
-			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
-			RoutingMethod:  optionalString(routingMethod),
+			TokenRateLimit:       optionalString(fields["tokenRateLimit"]),
+			InputTokenRateLimit:  optionalString(fields["inputTokenRateLimit"]),
+			OutputTokenRateLimit: optionalString(fields["outputTokenRateLimit"]),
+			RoutingMethod:        optionalString(routingMethod),
 		},
 	}
-	if update.LLMConfig.TokenRateLimit == nil && update.LLMConfig.RoutingMethod == nil {
-		return ModelUpdateConfig{}, fmt.Errorf("at least one of routingMethod or tokenRateLimit is required")
+	if update.LLMConfig.TokenRateLimit == nil &&
+		update.LLMConfig.InputTokenRateLimit == nil &&
+		update.LLMConfig.OutputTokenRateLimit == nil &&
+		update.LLMConfig.RoutingMethod == nil {
+		return ModelUpdateConfig{}, fmt.Errorf(
+			"at least one of routingMethod, tokenRateLimit, inputTokenRateLimit, or outputTokenRateLimit is required")
 	}
 	return update, nil
 }
@@ -802,7 +826,7 @@ func validateLLMModelURIs(uris []string) error {
 	return nil
 }
 
-func validateLLMTokenRateLimit(raw string) error {
+func validateLLMTokenRateLimit(fieldName, raw string) error {
 	if raw == "" {
 		return nil
 	}
@@ -811,31 +835,31 @@ func validateLLMTokenRateLimit(raw string) error {
 	for _, fragment := range strings.Split(raw, ",") {
 		fragment = strings.TrimSpace(fragment)
 		if fragment == "" {
-			return fmt.Errorf("invalid tokenRateLimit: empty fragment")
+			return fmt.Errorf("invalid %s: empty fragment", fieldName)
 		}
 
 		separator := strings.LastIndex(fragment, "-")
 		if separator <= 0 || separator == len(fragment)-1 {
-			return fmt.Errorf("invalid tokenRateLimit fragment %q: expected <positive-int>-<unit>", fragment)
+			return fmt.Errorf("invalid %s fragment %q: expected <positive-int>-<unit>", fieldName, fragment)
 		}
 		valuePart := strings.TrimSpace(fragment[:separator])
 		unit := strings.TrimSpace(fragment[separator+1:])
 
 		value, err := strconv.ParseInt(valuePart, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid tokenRateLimit value %q: must be a positive integer", valuePart)
+			return fmt.Errorf("invalid %s value %q: must be a positive integer", fieldName, valuePart)
 		}
 		if value <= 0 {
-			return fmt.Errorf("invalid tokenRateLimit value %q: must be positive", valuePart)
+			return fmt.Errorf("invalid %s value %q: must be positive", fieldName, valuePart)
 		}
 
 		switch unit {
-		case "S", "M", "H", "D", "W":
+		case "S", "M", "H", "D", "W", "MO":
 		default:
-			return fmt.Errorf("invalid tokenRateLimit unit %q: expected S, M, H, D, or W", unit)
+			return fmt.Errorf("invalid %s unit %q: expected S, M, H, D, W, or MO", fieldName, unit)
 		}
 		if seenUnits[unit] {
-			return fmt.Errorf("invalid tokenRateLimit: duplicate %s unit", unit)
+			return fmt.Errorf("invalid %s: duplicate %s unit", fieldName, unit)
 		}
 		seenUnits[unit] = true
 	}
@@ -915,14 +939,22 @@ func llmConfigInputToClient(input *LLMConfigInput) (*client.LLMConfigDto, error)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateLLMTokenRateLimit(optionalStringValue(input.TokenRateLimit)); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", optionalStringValue(input.TokenRateLimit)); err != nil {
+		return nil, err
+	}
+	if err := validateLLMTokenRateLimit("inputTokenRateLimit", optionalStringValue(input.InputTokenRateLimit)); err != nil {
+		return nil, err
+	}
+	if err := validateLLMTokenRateLimit("outputTokenRateLimit", optionalStringValue(input.OutputTokenRateLimit)); err != nil {
 		return nil, err
 	}
 
 	return &client.LLMConfigDto{
-		URIs:           input.URIs,
-		TokenRateLimit: input.TokenRateLimit,
-		RoutingMethod:  optionalString(routingMethod),
+		URIs:                 input.URIs,
+		TokenRateLimit:       input.TokenRateLimit,
+		InputTokenRateLimit:  input.InputTokenRateLimit,
+		OutputTokenRateLimit: input.OutputTokenRateLimit,
+		RoutingMethod:        optionalString(routingMethod),
 	}, nil
 }
 
@@ -938,16 +970,30 @@ func modelUpdateConfigToClient(update ModelUpdateConfig) (client.ModelUpdateDto,
 	if err != nil {
 		return client.ModelUpdateDto{}, err
 	}
-	if err := validateLLMTokenRateLimit(optionalStringValue(update.LLMConfig.TokenRateLimit)); err != nil {
+	if err := validateLLMTokenRateLimit("tokenRateLimit", optionalStringValue(update.LLMConfig.TokenRateLimit)); err != nil {
+		return client.ModelUpdateDto{}, err
+	}
+	if err := validateLLMTokenRateLimit(
+		"inputTokenRateLimit", optionalStringValue(update.LLMConfig.InputTokenRateLimit)); err != nil {
+		return client.ModelUpdateDto{}, err
+	}
+	if err := validateLLMTokenRateLimit(
+		"outputTokenRateLimit", optionalStringValue(update.LLMConfig.OutputTokenRateLimit)); err != nil {
 		return client.ModelUpdateDto{}, err
 	}
 
 	llmConfig := &client.LLMConfigUpdateDto{
-		TokenRateLimit: update.LLMConfig.TokenRateLimit,
-		RoutingMethod:  optionalString(routingMethod),
+		TokenRateLimit:       update.LLMConfig.TokenRateLimit,
+		InputTokenRateLimit:  update.LLMConfig.InputTokenRateLimit,
+		OutputTokenRateLimit: update.LLMConfig.OutputTokenRateLimit,
+		RoutingMethod:        optionalString(routingMethod),
 	}
-	if llmConfig.TokenRateLimit == nil && llmConfig.RoutingMethod == nil {
-		return client.ModelUpdateDto{}, fmt.Errorf("at least one of routingMethod or tokenRateLimit is required")
+	if llmConfig.TokenRateLimit == nil &&
+		llmConfig.InputTokenRateLimit == nil &&
+		llmConfig.OutputTokenRateLimit == nil &&
+		llmConfig.RoutingMethod == nil {
+		return client.ModelUpdateDto{}, fmt.Errorf(
+			"at least one of routingMethod, tokenRateLimit, inputTokenRateLimit, or outputTokenRateLimit is required")
 	}
 
 	return client.ModelUpdateDto{

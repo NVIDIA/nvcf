@@ -23,9 +23,11 @@ import (
 )
 
 type ModelSpec struct {
-	URIs           []string
-	TokenRateLimit string
-	RoutingMethod  string
+	URIs                 []string
+	TokenRateLimit       string
+	InputTokenRateLimit  string
+	OutputTokenRateLimit string
+	RoutingMethod        string
 }
 
 type InvocationAuthResponse struct {

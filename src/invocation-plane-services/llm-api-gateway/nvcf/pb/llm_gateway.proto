@@ -46,6 +46,8 @@ message AuthLlmInvokeResponse {
         repeated string uris = 1;
         optional string tokenRateLimit = 2;
         optional string routingMethod = 4;
+        optional string inputTokenRateLimit = 5;
+        optional string outputTokenRateLimit = 6;
     }
 }
 
