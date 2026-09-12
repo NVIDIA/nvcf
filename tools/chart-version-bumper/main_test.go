@@ -93,7 +93,9 @@ func (f *fixture) tag(t *testing.T, tag string) {
 		{"tag", tag},
 	}
 	for _, args := range commands {
-		if output, err := exec.Command("git", append([]string{"-C", f.root}, args...)...).CombinedOutput(); err != nil {
+		cmd := exec.Command("git", append([]string{"-C", f.root}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if output, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 		}
 	}
@@ -618,6 +620,47 @@ func TestValuesPathsAllMoveTogether(t *testing.T) {
 	values := f.read(t, "c", "values.yaml")
 	if strings.Count(values, `tag: "2.0.0"`) != 2 {
 		t.Fatalf("both declared paths should have moved:\n%s", values)
+	}
+}
+
+func TestCommitFileUpdatesRollsBackAfterALaterFailure(t *testing.T) {
+	f := newFixture(t, `{"services":[]}`)
+	first := filepath.Join(f.root, "first.yaml")
+	second := filepath.Join(f.root, "second.yaml")
+	f.source(t, "first.yaml", "first: old\n")
+	f.source(t, "second.yaml", "second: old\n")
+
+	firstUpdate, err := prepareFileUpdate(first, []byte("first: old\n"), "first: new\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondUpdate, err := prepareFileUpdate(second, []byte("second: old\n"), "second: new\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writes := 0
+	err = commitFileUpdatesWith([]fileUpdate{firstUpdate, secondUpdate}, func(path string, content []byte, mode os.FileMode) error {
+		writes++
+		if writes == 2 {
+			return fmt.Errorf("injected write failure")
+		}
+		return os.WriteFile(path, content, mode)
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected write failure") {
+		t.Fatalf("want the later write failure, got %v", err)
+	}
+	for path, want := range map[string]string{
+		first:  "first: old\n",
+		second: "second: old\n",
+	} {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if got := string(content); got != want {
+			t.Fatalf("%s was not restored: %q", path, got)
+		}
 	}
 }
 
