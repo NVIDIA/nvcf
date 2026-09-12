@@ -1,20 +1,17 @@
 # Stack Inventory Flow
 
-Each deployable stack needs an inventory of the charts, images, and resources
-that a customer must obtain. This flow starts with the self-managed control
-plane distributable. Its inventory also includes the shared observability state
-that the control-plane profile consumes. Keep that state until the standalone
-observability release publishes an inventory that the documentation aggregator
-can consume. The compute-plane and observability stacks should otherwise adopt
-the same per-stack ownership model as their inventory work lands.
+Each deployable stack owns an inventory of the charts, images, and resources
+that a customer must obtain. The self-managed, compute-plane, and observability
+inventories are separate release assets. An inventory config must reference
+only Helmfile states under its owning stack directory.
 
 ## Ownership Model
 
 Keep each fact in one source:
 
 - The owning Helmfile and chart values define runtime dependencies and versions.
-- `deploy/stacks/self-managed/release-inventory.yaml` supplies release-time
-  inventory configuration that cannot be derived from an ordinary render.
+- Each stack's `release-inventory.yaml` supplies release-time inventory
+  configuration that cannot be derived from an ordinary render.
 - The resolved JSON inventory records the artifacts found at an immutable stack
   tag. Release automation publishes it with the stack release.
 - `docs/version-catalog/main.yaml` records public distribution locations and
@@ -63,7 +60,7 @@ When adding, removing, or changing a dependency:
 
 1. Change the owning Helmfile, values, or chart configuration.
 2. Add an explicit condition for an optional release.
-3. Update the state in `deploy/stacks/self-managed/release-inventory.yaml`.
+3. Update the state in the owning stack's `release-inventory.yaml`.
    Add the optional setting to its `fullOverrides`, or add a state entry when
    the dependency belongs to a new Helmfile state.
 4. Add a `sourceCharts` entry when an independently released chart must be
@@ -80,6 +77,8 @@ When adding, removing, or changing a dependency:
 
    ```bash
    make -C deploy/stacks/self-managed test
+   make -C deploy/stacks/nvcf-compute-plane test-local
+   make -C deploy/stacks/observability test
    go test -C tools/docs-version-sync ./...
    go vet -C tools/docs-version-sync ./...
    go run -C tools/docs-version-sync . --target main
@@ -92,19 +91,19 @@ because its public publication is pending.
 
 ## Release Packaging
 
-The release workflow generates the inventory from an immutable self-managed
-stack tag. It renders the configured profiles, collects charts and ordinary
-images, discovers supported indirect image references, validates the result,
-and attaches `nvcf-self-managed-stack-inventory.json` to the GitHub Release.
+The release workflow generates each inventory from its immutable stack tag. It
+renders the configured profiles, collects charts and ordinary images,
+discovers supported indirect image references, validates the result, and
+attaches the matching inventory JSON to that stack's GitHub Release.
 
 The generation command has this shape:
 
 ```bash
 go run -C tools/docs-version-sync . \
-  --generate-stack-inventory /tmp/nvcf-self-managed-stack-inventory.json \
-  --inventory-config deploy/stacks/self-managed/release-inventory.yaml \
+  --generate-stack-inventory /tmp/stack-inventory.json \
+  --inventory-config deploy/stacks/<stack>/release-inventory.yaml \
   --stack-version X.Y.Z \
-  --stack-source-tag deploy/stacks/self-managed/vX.Y.Z \
+  --stack-source-tag deploy/stacks/<stack>/vX.Y.Z \
   --stack-source-commit <full-commit-sha>
 ```
 
@@ -115,9 +114,9 @@ put credentials in repository files or command examples.
 The distribution path is:
 
 ```text
-self-managed stack source and release inventory
-  -> tagged release inventory generation
-  -> nvcf-self-managed-stack-inventory.json release asset
+owning stack source and release inventory
+  -> tagged per-stack inventory generation
+  -> matching stack inventory JSON release asset
   -> docs-version-sync catalog update
   -> docs/version-catalog/main.yaml
   -> generated docs/user/manifest.md blocks
@@ -125,7 +124,7 @@ self-managed stack source and release inventory
 
 ## Documentation Sync
 
-After the stable stack release and inventory asset exist, run:
+After stable releases and inventory assets exist for all three stacks, run:
 
 ```bash
 git fetch --tags origin
@@ -135,6 +134,10 @@ go test -C tools/docs-version-sync ./...
 ./tools/ci/check-doc-version-sync
 ./tools/ci/check-docs
 ```
+
+By default the update selects the latest stable release of each stack. Use
+`--stack-version`, `--compute-stack-version`, and
+`--observability-stack-version` to select an exact compatible release set.
 
 The catalog update retains an exact publication only when its artifact name,
 type, and version still match. Leave an artifact in `publication_pending` until

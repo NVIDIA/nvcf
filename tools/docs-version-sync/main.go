@@ -40,10 +40,12 @@ func run(args []string) error {
 	check := flags.Bool("check", false, "fail if generated docs differ from checked-in marker blocks")
 	updateCatalog := flags.Bool("update-catalog", false, "fetch the resolved GitHub stack inventory and update the catalog")
 	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
+	computeStackVersion := flags.String("compute-stack-version", "", "compute-plane stack version to fetch")
+	observabilityStackVersion := flags.String("observability-stack-version", "", "observability stack version to fetch")
 	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
 	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
-	stackSourceTag := flags.String("stack-source-tag", "", "immutable self-managed stack source tag for inventory generation")
-	stackSourceCommit := flags.String("stack-source-commit", "", "immutable self-managed stack source commit for inventory generation")
+	stackSourceTag := flags.String("stack-source-tag", "", "immutable owning stack source tag for inventory generation")
+	stackSourceCommit := flags.String("stack-source-commit", "", "immutable owning stack source commit for inventory generation")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -80,6 +82,9 @@ func run(args []string) error {
 			Commit:  *stackSourceCommit,
 		})
 	}
+	if !*updateCatalog && (*computeStackVersion != "" || *observabilityStackVersion != "") {
+		return fmt.Errorf("--compute-stack-version and --observability-stack-version require --update-catalog")
+	}
 	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" {
 		return fmt.Errorf("--stack-source-tag, --stack-source-commit, and --inventory-config require --generate-stack-inventory")
 	}
@@ -96,7 +101,11 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		updated, err := updateCatalogFromGitHub(repoRoot, *stackVersion, base)
+		updated, err := updateCatalogFromGitHubInventories(repoRoot, map[string]string{
+			selfManagedStackKey:   *stackVersion,
+			computePlaneStackKey:  *computeStackVersion,
+			observabilityStackKey: *observabilityStackVersion,
+		}, base)
 		if err != nil {
 			return err
 		}

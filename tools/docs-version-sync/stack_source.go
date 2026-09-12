@@ -47,27 +47,6 @@ var effectiveStackPins = []effectiveStackPin{
 	},
 }
 
-// legacyComputeEffectiveStackPins keeps existing aggregate catalogs
-// verifiable while new self-managed refreshes stop owning compute-plane pins.
-var legacyComputeEffectiveStackPins = []effectiveStackPin{
-	{
-		artifact:             "helm-nvca-operator",
-		artifactType:         ArtifactTypeChart,
-		path:                 "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
-		blockPattern:         `(?m)^  - name: nvca-operator[ \t]*$`,
-		blockBoundaryPattern: `(?m)^  -[ \t]+`,
-		pattern:              `(?m)^    version:[ \t]*"?([^"\s]+)"?[ \t]*$`,
-	},
-	{
-		artifact:             "nvca",
-		artifactType:         ArtifactTypeImage,
-		path:                 "deploy/stacks/nvcf-compute-plane/environments/base.yaml",
-		blockPattern:         `(?m)^  nvcaOperator:[ \t]*$`,
-		blockBoundaryPattern: `(?m)^  [A-Za-z0-9_-]+:[ \t]*`,
-		pattern:              `(?m)^      nvcaVersion:[ \t]*"([^"]+)"[ \t]*$`,
-	},
-}
-
 func extractEffectiveStackPins(sources map[string][]byte, pins []effectiveStackPin) (map[string]string, error) {
 	versions := make(map[string]string, len(pins))
 	matchedSources := make(map[string]struct{}, len(sources))
@@ -155,7 +134,7 @@ func validateStackSourceSnapshot(repoRoot string, catalog *Catalog) error {
 }
 
 func effectiveStackPinsForSources(sourcePaths []string) ([]effectiveStackPin, error) {
-	known := append(append([]effectiveStackPin(nil), effectiveStackPins...), legacyComputeEffectiveStackPins...)
+	known := append([]effectiveStackPin(nil), effectiveStackPins...)
 	knownPaths := make(map[string]struct{}, len(known))
 	for _, pin := range known {
 		knownPaths[pin.path] = struct{}{}

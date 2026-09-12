@@ -42,50 +42,6 @@ type resolvedInventoryState struct {
 	FullOverrides []string `yaml:"fullOverrides,omitempty"`
 }
 
-var legacyResolvedInventoryStates = []resolvedInventoryState{
-	{
-		Plane: "control-plane",
-		Path:  "deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl",
-		FullOverrides: []string{
-			"addons.llm.enabled=true",
-		},
-	},
-	{
-		Plane: "control-plane",
-		Path:  "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
-		FullOverrides: []string{
-			"addons.llm.enabled=true",
-			"addons.vanityGateway.enabled=true",
-			"addons.nvcfUi.enabled=true",
-		},
-	},
-	{
-		Plane: "observability",
-		Path:  "deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl",
-	},
-	{
-		Plane: "observability",
-		Path:  "deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl",
-		BaseOverrides: []string{
-			"observability.profile=all",
-		},
-	},
-	{
-		Plane: "compute-plane",
-		Path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",
-		FullOverrides: []string{
-			"addons.kaiScheduler.enabled=true",
-			"addons.groveOperator.enabled=true",
-			"addons.dynamoOperator.enabled=true",
-			"addons.topologyAwareScheduling.enabled=true",
-		},
-	},
-	{
-		Plane: "compute-plane",
-		Path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
-	},
-}
-
 type resolvedInventoryCommandRunner interface {
 	Output(dir string, env []string, args ...string) ([]byte, error)
 	PrepareRepositories(env []string, repositories map[string]helmfileRepository, ngcAPIKey string) error
@@ -224,6 +180,13 @@ func writeResolvedStackInventory(repoRoot, outputPath, configPath string, source
 	if err := verifyResolvedInventoryCheckout(repoRoot, source); err != nil {
 		return err
 	}
+	if configPath == "" {
+		spec, err := stackInventorySpecByTag(source.Tag)
+		if err != nil {
+			return err
+		}
+		configPath = filepath.Join(repoRoot, filepath.FromSlash(spec.ConfigPath))
+	}
 	inventory, err := collectResolvedStackInventory(repoRoot, configPath, source, execResolvedInventoryCommandRunner{})
 	if err != nil {
 		return err
@@ -280,7 +243,7 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	}
 	states := config.States
 	if len(states) == 0 {
-		states = legacyResolvedInventoryStates
+		return resolvedStackInventory{}, fmt.Errorf("resolved inventory config must declare at least one stack-owned state")
 	}
 	if err := copyResolvedInventoryInputs(repoRoot, copiedRepoRoot, states); err != nil {
 		return resolvedStackInventory{}, err

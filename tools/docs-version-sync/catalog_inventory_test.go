@@ -69,6 +69,103 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 	}
 }
 
+func TestUpdateCatalogFromGitHubInventoriesMergesThreeStackAssets(t *testing.T) {
+	repo := initTestGitRepo(t)
+	selfRelease := commitTestStackSource(t, repo, "1.2.3", testCatalogPinSources())
+	releases := map[string]stackSourceRelease{
+		selfManagedStackKey: selfRelease,
+		computePlaneStackKey: {
+			Version: "2.3.4", Tag: stackInventorySpecs[1].TagPrefix + "2.3.4", Commit: selfRelease.Commit,
+		},
+		observabilityStackKey: {
+			Version: "3.4.5", Tag: stackInventorySpecs[2].TagPrefix + "3.4.5", Commit: selfRelease.Commit,
+		},
+	}
+	for _, key := range []string{computePlaneStackKey, observabilityStackKey} {
+		if _, err := gitOutput(repo, "tag", releases[key].Tag, releases[key].Commit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	full := testCatalogResolvedInventory(t, selfRelease)
+	inventories := map[string]resolvedStackInventory{
+		selfManagedStackKey:   filterResolvedInventoryByPlane(t, full, releases[selfManagedStackKey], "control-plane"),
+		computePlaneStackKey:  filterResolvedInventoryByPlane(t, full, releases[computePlaneStackKey], "compute-plane"),
+		observabilityStackKey: filterResolvedInventoryByPlane(t, full, releases[observabilityStackKey], "observability"),
+	}
+	raw := make(map[string][]byte, len(inventories))
+	for key, inventory := range inventories {
+		var err error
+		raw[key], err = marshalResolvedStackInventory(inventory)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, spec := range stackInventorySpecs {
+			release := releases[spec.Key]
+			switch r.URL.Path {
+			case "/repos/NVIDIA/nvcf/git/ref/tags/" + release.Tag:
+				_, _ = fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
+				return
+			case "/repos/NVIDIA/nvcf/releases/tags/" + release.Tag:
+				_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, release.Tag, spec.AssetName, server.URL+"/inventory/"+spec.Key)
+				return
+			case "/inventory/" + spec.Key:
+				_, _ = w.Write(raw[spec.Key])
+				return
+			}
+		}
+		http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	t.Setenv("DOC_VERSION_SYNC_GITHUB_API_URL", server.URL)
+	t.Setenv("DOC_VERSION_SYNC_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	catalog, err := updateCatalogFromGitHubInventories(repo, map[string]string{
+		selfManagedStackKey:   releases[selfManagedStackKey].Version,
+		computePlaneStackKey:  releases[computePlaneStackKey].Version,
+		observabilityStackKey: releases[observabilityStackKey].Version,
+	}, testCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalog.Stack.Version != "1.2.3" {
+		t.Fatalf("self-managed stack version = %s, want 1.2.3", catalog.Stack.Version)
+	}
+	for name, want := range map[string]string{
+		computeStackResourceName:       "2.3.4",
+		observabilityStackResourceName: "3.4.5",
+	} {
+		artifact, found := catalog.findArtifactByNameAndType(name, ArtifactTypeResource)
+		if !found || artifact.Version != want {
+			t.Fatalf("%s = %#v, want version %s", name, artifact, want)
+		}
+	}
+}
+
+func filterResolvedInventoryByPlane(t *testing.T, source resolvedStackInventory, release stackSourceRelease, plane string) resolvedStackInventory {
+	t.Helper()
+	filtered := resolvedStackInventory{SchemaVersion: resolvedStackInventorySchemaVersion, Source: release}
+	for _, candidate := range source.Releases {
+		if candidate.Plane == plane {
+			filtered.Releases = append(filtered.Releases, candidate)
+		}
+	}
+	for _, artifact := range source.Artifacts {
+		if len(artifact.Sources) == 1 && artifact.Sources[0].Plane == plane {
+			filtered.Artifacts = append(filtered.Artifacts, artifact)
+		}
+	}
+	if err := validateResolvedStackInventory(filtered); err != nil {
+		t.Fatalf("filtered %s inventory is invalid: %v", plane, err)
+	}
+	return filtered
+}
+
 func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependent(t *testing.T) {
 	source := stackSourceRelease{Version: "1.2.3", Tag: stackTagPrefix + "1.2.3", Commit: strings.Repeat("a", 40)}
 	inventory := testCatalogResolvedInventory(t, source)

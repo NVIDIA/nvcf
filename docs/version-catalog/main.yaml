@@ -775,11 +775,9 @@ stack:
   source_tag: deploy/stacks/self-managed/v0.16.1
   source_commit: 6aa572575c3f3ee7716a9fddc4cbfceae17e73ec
   pin_sources:
-    - deploy/stacks/nvcf-compute-plane/environments/base.yaml
-    - deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
-  pin_source_digest: sha256:9080c81090e00803c9920b4bbc3fe4015ea4efc7804f9a597d661f55f03ec118
+  pin_source_digest: sha256:9246f885bc9f52a512844da5d6fcbb9d5d32099c8a4cb6f063c4cc145cf058ff
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss

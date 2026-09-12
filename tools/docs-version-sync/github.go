@@ -107,11 +107,15 @@ func newGitHubClientFromEnvironment() *githubClient {
 
 // resolveStackSourceRelease selects the latest stable release or an explicit stack source ref.
 func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSourceRelease, error) {
+	return client.resolveStackSourceReleaseForSpec(stackInventorySpecs[0], sourceRef)
+}
+
+func (client *githubClient) resolveStackSourceReleaseForSpec(spec stackInventorySpec, sourceRef string) (stackSourceRelease, error) {
 	wantedRef := ""
 	wantedVersion := ""
 	if strings.TrimSpace(sourceRef) != "" {
 		var err error
-		wantedRef, wantedVersion, err = normalizeStackSourceRef(sourceRef)
+		wantedRef, wantedVersion, err = normalizeStackSourceRefForSpec(spec, sourceRef)
 		if err != nil {
 			return stackSourceRelease{}, err
 		}
@@ -129,7 +133,7 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 		return stackSourceRelease{Version: wantedVersion, Tag: strings.TrimPrefix(wantedRef, "refs/tags/"), Commit: commit}, nil
 	}
 
-	refs, err := client.stackRefs()
+	refs, err := client.stackRefsForSpec(spec)
 	if err != nil {
 		return stackSourceRelease{}, err
 	}
@@ -138,7 +142,7 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 	selectedVersion := stableStackVersion{}
 	selectedStackVersion := ""
 	for i := range refs {
-		version, parsed, ok := parseStableStackRef(refs[i].Ref)
+		version, parsed, ok := parseStableStackRefForSpec(spec, refs[i].Ref)
 		if !ok {
 			continue
 		}
@@ -149,7 +153,7 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 		}
 	}
 	if selected == -1 {
-		return stackSourceRelease{}, fmt.Errorf("no stable %sX.Y.Z stack source refs found in GitHub", stackTagPrefix)
+		return stackSourceRelease{}, fmt.Errorf("no stable %sX.Y.Z stack source refs found in GitHub", spec.TagPrefix)
 	}
 	commit, err := client.resolveCommit(refs[selected].Object)
 	if err != nil {
@@ -164,7 +168,11 @@ func (client *githubClient) resolveStackSourceRelease(sourceRef string) (stackSo
 
 // resolvedStackInventory downloads and validates the inventory attached to a selected release.
 func (client *githubClient) resolvedStackInventory(source stackSourceRelease) (resolvedStackInventory, error) {
-	if err := validateStackSourceRelease(source); err != nil {
+	return client.resolvedStackInventoryForSpec(stackInventorySpecs[0], source)
+}
+
+func (client *githubClient) resolvedStackInventoryForSpec(spec stackInventorySpec, source stackSourceRelease) (resolvedStackInventory, error) {
+	if err := validateStackSourceReleaseForSpec(source, spec); err != nil {
 		return resolvedStackInventory{}, err
 	}
 	path := fmt.Sprintf(
@@ -183,25 +191,25 @@ func (client *githubClient) resolvedStackInventory(source stackSourceRelease) (r
 
 	assetURL := ""
 	for _, asset := range release.Assets {
-		if asset.Name != resolvedStackInventoryAssetName {
+		if asset.Name != spec.AssetName {
 			continue
 		}
 		if assetURL != "" {
-			return resolvedStackInventory{}, fmt.Errorf("GitHub release %s has more than one %s asset", source.Tag, resolvedStackInventoryAssetName)
+			return resolvedStackInventory{}, fmt.Errorf("GitHub release %s has more than one %s asset", source.Tag, spec.AssetName)
 		}
 		assetURL = asset.BrowserDownloadURL
 	}
 	if assetURL == "" {
-		return resolvedStackInventory{}, fmt.Errorf("GitHub release %s has no %s asset", source.Tag, resolvedStackInventoryAssetName)
+		return resolvedStackInventory{}, fmt.Errorf("GitHub release %s has no %s asset", source.Tag, spec.AssetName)
 	}
 
 	raw, err := client.downloadPublicAsset(assetURL)
 	if err != nil {
-		return resolvedStackInventory{}, fmt.Errorf("download %s from GitHub release %s: %w", resolvedStackInventoryAssetName, source.Tag, err)
+		return resolvedStackInventory{}, fmt.Errorf("download %s from GitHub release %s: %w", spec.AssetName, source.Tag, err)
 	}
 	inventory, err := parseResolvedStackInventory(raw)
 	if err != nil {
-		return resolvedStackInventory{}, fmt.Errorf("parse %s from GitHub release %s: %w", resolvedStackInventoryAssetName, source.Tag, err)
+		return resolvedStackInventory{}, fmt.Errorf("parse %s from GitHub release %s: %w", spec.AssetName, source.Tag, err)
 	}
 	if inventory.Source != source {
 		return resolvedStackInventory{}, fmt.Errorf("resolved inventory source is %+v, want selected release %+v", inventory.Source, source)
@@ -229,11 +237,15 @@ func (client *githubClient) stackRef(ref string) (githubRef, error) {
 
 // stackRefs reads every GitHub ref with the self-managed stack tag prefix.
 func (client *githubClient) stackRefs() ([]githubRef, error) {
+	return client.stackRefsForSpec(stackInventorySpecs[0])
+}
+
+func (client *githubClient) stackRefsForSpec(spec stackInventorySpec) ([]githubRef, error) {
 	path := fmt.Sprintf(
 		"/repos/%s/%s/git/matching-refs/tags/%s",
 		url.PathEscape(client.owner),
 		url.PathEscape(client.repo),
-		stackTagPrefix,
+		spec.TagPrefix,
 	)
 	var refs []githubRef
 	for page := 1; ; {
@@ -406,14 +418,18 @@ func sameURLOrigin(left, right *url.URL) bool {
 
 // normalizeStackSourceRef converts a version, tag, or full ref to a canonical tag ref.
 func normalizeStackSourceRef(sourceRef string) (string, string, error) {
+	return normalizeStackSourceRefForSpec(stackInventorySpecs[0], sourceRef)
+}
+
+func normalizeStackSourceRefForSpec(spec stackInventorySpec, sourceRef string) (string, string, error) {
 	value := strings.TrimSpace(sourceRef)
 	value = strings.TrimPrefix(value, "refs/tags/")
-	if !strings.HasPrefix(value, stackTagPrefix) {
-		value = stackTagPrefix + value
+	if !strings.HasPrefix(value, spec.TagPrefix) {
+		value = spec.TagPrefix + value
 	}
-	version := strings.TrimPrefix(value, stackTagPrefix)
+	version := strings.TrimPrefix(value, spec.TagPrefix)
 	if !validStackVersion(version) {
-		return "", "", fmt.Errorf("stack source %q must be a semantic version, %s tag, or refs/tags/%s ref", sourceRef, stackTagPrefix, stackTagPrefix)
+		return "", "", fmt.Errorf("stack source %q must be a semantic version, %s tag, or refs/tags/%s ref", sourceRef, spec.TagPrefix, spec.TagPrefix)
 	}
 	return "refs/tags/" + value, version, nil
 }
@@ -437,10 +453,15 @@ func validStackVersion(version string) bool {
 
 // parseStableStackRef parses a stable stack tag ref for numeric ordering.
 func parseStableStackRef(ref string) (string, stableStackVersion, bool) {
-	if !strings.HasPrefix(ref, stackRefPrefix) {
+	return parseStableStackRefForSpec(stackInventorySpecs[0], ref)
+}
+
+func parseStableStackRefForSpec(spec stackInventorySpec, ref string) (string, stableStackVersion, bool) {
+	refPrefix := "refs/tags/" + spec.TagPrefix
+	if !strings.HasPrefix(ref, refPrefix) {
 		return "", stableStackVersion{}, false
 	}
-	version := strings.TrimPrefix(ref, stackRefPrefix)
+	version := strings.TrimPrefix(ref, refPrefix)
 	match := stableStackVersionRE.FindStringSubmatch(version)
 	if match == nil {
 		return "", stableStackVersion{}, false

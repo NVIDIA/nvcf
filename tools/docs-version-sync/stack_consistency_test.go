@@ -75,14 +75,6 @@ func TestExtractEffectiveStackPinsRejectsMissingVersionInTargetBlock(t *testing.
     version: 9.9.9
 	`,
 		},
-		{
-			artifact: "nvca",
-			body: `  nvcaOperator:
-    imageTag: "3.2.19"
-  unrelated:
-      nvcaVersion: "9.9.9"
-`,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.artifact, func(t *testing.T) {
@@ -113,16 +105,6 @@ func TestExtractEffectiveStackPinsRejectsDuplicateVersionsInTargetBlock(t *testi
     version: 9.9.9
 	`,
 		},
-		{
-			artifact: "nvca",
-			body: `  nvcaOperator:
-    nvca:
-      nvcaVersion: "3.2.19"
-      nvcaVersion: "3.2.20"
-  unrelated:
-    enabled: true
-`,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.artifact, func(t *testing.T) {
@@ -140,8 +122,7 @@ func TestExtractEffectiveStackPinsRejectsDuplicateVersionsInTargetBlock(t *testi
 
 func effectiveStackPinForArtifact(t *testing.T, artifact string) effectiveStackPin {
 	t.Helper()
-	allPins := append(append([]effectiveStackPin(nil), effectiveStackPins...), legacyComputeEffectiveStackPins...)
-	for _, pin := range allPins {
+	for _, pin := range effectiveStackPins {
 		if pin.artifact == artifact {
 			return pin
 		}
