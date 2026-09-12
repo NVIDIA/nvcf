@@ -1,0 +1,9 @@
+{{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Render the NVCF API JWT used by the state-metrics service.
+*/}}
+{{- with secret "services/nvcf-api/jwt/sign/nvcf-state-metrics" -}}
+{{ .Data.token }}
+{{- end -}}

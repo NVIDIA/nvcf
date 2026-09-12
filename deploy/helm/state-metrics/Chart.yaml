@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v2
+name: helm-nvcf-state-metrics
+description: A Helm chart for the NVCF State Metrics Service
+type: application
+version: 0.0.0 # managed by release automation
+appVersion: "1.24.0"
