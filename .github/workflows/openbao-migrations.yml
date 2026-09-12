@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Integration test for the OpenBao migrations helper functions. Runs a real
-# OpenBao server in Docker and drives the helpers through the kv-v2
-# storage-upgrade window that every mount setup opens, asserting the
-# readiness wait rides it out, unwaited writes fail without overwriting,
-# and other errors fail fast.
+# OpenBao migrations CI:
+# - Build-only multi-arch validation of migrations/openbao/Dockerfile
+#   (linux/amd64 + linux/arm64). Does not push; image-push only covers Bazel
+#   oci_image_index targets, so this job is the CI gate for the Dockerfile.
+# - Integration test for the migrations helper functions. Runs a real OpenBao
+#   server in Docker and drives the helpers through the kv-v2 storage-upgrade
+#   window that every mount setup opens, asserting the readiness wait rides it
+#   out, unwaited writes fail without overwriting, and other errors fail fast.
 
 name: openbao-migrations
 
@@ -36,6 +39,31 @@ defaults:
     shell: bash
 
 jobs:
+  image-build:
+    name: build migrations image (amd64, arm64)
+    runs-on: ubuntu-latest
+    # Cross-compiling OpenBao, jwker, and kubectl under QEMU for arm64 is slow.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build migrations image for linux/amd64 and linux/arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: migrations/openbao
+          file: migrations/openbao/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          # Multi-platform builds cannot load into the local docker daemon.
+          # cacheonly keeps this job build-only without exporting or pushing.
+          outputs: type=cacheonly
+
   kv-write-retry:
     name: kv write retry integration test
     runs-on: ubuntu-latest
