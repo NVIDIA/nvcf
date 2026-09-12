@@ -409,34 +409,32 @@ func ApplyValuesPaths(root string, chart Entry, version string, paths []string, 
 	if err != nil {
 		return err
 	}
-	type update struct {
-		path string
-		text string
-	}
-	updates := make([]update, 0, len(specs))
-	for _, spec := range specs {
-		b, err := os.ReadFile(spec.path)
+	groups := groupDeclaredValuesSpecs(specs)
+	updates := make([]fileUpdate, 0, len(groups)+1)
+	for _, group := range groups {
+		b, err := os.ReadFile(group.path)
 		if err != nil {
-			return fmt.Errorf("read %s: %w", spec.path, err)
+			return fmt.Errorf("read %s: %w", group.path, err)
 		}
 		lines := strings.Split(string(b), "\n")
-		for _, path := range spec.paths {
-			line, _, err := resolveValuesPath(lines, path)
-			if err != nil {
-				return fmt.Errorf("%s: %w", spec.path, err)
+		for _, spec := range group.specs {
+			for _, path := range spec.paths {
+				line, _, err := resolveValuesPath(lines, path)
+				if err != nil {
+					return fmt.Errorf("%s: %w", group.path, err)
+				}
+				m := scalarValueRE.FindStringSubmatch(lines[line])
+				lines[line] = m[1] + scalarLike(lines[line][len(m[1]):], version) + m[3]
 			}
-			m := scalarValueRE.FindStringSubmatch(lines[line])
-			lines[line] = m[1] + scalarLike(lines[line][len(m[1]):], version) + m[3]
 		}
-		updates = append(updates, update{path: spec.path, text: strings.Join(lines, "\n")})
+		update, err := prepareFileUpdate(group.path, b, strings.Join(lines, "\n"))
+		if err != nil {
+			return err
+		}
+		updates = append(updates, update)
 	}
 	if !ownsAppVersion {
-		for _, update := range updates {
-			if err := writeFilePreservingMode(update.path, update.text); err != nil {
-				return err
-			}
-		}
-		return nil
+		return commitFileUpdates(updates)
 	}
 
 	// Read and prepare both files before the first write. A missing or malformed
@@ -459,12 +457,79 @@ func ApplyValuesPaths(root string, chart Entry, version string, paths []string, 
 		groups := appVersionRE.FindStringSubmatch(line)
 		return groups[1] + scalarLike(line[len(groups[1]):], version) + groups[3]
 	})
-	if err := writeFilePreservingMode(chartYAML, chartText); err != nil {
+	chartUpdate, err := prepareFileUpdate(chartYAML, chartBytes, chartText)
+	if err != nil {
 		return err
 	}
-	for _, update := range updates {
-		if err := writeFilePreservingMode(update.path, update.text); err != nil {
-			return err
+	updates = append([]fileUpdate{chartUpdate}, updates...)
+	return commitFileUpdates(updates)
+}
+
+type declaredValuesGroup struct {
+	path  string
+	specs []declaredValuesSpec
+}
+
+// groupDeclaredValuesSpecs ensures multiple declarations resolving to the
+// same file are applied to one buffer and committed as one file update.
+func groupDeclaredValuesSpecs(specs []declaredValuesSpec) []declaredValuesGroup {
+	var groups []declaredValuesGroup
+	groupIndex := make(map[string]int)
+	for _, spec := range specs {
+		index, ok := groupIndex[spec.path]
+		if !ok {
+			index = len(groups)
+			groupIndex[spec.path] = index
+			groups = append(groups, declaredValuesGroup{path: spec.path})
+		}
+		groups[index].specs = append(groups[index].specs, spec)
+	}
+	return groups
+}
+
+type fileUpdate struct {
+	path     string
+	original []byte
+	updated  []byte
+	mode     os.FileMode
+}
+
+func prepareFileUpdate(path string, original []byte, updated string) (fileUpdate, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileUpdate{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+	return fileUpdate{
+		path:     path,
+		original: append([]byte(nil), original...),
+		updated:  []byte(updated),
+		mode:     info.Mode().Perm(),
+	}, nil
+}
+
+type fileWriter func(path string, content []byte, mode os.FileMode) error
+
+// commitFileUpdates restores every attempted file if one write fails. This is
+// best-effort because the filesystem can also reject a rollback, in which case
+// the returned error reports both failures instead of hiding the partial state.
+func commitFileUpdates(updates []fileUpdate) error {
+	return commitFileUpdatesWith(updates, os.WriteFile)
+}
+
+func commitFileUpdatesWith(updates []fileUpdate, write fileWriter) error {
+	for i, update := range updates {
+		if err := write(update.path, update.updated, update.mode); err != nil {
+			var rollbackErrors []string
+			for j := i; j >= 0; j-- {
+				attempted := updates[j]
+				if rollbackErr := write(attempted.path, attempted.original, attempted.mode); rollbackErr != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Sprintf("restore %s: %v", attempted.path, rollbackErr))
+				}
+			}
+			if len(rollbackErrors) > 0 {
+				return fmt.Errorf("write %s: %w; rollback failed: %s", update.path, err, strings.Join(rollbackErrors, "; "))
+			}
+			return fmt.Errorf("write %s: %w", update.path, err)
 		}
 	}
 	return nil
