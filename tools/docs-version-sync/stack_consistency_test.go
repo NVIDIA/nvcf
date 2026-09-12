@@ -140,7 +140,8 @@ func TestExtractEffectiveStackPinsRejectsDuplicateVersionsInTargetBlock(t *testi
 
 func effectiveStackPinForArtifact(t *testing.T, artifact string) effectiveStackPin {
 	t.Helper()
-	for _, pin := range effectiveStackPins {
+	allPins := append(append([]effectiveStackPin(nil), effectiveStackPins...), legacyComputeEffectiveStackPins...)
+	for _, pin := range allPins {
 		if pin.artifact == artifact {
 			return pin
 		}

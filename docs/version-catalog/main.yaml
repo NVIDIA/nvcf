@@ -98,6 +98,7 @@ version_overrides:
     source: independent source release; not pinned by stack
 publication_pending:
   - admin-token-issuer-proxy
+  - cert-manager-acmesolver
   - crd-upgrader
   - dynamo-platform
   - ess-agent
@@ -360,6 +361,12 @@ manifest:
       requirement: required
       description: Provides Kubernetes command-line utilities for deployment jobs.
       github_url: https://github.com/alpine-docker/k8s
+    - artifact_id: cert-manager-acmesolver
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Serves temporary ACME HTTP-01 domain-validation challenges.
+      upstream_url: https://github.com/cert-manager/cert-manager
     - artifact_id: cert-manager-cainjector
       plane: control
       kind: service-image
@@ -864,6 +871,10 @@ artifacts:
     type: image
     registry: public-images
     version: 5.0.8-nv-2.0.1
+  - name: cert-manager-acmesolver
+    type: image
+    registry: public-images
+    version: v1.20.2
   - name: cert-manager-cainjector
     type: image
     registry: public-images
