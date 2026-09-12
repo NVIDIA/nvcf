@@ -333,6 +333,7 @@ func findTaskPodByName(t *testing.T, objs []metav1.Object, name string) *corev1.
 	return nil
 }
 
+// findTaskContainerByName returns the named task container or fails the test.
 func findTaskContainerByName(t *testing.T, containers []corev1.Container, name string) corev1.Container {
 	t.Helper()
 
