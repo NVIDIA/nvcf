@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       inventory_tag:
-        description: Optional self-managed stack tag to render and validate without publishing.
+        description: Optional stack tag to render and validate without publishing.
         required: false
         type: string
       release_tag:
@@ -117,7 +117,7 @@ jobs:
           ./tools/ci/github-release auto
 
   inventory-preflight:
-    name: self-managed inventory preflight
+    name: stack inventory preflight
     if: github.event_name == 'workflow_dispatch' && inputs.inventory_tag != ''
     runs-on: linux-amd64-cpu4
     permissions:
@@ -166,20 +166,19 @@ jobs:
         run: |
           set -euo pipefail
           case "${INVENTORY_TAG}" in
-            deploy/stacks/self-managed/v*) ;;
+            deploy/stacks/self-managed/v*|deploy/stacks/nvcf-compute-plane/v*|deploy/stacks/observability/v*) ;;
             *)
-              echo "ERROR: inventory_tag must be a deploy/stacks/self-managed/v* tag." >&2
+              echo "ERROR: inventory_tag must identify a registered deploy/stacks/*/v* release." >&2
               exit 1
               ;;
           esac
-          version="${INVENTORY_TAG#deploy/stacks/self-managed/v}"
+          version="${INVENTORY_TAG##*/v}"
           commit="$(git rev-list -n 1 "${INVENTORY_TAG}")"
           test -n "${commit}"
           git worktree add --detach "${RUNNER_TEMP}/inventory-source" "${INVENTORY_TAG}"
           cd "${RUNNER_TEMP}/inventory-source"
           "${RUNNER_TEMP}/docs-version-sync" \
-            --generate-stack-inventory "${RUNNER_TEMP}/nvcf-self-managed-stack-inventory.json" \
-            --inventory-config "${RUNNER_TEMP}/inventory-source/deploy/stacks/self-managed/release-inventory.yaml" \
+            --generate-stack-inventory "${RUNNER_TEMP}/stack-inventory.json" \
             --stack-version "${version}" \
             --stack-source-tag "${INVENTORY_TAG}" \
             --stack-source-commit "${commit}"
@@ -216,12 +215,12 @@ jobs:
           echo "NVCF_RELEASE_SOURCE_ROOT=${RUNNER_TEMP}/release-source" >> "${GITHUB_ENV}"
 
       - uses: actions/setup-go@v5
-        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/self-managed/v')
+        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/')
         with:
           go-version-file: tools/go-toolchain/go.mod
 
       - name: Install Helm release tool
-        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/self-managed/v') || startsWith(inputs.release_tag || github.ref_name, 'deploy/helm/')
+        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/') || startsWith(inputs.release_tag || github.ref_name, 'deploy/helm/')
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"
@@ -235,7 +234,7 @@ jobs:
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Install Helmfile inventory tool
-        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/self-managed/v')
+        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/')
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"

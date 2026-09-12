@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 schemaVersion: 1
-# Inventory states are owned by this distributable. The standalone
-# compute-plane stack publishes its own release and must not be pulled into the
-# self-managed stack inventory.
+# Inventory states are owned by this distributable. Other stack trees publish
+# their own release inventories and must not be referenced here.
 states:
   - plane: control-plane
     path: deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl
@@ -16,15 +15,10 @@ states:
       - addons.llm.enabled=true
       - addons.vanityGateway.enabled=true
       - addons.nvcfUi.enabled=true
-  - plane: observability
+  - plane: control-plane
     path: deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl
-  # The control-plane profile consumes the shared observability state. Keep
-  # those releases in this inventory until the standalone observability stack
-  # publishes and the documentation aggregator consumes its own inventory.
-  - plane: observability
-    path: deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl
-    baseOverrides:
-      - observability.profile=all
+    fullOverrides:
+      - observability.profile=control
 # These charts are released independently and might not yet be mirrored into
 # the composite stack's release chart repository. Render each pinned chart from
 # its immutable public GitHub release tag, then report the public self-managed

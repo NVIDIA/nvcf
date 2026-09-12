@@ -86,8 +86,7 @@ func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testi
 	states := []resolvedInventoryState{
 		{Plane: "control-plane", Path: "deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl", FullOverrides: []string{"addons.llm.enabled=true"}},
 		{Plane: "control-plane", Path: "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl"},
-		{Plane: "observability", Path: "deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl"},
-		{Plane: "observability", Path: "deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl", BaseOverrides: []string{"observability.profile=all"}},
+		{Plane: "control-plane", Path: "deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl"},
 	}
 	configBody := "schemaVersion: 1\npublishedChartRepository: " + testPublishedChartRepository + "\nstates:\n"
 	for _, state := range states {
@@ -114,8 +113,8 @@ func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testi
 	if err := validateResolvedStackInventory(inventory); err != nil {
 		t.Fatalf("inventory validation failed: %v", err)
 	}
-	if len(inventory.Releases) != 5 {
-		t.Fatalf("got %d releases, want 5", len(inventory.Releases))
+	if len(inventory.Releases) != 4 {
+		t.Fatalf("got %d releases, want 4", len(inventory.Releases))
 	}
 	for _, release := range inventory.Releases {
 		if release.Name == "nvcf-pki" && release.Required {
@@ -255,35 +254,55 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	}
 }
 
-func TestSelfManagedReleaseInventoryOwnsExpectedStates(t *testing.T) {
+func TestReleaseInventoriesOwnOnlyTheirStackStates(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, err := loadResolvedInventoryConfig(repoRoot, "")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		spec  stackInventorySpec
+		plane string
+		paths []string
+	}{
+		{stackInventorySpecs[0], "control-plane", []string{
+			"deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl",
+			"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
+			"deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl",
+		}},
+		{stackInventorySpecs[1], "compute-plane", []string{
+			"deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",
+			"deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
+		}},
+		{stackInventorySpecs[2], "observability", []string{
+			"deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl",
+		}},
 	}
-	want := map[string]string{
-		"deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl":   "control-plane",
-		"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl":           "control-plane",
-		"deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl":  "observability",
-		"deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl": "observability",
-	}
-	if len(config.States) != len(want) {
-		t.Fatalf("self-managed inventory states = %d, want %d", len(config.States), len(want))
-	}
-	for _, state := range config.States {
-		if state.Plane == "compute-plane" || strings.Contains(state.Path, "/nvcf-compute-plane/") {
-			t.Fatalf("self-managed inventory includes compute-plane state %#v", state)
-		}
-		if wantPlane, ok := want[state.Path]; !ok || state.Plane != wantPlane {
-			t.Fatalf("unexpected self-managed inventory state %#v", state)
-		}
-		delete(want, state.Path)
-	}
-	if len(want) != 0 {
-		t.Fatalf("self-managed inventory is missing states %v", want)
+	for _, test := range tests {
+		t.Run(test.spec.Key, func(t *testing.T) {
+			config, err := loadResolvedInventoryConfig(repoRoot, filepath.Join(repoRoot, filepath.FromSlash(test.spec.ConfigPath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := make(map[string]struct{}, len(test.paths))
+			for _, path := range test.paths {
+				want[path] = struct{}{}
+			}
+			if len(config.States) != len(want) {
+				t.Fatalf("%s inventory states = %d, want %d", test.spec.Key, len(config.States), len(want))
+			}
+			for _, state := range config.States {
+				if state.Plane != test.plane {
+					t.Fatalf("%s inventory state %#v has plane %s, want %s", test.spec.Key, state, state.Plane, test.plane)
+				}
+				if _, ok := want[state.Path]; !ok {
+					t.Fatalf("unexpected %s inventory state %#v", test.spec.Key, state)
+				}
+				delete(want, state.Path)
+			}
+			if len(want) != 0 {
+				t.Fatalf("%s inventory is missing states %v", test.spec.Key, want)
+			}
+		})
 	}
 }
 

@@ -12,6 +12,8 @@ resource.
 - `self-managed/` owns the NVCF control-plane stack.
 - `nvcf-compute-plane/` owns the NVCF compute-plane stack.
 - `observability/` owns shared observability infrastructure.
+- Each stack owns its own `release-inventory.yaml` and release asset.
+- Do not reference another stack's Helmfile state from an inventory config.
 - Keep a dependency in the stack that installs or creates it.
 - Follow the nearest nested `AGENTS.md` when it adds stack-specific guidance.
 
@@ -21,12 +23,13 @@ For every dependency change:
 
 1. Update the owning Helmfile, chart values, or stack configuration.
 2. Give an optional release an explicit condition and inventory render profile.
-3. Add registry and repository overrides for images that customers must mirror.
-4. Record images that do not appear in rendered Kubernetes `image` fields.
-5. Update the artifact classification in `docs/version-catalog/main.yaml`.
-6. Run the stack tests and the inventory and documentation checks described in
+3. Update the owning stack's `release-inventory.yaml`.
+4. Add registry and repository overrides for images that customers must mirror.
+5. Record images that do not appear in rendered Kubernetes `image` fields.
+6. Update the artifact classification in `docs/version-catalog/main.yaml`.
+7. Run the stack tests and the inventory and documentation checks described in
    [`INVENTORY.md`](INVENTORY.md).
-7. After the stack release publishes its inventory asset, update the catalog
+8. After the stack release publishes its inventory asset, update the catalog
    and generated manifest in a documentation sync change.
 
 A dependency is not fully distributed when the released inventory or generated
@@ -48,6 +51,8 @@ Run from the repository root unless a command says otherwise:
 
 ```bash
 make -C deploy/stacks/self-managed test
+make -C deploy/stacks/nvcf-compute-plane test-local
+make -C deploy/stacks/observability test
 go test -C tools/docs-version-sync ./...
 go run -C tools/docs-version-sync . --target main
 ./tools/ci/check-doc-version-sync
