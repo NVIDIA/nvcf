@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -2225,17 +2226,21 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			instanceIDs = append(instanceIDs, instanceID)
 		}
 
-		// Initialize terminatedInstances map with existing instances
+		// terminatedInstances tracks instances PurgeInstanceID confirms terminated in this
+		// pass. It must start empty: PurgeInstanceID treats any pre-existing entry for an
+		// instance ID as "already handled" and skips it, so seeding this from
+		// req.Status.Instances (which holds each instance's current, non-terminated status)
+		// would make every instance look already-terminated and PurgeInstanceID would never
+		// report success for any of them.
 		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
-		if len(req.Status.Instances) != 0 {
-			terminatedInstances = req.Status.Instances
-		}
 
 		// Use PurgeInstanceID to directly terminate each instance
 		var terminatedCount int
+		var purgedInstanceIDs []string
 		for _, instanceID := range instanceIDs {
 			if a.backendk8scache.icmsRequestHelper.PurgeInstanceID(ctx, req, terminatedInstances, instanceID) {
 				terminatedCount++
+				purgedInstanceIDs = append(purgedInstanceIDs, instanceID)
 			}
 		}
 
@@ -2246,8 +2251,13 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 				"totalInstances":  len(instanceIDs),
 			}).Info("Successfully terminated instances during maintenance eviction")
 
-			// Update the request status with the terminated instances
-			req.Status.Instances = terminatedInstances
+			// Update the request status: overlay the newly terminated instances onto the
+			// existing set so instances not yet confirmed terminated in this pass (e.g.
+			// still blocked by a finalizer) are preserved rather than dropped.
+			updatedInstances := make(map[string]nvcav2beta1.InstanceStatus, len(req.Status.Instances))
+			maps.Copy(updatedInstances, req.Status.Instances)
+			maps.Copy(updatedInstances, terminatedInstances)
+			req.Status.Instances = updatedInstances
 			req.Status.RequestStatus = nvcav2beta1.ICMSRequestStatusInProgress
 			req.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
 
@@ -2264,8 +2274,10 @@ func (a *Agent) evictAllWorkloads(ctx context.Context) error {
 			}
 		}
 
-		// Send termination status updates to ICMS for each terminated instance.
-		for _, instanceID := range instanceIDs {
+		// Send termination status updates to ICMS only for instances PurgeInstanceID
+		// actually confirmed terminated; an instance whose backing Pod/MiniService is
+		// still present must not be reported as terminated.
+		for _, instanceID := range purgedInstanceIDs {
 			updateRequest := &types.ICMSInstanceStatusUpdateRequest{
 				Status:           types.ICMSRequestInstanceTerminatedByService,
 				InstanceState:    types.ICMSInstanceTerminated,

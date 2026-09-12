@@ -48,14 +48,18 @@ import (
 	k8sinformers "k8s.io/client-go/informers"
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	k8smock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvcafake "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
@@ -1797,6 +1801,140 @@ func TestPurgeInstanceID_ErrorHandling(t *testing.T) {
 
 	// Should return false since instance was already terminated
 	assert.False(t, result, "Should return false for already terminated instance")
+}
+
+// TestPurgeInstanceID_StillPresentAfterDelete simulates a Delete() call that is accepted by
+// the API server but does not actually remove the object yet (e.g. blocked by a finalizer
+// held by another controller). The vendored fake clientsets do not implement finalizer
+// semantics on Delete (they remove the object outright), so a reactor/interceptor is used to
+// make the delete call succeed without actually removing the object, mirroring what a
+// finalizer-blocked real Delete looks like from purgeInstanceID's point of view.
+func TestPurgeInstanceID_StillPresentAfterDelete(t *testing.T) {
+	ctx := newTestContext()
+
+	t.Run("Pod blocked by finalizer is not reported terminated", func(t *testing.T) {
+		clients := mockKubeClients()
+
+		b, _, err := NewBackendk8sCacheBuilder().
+			WithNamespaceLabels(labels.Set{"bartnamespace": "true"}).
+			WithClients(clients).
+			Start(ctx)
+		require.NoError(t, err)
+
+		kbInterface, _ := NewK8sComputeBackend(clients, b)
+		kb := kbInterface.(K8sComputeBackend)
+
+		instanceID := "finalizer-blocked-pod"
+		pod := &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      instanceID,
+				Namespace: kb.bk8s.podInstanceNamespace,
+			},
+		}
+		_, err = clients.K8s.CoreV1().Pods(kb.bk8s.podInstanceNamespace).Create(ctx, pod, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		// Wait for the informer backing podSpecLister to observe the newly created pod
+		// before relying on the lister to reflect its presence/absence.
+		require.Eventually(t, func() bool {
+			_, err := kb.bk8s.podSpecLister.Get(instanceID)
+			return err == nil
+		}, 5*time.Second, 50*time.Millisecond, "informer should observe the created pod")
+
+		fakeK8s, ok := clients.K8s.(*fakek8sclient.Clientset)
+		require.True(t, ok)
+		deleteBlocked := true
+		fakeK8s.Fake.PrependReactor("delete", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+			if deleteBlocked {
+				// Simulate a Delete accepted by the API server (e.g. DeletionTimestamp set)
+				// without the object actually being removed, as happens when a finalizer
+				// held by another controller blocks removal.
+				return true, nil, nil
+			}
+			return false, nil, nil
+		})
+
+		req := &nvcav2beta1.ICMSRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-request", Namespace: "default"},
+			Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "test-request-id"},
+		}
+		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
+
+		result := kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+		assert.False(t, result, "instance should not be reported terminated while pod still exists")
+		_, exists := terminatedInstances[instanceID]
+		assert.False(t, exists, "instance should not be added to terminatedInstances while pod still exists")
+
+		// Now let a real delete go through, as if the finalizer were released.
+		deleteBlocked = false
+		require.NoError(t, clients.K8s.CoreV1().Pods(kb.bk8s.podInstanceNamespace).Delete(ctx, instanceID, metav1.DeleteOptions{}))
+
+		require.Eventually(t, func() bool {
+			result = kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+			return result
+		}, 5*time.Second, 50*time.Millisecond, "instance should eventually be reported terminated once pod is gone")
+
+		instanceStatus, exists := terminatedInstances[instanceID]
+		assert.True(t, exists)
+		assert.Equal(t, string(types.ICMSInstanceTerminated), instanceStatus.Status)
+	})
+
+	t.Run("MiniService blocked by finalizer is not reported terminated", func(t *testing.T) {
+		sch := newMiniServiceScheme()
+		deleteBlocked := true
+		fakeHelmClient := ctrlfake.NewClientBuilder().
+			WithScheme(sch).
+			WithStatusSubresource(&v1alpha1.MiniService{}).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					if deleteBlocked {
+						// Simulate a Delete accepted by the API server without the
+						// MiniService actually being removed (blocked by its own
+						// finalizer/cleanup logic).
+						return nil
+					}
+					return c.Delete(ctx, obj, opts...)
+				},
+			}).
+			Build()
+
+		clients := mockKubeClients()
+		clients.HelmV2 = fakeHelmClient
+
+		b, _, err := NewBackendk8sCacheBuilder().
+			WithNamespaceLabels(labels.Set{"bartnamespace": "true"}).
+			WithClients(clients).
+			Start(ctx)
+		require.NoError(t, err)
+
+		kbInterface, _ := NewK8sComputeBackend(clients, b)
+		kb := kbInterface.(K8sComputeBackend)
+
+		instanceID := "finalizer-blocked-instance-miniservice"
+		ms := &v1alpha1.MiniService{
+			ObjectMeta: metav1.ObjectMeta{Name: instanceID},
+		}
+		require.NoError(t, clients.HelmV2.Create(ctx, ms))
+
+		req := &nvcav2beta1.ICMSRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-request", Namespace: "default"},
+			Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "test-request-id"},
+		}
+		terminatedInstances := make(map[string]nvcav2beta1.InstanceStatus)
+
+		result := kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+		assert.False(t, result, "instance should not be reported terminated while miniservice still exists")
+		_, exists := terminatedInstances[instanceID]
+		assert.False(t, exists, "instance should not be added to terminatedInstances while miniservice still exists")
+
+		// Now let a real delete go through, as if the finalizer/cleanup were resolved.
+		deleteBlocked = false
+		result = kb.PurgeInstanceID(ctx, req, terminatedInstances, instanceID)
+		assert.True(t, result, "instance should be reported terminated once miniservice is gone")
+		instanceStatus, exists := terminatedInstances[instanceID]
+		assert.True(t, exists)
+		assert.Equal(t, string(types.ICMSInstanceTerminated), instanceStatus.Status)
+	})
 }
 
 func TestGetICMSRequestUpdatesForCreatePodRequest_CreateContainerError_EventLogInHealthInfo(t *testing.T) {
