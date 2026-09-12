@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,6 +71,34 @@ func (f *fixture) read(t *testing.T, id, name string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func (f *fixture) source(t *testing.T, path, content string) {
+	t.Helper()
+	full := filepath.Join(f.root, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *fixture) tag(t *testing.T, tag string) {
+	t.Helper()
+	commands := [][]string{
+		{"init", "--quiet"},
+		{"add", "."},
+		{"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "fixture"},
+		{"tag", tag},
+	}
+	for _, args := range commands {
+		cmd := exec.Command("git", append([]string{"-C", f.root}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
 }
 
 const meta = `{"services":[
@@ -358,8 +387,8 @@ func TestRealChartsResolve(t *testing.T) {
 			continue
 		}
 		for _, d := range e.Deploys {
-			if len(d.ValuesPaths) > 0 {
-				if _, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths); err != nil {
+			if len(d.ValuesPaths) > 0 || len(d.ValuesFiles) > 0 {
+				if _, err := PlanForValuesPaths(root, e, "9.9.9", d.ValuesPaths, d.ValuesFiles, d.AppVersion); err != nil {
 					t.Errorf("planning %s (%s values paths) failed: %v", e.ID, d.Service, err)
 				}
 				continue
@@ -594,6 +623,133 @@ func TestValuesPathsAllMoveTogether(t *testing.T) {
 	}
 }
 
+func TestPrimaryAndAdditionalPathsForTheSameValuesFileMerge(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{
+	   "service":"svc",
+	   "values_paths":["a.tag"],
+	   "values_files":[{"file":"values.yaml","paths":["b.tag"]}]
+	 }]}
+	]}`)
+	f.chart(t, "c", "0.0.0", "a:\n  tag: 1.0.0\nb:\n  tag: 1.0.0")
+
+	if code, _, errOut := f.run(t, "src/svc/v2.0.0", true); code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s", code, errOut)
+	}
+	values := f.read(t, "c", "values.yaml")
+	if strings.Count(values, "tag: 2.0.0") != 2 {
+		t.Fatalf("both declarations targeting values.yaml must be preserved:\n%s", values)
+	}
+}
+
+func TestCommitFileUpdatesRollsBackAfterALaterFailure(t *testing.T) {
+	f := newFixture(t, `{"services":[]}`)
+	first := filepath.Join(f.root, "first.yaml")
+	second := filepath.Join(f.root, "second.yaml")
+	f.source(t, "first.yaml", "first: old\n")
+	f.source(t, "second.yaml", "second: old\n")
+
+	firstUpdate, err := prepareFileUpdate(first, []byte("first: old\n"), "first: new\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondUpdate, err := prepareFileUpdate(second, []byte("second: old\n"), "second: new\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writes := 0
+	err = commitFileUpdatesWith([]fileUpdate{firstUpdate, secondUpdate}, func(path string, content []byte, mode os.FileMode) error {
+		writes++
+		if writes == 2 {
+			return fmt.Errorf("injected write failure")
+		}
+		return os.WriteFile(path, content, mode)
+	})
+	if err == nil || !strings.Contains(err.Error(), "injected write failure") {
+		t.Fatalf("want the later write failure, got %v", err)
+	}
+	for path, want := range map[string]string{
+		first:  "first: old\n",
+		second: "second: old\n",
+	} {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if got := string(content); got != want {
+			t.Fatalf("%s was not restored: %q", path, got)
+		}
+	}
+}
+
+func TestCompositeArtifactVersionMovesDeclaredPathsAndAppVersion(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"wrapper","path":"infra/wrapper","artifact_version":{
+	   "source_file":"Dockerfile",
+	   "source_pattern":"(?m)^ARG UPSTREAM=(?P<upstream>[0-9]+\\.[0-9]+\\.[0-9]+)$",
+	   "format":"${upstream}-nv-${release}"
+	 }},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{
+	   "service":"wrapper",
+	   "values_paths":["server.image.tag","agent.image.tag"],
+	   "values_files":[{"file":"upgrade/values.yaml","paths":["server.image.tag","agent.image.tag"]}],
+	   "app_version":true
+	 }]}
+	]}`)
+	f.chart(t, "c", "2.5.5-nv-1.3.3", "server:\n  image:\n    tag: 2.5.5-nv-1.3.3\nagent:\n  image:\n    tag: 2.5.5-nv-1.3.3")
+	f.source(t, "deploy/helm/c/upgrade/values.yaml", "server:\n  image:\n    tag: 2.5.5-nv-1.3.3\nagent:\n  image:\n    tag: 2.5.5-nv-1.3.3\n")
+	f.source(t, "infra/wrapper/Dockerfile", "ARG UPSTREAM=2.6.2\n")
+	f.tag(t, "infra/wrapper/v1.3.4")
+
+	// The working tree may have advanced since the release. The image tag must
+	// come from the tagged source, not whatever the default branch says now.
+	f.source(t, "infra/wrapper/Dockerfile", "ARG UPSTREAM=9.9.9\n")
+	code, out, errOut := f.run(t, "infra/wrapper/v1.3.4", true)
+	if code != 0 {
+		t.Fatalf("want a clean composite bump, got %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "version 1.3.4, artifact 2.6.2-nv-1.3.4") {
+		t.Fatalf("release and artifact versions were not reported separately:\n%s", out)
+	}
+	if !strings.Contains(out, "bump: patch") {
+		t.Fatalf("chart semver must follow wrapper 1.3.3 -> 1.3.4, not the embedded upstream version:\n%s", out)
+	}
+	if got := f.read(t, "c", "Chart.yaml"); !strings.Contains(got, `appVersion: "2.6.2-nv-1.3.4"`) {
+		t.Fatalf("appVersion did not move to the composite artifact version:\n%s", got)
+	}
+	if got := f.read(t, "c", "values.yaml"); strings.Count(got, "tag: 2.6.2-nv-1.3.4") != 2 {
+		t.Fatalf("both declared image fields must move to the composite artifact version:\n%s", got)
+	}
+	if got := f.read(t, "c", "upgrade/values.yaml"); strings.Count(got, "tag: 2.6.2-nv-1.3.4") != 2 {
+		t.Fatalf("repeated pins in an additional values file must move too:\n%s", got)
+	}
+}
+
+func TestAppVersionOwningPathsRefuseExistingDrift(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{
+	   "service":"svc","values_paths":["server.image.tag"],"app_version":true
+	 }]}
+	]}`)
+	f.chart(t, "c", "1.0.0", "server:\n  image:\n    tag: 1.0.1")
+	beforeChart := f.read(t, "c", "Chart.yaml")
+	beforeValues := f.read(t, "c", "values.yaml")
+
+	code, _, errOut := f.run(t, "src/svc/v1.0.2", true)
+	if code != RefusedExit {
+		t.Fatalf("want refusal, got %d", code)
+	}
+	if !strings.Contains(errOut, "appVersion 1.0.0 does not match declared values path(s) server.image.tag=1.0.1") {
+		t.Fatalf("want the appVersion drift reason:\n%s", errOut)
+	}
+	if f.read(t, "c", "Chart.yaml") != beforeChart || f.read(t, "c", "values.yaml") != beforeValues {
+		t.Fatal("a drift refusal must not modify either chart file")
+	}
+}
+
 func TestValuesPathsDisagreeRefusesRatherThanForcingAgreement(t *testing.T) {
 	f := newFixture(t, `{"services":[
 	 {"id":"sidecar","path":"src/sidecar"},
@@ -679,7 +835,7 @@ func TestDeployEntryAcceptsBothStringAndObjectShapesInOneList(t *testing.T) {
 	// appVersion evidence) with an object (byoo-otel-collector, explicit
 	// paths) in the same deploys list.
 	m := decodeMetadata(t, `{"services":[
-	 {"id":"c","path":"deploy/helm/c","deploys":["nvca",{"service":"sidecar","values_paths":["a.tag"]}]}
+	 {"id":"c","path":"deploy/helm/c","deploys":["nvca",{"service":"sidecar","values_paths":["a.tag"],"app_version":true}]}
 	]}`)
 	entry := m.Services[0]
 	if len(entry.Deploys) != 2 {
@@ -688,8 +844,26 @@ func TestDeployEntryAcceptsBothStringAndObjectShapesInOneList(t *testing.T) {
 	if entry.Deploys[0].Service != "nvca" || len(entry.Deploys[0].ValuesPaths) != 0 {
 		t.Fatalf("the string form should decode as a bare service with no paths: %+v", entry.Deploys[0])
 	}
-	if entry.Deploys[1].Service != "sidecar" || strings.Join(entry.Deploys[1].ValuesPaths, ",") != "a.tag" {
+	if entry.Deploys[1].Service != "sidecar" || strings.Join(entry.Deploys[1].ValuesPaths, ",") != "a.tag" || !entry.Deploys[1].AppVersion {
 		t.Fatalf("the object form should decode its service and paths: %+v", entry.Deploys[1])
+	}
+}
+
+func TestObjectDeployRequiresValuesPaths(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"c","path":"deploy/helm/c","deploys":[{"service":"svc"}]}
+	]}`)
+	if _, err := LoadMetadata(f.root); err == nil {
+		t.Fatal("an object deploy without values_paths must fail to decode")
+	}
+}
+
+func TestArtifactVersionMetadataIsValidatedAtLoad(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"infra/svc","artifact_version":{"format":"${upstream}"}}
+	]}`)
+	if _, err := LoadMetadata(f.root); err == nil || !strings.Contains(err.Error(), "service svc artifact_version") {
+		t.Fatalf("invalid artifact_version must fail metadata loading, got %v", err)
 	}
 }
 

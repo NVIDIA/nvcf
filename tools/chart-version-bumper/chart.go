@@ -321,26 +321,32 @@ func Apply(root string, chart Entry, version string, p Plan) error {
 
 // PlanForValuesPaths decides what to do for a chart whose deploy edge names
 // the exact values.yaml paths holding this service's tag, rather than relying
-// on appVersion agreement. appVersion is never part of this plan: in a
-// multi-image chart it belongs to whichever other service, if any, uses the
-// default single-image evidence.
-func PlanForValuesPaths(root string, chart Entry, version string, paths []string) (Plan, error) {
+// on single-image discovery. When ownsAppVersion is true, agreement between
+// those paths and appVersion is required and all of them move together.
+func PlanForValuesPaths(root string, chart Entry, version string, paths []string, files []ValuesFile, ownsAppVersion bool) (Plan, error) {
 	chartYAML, valuesYAML := ChartFiles(root, chart.Path)
 	if chartYAML == "" {
 		return Plan{Action: ActionSkip, Detail: fmt.Sprintf("no Chart.yaml under %s", chart.Path)}, nil
 	}
-	b, err := os.ReadFile(valuesYAML)
+	specs, err := declaredValuesSpecs(root, chart, valuesYAML, paths, files)
 	if err != nil {
-		return Plan{}, fmt.Errorf("read %s: %w", valuesYAML, err)
+		return Plan{}, err
 	}
-	lines := strings.Split(string(b), "\n")
-	values := make([]string, len(paths))
-	for i, p := range paths {
-		_, v, err := resolveValuesPath(lines, p)
+	var names, values []string
+	for _, spec := range specs {
+		b, err := os.ReadFile(spec.path)
 		if err != nil {
-			return Plan{ActionRefuse, err.Error(), "", nil}, nil
+			return Plan{}, fmt.Errorf("read %s: %w", spec.path, err)
 		}
-		values[i] = v
+		lines := strings.Split(string(b), "\n")
+		for _, path := range spec.paths {
+			_, value, err := resolveValuesPath(lines, path)
+			if err != nil {
+				return Plan{ActionRefuse, valuesPathName(spec.label, err.Error()), "", nil}, nil
+			}
+			names = append(names, valuesPathName(spec.label, path))
+			values = append(values, value)
+		}
 	}
 
 	// The declared paths are the ownership evidence here, in place of the
@@ -352,16 +358,36 @@ func PlanForValuesPaths(root string, chart Entry, version string, paths []string
 		if v != current {
 			return Plan{
 				ActionRefuse,
-				fmt.Sprintf("declared values paths disagree: %s", describePaths(paths, values)),
+				fmt.Sprintf("declared values paths disagree: %s", describePaths(names, values)),
 				"",
 				values,
 			}, nil
 		}
 	}
+	detail := "declared values path(s): " + strings.Join(names, ", ")
+	if ownsAppVersion {
+		b, err := os.ReadFile(chartYAML)
+		if err != nil {
+			return Plan{}, fmt.Errorf("read %s: %w", chartYAML, err)
+		}
+		match := appVersionRE.FindStringSubmatch(string(b))
+		if match == nil {
+			return Plan{ActionRefuse, "chart declares no appVersion", current, values}, nil
+		}
+		if match[2] != current {
+			return Plan{
+				ActionRefuse,
+				fmt.Sprintf("appVersion %s does not match declared values path(s) %s", match[2], describePaths(names, values)),
+				current,
+				values,
+			}, nil
+		}
+		detail += " and appVersion"
+	}
 	if floating[current] {
 		return Plan{ActionRefuse, "image tag is floating (" + current + ")", current, values}, nil
 	}
-	return Plan{ActionValuesPaths, "declared values path(s): " + strings.Join(paths, ", "), current, values}, nil
+	return Plan{ActionValuesPaths, detail, current, values}, nil
 }
 
 // describePaths pairs each declared path with the value found there, for a
@@ -374,25 +400,177 @@ func describePaths(paths, values []string) string {
 	return strings.Join(parts, ", ")
 }
 
-// ApplyValuesPaths writes the released version to every path this deploy edge
-// named, and nothing else: appVersion and any other image in the chart are
-// left alone.
-func ApplyValuesPaths(root string, chart Entry, version string, paths []string) error {
-	_, valuesYAML := ChartFiles(root, chart.Path)
-	b, err := os.ReadFile(valuesYAML)
+// ApplyValuesPaths writes the released artifact version to every path this
+// deploy edge named and, when ownsAppVersion is true, to appVersion. Other
+// images in the chart are left alone.
+func ApplyValuesPaths(root string, chart Entry, version string, paths []string, files []ValuesFile, ownsAppVersion bool) error {
+	chartYAML, valuesYAML := ChartFiles(root, chart.Path)
+	specs, err := declaredValuesSpecs(root, chart, valuesYAML, paths, files)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", valuesYAML, err)
+		return err
 	}
-	lines := strings.Split(string(b), "\n")
-	for _, p := range paths {
-		line, _, err := resolveValuesPath(lines, p)
+	groups := groupDeclaredValuesSpecs(specs)
+	updates := make([]fileUpdate, 0, len(groups)+1)
+	for _, group := range groups {
+		b, err := os.ReadFile(group.path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", group.path, err)
+		}
+		lines := strings.Split(string(b), "\n")
+		for _, spec := range group.specs {
+			for _, path := range spec.paths {
+				line, _, err := resolveValuesPath(lines, path)
+				if err != nil {
+					return fmt.Errorf("%s: %w", group.path, err)
+				}
+				m := scalarValueRE.FindStringSubmatch(lines[line])
+				lines[line] = m[1] + scalarLike(lines[line][len(m[1]):], version) + m[3]
+			}
+		}
+		update, err := prepareFileUpdate(group.path, b, strings.Join(lines, "\n"))
 		if err != nil {
 			return err
 		}
-		m := scalarValueRE.FindStringSubmatch(lines[line])
-		lines[line] = m[1] + scalarLike(lines[line][len(m[1]):], version) + m[3]
+		updates = append(updates, update)
 	}
-	return writeFilePreservingMode(valuesYAML, strings.Join(lines, "\n"))
+	if !ownsAppVersion {
+		return commitFileUpdates(updates)
+	}
+
+	// Read and prepare both files before the first write. A missing or malformed
+	// Chart.yaml must not leave values.yaml moved on its own.
+	chartBytes, err := os.ReadFile(chartYAML)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", chartYAML, err)
+	}
+	chartText := string(chartBytes)
+	match := appVersionRE.FindStringSubmatch(chartText)
+	if match == nil {
+		return fmt.Errorf("appVersion not found in %s", chartYAML)
+	}
+	replaced := false
+	chartText = appVersionRE.ReplaceAllStringFunc(chartText, func(line string) string {
+		if replaced {
+			return line
+		}
+		replaced = true
+		groups := appVersionRE.FindStringSubmatch(line)
+		return groups[1] + scalarLike(line[len(groups[1]):], version) + groups[3]
+	})
+	chartUpdate, err := prepareFileUpdate(chartYAML, chartBytes, chartText)
+	if err != nil {
+		return err
+	}
+	updates = append([]fileUpdate{chartUpdate}, updates...)
+	return commitFileUpdates(updates)
+}
+
+type declaredValuesGroup struct {
+	path  string
+	specs []declaredValuesSpec
+}
+
+// groupDeclaredValuesSpecs ensures multiple declarations resolving to the
+// same file are applied to one buffer and committed as one file update.
+func groupDeclaredValuesSpecs(specs []declaredValuesSpec) []declaredValuesGroup {
+	var groups []declaredValuesGroup
+	groupIndex := make(map[string]int)
+	for _, spec := range specs {
+		index, ok := groupIndex[spec.path]
+		if !ok {
+			index = len(groups)
+			groupIndex[spec.path] = index
+			groups = append(groups, declaredValuesGroup{path: spec.path})
+		}
+		groups[index].specs = append(groups[index].specs, spec)
+	}
+	return groups
+}
+
+type fileUpdate struct {
+	path     string
+	original []byte
+	updated  []byte
+	mode     os.FileMode
+}
+
+func prepareFileUpdate(path string, original []byte, updated string) (fileUpdate, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileUpdate{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+	return fileUpdate{
+		path:     path,
+		original: append([]byte(nil), original...),
+		updated:  []byte(updated),
+		mode:     info.Mode().Perm(),
+	}, nil
+}
+
+type fileWriter func(path string, content []byte, mode os.FileMode) error
+
+// commitFileUpdates restores every attempted file if one write fails. This is
+// best-effort because the filesystem can also reject a rollback, in which case
+// the returned error reports both failures instead of hiding the partial state.
+func commitFileUpdates(updates []fileUpdate) error {
+	return commitFileUpdatesWith(updates, os.WriteFile)
+}
+
+func commitFileUpdatesWith(updates []fileUpdate, write fileWriter) error {
+	for i, update := range updates {
+		if err := write(update.path, update.updated, update.mode); err != nil {
+			var rollbackErrors []string
+			for j := i; j >= 0; j-- {
+				attempted := updates[j]
+				if rollbackErr := write(attempted.path, attempted.original, attempted.mode); rollbackErr != nil {
+					rollbackErrors = append(rollbackErrors, fmt.Sprintf("restore %s: %v", attempted.path, rollbackErr))
+				}
+			}
+			if len(rollbackErrors) > 0 {
+				return fmt.Errorf("write %s: %w; rollback failed: %s", update.path, err, strings.Join(rollbackErrors, "; "))
+			}
+			return fmt.Errorf("write %s: %w", update.path, err)
+		}
+	}
+	return nil
+}
+
+type declaredValuesSpec struct {
+	path  string
+	label string
+	paths []string
+}
+
+func declaredValuesSpecs(root string, chart Entry, valuesYAML string, paths []string, files []ValuesFile) ([]declaredValuesSpec, error) {
+	var specs []declaredValuesSpec
+	if len(paths) > 0 {
+		specs = append(specs, declaredValuesSpec{path: valuesYAML, paths: paths})
+	}
+	for _, file := range files {
+		clean := filepath.Clean(file.File)
+		if filepath.IsAbs(file.File) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("values file %q must be relative to the chart path", file.File)
+		}
+		if len(file.Paths) == 0 {
+			return nil, fmt.Errorf("values file %q declares no paths", file.File)
+		}
+		specs = append(specs, declaredValuesSpec{
+			path:  filepath.Join(root, chart.Path, clean),
+			label: filepath.ToSlash(clean),
+			paths: file.Paths,
+		})
+	}
+	if len(specs) == 0 {
+		return nil, fmt.Errorf("no declared values paths for chart %s", chart.ID)
+	}
+	return specs, nil
+}
+
+func valuesPathName(file, path string) string {
+	if file == "" {
+		return path
+	}
+	return file + ":" + path
 }
 
 // scalarLike renders version the way the value it replaces was written:

@@ -45,7 +45,7 @@ public class ClusterByIdReadsIntegrationTest extends IntegrationTest {
     private NvcaClusterRepository nvcaClusterRepository;
 
     @Test
-    void getAllClustersInAuthorizedAccount_returnsOwnedAuthorizedAndWildcardClusters() {
+    void getAllClustersInAuthorizedAccount_preservesLegacyPartitionSemantics() {
         // Prepare
         ClusterEntity owned = saveCluster("owner-a", Set.of("auth-a"));
         ClusterEntity authorized = saveCluster("owner-b", Set.of("auth-a"));
@@ -64,17 +64,15 @@ public class ClusterByIdReadsIntegrationTest extends IntegrationTest {
 
         // Assert
         Assertions.assertEquals(
-                Set.of(owned.getClusterId(), authorized.getClusterId(), wildcard.getClusterId()),
+                Set.of(owned.getClusterId(), authorized.getClusterId()),
                 toClusterIds(forAuthorizedAccount));
         Assertions.assertEquals(
-                Set.of(owned.getClusterId(), wildcard.getClusterId()),
+                Set.of(owned.getClusterId()),
                 toClusterIds(forOwnerAccount));
         Assertions.assertEquals(
                 Set.of(wildcard.getClusterId()),
                 toClusterIds(forWildcardKey));
-        Assertions.assertEquals(
-                Set.of(wildcard.getClusterId()),
-                toClusterIds(forUnrelatedAccount));
+        Assertions.assertTrue(forUnrelatedAccount.isEmpty());
         Assertions.assertFalse(
                 toClusterIds(forAuthorizedAccount).contains(unrelated.getClusterId()));
     }

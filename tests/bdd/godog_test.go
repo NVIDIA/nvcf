@@ -424,22 +424,11 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 // so the I copy / I update yaml chain has a real source file. The
 // fake runner is pre-loaded with canned JSON for the Helm release assertion.
 func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
-	const vanityInvokeScript = `IFS= read -r api_key || [ -n "$api_key" ]; exec curl --silent --show-error --fail-with-body --header "Authorization: Bearer ${api_key}" "$@"`
 	const selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
 	const selectedFunctionStatusJSON = `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`
-	vanityInvokeCommand := dsl.BuildCommand(
-		"/bin/sh", "-c", vanityInvokeScript, "vanity-gateway-request",
-		"--request", "POST",
-		"--header", "Host: vanity.localhost",
-		"--header", "Content-Type: application/json",
-		"--data", `{"message":"bdd-vanity-echo","repeats":1}`,
-		"--retry", "24",
-		"--retry-all-errors",
-		"--retry-delay", "5",
-		"--retry-max-time", "120",
-		"--max-time", "120",
-		"http://127.0.0.1:8080/bdd/echo",
-	)
+	const vanityInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" function invoke --vanity-host vanity.localhost --path /bdd/echo --timeout 120" +
+		" --request-body '{\"message\":\"bdd-vanity-echo\",\"repeats\":1}'"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NGC_API_KEY", "test-key")
@@ -525,9 +514,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("function invoke CLI command was never invoked")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
-		"curl --silent --show-error --fail-with-body",
-		"Host: vanity.localhost",
-		"http://127.0.0.1:8080/bdd/echo",
+		"function invoke",
+		"--vanity-host vanity.localhost",
+		"--path /bdd/echo",
 		"bdd-vanity-echo") {
 		t.Fatal("Vanity Gateway exact-host request was never invoked")
 	}
@@ -1446,7 +1435,6 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 
 	const (
-		grpcurlPreflightCommand = `/bin/sh -c 'command -v grpcurl >/dev/null'`
 		tlsHandshakeCommand     = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
 			`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
 			`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
@@ -1473,7 +1461,6 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local": {ExitCode: 1},
-		grpcurlPreflightCommand:     {ExitCode: 0},
 		"kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
 			Stdout:   "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071\n",
@@ -1562,9 +1549,6 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 		t.Fatal("plaintext WatchStargates rejection was not exercised")
 	}
 	runs := suite.Runner.(*fakeRunner).runs
-	if !commandRanExactly(runs, grpcurlPreflightCommand) {
-		t.Fatal("grpcurl availability was not checked before the live probes")
-	}
 	if !commandRanExactly(runs, invalidAuthorityCommand) {
 		t.Fatal("invalid registration authority was not rejected before installation")
 	}
@@ -2378,6 +2362,9 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregion(t *testing.T) {
 func TestMultiClusterHelmfileLLMRegistrationTLS(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
+	}
+	if err := harness.CheckExternalTools([]string{"grpcurl"}); err != nil {
+		t.Fatal(err)
 	}
 	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-tls.feature")
 }

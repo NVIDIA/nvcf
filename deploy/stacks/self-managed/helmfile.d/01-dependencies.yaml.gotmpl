@@ -125,7 +125,7 @@ releases:
     <<: *dependency
 
   - name: openbao-server # this name MUST not change
-    version: 0.32.4
+    version: 0.32.6
     condition: openbao.enabled # From defaults.yaml or env overrides
     namespace: vault-system
     <<: *dependency # Inherits base values from the dependency template
@@ -167,7 +167,7 @@ releases:
 {{- end }}
 
   - name: cassandra
-    version: 0.21.0
+    version: 0.21.3
     condition: cassandra.enabled # From defaults.yaml or env overrides
     namespace: cassandra-system
     <<: *dependency # Inherits base values from the dependency template
