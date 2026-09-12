@@ -21,10 +21,10 @@ metadata:
   name: nvca-operator
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.22.2
+    helm.sh/chart: helm-nvca-operator-1.28.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.5.2"
+    app.kubernetes.io/version: "3.8.0"
     app.kubernetes.io/managed-by: Helm
 spec:
   
@@ -85,7 +85,7 @@ spec:
         - name: AGENT_RESOURCES_B64
           value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiI0R2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMTAwbSIsIm1lbW9yeSI6IjIwME1pIn19"
         - name: WEBHOOK_RESOURCES_B64
-          value: "eyJsaW1pdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjIwME1pIn0sInJlcXVlc3RzIjp7ImNwdSI6IjUwbSIsIm1lbW9yeSI6IjUwTWkifX0="
+          value: "eyJsaW1pdHMiOnsibWVtb3J5IjoiMjAwTWkifSwicmVxdWVzdHMiOnsiY3B1IjoiNTAwbSIsIm1lbW9yeSI6IjUwTWkifX0="
         - name: GENERATE_IMAGE_PULL_SECRET
           value: "false"
         - name: ADDITIONAL_IMAGE_PULL_SECRETS_B64
@@ -127,10 +127,10 @@ spec:
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
           - --function-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4yLjEifQ=="
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC4yLjUifQ=="
           - --task-env-overrides-b64
-          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4yLjEifQ=="
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.5.2
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTYwLjAtbnYtMC4yLjUifQ=="
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.8.0
         imagePullPolicy: IfNotPresent
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -176,7 +176,7 @@ spec:
             cpu: "1000m"
             memory: "4Gi"
       - name: nvca-mirror
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.5.2
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.8.0
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000

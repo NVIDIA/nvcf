@@ -29,6 +29,7 @@ test:
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
 	@tests/notary-image-repository.sh
+	@tests/nvcf-ui-migrations-image-tag.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
