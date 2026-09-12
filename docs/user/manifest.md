@@ -183,6 +183,7 @@ The following tables list the complete artifact inventory.
 | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.1.1` | Required | Proxies admin token requests for stack services. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/admin-token-issuer-proxy) |
 | `cassandra` | `5.0.8-nv-2.0.1` | Required | Stores NVCF account, function, cluster, and service state. | `nvcr.io/nvidia/nvcf/cassandra:5.0.8-nv-2.0.1` | [Upstream](https://github.com/apache/cassandra) |
+| `cert-manager-acmesolver` | `v1.20.2` | Optional | Serves temporary ACME HTTP-01 domain-validation challenges. | `Publication pending` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-cainjector` | `v1.20.2` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-controller` | `v1.20.2` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |

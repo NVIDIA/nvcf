@@ -39,7 +39,7 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 	catalog := refreshCatalogFromArtifacts(inventory.Source.Version, artifacts, base)
-	retainIndependentManifestArtifacts(catalog)
+	retainIndependentManifestArtifacts(catalog, inventory, base)
 	if err := materializeMissingEffectiveStackPins(catalog, base, snapshot.Files); err != nil {
 		return nil, err
 	}
@@ -59,18 +59,6 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 
-	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
-		if !setArtifactVersionByNameAndType(catalog, name, ArtifactTypeResource, inventory.Source.Version) {
-			catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts, Artifact{
-				Name:     name,
-				Type:     ArtifactTypeResource,
-				Registry: defaultStackRegistry,
-				Version:  inventory.Source.Version,
-			})
-		}
-	}
-	// The source release advances all deployment bundles together. Their public
-	// publication status remains independently verified below.
 	retainCurrentPublications(catalog)
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
@@ -155,14 +143,22 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 	}
 }
 
-// retainIndependentManifestArtifacts keeps public add-ons that are documented
-// with the stack but are installed and versioned separately.
-func retainIndependentManifestArtifacts(catalog *Catalog) {
+// retainIndependentManifestArtifacts keeps public add-ons and artifacts from
+// deployment planes that are not owned by this inventory. Legacy aggregate
+// inventories still replace artifacts from every plane they contain.
+func retainIndependentManifestArtifacts(catalog *Catalog, inventory resolvedStackInventory, base *Catalog) {
 	denylist := catalog.DenylistMap()
-	referenced := make(map[string]struct{}, len(catalog.Manifest.Entries))
+	referenced := make(map[string]ManifestPlane, len(catalog.Manifest.Entries))
 	for _, entry := range catalog.Manifest.Entries {
 		if entry.ArtifactID != "" {
-			referenced[entry.ArtifactID] = struct{}{}
+			referenced[entry.ArtifactID] = entry.Plane
+		}
+	}
+	ownedPlanes := resolvedInventoryManifestPlanes(inventory)
+	independentArtifacts := make(map[string]struct{})
+	if base != nil {
+		for _, artifact := range base.SupplementalArtifacts {
+			independentArtifacts[artifact.catalogKey()] = struct{}{}
 		}
 	}
 	retained := catalog.SupplementalArtifacts[:0]
@@ -170,14 +166,34 @@ func retainIndependentManifestArtifacts(catalog *Catalog) {
 		if _, denied := denylist[artifact.Name]; denied {
 			continue
 		}
-		_, manifestArtifact := referenced[artifact.catalogKey()]
-		if artifact.Type != ArtifactTypeResource && !manifestArtifact {
-			continue
+		if artifact.Type != ArtifactTypeResource {
+			plane, manifestArtifact := referenced[artifact.catalogKey()]
+			if !manifestArtifact {
+				continue
+			}
+			if _, owned := ownedPlanes[plane]; owned {
+				if _, independent := independentArtifacts[artifact.catalogKey()]; !independent {
+					continue
+				}
+			}
 		}
 		artifact.Registry = publicRegistryForArtifactType(artifact.Type)
 		retained = append(retained, artifact)
 	}
 	catalog.SupplementalArtifacts = retained
+}
+
+func resolvedInventoryManifestPlanes(inventory resolvedStackInventory) map[ManifestPlane]struct{} {
+	planes := make(map[ManifestPlane]struct{})
+	for _, release := range inventory.Releases {
+		switch release.Plane {
+		case "control-plane", "observability":
+			planes[ManifestPlaneControl] = struct{}{}
+		case "compute-plane":
+			planes[ManifestPlaneCompute] = struct{}{}
+		}
+	}
+	return planes
 }
 
 // retainCurrentPublications keeps exact public availability records for the

@@ -36,44 +36,44 @@ var resolvedInventoryCommonOverrides = []string{
 }
 
 type resolvedInventoryState struct {
-	plane         string
-	path          string
-	baseOverrides []string
-	fullOverrides []string
+	Plane         string   `yaml:"plane"`
+	Path          string   `yaml:"path"`
+	BaseOverrides []string `yaml:"baseOverrides,omitempty"`
+	FullOverrides []string `yaml:"fullOverrides,omitempty"`
 }
 
-var resolvedInventoryStates = []resolvedInventoryState{
+var legacyResolvedInventoryStates = []resolvedInventoryState{
 	{
-		plane: "control-plane",
-		path:  "deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl",
-		fullOverrides: []string{
+		Plane: "control-plane",
+		Path:  "deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl",
+		FullOverrides: []string{
 			"addons.llm.enabled=true",
 		},
 	},
 	{
-		plane: "control-plane",
-		path:  "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
-		fullOverrides: []string{
+		Plane: "control-plane",
+		Path:  "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
+		FullOverrides: []string{
 			"addons.llm.enabled=true",
 			"addons.vanityGateway.enabled=true",
 			"addons.nvcfUi.enabled=true",
 		},
 	},
 	{
-		plane: "observability",
-		path:  "deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl",
+		Plane: "observability",
+		Path:  "deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl",
 	},
 	{
-		plane: "observability",
-		path:  "deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl",
-		baseOverrides: []string{
+		Plane: "observability",
+		Path:  "deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl",
+		BaseOverrides: []string{
 			"observability.profile=all",
 		},
 	},
 	{
-		plane: "compute-plane",
-		path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",
-		fullOverrides: []string{
+		Plane: "compute-plane",
+		Path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",
+		FullOverrides: []string{
 			"addons.kaiScheduler.enabled=true",
 			"addons.groveOperator.enabled=true",
 			"addons.dynamoOperator.enabled=true",
@@ -81,8 +81,8 @@ var resolvedInventoryStates = []resolvedInventoryState{
 		},
 	},
 	{
-		plane: "compute-plane",
-		path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
+		Plane: "compute-plane",
+		Path:  "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
 	},
 }
 
@@ -202,6 +202,7 @@ type resolvedInventoryConfig struct {
 	SchemaVersion            int                                     `yaml:"schemaVersion"`
 	PublishedChartRepository string                                  `yaml:"publishedChartRepository"`
 	SourceCharts             map[string]resolvedInventorySourceChart `yaml:"sourceCharts"`
+	States                   []resolvedInventoryState                `yaml:"states,omitempty"`
 }
 
 type resolvedInventorySourceChart struct {
@@ -273,11 +274,15 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	defer os.RemoveAll(tempRoot)
 
 	copiedRepoRoot := filepath.Join(tempRoot, "repo")
-	if err := copyResolvedInventoryInputs(repoRoot, copiedRepoRoot); err != nil {
+	config, err := loadResolvedInventoryConfig(repoRoot, configPath)
+	if err != nil {
 		return resolvedStackInventory{}, err
 	}
-	config, err := loadResolvedInventoryConfig(copiedRepoRoot, configPath)
-	if err != nil {
+	states := config.States
+	if len(states) == 0 {
+		states = legacyResolvedInventoryStates
+	}
+	if err := copyResolvedInventoryInputs(repoRoot, copiedRepoRoot, states); err != nil {
 		return resolvedStackInventory{}, err
 	}
 	env, renderSource, ngcAPIKey, err := prepareResolvedInventoryEnvironment(copiedRepoRoot)
@@ -294,16 +299,17 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 		return resolvedStackInventory{}, fmt.Errorf("authenticate release chart registry: %w", err)
 	}
 
-	planes := make(map[string]*resolvedInventoryPlaneInput, len(resolvedStackPlanes))
-	for _, name := range resolvedStackPlanes {
+	planeNames := resolvedInventoryPlaneNames(states)
+	planes := make(map[string]*resolvedInventoryPlaneInput, len(planeNames))
+	for _, name := range planeNames {
 		planes[name] = &resolvedInventoryPlaneInput{
 			Name:              name,
 			ManifestByRelease: map[string][]byte{},
 		}
 	}
 	usedSourceCharts := map[string]struct{}{}
-	for stateIndex, state := range resolvedInventoryStates {
-		stateFile := filepath.Join(copiedRepoRoot, filepath.FromSlash(state.path))
+	for stateIndex, state := range states {
+		stateFile := filepath.Join(copiedRepoRoot, filepath.FromSlash(state.Path))
 		releases, manifests, stateSourceCharts, err := collectResolvedInventoryState(
 			repoRoot,
 			copiedRepoRoot,
@@ -319,12 +325,12 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 			runner,
 		)
 		if err != nil {
-			return resolvedStackInventory{}, fmt.Errorf("collect %s: %w", state.path, err)
+			return resolvedStackInventory{}, fmt.Errorf("collect %s: %w", state.Path, err)
 		}
 		for _, chart := range stateSourceCharts {
 			usedSourceCharts[chart] = struct{}{}
 		}
-		plane := planes[state.plane]
+		plane := planes[state.Plane]
 		var existing []helmfileRelease
 		if len(plane.ReleaseList) != 0 {
 			existing, err = decodeHelmfileReleaseList(plane.ReleaseList)
@@ -339,7 +345,7 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 		}
 		for release, manifest := range manifests {
 			if _, exists := plane.ManifestByRelease[release]; exists {
-				return resolvedStackInventory{}, fmt.Errorf("duplicate %s release %s across Helmfile states", state.plane, release)
+				return resolvedStackInventory{}, fmt.Errorf("duplicate %s release %s across Helmfile states", state.Plane, release)
 			}
 			plane.ManifestByRelease[release] = manifest
 		}
@@ -350,15 +356,41 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 		}
 	}
 
-	inputs := make([]resolvedInventoryPlaneInput, 0, len(resolvedStackPlanes))
-	for _, name := range resolvedStackPlanes {
+	inputs := make([]resolvedInventoryPlaneInput, 0, len(planeNames))
+	for _, name := range planeNames {
 		inputs = append(inputs, *planes[name])
 	}
 	return generateResolvedStackInventory(source, inputs)
 }
 
-func copyResolvedInventoryInputs(repoRoot, copiedRepoRoot string) error {
-	for _, stack := range []string{"self-managed", "nvcf-compute-plane", "observability"} {
+func resolvedInventoryPlaneNames(states []resolvedInventoryState) []string {
+	seen := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		seen[state.Plane] = struct{}{}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func copyResolvedInventoryInputs(repoRoot, copiedRepoRoot string, states []resolvedInventoryState) error {
+	stacks := make(map[string]struct{})
+	for _, state := range states {
+		parts := strings.Split(filepath.ToSlash(state.Path), "/")
+		if len(parts) < 4 || parts[0] != "deploy" || parts[1] != "stacks" {
+			return fmt.Errorf("resolved inventory state path %s is outside deploy/stacks", state.Path)
+		}
+		stacks[parts[2]] = struct{}{}
+	}
+	stackNames := make([]string, 0, len(stacks))
+	for stack := range stacks {
+		stackNames = append(stackNames, stack)
+	}
+	sort.Strings(stackNames)
+	for _, stack := range stackNames {
 		source := filepath.Join(repoRoot, "deploy", "stacks", stack)
 		destination := filepath.Join(copiedRepoRoot, "deploy", "stacks", stack)
 		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
@@ -425,6 +457,27 @@ func loadResolvedInventoryConfig(repoRoot, configPath string) (resolvedInventory
 	}
 	if config.SchemaVersion != 1 {
 		return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory config schemaVersion is %d, want 1", config.SchemaVersion)
+	}
+	if len(config.States) > 0 {
+		seenStates := make(map[string]struct{}, len(config.States))
+		for index, state := range config.States {
+			if !isResolvedStackPlane(state.Plane) {
+				return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory state %d has unknown plane %q", index, state.Plane)
+			}
+			if !validResolvedInventoryRepoPath(state.Path) || !strings.HasSuffix(state.Path, ".yaml.gotmpl") {
+				return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory state %d has invalid Helmfile path %q", index, state.Path)
+			}
+			if _, exists := seenStates[state.Path]; exists {
+				return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory state path %s is duplicated", state.Path)
+			}
+			seenStates[state.Path] = struct{}{}
+			for _, override := range append(append([]string{}, state.BaseOverrides...), state.FullOverrides...) {
+				name, value, found := strings.Cut(override, "=")
+				if !found || !validResolvedInventoryRenderValueName(name) || value == "" || value != strings.TrimSpace(value) {
+					return resolvedInventoryConfig{}, fmt.Errorf("resolved inventory state %s has invalid override %q", state.Path, override)
+				}
+			}
+		}
 	}
 	repository := config.PublishedChartRepository
 	if repository == "" || repository != strings.TrimSpace(repository) || strings.HasSuffix(repository, "/") ||
@@ -632,8 +685,8 @@ func collectResolvedInventoryState(
 	ngcAPIKey string,
 	runner resolvedInventoryCommandRunner,
 ) ([]helmfileRelease, map[string][]byte, []string, error) {
-	baseOverrides := append(append([]string{}, resolvedInventoryCommonOverrides...), state.baseOverrides...)
-	fullOverrides := append(append([]string{}, baseOverrides...), state.fullOverrides...)
+	baseOverrides := append(append([]string{}, resolvedInventoryCommonOverrides...), state.BaseOverrides...)
+	fullOverrides := append(append([]string{}, baseOverrides...), state.FullOverrides...)
 	baseList, err := runResolvedInventoryHelmfile(runner, filepath.Dir(stateFile), env, stateFile, baseOverrides, "list", "--output", "json")
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("list default releases: %w", err)

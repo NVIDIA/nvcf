@@ -1764,7 +1764,7 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertIn("Render tagged inventory without publishing", workflow)
         self.assertIn("--generate-stack-inventory", workflow)
         self.assertIn(
-            '--inventory-config "${GITHUB_WORKSPACE}/deploy/stacks/self-managed/release-inventory.yaml"',
+            '--inventory-config "${RUNNER_TEMP}/inventory-source/deploy/stacks/self-managed/release-inventory.yaml"',
             workflow,
         )
         preflight = workflow.index("inventory-preflight:")

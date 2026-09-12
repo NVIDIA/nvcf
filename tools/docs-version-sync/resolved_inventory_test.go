@@ -68,6 +68,123 @@ metadata:
 	}
 }
 
+func TestExtractResolvedImagesFindsImageArguments(t *testing.T) {
+	manifest := []byte(`
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: registry.example.com/controller:v1.20.2
+          args:
+            - --acme-http01-solver-image=registry.example.com/acmesolver:v1.20.2
+            - --image-pull-policy=IfNotPresent
+            - --unrelated=value
+          command:
+            - controller
+            - --operator-image=registry.example.com/operator@sha256:abc123
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  annotations:
+    release-artifact-worker-image: registry.example.com/worker:2.7.1
+data:
+  example: --ignored-image=registry.example.com/not-an-argument:1.0.0
+`)
+
+	images, err := extractResolvedImages(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"registry.example.com/acmesolver:v1.20.2",
+		"registry.example.com/controller:v1.20.2",
+		"registry.example.com/operator@sha256:abc123",
+		"registry.example.com/worker:2.7.1",
+	}
+	if len(images) != len(want) {
+		t.Fatalf("got %d images, want %d: %+v", len(images), len(want), images)
+	}
+	for i, reference := range want {
+		if images[i].Reference != reference {
+			t.Fatalf("image %d reference = %q, want %q", i, images[i].Reference, reference)
+		}
+	}
+}
+
+func TestExtractResolvedImagesDeduplicatesImageArguments(t *testing.T) {
+	manifest := []byte(`
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: registry.example.com/acmesolver:v1.20.2
+          args:
+            - --acme-http01-solver-image=registry.example.com/acmesolver:v1.20.2
+            - --fallback-image=registry.example.com/acmesolver:v1.20.2
+`)
+
+	images, err := extractResolvedImages(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 || images[0].Reference != "registry.example.com/acmesolver:v1.20.2" {
+		t.Fatalf("unexpected images: %+v", images)
+	}
+}
+
+func TestExtractResolvedImagesRejectsUnresolvedImageArguments(t *testing.T) {
+	tests := []struct {
+		name      string
+		argument  string
+		wantError string
+	}{
+		{name: "empty", argument: "--solver-image=", wantError: "unresolved"},
+		{name: "placeholder", argument: "--solver-image=${registry}/solver:1.0.0", wantError: "unresolved"},
+		{name: "missing tag", argument: "--solver-image=registry.example.com/solver", wantError: "no tag or digest"},
+		{name: "latest tag", argument: "--solver-image=registry.example.com/solver:latest", wantError: "unresolved latest tag"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := []byte("apiVersion: v1\nkind: Pod\nspec:\n  containers:\n    - name: controller\n      args:\n        - " + test.argument + "\n")
+			_, err := extractResolvedImages(manifest)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) || !strings.Contains(err.Error(), "image argument") {
+				t.Fatalf("got error %v, want image argument error containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestResolvedImageArgumentRequiresCompleteImageFlag(t *testing.T) {
+	tests := []struct {
+		value string
+		want  string
+		ok    bool
+	}{
+		{value: "--acme-http01-solver-image=registry.example.com/acmesolver:v1.20.2", want: "registry.example.com/acmesolver:v1.20.2", ok: true},
+		{value: "--operator_v2-image=registry.example.com/operator:1.0.0", want: "registry.example.com/operator:1.0.0", ok: true},
+		{value: "--operator.image=registry.example.com/operator:1.0.0", ok: false},
+		{value: "--image=registry.example.com/operator:1.0.0"},
+		{value: "--solver-image", ok: false},
+		{value: "prefix --solver-image=registry.example.com/solver:1.0.0", ok: false},
+		{value: "--image-pull-policy=IfNotPresent", ok: false},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			got, ok := resolvedImageArgument(test.value)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("resolvedImageArgument(%q) = %q, %t; want %q, %t", test.value, got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
 func TestGenerateResolvedStackInventoryIsDeterministic(t *testing.T) {
 	inputs := resolvedInventoryTestInputs(t)
 	first, err := generateResolvedStackInventory(resolvedInventoryTestSource(), inputs)

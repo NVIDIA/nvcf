@@ -24,16 +24,17 @@ next `deploy/stacks/self-managed/vX.Y.Z` tag and GitHub Release. Chart pin and
 Helmfile changes in that subtree should use a release-worthy commit type. No
 maintainer normally creates the stack tag by hand.
 
-The tag workflow renders the control-plane, compute-plane, and observability
-stacks from the same tagged commit. It attaches the resolved chart and image
+The tag workflow renders the states owned by the self-managed distributable.
+That currently includes the control plane and the shared observability state
+used by its observability profile. It excludes the independently released
+compute-plane stack. The workflow attaches the resolved chart and image
 inventory before publishing the GitHub Release. Public artifact publishing is
 a separate process and can happen later after QA.
 
-Changes limited to `deploy/stacks/nvcf-compute-plane/` or
-`deploy/stacks/observability/` create releases for those registered subprojects.
-The documentation sync still follows the next self-managed stack release that
-contains those commits because the self-managed release owns the combined
-inventory asset.
+Changes limited to `deploy/stacks/nvcf-compute-plane/` or the standalone
+`deploy/stacks/observability/` stack create releases for those registered
+subprojects. Their independently owned inventories and aggregate documentation
+sync are tracked separately from this self-managed flow.
 
 ## Sync after an automatic stack release
 
@@ -49,7 +50,7 @@ The command selects the latest stable self-managed stack release unless
 
 - `docs/version-catalog/main.yaml`
 - Generated blocks configured by the catalog under `docs/user/`
-- The control-plane, compute-plane, and observability bundle versions
+- The self-managed bundle version
 
 The update retains publication records only when `name`, `type`, and `version`
 still match. New and changed versions without a matching record are added to
@@ -99,19 +100,24 @@ A publication-only update does not require a new stack release.
 
 ## Add an artifact to the stack inventory
 
-For a chart or image deployed by a stack:
+For the complete dependency workflow, including ownership, optionality, and
+indirect images, see
+[`deploy/stacks/INVENTORY.md`](../../deploy/stacks/INVENTORY.md).
+
+For a chart or image deployed by the self-managed stack:
 
 1. Add it to the owning Helmfile or chart values.
 2. Confirm the inventory renderer includes the path:
    - A default release in an existing state is discovered automatically.
    - For a release behind a new optional setting, add that setting to the
-     matching `fullOverrides` entry in `resolved_inventory_publish.go`.
-   - For a new Helmfile state, add the state to `resolvedInventoryStates`.
+     matching `fullOverrides` entry in
+     [`release-inventory.yaml`](../../deploy/stacks/self-managed/release-inventory.yaml).
+   - For a new Helmfile state, add a `states` entry in that file.
    - If an independently released chart must be rendered from its immutable
      GitHub tag, add it to
      [`release-inventory.yaml`](../../deploy/stacks/self-managed/release-inventory.yaml).
 3. Merge the release-worthy change to `main`. Release automation creates the
-   corresponding registered stack release.
+   self-managed stack release.
 4. Run the documentation sync after a self-managed stack release containing
    the change appears with its inventory asset.
 5. Add a `manifest.entries` record for the new artifact.
