@@ -2595,11 +2595,15 @@ func assertNetworkPolicyOmitsTCPPort(t *testing.T, policyYAML, policyName string
 
 	for _, ingressRule := range policy.Spec.Ingress {
 		for _, networkPolicyPort := range ingressRule.Ports {
-			if networkPolicyPort.Port == nil || networkPolicyPort.Protocol == nil {
+			if networkPolicyPort.Port == nil {
 				continue
 			}
+			protocol := corev1.ProtocolTCP
+			if networkPolicyPort.Protocol != nil {
+				protocol = *networkPolicyPort.Protocol
+			}
 			assert.Falsef(t,
-				*networkPolicyPort.Port == port && *networkPolicyPort.Protocol == corev1.ProtocolTCP,
+				*networkPolicyPort.Port == port && protocol == corev1.ProtocolTCP,
 				"%s should not explicitly declare TCP port %q", policyName, port.String(),
 			)
 		}

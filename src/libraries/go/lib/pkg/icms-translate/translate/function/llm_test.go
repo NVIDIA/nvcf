@@ -47,6 +47,7 @@ func assertCanonicalPylonBootstrapArgs(t *testing.T, args []string) {
 	assert.Equal(t, []string{"--initial-input-tps=100"}, initialInputTPSArgs)
 }
 
+// healthPathArgs extracts the upstream health-path flags from Pylon arguments.
 func healthPathArgs(args []string) []string {
 	var healthPaths []string
 	for _, arg := range args {
