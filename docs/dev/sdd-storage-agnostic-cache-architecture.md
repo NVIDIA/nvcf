@@ -138,11 +138,13 @@ retried instead of leaving the namespace Terminating.
 Every reader is a static PV pre-bound to a claim by name. The PV is a copy of
 the writer's PV with: `storageClassName` cleared (a pre-bound pair whose classes
 differ never binds), `csi.readOnly: true` (access modes are not enforced at
-mount time), and `mountOptions` resolved per provisioner from the
-`nvca-cache-mount-options` ConfigMap. The catalog's `readerMountOptions` is the
-intended source for those options and is validated, but no reader code reads it
-yet. Only the volume handle differs by driver: NVMesh rewrites the namespace
-segment; every other driver reuses the writer's handle unchanged.
+mount time), and `mountOptions` taken from the request's persisted selection,
+which carries the catalog's `readerMountOptions`. Operator-configured options
+are appended unless they negate a required one (`rw` against `ro`). A request
+with no durable selection falls back to the per-provisioner
+`nvca-cache-mount-options` ConfigMap, so in-flight legacy requests keep their
+behavior. Only the volume handle differs by driver: NVMesh rewrites the
+namespace segment; every other driver reuses the writer's handle unchanged.
 
 A reader claim that names only a StorageClass gets a new empty volume from a
 dynamic provisioner. It binds, the pod starts, and the model is missing. That
