@@ -179,6 +179,7 @@ public class ByocMessageGenerator {
                 .ncaId(instanceRequest.getNcaId())
                 .functionId(instanceRequest.getFunctionId())
                 .functionVersionId(instanceRequest.getFunctionVersionId())
+                .taskId(instanceRequest.getTaskId())
                 .deploymentId(instanceRequest.getDeploymentId())
                 .gpuSpecificationId(instanceRequest.getGpuSpecificationId())
                 .build();
