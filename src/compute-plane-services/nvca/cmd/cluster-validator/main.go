@@ -72,8 +72,32 @@ func main() {
 			clustervalidator.SummaryConfigMapNamespaceEnv)
 	}
 
-	if err := clustervalidator.Run(ctx, client, configNS, configName, summaryNS, emitMetrics); err != nil {
+	// VALIDATOR_ROLE selects which check set runs: "control-plane" enables
+	// gateway and StorageClass checks and skips GPU/SMB; anything else (including
+	// unset) runs the compute-plane check set (backward-compatible default).
+	roleEnv := os.Getenv("VALIDATOR_ROLE")
+	role, roleKnown := parseRole(roleEnv)
+	if roleEnv != "" && !roleKnown {
+		log.Warnf("VALIDATOR_ROLE=%q is not recognized; defaulting to compute-plane", roleEnv)
+	}
+
+	if err := clustervalidator.Run(ctx, client, configNS, configName, summaryNS, emitMetrics, role); err != nil {
 		log.WithError(err).Fatal("Cluster validation failed")
+	}
+}
+
+// parseRole normalizes the VALIDATOR_ROLE env value. Returns the matching
+// clustervalidator.Role constant and true for "control-plane" or
+// "compute-plane"; returns the compute-plane default and false for any other
+// value so unknown inputs are safe.
+func parseRole(v string) (clustervalidator.Role, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case string(clustervalidator.RoleControlPlane):
+		return clustervalidator.RoleControlPlane, true
+	case string(clustervalidator.RoleComputePlane):
+		return clustervalidator.RoleComputePlane, true
+	default:
+		return clustervalidator.RoleComputePlane, false
 	}
 }
 

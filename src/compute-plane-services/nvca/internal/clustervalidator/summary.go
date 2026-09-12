@@ -151,6 +151,17 @@ const (
 	CheckKeyGPUOperator            = "gpu_operator"
 	CheckKeyConfigurableNetpol     = "configurable_netpol"
 	CheckKeyNetpolEnforcement      = "netpol_enforcement"
+	// Control-plane-specific check keys. Only written to the summary when the
+	// check ran (nil pointer = check was skipped for this role).
+	CheckKeyDefaultStorageClass = "default_storage_class"
+	CheckKeyGatewayAPICRDs      = "gateway_api_crds"
+	CheckKeyEnvoyGateway        = "envoy_gateway"
+	CheckKeyGatewayRoutes       = "gateway_routes"
+	CheckKeyExternalLB          = "external_lb"
+	CheckKeyNodeToNode          = "node_to_node"
+	// HA readiness checks (CP Resilience SDD).
+	CheckKeyTier1Deployments  = "tier1_deployments"
+	CheckKeyTier2StatefulSets = "tier2_statefulsets"
 )
 
 // AllCheckKeys is the canonical ordering used for documentation and
@@ -160,12 +171,22 @@ var AllCheckKeys = []string{
 	CheckKeyWorkerNodesAllReady,
 	CheckKeyWebhooks,
 	CheckKeyNetworkPoliciesSupport,
+	// Compute-plane checks.
 	CheckKeySMBCSI,
 	CheckKeyEndpointReachability,
 	CheckKeyGPUResources,
 	CheckKeyGPUOperator,
 	CheckKeyConfigurableNetpol,
 	CheckKeyNetpolEnforcement,
+	// Control-plane checks (only present in summary when the role ran them).
+	CheckKeyDefaultStorageClass,
+	CheckKeyGatewayAPICRDs,
+	CheckKeyEnvoyGateway,
+	CheckKeyGatewayRoutes,
+	CheckKeyExternalLB,
+	CheckKeyNodeToNode,
+	CheckKeyTier1Deployments,
+	CheckKeyTier2StatefulSets,
 }
 
 // buildSummary projects a ValidationState into the wire format. Checks
@@ -203,6 +224,32 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 	}
 	if state.EnforcementOK != nil {
 		s.Checks[CheckKeyNetpolEnforcement] = *state.EnforcementOK
+	}
+	// Control-plane checks are only written when the check ran (non-nil pointer).
+	// A nil pointer means the check was skipped because the role was compute-plane.
+	if state.DefaultStorageClassOK != nil {
+		s.Checks[CheckKeyDefaultStorageClass] = *state.DefaultStorageClassOK
+	}
+	if state.GatewayAPICRDsOK != nil {
+		s.Checks[CheckKeyGatewayAPICRDs] = *state.GatewayAPICRDsOK
+	}
+	if state.EnvoyGatewayOK != nil {
+		s.Checks[CheckKeyEnvoyGateway] = *state.EnvoyGatewayOK
+	}
+	if state.GatewayRoutesOK != nil {
+		s.Checks[CheckKeyGatewayRoutes] = *state.GatewayRoutesOK
+	}
+	if state.ExternalLBOK != nil {
+		s.Checks[CheckKeyExternalLB] = *state.ExternalLBOK
+	}
+	if state.NodeToNodeOK != nil {
+		s.Checks[CheckKeyNodeToNode] = *state.NodeToNodeOK
+	}
+	if state.Tier1DeploymentsOK != nil {
+		s.Checks[CheckKeyTier1Deployments] = *state.Tier1DeploymentsOK
+	}
+	if state.Tier2StatefulSetsOK != nil {
+		s.Checks[CheckKeyTier2StatefulSets] = *state.Tier2StatefulSetsOK
 	}
 
 	if len(state.EndpointResults) > 0 {
