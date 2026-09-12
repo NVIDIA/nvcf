@@ -125,6 +125,7 @@ release_needs_csv() {
     paste -sd, -
 }
 
+# assert_equal fails the test when actual and expected values differ.
 assert_equal() {
   local actual="$1"
   local expected="$2"
@@ -134,6 +135,7 @@ assert_equal() {
     fail "$description: expected '$expected', got '$actual'"
 }
 
+# assert_yaml_value verifies that a yq expression resolves to the expected value.
 assert_yaml_value() {
   local file="$1"
   local expression="$2"
