@@ -55,6 +55,7 @@ chart_map=(
     "nvca-operator            nvca-operator/nvca-operator"
     "openbao                  openbao/helm"
     "ratelimiter              ratelimiter/nvcf-ratelimiter"
+    "state-metrics            state-metrics"
     "vanity-gateway           vanity-gateway/helm-nvcf-vanity-gateway"
 )
 
