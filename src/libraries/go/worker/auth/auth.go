@@ -28,6 +28,7 @@ import (
 
 type allowInsecureOauthTokenSource struct {
 	oauth.TokenSource
+	requireTLS bool
 }
 
 func (ts allowInsecureOauthTokenSource) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
@@ -40,13 +41,19 @@ func (ts allowInsecureOauthTokenSource) GetRequestMetadata(context.Context, ...s
 	}, nil
 }
 
+// RequireTransportSecurity is false for legacy NVCF-issued tokens, which may travel over
+// in-cluster plaintext, and true for a mounted projected ServiceAccount token, which must
+// only be presented over TLS.
 func (ts allowInsecureOauthTokenSource) RequireTransportSecurity() bool {
-	return false
+	return ts.requireTLS
 }
 
-func GrpcTokenFromSource(ts oauth2.TokenSource) grpc.CallOption {
+// GrpcTokenFromSource attaches ts as per-RPC bearer credentials. requireTLS must be true
+// when ts serves a mounted projected ServiceAccount token.
+func GrpcTokenFromSource(ts oauth2.TokenSource, requireTLS bool) grpc.CallOption {
 	return grpc.PerRPCCredentials(allowInsecureOauthTokenSource{
-		oauth.TokenSource{TokenSource: ts},
+		TokenSource: oauth.TokenSource{TokenSource: ts},
+		requireTLS:  requireTLS,
 	})
 }
 

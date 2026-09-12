@@ -424,7 +424,7 @@ func TestStreamingClientFlushNoStreamer(t *testing.T) {
 	fqdn := startMock(t, srv)
 	c := newClientForMock(t, fqdn)
 
-	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider)
+	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider, false)
 	// No streamer created yet; Flush -> Close should be a clean no-op.
 	require.NoError(t, sc.Flush())
 }
@@ -434,7 +434,7 @@ func TestStreamingClientSendAndFlush(t *testing.T) {
 	fqdn := startMock(t, srv)
 	c := newClientForMock(t, fqdn)
 
-	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider)
+	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider, false)
 
 	var progress uint32
 	req := &pb.ResultMetadataRequest{
@@ -463,7 +463,7 @@ func TestStreamingClientClearOldStreamer(t *testing.T) {
 	fqdn := startMock(t, srv)
 	c := newClientForMock(t, fqdn)
 
-	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider)
+	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider, false)
 
 	var progress uint32
 	req := &pb.ResultMetadataRequest{
@@ -494,7 +494,7 @@ func TestStreamingClientSendResultServerError(t *testing.T) {
 	fqdn := startMock(t, srv)
 	c := newClientForMock(t, fqdn)
 
-	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider)
+	sc := NewStreamingClient(context.Background(), c.Client, c.NvctTokenProvider, false)
 
 	var progress uint32
 	req := &pb.ResultMetadataRequest{
