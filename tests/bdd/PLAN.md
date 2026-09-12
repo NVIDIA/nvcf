@@ -112,6 +112,17 @@ refactor in every consumer; that is a feature.
 | `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
 | `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
 
+### Kubernetes manifests (Given / When)
+
+The Given keeps every manifest field visible in the feature file. The When
+hides only the repeated `kubectl --context <ctx> apply -f <file>` mechanics
+and the target contexts stay visible as table rows.
+
+| Step | Notes |
+|------|-------|
+| `Given Kubernetes manifest {string} is:` (YAML docstring) | Stores the raw docstring under the visible name in scenario state. The name must be non-empty and declared at most once per scenario. No interpolation, validation, or I/O happens here, so the manifest may reference an env var that a later step exports. |
+| `When I successfully apply Kubernetes manifest {string} using contexts:` (table) | Requires a `context` header and one or more contexts. Interpolates `${VAR}` in the named manifest at apply time, writes the rendered body once to a file under the run's `out/<run-id>/` directory, and runs one explicit-context `kubectl apply -f <file>` per row in order. Each apply must exit 0 and is recorded like any successful command. Failures name the row, manifest, and context. The rendered file is a run artifact, not a ledger-backed working-tree path. |
+
 ### Command execution (When)
 
 | Step | Notes |
@@ -195,6 +206,7 @@ original order. Repeated options and empty values are preserved.
 | `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
+| `Then these Kubernetes workloads should complete rollout using context {string} within {string}:` (table) | Requires `kind`, `name`, and `namespace` headers. Runs one explicit-context `kubectl rollout status <kind>/<name>` per row in order with the shared context and timeout. The kind is lowercased and passed through without an allowlist, so Deployment, StatefulSet, and DaemonSet rows all work. Failures name the row, kind, name, and namespace without printing command output. Prefer this over a raw `kubectl rollout status` command step. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
 | `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |

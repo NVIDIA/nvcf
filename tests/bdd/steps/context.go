@@ -43,13 +43,17 @@ import (
 // or an explicit "the command exit code should be 0" assertion uses it to seed
 // the suite-level CommandCache so a subsequent "Given command has succeeded:"
 // for the same resolved text hits the cache instead of rerunning a destructive
-// command.
+// command. Manifests holds the raw docstrings declared by "Kubernetes
+// manifest ... is:" keyed by their visible name; ${VAR} interpolation is
+// deferred to the apply step so a manifest may reference values exported
+// later in the scenario.
 type ScenarioContext struct {
 	Suite         *harness.Suite
 	LastResult    harness.Result
 	LastErr       error
 	LastCommand   string
 	NVCFCLIConfig string
+	Manifests     map[string]string
 }
 
 // NewScenarioContext wraps suite in a fresh per-scenario state. The
@@ -67,6 +71,7 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		sc.LastErr = nil
 		sc.LastCommand = ""
 		sc.NVCFCLIConfig = ""
+		sc.Manifests = nil
 		return c, nil
 	})
 	// Godog's default pretty formatter buffers the scenario block until
@@ -94,6 +99,7 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		return c, nil
 	})
 	registerFileSteps(ctx, sc)
+	registerManifestSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
 	registerRegistrationSteps(ctx, sc)

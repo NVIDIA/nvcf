@@ -67,6 +67,18 @@ logic into `dsl/`.
   `I substitute a block`)
   snapshot the destination through `Suite.Ledger` before the first write.
   Suite teardown restores every snapshotted path.
+- `CommandRunner` tokenizes command text with shlex and execs the argv
+  directly. There is no shell, so heredocs, pipes, and redirections only
+  work inside an explicit `/bin/bash -c '...'` wrapper. Apply inline YAML
+  through `Kubernetes manifest ... is:` plus `I successfully apply
+  Kubernetes manifest ... using contexts:` instead of `kubectl apply -f -`
+  with a heredoc.
+- `Kubernetes manifest ... is:` stores the raw docstring in
+  `ScenarioContext.Manifests`; the apply step interpolates `${VAR}` and
+  writes the rendered body under `out/<run-id>/` before each
+  explicit-context `kubectl apply`. Declare manifests with the scenario's
+  Givens even when they reference an env var exported later, and never
+  interpolate at declaration time.
 - `Given command has succeeded:` keys on the fully resolved command
   text. Two scenarios whose pre-interpolation text matches but whose
   env vars differ must miss the cache. The cache lives in

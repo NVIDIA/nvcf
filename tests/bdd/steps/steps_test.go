@@ -412,6 +412,105 @@ func TestIWriteYAMLFileRejectsExistingFile(t *testing.T) {
 	}
 }
 
+// TestKubernetesManifestAppliesInterpolatedBodyPerContext verifies that the
+// Given stores the raw docstring, that ${VAR} expands at apply time rather
+// than declaration time, and that one explicit-context apply runs per row
+// against the same rendered file under OutDir.
+func TestKubernetesManifestAppliesInterpolatedBodyPerContext(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	sc.Suite.Config.OutDir = filepath.Join(sc.Suite.Config.RepoRoot, "out", "run")
+	fake.result = harness.Result{ExitCode: 0}
+	doc := &godog.DocString{Content: "apiVersion: v1\nkind: Endpoints\nsubsets:\n  - addresses:\n      - ip: ${BDD_ALIAS_IP}\n"}
+	if err := sc.kubernetesManifestIs("region-b-watch", doc); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	// Exported after the declaration, as the feature does with CONTROL_PLANE_IP.
+	t.Setenv("BDD_ALIAS_IP", "192.0.2.10")
+
+	table := docTable(t, [][]string{{"context"}, {"k3d-ncp-local-cp"}, {"k3d-ncp-local-compute-1"}})
+	if err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "region-b-watch", table); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+	var path string
+	for index, wantContext := range []string{"k3d-ncp-local-cp", "k3d-ncp-local-compute-1"} {
+		prefix := "kubectl --context " + wantContext + " apply -f "
+		if !strings.HasPrefix(fake.runs[index].command, prefix) {
+			t.Fatalf("command %d = %q, want prefix %q", index+1, fake.runs[index].command, prefix)
+		}
+		got := strings.TrimPrefix(fake.runs[index].command, prefix)
+		if path == "" {
+			path = got
+		} else if got != path {
+			t.Fatalf("second apply used %q, want the same file %q", got, path)
+		}
+	}
+	if !strings.HasPrefix(path, sc.Suite.Config.OutDir) {
+		t.Fatalf("manifest %q was not written under OutDir %q", path, sc.Suite.Config.OutDir)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if !strings.Contains(string(body), "ip: 192.0.2.10") {
+		t.Fatalf("manifest body was not interpolated at apply time:\n%s", body)
+	}
+	if sc.LastResult.ExitCode != 0 || sc.LastCommand != fake.runs[1].command {
+		t.Fatalf("last result not recorded: %+v %q", sc.LastResult, sc.LastCommand)
+	}
+}
+
+func TestKubernetesManifestIsRejectsEmptyAndDuplicateDeclarations(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	if err := sc.kubernetesManifestIs("", &godog.DocString{Content: "kind: Service\n"}); err == nil {
+		t.Fatal("expected empty name error")
+	}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "  \n"}); err == nil {
+		t.Fatal("expected empty body error")
+	}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Service\n"}); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Endpoints\n"})
+	if err == nil || !strings.Contains(err.Error(), "already declared") {
+		t.Fatalf("err = %v, want already-declared error", err)
+	}
+}
+
+func TestISuccessfullyApplyKubernetesManifestRejectsUndeclaredNameAndBadTable(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{{"context"}, {"k3d-ncp-local-cp"}})
+	err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "missing", table)
+	if err == nil || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("err = %v, want not-declared error", err)
+	}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Service\n"}); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	badHeader := docTable(t, [][]string{{"cluster"}, {"k3d-ncp-local-cp"}})
+	if err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "alias", badHeader); err == nil {
+		t.Fatal("expected header error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before validation passes", len(fake.runs))
+	}
+}
+
+func TestISuccessfullyApplyKubernetesManifestNamesFailingContext(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.runResults = []harness.Result{{ExitCode: 0}, {ExitCode: 1}}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Service\n"}); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	table := docTable(t, [][]string{{"context"}, {"k3d-ncp-local-cp"}, {"k3d-ncp-local-compute-1"}})
+	err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "alias", table)
+	if err == nil || !strings.Contains(err.Error(), "row 2") || !strings.Contains(err.Error(), "k3d-ncp-local-compute-1") {
+		t.Fatalf("err = %v, want row 2 compute context failure", err)
+	}
+}
+
 func TestISubstituteBlockReplacesAndRestoresFile(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	rel := "global.yaml.gotmpl"
@@ -1114,6 +1213,61 @@ func TestDNSNameShouldResolveFailureNamesTargetWithoutResolverOutput(t *testing.
 	}
 	if strings.Contains(err.Error(), secretOutput) {
 		t.Fatalf("error leaked resolver output: %v", err)
+	}
+}
+
+func TestKubernetesWorkloadsShouldCompleteRolloutRunsExplicitWaits(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"kind", "name", "namespace"},
+		{"StatefulSet", "llm-request-router-region-b", "nvcf"},
+		{"Deployment", "llm-request-router-region-b-backend-router", "nvcf"},
+	})
+
+	if err := sc.kubernetesWorkloadsShouldCompleteRollout(context.Background(), "k3d-ncp-local-cp", "10m", table); err != nil {
+		t.Fatalf("wait for workload rollouts: %v", err)
+	}
+	want := []string{
+		"kubectl rollout status statefulset/llm-request-router-region-b -n nvcf --context k3d-ncp-local-cp --timeout=10m",
+		"kubectl rollout status deployment/llm-request-router-region-b-backend-router -n nvcf --context k3d-ncp-local-cp --timeout=10m",
+	}
+	if len(fake.runs) != len(want) {
+		t.Fatalf("runs = %d, want %d", len(fake.runs), len(want))
+	}
+	for index, run := range fake.runs {
+		if run.command != want[index] {
+			t.Fatalf("command %d = %q, want %q", index+1, run.command, want[index])
+		}
+	}
+}
+
+func TestKubernetesWorkloadsShouldCompleteRolloutNamesFailingRow(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 1}
+	table := docTable(t, [][]string{
+		{"kind", "name", "namespace"},
+		{"StatefulSet", "llm-request-router-region-b", "nvcf"},
+	})
+
+	err := sc.kubernetesWorkloadsShouldCompleteRollout(context.Background(), "k3d-ncp-local-cp", "10m", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), `StatefulSet "llm-request-router-region-b"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubernetesWorkloadsShouldCompleteRolloutRejectsWrongHeaders(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"kind", "namespace", "name"},
+		{"StatefulSet", "nvcf", "llm-request-router-region-b"},
+	})
+
+	if err := sc.kubernetesWorkloadsShouldCompleteRollout(context.Background(), "k3d-ncp-local-cp", "10m", table); err == nil {
+		t.Fatal("expected header order error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
 	}
 }
 

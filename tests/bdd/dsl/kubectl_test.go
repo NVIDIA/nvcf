@@ -114,6 +114,38 @@ func TestKubernetesDeploymentRolloutCommandBuildsExplicitWait(t *testing.T) {
 	}
 }
 
+func TestKubernetesWorkloadRolloutCommandLowercasesKind(t *testing.T) {
+	t.Setenv("BDD_ROUTER_NAME", "llm-request-router-region-b")
+	got, err := KubernetesWorkloadRolloutCommand(
+		KubernetesWorkload{Kind: "StatefulSet", Name: "${BDD_ROUTER_NAME}", Namespace: "nvcf"},
+		"k3d-ncp-local-cp",
+		"10m",
+	)
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl rollout status statefulset/llm-request-router-region-b -n nvcf --context k3d-ncp-local-cp --timeout=10m"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestKubernetesWorkloadRolloutCommandRejectsMissingInputs(t *testing.T) {
+	cases := map[string]KubernetesWorkload{
+		"kind":      {Name: "router", Namespace: "nvcf"},
+		"name":      {Kind: "StatefulSet", Namespace: "nvcf"},
+		"namespace": {Kind: "StatefulSet", Name: "router"},
+	}
+	for missing, workload := range cases {
+		if _, err := KubernetesWorkloadRolloutCommand(workload, "k3d-ncp-local-cp", "10m"); err == nil {
+			t.Fatalf("expected empty %s error", missing)
+		}
+	}
+	if _, err := KubernetesWorkloadRolloutCommand(KubernetesWorkload{Kind: "Deployment", Name: "router", Namespace: "nvcf"}, "", "10m"); err == nil {
+		t.Fatal("expected empty context error")
+	}
+}
+
 func TestNVCFBackendAgentStatusCommandBuildsExplicitWait(t *testing.T) {
 	t.Setenv("BDD_BACKEND_NAME", "ncp-local-compute-1")
 	got, err := NVCFBackendAgentStatusCommand("${BDD_BACKEND_NAME}", "nvca-operator", "k3d-ncp-local-compute-1", "healthy", "10m")
