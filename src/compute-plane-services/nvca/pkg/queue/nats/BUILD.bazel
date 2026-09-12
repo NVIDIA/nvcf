@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "client.go",
         "client_psat.go",
+        "conn_options.go",
         "host.go",
         "nats.go",
     ],
@@ -33,8 +34,12 @@ alias(
 go_test(
     name = "nats_test",
     srcs = [
+        "client_broken_consumer_test.go",
         "client_psat_test.go",
         "client_test.go",
+        "conn_auth_abort_test.go",
+        "conn_handlers_test.go",
+        "conn_options_test.go",
         "host_test.go",
     ],
     embed = [":nats"],

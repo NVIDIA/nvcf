@@ -1313,6 +1313,11 @@ func (a *Agent) Start(ctx context.Context) error {
 	log.WithField("maintenance_mode", a.MaintenanceMode).Infof("Initializing queue manager")
 	metrics := nvcametrics.FromContext(ctx)
 
+	// Publishes NATS connection transitions as metrics. With liveness no longer
+	// restarting the pod on a queue outage, nvca_nats_connection_state is the
+	// signal that something is wrong, so it has to be wired on both auth paths.
+	natsObserver := newNATSConnectionObserver(metrics)
+
 	var queueClient queue.Client
 	if a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.SelfHosted) {
 		// PSAT/SPIRE paths share the same projected-token file at
@@ -1329,7 +1334,7 @@ func (a *Agent) Start(ctx context.Context) error {
 				log.WithError(ferr).Error("Failed to construct projected-token fetcher for NATS")
 				return fmt.Errorf("construct projected-token fetcher: %w", ferr)
 			}
-			queueClient, err = natsqueue.NewClientWithTokenFetcherURLAndHostOverride(ctx, a.NATSURL, a.NATSHostOverride, a.ClusterID, psatFetcher)
+			queueClient, err = natsqueue.NewClientWithTokenFetcherURLAndHostOverride(ctx, a.NATSURL, a.NATSHostOverride, a.ClusterID, psatFetcher, natsObserver)
 			if err != nil {
 				log.WithError(err).Error("Failed to create NATS queue client")
 				return fmt.Errorf("create NATS queue client: %w", err)
@@ -1381,7 +1386,7 @@ func (a *Agent) Start(ctx context.Context) error {
 			if a.natsSecretsFetcher == nil {
 				return fmt.Errorf("nats secrets fetcher not available")
 			}
-			queueClient, err = natsqueue.NewClientWithURLAndHostOverride(ctx, a.NATSURL, a.NATSHostOverride, a.ClusterID, a.natsSecretsFetcher)
+			queueClient, err = natsqueue.NewClientWithURLAndHostOverride(ctx, a.NATSURL, a.NATSHostOverride, a.ClusterID, a.natsSecretsFetcher, natsObserver)
 			if err != nil {
 				log.WithError(err).Error("Failed to create NATS queue client")
 				return fmt.Errorf("create NATS queue client: %w", err)
@@ -1390,6 +1395,12 @@ func (a *Agent) Start(ctx context.Context) error {
 	} else {
 		queueClient = newQueueClient(a.AgentOptions.EndpointURL)
 	}
+
+	// Captured before instrumentation below, which replaces queueClient with a
+	// wrapper. Asserting after that point would silently find no connection
+	// state whenever client metrics are on, and liveness would fall back to
+	// restarting on poll failures. Nil for SQS, which has no connection.
+	queueConn, _ := queueClient.(connectionStateProvider)
 
 	// Instrument the queue client through the shared recorder. NewQueueClient
 	// returns the client unchanged when the recorder is nil, so this is a no-op
@@ -1420,7 +1431,20 @@ func (a *Agent) Start(ctx context.Context) error {
 		a.MaintenanceMode,
 		metrics,
 	)
-	a.livenessCheckGetter.AddChecker(a.queueManager)
+	// Liveness sees the connection, not the polls. A queue that cannot be
+	// polled has to stop the backend taking work, which readiness below does,
+	// but restarting on it would restart every NVCA in the fleet during a queue
+	// outage and discard an in-progress reconnect. Only a connection closed for
+	// good justifies the restart, since nats.go never reopens one.
+	a.livenessCheckGetter.AddChecker(NewQueueLiveness(a.queueManager, queueConn))
+
+	// Also gate readiness on the queue, so /healthz cannot report the backend
+	// healthy before anything is consuming the creation queue (nvcf#1590).
+	// Registered here rather than passed to NewBackendStatusCache above because
+	// the queue manager does not exist until after the startup health gate has
+	// already run against that cache; adding a not-ready-by-construction
+	// component to it would stall startup instead of gating readiness.
+	a.backendHealthCache.AddGetter(ctx, a.queueManager)
 
 	// If GracefulNoGPU is enabled and we started without GPUs, pause the queue manager
 	// and set up callbacks to handle GPU availability changes
