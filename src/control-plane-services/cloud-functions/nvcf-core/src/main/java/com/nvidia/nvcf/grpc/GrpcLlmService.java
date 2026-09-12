@@ -106,6 +106,12 @@ public class GrpcLlmService extends LlmGatewayImplBase {
             if (llmConfig != null && llmConfig.getTokenRateLimit() != null) {
                 modelSpecBuilder.setTokenRateLimit(llmConfig.getTokenRateLimit());
             }
+            if (llmConfig != null && llmConfig.getInputTokenRateLimit() != null) {
+                modelSpecBuilder.setInputTokenRateLimit(llmConfig.getInputTokenRateLimit());
+            }
+            if (llmConfig != null && llmConfig.getOutputTokenRateLimit() != null) {
+                modelSpecBuilder.setOutputTokenRateLimit(llmConfig.getOutputTokenRateLimit());
+            }
             if (llmConfig != null && llmConfig.getTokenizer() != null) {
                 modelSpecBuilder.setTokenizer(llmConfig.getTokenizer());
             }

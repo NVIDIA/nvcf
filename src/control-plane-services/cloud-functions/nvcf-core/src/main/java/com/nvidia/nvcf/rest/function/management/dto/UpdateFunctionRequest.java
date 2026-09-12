@@ -72,7 +72,8 @@ public record UpdateFunctionRequest(
         LlmInvocationConfigDto llmInvocationConfig) {
 
     private static final String MESG_MODEL_CONFIG_UPDATE_REQUIRED =
-            "Invalid request: at least one of 'tokenRateLimit' or 'routingMethod' must be specified";
+            "Invalid request: at least one of 'tokenRateLimit', 'routingMethod', "
+                    + "'inputTokenRateLimit', or 'outputTokenRateLimit' must be specified";
     private static final String MESG_DUPLICATE_MODEL_UPDATES =
             "Invalid request: duplicate model names are not allowed in 'modelUpdates'";
     private static final String MESG_FUNCTION_UPDATE_REQUIRED =
@@ -104,7 +105,17 @@ public record UpdateFunctionRequest(
             @Nullable
             @Schema(description = "Updated routing method for the model. " +
                     "When omitted, the existing value is preserved.")
-            String routingMethod) {
+            String routingMethod,
+
+            @Nullable
+            @Schema(description = "Updated input (prompt) token-level rate limit for the model. " +
+                    "When omitted, the existing value is preserved.")
+            String inputTokenRateLimit,
+
+            @Nullable
+            @Schema(description = "Updated output (completion) token-level rate limit for the model. " +
+                    "When omitted, the existing value is preserved.")
+            String outputTokenRateLimit) {
     }
 
     @Constraint(validatedBy = ValidUpdateFunctionRequestValidator.class)
@@ -148,7 +159,10 @@ public record UpdateFunctionRequest(
             for (var modelUpdate : modelUpdates) {
                 var llmConfig = modelUpdate.llmConfig();
                 if (llmConfig == null
-                        || (llmConfig.tokenRateLimit() == null && llmConfig.routingMethod() == null)) {
+                        || (llmConfig.tokenRateLimit() == null
+                                && llmConfig.routingMethod() == null
+                                && llmConfig.inputTokenRateLimit() == null
+                                && llmConfig.outputTokenRateLimit() == null)) {
                     return violation(context, MESG_MODEL_CONFIG_UPDATE_REQUIRED);
                 }
             }

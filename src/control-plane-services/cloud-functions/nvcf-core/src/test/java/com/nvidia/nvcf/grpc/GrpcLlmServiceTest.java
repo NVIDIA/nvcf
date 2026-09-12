@@ -150,6 +150,26 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
     }
 
     @Test
+    void authLlmInvocation_inputOutputTokenRateLimits() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-8b-instruct",
+                List.of("/v1/chat/completions"), "1-M", null, null, "3-M,10-D", "2-M,5-D");
+
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        var modelSpec = response.getModelSpecsMap().get("meta/llama-3.1-8b-instruct");
+        assertThat(modelSpec.hasInputTokenRateLimit()).isTrue();
+        assertThat(modelSpec.getInputTokenRateLimit()).isEqualTo("3-M,10-D");
+        assertThat(modelSpec.hasOutputTokenRateLimit()).isTrue();
+        assertThat(modelSpec.getOutputTokenRateLimit()).isEqualTo("2-M,5-D");
+    }
+
+    @Test
     void authLlmInvocation_publicFunction() {
         setFunctionActive(TEST_PUBLIC_FUNCTION_ID_1, TEST_PUBLIC_FUNCTION_VERSION_ID_1);
         var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");

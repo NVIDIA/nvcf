@@ -33,18 +33,24 @@ public final class LlmConfigValidator {
             "groq-multiregion",
             "pulsar-multiregion");
 
-    // Comma-separated '<positiveInteger>-<unit>' entries, no unit repeated.
+    // Comma-separated '<positiveInteger>-<unit>' entries, no unit repeated. "M(?!O)" keeps
+    // Minute and Month disjoint in both directions: the initial capture won't let "M" match
+    // the first letter of a later "MO", and the trailing (?!O) on the backreference stops a
+    // duplicate-check false positive where an earlier "M" backreferences into a later "MO"'s
+    // leading "M".
     private static final Pattern TOKEN_RATE_LIMIT_PATTERN = Pattern.compile(
-            "^(?!.*-([SMHDW]).*-\\1)[1-9]\\d*-[SMHDW](,\\s*[1-9]\\d*-[SMHDW])*$");
+            "^(?!.*-(MO|M(?!O)|S|H|D|W).*-\\1(?!O))"
+                    + "[1-9]\\d*-(?:MO|M(?!O)|S|H|D|W)"
+                    + "(,\\s*[1-9]\\d*-(?:MO|M(?!O)|S|H|D|W))*$");
 
     private static final String MESG_INVALID_ROUTING_METHOD =
             "Invalid request: 'llmConfig.routingMethod' for model '%s' is invalid; supported "
                     + "values are [power-of-two, wait-and-widen, round-robin, random, pulsar, "
                     + "pulsar-wait-and-widen, groq-multiregion, pulsar-multiregion]";
     private static final String MESG_INVALID_TOKEN_RATE_LIMIT =
-            "Invalid request: 'llmConfig.tokenRateLimit' for model '%s' is invalid; expected "
-                    + "comma-separated '<positiveInteger>-<unit>' entries with unit in [S, M, H, D, W] "
-                    + "(for example '100000-S' or '10-M,5-S')";
+            "Invalid request: 'llmConfig.%s' for model '%s' is invalid; expected "
+                    + "comma-separated '<positiveInteger>-<unit>' entries with unit in "
+                    + "[S, M, H, D, W, MO] (for example '100000-S' or '10-M,5-S')";
 
     /** Rejects a routingMethod that is not one of the supported router algorithms. */
     public static void validateRoutingMethod(String modelName, @Nullable String routingMethod) {
@@ -62,11 +68,28 @@ public final class LlmConfigValidator {
 
     /** Rejects a tokenRateLimit that is not '<positiveInteger>-<unit>' fragments. */
     public static void validateTokenRateLimit(String modelName, @Nullable String tokenRateLimit) {
-        if (StringUtils.isBlank(tokenRateLimit)) {
+        validateTokenRateLimitField(modelName, "tokenRateLimit", tokenRateLimit);
+    }
+
+    /** Rejects an inputTokenRateLimit that is not '<positiveInteger>-<unit>' fragments. */
+    public static void validateInputTokenRateLimit(
+            String modelName, @Nullable String inputTokenRateLimit) {
+        validateTokenRateLimitField(modelName, "inputTokenRateLimit", inputTokenRateLimit);
+    }
+
+    /** Rejects an outputTokenRateLimit that is not '<positiveInteger>-<unit>' fragments. */
+    public static void validateOutputTokenRateLimit(
+            String modelName, @Nullable String outputTokenRateLimit) {
+        validateTokenRateLimitField(modelName, "outputTokenRateLimit", outputTokenRateLimit);
+    }
+
+    private static void validateTokenRateLimitField(
+            String modelName, String fieldName, @Nullable String value) {
+        if (StringUtils.isBlank(value)) {
             return;
         }
-        if (!TOKEN_RATE_LIMIT_PATTERN.matcher(tokenRateLimit).matches()) {
-            var mesg = MESG_INVALID_TOKEN_RATE_LIMIT.formatted(modelName);
+        if (!TOKEN_RATE_LIMIT_PATTERN.matcher(value).matches()) {
+            var mesg = MESG_INVALID_TOKEN_RATE_LIMIT.formatted(fieldName, modelName);
             log.error(mesg);
             throw new BadRequestException(mesg);
         }

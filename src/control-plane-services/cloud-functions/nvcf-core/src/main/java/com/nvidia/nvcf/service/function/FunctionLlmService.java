@@ -407,6 +407,16 @@ public class FunctionLlmService {
                             modelUpdate.modelName(), llmConfigUpdate.routingMethod());
                     llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
                 }
+                if (llmConfigUpdate.inputTokenRateLimit() != null) {
+                    LlmConfigValidator.validateInputTokenRateLimit(
+                            modelUpdate.modelName(), llmConfigUpdate.inputTokenRateLimit());
+                    llmConfig.setInputTokenRateLimit(llmConfigUpdate.inputTokenRateLimit());
+                }
+                if (llmConfigUpdate.outputTokenRateLimit() != null) {
+                    LlmConfigValidator.validateOutputTokenRateLimit(
+                            modelUpdate.modelName(), llmConfigUpdate.outputTokenRateLimit());
+                    llmConfig.setOutputTokenRateLimit(llmConfigUpdate.outputTokenRateLimit());
+                }
                 updated = true;
                 break;
             }

@@ -43,6 +43,8 @@ message AuthLlmInvokeResponse {
         optional string tokenRateLimit = 2;
         optional string tokenizer = 3;
         optional string routingMethod = 4;
+        optional string inputTokenRateLimit = 5;
+        optional string outputTokenRateLimit = 6;
     }
 }
 

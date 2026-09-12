@@ -301,11 +301,25 @@ public class BaseFunctionInvocationTest {
                                                   String tokenRateLimit,
                                                   @Nullable String tokenizer,
                                                   @Nullable String routingMethod) {
+        return saveFunctionModel(functionVersionId, modelName, uris, tokenRateLimit, tokenizer,
+                                 routingMethod, null, null);
+    }
+
+    protected FunctionModelDto saveFunctionModel(UUID functionVersionId,
+                                                  String modelName,
+                                                  List<String> uris,
+                                                  String tokenRateLimit,
+                                                  @Nullable String tokenizer,
+                                                  @Nullable String routingMethod,
+                                                  @Nullable String inputTokenRateLimit,
+                                                  @Nullable String outputTokenRateLimit) {
         var llmConfig = FunctionModelDto.LlmConfigDto.builder()
                 .uris(uris)
                 .tokenRateLimit(tokenRateLimit)
                 .tokenizer(tokenizer)
                 .routingMethod(routingMethod)
+                .inputTokenRateLimit(inputTokenRateLimit)
+                .outputTokenRateLimit(outputTokenRateLimit)
                 .build();
         var dto = FunctionModelDto.builder()
                 .name(modelName)

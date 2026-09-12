@@ -345,6 +345,10 @@ public class CreateFunctionRequest {
                             model.getName(), model.getLlmConfig().getRoutingMethod());
                     LlmConfigValidator.validateTokenRateLimit(
                             model.getName(), model.getLlmConfig().getTokenRateLimit());
+                    LlmConfigValidator.validateInputTokenRateLimit(
+                            model.getName(), model.getLlmConfig().getInputTokenRateLimit());
+                    LlmConfigValidator.validateOutputTokenRateLimit(
+                            model.getName(), model.getLlmConfig().getOutputTokenRateLimit());
                 }
                 if (!isLlmFunction && (model.getVersion() == null || model.getUri() == null)) {
                     log.error(MESG_NON_LLM_MODEL_VERSION_URI_REQUIRED);

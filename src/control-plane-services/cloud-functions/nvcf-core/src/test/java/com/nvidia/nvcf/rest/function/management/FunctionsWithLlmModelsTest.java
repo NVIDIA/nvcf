@@ -642,6 +642,109 @@ class FunctionsWithLlmModelsTest {
     }
 
     @Test
+    void shouldRejectCreateWithInvalidInputTokenRateLimit() {
+        var createToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_REGISTER_FUNCTION), 100);
+        var model = llmModelWithInputOutput("1-M", "round-robin", "20-X", null);
+        var createRequest = CreateFunctionRequest.builder()
+                .name(TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli())
+                .containerImage(TEST_NGC_CONTAINER_IMAGE)
+                .inferenceUrl(TEST_INFERENCE_URL)
+                .inferencePort(TEST_INFERENCE_PORT)
+                .functionType(FunctionTypeEnum.LLM)
+                .models(List.of(model))
+                .build();
+        var createEntity = RequestEntity.post(URI.create("/v2/nvcf/functions"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + createToken)
+                .body(createRequest);
+
+        var response = testRestTemplate.exchange(createEntity, String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("llmConfig.inputTokenRateLimit");
+    }
+
+    @Test
+    void shouldRejectCreateWithInvalidOutputTokenRateLimit() {
+        var createToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_REGISTER_FUNCTION), 100);
+        var model = llmModelWithInputOutput("1-M", "round-robin", null, "20-X");
+        var createRequest = CreateFunctionRequest.builder()
+                .name(TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli())
+                .containerImage(TEST_NGC_CONTAINER_IMAGE)
+                .inferenceUrl(TEST_INFERENCE_URL)
+                .inferencePort(TEST_INFERENCE_PORT)
+                .functionType(FunctionTypeEnum.LLM)
+                .models(List.of(model))
+                .build();
+        var createEntity = RequestEntity.post(URI.create("/v2/nvcf/functions"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + createToken)
+                .body(createRequest);
+
+        var response = testRestTemplate.exchange(createEntity, String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("llmConfig.outputTokenRateLimit");
+    }
+
+    @Test
+    void shouldCreateAndUpdateInputOutputTokenRateLimits() {
+        var createToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_REGISTER_FUNCTION), 100);
+        var model = llmModelWithInputOutput("1-M", "round-robin", "3-M", "2-M");
+        var createRequest = CreateFunctionRequest.builder()
+                .name(TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli())
+                .containerImage(TEST_NGC_CONTAINER_IMAGE)
+                .inferenceUrl(TEST_INFERENCE_URL)
+                .inferencePort(TEST_INFERENCE_PORT)
+                .functionType(FunctionTypeEnum.LLM)
+                .models(List.of(model))
+                .build();
+        var createEntity = RequestEntity.post(URI.create("/v2/nvcf/functions"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + createToken)
+                .body(createRequest);
+        var createResponse = testRestTemplate.exchange(createEntity, CreateFunctionResponse.class);
+
+        assertThat(createResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var createdFunction = createResponse.getBody().function();
+        var createdConfig = createdFunction.models().getFirst().getLlmConfig();
+        assertThat(createdConfig.getInputTokenRateLimit()).isEqualTo("3-M");
+        assertThat(createdConfig.getOutputTokenRateLimit()).isEqualTo("2-M");
+
+        var updateToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_UPDATE_FUNCTION), 100);
+        var updateRequest = UpdateFunctionRequest.builder()
+                .modelUpdates(List.of(UpdateFunctionRequest.ModelUpdateDto.builder()
+                        .modelName(TEST_LLM_MODEL_NAME)
+                        .llmConfig(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
+                                .inputTokenRateLimit("9-M")
+                                .outputTokenRateLimit("4-M")
+                                .build())
+                        .build()))
+                .build();
+        var updateEntity = RequestEntity.put(URI.create("/v2/nvcf/functions/" + createdFunction.id()
+                                                        + "/versions/" + createdFunction.versionId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + updateToken)
+                .body(updateRequest);
+        var updateResponse = testRestTemplate.exchange(updateEntity, FunctionResponse.class);
+
+        assertThat(updateResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var updatedConfig = updateResponse.getBody().function().models().getFirst().getLlmConfig();
+        assertThat(updatedConfig.getInputTokenRateLimit()).isEqualTo("9-M");
+        assertThat(updatedConfig.getOutputTokenRateLimit()).isEqualTo("4-M");
+
+        var stored = functionLookupService.lookupUsingVersionIdOrThrow(createdFunction.versionId());
+        var storedConfig = functionMapperService.toFunctionModels(stored.getModelSpecs())
+                .getFirst().getLlmConfig();
+        assertThat(storedConfig.getInputTokenRateLimit()).isEqualTo("9-M");
+        assertThat(storedConfig.getOutputTokenRateLimit()).isEqualTo("4-M");
+    }
+
+    @Test
     void shouldRejectUpdateWithInvalidRoutingMethod() {
         var functionName = TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli();
         var function = createInitialLlmFunction(functionName, "1-M", "round-robin");
@@ -722,6 +825,25 @@ class FunctionsWithLlmModelsTest {
                         .tokenRateLimit(tokenRateLimit)
                         .tokenizer(tokenizer)
                         .routingMethod(routingMethod)
+                        .build())
+                .build();
+    }
+
+    private static FunctionModelDto llmModelWithInputOutput(String tokenRateLimit,
+                                                             String routingMethod,
+                                                             String inputTokenRateLimit,
+                                                             String outputTokenRateLimit) {
+        return FunctionModelDto.builder()
+                .name(TEST_LLM_MODEL_NAME)
+                .version("1.0")
+                .uri(URI.create(TEST_MODEL_URL_1))
+                .llmConfig(FunctionModelDto.LlmConfigDto.builder()
+                        .uris(List.of("/v1/chat/completions", "/v1/responses"))
+                        .tokenRateLimit(tokenRateLimit)
+                        .tokenizer("meta-llama-tokenizer")
+                        .routingMethod(routingMethod)
+                        .inputTokenRateLimit(inputTokenRateLimit)
+                        .outputTokenRateLimit(outputTokenRateLimit)
                         .build())
                 .build();
     }

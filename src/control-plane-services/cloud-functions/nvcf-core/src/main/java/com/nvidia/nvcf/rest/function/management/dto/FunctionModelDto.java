@@ -70,6 +70,14 @@ public class FunctionModelDto {
         @Nullable
         private String tokenRateLimit;
 
+        @Schema(description = "Input (prompt) token-level rate limit for this model.")
+        @Nullable
+        private String inputTokenRateLimit;
+
+        @Schema(description = "Output (completion) token-level rate limit for this model.")
+        @Nullable
+        private String outputTokenRateLimit;
+
         @Schema(description = "Tokenizer identifier for this model.")
         @Nullable
         private String tokenizer;
@@ -82,6 +90,8 @@ public class FunctionModelDto {
         public boolean hasContent() {
             return (uris != null && !uris.isEmpty())
                     || tokenRateLimit != null
+                    || inputTokenRateLimit != null
+                    || outputTokenRateLimit != null
                     || tokenizer != null
                     || routingMethod != null;
         }
