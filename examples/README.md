@@ -21,6 +21,7 @@ Functions are long-running services that respond to HTTP or gRPC invocations.
 | [Ray Serve Helm Chart](function-samples/helmchart-samples/ray-serve-sample/) | Helm chart that deploys a Ray Serve application as an NVCF function. |
 | [Dynamo Operator Sample](function-samples/helmchart-samples/dynamo-operator-sample/) | Helm chart for a vLLM disaggregated router deployed through NVCF. |
 | [Load Tester Supreme](function-samples/load-tester-supreme/) | HTTP and gRPC echo servers designed for load and throughput testing. |
+| [OpenAI-compatible](function-samples/openai-compatible-sample/) | Controllable OpenAI-compatible LLM endpoint target for SDK and load testing. |
 
 ## Task Samples
 
