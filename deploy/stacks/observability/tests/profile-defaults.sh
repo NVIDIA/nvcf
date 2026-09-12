@@ -49,6 +49,7 @@ profile_release_json() {
   cat "$output_file"
 }
 
+# profile_releases_csv returns the sorted release names enabled for an observability profile.
 profile_releases_csv() {
   local profile="$1"
   shift
@@ -75,6 +76,7 @@ render_monitors() {
     template --output-dir "$output_dir" >/dev/null
 }
 
+# monitor_targets_csv returns the sorted monitor kinds and names rendered in an output directory.
 monitor_targets_csv() {
   local output_dir="$1"
   local file
