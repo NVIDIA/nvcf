@@ -300,6 +300,12 @@ async fn relay_direction(acceptor: quinn::Connection, initiator: quinn::Connecti
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
+            biased;
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = result {
+                    warn!(%error, "stream relay task failed");
+                }
+            }
             bi = acceptor.accept_bi() => {
                 spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream,
                     "accept_bi failed in relay", "bi-stream relay error");
@@ -323,6 +329,11 @@ async fn relay_direction_until_shutdown(
         tokio::select! {
             biased;
             _ = drain.changed() => break,
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = result {
+                    warn!(%error, "draining stream relay task failed");
+                }
+            }
             bi = acceptor.accept_bi() => {
                 spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream_until_delivered,
                     "accept_bi failed in draining relay", "draining bi-stream relay error");

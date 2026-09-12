@@ -143,6 +143,7 @@ impl StargateMetrics {
 
     pub fn new_with_prefix(prefix: &str) -> anyhow::Result<Arc<Self>> {
         let metrics = Arc::new(Self::register(prefix)?);
+        metrics.requests_total(None, "", "", "404").inc_by(0);
         for outcome in stargate_tls::TlsReloadOutcome::ALL {
             metrics
                 .tls_reloads_total
