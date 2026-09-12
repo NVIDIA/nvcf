@@ -1436,15 +1436,20 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	}
 	// Boolean and collection values must be emitted as native YAML
 	// types so Helm evaluates them correctly (string "false" is truthy
-	// in Go templates).
-	for _, unwanted := range []string{
-		`enabled: "true"`,
-		`enabled: "false"`,
-		`create: "false"`,
-		`remoteWatchUrls: "[]"`,
+	// in Go templates). MatchYAMLSubtree compares parsed values, so a
+	// missing key, a quoted "false", or a "[]" string all fail here.
+	for _, typed := range []struct {
+		key  string
+		want string
+	}{
+		{key: "llmRequestRouter.backendRouter.enabled", want: "true"},
+		{key: "llmRequestRouter.serviceAccount.create", want: "false"},
+		{key: "llmRequestRouter.pki.enabled", want: "false"},
+		{key: "llmRequestRouter.certificate.enabled", want: "false"},
+		{key: "llmRequestRouter.discovery.remoteWatchUrls", want: "[]"},
 	} {
-		if strings.Contains(string(regionBValues), unwanted) {
-			t.Fatalf("region-b-values.yaml has quoted %s:\n%s", unwanted, regionBValues)
+		if err := dsl.MatchYAMLSubtree(regionBValuesPath, typed.key, typed.want, dsl.MatchExact); err != nil {
+			t.Fatalf("region-b-values.yaml %s is not the native value %s: %v\n%s", typed.key, typed.want, err, regionBValues)
 		}
 	}
 
@@ -2591,6 +2596,9 @@ func commandRanExactly(runs []string, want string) bool {
 	return false
 }
 
+// commandRanThatContainsAll reports whether a single recorded command
+// contains every needle. Matching within one command, rather than across
+// the whole recording, ties related arguments to the same invocation.
 func commandRanThatContainsAll(runs []string, needles ...string) bool {
 	for _, run := range runs {
 		matched := true
@@ -2629,6 +2637,8 @@ func appliedManifestBodies(t *testing.T, runs []string, kubeContext string) []st
 	return bodies
 }
 
+// assertFileContains fails the test unless the file at path contains every
+// needle. It is used to check handoff artifacts written by file steps.
 func assertFileContains(t *testing.T, path string, needles ...string) {
 	t.Helper()
 	content, err := os.ReadFile(path)
