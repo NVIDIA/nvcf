@@ -116,7 +116,10 @@ pub struct BackendSummary {
     pub request_count: usize,
     pub success_count: usize,
     pub input_tokens: u64,
+    /// Requested output tokens from the workload.
     pub output_tokens: u64,
+    #[serde(default)]
+    pub observed_output_tokens: Option<u64>,
     pub avg_ttlt_ms: Option<f64>,
     pub p95_ttlt_ms: Option<u64>,
     pub cache_hit_rate: Option<f64>,
@@ -180,6 +183,7 @@ pub fn summarize_with_topology(
 struct SummaryAccumulator {
     successes: usize,
     successful_output_tokens: u64,
+    unmeasured_successes: usize,
     share_totals: [u64; 3],
     run_window_ms: Option<(u64, u64)>,
     ttft: Vec<u64>,
@@ -196,6 +200,8 @@ struct GroupAccumulator {
     success_count: usize,
     input_tokens: u64,
     output_tokens: u64,
+    observed_output_tokens: u64,
+    missing_output_usage: usize,
     successful_output_tokens: u64,
     ttlt: Vec<u64>,
     observed_cache: usize,
@@ -226,7 +232,8 @@ impl SummaryAccumulator {
 
         if result.ok {
             self.successes += 1;
-            self.successful_output_tokens += result.output_tokens;
+            self.successful_output_tokens += result.observed_output_tokens.unwrap_or_default();
+            self.unmeasured_successes += usize::from(result.observed_output_tokens.is_none());
         } else {
             let failure = (
                 result.status_code,
@@ -243,7 +250,8 @@ impl SummaryAccumulator {
         *input_tokens = input_tokens.saturating_add(result.input_tokens);
         if result.ok {
             *requests = requests.saturating_add(1);
-            *output_tokens = output_tokens.saturating_add(result.output_tokens);
+            *output_tokens =
+                output_tokens.saturating_add(result.observed_output_tokens.unwrap_or_default());
         }
         let cluster_id = topology
             .backend_cluster_ids
@@ -271,10 +279,14 @@ impl SummaryAccumulator {
         let total_length_ms = self
             .run_window_ms
             .map_or(0, |(first, last)| last.saturating_sub(first));
-        let (backend_request_shares, backend_input_token_shares, backend_output_token_shares) =
+        let (backend_request_shares, backend_input_token_shares, mut backend_output_token_shares) =
             group_shares(&self.backends, self.share_totals);
-        let (cluster_request_shares, cluster_input_token_shares, cluster_output_token_shares) =
+        let (cluster_request_shares, cluster_input_token_shares, mut cluster_output_token_shares) =
             group_shares(&self.clusters, self.share_totals);
+        if self.unmeasured_successes > 0 {
+            backend_output_token_shares.clear();
+            cluster_output_token_shares.clear();
+        }
         let observed_input_tokens =
             self.cache.reused_input_tokens + self.cache.uncached_input_tokens;
         self.cache.hit_rate = ratio(self.cache.hit_count, self.cache.observed_request_count);
@@ -291,10 +303,9 @@ impl SummaryAccumulator {
             request_count,
             success_rate: ratio(self.successes, request_count).unwrap_or_default(),
             successful_requests_per_second: per_second(self.successes as u64, total_length_ms),
-            successful_output_tokens_per_second: per_second(
-                self.successful_output_tokens,
-                total_length_ms,
-            ),
+            successful_output_tokens_per_second: (self.unmeasured_successes == 0)
+                .then(|| per_second(self.successful_output_tokens, total_length_ms))
+                .flatten(),
             avg_ttft_ms: average(&self.ttft),
             p50_ttft_ms: percentile(&self.ttft, 0.50),
             p95_ttft_ms: percentile(&self.ttft, 0.95),
@@ -362,8 +373,10 @@ impl GroupAccumulator {
         self.success_count += usize::from(result.ok);
         self.input_tokens += result.input_tokens;
         self.output_tokens += result.output_tokens;
+        self.observed_output_tokens += result.observed_output_tokens.unwrap_or_default();
+        self.missing_output_usage += usize::from(result.observed_output_tokens.is_none());
         if result.ok {
-            self.successful_output_tokens += result.output_tokens;
+            self.successful_output_tokens += result.observed_output_tokens.unwrap_or_default();
         }
         self.ttlt.push(result.completion_ms);
         self.observed_cache += usize::from(result.kv_cache_hit.is_some());
@@ -379,6 +392,8 @@ impl GroupAccumulator {
             success_count: self.success_count,
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
+            observed_output_tokens: (self.missing_output_usage == 0)
+                .then_some(self.observed_output_tokens),
             avg_ttlt_ms: average(&self.ttlt),
             p95_ttlt_ms: percentile(&self.ttlt, 0.95),
             cache_hit_rate: ratio(self.cache_hits, self.observed_cache),
@@ -672,6 +687,7 @@ mod tests {
             cache_affinity_key: None,
             input_tokens: 1,
             output_tokens: 1,
+            observed_output_tokens: Some(1),
             scheduled_offset_ms: 0,
             status_code: 200,
             selected_backend_id: Some(backend.to_string()),
@@ -696,6 +712,7 @@ mod tests {
     ) -> RequestResult {
         result.input_tokens = input_tokens;
         result.output_tokens = output_tokens;
+        result.observed_output_tokens = Some(output_tokens);
         result
     }
 
@@ -734,6 +751,40 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn output_throughput_and_shares_use_observed_usage_instead_of_requested_tokens() {
+        let mut a = result("a", 10, 100);
+        let mut b = result("b", 10, 100);
+        a.output_tokens = 100;
+        b.output_tokens = 100;
+        a.observed_output_tokens = Some(2);
+        b.observed_output_tokens = Some(8);
+        let summary = summarize_with_topology(&[a, b], &RoutingTopology::default());
+        assert_eq!(summary.successful_output_tokens_per_second, Some(100.0));
+        assert_eq!(summary.backend_output_token_shares["a"], 0.2);
+        assert_eq!(summary.backend_output_token_shares["b"], 0.8);
+        assert_eq!(
+            summary.backend_summaries["a"].observed_output_tokens,
+            Some(2)
+        );
+        assert_eq!(summary.backend_summaries["a"].output_tokens, 100);
+    }
+
+    #[test]
+    fn missing_usage_in_legacy_results_does_not_fabricate_output_metrics() {
+        let mut json = serde_json::to_value(result("a", 10, 100)).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("observed_output_tokens");
+        let legacy: RequestResult = serde_json::from_value(json).unwrap();
+        let summary = summarize_with_topology(&[legacy], &RoutingTopology::default());
+        assert_eq!(summary.success_rate, 1.0);
+        assert_eq!(summary.successful_output_tokens_per_second, None);
+        assert!(summary.backend_output_token_shares.is_empty());
+        assert!(summary.cluster_output_token_shares.is_empty());
+        assert_eq!(summary.backend_summaries["a"].observed_output_tokens, None);
     }
 
     #[test]
