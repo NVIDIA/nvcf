@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use indexmap::IndexMap;
@@ -50,6 +51,8 @@ pub struct StatsCollectorConfig {
     pub engine_stats_request_ttl: Duration,
     pub engine_stats_model_ttl: Duration,
     pub engine_stats_sweep_interval: Duration,
+    /// Per-model concurrency used when the engine has not reported a limit.
+    pub fallback_max_engine_concurrency: Option<NonZeroU64>,
     pub openai_fallback_stats_enabled: bool,
 }
 
@@ -67,6 +70,7 @@ impl Default for StatsCollectorConfig {
             engine_stats_request_ttl: DEFAULT_ENGINE_STATS_REQUEST_TTL,
             engine_stats_model_ttl: DEFAULT_ENGINE_STATS_MODEL_TTL,
             engine_stats_sweep_interval: DEFAULT_ENGINE_STATS_SWEEP_INTERVAL,
+            fallback_max_engine_concurrency: None,
             openai_fallback_stats_enabled: true,
         }
     }
@@ -195,8 +199,16 @@ pub enum StatsUpdateSource {
 #[derive(Debug, Clone)]
 pub enum StatsAggregatorUpdate {
     RequestCounters(RequestCounterUpdate),
+    EngineConcurrency(EngineConcurrencyUpdate),
     FinalizeRequest(FinalizeRequestUpdate),
     EnableOpenAiFallback,
+}
+
+#[derive(Debug, Clone)]
+pub struct EngineConcurrencyUpdate {
+    pub(crate) model_id: String,
+    pub(crate) generation: Option<ModelGeneration>,
+    pub(crate) max_engine_concurrency: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1165,6 +1177,78 @@ mod tests {
             .find(|(generation, _)| generation.model_id() == "model-a")
             .expect("model-a stats should publish")
             .1
+    }
+
+    #[test]
+    fn engine_concurrency_is_published_cleared_and_scoped_to_its_generation() {
+        for fallback in [None, NonZeroU64::new(3)] {
+            let mut aggregator = test_aggregator(StatsCollectorConfig {
+                fallback_max_engine_concurrency: fallback,
+                ..Default::default()
+            });
+            assert_eq!(
+                aggregator.snapshot("model-a").max_engine_concurrency,
+                fallback.map(NonZeroU64::get)
+            );
+            let generation = aggregator.current_generation("model-a").unwrap().clone();
+            let update = |generation, max_engine_concurrency| {
+                StatsAggregatorUpdate::EngineConcurrency(EngineConcurrencyUpdate {
+                    model_id: "model-a".to_string(),
+                    generation: Some(generation),
+                    max_engine_concurrency,
+                })
+            };
+            let stats =
+                published_stats(aggregator.apply_update(update(generation.clone(), Some(25))));
+            assert_eq!(stats.max_engine_concurrency, Some(25));
+            assert!(
+                aggregator
+                    .apply_update(update(generation.clone(), Some(25)))
+                    .is_empty()
+            );
+            assert!(
+                aggregator
+                    .apply_update(update(ModelGeneration::new("model-a", u64::MAX), Some(1)))
+                    .is_empty()
+            );
+            let stats = aggregator.stream_stats("req-a", (100, 10), true, seconds(1));
+            assert_eq!(stats.max_engine_concurrency, Some(25));
+            let stats = published_stats(aggregator.apply_update(update(generation, None)));
+            assert_eq!(stats.max_engine_concurrency, fallback.map(NonZeroU64::get));
+            let stats = aggregator.stream_stats("req-b", (200, 20), true, seconds(2));
+            assert_eq!(stats.max_engine_concurrency, fallback.map(NonZeroU64::get));
+        }
+    }
+
+    #[test]
+    fn new_model_generations_use_the_concurrency_fallback() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig {
+            fallback_max_engine_concurrency: NonZeroU64::new(3),
+            ..Default::default()
+        });
+        let retired = aggregator.current_generation("model-a").unwrap().clone();
+        let update = StatsAggregatorUpdate::EngineConcurrency(EngineConcurrencyUpdate {
+            model_id: "model-a".to_string(),
+            generation: Some(retired.clone()),
+            max_engine_concurrency: Some(25),
+        });
+        aggregator.apply_update(update.clone());
+        assert!(aggregator.retire_generation(&retired));
+
+        for model_id in ["model-a", "model-b"] {
+            let (_, stats) = aggregator
+                .begin_generation(
+                    ModelGeneration::new(model_id, 1),
+                    ModelStatsInitialization::Empty,
+                )
+                .expect("new model generation should initialize");
+            assert_eq!(stats.max_engine_concurrency, Some(3));
+        }
+        assert!(aggregator.apply_update(update).is_empty());
+        assert_eq!(
+            aggregator.snapshot("model-a").max_engine_concurrency,
+            Some(3)
+        );
     }
 
     fn single_fallback_stats(
@@ -3611,6 +3695,61 @@ mod tests {
                 .queue_time_estimate_ms_by_priority,
             Some(HashMap::from([(0, 15)]))
         );
+        collector.handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn concurrency_fallback_is_advertised_and_used_for_queue_admission() {
+        let collector = RunningCollector::spawn_empty(
+            StatsCollectorConfig {
+                fallback_max_engine_concurrency: NonZeroU64::new(2),
+                ..Default::default()
+            },
+            None,
+            false,
+        );
+        collector.begin_configured_model("model-a", 100.0).await;
+        let runtime = &collector.runtime_state;
+        let generation = runtime.current_generation("model-a").unwrap();
+        assert!(runtime.publish_generation(&generation));
+        assert_eq!(
+            runtime.advertised_models()["model-a"]
+                .stats
+                .as_ref()
+                .unwrap()
+                .max_engine_concurrency,
+            2
+        );
+        let required = |request_id: &str| crate::request_observer::RequiredTunnelHeaders {
+            request_id: request_id.to_string(),
+            routing_key: None,
+            model_id: "model-a".to_string(),
+            priority: None,
+            input_tokens: 100,
+            accepted_at: std::time::Instant::now(),
+        };
+        let mut prefill = runtime.track_request(&required("prefill"));
+        prefill.on_backend_submission();
+        let incoming = required("incoming");
+        let _incoming = runtime.track_request(&incoming);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS,
+            "0".parse().unwrap(),
+        );
+        let evaluate = || {
+            runtime.evaluate_generation_queue_admission(
+                &crate::PylonQueueMismatchRetryConfig::default(),
+                &incoming,
+                Some(&generation),
+                &headers,
+            )
+        };
+        assert_eq!(evaluate().actual_ms(), Some(0));
+        let pending = runtime.track_request(&required("pending"));
+        assert_eq!(evaluate().actual_ms(), Some(2_000));
+        drop(pending);
+        assert_eq!(evaluate().actual_ms(), Some(0));
         collector.handle.shutdown().await;
     }
 

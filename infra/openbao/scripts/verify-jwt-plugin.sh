@@ -31,6 +31,7 @@ required_grpc_version=${REQUIRED_GRPC_VERSION:-v1.83.2}
 required_go_jose_version=${REQUIRED_GO_JOSE_VERSION:-v4.1.4}
 required_vault_api_version=${REQUIRED_VAULT_API_VERSION:-v1.15.0}
 required_vault_sdk_version=${REQUIRED_VAULT_SDK_VERSION:-v0.15.2}
+required_plugincontainer_version=${REQUIRED_PLUGINCONTAINER_VERSION:-v0.5.0}
 
 metadata_files=
 cleanup_metadata_files() {
@@ -125,6 +126,8 @@ verify_binary() {
   go_jose_version=$(dep_version github.com/go-jose/go-jose/v4 "$metadata")
   vault_api_version=$(dep_version github.com/hashicorp/vault/api "$metadata")
   vault_sdk_version=$(dep_version github.com/hashicorp/vault/sdk "$metadata")
+  plugincontainer_version=$(dep_version github.com/hashicorp/go-secure-stdlib/plugincontainer "$metadata")
+  legacy_docker_version=$(dep_version github.com/docker/docker "$metadata")
 
   if ! semver_ge "$x_crypto_version" "$required_x_crypto_version"; then
     echo "$binary embeds golang.org/x/crypto $x_crypto_version; need $required_x_crypto_version or newer" >&2
@@ -154,6 +157,14 @@ verify_binary() {
     echo "$binary embeds github.com/hashicorp/vault/sdk $vault_sdk_version; expected $required_vault_sdk_version" >&2
     exit 1
   fi
+  if ! semver_ge "$plugincontainer_version" "$required_plugincontainer_version"; then
+    echo "$binary embeds plugincontainer $plugincontainer_version; need $required_plugincontainer_version or newer" >&2
+    exit 1
+  fi
+  if [ -n "$legacy_docker_version" ]; then
+    echo "$binary embeds the legacy github.com/docker/docker module $legacy_docker_version" >&2
+    exit 1
+  fi
 
   echo "verified $binary"
   echo "  go: $toolchain"
@@ -164,6 +175,7 @@ verify_binary() {
   echo "  go-jose/v4: $go_jose_version"
   echo "  vault/api: $vault_api_version"
   echo "  vault/sdk: $vault_sdk_version"
+  echo "  plugincontainer: $plugincontainer_version"
   echo "  sha256: $actual_hash"
 
   rm -f "$metadata"

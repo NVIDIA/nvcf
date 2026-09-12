@@ -119,12 +119,16 @@ fn wait_and_widen_affinity_algorithm_config(
     })
 }
 
+fn wait_and_widen_config(config: &LoadBalancerAlgorithmConfig) -> WaitAndWidenConfig {
+    WaitAndWidenConfig::from_algorithm_config(config).expect("valid wait-and-widen config")
+}
+
 fn wait_and_widen_affinity_config(
     virtual_nodes: usize,
     selection_count: usize,
     sample_count: Option<usize>,
 ) -> WaitAndWidenConfig {
-    WaitAndWidenConfig::from_algorithm_config(&wait_and_widen_affinity_algorithm_config(
+    wait_and_widen_config(&wait_and_widen_affinity_algorithm_config(
         virtual_nodes,
         selection_count,
         sample_count,
@@ -277,7 +281,7 @@ fn max_queue_time(
         request_slo,
         ..request(&target, None, Some(0))
     };
-    WaitAndWidenConfig::from_algorithm_config(&config)
+    wait_and_widen_config(&config)
         .max_queue_time(&request)
         .expect("floor and ceil should enable max queue time")
 }
@@ -359,7 +363,8 @@ type AffinityRetryFixture = (
 );
 
 fn affinity_retry_fixture(excluded_ids: &[&str]) -> AffinityRetryFixture {
-    let config = wait_and_widen_affinity_config(32, 1, None);
+    let mut config = wait_and_widen_affinity_config(32, 1, None);
+    config.cache_affinity_input_tokens_scale = 0.1;
     let target = target();
     let mut candidates = excluded_ids
         .iter()
@@ -380,13 +385,15 @@ fn affinity_retry_fixture(excluded_ids: &[&str]) -> AffinityRetryFixture {
         if candidates[primary[0]].cluster_id != excluded_ids[0] {
             continue;
         }
-        let retry_request = LoadBalancerRequest {
-            excluded_cluster_ids: Some(&excluded),
-            ..base_request
-        };
-        let retry = cache_affinity_candidate_indices(&config, &retry_request, &candidates)
-            .expect("retry should select an affinity successor");
-        if candidates[retry[0]].cluster_id != "affinity-successor" {
+        let mut full_ring_config = config.clone();
+        full_ring_config.cache_affinity_backend_selection_count = Some(candidates.len());
+        let ring = cache_affinity_candidate_indices(&full_ring_config, &base_request, &candidates)
+            .unwrap();
+        let first_unexcluded = ring
+            .iter()
+            .find(|index| !excluded.contains(&candidates[**index].cluster_id))
+            .unwrap();
+        if candidates[*first_unexcluded].cluster_id != "affinity-successor" {
             continue;
         }
         return (config, target, candidates, excluded, key);
@@ -405,12 +412,14 @@ fn assert_cache_affinity_retry(excluded_ids: &[&str]) {
         ..request
     };
     let chosen = choose(&load_balancer, &retry_request, &candidates);
-    assert_eq!(chosen.candidate.cluster_id, "affinity-successor");
+    assert_eq!(chosen.candidate.cluster_id, "global-fast");
     let cached_key_bytes = load_balancer.cached_affinity_key_bytes();
-    assert!(cached_key_bytes >= key.len() * 2 + excluded.iter().map(String::len).sum::<usize>());
+    assert_eq!(cached_key_bytes, key.len());
+    assert_eq!(chosen.rank_depth, 2);
 
     let chosen_again = choose(&load_balancer, &retry_request, &candidates);
-    assert_eq!(chosen_again.candidate.cluster_id, "affinity-successor");
+    assert_eq!(chosen_again.candidate.cluster_id, "global-fast");
+    assert_eq!(chosen_again.rank_depth, 2);
     assert_eq!(load_balancer.cached_affinity_key_bytes(), cached_key_bytes);
 }
 
@@ -1111,7 +1120,7 @@ fn legacy_algorithm_names_remain_compatible_in_detailed_configs() {
 #[test]
 fn detailed_model_config_parses_wait_and_widen_cache_affinity() {
     let router = router_from_json(
-        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2}}}"#,
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2,"cache_affinity_input_tokens_scale":0.1,"cache_affinity_wait_ms":200}}}"#,
     );
     let model_config = router.algorithm_config("model-a");
     assert_eq!(
@@ -1120,12 +1129,84 @@ fn detailed_model_config_parses_wait_and_widen_cache_affinity() {
     );
     assert_eq!(model_config.seed(), Some("seed-1"));
     assert!(model_config.requires_cache_affinity_key());
-    let wait_and_widen_config = WaitAndWidenConfig::from_algorithm_config(model_config);
+    let wait_and_widen_config = wait_and_widen_config(model_config);
     assert_eq!(wait_and_widen_config.cache_affinity_virtual_nodes, 64);
     assert_eq!(
         wait_and_widen_config.cache_affinity_backend_selection_count,
         Some(2)
     );
+    assert_eq!(wait_and_widen_config.cache_affinity_input_tokens_scale, 0.1);
+    assert_eq!(
+        wait_and_widen_config.cache_affinity_wait,
+        Duration::from_millis(200)
+    );
+}
+
+#[test]
+fn wait_and_widen_validates_cache_affinity_input_tokens_scale() {
+    for algorithm in [
+        LoadBalancerAlgorithm::WaitAndWiden,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        for scale in [-0.1, 1.1] {
+            assert_json_rejected::<LoadBalancerAlgorithmConfig>(
+                &format!(
+                    r#"{{"algorithm":"{algorithm}","cache_affinity_input_tokens_scale":{scale}}}"#
+                ),
+                "cache_affinity_input_tokens_scale must be between 0.0 and 1.0",
+            );
+        }
+        for scale in [0.0, 1.0] {
+            if algorithm == LoadBalancerAlgorithm::PulsarWaitAndWiden && scale != 1.0 {
+                continue;
+            }
+            let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+                r#"{{"algorithm":"{algorithm}","cache_affinity_input_tokens_scale":{scale}}}"#
+            ));
+            assert!(create_load_balancer_with_config(&config).is_ok());
+        }
+        for scale in [-0.1, 1.1, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut config = LoadBalancerAlgorithmConfig::from(algorithm);
+            config
+                .wait_and_widen_settings_mut()
+                .unwrap()
+                .cache_affinity_input_tokens_scale = Some(scale);
+            let error = match create_load_balancer_with_config(&config) {
+                Ok(_) => panic!("programmatic invalid input scale should fail"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("cache_affinity_input_tokens_scale")
+            );
+            assert!(WaitAndWidenConfig::from_algorithm_config(&config).is_err());
+        }
+    }
+}
+
+#[test]
+fn pulsar_wait_and_widen_rejects_unsupported_affinity_settings() {
+    for (field, value) in [
+        ("cache_affinity_input_tokens_scale", "0.0"),
+        ("cache_affinity_input_tokens_scale", "0.1"),
+        ("cache_affinity_wait_ms", "1"),
+    ] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"pulsar-wait-and-widen","{field}":{value}}}"#
+        ));
+        let error = create_load_balancer_with_config(&config)
+            .err()
+            .expect("unsupported affinity settings must fail");
+        assert!(error.to_string().contains(field));
+    }
+    for raw in [
+        r#"{"algorithm":"pulsar-wait-and-widen"}"#,
+        r#"{"algorithm":"pulsar-wait-and-widen","cache_affinity_input_tokens_scale":1.0,"cache_affinity_wait_ms":0}"#,
+    ] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(raw);
+        assert!(create_load_balancer_with_config(&config).is_ok());
+    }
 }
 
 #[test]
@@ -1251,10 +1332,12 @@ fn wait_and_widen_config_resolves_internal_defaults() {
     settings.n = Some(0);
     settings.ignore_queue_time = Some(true);
     settings.ignore_input_processing_time = Some(true);
-    let config = WaitAndWidenConfig::from_algorithm_config(&algorithm_config);
+    let config = wait_and_widen_config(&algorithm_config);
 
     assert_eq!(config.cache_affinity_virtual_nodes, 1);
     assert_eq!(config.cache_affinity_backend_selection_count, None);
+    assert_eq!(config.cache_affinity_input_tokens_scale, 1.0);
+    assert_eq!(config.cache_affinity_wait, Duration::ZERO);
     assert_eq!(config.ttft_bucket_size, Duration::from_millis(20));
     assert_eq!(config.next_bucket_unlock_factor, 0.25);
     assert_eq!(config.sample_count, 1);
@@ -1831,23 +1914,89 @@ fn wait_and_widen_cache_affinity_retry_skips_excluded_primary() {
 }
 
 #[test]
-fn wait_and_widen_cache_affinity_retry_returns_candidate_slice_indices() {
+fn wait_and_widen_retry_keeps_affinity_group_and_returns_public_slice_index() {
     let (config, target, candidates, excluded, key) = affinity_retry_fixture(&["excluded-primary"]);
     let request = request(&target, Some(&key), Some(1));
-    let primary = cache_affinity_candidate_indices(&config, &request, &candidates)
-        .expect("cache affinity should select a backend");
+    let primary = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
     assert_eq!(candidates[primary[0]].cluster_id, "excluded-primary");
+    let retry = LoadBalancerRequest {
+        excluded_cluster_ids: Some(&excluded),
+        ..request
+    };
     assert_eq!(
-        cache_affinity_candidate_indices(
-            &config,
-            &LoadBalancerRequest {
-                excluded_cluster_ids: Some(&excluded),
-                ..request
-            },
-            &candidates,
-        ),
-        Some(vec![1]),
+        cache_affinity_candidate_indices(&config, &retry, &candidates),
+        Some(primary)
     );
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let choice = lb.choose_candidate(&retry, &candidates).unwrap();
+    assert_eq!(choice.candidate_index, 2);
+    assert_eq!(choice.rank_depth, 2);
+}
+
+#[test]
+fn wait_and_widen_retry_preserves_the_affinity_deadline() {
+    let (mut config, target, candidates, excluded, key) =
+        affinity_retry_fixture(&["excluded-primary"]);
+    config.cache_affinity_wait = Duration::from_millis(100);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let request = LoadBalancerRequest {
+        excluded_cluster_ids: Some(&excluded),
+        ..request(&target, Some(&key), Some(1))
+    };
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(99)),
+        LoadBalancerDecision::Wait(Duration::from_millis(1))
+    );
+    let choice = lb
+        .decide_at(&request, &candidates, Duration::from_millis(100))
+        .selected()
+        .unwrap();
+    assert_eq!(candidates[choice.candidate_index].cluster_id, "global-fast");
+    assert_eq!(choice.rank_depth, 2);
+}
+
+#[test]
+fn wait_and_widen_keeps_an_unexcluded_affine_backup() {
+    let config = wait_and_widen_affinity_config(8, 2, Some(2));
+    let target = target();
+    let request = request(&target, Some("prefix"), Some(1));
+    let candidates = candidates(&["a", "b", "c"]);
+    let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+    let excluded = HashSet::from([candidates[affine[0]].cluster_id.clone()]);
+    let retry = LoadBalancerRequest {
+        excluded_cluster_ids: Some(&excluded),
+        ..request
+    };
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let choice = lb.choose_candidate(&retry, &candidates).unwrap();
+    assert_eq!(choice.candidate_index, affine[1]);
+    assert_eq!(choice.rank_depth, 1);
+}
+
+#[test]
+fn wait_and_widen_affine_primary_must_meet_interpolated_queue_limit() {
+    let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+        settings.cache_affinity_backend_selection_count = Some(2);
+        settings.max_queue_time_floor_ms = Some(100);
+        settings.max_queue_time_ceil_ms = Some(300);
+        settings.ignore_queue_time = Some(true);
+    }));
+    let target = target();
+    let request = LoadBalancerRequest {
+        received_at: Instant::now() - Duration::from_secs(30),
+        request_slo: Some(Duration::from_secs(60)),
+        ..request(&target, Some("prefix"), Some(1))
+    };
+    let mut candidates = candidates(&["a", "b", "c"]);
+    let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+    candidates[affine[0]]
+        .stats
+        .queue_time_estimate_ms_by_priority = HashMap::from([(0, 250)]);
+    candidates[affine[1]].rtt = Duration::from_secs(1);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let choice = lb.choose_candidate(&request, &candidates).unwrap();
+    assert_eq!(choice.candidate_index, affine[1]);
+    assert_eq!(choice.rank_depth, 1);
 }
 
 #[test]
@@ -1956,6 +2105,335 @@ fn wait_and_widen_cache_affinity_falls_back_when_primary_is_full() {
 
     let chosen = choose(lb.as_ref(), &request, &candidates);
     assert_ne!(chosen.candidate.cluster_id, primary);
+}
+
+#[test]
+fn wait_and_widen_keeps_ttft_selection_within_affinity_group() {
+    let config = wait_and_widen_affinity_config(8, 2, Some(2));
+    let lb = WaitAndWidenLoadBalancer::new(config.clone());
+    let target = target();
+    let request = request(&target, Some("prefix-a"), Some(1));
+    let mut candidates = candidates(&["ordered-a", "ordered-b", "public"]);
+    let affinity = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+    candidates[affinity[0]]
+        .stats
+        .queue_time_estimate_ms_by_priority = HashMap::from([(0, 30_000)]);
+    let choice = choose(&lb, &request, &candidates);
+    assert_eq!(
+        choice.candidate.cluster_id,
+        candidates[affinity[1]].cluster_id
+    );
+}
+
+#[test]
+fn wait_and_widen_opens_global_buckets_only_after_affinity_deadline() {
+    let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+        settings.seed = Some("seed-1".to_string());
+        settings.cache_affinity_backend_selection_count = Some(1);
+        settings.cache_affinity_wait_ms = Some(200);
+        settings.comparator = Some(ClusterComparator::Utilization);
+        settings.n = Some(2);
+    }));
+    let lb = WaitAndWidenLoadBalancer::new(config.clone());
+    let target = target();
+    let request = request(&target, Some("cached-prefix"), Some(100));
+    let mut candidates = candidates(&["a", "b", "c"]);
+    let affinity = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap()[0];
+    let public: Vec<_> = (0..candidates.len())
+        .filter(|index| *index != affinity)
+        .collect();
+    candidates[affinity].stats.max_engine_concurrency = 1;
+    candidates[affinity].stats.num_running_queries = 1;
+    candidates[affinity].rtt = Duration::from_millis(100);
+    candidates[public[0]].rtt = Duration::from_millis(300);
+    candidates[public[0]].stats.max_engine_concurrency = 10;
+    candidates[public[0]].stats.num_running_queries = 1;
+    candidates[public[1]].rtt = Duration::from_millis(500);
+    candidates[public[1]].stats.max_engine_concurrency = 10;
+
+    for (elapsed_ms, remaining_ms) in [(0, 200), (199, 1)] {
+        assert_eq!(
+            lb.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
+            LoadBalancerDecision::Wait(Duration::from_millis(remaining_ms))
+        );
+    }
+    // The full affine backend anchors global bucket zero at X. The other
+    // backends unlock at X + (300 - 100) * 0.25 and another 50 ms later.
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(200)),
+        LoadBalancerDecision::Wait(Duration::from_millis(50))
+    );
+    for (elapsed_ms, expected) in [(250, public[0]), (299, public[0]), (300, public[1])] {
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::from_millis(elapsed_ms))
+            .selected()
+            .unwrap();
+        assert_eq!(choice.candidate_index, expected);
+        assert_eq!(choice.rank_depth, 2);
+    }
+
+    candidates[public[0]].stats.num_running_queries = 10;
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(250)),
+        LoadBalancerDecision::Wait(Duration::from_millis(50))
+    );
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(300))
+            .selected()
+            .unwrap()
+            .candidate_index,
+        public[1]
+    );
+    candidates[public[1]].stats.num_running_queries = 10;
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(200)),
+        LoadBalancerDecision::Unavailable
+    );
+
+    // Capacity recovery can serve the request in its affinity group before X.
+    candidates[affinity].stats.num_running_queries = 0;
+    let recovered = lb
+        .decide_at(&request, &candidates, Duration::from_millis(50))
+        .selected()
+        .unwrap();
+    assert_eq!(recovered.candidate_index, affinity);
+}
+
+#[test]
+fn wait_and_widen_free_slot_removes_queue_delay_but_keeps_request_prefill() {
+    for priority_estimates in [HashMap::new(), HashMap::from([(0, 10_000)])] {
+        let candidate = candidate("free-slot", 1024).with_stats(|stats| {
+            stats.last_mean_input_tps = 8_000.0;
+            stats.queued_input_size = 80_000;
+            stats.num_running_queries = 24;
+            stats.max_engine_concurrency = 25;
+            stats.queue_time_estimate_ms_by_priority = priority_estimates;
+        });
+        let estimated =
+            wait_and_widen_ttft_components(&candidate, Some(8_000), 1.0, 0, false, false);
+        assert_eq!(estimated.queue_ms, 0.0);
+        assert_eq!(estimated.ttft_ms, 1_005.0);
+        let target = target();
+        let request = request(&target, None, Some(8_000));
+        let lb = wait_and_widen_load_balancer(|settings| {
+            settings.max_queue_time_floor_ms = Some(100);
+            settings.max_queue_time_ceil_ms = Some(100);
+            settings.max_queued = Some(1);
+        });
+        assert!(
+            lb.decide(&request, std::slice::from_ref(&candidate))
+                .selected()
+                .is_some()
+        );
+        for (running, capacity) in [(25, 25), (26, 25), (24, 0)] {
+            let mut full = candidate.clone();
+            full.stats.num_running_queries = running;
+            full.stats.max_engine_concurrency = capacity;
+            assert_eq!(
+                wait_and_widen_ttft_components(&full, Some(8_000), 1.0, 0, false, false).queue_ms,
+                10_000.0
+            );
+            assert!(lb.decide(&request, &[full]).selected().is_none());
+        }
+    }
+}
+
+#[test]
+fn wait_and_widen_global_buckets_include_affinity_candidates_at_full_prefill_cost() {
+    for ids in [&["a", "b"][..], &["a", "b", "c", "d"][..]] {
+        let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+            settings.cache_affinity_backend_selection_count = Some(2);
+            settings.cache_affinity_wait_ms = Some(200);
+            settings.cache_affinity_input_tokens_scale = Some(0.1);
+            settings.comparator = Some(ClusterComparator::Utilization);
+            settings.max_queued = Some(1);
+            settings.max_queue_time_floor_ms = Some(100);
+            settings.max_queue_time_ceil_ms = Some(5_000);
+        }));
+        let lb = WaitAndWidenLoadBalancer::new(config.clone());
+        let target = target();
+        let request = request(&target, Some("long-context"), Some(80_000));
+        let mut candidates = candidates(ids);
+        let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+        for candidate in &mut candidates {
+            candidate.rtt = Duration::from_secs(10);
+            candidate.stats.last_mean_input_tps = 7_000.0;
+            candidate.stats.max_engine_concurrency = 25;
+        }
+        candidates[affine[0]].rtt = Duration::ZERO;
+        candidates[affine[0]].stats.num_running_queries = 26;
+        candidates[affine[1]].rtt = Duration::from_millis(2_500);
+        candidates[affine[1]].stats.last_mean_input_tps = 14_000.0;
+
+        // Discounted TTFT puts the full backend first (1143 vs 3071 ms).
+        // Its affine backup remains locked until about 482 ms. Full prefill
+        // reverses that order (11429 vs 8214 ms), opening the backup globally.
+        assert_eq!(
+            lb.decide_at(&request, &candidates, Duration::from_millis(199)),
+            LoadBalancerDecision::Wait(Duration::from_millis(1))
+        );
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::from_millis(200))
+            .selected()
+            .expect("global routing must include the available affine backup");
+        assert_eq!(choice.candidate_index, affine[1]);
+        assert_eq!(choice.rank_depth, 3);
+
+        // Every retry still checks affinity first after X. Once the primary
+        // recovers, its discounted score wins even though global scoring
+        // continues to favor the faster-prefill backup.
+        candidates[affine[0]].stats.num_running_queries = 0;
+        let recovered = lb
+            .decide_at(&request, &candidates, Duration::from_millis(201))
+            .selected()
+            .expect("recovered affinity must be checked before global fallback");
+        assert_eq!(recovered.candidate_index, affine[0]);
+        assert_eq!(recovered.rank_depth, 1);
+    }
+}
+
+#[test]
+fn wait_and_widen_affinity_deadline_does_not_depend_on_estimates_or_slo() {
+    for scale in [0.0, 0.1, 1.0] {
+        for request_slo in [
+            None,
+            Some(Duration::from_millis(10)),
+            Some(Duration::from_secs(60)),
+        ] {
+            let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+                settings.cache_affinity_backend_selection_count = Some(1);
+                settings.cache_affinity_wait_ms = Some(100);
+                settings.cache_affinity_input_tokens_scale = Some(scale);
+            }));
+            let lb = WaitAndWidenLoadBalancer::new(config.clone());
+            let target = target();
+            let request = LoadBalancerRequest {
+                request_slo,
+                ..request(&target, Some("prefix"), Some(100))
+            };
+            let mut candidates = candidates(&["a", "b"]);
+            let affinity =
+                cache_affinity_candidate_indices(&config, &request, &candidates).unwrap()[0];
+            candidates[affinity].stats.max_engine_concurrency = 1;
+            candidates[affinity].stats.num_running_queries = 1;
+            for public_rtt_ms in [0, 10_000] {
+                // Keep both candidates in global bucket zero to isolate X
+                // from the separate waits for later global TTFT buckets.
+                candidates[affinity].rtt = Duration::from_millis(public_rtt_ms);
+                candidates[1 - affinity].rtt = Duration::from_millis(public_rtt_ms);
+                assert_eq!(
+                    lb.decide_at(&request, &candidates, Duration::from_millis(99)),
+                    LoadBalancerDecision::Wait(Duration::from_millis(1))
+                );
+                let choice = lb
+                    .decide_at(&request, &candidates, Duration::from_millis(100))
+                    .selected()
+                    .unwrap();
+                assert_eq!(choice.candidate_index, 1 - affinity);
+            }
+        }
+    }
+}
+
+#[test]
+fn wait_and_widen_prefill_discount_is_limited_to_the_affinity_group() {
+    for (scale, expected_affine_position) in [(1.0, 0), (0.1, 1)] {
+        let mut config = wait_and_widen_affinity_algorithm_config(8, 2, Some(2));
+        let settings = config.wait_and_widen_settings_mut().unwrap();
+        settings.cache_affinity_wait_ms = Some(100);
+        settings.cache_affinity_input_tokens_scale = Some(scale);
+        let config = wait_and_widen_config(&config);
+        let lb = WaitAndWidenLoadBalancer::new(config.clone());
+        let target = target();
+        let request = request(&target, Some("prefix"), Some(1_000));
+        let mut candidates = candidates(&["a", "b", "c", "d"]);
+        let affine = cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+        let public: Vec<_> = (0..candidates.len())
+            .filter(|index| !affine.contains(index))
+            .collect();
+        // Full prefill favors the faster processor (1500 vs 2001 ms).
+        // Discounted prefill favors the closer backend (600 vs 201 ms).
+        for group in [affine.as_slice(), public.as_slice()] {
+            candidates[group[0]].rtt = Duration::from_millis(500);
+            candidates[group[0]].stats.last_mean_input_tps = 1_000.0;
+            candidates[group[1]].rtt = Duration::from_millis(1);
+            candidates[group[1]].stats.last_mean_input_tps = 500.0;
+        }
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::ZERO)
+            .selected()
+            .unwrap();
+        assert_eq!(choice.candidate_index, affine[expected_affine_position]);
+
+        for index in &affine {
+            candidates[*index].stats.max_engine_concurrency = 1;
+            candidates[*index].stats.num_running_queries = 1;
+        }
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::from_millis(100))
+            .selected()
+            .unwrap();
+        assert_eq!(
+            choice.candidate_index, public[0],
+            "public prefill must remain undiscounted"
+        );
+    }
+}
+
+#[test]
+fn wait_and_widen_affinity_wait_requires_a_configured_group_and_key() {
+    for (selection_count, key) in [(None, Some("prefix")), (Some(1), None)] {
+        let lb = wait_and_widen_load_balancer(|settings| {
+            settings.cache_affinity_wait_ms = Some(1_000);
+            settings.cache_affinity_backend_selection_count = selection_count;
+        });
+        let target = target();
+        let request = request(&target, key, Some(1));
+        assert!(matches!(
+            lb.decide(&request, &candidates(&["a"])),
+            LoadBalancerDecision::Selected(_)
+        ));
+    }
+}
+
+#[test]
+fn wait_and_widen_affinity_group_can_cover_all_candidates() {
+    let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+        settings.cache_affinity_wait_ms = Some(100);
+        settings.cache_affinity_backend_selection_count = Some(3);
+    }));
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let target = target();
+    let request = request(&target, Some("prefix"), Some(1));
+    let candidates = [candidate("a", 1024).with_stats(|stats| {
+        stats.max_engine_concurrency = 1;
+        stats.num_running_queries = 1;
+    })];
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::ZERO),
+        LoadBalancerDecision::Wait(Duration::from_millis(100))
+    );
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(100)),
+        LoadBalancerDecision::Unavailable
+    );
+    assert_eq!(
+        lb.decide_at(&request, &[], Duration::ZERO),
+        LoadBalancerDecision::Unavailable
+    );
+}
+
+#[test]
+fn wait_and_widen_zero_prefill_scale_preserves_invalid_tps() {
+    for input_tps in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let candidate = candidate("invalid-tps", 1024)
+            .with_stats(|stats| stats.last_mean_input_tps = input_tps);
+        let estimated = wait_and_widen_ttft_components(&candidate, Some(200), 0.0, 0, false, false);
+        assert_eq!(estimated.ttft_ms, f64::INFINITY);
+    }
+    let estimated =
+        wait_and_widen_ttft_components(&candidate("cached", 1024), Some(200), 0.0, 0, false, false);
+    assert_eq!(estimated.ttft_ms, 5.0);
 }
 
 #[test]
@@ -2325,15 +2803,19 @@ fn wait_and_widen_ttft_uses_priority_queue_and_ignore_flags() {
     let mut candidate = work_candidate("estimated", 7, 100.0, 999);
     candidate.stats.queue_time_estimate_ms_by_priority = HashMap::from([(4, 25)]);
 
-    let full = wait_and_widen_ttft_components(&candidate, Some(200), 4, false, false);
+    let full = wait_and_widen_ttft_components(&candidate, Some(200), 1.0, 4, false, false);
     assert_eq!(full.queue_ms, 25.0);
     assert_eq!(full.ttft_ms, 2032.0);
 
-    let ignore_queue = wait_and_widen_ttft_components(&candidate, Some(200), 4, true, false);
+    let discounted = wait_and_widen_ttft_components(&candidate, Some(200), 0.1, 4, false, false);
+    assert_eq!(discounted.queue_ms, 25.0);
+    assert_eq!(discounted.ttft_ms, 232.0);
+
+    let ignore_queue = wait_and_widen_ttft_components(&candidate, Some(200), 1.0, 4, true, false);
     assert_eq!(ignore_queue.queue_ms, 25.0);
     assert_eq!(ignore_queue.ttft_ms, 2007.0);
 
-    let ignore_prefill = wait_and_widen_ttft_components(&candidate, Some(200), 4, false, true);
+    let ignore_prefill = wait_and_widen_ttft_components(&candidate, Some(200), 1.0, 4, false, true);
     assert_eq!(ignore_prefill.queue_ms, 25.0);
     assert_eq!(ignore_prefill.ttft_ms, 32.0);
 }
@@ -2625,4 +3107,87 @@ fn pulsar_returns_none_when_all_candidates_lack_valid_last_mean_input_tps() {
         &[invalid_a, invalid_b],
     );
     assert!(choice.is_none());
+}
+
+fn assert_affinity_discount_survives_bucket_flags(ignore_queue: bool, ignore_prefill: bool) {
+    let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+        settings.cache_affinity_backend_selection_count = Some(2);
+        settings.cache_affinity_input_tokens_scale = Some(0.1);
+        settings.cache_affinity_wait_ms = Some(100);
+        settings.ignore_queue_time = Some(ignore_queue);
+        settings.ignore_input_processing_time = Some(ignore_prefill);
+        settings.ttft_bucket_size_ms = Some(100);
+        settings.n = Some(2);
+        settings.comparator = Some(ClusterComparator::Ttft);
+    }));
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let target = target();
+    let request = request(&target, Some("prefix"), Some(1_000));
+    let candidates = [
+        work_candidate("higher-rtt-fast-prefill", 50, 10_000.0, 0),
+        work_candidate("lower-rtt-slow-prefill", 1, 2_000.0, 0),
+    ];
+    let choice = lb
+        .decide_at(&request, &candidates, Duration::ZERO)
+        .selected()
+        .unwrap();
+    assert_eq!(
+        candidates[choice.candidate_index].cluster_id, "lower-rtt-slow-prefill",
+        "scaled comparator TTFT is 60 ms vs 51 ms; bucket flags must not restore full prefill",
+    );
+}
+
+#[test]
+fn wait_and_widen_affinity_discount_without_bucket_flags() {
+    assert_affinity_discount_survives_bucket_flags(false, false);
+}
+
+#[test]
+fn wait_and_widen_affinity_discount_with_ignore_queue() {
+    assert_affinity_discount_survives_bucket_flags(true, false);
+}
+
+#[test]
+fn wait_and_widen_affinity_discount_with_ignore_prefill() {
+    assert_affinity_discount_survives_bucket_flags(false, true);
+}
+
+#[test]
+fn wait_and_widen_affinity_wait_preserves_the_next_bucket_wakeup() {
+    let target = target();
+    let request = request(&target, Some("prefix"), Some(100));
+    let candidates = [
+        work_candidate("full-first-bucket", 10, 1_000.0, 0).with_stats(|stats| {
+            stats.max_engine_concurrency = 1;
+            stats.num_running_queries = 1;
+        }),
+        work_candidate("available-next-bucket", 50, 1_000.0, 0).with_stats(|stats| {
+            stats.max_engine_concurrency = 1;
+        }),
+    ];
+    for (hold_ms, expected_waits) in [(200, [(0, 10), (5, 5)]), (5, [(0, 5), (5, 5)])] {
+        let config = wait_and_widen_config(&wait_and_widen_algorithm_config(|settings| {
+            settings.cache_affinity_backend_selection_count = Some(2);
+            settings.cache_affinity_wait_ms = Some(hold_ms);
+            settings.ttft_bucket_size_ms = Some(20);
+            settings.next_bucket_unlock_factor = Some(0.25);
+        }));
+        let lb = WaitAndWidenLoadBalancer::new(config);
+        // The available affine bucket unlocks at (150 - 110) * 0.25 = 10 ms.
+        // A shorter hold opens global routing first; the affine hint still wins
+        // when its bucket unlocks before the next global bucket.
+        for (elapsed_ms, expected_wait_ms) in expected_waits {
+            assert_eq!(
+                lb.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
+                LoadBalancerDecision::Wait(Duration::from_millis(expected_wait_ms)),
+                "hold={hold_ms} ms, elapsed={elapsed_ms} ms",
+            );
+        }
+        let choice = lb
+            .decide_at(&request, &candidates, Duration::from_millis(10))
+            .selected()
+            .expect("the affine bucket should be unlocked");
+        assert_eq!(choice.candidate_index, 1);
+        assert_eq!(choice.rank_depth, 1);
+    }
 }

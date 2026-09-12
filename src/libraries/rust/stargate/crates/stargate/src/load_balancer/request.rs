@@ -59,3 +59,27 @@ impl LoadBalancerCandidateChoice {
         }
     }
 }
+
+/// A routing decision distinguishes a timed wait from unavailable capacity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoadBalancerDecision {
+    Selected(LoadBalancerCandidateChoice),
+    Wait(Duration),
+    Unavailable,
+}
+
+impl LoadBalancerDecision {
+    /// Extract an immediate choice; timed waits and unavailable capacity return None.
+    pub fn selected(self) -> Option<LoadBalancerCandidateChoice> {
+        match self {
+            Self::Selected(choice) => Some(choice),
+            Self::Wait(_) | Self::Unavailable => None,
+        }
+    }
+}
+
+impl From<Option<LoadBalancerCandidateChoice>> for LoadBalancerDecision {
+    fn from(choice: Option<LoadBalancerCandidateChoice>) -> Self {
+        choice.map_or(Self::Unavailable, Self::Selected)
+    }
+}

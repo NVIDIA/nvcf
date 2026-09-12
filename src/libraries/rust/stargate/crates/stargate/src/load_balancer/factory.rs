@@ -27,11 +27,19 @@ pub fn create_load_balancer_with_config(
     config: &LoadBalancerAlgorithmConfig,
 ) -> anyhow::Result<Arc<dyn LoadBalancer>> {
     if config.algorithm() == LoadBalancerAlgorithm::PulsarWaitAndWiden
-        && config
-            .wait_and_widen_settings()
-            .is_some_and(|settings| settings.comparator.is_some())
+        && let Some(settings) = config.wait_and_widen_settings()
     {
-        anyhow::bail!("comparator is not supported for pulsar-wait-and-widen");
+        if settings.comparator.is_some() {
+            anyhow::bail!("comparator is not supported for pulsar-wait-and-widen");
+        }
+        if settings.cache_affinity_input_tokens_scale.unwrap_or(1.0) != 1.0 {
+            anyhow::bail!(
+                "cache_affinity_input_tokens_scale is not supported for pulsar-wait-and-widen"
+            );
+        }
+        if settings.cache_affinity_wait_ms.unwrap_or(0) != 0 {
+            anyhow::bail!("cache_affinity_wait_ms is not supported for pulsar-wait-and-widen");
+        }
     }
 
     if config.considers_kv_free_tokens()
@@ -50,13 +58,13 @@ pub fn create_load_balancer_with_config(
             PowerOfNLoadBalancer::from_algorithm_config(config)?,
         )),
         LoadBalancerAlgorithm::WaitAndWiden => Ok(Arc::new(WaitAndWidenLoadBalancer::new(
-            WaitAndWidenConfig::from_algorithm_config(config),
+            WaitAndWidenConfig::from_algorithm_config(config)?,
         ))),
         LoadBalancerAlgorithm::RoundRobin => Ok(Arc::new(RoundRobinLoadBalancer::new())),
         LoadBalancerAlgorithm::Random => Ok(Arc::new(RandomLoadBalancer)),
         LoadBalancerAlgorithm::Pulsar => Ok(Arc::new(PulsarLoadBalancer::new(config.clone()))),
         LoadBalancerAlgorithm::PulsarWaitAndWiden => Ok(Arc::new(
-            PulsarWaitAndWidenLoadBalancer::new(config.clone()),
+            PulsarWaitAndWidenLoadBalancer::new(config.clone())?,
         )),
     }
 }

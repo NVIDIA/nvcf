@@ -265,17 +265,19 @@ public class ClusterRepository {
     }
 
     /**
-     * All clusters visible to an account in cluster_by_cluster_id: {@code nca_id = :x} UNION
-     * {@code authorized_nca_ids CONTAINS :x} UNION {@code authorized_nca_ids CONTAINS '*'}.
-     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
+     * Reconstructs a {@code clusters_by_authorized_accounts} partition from
+     * {@code cluster_by_cluster_id}. The wildcard partition contains public clusters, while an
+     * account partition contains only owned or explicitly authorized clusters.
      */
-    public List<ClusterEntity> getAllClustersVisibleToAccount(String ncaId) {
+    public List<ClusterEntity> getAllClustersForAuthorizationKey(String ncaId) {
+        if (WILDCARD.equals(ncaId)) {
+            return clusterByIdRepo.findAllByAuthorizedNcaIdsContains(AUTHORIZED_NCA_IDS_WILDCARD);
+        }
+
         Map<String, ClusterEntity> clustersById = new LinkedHashMap<>();
         clusterByIdRepo.findAllByNcaId(ncaId)
                 .forEach(entity -> clustersById.put(entity.getClusterId(), entity));
         clusterByIdRepo.findAllByAuthorizedNcaIdsContains(ncaId)
-                .forEach(entity -> clustersById.put(entity.getClusterId(), entity));
-        clusterByIdRepo.findAllByAuthorizedNcaIdsContains(AUTHORIZED_NCA_IDS_WILDCARD)
                 .forEach(entity -> clustersById.put(entity.getClusterId(), entity));
         return List.copyOf(clustersById.values());
     }

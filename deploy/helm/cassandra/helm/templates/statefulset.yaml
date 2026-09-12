@@ -33,8 +33,9 @@ spec:
         checksum/cassandra-conf: {{ include (print $.Template.BasePath "/configmap-cassandra-conf.yaml") . | sha256sum }}
     spec:
       {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
-      securityContext:
-        fsGroup: {{ .Values.cassandra.podSecurityContext.fsGroup }}
+      {{- with .Values.cassandra.podSecurityContext }}
+      securityContext: {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.cassandra.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -55,6 +56,9 @@ spec:
         - name: cassandra-conf-init
           image: "{{ .Values.cassandra.image.registry }}/{{ .Values.cassandra.image.repository }}:{{ .Values.cassandra.image.tag }}"
           imagePullPolicy: {{ .Values.cassandra.image.pullPolicy }}
+          {{- with .Values.cassandra.containerSecurityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
           command:
             - /bin/sh
             - -c
@@ -66,7 +70,7 @@ spec:
               # kept for the rest). The main container mounts /shared-conf at
               # /etc/cassandra, so the entrypoint still seds the CASSANDRA_* keys
               # into the merged file. yq is provided by the runtime image.
-              cp -a /etc/cassandra/. /shared-conf/
+              cp -R /etc/cassandra/. /shared-conf/
               yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' \
                 /shared-conf/cassandra.yaml /overrides/cassandra-overrides.yaml > /tmp/cassandra.yaml
               mv /tmp/cassandra.yaml /shared-conf/cassandra.yaml
@@ -81,6 +85,9 @@ spec:
         - name: cassandra
           image: "{{ .Values.cassandra.image.registry }}/{{ .Values.cassandra.image.repository }}:{{ .Values.cassandra.image.tag }}"
           imagePullPolicy: {{ .Values.cassandra.image.pullPolicy }}
+          {{- with .Values.cassandra.containerSecurityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: intra
               containerPort: 7000
@@ -175,12 +182,13 @@ spec:
               command: ["/bin/sh", "-c", "nodetool status"]
             failureThreshold: 60
             periodSeconds: 10
-            timeoutSeconds: 15
+            timeoutSeconds: 30
           livenessProbe:
             exec:
               command: ["/bin/sh", "-c", "nodetool status"]
+            failureThreshold: 10
             periodSeconds: 30
-            timeoutSeconds: 15
+            timeoutSeconds: 30
           readinessProbe:
             exec:
               # Scope to this pod's own node: an unscoped '^UN' matches any
@@ -188,7 +196,7 @@ spec:
               # before its own node has joined. POD_IP is set below via fieldRef.
               command: ["/bin/sh", "-c", "nodetool status | grep -E \"^UN[[:space:]]+$POD_IP[[:space:]]\""]
             periodSeconds: 10
-            timeoutSeconds: 15
+            timeoutSeconds: 30
           resources: {{- include "cassandra.resources" . | nindent 12 }}
       volumes:
         # Writable copy of the image's /etc/cassandra. Populated by the
@@ -202,7 +210,7 @@ spec:
         - name: cassandra-init-cql
           configMap:
             name: cassandra-init-cql
-            defaultMode: 0500
+            defaultMode: 0444
   volumeClaimTemplates:
     - metadata:
         name: data

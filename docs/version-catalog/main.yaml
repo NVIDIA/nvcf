@@ -13,68 +13,87 @@ registries:
     namespace: nvidia/nvcf
 publications:
   - name: cert-manager-cainjector
+    type: image
     version: v1.20.2
     registry: public-images
   - name: cert-manager-controller
+    type: image
     version: v1.20.2
     registry: public-images
   - name: cert-manager-startupapicheck
+    type: image
     version: v1.20.2
     registry: public-images
   - name: cert-manager-webhook
+    type: image
     version: v1.20.2
     registry: public-images
   - name: oss-vault-k8s
+    type: image
     version: 1.7.4
     registry: public-images
   - name: nvcf-image-credential-helper
+    type: image
     version: 0.10.2
     registry: public-images
   - name: nats-box
+    type: image
     version: 0.19.7-nonroot
     registry: public-images
   - name: nvcf-state-metrics-service
+    type: image
     version: 1.23.7
     registry: public-images
   - name: cassandra
+    type: image
     version: 5.0.8-nv-2.0.1
     registry: public-images
   - name: helm-nvcf-cert-manager
+    type: chart
     version: 0.1.0
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-pki
+    type: chart
     version: 0.1.0
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-state-metrics
+    type: chart
     version: 1.0.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-ui
+    type: chart
     version: 1.1.2
     registry: public-helm
     chart_format: http
   - name: nvcf-container-cache
+    type: image
     version: v1.1.36
     registry: public-images
   - name: nvcf-proxy-tls-certs
+    type: image
     version: v1.2.10
     registry: public-images
   - name: nvcf-container-cache
+    type: chart
     version: 0.25.22
     registry: public-helm
     chart_format: http
   - name: nvcf-example-dashboards
+    type: chart
     version: 1.6.0
     registry: public-helm
     chart_format: http
   - name: nvcf-observability-reference-stack
+    type: chart
     version: 1.10.0
     registry: public-helm
     chart_format: http
 version_overrides:
   - name: nvcf-cli
+    type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:
@@ -746,7 +765,6 @@ stack:
   name: nvcf-self-managed-stack
   version: 0.16.1
   registry: public-resources
-  source_version: 0.16.1
   source_tag: deploy/stacks/self-managed/v0.16.1
   source_commit: 6aa572575c3f3ee7716a9fddc4cbfceae17e73ec
   pin_sources:
