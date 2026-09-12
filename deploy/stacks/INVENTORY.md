@@ -1,9 +1,72 @@
 # Stack Inventory Flow
 
-Each deployable stack owns an inventory of the charts, images, and resources
-that a customer must obtain. The self-managed, compute-plane, and observability
-inventories are separate release assets. An inventory config must reference
-only Helmfile states under its owning stack directory.
+## Summary
+
+We package the self-managed control plane, compute plane, and observability
+stack as three separate distributables. Each stack owns the inventory of
+charts, images, and resources that its release can cause a customer environment
+to pull. Release automation publishes those inventories as separate assets,
+then the documentation sync combines them into one customer-facing manifest.
+
+This split keeps ownership close to the stack that installs the dependency. It
+also means a stack can release on its own cadence without treating another
+stack's Helmfile state as part of its package.
+
+## Architecture
+
+The flow has three layers:
+
+1. Each directory under `deploy/stacks/` owns its Helmfile states and
+   `release-inventory.yaml`. An inventory config must reference only states
+   under that stack directory.
+1. The release workflow checks out an immutable stack tag, renders the profiles
+   named by that stack, and publishes one resolved JSON inventory with the
+   matching GitHub Release.
+1. `tools/docs-version-sync` downloads all three released inventories. It
+   validates their plane boundaries, merges compatible artifacts, updates
+   `docs/version-catalog/main.yaml`, and generates the inventory blocks in
+   `docs/user/manifest.md`.
+
+The version catalog is the handoff between release facts and public
+documentation. Released inventories provide immutable versions and source
+provenance. The catalog adds public distribution locations and the
+human-authored classification that tells customers whether an artifact is
+required or optional.
+
+At the current phase, CI reports drift from the latest released inventories as
+a warning. We still block on locally generated documentation being out of sync.
+This gives the team visibility while the three release assets are being adopted
+without making an unavailable or older release asset stop unrelated changes.
+
+## Release Sequence
+
+```mermaid
+sequenceDiagram
+    actor Contributor
+    participant Stack as Owning stack
+    participant Release as Release workflow
+    participant Assets as GitHub Releases
+    participant Sync as docs-version-sync
+    participant Catalog as Version catalog
+    participant Manifest as Manifest page
+
+    Contributor->>Stack: Update dependency and release-inventory.yaml
+    Contributor->>Stack: Run stack, inventory, and docs checks
+
+    loop Self-managed, compute-plane, and observability releases
+        Release->>Stack: Check out immutable stack tag
+        Release->>Stack: Render configured profiles
+        Stack-->>Release: Return charts, images, and resources
+        Release->>Release: Validate stack ownership and classifications
+        Release->>Assets: Publish the stack inventory JSON
+    end
+
+    Sync->>Assets: Download all three inventory assets
+    Assets-->>Sync: Return immutable release inventories
+    Sync->>Sync: Validate planes and merge compatible artifacts
+    Sync->>Catalog: Update versions, provenance, and release sources
+    Sync->>Manifest: Generate customer-facing inventory blocks
+```
 
 ## Ownership Model
 
@@ -110,17 +173,6 @@ go run -C tools/docs-version-sync . \
 Generation requires the tagged source, Helm and Helmfile, and release registry
 credentials. It normally runs in `.github/workflows/release-tags.yml`. Do not
 put credentials in repository files or command examples.
-
-The distribution path is:
-
-```text
-owning stack source and release inventory
-  -> tagged per-stack inventory generation
-  -> matching stack inventory JSON release asset
-  -> docs-version-sync catalog update
-  -> docs/version-catalog/main.yaml
-  -> generated docs/user/manifest.md blocks
-```
 
 ## Documentation Sync
 
