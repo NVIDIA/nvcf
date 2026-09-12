@@ -462,6 +462,9 @@ func TestKubernetesManifestAppliesInterpolatedBodyPerContext(t *testing.T) {
 	}
 }
 
+// TestKubernetesManifestIsRejectsEmptyAndDuplicateDeclarations confirms
+// that the manifest Given rejects an empty name, a blank body, and a
+// second declaration of the same name within one scenario.
 func TestKubernetesManifestIsRejectsEmptyAndDuplicateDeclarations(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	if err := sc.kubernetesManifestIs("", &godog.DocString{Content: "kind: Service\n"}); err == nil {
@@ -479,6 +482,9 @@ func TestKubernetesManifestIsRejectsEmptyAndDuplicateDeclarations(t *testing.T) 
 	}
 }
 
+// TestISuccessfullyApplyKubernetesManifestRejectsUndeclaredNameAndBadTable
+// confirms that applying an undeclared manifest or passing a table without
+// the context header fails before any kubectl command runs.
 func TestISuccessfullyApplyKubernetesManifestRejectsUndeclaredNameAndBadTable(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	table := docTable(t, [][]string{{"context"}, {"k3d-ncp-local-cp"}})
@@ -498,6 +504,9 @@ func TestISuccessfullyApplyKubernetesManifestRejectsUndeclaredNameAndBadTable(t 
 	}
 }
 
+// TestISuccessfullyApplyKubernetesManifestNamesFailingContext verifies
+// that when a later context row fails, the error names that row number
+// and kube context so the operator knows which cluster rejected the apply.
 func TestISuccessfullyApplyKubernetesManifestNamesFailingContext(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.runResults = []harness.Result{{ExitCode: 0}, {ExitCode: 1}}
@@ -1216,6 +1225,9 @@ func TestDNSNameShouldResolveFailureNamesTargetWithoutResolverOutput(t *testing.
 	}
 }
 
+// TestKubernetesWorkloadsShouldCompleteRolloutRunsExplicitWaits verifies
+// that each table row produces exactly one explicit-context rollout status
+// command, in row order, with the kind lowercased for kubectl.
 func TestKubernetesWorkloadsShouldCompleteRolloutRunsExplicitWaits(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0}
@@ -1242,6 +1254,9 @@ func TestKubernetesWorkloadsShouldCompleteRolloutRunsExplicitWaits(t *testing.T)
 	}
 }
 
+// TestKubernetesWorkloadsShouldCompleteRolloutNamesFailingRow confirms
+// that a non-zero rollout exit names the row, kind, and workload name in
+// the error without echoing kubectl output.
 func TestKubernetesWorkloadsShouldCompleteRolloutNamesFailingRow(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 1}
@@ -1256,6 +1271,9 @@ func TestKubernetesWorkloadsShouldCompleteRolloutNamesFailingRow(t *testing.T) {
 	}
 }
 
+// TestKubernetesWorkloadsShouldCompleteRolloutRejectsWrongHeaders confirms
+// that a table whose headers are not kind, name, namespace in that order is
+// rejected before any rollout command runs.
 func TestKubernetesWorkloadsShouldCompleteRolloutRejectsWrongHeaders(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	table := docTable(t, [][]string{

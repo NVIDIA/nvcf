@@ -114,6 +114,9 @@ func TestKubernetesDeploymentRolloutCommandBuildsExplicitWait(t *testing.T) {
 	}
 }
 
+// TestKubernetesWorkloadRolloutCommandLowercasesKind verifies that a
+// mixed-case kind is lowercased for kubectl and that ${VAR} in the
+// workload name is interpolated before the argv is built.
 func TestKubernetesWorkloadRolloutCommandLowercasesKind(t *testing.T) {
 	t.Setenv("BDD_ROUTER_NAME", "llm-request-router-region-b")
 	got, err := KubernetesWorkloadRolloutCommand(
@@ -130,6 +133,9 @@ func TestKubernetesWorkloadRolloutCommandLowercasesKind(t *testing.T) {
 	}
 }
 
+// TestKubernetesWorkloadRolloutCommandRejectsMissingInputs confirms that
+// an empty kind, name, namespace, or kube context is rejected instead of
+// producing a rollout wait against an implicit target.
 func TestKubernetesWorkloadRolloutCommandRejectsMissingInputs(t *testing.T) {
 	cases := map[string]KubernetesWorkload{
 		"kind":      {Name: "router", Namespace: "nvcf"},

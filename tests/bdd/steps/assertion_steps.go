@@ -564,6 +564,10 @@ func tableToKubernetesResources(table *godog.Table) ([]dsl.KubernetesResource, e
 	return resources, nil
 }
 
+// tableToKubernetesWorkloads converts a Godog table with kind, name, and
+// namespace headers into the workload list that
+// dsl.KubernetesWorkloadRolloutCommand consumes. Cells interpolate ${VAR}
+// and every cell must be non-empty; the row number is named in each error.
 func tableToKubernetesWorkloads(table *godog.Table) ([]dsl.KubernetesWorkload, error) {
 	if table == nil || len(table.Rows) < 2 {
 		return nil, fmt.Errorf("table must have kind, name, and namespace headers and at least one data row")
