@@ -467,7 +467,7 @@ natsAuthCalloutService:
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $effectivePylonImage = printf "%s/%s/pylon:0.16.2" $sidecarsHost $sidecarsRepo }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.18.0" $sidecarsHost $sidecarsRepo }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}
 {{- $stackNvcfRemoteConfig := dict }}
@@ -1249,7 +1249,7 @@ llmRequestRouter:
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
        PKI tag, then the OpenBao migrations tag, and finally the compatible
        stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.1" }}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.5" }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -1367,12 +1367,12 @@ vanityGateway:
 {{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" "nvcf" "port" 8080) }}
 {{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" "ess" "port" 8080) }}
 {{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
-{{/* openbao-migrations image tag: 0.19.1 is the floor. An operator may pin a
+{{/* openbao-migrations image tag: 0.19.5 is the floor. An operator may pin a
      newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
-     than the floor is ignored (the migrations job needs >= 0.19.1). */}}
-{{- $nvcfUiOpenbaoMigrationsTag := "0.19.1" }}
+     than the floor is ignored (the migrations job needs >= 0.19.5). */}}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.19.5" }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
-{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.19.1" $nvcfUiMigrationsTagOverride) }}
+{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.19.5" $nvcfUiMigrationsTagOverride) }}
 {{- $nvcfUiOpenbaoMigrationsTag = $nvcfUiMigrationsTagOverride }}
 {{- end }}
 nvcfUi:

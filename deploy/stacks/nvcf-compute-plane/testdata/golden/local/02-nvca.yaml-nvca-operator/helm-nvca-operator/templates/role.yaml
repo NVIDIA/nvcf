@@ -20,10 +20,10 @@ kind: ClusterRole
 metadata:
   name: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.22.2
+    helm.sh/chart: helm-nvca-operator-1.28.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
-    app.kubernetes.io/version: "3.5.2"
+    app.kubernetes.io/version: "3.8.0"
     app.kubernetes.io/managed-by: Helm
   finalizers:
     - nvca.nvcf.nvidia.io/operator-cleanup
@@ -69,7 +69,7 @@ rules:
   resources: ["icmsrequests/status"]
   verbs: ["get", "update", "patch"]
 - apiGroups: ["nvca.nvcf.nvidia.io"]
-  resources: ["storagerequests", "storagerequests/status"]
+  resources: ["modelcachebindings", "modelcachebindings/status", "storagerequests", "storagerequests/status"]
   verbs: ["get", "list", "watch", "patch", "create", "update", "delete"]
 - apiGroups: ["batch"]
   resources: ["jobs", "cronjobs"]
