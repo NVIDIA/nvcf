@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+schemaVersion: 1
+states:
+  - plane: compute-plane
+    path: deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl
+    fullOverrides:
+      - addons.kaiScheduler.enabled=true
+      - addons.groveOperator.enabled=true
+      - addons.dynamoOperator.enabled=true
+      - addons.topologyAwareScheduling.enabled=true
+  - plane: compute-plane
+    path: deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
+sourceCharts:
+  helm-nvca-operator:
+    tagPrefix: deploy/helm/nvca-operator/v
+    path: deploy/helm/nvca-operator/nvca-operator
+publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf

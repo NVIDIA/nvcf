@@ -27,6 +27,147 @@ func updateCatalogFromGitHub(repoRoot, sourceRef string, base *Catalog) (*Catalo
 	return buildCatalogFromResolvedStackInventory(inventory, snapshot, base)
 }
 
+func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, base *Catalog) (*Catalog, error) {
+	client := newGitHubClientFromEnvironment()
+	inventories := make(map[string]resolvedStackInventory, len(stackInventorySpecs))
+	for _, spec := range stackInventorySpecs {
+		release, err := client.resolveStackSourceReleaseForSpec(spec, sourceRefs[spec.Key])
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s stack release: %w", spec.Key, err)
+		}
+		inventory, err := client.resolvedStackInventoryForSpec(spec, release)
+		if err != nil {
+			return nil, fmt.Errorf("read %s stack inventory: %w", spec.Key, err)
+		}
+		if err := validateInventoryPlaneOwnership(spec, inventory); err != nil {
+			return nil, err
+		}
+		inventories[spec.Key] = inventory
+	}
+
+	combined, err := mergeResolvedStackInventories(inventories)
+	if err != nil {
+		return nil, err
+	}
+	selfManaged := inventories[selfManagedStackKey]
+	sourcePaths := effectiveStackPinSourcePaths(effectiveStackPins)
+	snapshot, err := loadStackSourceSnapshot(repoRoot, selfManaged.Source, sourcePaths)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := buildCatalogFromResolvedStackInventory(combined, snapshot, base)
+	if err != nil {
+		return nil, err
+	}
+	for _, spec := range stackInventorySpecs[1:] {
+		version := inventories[spec.Key].Source.Version
+		if !setArtifactVersionByNameAndType(catalog, spec.ResourceName, ArtifactTypeResource, version) {
+			catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts, Artifact{
+				Name:     spec.ResourceName,
+				Type:     ArtifactTypeResource,
+				Registry: defaultStackRegistry,
+				Version:  version,
+			})
+		}
+	}
+	retainCurrentPublications(catalog)
+	catalog.markAllUnpublishedAsPending()
+	catalog.reconcilePublicationPending()
+	catalog.pruneUnusedRegistries()
+	if err := ValidateCatalog(catalog); err != nil {
+		return nil, err
+	}
+	return catalog, nil
+}
+
+func validateInventoryPlaneOwnership(spec stackInventorySpec, inventory resolvedStackInventory) error {
+	wantPlane := map[string]string{
+		selfManagedStackKey:   "control-plane",
+		computePlaneStackKey:  "compute-plane",
+		observabilityStackKey: "observability",
+	}[spec.Key]
+	for _, release := range inventory.Releases {
+		if release.Plane != wantPlane {
+			return fmt.Errorf("%s stack inventory contains %s release %s; want only %s releases", spec.Key, release.Plane, release.Name, wantPlane)
+		}
+	}
+	return nil
+}
+
+func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory) (resolvedStackInventory, error) {
+	selfManaged, ok := inventories[selfManagedStackKey]
+	if !ok {
+		return resolvedStackInventory{}, fmt.Errorf("self-managed stack inventory is required")
+	}
+	combined := resolvedStackInventory{
+		SchemaVersion: resolvedStackInventorySchemaVersion,
+		Source:        selfManaged.Source,
+	}
+	releases := make(map[string]struct{})
+	artifacts := make(map[string]*resolvedInventoryArtifact)
+	artifactIdentities := make(map[string]string)
+	for _, spec := range stackInventorySpecs {
+		inventory, exists := inventories[spec.Key]
+		if !exists {
+			return resolvedStackInventory{}, fmt.Errorf("%s stack inventory is required", spec.Key)
+		}
+		if err := validateResolvedStackInventory(inventory); err != nil {
+			return resolvedStackInventory{}, fmt.Errorf("validate %s stack inventory: %w", spec.Key, err)
+		}
+		for _, release := range inventory.Releases {
+			key := resolvedReleaseKey(release.Plane, release.Name)
+			if _, duplicate := releases[key]; duplicate {
+				return resolvedStackInventory{}, fmt.Errorf("duplicate release %s across stack inventories", key)
+			}
+			releases[key] = struct{}{}
+			combined.Releases = append(combined.Releases, release)
+		}
+		for _, artifact := range inventory.Artifacts {
+			identity := artifact.Type + "\x00" + artifact.Name
+			if reference, exists := artifactIdentities[identity]; exists && reference != artifact.Reference {
+				return resolvedStackInventory{}, fmt.Errorf("stack inventories resolve %s %s to both %s and %s", artifact.Type, artifact.Name, reference, artifact.Reference)
+			}
+			artifactIdentities[identity] = artifact.Reference
+			key := artifact.Type + "\x00" + artifact.Reference
+			existing, exists := artifacts[key]
+			if !exists {
+				copy := artifact
+				copy.Sources = append([]resolvedArtifactSource(nil), artifact.Sources...)
+				artifacts[key] = &copy
+				continue
+			}
+			for _, source := range artifact.Sources {
+				found := false
+				for _, current := range existing.Sources {
+					if current == source {
+						found = true
+						break
+					}
+				}
+				if !found {
+					existing.Sources = append(existing.Sources, source)
+				}
+			}
+		}
+	}
+	for _, artifact := range artifacts {
+		sort.Slice(artifact.Sources, func(i, j int) bool {
+			return compareResolvedArtifactSources(artifact.Sources[i], artifact.Sources[j]) < 0
+		})
+		combined.Artifacts = append(combined.Artifacts, *artifact)
+	}
+	sort.Slice(combined.Releases, func(i, j int) bool {
+		return compareResolvedInventoryReleases(combined.Releases[i], combined.Releases[j]) < 0
+	})
+	sort.Slice(combined.Artifacts, func(i, j int) bool {
+		return compareResolvedInventoryArtifacts(combined.Artifacts[i], combined.Artifacts[j]) < 0
+	})
+	if err := validateResolvedStackInventory(combined); err != nil {
+		return resolvedStackInventory{}, fmt.Errorf("validate combined stack inventory: %w", err)
+	}
+	return combined, nil
+}
+
 func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, snapshot stackSourceSnapshot, base *Catalog) (*Catalog, error) {
 	if err := validateResolvedStackInventory(inventory); err != nil {
 		return nil, err
@@ -39,7 +180,7 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 	catalog := refreshCatalogFromArtifacts(inventory.Source.Version, artifacts, base)
-	retainIndependentManifestArtifacts(catalog)
+	retainIndependentManifestArtifacts(catalog, inventory, base)
 	if err := materializeMissingEffectiveStackPins(catalog, base, snapshot.Files); err != nil {
 		return nil, err
 	}
@@ -59,18 +200,6 @@ func buildCatalogFromResolvedStackInventory(inventory resolvedStackInventory, sn
 		return nil, err
 	}
 
-	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
-		if !setArtifactVersionByNameAndType(catalog, name, ArtifactTypeResource, inventory.Source.Version) {
-			catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts, Artifact{
-				Name:     name,
-				Type:     ArtifactTypeResource,
-				Registry: defaultStackRegistry,
-				Version:  inventory.Source.Version,
-			})
-		}
-	}
-	// The source release advances all deployment bundles together. Their public
-	// publication status remains independently verified below.
 	retainCurrentPublications(catalog)
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
@@ -155,14 +284,22 @@ func preserveCatalogArtifactIdentity(artifacts []Artifact, base *Catalog) {
 	}
 }
 
-// retainIndependentManifestArtifacts keeps public add-ons that are documented
-// with the stack but are installed and versioned separately.
-func retainIndependentManifestArtifacts(catalog *Catalog) {
+// retainIndependentManifestArtifacts keeps public add-ons and artifacts from
+// deployment planes that are not owned by this inventory. Legacy aggregate
+// inventories still replace artifacts from every plane they contain.
+func retainIndependentManifestArtifacts(catalog *Catalog, inventory resolvedStackInventory, base *Catalog) {
 	denylist := catalog.DenylistMap()
-	referenced := make(map[string]struct{}, len(catalog.Manifest.Entries))
+	referenced := make(map[string]ManifestPlane, len(catalog.Manifest.Entries))
 	for _, entry := range catalog.Manifest.Entries {
 		if entry.ArtifactID != "" {
-			referenced[entry.ArtifactID] = struct{}{}
+			referenced[entry.ArtifactID] = entry.Plane
+		}
+	}
+	ownedPlanes := resolvedInventoryManifestPlanes(inventory)
+	independentArtifacts := make(map[string]struct{})
+	if base != nil {
+		for _, artifact := range base.SupplementalArtifacts {
+			independentArtifacts[artifact.catalogKey()] = struct{}{}
 		}
 	}
 	retained := catalog.SupplementalArtifacts[:0]
@@ -170,14 +307,34 @@ func retainIndependentManifestArtifacts(catalog *Catalog) {
 		if _, denied := denylist[artifact.Name]; denied {
 			continue
 		}
-		_, manifestArtifact := referenced[artifact.catalogKey()]
-		if artifact.Type != ArtifactTypeResource && !manifestArtifact {
-			continue
+		if artifact.Type != ArtifactTypeResource {
+			plane, manifestArtifact := referenced[artifact.catalogKey()]
+			if !manifestArtifact {
+				continue
+			}
+			if _, owned := ownedPlanes[plane]; owned {
+				if _, independent := independentArtifacts[artifact.catalogKey()]; !independent {
+					continue
+				}
+			}
 		}
 		artifact.Registry = publicRegistryForArtifactType(artifact.Type)
 		retained = append(retained, artifact)
 	}
 	catalog.SupplementalArtifacts = retained
+}
+
+func resolvedInventoryManifestPlanes(inventory resolvedStackInventory) map[ManifestPlane]struct{} {
+	planes := make(map[ManifestPlane]struct{})
+	for _, release := range inventory.Releases {
+		switch release.Plane {
+		case "control-plane", "observability":
+			planes[ManifestPlaneControl] = struct{}{}
+		case "compute-plane":
+			planes[ManifestPlaneCompute] = struct{}{}
+		}
+	}
+	return planes
 }
 
 // retainCurrentPublications keeps exact public availability records for the

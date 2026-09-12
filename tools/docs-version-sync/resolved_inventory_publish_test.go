@@ -79,29 +79,31 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 	}
 }
 
-func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
+func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")
 	repo := initTestGitRepo(t)
-	writeFile(t, filepath.Join(repo, "deploy/helm/nvca-operator/nvca-operator/Chart.yaml"), "apiVersion: v2\nname: helm-nvca-operator\nversion: 0.0.0\n")
-	writeFile(t, filepath.Join(repo, "deploy/helm/nvca-operator/nvca-operator/templates/pod.yaml"), "kind: Pod\n")
-	if _, err := gitOutput(repo, "add", "--all"); err != nil {
-		t.Fatal(err)
+	states := []resolvedInventoryState{
+		{Plane: "control-plane", Path: "deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl", FullOverrides: []string{"addons.llm.enabled=true"}},
+		{Plane: "control-plane", Path: "deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl"},
+		{Plane: "control-plane", Path: "deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl"},
 	}
-	if _, err := gitOutput(repo, "commit", "-m", "nvca chart fixture"); err != nil {
-		t.Fatal(err)
+	configBody := "schemaVersion: 1\npublishedChartRepository: " + testPublishedChartRepository + "\nstates:\n"
+	for _, state := range states {
+		configBody += "  - plane: " + state.Plane + "\n    path: " + state.Path + "\n"
+		if len(state.BaseOverrides) > 0 {
+			configBody += "    baseOverrides:\n      - " + state.BaseOverrides[0] + "\n"
+		}
+		if len(state.FullOverrides) > 0 {
+			configBody += "    fullOverrides:\n      - " + state.FullOverrides[0] + "\n"
+		}
 	}
-	if _, err := gitOutput(repo, "tag", "deploy/helm/nvca-operator/v1.0.0"); err != nil {
-		t.Fatal(err)
-	}
-
 	stackFiles := map[string]string{
-		resolvedInventoryConfigPath: "schemaVersion: 1\npublishedChartRepository: " + testPublishedChartRepository + "\nsourceCharts:\n  helm-nvca-operator:\n    tagPrefix: deploy/helm/nvca-operator/v\n    path: deploy/helm/nvca-operator/nvca-operator\n",
+		resolvedInventoryConfigPath: configBody,
 	}
-	for _, state := range resolvedInventoryStates {
-		stackFiles[state.path] = "releases: []\n"
+	for _, state := range states {
+		stackFiles[state.Path] = "releases: []\n"
 	}
-	stackFiles["deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl"] = "releases:\n  - name: nvca-operator\n    chart: nvcf/helm-nvca-operator\n    version: 1.0.0\n"
 	source := commitTestStackSource(t, repo, "1.2.3", stackFiles)
 	runner := &fakeResolvedInventoryRunner{t: t}
 	inventory, err := collectResolvedStackInventory(repo, "", source, runner)
@@ -111,19 +113,19 @@ func TestCollectResolvedStackInventoryBuildsEveryPlane(t *testing.T) {
 	if err := validateResolvedStackInventory(inventory); err != nil {
 		t.Fatalf("inventory validation failed: %v", err)
 	}
-	if len(inventory.Releases) != 8 {
-		t.Fatalf("got %d releases, want 8", len(inventory.Releases))
+	if len(inventory.Releases) != 4 {
+		t.Fatalf("got %d releases, want 4", len(inventory.Releases))
 	}
 	for _, release := range inventory.Releases {
 		if release.Name == "nvcf-pki" && release.Required {
 			t.Fatal("nvcf-pki should remain optional after the full render")
 		}
 	}
-	if runner.templateCalls != len(resolvedInventoryStates) {
-		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(resolvedInventoryStates))
+	if runner.templateCalls != len(states) {
+		t.Fatalf("template calls = %d, want %d", runner.templateCalls, len(states))
 	}
-	if runner.prepareCalls != 3 {
-		t.Fatalf("repository preparation calls = %d, want source and two public repository preparations", runner.prepareCalls)
+	if runner.prepareCalls != 2 {
+		t.Fatalf("repository preparation calls = %d, want source and public repository preparation", runner.prepareCalls)
 	}
 	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
 	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {
@@ -211,6 +213,36 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 		t.Fatalf("invalid render value name error = %v", err)
 	}
 
+	invalidStates := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "unknown plane",
+			body:    "states:\n  - plane: data-plane\n    path: deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl\n",
+			wantErr: "unknown plane",
+		},
+		{
+			name:    "duplicate path",
+			body:    "states:\n  - plane: control-plane\n    path: deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl\n  - plane: observability\n    path: deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl\n",
+			wantErr: "is duplicated",
+		},
+		{
+			name:    "malformed override",
+			body:    "states:\n  - plane: control-plane\n    path: deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl\n    fullOverrides:\n      - addons.llm.enabled\n",
+			wantErr: "invalid override",
+		},
+	}
+	for _, test := range invalidStates {
+		t.Run(test.name, func(t *testing.T) {
+			writeFile(t, configPath, "schemaVersion: 1\npublishedChartRepository: "+testPublishedChartRepository+"\n"+test.body)
+			if _, err := loadResolvedInventoryConfig(repo, ""); err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("state validation error = %v, want substring %q", err, test.wantErr)
+			}
+		})
+	}
+
 	externalConfig := filepath.Join(t.TempDir(), "release-inventory.yaml")
 	writeFile(t, externalConfig, "schemaVersion: 1\npublishedChartRepository: https://helm.example.test/external\n")
 	external, err := loadResolvedInventoryConfig(repo, externalConfig)
@@ -219,6 +251,58 @@ func TestLoadResolvedInventoryConfig(t *testing.T) {
 	}
 	if external.PublishedChartRepository != "https://helm.example.test/external" {
 		t.Fatalf("external published repository = %q", external.PublishedChartRepository)
+	}
+}
+
+func TestReleaseInventoriesOwnOnlyTheirStackStates(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		spec  stackInventorySpec
+		plane string
+		paths []string
+	}{
+		{stackInventorySpecs[0], "control-plane", []string{
+			"deploy/stacks/self-managed/helmfile.d/01-dependencies.yaml.gotmpl",
+			"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl",
+			"deploy/stacks/self-managed/helmfile.d/03-observability.yaml.gotmpl",
+		}},
+		{stackInventorySpecs[1], "compute-plane", []string{
+			"deploy/stacks/nvcf-compute-plane/helmfile.d/01-dependencies.yaml.gotmpl",
+			"deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
+		}},
+		{stackInventorySpecs[2], "observability", []string{
+			"deploy/stacks/observability/helmfile.d/01-observability.yaml.gotmpl",
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.spec.Key, func(t *testing.T) {
+			config, err := loadResolvedInventoryConfig(repoRoot, filepath.Join(repoRoot, filepath.FromSlash(test.spec.ConfigPath)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := make(map[string]struct{}, len(test.paths))
+			for _, path := range test.paths {
+				want[path] = struct{}{}
+			}
+			if len(config.States) != len(want) {
+				t.Fatalf("%s inventory states = %d, want %d", test.spec.Key, len(config.States), len(want))
+			}
+			for _, state := range config.States {
+				if state.Plane != test.plane {
+					t.Fatalf("%s inventory state %#v has plane %s, want %s", test.spec.Key, state, state.Plane, test.plane)
+				}
+				if _, ok := want[state.Path]; !ok {
+					t.Fatalf("unexpected %s inventory state %#v", test.spec.Key, state)
+				}
+				delete(want, state.Path)
+			}
+			if len(want) != 0 {
+				t.Fatalf("%s inventory is missing states %v", test.spec.Key, want)
+			}
+		})
 	}
 }
 

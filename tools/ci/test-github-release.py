@@ -1181,6 +1181,20 @@ class GithubReleaseTest(unittest.TestCase):
             ],
         }
 
+    def test_release_metadata_publishes_one_inventory_per_stack(self):
+        metadata_path = SCRIPT_PATH.with_name("github-release-subprojects.json")
+        metadata = json.loads(metadata_path.read_text())
+        expected = {
+            "deploy/stacks/self-managed/v1.2.3": "nvcf-self-managed-stack-inventory.json",
+            "deploy/stacks/nvcf-compute-plane/v1.2.3": "nvcf-compute-plane-stack-inventory.json",
+            "deploy/stacks/observability/v1.2.3": "nvcf-observability-stack-inventory.json",
+        }
+        for tag, asset_name in expected.items():
+            with self.subTest(tag=tag):
+                service = self.github_release.release_asset_service(metadata, tag, SCRIPT_PATH.parents[2])
+                self.assertIsNotNone(service)
+                self.assertEqual(service["resolved_inventory_asset"], asset_name)
+
     def chart_release_metadata(self):
         """Return minimal release metadata for the chart publication tests."""
         return {
@@ -1758,17 +1772,16 @@ class GithubReleaseTest(unittest.TestCase):
     def test_stack_inventory_preflight_renders_without_release_publication(self):
         workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
         self.assertIn("inventory_tag:", workflow)
-        self.assertIn("name: self-managed inventory preflight", workflow)
+        self.assertIn("name: stack inventory preflight", workflow)
         self.assertIn("inputs.inventory_tag != ''", workflow)
         self.assertIn('token: ${{ github.token }}', workflow)
         self.assertIn("Render tagged inventory without publishing", workflow)
         self.assertIn("--generate-stack-inventory", workflow)
-        self.assertIn(
-            '--inventory-config "${GITHUB_WORKSPACE}/deploy/stacks/self-managed/release-inventory.yaml"',
-            workflow,
-        )
+        self.assertIn("deploy/stacks/nvcf-compute-plane/v*", workflow)
+        self.assertIn("deploy/stacks/observability/v*", workflow)
         preflight = workflow.index("inventory-preflight:")
         tag_release = workflow.index("tag-release-notes:")
+        self.assertNotIn("--inventory-config", workflow[preflight:tag_release])
         self.assertNotIn("github-release tag", workflow[preflight:tag_release])
         self.assertNotIn("upload-artifact", workflow[preflight:tag_release])
 

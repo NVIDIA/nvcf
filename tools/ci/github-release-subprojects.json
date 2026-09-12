@@ -34,7 +34,9 @@
       "path": "deploy/stacks/nvcf-compute-plane",
       "service_name": "nvcf-compute-plane-stack",
       "legacy_tag_prefix": "nvcf-compute-plane-stack-v",
-      "initial_version": "0.2.0"
+      "tag_format": "deploy/stacks/nvcf-compute-plane/v${version}",
+      "initial_version": "0.2.0",
+      "resolved_inventory_asset": "nvcf-compute-plane-stack-inventory.json"
     },
     {
       "id": "nvcf-self-managed-stack",
@@ -49,7 +51,8 @@
       "path": "deploy/stacks/observability",
       "service_name": "nvcf-observability-stack",
       "tag_format": "deploy/stacks/observability/v${version}",
-      "initial_version": "0.0.0"
+      "initial_version": "0.0.0",
+      "resolved_inventory_asset": "nvcf-observability-stack-inventory.json"
     },
     {
       "id": "grpc-proxy",

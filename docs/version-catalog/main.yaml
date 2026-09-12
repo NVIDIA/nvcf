@@ -98,6 +98,7 @@ version_overrides:
     source: independent source release; not pinned by stack
 publication_pending:
   - admin-token-issuer-proxy
+  - cert-manager-acmesolver
   - crd-upgrader
   - dynamo-platform
   - ess-agent
@@ -360,6 +361,12 @@ manifest:
       requirement: required
       description: Provides Kubernetes command-line utilities for deployment jobs.
       github_url: https://github.com/alpine-docker/k8s
+    - artifact_id: cert-manager-acmesolver
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Serves temporary ACME HTTP-01 domain-validation challenges.
+      upstream_url: https://github.com/cert-manager/cert-manager
     - artifact_id: cert-manager-cainjector
       plane: control
       kind: service-image
@@ -768,11 +775,9 @@ stack:
   source_tag: deploy/stacks/self-managed/v0.16.1
   source_commit: 6aa572575c3f3ee7716a9fddc4cbfceae17e73ec
   pin_sources:
-    - deploy/stacks/nvcf-compute-plane/environments/base.yaml
-    - deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
-  pin_source_digest: sha256:9080c81090e00803c9920b4bbc3fe4015ea4efc7804f9a597d661f55f03ec118
+  pin_source_digest: sha256:9246f885bc9f52a512844da5d6fcbb9d5d32099c8a4cb6f063c4cc145cf058ff
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
@@ -864,6 +869,10 @@ artifacts:
     type: image
     registry: public-images
     version: 5.0.8-nv-2.0.1
+  - name: cert-manager-acmesolver
+    type: image
+    registry: public-images
+    version: v1.20.2
   - name: cert-manager-cainjector
     type: image
     registry: public-images

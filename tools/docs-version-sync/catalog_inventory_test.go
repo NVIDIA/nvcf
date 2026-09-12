@@ -63,10 +63,107 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 	}
 	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
 		artifact, ok := catalog.findArtifact(name)
-		if !ok || artifact.Version != release.Version {
-			t.Fatalf("%s = %#v, want release version %s", name, artifact, release.Version)
+		if !ok || artifact.Version != "0.5.0" {
+			t.Fatalf("%s = %#v, want independently owned version 0.5.0", name, artifact)
 		}
 	}
+}
+
+func TestUpdateCatalogFromGitHubInventoriesMergesThreeStackAssets(t *testing.T) {
+	repo := initTestGitRepo(t)
+	selfRelease := commitTestStackSource(t, repo, "1.2.3", testCatalogPinSources())
+	releases := map[string]stackSourceRelease{
+		selfManagedStackKey: selfRelease,
+		computePlaneStackKey: {
+			Version: "2.3.4", Tag: stackInventorySpecs[1].TagPrefix + "2.3.4", Commit: selfRelease.Commit,
+		},
+		observabilityStackKey: {
+			Version: "3.4.5", Tag: stackInventorySpecs[2].TagPrefix + "3.4.5", Commit: selfRelease.Commit,
+		},
+	}
+	for _, key := range []string{computePlaneStackKey, observabilityStackKey} {
+		if _, err := gitOutput(repo, "tag", releases[key].Tag, releases[key].Commit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	full := testCatalogResolvedInventory(t, selfRelease)
+	inventories := map[string]resolvedStackInventory{
+		selfManagedStackKey:   filterResolvedInventoryByPlane(t, full, releases[selfManagedStackKey], "control-plane"),
+		computePlaneStackKey:  filterResolvedInventoryByPlane(t, full, releases[computePlaneStackKey], "compute-plane"),
+		observabilityStackKey: filterResolvedInventoryByPlane(t, full, releases[observabilityStackKey], "observability"),
+	}
+	raw := make(map[string][]byte, len(inventories))
+	for key, inventory := range inventories {
+		var err error
+		raw[key], err = marshalResolvedStackInventory(inventory)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, spec := range stackInventorySpecs {
+			release := releases[spec.Key]
+			switch r.URL.Path {
+			case "/repos/NVIDIA/nvcf/git/ref/tags/" + release.Tag:
+				_, _ = fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
+				return
+			case "/repos/NVIDIA/nvcf/releases/tags/" + release.Tag:
+				_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, release.Tag, spec.AssetName, server.URL+"/inventory/"+spec.Key)
+				return
+			case "/inventory/" + spec.Key:
+				_, _ = w.Write(raw[spec.Key])
+				return
+			}
+		}
+		http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	t.Setenv("DOC_VERSION_SYNC_GITHUB_API_URL", server.URL)
+	t.Setenv("DOC_VERSION_SYNC_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	catalog, err := updateCatalogFromGitHubInventories(repo, map[string]string{
+		selfManagedStackKey:   releases[selfManagedStackKey].Version,
+		computePlaneStackKey:  releases[computePlaneStackKey].Version,
+		observabilityStackKey: releases[observabilityStackKey].Version,
+	}, testCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalog.Stack.Version != "1.2.3" {
+		t.Fatalf("self-managed stack version = %s, want 1.2.3", catalog.Stack.Version)
+	}
+	for name, want := range map[string]string{
+		computeStackResourceName:       "2.3.4",
+		observabilityStackResourceName: "3.4.5",
+	} {
+		artifact, found := catalog.findArtifactByNameAndType(name, ArtifactTypeResource)
+		if !found || artifact.Version != want {
+			t.Fatalf("%s = %#v, want version %s", name, artifact, want)
+		}
+	}
+}
+
+func filterResolvedInventoryByPlane(t *testing.T, source resolvedStackInventory, release stackSourceRelease, plane string) resolvedStackInventory {
+	t.Helper()
+	filtered := resolvedStackInventory{SchemaVersion: resolvedStackInventorySchemaVersion, Source: release}
+	for _, candidate := range source.Releases {
+		if candidate.Plane == plane {
+			filtered.Releases = append(filtered.Releases, candidate)
+		}
+	}
+	for _, artifact := range source.Artifacts {
+		if len(artifact.Sources) == 1 && artifact.Sources[0].Plane == plane {
+			filtered.Artifacts = append(filtered.Artifacts, artifact)
+		}
+	}
+	if err := validateResolvedStackInventory(filtered); err != nil {
+		t.Fatalf("filtered %s inventory is invalid: %v", plane, err)
+	}
+	return filtered
 }
 
 func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependent(t *testing.T) {
@@ -93,7 +190,7 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 		{Name: "nvca", Type: ArtifactTypeChart, Version: "6.7.8", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 		{Name: "pylon", Type: ArtifactTypeImage, Version: "3.4.5", Registry: "private-images"},
 		{Name: "independent-chart", Type: ArtifactTypeChart, Version: "2.3.4", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
-		{Name: computeStackResourceName, Type: ArtifactTypeResource, Version: source.Version, Registry: "public-resources"},
+		{Name: computeStackResourceName, Type: ArtifactTypeResource, Version: "0.5.0", Registry: "public-resources"},
 	}
 
 	catalog, err := buildCatalogFromResolvedStackInventory(inventory, snapshot, base)
@@ -169,8 +266,8 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 		t.Fatal("compute stack has an exact publication but is marked pending")
 	}
 	observability, ok := catalog.findArtifact(observabilityStackResourceName)
-	if !ok || observability.Version != source.Version {
-		t.Fatalf("observability stack = %#v, want release version %s", observability, source.Version)
+	if !ok || observability.Version != "0.5.0" {
+		t.Fatalf("observability stack = %#v, want independently owned version 0.5.0", observability)
 	}
 	if !catalog.publicationIsPending(observability) {
 		t.Fatal("observability stack without an exact publication is not marked pending")
@@ -178,6 +275,76 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	if catalog.Stack.PinSourceDigest == "" || strings.Join(catalog.Stack.PinSources, ",") != strings.Join(effectiveStackPinSourcePaths(effectiveStackPins), ",") {
 		t.Fatalf("stack pin metadata = %#v", catalog.Stack)
 	}
+}
+
+func TestRetainIndependentManifestArtifactsUsesInventoryPlaneOwnership(t *testing.T) {
+	newCatalog := func() *Catalog {
+		return &Catalog{
+			Registries: map[string]Registry{
+				defaultStackRegistry: {},
+				defaultImageRegistry: {},
+				defaultChartRegistry: {},
+			},
+			SupplementalArtifacts: []Artifact{
+				{Name: "stale-control", Type: ArtifactTypeImage, Registry: "old", Version: "1.0.0"},
+				{Name: "independent-compute", Type: ArtifactTypeImage, Registry: "old", Version: "2.0.0"},
+				{Name: "unclassified", Type: ArtifactTypeImage, Registry: "old", Version: "3.0.0"},
+				{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "old", Version: "4.0.0"},
+			},
+			Manifest: ManifestMetadata{Entries: []ManifestEntry{
+				{ArtifactID: "stale-control", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Control artifact."},
+				{ArtifactID: "independent-compute", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Compute artifact."},
+				{ArtifactID: "independent-resource", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Independent resource."},
+			}},
+		}
+	}
+
+	t.Run("self-managed-only inventory", func(t *testing.T) {
+		catalog := newCatalog()
+		base := newCatalog()
+		base.Artifacts = append([]Artifact(nil), base.SupplementalArtifacts...)
+		base.SupplementalArtifacts = nil
+		inventory := resolvedStackInventory{Releases: []resolvedInventoryRelease{
+			{Plane: "control-plane", Name: "api"},
+			{Plane: "observability", Name: "collector"},
+		}}
+		retainIndependentManifestArtifacts(catalog, inventory, base)
+
+		if _, found := catalog.findArtifact("stale-control"); found {
+			t.Fatal("control artifact absent from its owning inventory was retained")
+		}
+		compute, found := catalog.findArtifact("independent-compute")
+		if !found || compute.Registry != defaultImageRegistry {
+			t.Fatalf("independent compute artifact = %#v, want retained with public image registry", compute)
+		}
+		if _, found := catalog.findArtifact("unclassified"); found {
+			t.Fatal("unclassified artifact was retained")
+		}
+		resource, found := catalog.findArtifact("independent-resource")
+		if !found || resource.Registry != defaultStackRegistry {
+			t.Fatalf("independent resource = %#v, want retained with public resource registry", resource)
+		}
+	})
+
+	t.Run("legacy aggregate inventory", func(t *testing.T) {
+		catalog := newCatalog()
+		base := newCatalog()
+		base.Artifacts = append([]Artifact(nil), base.SupplementalArtifacts...)
+		base.SupplementalArtifacts = nil
+		inventory := resolvedStackInventory{Releases: []resolvedInventoryRelease{
+			{Plane: "control-plane", Name: "api"},
+			{Plane: "compute-plane", Name: "nvca"},
+			{Plane: "observability", Name: "collector"},
+		}}
+		retainIndependentManifestArtifacts(catalog, inventory, base)
+
+		if _, found := catalog.findArtifact("independent-compute"); found {
+			t.Fatal("compute artifact absent from a legacy aggregate inventory was retained")
+		}
+		if _, found := catalog.findArtifact("independent-resource"); !found {
+			t.Fatal("independent resource was not retained")
+		}
+	})
 }
 
 func TestStackResourceVersionUpdateIgnoresSameNameImage(t *testing.T) {
@@ -343,10 +510,8 @@ func testCatalogResolvedInventory(t *testing.T, source stackSourceRelease) resol
 
 func testCatalogPinSources() map[string]string {
 	return map[string]string{
-		"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl":       "  - name: llm-request-router\n    version: 1.2.3\n  - name: ingress\n    version: 2.3.4\n",
-		"deploy/stacks/self-managed/global.yaml.gotmpl":                   "image: nvcr.io/nvidia/nvcf/pylon:3.4.5\n",
-		"deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl": "  - name: nvca-operator\n    version: 4.5.6\n",
-		"deploy/stacks/nvcf-compute-plane/environments/base.yaml":         "  nvcaOperator:\n    selfManaged:\n      nvcaVersion: \"6.7.8\"\n",
+		"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl": "  - name: llm-request-router\n    version: 1.2.3\n  - name: ingress\n    version: 2.3.4\n",
+		"deploy/stacks/self-managed/global.yaml.gotmpl":             "image: nvcr.io/nvidia/nvcf/pylon:3.4.5\n",
 	}
 }
 

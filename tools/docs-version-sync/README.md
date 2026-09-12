@@ -1,16 +1,16 @@
 # Documentation Version Sync
 
 This tool keeps the artifact versions in the top-of-tree documentation aligned
-with the latest stable self-managed stack release. Top-of-tree documentation is
-under `docs/user/`, but its version catalog follows a tagged stack release, not
-an untagged `main` commit.
+with the selected self-managed, compute-plane, and observability stack
+releases. Top-of-tree documentation is under `docs/user/`, but its version
+catalog follows tagged stack releases, not an untagged `main` commit.
 
 ## Release and documentation flow
 
 ```text
 merge release-worthy stack change to main
-  -> release automation creates the self-managed stack tag and GitHub Release
-  -> the tag workflow attaches nvcf-self-managed-stack-inventory.json
+  -> release automation creates the owning stack tag and GitHub Release
+  -> the tag workflow attaches that stack's inventory JSON
   -> a maintainer runs docs-version-sync
   -> the catalog records public locations or Publication pending
   -> generated blocks under docs/user/ are updated in a Pull Request
@@ -19,21 +19,21 @@ merge release-worthy stack change to main
 The stack release is automatic. A merge to `main` runs
 [`release-tags.yml`](../../.github/workflows/release-tags.yml), which invokes
 `tools/ci/github-release auto` for every registered subproject. A `feat:`,
-`fix:`, or `perf:` commit that changes `deploy/stacks/self-managed/` creates the
-next `deploy/stacks/self-managed/vX.Y.Z` tag and GitHub Release. Chart pin and
-Helmfile changes in that subtree should use a release-worthy commit type. No
-maintainer normally creates the stack tag by hand.
+`fix:`, or `perf:` commit that changes a stack creates that stack's next tag
+and GitHub Release. Chart pin and Helmfile changes should use a release-worthy
+commit type. No maintainer normally creates the stack tag by hand.
 
-The tag workflow renders the control-plane, compute-plane, and observability
-stacks from the same tagged commit. It attaches the resolved chart and image
-inventory before publishing the GitHub Release. Public artifact publishing is
-a separate process and can happen later after QA.
+The tag workflow renders only the states owned by the tagged stack. It attaches
+the resolved chart and image inventory before publishing the GitHub Release.
+Public artifact publishing is a separate process and can happen later after QA.
 
-Changes limited to `deploy/stacks/nvcf-compute-plane/` or
-`deploy/stacks/observability/` create releases for those registered subprojects.
-The documentation sync still follows the next self-managed stack release that
-contains those commits because the self-managed release owns the combined
-inventory asset.
+Each registered stack publishes its own inventory:
+
+- `nvcf-self-managed-stack-inventory.json`
+- `nvcf-compute-plane-stack-inventory.json`
+- `nvcf-observability-stack-inventory.json`
+
+No stack inventory references another stack's Helmfile state.
 
 ## Sync after an automatic stack release
 
@@ -44,12 +44,13 @@ git fetch --tags origin
 go run -C tools/docs-version-sync . --target main --update-catalog
 ```
 
-The command selects the latest stable self-managed stack release unless
-`--stack-version X.Y.Z` is supplied. It updates:
+The command selects the latest stable release for all three stacks. Supply
+`--stack-version`, `--compute-stack-version`, and
+`--observability-stack-version` to pin an exact release set. It updates:
 
 - `docs/version-catalog/main.yaml`
 - Generated blocks configured by the catalog under `docs/user/`
-- The control-plane, compute-plane, and observability bundle versions
+- The self-managed, compute-plane, and observability bundle versions
 
 The update retains publication records only when `name`, `type`, and `version`
 still match. New and changed versions without a matching record are added to
@@ -99,21 +100,26 @@ A publication-only update does not require a new stack release.
 
 ## Add an artifact to the stack inventory
 
-For a chart or image deployed by a stack:
+For the complete dependency workflow, including ownership, optionality, and
+indirect images, see
+[`deploy/stacks/INVENTORY.md`](../../deploy/stacks/INVENTORY.md).
+
+For a chart or image deployed by any stack:
 
 1. Add it to the owning Helmfile or chart values.
 2. Confirm the inventory renderer includes the path:
    - A default release in an existing state is discovered automatically.
    - For a release behind a new optional setting, add that setting to the
-     matching `fullOverrides` entry in `resolved_inventory_publish.go`.
-   - For a new Helmfile state, add the state to `resolvedInventoryStates`.
+     matching `fullOverrides` entry in
+     owning `release-inventory.yaml`.
+   - For a new Helmfile state, add a `states` entry in that file.
    - If an independently released chart must be rendered from its immutable
      GitHub tag, add it to
-     [`release-inventory.yaml`](../../deploy/stacks/self-managed/release-inventory.yaml).
+     owning `release-inventory.yaml`.
 3. Merge the release-worthy change to `main`. Release automation creates the
-   corresponding registered stack release.
-4. Run the documentation sync after a self-managed stack release containing
-   the change appears with its inventory asset.
+   owning stack release.
+4. Run the documentation sync after all selected stack releases have inventory
+   assets.
 5. Add a `manifest.entries` record for the new artifact.
 6. Add a verified public publication or leave the artifact pending.
 

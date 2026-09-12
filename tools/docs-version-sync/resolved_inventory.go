@@ -21,6 +21,7 @@ const resolvedStackInventorySchemaVersion = 1
 
 var (
 	resolvedStackPlanes = []string{"compute-plane", "control-plane", "observability"}
+	imageArgumentRe     = regexp.MustCompile(`^--[A-Za-z0-9][A-Za-z0-9_.-]*-image=(.*)$`)
 	imageDigestRe       = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+.-]*:[A-Za-z0-9=_+.-]+$`)
 )
 
@@ -160,14 +161,17 @@ func generateResolvedStackInventory(source stackSourceRelease, planes []resolved
 }
 
 func normalizeResolvedInventoryPlanes(planes []resolvedInventoryPlaneInput) ([]resolvedInventoryPlaneInput, error) {
-	if len(planes) != len(resolvedStackPlanes) {
-		return nil, fmt.Errorf("resolved inventory requires planes %s", strings.Join(resolvedStackPlanes, ", "))
+	if len(planes) == 0 {
+		return nil, fmt.Errorf("resolved inventory requires at least one plane")
 	}
 	planes = append([]resolvedInventoryPlaneInput(nil), planes...)
 	sort.Slice(planes, func(i, j int) bool { return planes[i].Name < planes[j].Name })
-	for i, want := range resolvedStackPlanes {
-		if planes[i].Name != want {
-			return nil, fmt.Errorf("resolved inventory plane %d is %q, want %q", i, planes[i].Name, want)
+	for i, plane := range planes {
+		if !isResolvedStackPlane(plane.Name) {
+			return nil, fmt.Errorf("resolved inventory plane %d is unknown: %q", i, plane.Name)
+		}
+		if i > 0 && planes[i-1].Name == plane.Name {
+			return nil, fmt.Errorf("resolved inventory plane %q is duplicated", plane.Name)
 		}
 	}
 	return planes, nil
@@ -312,6 +316,11 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 				}
 				images[image.Reference] = image
 			}
+			if key.Value == "args" || key.Value == "command" {
+				if err := collectResolvedImageArguments(value, images); err != nil {
+					return err
+				}
+			}
 			if err := collectResolvedImages(value, images); err != nil {
 				return err
 			}
@@ -324,6 +333,33 @@ func collectResolvedImages(node *yaml.Node, images map[string]parsedImageReferen
 		}
 	}
 	return nil
+}
+
+func collectResolvedImageArguments(node *yaml.Node, images map[string]parsedImageReference) error {
+	if node.Kind == yaml.ScalarNode {
+		if reference, ok := resolvedImageArgument(node.Value); ok {
+			image, err := parseResolvedImageReference(reference)
+			if err != nil {
+				return fmt.Errorf("image argument %q: %w", node.Value, err)
+			}
+			images[image.Reference] = image
+		}
+		return nil
+	}
+	for _, child := range node.Content {
+		if err := collectResolvedImageArguments(child, images); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resolvedImageArgument(value string) (string, bool) {
+	matches := imageArgumentRe.FindStringSubmatch(value)
+	if matches == nil {
+		return "", false
+	}
+	return matches[1], true
 }
 
 func isResolvedImageField(key string) bool {
@@ -402,7 +438,6 @@ func validateResolvedStackInventory(inventory resolvedStackInventory) error {
 	}
 
 	releases := make(map[string]resolvedInventoryRelease, len(inventory.Releases))
-	planeReleaseCounts := make(map[string]int, len(resolvedStackPlanes))
 	for i, release := range inventory.Releases {
 		if i > 0 && compareResolvedInventoryReleases(inventory.Releases[i-1], release) >= 0 {
 			return fmt.Errorf("resolved inventory releases are not uniquely sorted")
@@ -412,12 +447,6 @@ func validateResolvedStackInventory(inventory resolvedStackInventory) error {
 		}
 		key := resolvedReleaseKey(release.Plane, release.Name)
 		releases[key] = release
-		planeReleaseCounts[release.Plane]++
-	}
-	for _, plane := range resolvedStackPlanes {
-		if planeReleaseCounts[plane] == 0 {
-			return fmt.Errorf("resolved inventory has no %s releases", plane)
-		}
 	}
 
 	chartSources := make(map[string]struct{}, len(inventory.Releases))
