@@ -129,7 +129,7 @@ func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testi
 	}
 	source := commitTestStackSource(t, repo, "1.2.3", stackFiles)
 	runner := &fakeResolvedInventoryRunner{t: t}
-	inventory, err := collectResolvedStackInventory(repo, "", source, runner)
+	inventory, err := collectResolvedStackInventory(repo, "", source, resolvedInventoryGenerationOptions{}, runner)
 	if err != nil {
 		t.Fatalf("collectResolvedStackInventory failed: %v", err)
 	}

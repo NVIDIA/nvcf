@@ -161,6 +161,10 @@ type resolvedInventoryConfig struct {
 	States                   []resolvedInventoryState                `yaml:"states,omitempty"`
 }
 
+type resolvedInventoryGenerationOptions struct {
+	UsePublishedCharts bool
+}
+
 type resolvedInventorySourceChart struct {
 	TagPrefix    string            `yaml:"tagPrefix"`
 	Path         string            `yaml:"path"`
@@ -176,7 +180,7 @@ func (source resolvedInventoryHelmSource) reference() string {
 	return source.Registry + "/" + source.Repository
 }
 
-func writeResolvedStackInventory(repoRoot, outputPath, configPath string, source stackSourceRelease) error {
+func writeResolvedStackInventory(repoRoot, outputPath, configPath string, source stackSourceRelease, options resolvedInventoryGenerationOptions) error {
 	if err := verifyResolvedInventoryCheckout(repoRoot, source); err != nil {
 		return err
 	}
@@ -187,7 +191,7 @@ func writeResolvedStackInventory(repoRoot, outputPath, configPath string, source
 		}
 		configPath = filepath.Join(repoRoot, filepath.FromSlash(spec.ConfigPath))
 	}
-	inventory, err := collectResolvedStackInventory(repoRoot, configPath, source, execResolvedInventoryCommandRunner{})
+	inventory, err := collectResolvedStackInventory(repoRoot, configPath, source, options, execResolvedInventoryCommandRunner{})
 	if err != nil {
 		return err
 	}
@@ -229,7 +233,7 @@ func verifyResolvedInventoryCheckout(repoRoot string, source stackSourceRelease)
 	return nil
 }
 
-func collectResolvedStackInventory(repoRoot, configPath string, source stackSourceRelease, runner resolvedInventoryCommandRunner) (resolvedStackInventory, error) {
+func collectResolvedStackInventory(repoRoot, configPath string, source stackSourceRelease, options resolvedInventoryGenerationOptions, runner resolvedInventoryCommandRunner) (resolvedStackInventory, error) {
 	tempRoot, err := os.MkdirTemp("", "nvcf-resolved-stack-inventory-")
 	if err != nil {
 		return resolvedStackInventory{}, err
@@ -240,6 +244,9 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	config, err := loadResolvedInventoryConfig(repoRoot, configPath)
 	if err != nil {
 		return resolvedStackInventory{}, err
+	}
+	if options.UsePublishedCharts {
+		config.SourceCharts = nil
 	}
 	states := config.States
 	if len(states) == 0 {

@@ -195,8 +195,10 @@ The manual `inventory_tag` preflight uploads the rendered JSON as a workflow
 artifact. New releases use the inventory config stored in the immutable tag.
 For a release that lacks a config with per-stack states, the preflight uses the
 config from the workflow ref as a bootstrap. The inventory still records and
-renders the selected tag. This fallback is only for validating historical
-releases. Tags created after this workflow lands are self-contained.
+renders the selected tag, using the published charts referenced there instead
+of source chart paths that might not exist in the historical commit. This
+fallback is only for validating historical releases. Tags created after this
+workflow lands are self-contained.
 
 ## Development Documentation Sync
 
