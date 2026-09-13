@@ -1766,7 +1766,8 @@ class GithubReleaseTest(unittest.TestCase):
         tag_release = workflow.index("tag-release-notes:")
         preflight_workflow = workflow[preflight:tag_release]
         self.assertIn("--inventory-config", preflight_workflow)
-        self.assertIn("predates its inventory config", preflight_workflow)
+        self.assertIn("grep -q '^states:'", preflight_workflow)
+        self.assertIn("predates its per-stack inventory states", preflight_workflow)
         self.assertIn("actions/upload-artifact@v4", preflight_workflow)
         self.assertIn("if-no-files-found: error", preflight_workflow)
         self.assertNotIn("github-release tag", preflight_workflow)

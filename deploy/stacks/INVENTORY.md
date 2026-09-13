@@ -193,7 +193,7 @@ put credentials in repository files or command examples.
 
 The manual `inventory_tag` preflight uploads the rendered JSON as a workflow
 artifact. New releases use the inventory config stored in the immutable tag.
-For a release that predates per-stack inventory configs, the preflight uses the
+For a release that lacks a config with per-stack states, the preflight uses the
 config from the workflow ref as a bootstrap. The inventory still records and
 renders the selected tag. This fallback is only for validating historical
 releases. Tags created after this workflow lands are self-contained.

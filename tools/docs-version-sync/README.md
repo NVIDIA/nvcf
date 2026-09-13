@@ -188,7 +188,7 @@ directory normally contains three separated inventories.
 
 Use the `inventory_tag` input on `release-tags.yml` to reproduce an inventory
 without publishing a release. The preflight uploads the JSON as a workflow
-artifact. Tags that predate per-stack inventory configs use the config from the
+artifact. Tags that lack a config with per-stack states use the config from the
 workflow ref as a one-time bootstrap. New tags carry their own config.
 
 ## Validation
