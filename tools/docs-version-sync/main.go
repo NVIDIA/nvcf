@@ -115,7 +115,7 @@ func run(args []string) error {
 		if !*updateCatalog {
 			return fmt.Errorf("--qualification-version requires --update-catalog")
 		}
-		if !validStackVersion(strings.TrimPrefix(*qualificationVersion, "v")) {
+		if !validStableStackVersion(strings.TrimPrefix(*qualificationVersion, "v")) {
 			return fmt.Errorf("--qualification-version must be a stable semantic version")
 		}
 		if *stackVersion == "" || *computeStackVersion == "" || *observabilityStackVersion == "" {

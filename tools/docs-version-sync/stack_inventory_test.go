@@ -55,6 +55,32 @@ func TestReleaseSetRecordsAllThreeImmutableSources(t *testing.T) {
 	}
 }
 
+func TestReleaseSetStackComparisonIncludesImmutableSourceMetadata(t *testing.T) {
+	releaseSet := ReleaseSetMetadata{Stacks: ReleaseSetStacks{
+		ControlPlane: StackReleaseMetadata{
+			Version: "1.2.3", SourceTag: stackInventorySpecs[0].TagPrefix + "1.2.3",
+			SourceCommit: strings.Repeat("a", 40), InventoryAsset: stackInventorySpecs[0].AssetName,
+		},
+		ComputePlane: StackReleaseMetadata{
+			Version: "2.3.4", SourceTag: stackInventorySpecs[1].TagPrefix + "2.3.4",
+			SourceCommit: strings.Repeat("b", 40), InventoryAsset: stackInventorySpecs[1].AssetName,
+		},
+		Observability: StackReleaseMetadata{
+			Version: "3.4.5", SourceTag: stackInventorySpecs[2].TagPrefix + "3.4.5",
+			SourceCommit: strings.Repeat("c", 40), InventoryAsset: stackInventorySpecs[2].AssetName,
+		},
+	}}
+	if !releaseSet.sameStackReleases(releaseSet) {
+		t.Fatal("identical stack metadata did not match")
+	}
+
+	changed := releaseSet
+	changed.Stacks.Observability.SourceCommit = strings.Repeat("d", 40)
+	if releaseSet.sameStackReleases(changed) {
+		t.Fatal("release sets with different immutable source commits matched")
+	}
+}
+
 func TestMergeResolvedStackInventoriesCombinesPeerSources(t *testing.T) {
 	inventories := map[string]resolvedStackInventory{
 		selfManagedStackKey:   testSeparatedInventory(t, stackInventorySpecs[0], "control-plane", "api"),

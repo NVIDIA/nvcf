@@ -351,7 +351,7 @@ func ValidateCatalog(catalog *Catalog) error {
 		}
 		seenPending[name] = struct{}{}
 	}
-	if catalog.ReleaseSet.DocumentationVersion != "" {
+	if catalog.ReleaseSet != (ReleaseSetMetadata{}) {
 		if err := validateReleaseSet(catalog.ReleaseSet); err != nil {
 			return err
 		}
@@ -462,7 +462,7 @@ func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
 	if releaseSet.Status == ReleaseSetDevelopment && releaseSet.DocumentationVersion != "dev" {
 		return fmt.Errorf("development release_set documentation_version must be dev")
 	}
-	if releaseSet.Status == ReleaseSetQualified && !validStackVersion(strings.TrimPrefix(releaseSet.DocumentationVersion, "v")) {
+	if releaseSet.Status == ReleaseSetQualified && !validStableStackVersion(strings.TrimPrefix(releaseSet.DocumentationVersion, "v")) {
 		return fmt.Errorf("qualified release_set documentation_version must be a stable semantic version")
 	}
 	for _, stack := range []struct {

@@ -296,18 +296,20 @@ func TestRetainIndependentManifestArtifactsUsesInventoryPlaneOwnership(t *testin
 			SupplementalArtifacts: []Artifact{
 				{Name: "stale-control", Type: ArtifactTypeImage, Registry: "old", Version: "1.0.0"},
 				{Name: "independent-compute", Type: ArtifactTypeImage, Registry: "old", Version: "2.0.0"},
+				{Name: "stale-observability", Type: ArtifactTypeImage, Registry: "old", Version: "2.5.0"},
 				{Name: "unclassified", Type: ArtifactTypeImage, Registry: "old", Version: "3.0.0"},
 				{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "old", Version: "4.0.0"},
 			},
 			Manifest: ManifestMetadata{Entries: []ManifestEntry{
 				{ArtifactID: "stale-control", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Control artifact."},
 				{ArtifactID: "independent-compute", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Compute artifact."},
+				{ArtifactID: "stale-observability", Plane: ManifestPlaneObservability, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Observability artifact."},
 				{ArtifactID: "independent-resource", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Independent resource."},
 			}},
 		}
 	}
 
-	t.Run("self-managed-only inventory", func(t *testing.T) {
+	t.Run("legacy control and observability inventory", func(t *testing.T) {
 		catalog := newCatalog()
 		base := newCatalog()
 		base.Artifacts = append([]Artifact(nil), base.SupplementalArtifacts...)
@@ -331,6 +333,24 @@ func TestRetainIndependentManifestArtifactsUsesInventoryPlaneOwnership(t *testin
 		resource, found := catalog.findArtifact("independent-resource")
 		if !found || resource.Registry != defaultStackRegistry {
 			t.Fatalf("independent resource = %#v, want retained with public resource registry", resource)
+		}
+	})
+
+	t.Run("observability-only inventory", func(t *testing.T) {
+		catalog := newCatalog()
+		base := newCatalog()
+		base.Artifacts = append([]Artifact(nil), base.SupplementalArtifacts...)
+		base.SupplementalArtifacts = nil
+		inventory := resolvedStackInventory{Releases: []resolvedInventoryRelease{
+			{Plane: "observability", Name: "collector"},
+		}}
+		retainIndependentManifestArtifacts(catalog, inventory, base)
+
+		if _, found := catalog.findArtifact("stale-observability"); found {
+			t.Fatal("observability artifact absent from its owning inventory was retained")
+		}
+		if control, found := catalog.findArtifact("stale-control"); !found || control.Registry != defaultImageRegistry {
+			t.Fatalf("independent control artifact = %#v, want retained with public image registry", control)
 		}
 	})
 

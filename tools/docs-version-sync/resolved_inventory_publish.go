@@ -353,7 +353,7 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	return inventory, nil
 }
 
-var helmfileReleaseNameRE = regexp.MustCompile(`^\s*-\s+name:\s*([A-Za-z0-9][A-Za-z0-9_.-]*)\s*(?:#.*)?$`)
+var helmfileReleaseNameRE = regexp.MustCompile(`^\s*-\s+name:\s*(?:"([A-Za-z0-9][A-Za-z0-9_.-]*)"|'([A-Za-z0-9][A-Za-z0-9_.-]*)'|([A-Za-z0-9][A-Za-z0-9_.-]*))\s*(?:#.*)?$`)
 
 func declaredHelmfileReleaseNames(path string) ([]string, error) {
 	raw, err := os.ReadFile(path)
@@ -379,11 +379,18 @@ func declaredHelmfileReleaseNames(path string) ([]string, error) {
 		if match == nil {
 			continue
 		}
-		if _, exists := seen[match[1]]; exists {
+		name := match[1]
+		if name == "" {
+			name = match[2]
+		}
+		if name == "" {
+			name = match[3]
+		}
+		if _, exists := seen[name]; exists {
 			continue
 		}
-		seen[match[1]] = struct{}{}
-		names = append(names, match[1])
+		seen[name] = struct{}{}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names, nil

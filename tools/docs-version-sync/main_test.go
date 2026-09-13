@@ -904,6 +904,23 @@ func TestValidateTargetRejectsNonMainTargets(t *testing.T) {
 	}
 }
 
+func TestRunRejectsPrereleaseQualificationVersion(t *testing.T) {
+	err := run([]string{"--update-catalog", "--qualification-version", "v1.2.3-rc.1"})
+	if err == nil || !strings.Contains(err.Error(), "must be a stable semantic version") {
+		t.Fatalf("run error = %v, want prerelease qualification rejection", err)
+	}
+}
+
+func TestValidateCatalogRejectsPartiallyPopulatedReleaseSet(t *testing.T) {
+	catalog := testCatalog()
+	catalog.ReleaseSet.Status = ReleaseSetDevelopment
+
+	err := ValidateCatalog(catalog)
+	if err == nil || !strings.Contains(err.Error(), "documentation_version must be non-empty") {
+		t.Fatalf("ValidateCatalog error = %v, want partial release_set rejection", err)
+	}
+}
+
 func testCatalog() *Catalog {
 	return &Catalog{
 		Version: 1,

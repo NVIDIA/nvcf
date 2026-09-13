@@ -33,25 +33,13 @@ catalog_snapshot="$root/docs/version-catalog/$VERSION.yaml"
 [[ ! -f "$nav_dst" ]] || { echo "Refusing to overwrite $nav_dst" >&2; exit 1; }
 [[ ! -f "$catalog_snapshot" ]] || { echo "Refusing to overwrite $catalog_snapshot" >&2; exit 1; }
 
-echo "==> Snapshotting docs/user -> docs/$VERSION (dereferencing symlinks)"
-cp -RL "$docs_src" "$docs_dst"
-cp "$catalog" "$catalog_snapshot"
-
-echo "==> Generating fern/versions/$VERSION.yml from dev.yml"
-sed "s|../../docs/user/|../../docs/$VERSION/|g" "$nav_src" > "$nav_dst"
-
-echo "==> Updating latest and version entries in fern/docs.yml"
-python3 - "$docs_yml" "$catalog" "$VERSION" "$DISPLAY" <<'PY'
+stack_display="$(python3 - "$catalog" "$DISPLAY" <<'PY'
 from pathlib import Path
 import re
 import sys
 
-docs_yml = Path(sys.argv[1])
-catalog = Path(sys.argv[2])
-version = sys.argv[3]
-display = sys.argv[4]
-
-catalog_text = catalog.read_text()
+catalog_text = Path(sys.argv[1]).read_text()
+display = sys.argv[2]
 
 
 def release_set_value(name):
@@ -76,11 +64,30 @@ if release_set_value("status") != "qualified":
     raise SystemExit("release_set must be qualified before cutting versioned docs")
 if release_set_value("documentation_version").lstrip("v") != display:
     raise SystemExit("release_set documentation_version does not match requested docs version")
-
 control_version = stack_version("control-plane")
 compute_version = stack_version("compute-plane")
 observability_version = stack_version("observability")
-stack_display = f"CP {control_version}, Compute {compute_version}, Obs {observability_version}"
+print(f"CP {control_version}, Compute {compute_version}, Obs {observability_version}")
+PY
+)"
+
+echo "==> Snapshotting docs/user -> docs/$VERSION (dereferencing symlinks)"
+cp -RL "$docs_src" "$docs_dst"
+cp "$catalog" "$catalog_snapshot"
+
+echo "==> Generating fern/versions/$VERSION.yml from dev.yml"
+sed "s|../../docs/user/|../../docs/$VERSION/|g" "$nav_src" > "$nav_dst"
+
+echo "==> Updating latest and version entries in fern/docs.yml"
+python3 - "$docs_yml" "$VERSION" "$DISPLAY" "$stack_display" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+docs_yml = Path(sys.argv[1])
+version = sys.argv[2]
+display = sys.argv[3]
+stack_display = sys.argv[4]
 
 text = docs_yml.read_text()
 versions_marker = "versions:\n"

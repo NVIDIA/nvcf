@@ -117,8 +117,6 @@ func releaseSetFromInventories(inventories map[string]resolvedStackInventory, do
 	}, nil
 }
 
-func (releaseSet ReleaseSetMetadata) sameStackVersions(other ReleaseSetMetadata) bool {
-	return releaseSet.Stacks.ControlPlane.Version == other.Stacks.ControlPlane.Version &&
-		releaseSet.Stacks.ComputePlane.Version == other.Stacks.ComputePlane.Version &&
-		releaseSet.Stacks.Observability.Version == other.Stacks.Observability.Version
+func (releaseSet ReleaseSetMetadata) sameStackReleases(other ReleaseSetMetadata) bool {
+	return releaseSet.Stacks == other.Stacks
 }

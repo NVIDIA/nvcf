@@ -76,4 +76,14 @@ if ! cmp -s "${workdir}/docs/version-catalog/main.yaml" "${workdir}/docs/version
   exit 1
 fi
 
+sed -i.bak 's/status: qualified/status: development/' "${workdir}/docs/version-catalog/main.yaml"
+if "${workdir}/tools/scripts/cut-docs-version.sh" v0.7.0 > "${workdir}/invalid-output.txt" 2>&1; then
+  echo "expected an unqualified release set to be rejected"
+  exit 1
+fi
+if [[ -e "${workdir}/docs/v0.7.0" || -e "${workdir}/fern/versions/v0.7.0.yml" || -e "${workdir}/docs/version-catalog/v0.7.0.yaml" ]]; then
+  echo "unqualified release set created a partial documentation snapshot"
+  exit 1
+fi
+
 echo "test-cut-docs-version: PASS"

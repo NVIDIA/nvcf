@@ -73,7 +73,7 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	if err != nil {
 		return nil, err
 	}
-	if qualificationVersion == "" && base != nil && base.ReleaseSet.Status == ReleaseSetQualified && releaseSet.sameStackVersions(base.ReleaseSet) {
+	if qualificationVersion == "" && base != nil && base.ReleaseSet.Status == ReleaseSetQualified && releaseSet.sameStackReleases(base.ReleaseSet) {
 		releaseSet.DocumentationVersion = base.ReleaseSet.DocumentationVersion
 		releaseSet.Status = base.ReleaseSet.Status
 	}
@@ -395,10 +395,12 @@ func resolvedInventoryManifestPlanes(inventory resolvedStackInventory) map[Manif
 	planes := make(map[ManifestPlane]struct{})
 	for _, release := range inventory.Releases {
 		switch release.Plane {
-		case "control-plane", "observability":
+		case "control-plane":
 			planes[ManifestPlaneControl] = struct{}{}
 		case "compute-plane":
 			planes[ManifestPlaneCompute] = struct{}{}
+		case "observability":
+			planes[ManifestPlaneObservability] = struct{}{}
 		}
 	}
 	return planes

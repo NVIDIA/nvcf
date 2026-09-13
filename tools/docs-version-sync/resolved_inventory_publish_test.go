@@ -87,6 +87,10 @@ func TestDeclaredHelmfileReleaseNamesReportsUncoveredOptionalRelease(t *testing.
 releases:
   - name: required
     chart: nvcf/required
+  - name: "double-quoted-addon"
+    chart: nvcf/double-quoted
+  - name: 'single-quoted-addon' # optional release
+    chart: nvcf/single-quoted
   - name: optional-addon
     condition: addons.example.enabled
     chart: nvcf/optional
@@ -96,7 +100,7 @@ releases:
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"optional-addon", "required"}
+	want := []string{"double-quoted-addon", "optional-addon", "required", "single-quoted-addon"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("declared releases = %v, want %v", names, want)
 	}
@@ -174,6 +178,7 @@ func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testi
 	for _, state := range states {
 		stackFiles[state.Path] = "releases: []\n"
 	}
+	stackFiles[states[0].Path] = "releases:\n  - name: \"unrendered-addon\"\n    chart: nvcf/addon\n"
 	source := commitTestStackSource(t, repo, "1.2.3", stackFiles)
 	runner := &fakeResolvedInventoryRunner{t: t}
 	inventory, err := collectResolvedStackInventory(repo, "", source, resolvedInventoryGenerationOptions{}, runner)
@@ -196,6 +201,10 @@ func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testi
 	}
 	if runner.prepareCalls != 2 {
 		t.Fatalf("repository preparation calls = %d, want source and public repository preparation", runner.prepareCalls)
+	}
+	wantWarning := states[0].Path + " declares release unrendered-addon but the full inventory profile did not render it"
+	if !reflect.DeepEqual(inventory.Warnings, []string{wantWarning}) {
+		t.Fatalf("coverage warnings = %v, want %q", inventory.Warnings, wantWarning)
 	}
 	wantPrefix := []string{"prepare-source", "list", "list", "build", "prepare-public", "template"}
 	if len(runner.operations) < len(wantPrefix) || !reflect.DeepEqual(runner.operations[:len(wantPrefix)], wantPrefix) {

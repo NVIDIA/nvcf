@@ -451,6 +451,11 @@ func validStackVersion(version string) bool {
 	return true
 }
 
+func validStableStackVersion(version string) bool {
+	match := stackVersionRE.FindStringSubmatch(version)
+	return match != nil && match[1] == ""
+}
+
 // parseStableStackRef parses a stable stack tag ref for numeric ordering.
 func parseStableStackRef(ref string) (string, stableStackVersion, bool) {
 	return parseStableStackRefForSpec(stackInventorySpecs[0], ref)
