@@ -165,6 +165,25 @@ releases:
       - ../global.yaml.gotmpl
       - image:
           repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
+      - serviceConfig:
+          service:
+            nats_url: "nats://nats.nats-system.svc.cluster.local:4222"
+      - servicePluginConfigSecret:
+          enabled: true
+          name: nats-nkeys
+          key: auth-callout-plugin.yaml
+          mountPath: /etc/plugin-config/plugin.yaml
+      - extraEnvs:
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED
+            valueFrom:
+              secretKeyRef:
+                name: {{ dig "nats" "authCallout" "secretName" "nats-auth-callout-nkeys" .Values | quote }}
+                key: nkey_seed
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SIGNATURE
+            valueFrom:
+              secretKeyRef:
+                name: {{ dig "nats" "authCallout" "secretName" "nats-auth-callout-nkeys" .Values | quote }}
+                key: nkey_signature
       {{- if .Values.global.imagePullSecrets }}
       - imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}

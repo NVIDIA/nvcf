@@ -107,8 +107,7 @@ image:
 imagePullSecrets: [] # List of secrets containing registry credentials
 
 # Additional environment variables to be added to the pod
-extraEnvs:
-  []
+extraEnvs: []
   # - name: ENV_NAME
   #   value: "value"
   # - name: ANOTHER_ENV
@@ -116,6 +115,14 @@ extraEnvs:
   #     secretKeyRef:
   #       name: secret-name
   #       key: secret-key
+
+# Optional partial configuration stored in a Secret. This is loaded after the
+# ConfigMap and before environment overrides.
+servicePluginConfigSecret:
+  enabled: false
+  name: nats-nkeys
+  key: auth-callout-plugin.yaml
+  mountPath: /etc/plugin-config/plugin.yaml
 
 podAnnotations: {}
 podLabels: {}
