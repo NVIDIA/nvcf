@@ -79,6 +79,29 @@ func TestMergeAndResolveHelmfileReleasesPreservesOptionalStatus(t *testing.T) {
 	}
 }
 
+func TestDeclaredHelmfileReleaseNamesReportsUncoveredOptionalRelease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml.gotmpl")
+	writeFile(t, path, `repositories:
+  - name: nvcf
+    url: example.invalid
+releases:
+  - name: required
+    chart: nvcf/required
+  - name: optional-addon
+    condition: addons.example.enabled
+    chart: nvcf/optional
+`)
+
+	names, err := declaredHelmfileReleaseNames(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"optional-addon", "required"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("declared releases = %v, want %v", names, want)
+	}
+}
+
 func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")

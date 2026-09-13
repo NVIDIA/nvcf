@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,30 @@ func TestStackInventorySpecsMatchReleasedStacks(t *testing.T) {
 				t.Fatalf("spec = %#v, want %#v", got, spec)
 			}
 		})
+	}
+}
+
+func TestReleaseSetRecordsAllThreeImmutableSources(t *testing.T) {
+	inventories := map[string]resolvedStackInventory{}
+	for index, spec := range stackInventorySpecs {
+		version := fmt.Sprintf("1.%d.0", index)
+		inventories[spec.Key] = resolvedStackInventory{Source: stackSourceRelease{
+			Version: version,
+			Tag:     spec.TagPrefix + version,
+			Commit:  strings.Repeat(string(rune('a'+index)), 40),
+		}}
+	}
+	releaseSet, err := releaseSetFromInventories(inventories, "1.4.0", ReleaseSetQualified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReleaseSet(releaseSet); err != nil {
+		t.Fatal(err)
+	}
+	if releaseSet.Stacks.ControlPlane.InventoryAsset != stackInventorySpecs[0].AssetName ||
+		releaseSet.Stacks.ComputePlane.InventoryAsset != stackInventorySpecs[1].AssetName ||
+		releaseSet.Stacks.Observability.InventoryAsset != stackInventorySpecs[2].AssetName {
+		t.Fatalf("release set assets = %#v", releaseSet.Stacks)
 	}
 }
 
@@ -68,7 +93,7 @@ func TestMergeResolvedStackInventoriesRejectsVersionConflict(t *testing.T) {
 	}
 	inventories[computePlaneStackKey] = compute
 	_, err := mergeResolvedStackInventories(inventories)
-	if err == nil || !strings.Contains(err.Error(), "resolve container-image shared-runtime to both") {
+	if err == nil || !strings.Contains(err.Error(), "compute-plane uses nvcr.io/nvidia/nvcf/shared-runtime:2.0.0") {
 		t.Fatalf("merge error = %v, want cross-stack version conflict", err)
 	}
 }

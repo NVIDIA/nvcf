@@ -42,10 +42,13 @@ func run(args []string) error {
 	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
 	computeStackVersion := flags.String("compute-stack-version", "", "compute-plane stack version to fetch")
 	observabilityStackVersion := flags.String("observability-stack-version", "", "observability stack version to fetch")
+	qualificationVersion := flags.String("qualification-version", "", "documentation version for an exact QA-qualified three-stack release set")
 	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
 	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
 	stackSourceTag := flags.String("stack-source-tag", "", "immutable owning stack source tag for inventory generation")
 	stackSourceCommit := flags.String("stack-source-commit", "", "immutable owning stack source commit for inventory generation")
+	compareFrom := flags.String("compare-release-set-from", "", "directory containing previous release-set inventory JSON files")
+	compareTo := flags.String("compare-release-set-to", "", "directory containing current release-set inventory JSON files")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -60,6 +63,26 @@ func run(args []string) error {
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
+	}
+	if *compareFrom != "" || *compareTo != "" {
+		if *compareFrom == "" || *compareTo == "" {
+			return fmt.Errorf("--compare-release-set-from and --compare-release-set-to must be used together")
+		}
+		if *updateCatalog || *check || *inventoryOutput != "" || *qualificationVersion != "" ||
+			*stackVersion != "" || *computeStackVersion != "" || *observabilityStackVersion != "" ||
+			*inventoryConfig != "" || *stackSourceTag != "" || *stackSourceCommit != "" {
+			return fmt.Errorf("release-set comparison cannot be combined with catalog update, check, or inventory generation flags")
+		}
+		fromPath := resolveRepoPath(repoRoot, *compareFrom)
+		toPath := resolveRepoPath(repoRoot, *compareTo)
+		report, err := compareInventorySetDirectories(fromPath, toPath)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Print(report); err != nil {
+			return fmt.Errorf("write release-set comparison: %w", err)
+		}
+		return nil
 	}
 	if *inventoryOutput != "" {
 		if *updateCatalog || *check {
@@ -85,6 +108,17 @@ func run(args []string) error {
 	if !*updateCatalog && (*computeStackVersion != "" || *observabilityStackVersion != "") {
 		return fmt.Errorf("--compute-stack-version and --observability-stack-version require --update-catalog")
 	}
+	if *qualificationVersion != "" {
+		if !*updateCatalog {
+			return fmt.Errorf("--qualification-version requires --update-catalog")
+		}
+		if !validStackVersion(strings.TrimPrefix(*qualificationVersion, "v")) {
+			return fmt.Errorf("--qualification-version must be a stable semantic version")
+		}
+		if *stackVersion == "" || *computeStackVersion == "" || *observabilityStackVersion == "" {
+			return fmt.Errorf("--qualification-version requires exact control-plane, compute-plane, and observability stack versions")
+		}
+	}
 	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" {
 		return fmt.Errorf("--stack-source-tag, --stack-source-commit, and --inventory-config require --generate-stack-inventory")
 	}
@@ -105,7 +139,7 @@ func run(args []string) error {
 			selfManagedStackKey:   *stackVersion,
 			computePlaneStackKey:  *computeStackVersion,
 			observabilityStackKey: *observabilityStackVersion,
-		}, base)
+		}, *qualificationVersion, base)
 		if err != nil {
 			return err
 		}
@@ -144,6 +178,13 @@ func run(args []string) error {
 		return err
 	}
 	return nil
+}
+
+func resolveRepoPath(repoRoot, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(repoRoot, path)
 }
 
 func writeCatalogAfterStackSourceValidation(repoRoot, catalogPath string, catalog *Catalog) error {

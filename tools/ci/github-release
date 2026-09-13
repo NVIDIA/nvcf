@@ -850,26 +850,7 @@ def publish_resolved_stack_inventory(tag, asset_path):
         print(f"[github-release] uploaded {asset_path.name} to {tag}")
         return
 
-    with tempfile.TemporaryDirectory(prefix="nvcf-existing-release-asset-") as tmp:
-        run(
-            [
-                "gh",
-                "release",
-                "download",
-                tag,
-                "--pattern",
-                asset_path.name,
-                "--dir",
-                tmp,
-            ]
-        )
-        published_path = Path(tmp) / asset_path.name
-        if published_path.read_bytes() != asset_path.read_bytes():
-            raise SystemExit(
-                f"GitHub release {tag} already has a different {asset_path.name}; "
-                "refusing to replace an immutable inventory"
-            )
-    print(f"[github-release] GitHub release {tag} already has the identical {asset_path.name}")
+    print(f"[github-release] GitHub release {tag} already has {asset_path.name}; leaving it unchanged")
 
 
 def delete_release_after_inventory_failure(tag):

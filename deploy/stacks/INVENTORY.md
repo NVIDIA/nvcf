@@ -8,9 +8,9 @@ charts, images, and resources that its release can cause a customer environment
 to pull. Release automation publishes those inventories as separate assets,
 then the documentation sync combines them into one customer-facing manifest.
 
-This split keeps ownership close to the stack that installs the dependency. It
-also means a stack can release on its own cadence without treating another
-stack's Helmfile state as part of its package.
+This split keeps ownership close to the stack that installs the dependency.
+Each stack is packaged, tagged, and inventoried independently. Customer support
+and qualification apply to one three-stack release set after joint QA.
 
 ## Architecture
 
@@ -26,12 +26,15 @@ The flow has three layers:
    validates their plane boundaries, merges compatible artifacts, updates
    `docs/version-catalog/main.yaml`, and generates the inventory blocks in
    `docs/user/manifest.md`.
+1. The catalog records the exact control-plane, compute-plane, and
+   observability versions. A development release set follows the newest stack
+   releases. A qualified release set uses three versions selected by QA.
 
 The version catalog is the handoff between release facts and public
 documentation. Released inventories provide immutable versions and source
 provenance. The catalog adds public distribution locations and the
-human-authored classification that tells customers whether an artifact is
-required or optional.
+human-authored descriptions and source links. Stack ownership and
+required or optional status come from the released inventories.
 
 At the current phase, CI reports drift from the latest released inventories as
 a warning. We still block on locally generated documentation being out of sync.
@@ -47,7 +50,9 @@ sequenceDiagram
     participant Release as Release workflow
     participant Assets as GitHub Releases
     participant Sync as docs-version-sync
-    participant Catalog as Version catalog
+    participant QA
+    participant Catalog as Development catalog
+    participant Stable as Versioned docs
     participant Manifest as Manifest page
 
     Contributor->>Stack: Update dependency and release-inventory.yaml
@@ -57,15 +62,22 @@ sequenceDiagram
         Release->>Stack: Check out immutable stack tag
         Release->>Stack: Render configured profiles
         Stack-->>Release: Return charts, images, and resources
-        Release->>Release: Validate stack ownership and classifications
+        Release->>Release: Validate ownership and profile coverage
         Release->>Assets: Publish the stack inventory JSON
     end
 
-    Sync->>Assets: Download all three inventory assets
-    Assets-->>Sync: Return immutable release inventories
-    Sync->>Sync: Validate planes and merge compatible artifacts
-    Sync->>Catalog: Update versions, provenance, and release sources
-    Sync->>Manifest: Generate customer-facing inventory blocks
+    Sync->>Assets: Download newest three inventory assets
+    Assets-->>Sync: Return released inventories
+    Sync->>Sync: Deduplicate artifacts and report conflicts
+    Sync->>Catalog: Open reviewable development docs update
+    Catalog->>Manifest: Generate ownership and optionality
+
+    QA->>QA: Qualify one exact three-stack set
+    QA->>Sync: Approve exact versions and docs version
+    Sync->>Assets: Download the three selected inventories
+    Sync->>Catalog: Record qualified release_set
+    Catalog->>Stable: Snapshot docs and catalog
+    Stable->>Stable: Make qualified docs the default
 ```
 
 ## Ownership Model
@@ -77,8 +89,10 @@ Keep each fact in one source:
   configuration that cannot be derived from an ordinary render.
 - The resolved JSON inventory records the artifacts found at an immutable stack
   tag. Release automation publishes it with the stack release.
+- The catalog `release_set` records the exact three stack releases represented
+  by the generated documentation.
 - `docs/version-catalog/main.yaml` records public distribution locations and
-  human-authored manifest classification.
+  human-authored descriptions and source links.
 - Generated blocks in `docs/user/manifest.md` present the catalog to users.
 
 Do not maintain a second hand-written list of versions in the documentation.
@@ -130,9 +144,11 @@ When adding, removing, or changing a dependency:
    rendered from an immutable source tag. Update the renderer when an indirect
    artifact uses an input form it does not recognize.
 5. Add or update tests that prove the resolved inventory contains the artifact
-   and its source release.
+   and its source release. Confirm the inventory-derived stack ownership and
+   required or optional status.
 6. Update `manifest.entries` in `docs/version-catalog/main.yaml`. Set the plane,
-   kind, requirement, public description, and public source link.
+   kind, public description, and public source link. The released inventory
+   overrides ownership and required or optional status.
 7. For a new third-party dependency, verify its license against
    `.allowed-licenses.txt` and update `NOTICE` or subtree attribution files as
    required.
@@ -149,8 +165,9 @@ When adding, removing, or changing a dependency:
    ./tools/ci/check-docs
    ```
 
-The renderer rejects unclassified artifacts. Do not denylist an artifact merely
-because its public publication is pending.
+The renderer rejects unclassified artifacts. Inventory generation warns when a
+release declared in a Helmfile state does not appear in its full profile. Do
+not denylist an artifact merely because its public publication is pending.
 
 ## Release Packaging
 
@@ -174,7 +191,14 @@ Generation requires the tagged source, Helm and Helmfile, and release registry
 credentials. It normally runs in `.github/workflows/release-tags.yml`. Do not
 put credentials in repository files or command examples.
 
-## Documentation Sync
+The manual `inventory_tag` preflight uploads the rendered JSON as a workflow
+artifact. New releases use the inventory config stored in the immutable tag.
+For a release that predates per-stack inventory configs, the preflight uses the
+config from the workflow ref as a bootstrap. The inventory still records and
+renders the selected tag. This fallback is only for validating historical
+releases. Tags created after this workflow lands are self-contained.
+
+## Development Documentation Sync
 
 After stable releases and inventory assets exist for all three stacks, run:
 
@@ -187,9 +211,9 @@ go test -C tools/docs-version-sync ./...
 ./tools/ci/check-docs
 ```
 
-By default the update selects the latest stable release of each stack. Use
-`--stack-version`, `--compute-stack-version`, and
-`--observability-stack-version` to select an exact compatible release set.
+By default the update selects the latest stable release of each stack and marks
+the release set as `development`. The update is reviewable and does not imply
+that QA qualified the selected combination.
 
 The catalog update retains an exact publication only when its artifact name,
 type, and version still match. Leave an artifact in `publication_pending` until
@@ -200,3 +224,40 @@ The CI check against the latest released inventory remains warn-only for now. A
 release-drift warning does not block a merge. Generated-document consistency
 remains blocking, and local validation should still return success before a
 dependency change is complete.
+
+## Qualified Documentation Promotion
+
+After QA approves one exact three-stack set and every customer artifact is
+published, run:
+
+```bash
+go run -C tools/docs-version-sync . \
+  --target main \
+  --update-catalog \
+  --qualification-version X.Y.Z \
+  --stack-version A.B.C \
+  --compute-stack-version D.E.F \
+  --observability-stack-version G.H.I
+go run -C tools/docs-version-sync . --target main
+./tools/scripts/cut-docs-version.sh vX.Y.Z
+```
+
+Qualification requires all three exact stack versions. The snapshot command
+copies the generated docs and catalog. It updates the version dropdown with the
+documentation version and all three stack versions. A later development sync
+can move `docs/user/` forward without changing the versioned snapshot.
+
+## Compare Release Sets
+
+Place the previous inventory JSON files in one directory and the current files
+in another. A directory can contain one historical combined inventory or three
+separated inventories. Run:
+
+```bash
+go run -C tools/docs-version-sync . \
+  --compare-release-set-from /tmp/previous-inventories \
+  --compare-release-set-to /tmp/current-inventories
+```
+
+The report lists added, removed, and changed artifacts. Changes include image
+or chart references, digests, stack ownership, and required or optional status.

@@ -1,9 +1,8 @@
 # Documentation Version Sync
 
-This tool keeps the artifact versions in the top-of-tree documentation aligned
-with the selected self-managed, compute-plane, and observability stack
-releases. Top-of-tree documentation is under `docs/user/`, but its version
-catalog follows tagged stack releases, not an untagged `main` commit.
+This tool keeps top-of-tree documentation aligned with three released stack
+inventories. It also promotes an exact QA-qualified three-stack release set to
+versioned documentation.
 
 ## Release and documentation flow
 
@@ -44,13 +43,13 @@ git fetch --tags origin
 go run -C tools/docs-version-sync . --target main --update-catalog
 ```
 
-The command selects the latest stable release for all three stacks. Supply
-`--stack-version`, `--compute-stack-version`, and
-`--observability-stack-version` to pin an exact release set. It updates:
+The command selects the latest stable release for all three stacks and records
+a development release set. It updates:
 
 - `docs/version-catalog/main.yaml`
 - Generated blocks configured by the catalog under `docs/user/`
 - The self-managed, compute-plane, and observability bundle versions
+- The exact source tag, commit, and inventory asset for all three stacks
 
 The update retains publication records only when `name`, `type`, and `version`
 still match. New and changed versions without a matching record are added to
@@ -98,6 +97,27 @@ go run -C tools/docs-version-sync . --target main
 
 A publication-only update does not require a new stack release.
 
+## Promote a QA-qualified release set
+
+After QA approves the three stack versions and all artifacts are published,
+run the catalog update with all three exact versions:
+
+```bash
+go run -C tools/docs-version-sync . \
+  --target main \
+  --update-catalog \
+  --qualification-version X.Y.Z \
+  --stack-version A.B.C \
+  --compute-stack-version D.E.F \
+  --observability-stack-version G.H.I
+go run -C tools/docs-version-sync . --target main
+./tools/scripts/cut-docs-version.sh vX.Y.Z
+```
+
+The qualification command does not select latest versions. The docs snapshot
+fails unless the catalog is qualified and its documentation version matches the
+requested version. The version dropdown identifies all three stack versions.
+
 ## Add an artifact to the stack inventory
 
 For the complete dependency workflow, including ownership, optionality, and
@@ -120,12 +140,13 @@ For a chart or image deployed by any stack:
    owning stack release.
 4. Run the documentation sync after all selected stack releases have inventory
    assets.
-5. Add a `manifest.entries` record for the new artifact.
+5. Add a `manifest.entries` record for the new artifact description and source.
 6. Add a verified public publication or leave the artifact pending.
 
 A catalog-backed manifest entry uses `artifact_id` and describes the deployment
-plane, kind, requirement, purpose, and public source links. The generator fails
-when a discovered artifact has no classification.
+plane, kind, purpose, and public source links. Released inventory data supplies
+stack ownership and required or optional status. The generator fails when a
+discovered artifact has no classification.
 
 ## Add an independently versioned artifact
 
@@ -149,6 +170,26 @@ sync, remove its stale manifest metadata. Use `denylist` only when an artifact
 is intentionally excluded from public documentation, and give it a public-safe
 reason. Do not use a private registry as a placeholder for an unpublished
 artifact.
+
+## Compare release sets
+
+Store each release set's inventory JSON files in a directory, then run:
+
+```bash
+go run -C tools/docs-version-sync . \
+  --compare-release-set-from /tmp/previous-inventories \
+  --compare-release-set-to /tmp/current-inventories
+```
+
+The report detects dependency disappearance and explains additions, reference
+or digest changes, ownership changes, and required or optional changes. A
+historical directory can contain one legacy combined inventory. A current
+directory normally contains three separated inventories.
+
+Use the `inventory_tag` input on `release-tags.yml` to reproduce an inventory
+without publishing a release. The preflight uploads the JSON as a workflow
+artifact. Tags that predate per-stack inventory configs use the config from the
+workflow ref as a one-time bootstrap. New tags carry their own config.
 
 ## Validation
 

@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 )
@@ -27,7 +28,7 @@ func updateCatalogFromGitHub(repoRoot, sourceRef string, base *Catalog) (*Catalo
 	return buildCatalogFromResolvedStackInventory(inventory, snapshot, base)
 }
 
-func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, base *Catalog) (*Catalog, error) {
+func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]string, qualificationVersion string, base *Catalog) (*Catalog, error) {
 	client := newGitHubClientFromEnvironment()
 	inventories := make(map[string]resolvedStackInventory, len(stackInventorySpecs))
 	for _, spec := range stackInventorySpecs {
@@ -41,6 +42,9 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 		}
 		if err := validateInventoryPlaneOwnership(spec, inventory); err != nil {
 			return nil, err
+		}
+		for _, warning := range inventory.Warnings {
+			fmt.Fprintf(os.Stderr, "WARNING: %s stack inventory: %s\n", spec.Key, warning)
 		}
 		inventories[spec.Key] = inventory
 	}
@@ -59,6 +63,21 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	if err != nil {
 		return nil, err
 	}
+	status := ReleaseSetDevelopment
+	documentationVersion := "dev"
+	if qualificationVersion != "" {
+		status = ReleaseSetQualified
+		documentationVersion = strings.TrimPrefix(qualificationVersion, "v")
+	}
+	releaseSet, err := releaseSetFromInventories(inventories, documentationVersion, status)
+	if err != nil {
+		return nil, err
+	}
+	if qualificationVersion == "" && base != nil && base.ReleaseSet.Status == ReleaseSetQualified && releaseSet.sameStackVersions(base.ReleaseSet) {
+		releaseSet.DocumentationVersion = base.ReleaseSet.DocumentationVersion
+		releaseSet.Status = base.ReleaseSet.Status
+	}
+	catalog.ReleaseSet = releaseSet
 	for _, spec := range stackInventorySpecs[1:] {
 		version := inventories[spec.Key].Source.Version
 		if !setArtifactVersionByNameAndType(catalog, spec.ResourceName, ArtifactTypeResource, version) {
@@ -67,17 +86,36 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 				Type:     ArtifactTypeResource,
 				Registry: defaultStackRegistry,
 				Version:  version,
+				Stacks:   []string{spec.Key},
 			})
+		} else {
+			setArtifactStacksByNameAndType(catalog, spec.ResourceName, ArtifactTypeResource, []string{spec.Key})
 		}
 	}
 	retainCurrentPublications(catalog)
 	catalog.markAllUnpublishedAsPending()
 	catalog.reconcilePublicationPending()
 	catalog.pruneUnusedRegistries()
+	if qualificationVersion != "" && len(catalog.PublicationPending) > 0 {
+		return nil, fmt.Errorf("qualified release set has unpublished artifacts: %s", strings.Join(catalog.PublicationPending, ", "))
+	}
 	if err := ValidateCatalog(catalog); err != nil {
 		return nil, err
 	}
 	return catalog, nil
+}
+
+func setArtifactStacksByNameAndType(catalog *Catalog, name string, artifactType ArtifactType, stacks []string) {
+	for index := range catalog.Artifacts {
+		if catalog.Artifacts[index].Name == name && catalog.Artifacts[index].Type == artifactType {
+			catalog.Artifacts[index].Stacks = append([]string(nil), stacks...)
+		}
+	}
+	for index := range catalog.SupplementalArtifacts {
+		if catalog.SupplementalArtifacts[index].Name == name && catalog.SupplementalArtifacts[index].Type == artifactType {
+			catalog.SupplementalArtifacts[index].Stacks = append([]string(nil), stacks...)
+		}
+	}
 }
 
 func validateInventoryPlaneOwnership(spec stackInventorySpec, inventory resolvedStackInventory) error {
@@ -106,6 +144,7 @@ func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory
 	releases := make(map[string]struct{})
 	artifacts := make(map[string]*resolvedInventoryArtifact)
 	artifactIdentities := make(map[string]string)
+	artifactOwners := make(map[string]string)
 	for _, spec := range stackInventorySpecs {
 		inventory, exists := inventories[spec.Key]
 		if !exists {
@@ -125,9 +164,12 @@ func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory
 		for _, artifact := range inventory.Artifacts {
 			identity := artifact.Type + "\x00" + artifact.Name
 			if reference, exists := artifactIdentities[identity]; exists && reference != artifact.Reference {
-				return resolvedStackInventory{}, fmt.Errorf("stack inventories resolve %s %s to both %s and %s", artifact.Type, artifact.Name, reference, artifact.Reference)
+				return resolvedStackInventory{}, fmt.Errorf("stack inventory version conflict for %s %s: %s uses %s and %s uses %s", artifact.Type, artifact.Name, artifactOwners[identity], reference, spec.Key, artifact.Reference)
 			}
 			artifactIdentities[identity] = artifact.Reference
+			if _, exists := artifactOwners[identity]; !exists {
+				artifactOwners[identity] = spec.Key
+			}
 			key := artifact.Type + "\x00" + artifact.Reference
 			existing, exists := artifacts[key]
 			if !exists {
@@ -216,6 +258,10 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 		denylistSource = &Catalog{}
 	}
 	denylist := denylistSource.DenylistMap()
+	requirements := make(map[string]bool, len(inventory.Releases))
+	for _, release := range inventory.Releases {
+		requirements[resolvedReleaseKey(release.Plane, release.Name)] = release.Required
+	}
 	artifacts := make([]Artifact, 0, len(inventory.Artifacts))
 	for _, resolved := range inventory.Artifacts {
 		if _, denied := denylist[resolved.Name]; denied {
@@ -228,12 +274,31 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 		if resolved.Version == "" {
 			return nil, fmt.Errorf("artifact %s has no tag version representable in the documentation catalog", resolved.Reference)
 		}
+		stacks := make(map[string]struct{})
+		requirement := ManifestOptional
+		for _, source := range resolved.Sources {
+			stack, err := stackKeyForPlane(source.Plane)
+			if err != nil {
+				return nil, fmt.Errorf("artifact %s: %w", resolved.Reference, err)
+			}
+			stacks[stack] = struct{}{}
+			if requirements[resolvedReleaseKey(source.Plane, source.Release)] {
+				requirement = ManifestRequired
+			}
+		}
+		owningStacks := make([]string, 0, len(stacks))
+		for stack := range stacks {
+			owningStacks = append(owningStacks, stack)
+		}
+		sort.Strings(owningStacks)
 		artifacts = append(artifacts, Artifact{
-			Name:     resolved.Name,
-			Type:     artifactType,
-			Registry: publicRegistryForArtifactType(artifactType),
-			Version:  resolved.Version,
-			Digest:   resolved.Digest,
+			Name:        resolved.Name,
+			Type:        artifactType,
+			Registry:    publicRegistryForArtifactType(artifactType),
+			Version:     resolved.Version,
+			Digest:      resolved.Digest,
+			Stacks:      owningStacks,
+			Requirement: requirement,
 		})
 	}
 	preserveCatalogArtifactIdentity(artifacts, base)

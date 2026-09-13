@@ -1659,7 +1659,7 @@ class GithubReleaseTest(unittest.TestCase):
                     path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "e" * 40
                 )
 
-    def test_existing_release_inventory_must_be_byte_identical(self):
+    def test_existing_release_inventory_is_left_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             asset = Path(tmp) / "inventory.json"
             asset.write_text("same\n")
@@ -1667,27 +1667,10 @@ class GithubReleaseTest(unittest.TestCase):
             def fake_run(args, **_kwargs):
                 if args[:3] == ["gh", "release", "view"]:
                     return "inventory.json\n"
-                if args[:3] == ["gh", "release", "download"]:
-                    destination = Path(args[args.index("--dir") + 1]) / "inventory.json"
-                    destination.write_text("same\n")
-                    return ""
                 raise AssertionError(f"unexpected call: {args}")
 
             self.github_release.run = fake_run
             with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
-
-            def fake_different_run(args, **_kwargs):
-                if args[:3] == ["gh", "release", "view"]:
-                    return "inventory.json\n"
-                if args[:3] == ["gh", "release", "download"]:
-                    destination = Path(args[args.index("--dir") + 1]) / "inventory.json"
-                    destination.write_text("different\n")
-                    return ""
-                raise AssertionError(f"unexpected call: {args}")
-
-            self.github_release.run = fake_different_run
-            with self.assertRaisesRegex(SystemExit, "refusing to replace"):
                 self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
 
     def test_missing_release_inventory_is_uploaded(self):
@@ -1781,9 +1764,12 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertIn("deploy/stacks/observability/v*", workflow)
         preflight = workflow.index("inventory-preflight:")
         tag_release = workflow.index("tag-release-notes:")
-        self.assertNotIn("--inventory-config", workflow[preflight:tag_release])
-        self.assertNotIn("github-release tag", workflow[preflight:tag_release])
-        self.assertNotIn("upload-artifact", workflow[preflight:tag_release])
+        preflight_workflow = workflow[preflight:tag_release]
+        self.assertIn("--inventory-config", preflight_workflow)
+        self.assertIn("predates its inventory config", preflight_workflow)
+        self.assertIn("actions/upload-artifact@v4", preflight_workflow)
+        self.assertIn("if-no-files-found: error", preflight_workflow)
+        self.assertNotIn("github-release tag", preflight_workflow)
 
     def test_release_replay_requires_an_exact_tag_ref(self):
         """A tag-shaped branch must not satisfy manual replay validation."""

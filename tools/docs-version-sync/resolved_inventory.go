@@ -30,6 +30,7 @@ type resolvedStackInventory struct {
 	Source        stackSourceRelease          `json:"source"`
 	Releases      []resolvedInventoryRelease  `json:"releases"`
 	Artifacts     []resolvedInventoryArtifact `json:"artifacts"`
+	Warnings      []string                    `json:"warnings,omitempty"`
 }
 
 type resolvedInventoryRelease struct {
@@ -435,6 +436,14 @@ func validateResolvedStackInventory(inventory resolvedStackInventory) error {
 	}
 	if len(inventory.Artifacts) == 0 {
 		return fmt.Errorf("resolved inventory has no artifacts")
+	}
+	for index, warning := range inventory.Warnings {
+		if warning == "" || warning != strings.TrimSpace(warning) {
+			return fmt.Errorf("resolved inventory warning must be non-empty and trimmed")
+		}
+		if index > 0 && inventory.Warnings[index-1] >= warning {
+			return fmt.Errorf("resolved inventory warnings are not uniquely sorted")
+		}
 	}
 
 	releases := make(map[string]resolvedInventoryRelease, len(inventory.Releases))

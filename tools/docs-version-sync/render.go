@@ -206,6 +206,7 @@ func (catalog *Catalog) stackArtifact() Artifact {
 		Type:     ArtifactTypeResource,
 		Registry: catalog.Stack.Registry,
 		Version:  catalog.Stack.Version,
+		Stacks:   []string{selfManagedStackKey},
 	}
 }
 

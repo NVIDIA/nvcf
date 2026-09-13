@@ -768,6 +768,25 @@ manifest:
       kind: resource
       description: Manages functions, deployments, and clusters from the command line.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli
+release_set:
+  documentation_version: dev
+  status: development
+  stacks:
+    control-plane:
+      version: 0.16.1
+      source_tag: deploy/stacks/self-managed/v0.16.1
+      source_commit: 6aa572575c3f3ee7716a9fddc4cbfceae17e73ec
+      inventory_asset: nvcf-self-managed-stack-inventory.json
+    compute-plane:
+      version: 0.3.1
+      source_tag: deploy/stacks/nvcf-compute-plane/v0.3.1
+      source_commit: 9694ba0c27a160e91a9be8a493a0c54cfb81825a
+      inventory_asset: nvcf-compute-plane-stack-inventory.json
+    observability:
+      version: 0.1.1
+      source_tag: deploy/stacks/observability/v0.1.1
+      source_commit: c9ca3b27124a60b99aba42ca3a81d10ce79a3924
+      inventory_asset: nvcf-observability-stack-inventory.json
 stack:
   name: nvcf-self-managed-stack
   version: 0.16.1
@@ -1162,11 +1181,11 @@ supplemental_artifacts:
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
-    version: 0.16.1
+    version: 0.3.1
   - name: nvcf-observability-stack
     type: resource
     registry: public-resources
-    version: 0.16.1
+    version: 0.1.1
   - name: nvcf-observability-reference-stack
     type: chart
     registry: public-helm

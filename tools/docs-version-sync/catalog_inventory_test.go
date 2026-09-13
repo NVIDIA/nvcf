@@ -129,12 +129,20 @@ func TestUpdateCatalogFromGitHubInventoriesMergesThreeStackAssets(t *testing.T) 
 		selfManagedStackKey:   releases[selfManagedStackKey].Version,
 		computePlaneStackKey:  releases[computePlaneStackKey].Version,
 		observabilityStackKey: releases[observabilityStackKey].Version,
-	}, testCatalog())
+	}, "", testCatalog())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if catalog.Stack.Version != "1.2.3" {
 		t.Fatalf("self-managed stack version = %s, want 1.2.3", catalog.Stack.Version)
+	}
+	if catalog.ReleaseSet.Status != ReleaseSetDevelopment || catalog.ReleaseSet.DocumentationVersion != "dev" {
+		t.Fatalf("release set = %#v, want development docs", catalog.ReleaseSet)
+	}
+	if catalog.ReleaseSet.Stacks.ControlPlane.Version != "1.2.3" ||
+		catalog.ReleaseSet.Stacks.ComputePlane.Version != "2.3.4" ||
+		catalog.ReleaseSet.Stacks.Observability.Version != "3.4.5" {
+		t.Fatalf("release set stack versions = %#v", catalog.ReleaseSet.Stacks)
 	}
 	for name, want := range map[string]string{
 		computeStackResourceName:       "2.3.4",

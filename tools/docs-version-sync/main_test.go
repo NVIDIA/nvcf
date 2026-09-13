@@ -31,13 +31,13 @@ func TestRenderManifestArtifactRegistryPaths(t *testing.T) {
 	}
 
 	wantLines := []string{
-		"| Artifact | Version | Required | Description | Distribution | Source code |",
-		"| `llm-api-gateway` | `0.3.0` | Optional |",
-		"| `llm-request-router` | `0.2.0` | Optional |",
-		"| `nvcf-self-managed-stack` | `0.5.0` |",
-		"| `nvcf-compute-plane-stack` | `0.5.0` |",
-		"| `nvcf-observability-stack` | `0.5.0` |",
-		"| `nvcf-cli` | `0.0.30` |",
+		"| Artifact | Version | Stack | Required | Description | Distribution | Source code |",
+		"| `llm-api-gateway` | `0.3.0` | `self-managed` | Optional |",
+		"| `llm-request-router` | `0.2.0` | `self-managed` | Optional |",
+		"| `nvcf-self-managed-stack` | `0.5.0` | `self-managed` |",
+		"| `nvcf-compute-plane-stack` | `0.5.0` | `compute-plane` |",
+		"| `nvcf-observability-stack` | `0.5.0` | `observability` |",
+		"| `nvcf-cli` | `0.0.30` | Independent |",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(got, want) {
@@ -73,22 +73,22 @@ func TestRenderManifestHandlesNewNVCAAndNVCTImageAndHelmArtifacts(t *testing.T) 
 
 	computeServices := sectionBetween(t, got, "### Compute plane services and images", "### EA-only CVE-impacted artifacts")
 	for _, want := range []string{
-		"| `nvca` | `3.0.0-rc.13` | Required |",
-		"| `nvca-operator` | `3.0.0-rc.13` | Required |",
+		"| `nvca` | `3.0.0-rc.13` | `compute-plane` | Required |",
+		"| `nvca-operator` | `3.0.0-rc.13` | `compute-plane` | Required |",
 	} {
 		if !strings.Contains(computeServices, want) {
 			t.Fatalf("compute services section missing %q:\n%s", want, computeServices)
 		}
 	}
 	computeCharts := sectionBetween(t, got, "### Compute plane Helm charts", "### Compute plane services and images")
-	if !strings.Contains(computeCharts, "| `helm-nvca-operator` | `1.11.1` | Required |") {
+	if !strings.Contains(computeCharts, "| `helm-nvca-operator` | `1.11.1` | `compute-plane` | Required |") {
 		t.Fatalf("compute charts section missing NVCA chart:\n%s", computeCharts)
 	}
 
 	controlPlane := sectionBetween(t, got, "### Control plane Helm charts", "### Compute plane Helm charts")
 	for _, want := range []string{
-		"| `nvct-service-oss` | `1.2.11` | Required |",
-		"| `helm-nvcf-nvct-api` | `1.4.2` | Required |",
+		"| `nvct-service-oss` | `1.2.11` | `self-managed` | Required |",
+		"| `helm-nvcf-nvct-api` | `1.4.2` | `self-managed` | Required |",
 	} {
 		if !strings.Contains(controlPlane, want) {
 			t.Fatalf("control plane section missing %q:\n%s", want, controlPlane)

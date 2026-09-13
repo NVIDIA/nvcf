@@ -271,6 +271,7 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 		}
 	}
 	usedSourceCharts := map[string]struct{}{}
+	var coverageWarnings []string
 	for stateIndex, state := range states {
 		stateFile := filepath.Join(copiedRepoRoot, filepath.FromSlash(state.Path))
 		releases, manifests, stateSourceCharts, err := collectResolvedInventoryState(
@@ -292,6 +293,19 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 		}
 		for _, chart := range stateSourceCharts {
 			usedSourceCharts[chart] = struct{}{}
+		}
+		declared, err := declaredHelmfileReleaseNames(stateFile)
+		if err != nil {
+			return resolvedStackInventory{}, err
+		}
+		rendered := make(map[string]struct{}, len(releases))
+		for _, release := range releases {
+			rendered[release.Name] = struct{}{}
+		}
+		for _, name := range declared {
+			if _, exists := rendered[name]; !exists {
+				coverageWarnings = append(coverageWarnings, fmt.Sprintf("%s declares release %s but the full inventory profile did not render it", state.Path, name))
+			}
 		}
 		plane := planes[state.Plane]
 		var existing []helmfileRelease
@@ -323,7 +337,49 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	for _, name := range planeNames {
 		inputs = append(inputs, *planes[name])
 	}
-	return generateResolvedStackInventory(source, inputs)
+	inventory, err := generateResolvedStackInventory(source, inputs)
+	if err != nil {
+		return resolvedStackInventory{}, err
+	}
+	sort.Strings(coverageWarnings)
+	inventory.Warnings = coverageWarnings
+	return inventory, nil
+}
+
+var helmfileReleaseNameRE = regexp.MustCompile(`^\s*-\s+name:\s*([A-Za-z0-9][A-Za-z0-9_.-]*)\s*(?:#.*)?$`)
+
+func declaredHelmfileReleaseNames(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read Helmfile state for coverage: %w", err)
+	}
+	inReleases := false
+	seen := map[string]struct{}{}
+	var names []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "releases:" {
+			inReleases = true
+			continue
+		}
+		if !inReleases {
+			continue
+		}
+		if trimmed != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "{{") {
+			break
+		}
+		match := helmfileReleaseNameRE.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		if _, exists := seen[match[1]]; exists {
+			continue
+		}
+		seen[match[1]] = struct{}{}
+		names = append(names, match[1])
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func resolvedInventoryPlaneNames(states []resolvedInventoryState) []string {

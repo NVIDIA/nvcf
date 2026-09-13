@@ -172,16 +172,36 @@ jobs:
               exit 1
               ;;
           esac
+          case "${INVENTORY_TAG}" in
+            deploy/stacks/self-managed/v*) inventory_config="deploy/stacks/self-managed/release-inventory.yaml" ;;
+            deploy/stacks/nvcf-compute-plane/v*) inventory_config="deploy/stacks/nvcf-compute-plane/release-inventory.yaml" ;;
+            deploy/stacks/observability/v*) inventory_config="deploy/stacks/observability/release-inventory.yaml" ;;
+          esac
+          bootstrap_config="${GITHUB_WORKSPACE}/${inventory_config}"
           version="${INVENTORY_TAG##*/v}"
           commit="$(git rev-list -n 1 "${INVENTORY_TAG}")"
           test -n "${commit}"
           git worktree add --detach "${RUNNER_TEMP}/inventory-source" "${INVENTORY_TAG}"
           cd "${RUNNER_TEMP}/inventory-source"
+          if [ -f "${inventory_config}" ]; then
+            inventory_config="${RUNNER_TEMP}/inventory-source/${inventory_config}"
+          else
+            echo "WARNING: ${INVENTORY_TAG} predates its inventory config; using ${bootstrap_config}." >&2
+            inventory_config="${bootstrap_config}"
+          fi
           "${RUNNER_TEMP}/docs-version-sync" \
             --generate-stack-inventory "${RUNNER_TEMP}/stack-inventory.json" \
+            --inventory-config "${inventory_config}" \
             --stack-version "${version}" \
             --stack-source-tag "${INVENTORY_TAG}" \
             --stack-source-commit "${commit}"
+
+      - name: Upload rendered inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-inventory
+          path: ${{ runner.temp }}/stack-inventory.json
+          if-no-files-found: error
 
   tag-release-notes:
     name: tag release

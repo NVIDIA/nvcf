@@ -63,3 +63,62 @@ func stackInventorySpecByTag(tag string) (stackInventorySpec, error) {
 	}
 	return stackInventorySpec{}, fmt.Errorf("stack source tag %q does not match a released stack", tag)
 }
+
+func stackKeyForPlane(plane string) (string, error) {
+	switch plane {
+	case "control-plane":
+		return selfManagedStackKey, nil
+	case "compute-plane":
+		return computePlaneStackKey, nil
+	case "observability":
+		return observabilityStackKey, nil
+	default:
+		return "", fmt.Errorf("unknown inventory plane %q", plane)
+	}
+}
+
+func releaseSetFromInventories(inventories map[string]resolvedStackInventory, documentationVersion string, status ReleaseSetStatus) (ReleaseSetMetadata, error) {
+	metadata := func(key string) (StackReleaseMetadata, error) {
+		spec, err := stackInventorySpecByKey(key)
+		if err != nil {
+			return StackReleaseMetadata{}, err
+		}
+		inventory, exists := inventories[key]
+		if !exists {
+			return StackReleaseMetadata{}, fmt.Errorf("%s inventory is required for release set metadata", key)
+		}
+		return StackReleaseMetadata{
+			Version:        inventory.Source.Version,
+			SourceTag:      inventory.Source.Tag,
+			SourceCommit:   inventory.Source.Commit,
+			InventoryAsset: spec.AssetName,
+		}, nil
+	}
+	controlPlane, err := metadata(selfManagedStackKey)
+	if err != nil {
+		return ReleaseSetMetadata{}, err
+	}
+	computePlane, err := metadata(computePlaneStackKey)
+	if err != nil {
+		return ReleaseSetMetadata{}, err
+	}
+	observability, err := metadata(observabilityStackKey)
+	if err != nil {
+		return ReleaseSetMetadata{}, err
+	}
+	return ReleaseSetMetadata{
+		DocumentationVersion: documentationVersion,
+		Status:               status,
+		Stacks: ReleaseSetStacks{
+			ControlPlane:  controlPlane,
+			ComputePlane:  computePlane,
+			Observability: observability,
+		},
+	}, nil
+}
+
+func (releaseSet ReleaseSetMetadata) sameStackVersions(other ReleaseSetMetadata) bool {
+	return releaseSet.Stacks.ControlPlane.Version == other.Stacks.ControlPlane.Version &&
+		releaseSet.Stacks.ComputePlane.Version == other.Stacks.ComputePlane.Version &&
+		releaseSet.Stacks.Observability.Version == other.Stacks.Observability.Version
+}

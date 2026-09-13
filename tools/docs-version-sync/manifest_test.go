@@ -103,7 +103,7 @@ func TestRenderManifestTable(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"| Artifact | Version | Required | Description | Distribution | Source code |",
+		"| Artifact | Version | Stack | Required | Description | Distribution | Source code |",
 		"These Early Access artifacts have known CVE impact.",
 		"[GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats)",
 		"[Upstream](https://github.com/nats-io/k8s)",

@@ -115,6 +115,60 @@ data:
 	}
 }
 
+func TestOptionalIndirectImageAppearsOptionalInManifest(t *testing.T) {
+	inputs := resolvedInventoryTestInputs(t)
+	inputs[2].ManifestByRelease["function-autoscaler"] = append(inputs[2].ManifestByRelease["function-autoscaler"], []byte(`
+---
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: registry.example.com/controller:1.0.0
+          args:
+            - --solver-image=registry.example.com/optional-solver:2.0.0
+`)...)
+	inventory, err := generateResolvedStackInventory(resolvedInventoryTestSource(), inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := catalogArtifactsFromResolvedStackInventory(inventory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var solver Artifact
+	for _, artifact := range artifacts {
+		if artifact.Name == "optional-solver" {
+			solver = artifact
+			break
+		}
+	}
+	if solver.Requirement != ManifestOptional {
+		t.Fatalf("optional solver requirement = %q, want optional", solver.Requirement)
+	}
+	if strings.Join(solver.Stacks, ",") != observabilityStackKey {
+		t.Fatalf("optional solver stacks = %v, want observability", solver.Stacks)
+	}
+
+	catalog := testCatalog()
+	catalog.Artifacts = append(catalog.Artifacts, solver)
+	catalog.Manifest.Entries = append(catalog.Manifest.Entries, ManifestEntry{
+		ArtifactID: solver.catalogKey(), Plane: ManifestPlaneObservability, Kind: ManifestKindServiceImage,
+		Requirement: ManifestRequired, Description: "Solves optional certificate challenges.",
+	})
+	catalog.PublicationPending = append(catalog.PublicationPending, solver.catalogKey())
+	manifest, err := renderManifestArtifactRegistryPaths(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := manifestRow(t, manifest, solver.Name)
+	if !strings.Contains(row, "| Optional |") {
+		t.Fatalf("optional indirect image row is not optional: %s", row)
+	}
+}
+
 func TestExtractResolvedImagesDeduplicatesImageArguments(t *testing.T) {
 	manifest := []byte(`
 apiVersion: apps/v1
