@@ -106,7 +106,7 @@ func comparableArtifactFromResolved(artifact resolvedInventoryArtifact, requirem
 			return comparableArtifact{}, err
 		}
 		stacks[stack] = struct{}{}
-		if requirements[resolvedReleaseKey(source.Plane, source.Release)] {
+		if resolvedArtifactSourceIsRequired(source, requirements) {
 			requirement = ManifestRequired
 		}
 	}

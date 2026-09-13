@@ -179,16 +179,7 @@ func mergeResolvedStackInventories(inventories map[string]resolvedStackInventory
 				continue
 			}
 			for _, source := range artifact.Sources {
-				found := false
-				for _, current := range existing.Sources {
-					if current == source {
-						found = true
-						break
-					}
-				}
-				if !found {
-					existing.Sources = append(existing.Sources, source)
-				}
+				mergeResolvedArtifactSource(existing, source)
 			}
 		}
 	}
@@ -282,7 +273,7 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 				return nil, fmt.Errorf("artifact %s: %w", resolved.Reference, err)
 			}
 			stacks[stack] = struct{}{}
-			if requirements[resolvedReleaseKey(source.Plane, source.Release)] {
+			if resolvedArtifactSourceIsRequired(source, requirements) {
 				requirement = ManifestRequired
 			}
 		}
@@ -304,6 +295,17 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 	preserveCatalogArtifactIdentity(artifacts, base)
 	assignCatalogArtifactIDs(artifacts)
 	return artifacts, nil
+}
+
+func resolvedArtifactSourceIsRequired(source resolvedArtifactSource, releaseRequirements map[string]bool) bool {
+	switch source.Requirement {
+	case ManifestRequired:
+		return true
+	case ManifestOptional:
+		return false
+	default:
+		return releaseRequirements[resolvedReleaseKey(source.Plane, source.Release)]
+	}
 }
 
 func publicRegistryForArtifactType(artifactType ArtifactType) string {

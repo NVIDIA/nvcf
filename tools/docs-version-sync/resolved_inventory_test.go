@@ -117,7 +117,7 @@ data:
 
 func TestOptionalIndirectImageAppearsOptionalInManifest(t *testing.T) {
 	inputs := resolvedInventoryTestInputs(t)
-	inputs[2].ManifestByRelease["function-autoscaler"] = append(inputs[2].ManifestByRelease["function-autoscaler"], []byte(`
+	inputs[1].ManifestByRelease["notary-service"] = append(inputs[1].ManifestByRelease["notary-service"], []byte(`
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -134,6 +134,14 @@ spec:
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolvedSolver := findResolvedInventoryArtifact(t, inventory, "container-image", "registry.example.com/optional-solver:2.0.0")
+	if len(resolvedSolver.Sources) != 1 || resolvedSolver.Sources[0].Requirement != ManifestOptional {
+		t.Fatalf("optional solver inventory sources = %+v, want optional", resolvedSolver.Sources)
+	}
+	controller := findResolvedInventoryArtifact(t, inventory, "container-image", "registry.example.com/controller:1.0.0")
+	if len(controller.Sources) != 1 || controller.Sources[0].Requirement != ManifestRequired {
+		t.Fatalf("required controller inventory sources = %+v, want required", controller.Sources)
+	}
 	artifacts, err := catalogArtifactsFromResolvedStackInventory(inventory, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -148,14 +156,14 @@ spec:
 	if solver.Requirement != ManifestOptional {
 		t.Fatalf("optional solver requirement = %q, want optional", solver.Requirement)
 	}
-	if strings.Join(solver.Stacks, ",") != observabilityStackKey {
-		t.Fatalf("optional solver stacks = %v, want observability", solver.Stacks)
+	if strings.Join(solver.Stacks, ",") != selfManagedStackKey {
+		t.Fatalf("optional solver stacks = %v, want self-managed", solver.Stacks)
 	}
 
 	catalog := testCatalog()
 	catalog.Artifacts = append(catalog.Artifacts, solver)
 	catalog.Manifest.Entries = append(catalog.Manifest.Entries, ManifestEntry{
-		ArtifactID: solver.catalogKey(), Plane: ManifestPlaneObservability, Kind: ManifestKindServiceImage,
+		ArtifactID: solver.catalogKey(), Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage,
 		Requirement: ManifestRequired, Description: "Solves optional certificate challenges.",
 	})
 	catalog.PublicationPending = append(catalog.PublicationPending, solver.catalogKey())
