@@ -163,6 +163,8 @@ releases:
     namespace: nats-system
     values:
       - ../global.yaml.gotmpl
+      - image:
+          repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
       {{- if .Values.global.imagePullSecrets }}
       - imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}

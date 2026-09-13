@@ -28,6 +28,7 @@ test:
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
+	@tests/nats-auth-callout-image-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
 

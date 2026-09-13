@@ -479,6 +479,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedValidRenderedWorkload(t, suite.Config.RepoRoot)
 	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 	if err := os.WriteFile(
@@ -563,6 +564,28 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
+	}
+}
+
+func seedValidRenderedWorkload(t *testing.T, repoRoot string) {
+	t.Helper()
+	path := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out", "01-api", "templates", "deployment.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir rendered workload directory: %v", err)
+	}
+	body := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          image: nvcr.io/nvidia/nvcf/api:test
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write rendered workload: %v", err)
 	}
 }
 
@@ -1435,7 +1458,7 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 
 	const (
-		tlsHandshakeCommand     = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
+		tlsHandshakeCommand = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
 			`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
 			`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
 			`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`

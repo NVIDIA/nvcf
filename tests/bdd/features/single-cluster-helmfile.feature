@@ -34,6 +34,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       When I successfully run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd"
 
       Then the command output should not contain "Error:"
+      And the rendered workloads in "deploy/stacks/self-managed/out" should have valid container images
 
   Rule: Helmfile installs the local control plane with gateway add-ons
 
