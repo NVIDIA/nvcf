@@ -290,6 +290,8 @@ func (sc *ScenarioContext) renderedManifestsShouldContainKubernetesResource(path
 	)
 }
 
+// renderedWorkloadsShouldHaveValidContainerImages delegates manifest parsing
+// while the step handler resolves the repository-relative path.
 func (sc *ScenarioContext) renderedWorkloadsShouldHaveValidContainerImages(path string) error {
 	return dsl.RenderedWorkloadImagesAreValid(sc.resolvePath(dsl.Interpolate(path)))
 }

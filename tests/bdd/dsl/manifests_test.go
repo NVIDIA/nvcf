@@ -73,6 +73,8 @@ metadata:
 	}
 }
 
+// TestRenderedWorkloadImagesAreValidAcceptsAllContainerTypes covers regular,
+// init, and ephemeral containers across direct and nested Pod specs.
 func TestRenderedWorkloadImagesAreValidAcceptsAllContainerTypes(t *testing.T) {
 	root := t.TempDir()
 	body := `apiVersion: apps/v1
@@ -114,6 +116,8 @@ spec:
 	}
 }
 
+// TestRenderedWorkloadImagesAreValidRejectsTagOnlyImage covers the image shape
+// that caused the NATS auth-callout installation failure.
 func TestRenderedWorkloadImagesAreValidRejectsTagOnlyImage(t *testing.T) {
 	root := t.TempDir()
 	body := `apiVersion: apps/v1
@@ -142,6 +146,8 @@ spec:
 	}
 }
 
+// TestRenderedWorkloadImagesAreValidRejectsMissingInitContainerImage verifies
+// that init containers receive the same validation as regular containers.
 func TestRenderedWorkloadImagesAreValidRejectsMissingInitContainerImage(t *testing.T) {
 	root := t.TempDir()
 	body := `apiVersion: v1
@@ -165,6 +171,8 @@ spec:
 	}
 }
 
+// TestRenderedWorkloadImagesAreValidRequiresAWorkload prevents an empty render
+// or unrelated YAML from satisfying the assertion.
 func TestRenderedWorkloadImagesAreValidRequiresAWorkload(t *testing.T) {
 	root := t.TempDir()
 	body := `apiVersion: v1

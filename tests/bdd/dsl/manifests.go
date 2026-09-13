@@ -185,6 +185,7 @@ func RenderedWorkloadImagesAreValid(root string) error {
 	return nil
 }
 
+// renderedWorkloadPodSpec returns the Pod spec for a supported workload kind.
 func renderedWorkloadPodSpec(manifest map[string]any) (map[string]any, bool) {
 	kind, _ := manifest["kind"].(string)
 	var path []string
@@ -210,6 +211,8 @@ func renderedWorkloadPodSpec(manifest map[string]any) (map[string]any, bool) {
 	return current, true
 }
 
+// validateRenderedContainerImages rejects missing, empty, and tag-only images
+// in one Pod spec.
 func validateRenderedContainerImages(podSpec map[string]any) error {
 	rawContainers, present := podSpec["containers"]
 	if !present {

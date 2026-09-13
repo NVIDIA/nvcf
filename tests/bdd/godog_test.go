@@ -40,10 +40,18 @@ import (
 type fakeRunner struct {
 	results map[string]harness.Result
 	runs    []string
+	onRun   func(string) error
 }
 
+// Run records the command, applies an optional test side effect, and returns
+// its canned result.
 func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, error) {
 	f.runs = append(f.runs, command)
+	if f.onRun != nil {
+		if err := f.onRun(command); err != nil {
+			return harness.Result{}, err
+		}
+	}
 	if result, ok := f.results[command]; ok {
 		return result, nil
 	}
@@ -424,6 +432,7 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 // so the I copy / I update yaml chain has a real source file. The
 // fake runner is pre-loaded with canned JSON for the Helm release assertion.
 func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
+	const templateCommand = "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd"
 	const selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
 	const selectedFunctionStatusJSON = `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`
 	const vanityInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
@@ -436,7 +445,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
-	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+	runner := newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesWithVanityJSON()},
 		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
@@ -475,11 +484,17 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		// Conflict precheck: feature asserts the conflicting
 		// multi-cluster control-plane is absent.
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
-	}))
+	})
+	suite := newWiringSuite(t, runner)
+	runner.onRun = func(command string) error {
+		if command != templateCommand {
+			return nil
+		}
+		return writeValidRenderedWorkload(suite.Config.RepoRoot)
+	}
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
-	seedValidRenderedWorkload(t, suite.Config.RepoRoot)
 	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 	if err := os.WriteFile(
@@ -567,11 +582,12 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
-func seedValidRenderedWorkload(t *testing.T, repoRoot string) {
-	t.Helper()
+// writeValidRenderedWorkload simulates the Helmfile template command output
+// consumed by the rendered-image assertion in the wiring test.
+func writeValidRenderedWorkload(repoRoot string) error {
 	path := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out", "01-api", "templates", "deployment.yaml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir rendered workload directory: %v", err)
+		return err
 	}
 	body := `apiVersion: apps/v1
 kind: Deployment
@@ -584,9 +600,7 @@ spec:
         - name: api
           image: nvcr.io/nvidia/nvcf/api:test
 `
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write rendered workload: %v", err)
-	}
+	return os.WriteFile(path, []byte(body), 0o644)
 }
 
 // TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps runs the
@@ -1458,7 +1472,7 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 
 	const (
-		tlsHandshakeCommand = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
+		tlsHandshakeCommand     = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
 			`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
 			`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
 			`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
