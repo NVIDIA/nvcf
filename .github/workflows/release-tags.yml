@@ -189,7 +189,7 @@ jobs:
           else
             echo "WARNING: ${INVENTORY_TAG} predates its per-stack inventory states; using ${bootstrap_config}." >&2
             inventory_config="${bootstrap_config}"
-            inventory_args+=(--use-published-charts)
+            inventory_args+=(--allow-unavailable-source-charts)
           fi
           "${RUNNER_TEMP}/docs-version-sync" \
             --generate-stack-inventory "${RUNNER_TEMP}/stack-inventory.json" \

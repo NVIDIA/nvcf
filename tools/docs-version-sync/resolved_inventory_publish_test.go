@@ -102,6 +102,53 @@ releases:
 	}
 }
 
+func TestMaterializeResolvedInventorySourceChartsAllowsUnavailableHistoricalPath(t *testing.T) {
+	repo := initTestGitRepo(t)
+	source := commitTestStackSource(t, repo, "1.2.3", map[string]string{
+		"deploy/stacks/self-managed/helmfile.d/state.yaml.gotmpl": "releases: []\n",
+	})
+	fullRaw := mustJSON(t, []helmfileRelease{{
+		Name:    "example",
+		Chart:   "nvcf/helm-example",
+		Version: "1.0.0",
+	}})
+	sourceCharts := map[string]resolvedInventorySourceChart{
+		"helm-example": {
+			TagPrefix: "deploy/helm/example/v",
+			Path:      "deploy/helm/example",
+		},
+	}
+
+	used, err := materializeResolvedInventorySourceCharts(
+		repo,
+		filepath.Join(repo, "deploy/stacks/self-managed/helmfile.d/state.yaml.gotmpl"),
+		t.TempDir(),
+		source,
+		fullRaw,
+		sourceCharts,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("historical source-chart fallback failed: %v", err)
+	}
+	if len(used) != 0 {
+		t.Fatalf("used source charts = %v, want published chart fallback", used)
+	}
+
+	_, err = materializeResolvedInventorySourceCharts(
+		repo,
+		filepath.Join(repo, "deploy/stacks/self-managed/helmfile.d/state.yaml.gotmpl"),
+		t.TempDir(),
+		source,
+		fullRaw,
+		sourceCharts,
+		false,
+	)
+	if err == nil || !strings.Contains(err.Error(), "is unavailable") {
+		t.Fatalf("strict source-chart error = %v, want unavailable path", err)
+	}
+}
+
 func TestCollectResolvedStackInventoryBuildsConfiguredSelfManagedStates(t *testing.T) {
 	t.Setenv("NVCF_RELEASE_NGC_API_KEY", "test-api-key")
 	t.Setenv("NVCF_RELEASE_HELM_REGISTRY", "registry.example.test/release/charts")

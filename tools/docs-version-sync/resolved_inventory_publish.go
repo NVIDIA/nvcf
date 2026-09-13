@@ -162,7 +162,7 @@ type resolvedInventoryConfig struct {
 }
 
 type resolvedInventoryGenerationOptions struct {
-	UsePublishedCharts bool
+	AllowUnavailableSourceCharts bool
 }
 
 type resolvedInventorySourceChart struct {
@@ -245,9 +245,6 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	if err != nil {
 		return resolvedStackInventory{}, err
 	}
-	if options.UsePublishedCharts {
-		config.SourceCharts = nil
-	}
 	states := config.States
 	if len(states) == 0 {
 		return resolvedStackInventory{}, fmt.Errorf("resolved inventory config must declare at least one stack-owned state")
@@ -292,6 +289,7 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 			renderSource,
 			config.PublishedChartRepository,
 			config.SourceCharts,
+			options.AllowUnavailableSourceCharts,
 			ngcAPIKey,
 			runner,
 		)
@@ -334,9 +332,11 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 			plane.ManifestByRelease[release] = manifest
 		}
 	}
-	for chart := range config.SourceCharts {
-		if _, used := usedSourceCharts[chart]; !used {
-			return resolvedStackInventory{}, fmt.Errorf("source chart %s is not used by any resolved Helmfile state", chart)
+	if !options.AllowUnavailableSourceCharts {
+		for chart := range config.SourceCharts {
+			if _, used := usedSourceCharts[chart]; !used {
+				return resolvedStackInventory{}, fmt.Errorf("source chart %s is not used by any resolved Helmfile state", chart)
+			}
 		}
 	}
 
@@ -708,6 +708,7 @@ func collectResolvedInventoryState(
 	renderSource resolvedInventoryHelmSource,
 	publishedChartRepository string,
 	sourceCharts map[string]resolvedInventorySourceChart,
+	allowUnavailableSourceCharts bool,
 	ngcAPIKey string,
 	runner resolvedInventoryCommandRunner,
 ) ([]helmfileRelease, map[string][]byte, []string, error) {
@@ -728,6 +729,7 @@ func collectResolvedInventoryState(
 		source,
 		fullList,
 		sourceCharts,
+		allowUnavailableSourceCharts,
 	)
 	if err != nil {
 		return nil, nil, nil, err
@@ -795,6 +797,7 @@ func materializeResolvedInventorySourceCharts(
 	stackSource stackSourceRelease,
 	fullRaw []byte,
 	sourceCharts map[string]resolvedInventorySourceChart,
+	allowUnavailableSourceCharts bool,
 ) ([]string, error) {
 	if len(sourceCharts) == 0 {
 		return nil, nil
@@ -820,6 +823,12 @@ func materializeResolvedInventorySourceCharts(
 			return nil, fmt.Errorf("source chart %s release %s version %q is not semantic", name, release.Name, release.Version)
 		}
 		tag := sourceChart.TagPrefix + release.Version
+		if _, err := gitOutput(repoRoot, "cat-file", "-e", tag+":"+sourceChart.Path); err != nil {
+			if allowUnavailableSourceCharts {
+				continue
+			}
+			return nil, fmt.Errorf("source chart %s path %s is unavailable at %s: %w", name, sourceChart.Path, tag, err)
+		}
 		if _, err := gitOutput(repoRoot, "merge-base", "--is-ancestor", tag, stackSource.Commit); err != nil {
 			return nil, fmt.Errorf("source chart %s tag %s is not an ancestor of stack commit %s: %w", name, tag, stackSource.Commit, err)
 		}

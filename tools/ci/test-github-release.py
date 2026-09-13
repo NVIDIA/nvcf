@@ -1768,7 +1768,7 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertIn("--inventory-config", preflight_workflow)
         self.assertIn("grep -q '^states:'", preflight_workflow)
         self.assertIn("predates its per-stack inventory states", preflight_workflow)
-        self.assertIn("--use-published-charts", preflight_workflow)
+        self.assertIn("--allow-unavailable-source-charts", preflight_workflow)
         self.assertIn("actions/upload-artifact@v4", preflight_workflow)
         self.assertIn("if-no-files-found: error", preflight_workflow)
         self.assertNotIn("github-release tag", preflight_workflow)

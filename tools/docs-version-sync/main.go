@@ -45,7 +45,7 @@ func run(args []string) error {
 	qualificationVersion := flags.String("qualification-version", "", "documentation version for an exact QA-qualified three-stack release set")
 	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
 	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
-	usePublishedCharts := flags.Bool("use-published-charts", false, "render inventory with published charts instead of configured source charts")
+	allowUnavailableSourceCharts := flags.Bool("allow-unavailable-source-charts", false, "use published charts when configured source paths are unavailable in a historical tag")
 	stackSourceTag := flags.String("stack-source-tag", "", "immutable owning stack source tag for inventory generation")
 	stackSourceCommit := flags.String("stack-source-commit", "", "immutable owning stack source commit for inventory generation")
 	compareFrom := flags.String("compare-release-set-from", "", "directory containing previous release-set inventory JSON files")
@@ -71,7 +71,7 @@ func run(args []string) error {
 		}
 		if *updateCatalog || *check || *inventoryOutput != "" || *qualificationVersion != "" ||
 			*stackVersion != "" || *computeStackVersion != "" || *observabilityStackVersion != "" ||
-			*inventoryConfig != "" || *usePublishedCharts || *stackSourceTag != "" || *stackSourceCommit != "" {
+			*inventoryConfig != "" || *allowUnavailableSourceCharts || *stackSourceTag != "" || *stackSourceCommit != "" {
 			return fmt.Errorf("release-set comparison cannot be combined with catalog update, check, or inventory generation flags")
 		}
 		fromPath := resolveRepoPath(repoRoot, *compareFrom)
@@ -105,7 +105,7 @@ func run(args []string) error {
 			Tag:     *stackSourceTag,
 			Commit:  *stackSourceCommit,
 		}, resolvedInventoryGenerationOptions{
-			UsePublishedCharts: *usePublishedCharts,
+			AllowUnavailableSourceCharts: *allowUnavailableSourceCharts,
 		})
 	}
 	if !*updateCatalog && (*computeStackVersion != "" || *observabilityStackVersion != "") {
@@ -122,8 +122,8 @@ func run(args []string) error {
 			return fmt.Errorf("--qualification-version requires exact control-plane, compute-plane, and observability stack versions")
 		}
 	}
-	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" || *usePublishedCharts {
-		return fmt.Errorf("--stack-source-tag, --stack-source-commit, --inventory-config, and --use-published-charts require --generate-stack-inventory")
+	if *stackSourceTag != "" || *stackSourceCommit != "" || *inventoryConfig != "" || *allowUnavailableSourceCharts {
+		return fmt.Errorf("--stack-source-tag, --stack-source-commit, --inventory-config, and --allow-unavailable-source-charts require --generate-stack-inventory")
 	}
 	if *catalogPath == "" {
 		*catalogPath = filepath.Join(repoRoot, "docs", "version-catalog", *target+".yaml")
