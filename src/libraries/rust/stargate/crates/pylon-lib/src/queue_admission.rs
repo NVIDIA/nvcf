@@ -353,11 +353,10 @@ impl LiveRequestState {
         self.track_generation_request(required, ModelGeneration::new(required.model_id.clone(), 0))
     }
 
-    pub(crate) fn begin_request(
+    pub(crate) fn begin_unobserved_request(
         &self,
         required: &RequiredTunnelHeaders,
         generation: ModelGeneration,
-        has_observer: bool,
         observe: impl FnOnce(&RequestObservationTransition),
     ) {
         let request_id = required.request_id.clone();
@@ -371,19 +370,12 @@ impl LiveRequestState {
         let _order = self.observation_order.lock();
         let transition = {
             let mut state = self.inner.lock();
-            let observed = state
+            let retired = state
                 .remove_request(&request_id)
                 .and_then(|(_, request)| request.request.into_observed());
-            // The first observer event replaces the inherited metric projection.
-            // A request without an observer must retire that projection now.
-            let (inherited, retired) = if has_observer {
-                (observed, None)
-            } else {
-                (None, observed)
-            };
             state.insert_request(
                 request_id,
-                LiveRequest::Queue(request, inherited),
+                LiveRequest::Queue(request, None),
                 Some(required.request_instance.clone()),
             );
             RequestObservationTransition {
@@ -402,7 +394,7 @@ impl LiveRequestState {
         required: &RequiredTunnelHeaders,
         generation: ModelGeneration,
     ) -> QueueTrackedRequestGuard {
-        self.begin_request(required, generation, true, |_| {});
+        self.begin_unobserved_request(required, generation, |_| {});
         self.request_guard(required)
     }
 
@@ -445,8 +437,14 @@ impl LiveRequestState {
         observe: impl FnOnce(&RequestObservationTransition),
     ) -> RequestObservationTransition {
         let generation = ModelGeneration::new(observation.model_id.clone(), 0);
-        self.transition_generation_observation_with(observation, Some(&generation), None, observe)
-            .unwrap()
+        self.transition_generation_observation_with(
+            observation,
+            Some(&generation),
+            None,
+            false,
+            observe,
+        )
+        .unwrap()
     }
 
     pub(crate) fn transition_generation_observation_with(
@@ -454,18 +452,22 @@ impl LiveRequestState {
         observation: &RequestObservation,
         generation: Option<&ModelGeneration>,
         instance: Option<&RequestInstance>,
+        begin_request: bool,
         observe: impl FnOnce(&RequestObservationTransition),
     ) -> Option<RequestObservationTransition> {
         let _order = self.observation_order.lock();
         let transition = {
             let mut state = self.inner.lock();
-            if let Some(instance) = instance
+            // Starting an observed request replaces both projections under this
+            // lock, so generation retirement cannot see different owners.
+            if !begin_request
+                && let Some(instance) = instance
                 && generation.is_some()
                 && !state.owns_instance(&observation.request_id, instance)
             {
                 return None;
             }
-            state.transition_observation(observation, generation, instance)
+            state.transition_observation(observation, generation, instance, begin_request)
         };
         observe(&transition);
         Some(transition)
@@ -513,6 +515,7 @@ impl QueueAdmissionState {
         observation: &RequestObservation,
         generation: Option<&ModelGeneration>,
         instance: Option<&RequestInstance>,
+        begin_request: bool,
     ) -> RequestObservationTransition {
         let prior = self.remove_request(&observation.request_id);
         let instance = instance.cloned().or_else(|| {
@@ -520,7 +523,7 @@ impl QueueAdmissionState {
                 .as_ref()
                 .and_then(|(_, record)| record.instance.clone())
         });
-        let (request_id, prior_queue, prior_observed) =
+        let (request_id, mut prior_queue, prior_observed) =
             match prior.map(|(id, record)| (id, record.request)) {
                 Some((request_id, LiveRequest::Queue(queue, observed))) => {
                     (request_id, Some(queue), observed)
@@ -547,6 +550,9 @@ impl QueueAdmissionState {
                 prior_observed.as_ref().map(|request| &request.generation),
             ],
         );
+        if begin_request {
+            prior_queue = None;
+        }
         let current = match (observation.is_terminal(), generation) {
             (false, Some(generation)) => {
                 let phase = [
@@ -1517,5 +1523,19 @@ mod tests {
                 QueueAdmissionDecision::MissingEstimate
             );
         }
+    }
+
+    #[test]
+    fn retiring_a_generation_preserves_replacement_accounting() {
+        let live = LiveRequestState::default();
+        let _first = live.track_request(&required_for_model("reused-id", "model-a", 0, 100));
+        live.transition_observation(&observation(
+            "reused-id",
+            RequestObservationState::InputProcessing,
+        ));
+        let replacement = live.track_request(&required_for_model("reused-id", "model-b", 0, 20));
+        live.retire_generation(&ModelGeneration::new("model-a", 0));
+        drop(replacement);
+        assert_eq!(live.snapshot_model("model-b").num_running_queries, 0);
     }
 }

@@ -187,7 +187,6 @@ impl RequestObserver {
         generation: Option<ModelGeneration>,
         runtime_state: PylonRuntimeState,
     ) -> Self {
-        runtime_state.begin_request(&required, generation.as_ref(), true);
         let priority = required.queue_priority();
         let RequiredTunnelHeaders {
             request_id,
@@ -199,7 +198,7 @@ impl RequestObserver {
             accepted_at,
         } = required;
         let output_token_calibration_enabled = runtime_state.output_token_calibration_enabled();
-        let mut observer = Self {
+        let observer = Self {
             endpoint,
             request_id,
             request_instance,
@@ -218,7 +217,13 @@ impl RequestObserver {
             state: RequestLifecycleState::UpstreamConnecting,
             runtime_state,
         };
-        observer.emit();
+        let event = observer.observation_event();
+        log_observation(&event.observation);
+        observer.runtime_state.observe_request_for_generation(
+            event,
+            observer.request_input_tokens,
+            true,
+        );
         observer
     }
 
@@ -501,7 +506,14 @@ impl RequestObserver {
             ),
         }
     }
-    fn emit(&mut self) {
+    fn emit(&self) {
+        let event = self.observation_event();
+        log_observation(&event.observation);
+        self.runtime_state
+            .observe_request_for_generation(event, self.request_input_tokens, false);
+    }
+
+    fn observation_event(&self) -> RequestObservationEvent {
         let backend = self.state.backend();
         let input_interval = backend.and_then(|backend| {
             backend
@@ -541,25 +553,20 @@ impl RequestObserver {
                 .map(|instant| instant.saturating_duration_since(self.started_at)),
             total_duration: self.started_at.elapsed(),
         };
-        log_observation(&observation);
-        self.runtime_state.observe_request_for_generation(
-            RequestObservationEvent {
-                observation,
-                request_instance: Some(self.request_instance.clone()),
-                generation: self.generation.clone(),
-                changed_generations: Vec::new(),
-                input_interval,
-                input_tokens_explicit: self.input_tokens_explicit,
-                output_calibration: backend
-                    .map_or_else(OutputCalibrationFacts::default, |backend| {
-                        backend.output_calibration
-                    }),
-                upstream_duration: backend
-                    .and_then(|backend| backend.last_upstream_event_at)
-                    .map(|instant| instant.saturating_duration_since(self.started_at)),
-            },
-            self.request_input_tokens,
-        );
+        RequestObservationEvent {
+            observation,
+            request_instance: Some(self.request_instance.clone()),
+            generation: self.generation.clone(),
+            changed_generations: Vec::new(),
+            input_interval,
+            input_tokens_explicit: self.input_tokens_explicit,
+            output_calibration: backend.map_or_else(OutputCalibrationFacts::default, |backend| {
+                backend.output_calibration
+            }),
+            upstream_duration: backend
+                .and_then(|backend| backend.last_upstream_event_at)
+                .map(|instant| instant.saturating_duration_since(self.started_at)),
+        }
     }
 }
 
@@ -771,7 +778,7 @@ mod tests {
             headers.insert(HEADER_MODEL, replacement_model.parse().unwrap());
             let required = validate_required_tunnel_headers(&headers).unwrap();
             let generation = runtime.current_generation(replacement_model);
-            runtime.begin_request(&required, generation.as_ref(), false);
+            runtime.begin_unobserved_request(&required, generation.as_ref());
             let guard = runtime
                 .track_generation_request(&required, generation.as_ref())
                 .unwrap();

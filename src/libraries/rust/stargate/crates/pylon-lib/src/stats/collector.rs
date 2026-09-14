@@ -812,6 +812,7 @@ mod tests {
                 upstream_duration: None,
             },
             request_input_tokens,
+            false,
         );
     }
 
@@ -4111,6 +4112,7 @@ mod tests {
             Some(generation.clone()),
             runtime.clone(),
         );
+        assert_eq!(runtime.snapshot_live_model("model-a").queue_size, 1);
         second.on_backend_submission(std::time::Instant::now() - Duration::from_secs(1));
         second.observe_generated_output(
             std::time::Instant::now() - Duration::from_millis(500),

@@ -316,7 +316,7 @@ impl TunnelRequestLifecycle {
     ) -> Self {
         if observation_endpoint.is_none() {
             app.runtime_state
-                .begin_request(&required, generation.as_ref(), false);
+                .begin_unobserved_request(&required, generation.as_ref());
         }
         let observer = observation_endpoint.map(|endpoint| {
             TunnelRequestObserver::accepted(

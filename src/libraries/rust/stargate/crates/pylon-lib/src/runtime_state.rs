@@ -466,6 +466,7 @@ impl PylonRuntimeState {
                 upstream_duration: None,
             },
             request_input_tokens,
+            false,
         );
     }
 
@@ -473,10 +474,13 @@ impl PylonRuntimeState {
         &self,
         event: RequestObservationEvent,
         request_input_tokens: u64,
+        begin_request: bool,
     ) {
-        let Some(event) =
-            self.transition_request_observation_for_generation(event, request_input_tokens)
-        else {
+        let Some(event) = self.transition_request_observation_for_generation(
+            event,
+            request_input_tokens,
+            begin_request,
+        ) else {
             return;
         };
         if let Some(tx) = &self.observation_tx
@@ -530,6 +534,7 @@ impl PylonRuntimeState {
                 upstream_duration: None,
             },
             request_input_tokens,
+            false,
         )
         .expect("test observation must target a current generation")
     }
@@ -538,6 +543,7 @@ impl PylonRuntimeState {
         &self,
         mut event: RequestObservationEvent,
         request_input_tokens: u64,
+        begin_request: bool,
     ) -> Option<RequestObservationEvent> {
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
@@ -565,6 +571,7 @@ impl PylonRuntimeState {
             &live_observation,
             event.generation.as_ref(),
             event.request_instance.as_ref(),
+            begin_request,
             |transition| {
                 if let Some(metrics) = &self.metrics {
                     metrics.observe_request_transition(&event.observation, transition);
@@ -632,19 +639,17 @@ impl PylonRuntimeState {
             .track_generation_request(required, generation)
     }
 
-    pub(crate) fn begin_request(
+    pub(crate) fn begin_unobserved_request(
         &self,
         required: &RequiredTunnelHeaders,
         generation: Option<&ModelGeneration>,
-        has_observer: bool,
     ) {
         let Some(generation) = generation else { return };
         let advertised = self.advertised.lock();
         if advertised.current(generation).is_some() {
-            self.live_requests.begin_request(
+            self.live_requests.begin_unobserved_request(
                 required,
                 generation.clone(),
-                has_observer,
                 |transition| {
                     if let Some(metrics) = &self.metrics {
                         metrics.observe_request_state_transition(transition);
@@ -750,6 +755,7 @@ mod tests {
                 upstream_duration: None,
             },
             request_input_tokens,
+            false,
         )
     }
 
