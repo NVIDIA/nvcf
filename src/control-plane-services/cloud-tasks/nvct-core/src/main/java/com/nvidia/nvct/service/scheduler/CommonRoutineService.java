@@ -50,6 +50,10 @@ class CommonRoutineService {
             "ICMS Request Id %s: Request State %s; Instance Id %s; Instance State %s; ";
     private static final String MESG_HEALTH_INFO_UNAVAILABLE =
             "Health info is not available";
+    private static final String MESG_NO_INSTANCE_PROVISIONED =
+            "No instance could be provisioned for this task before timing out "
+                    + "(commonly caused by cluster capacity exhaustion); "
+                    + "gpu=%s, instanceType=%s, backend=%s";
     private static final String UNKNOWN = "UNKNOWN";
 
     public static final Set<State> TERMINAL_INSTANCE_STATES =
@@ -123,6 +127,15 @@ class CommonRoutineService {
                                                  gpuSpec.getInstanceType(),
                                                  gpuSpec.getBackend(),
                                                  errorMessage);
+    }
+
+    // Caller-facing message used when ICMS reports no corresponding instance for a Task after
+    // the grace period has elapsed. This is most commonly caused by cluster capacity exhaustion,
+    // but is not asserted as certain since a request that never reached ICMS would look the same.
+    public static String getNoInstanceProvisionedErrorMessage(GpuSpecUdt gpuSpec) {
+        return MESG_NO_INSTANCE_PROVISIONED.formatted(gpuSpec.getGpu(),
+                                                       gpuSpec.getInstanceType(),
+                                                       gpuSpec.getBackend());
     }
 
     public static String getErrorMessage(Set<HealthDto> healthDtos) {
