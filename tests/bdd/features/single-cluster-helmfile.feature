@@ -222,6 +222,41 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # scenario's deployment at once.
       And I successfully undeploy the function selected by NVCF CLI
 
+    @function-lifecycle @helm-function
+    Scenario: Operator creates, deploys, and invokes a Helm chart function
+      Given environment variable "SAMPLE_HELM_FUNCTION_CHART" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      # Function creation and deployment both cross the ReVal chart-rendering
+      # boundary. A deployed ReVal pod alone does not prove this path works.
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-helm-function --helm-chart ${SAMPLE_HELM_FUNCTION_CHART} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
+        """
+
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value               |
+        | --gpu           | H100                |
+        | --instance-type | NCP.GPU.H100_1x     |
+        | --backend       | ncp-local           |
+        | --regions       | us-west-1           |
+        | --min-instances | 1                   |
+        | --max-instances | 1                   |
+        | --timeout       | 900                 |
+
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                                       |
+        | --description | bdd-helm-function                                                           |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details         |
+
+      When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
+        """
+        {"message":"bdd-helm-echo","repeats":1}
+        """
+      Then the command output should contain "bdd-helm-echo"
+
+      And I successfully undeploy the function selected by NVCF CLI
+
     @function-lifecycle @grpc
     Scenario: Operator creates, deploys, and invokes the gRPC Load Tester Supreme sample function
       Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"

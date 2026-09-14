@@ -46,7 +46,10 @@ go test -short ./...
 
 Live runs build nvcf-cli, bring up a real k3d cluster, and exercise the
 feature end to end. They require an NGC API key and sample registry
-coordinates.
+coordinates. The single-cluster Helmfile run also requires
+`SAMPLE_HELM_FUNCTION_CHART`. It must identify a chart that ReVal can fetch
+without credentials. The chart must expose an `entrypoint` Service on port
+8000, answer `/health`, and echo the request message from `/echo`.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -67,9 +70,9 @@ go test -run '^TestSingleClusterUpOneClick$' -timeout 30m -v
 # Multi-cluster CLI feature
 go test -run '^TestMultiClusterUp$' -timeout 60m -v
 
-# Single-cluster Helmfile feature (requires NGC_API_KEY, SAMPLE_NGC_ORG,
-# SAMPLE_NGC_TEAM)
+# Single-cluster Helmfile feature (also requires a public sample Helm chart)
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_HELM_FUNCTION_CHART=<chart-url-or-oci-reference> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Focused single-cluster Helmfile feature for the documented public Docker Hub

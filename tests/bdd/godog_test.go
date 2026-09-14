@@ -438,11 +438,14 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	const vanityInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function invoke --vanity-host vanity.localhost --path /bdd/echo --timeout 120" +
 		" --request-body '{\"message\":\"bdd-vanity-echo\",\"repeats\":1}'"
+	const helmInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" function invoke --request-body '{\"message\":\"bdd-helm-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test-0.1.0.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -462,6 +465,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		vanityInvokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-vanity-echo\"}\n",
+		},
+		helmInvokeCommand: {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-helm-echo\"}\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage" +
@@ -564,6 +571,16 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-helm-function",
+		"--helm-chart https://charts.example.test/inference-test-0.1.0.tgz",
+		"--helm-chart-service entrypoint",
+		"--inference-url /echo --inference-port 8000") {
+		t.Fatal("Helm sample function was not created through the chart-rendering path")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmInvokeCommand) {
+		t.Fatal("Helm sample function was not invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-openai-compatible-sample",
 		"nvcf-openai-compatible-sample:local",
 		"--function-type LLM",
@@ -576,7 +593,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 4)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
