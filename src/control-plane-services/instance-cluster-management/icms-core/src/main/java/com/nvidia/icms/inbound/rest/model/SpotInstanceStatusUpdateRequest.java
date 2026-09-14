@@ -16,9 +16,11 @@
  */
 package com.nvidia.icms.inbound.rest.model;
 
+import com.nvidia.icms.inbound.rest.model.workers.WorkerAuth;
 import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import io.swagger.v3.oas.annotations.media.Schema;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.util.Objects;
 import java.util.Set;
@@ -84,6 +86,13 @@ public class SpotInstanceStatusUpdateRequest {
     @Schema(description = "Capacity type of the instance", allowableValues = {"SPOT", "RESERVED", "RESERVED_BACKUP"}, defaultValue = "SPOT")
     @Nullable
     CapacityType capacityType;
+
+    @Schema(description = "Worker authentication registration payload (self-hosted deployments only). "
+            + "When present, ICMS stores the worker-identity set for this instance so that "
+            + "subsequent calls to POST /v1/workers/tokens/introspect can verify worker JWTs.")
+    @Nullable
+    @Valid
+    WorkerAuth workerAuth;
 
     @Data
     @AllArgsConstructor

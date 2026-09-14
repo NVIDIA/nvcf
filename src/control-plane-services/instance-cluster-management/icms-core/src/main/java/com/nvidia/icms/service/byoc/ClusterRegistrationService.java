@@ -72,6 +72,7 @@ import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 import io.micrometer.observation.annotation.Observed;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -92,6 +93,8 @@ public class ClusterRegistrationService {
     private final InstanceServiceHelper instanceServiceHelper;
     private final ByocServiceHelper byocServiceHelper;
     private final ComputePlatformService computePlatformService;
+
+    private final WorkerIdentifierService workerIdentifierService;
 
 
     @Observed
@@ -171,6 +174,7 @@ public class ClusterRegistrationService {
 
         try {
             clusterRepository.deleteClusterInfo(clusterEntity);
+            workerIdentifierService.deleteForClusterQuietly(clusterId);
 
             // Audit log changes in DB
             populateAuditValuesForDeletingCluster(auditProps, clusterId);

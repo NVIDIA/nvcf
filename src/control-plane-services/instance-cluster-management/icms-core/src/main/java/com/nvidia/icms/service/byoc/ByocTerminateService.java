@@ -56,6 +56,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -87,6 +88,8 @@ public class ByocTerminateService {
     private final FunctionDeploymentStagesService functionDeploymentStagesService;
 
     private final ComputePlatformService computePlatformService;
+
+    private final WorkerIdentifierService workerIdentifierService;
 
     @Observed
     public TerminateInstancesResponse terminateInstances(
@@ -291,6 +294,8 @@ public class ByocTerminateService {
         instanceEntity.setErrorLog(errorLog);
         // Instance is terminated by SIS either for unhealthy cloud, missing cluster info, or expired instance
         instanceEntity.setErrorSource(ICMS_ERROR_SOURCE);
+        workerIdentifierService.deleteForInstanceQuietly(
+                instanceEntity.getZone(), instanceEntity.getInstanceId());
         return instanceEntity;
     }
 

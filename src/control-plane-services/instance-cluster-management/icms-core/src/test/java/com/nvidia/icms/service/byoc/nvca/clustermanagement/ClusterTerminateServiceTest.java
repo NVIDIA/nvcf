@@ -56,6 +56,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -89,6 +90,11 @@ class ClusterTerminateServiceTest {
     @Mock
     NvcaClusterConfigurationRepository nvcaClusterConfigurationRepository;
 
+    @Mock
+
+    private WorkerIdentifierService workerIdentifierService;
+
+
     private ClusterTerminateService clusterTerminateService;
 
     @BeforeEach
@@ -97,7 +103,8 @@ class ClusterTerminateServiceTest {
         clusterTerminateService =
                 new ClusterTerminateService(nvcaClusterRepository, clusterRepository, queueManager,
                                             instanceServiceHelper, auditService, telemetryEventClient,
-                                            nvcaClusterRegistrationService, nvcaClusterConfigurationRepository);
+                                            nvcaClusterRegistrationService, nvcaClusterConfigurationRepository,
+                                            workerIdentifierService);
     }
 
     @Test
