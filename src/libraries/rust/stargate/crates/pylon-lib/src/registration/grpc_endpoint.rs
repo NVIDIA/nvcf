@@ -383,6 +383,16 @@ fn grpc_error_chain(mut error: &(dyn Error + 'static)) -> String {
         } else if let Some(status) = error.downcast_ref::<tonic::Status>() {
             // Metadata and binary details are not needed to diagnose the RPC.
             format!("gRPC {:?}: {}", status.code(), status.message())
+        } else if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            // Token-issuer URLs can contain credentials or sensitive queries.
+            // Keep the failure category and its sources without displaying the URL.
+            if error.is_timeout() {
+                "HTTP request timed out".into()
+            } else if error.is_connect() {
+                "HTTP connection failed".into()
+            } else {
+                "HTTP request failed".into()
+            }
         } else {
             error.to_string()
         };
