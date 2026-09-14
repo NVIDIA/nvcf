@@ -1594,17 +1594,6 @@ func controlPlaneNamespaceSet() []string {
 	return append(out, extra)
 }
 
-// isOwnedBy reports whether the pod is controlled by the named workload. A
-// label selector alone can match a pod the StatefulSet does not own.
-func isOwnedBy(pod *corev1.Pod, ownerName string) bool {
-	for i := range pod.OwnerReferences {
-		if pod.OwnerReferences[i].Name == ownerName {
-			return true
-		}
-	}
-	return false
-}
-
 // deploymentRolloutStalled reports whether the Deployment controller has given
 // up on the current rollout. Kubernetes sets Progressing=False with reason
 // ProgressDeadlineExceeded once progressDeadlineSeconds elapses without
@@ -1730,6 +1719,16 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 		return
 	}
 
+	if rollingCount > 0 {
+		// A mid-rollout Deployment was skipped rather than assessed, so the
+		// ones that did pass cannot stand in for the whole tier. Unknown here
+		// warns without failing, so a routine upgrade is not reported as an
+		// outage.
+		printWarning(log, fmt.Sprintf("%d Deployment(s) ready, but %d still mid-rollout; assessment is partial",
+			checkedCount, rollingCount))
+		return
+	}
+
 	printSuccess(log, fmt.Sprintf("All %d Deployments in control-plane namespaces are fully ready", checkedCount))
 	ok := true
 	state.Tier1DeploymentsOK = &ok
@@ -1824,7 +1823,7 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			nodeOwner := make(map[string]string)
 			for j := range pods.Items {
 				p := &pods.Items[j]
-				if !isOwnedBy(p, sts.Name) || !isPodReady(p) {
+				if !metav1.IsControlledBy(p, sts) || !isPodReady(p) {
 					continue
 				}
 				if first, dup := nodeOwner[p.Spec.NodeName]; dup {
@@ -1872,6 +1871,12 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 			checkedCount, deniedCount))
 		state.Warnings = append(state.Warnings,
 			"Tier-2 StatefulSets: status unknown (RBAC denied StatefulSet list in one or more control-plane namespaces)")
+		return
+	}
+
+	if rollingCount > 0 {
+		printWarning(log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d still mid-rollout; assessment is partial",
+			checkedCount, rollingCount))
 		return
 	}
 

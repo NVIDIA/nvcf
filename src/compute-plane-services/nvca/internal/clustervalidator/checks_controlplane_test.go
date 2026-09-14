@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -636,8 +637,12 @@ func TestCheckTier1Deployments_ForbiddenIsNotAPass(t *testing.T) {
 // co-location scan has something to walk. nodes gives one node name per pod.
 func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []runtime.Object {
 	sel := map[string]string{"app": name}
+	// IsControlledBy compares the controller reference UID, so the fixture needs
+	// a real one on both sides.
+	uid := types.UID("uid-" + name)
+	controller := true
 	objs := []runtime.Object{&appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: uid},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: sel},
@@ -652,7 +657,10 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 		objs = append(objs, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("%s-%d", name, i), Namespace: ns, Labels: sel,
-				OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: name}},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: "apps/v1", Kind: "StatefulSet",
+					Name: name, UID: uid, Controller: &controller,
+				}},
 			},
 			Spec: corev1.PodSpec{NodeName: node},
 			Status: corev1.PodStatus{
@@ -825,6 +833,79 @@ func TestCheckTier2StatefulSets_IgnoresUnownedAndUnreadyPods(t *testing.T) {
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.True(t, *state.Tier2StatefulSetsOK,
 		"an unowned, not-Ready pod on an occupied node must not be read as a co-located peer")
+}
+
+// An owner reference naming the StatefulSet but belonging to another kind must
+// not count: matching on name alone would let its pod cause a co-location
+// failure on a healthy quorum.
+func TestCheckTier2StatefulSets_IgnoresSameNamedOwnerOfAnotherKind(t *testing.T) {
+	objs := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
+	controller := true
+	impostor := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "impostor", Namespace: "nats-system", Labels: map[string]string{"app": "nats"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "Deployment",
+				Name: "nats", UID: types.UID("some-other-uid"), Controller: &controller,
+			}},
+		},
+		Spec: corev1.PodSpec{NodeName: "node-1"},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	client := fake.NewSimpleClientset(append(objs, impostor)...)
+
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK,
+		"a Ready pod owned by a same-named Deployment must not be treated as a StatefulSet peer")
+}
+
+// A healthy StatefulSet must not stand in for one that was skipped mid-rollout:
+// its quorum was never assessed, so the tier result is partial, not a pass.
+func TestCheckTier2StatefulSets_HealthyPeerDoesNotMaskRollingOne(t *testing.T) {
+	healthy := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
+	rolling := makeQuorumSTS("openbao", "vault-system", 3, 2, []string{"node-1", "node-2"})
+	rolling[0].(*appsv1.StatefulSet).Status.UpdateRevision = "openbao-r2"
+
+	client := fake.NewSimpleClientset(append(healthy, rolling...)...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier2StatefulSetsOK,
+		"one StatefulSet still rolling means the tier assessment is partial, not a pass")
+	assert.NotEmpty(t, state.Warnings)
+}
+
+// Same shape for Tier-1: a ready Deployment does not certify one still rolling.
+func TestCheckTier1Deployments_HealthyPeerDoesNotMaskRollingOne(t *testing.T) {
+	two := int32(2)
+	client := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: "nvcf", Generation: 1},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 2,
+			},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "rolling", Namespace: "sis", Generation: 3},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration: 2, UpdatedReplicas: 1, ReadyReplicas: 2,
+			},
+		},
+	)
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier1DeploymentsOK,
+		"one Deployment still rolling means the tier assessment is partial, not a pass")
+	assert.NotEmpty(t, state.Warnings)
 }
 
 // The OpenBao namespace is relocatable, so a cluster that overrides it must not
