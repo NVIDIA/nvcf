@@ -127,6 +127,47 @@ rust_test(
     deps = all_crate_deps(normal_dev = True),
 )
 
+# Integration tests under tests/ are separate crates, so each needs its own
+# target; the crate-based target above only covers unit tests. They start NATS
+# and LocalStack through testcontainers, hence the tags: Docker runs outside
+# the sandbox and needs the bind-mounted config on a real host path, the
+# containers need the network, and testcontainers picks ports dynamically so
+# parallel runs collide. deps needs both normal and normal_dev because an
+# integration test is its own compilation unit and does not inherit the
+# library's dependencies.
+rust_test(
+    name = "test_health",
+    srcs = [
+        "tests/test_health.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_health.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+
 # Multi-arch OCI image. Distroless/cc base (libc; required for Rust +
 # jemalloc), binary at /usr/local/bin/server. Build/load/index/tar
 # targets live here. The internal NGC publish lanes (kaze,
