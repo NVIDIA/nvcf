@@ -36,6 +36,8 @@ var vanityInvocationRetryInterval = time.Second
 
 var selectedFunctionPollInterval = 5 * time.Second
 
+const vanityRouteNotFoundError = "Error: failed to invoke function: API error 404: 404 page not found"
+
 func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I use NVCF CLI config "([^"]*)"$`, sc.iUseNVCFCLIConfig)
 	ctx.Step(`^I successfully create function "([^"]*)" from image "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateFunction)
@@ -208,7 +210,7 @@ func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
 			return nil
 		}
 		if retryTimeoutErr != nil || retryFor <= 0 ||
-			!strings.Contains(combinedOutput(sc.LastResult), "API error 404: 404 page not found") {
+			!isTransientVanityRouteNotFound(sc.LastResult.Stderr) {
 			return err
 		}
 
@@ -226,7 +228,21 @@ func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
 			return err
 		case <-timer.C:
 		}
+		if time.Until(deadline) <= 0 {
+			return err
+		}
+		if retryCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
 	}
+}
+
+func isTransientVanityRouteNotFound(stderr string) bool {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	return len(lines) > 0 && lines[len(lines)-1] == vanityRouteNotFoundError
 }
 
 func (sc *ScenarioContext) iSuccessfullyUndeploySelectedFunction(ctx context.Context) error {

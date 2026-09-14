@@ -164,7 +164,7 @@ func TestVanityGatewayInvocationRetriesPlainNotFoundDuringRouteConvergence(t *te
 	t.Setenv("NVCF_CLI", "nvcf-cli")
 	sc.NVCFCLIConfig = "config.yaml"
 	fake.runResults = []harness.Result{
-		{ExitCode: 1, Stderr: "API error 404: 404 page not found"},
+		{ExitCode: 1, Stderr: "DEBUG: invoking Vanity endpoint\n" + vanityRouteNotFoundError + "\n"},
 		{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`},
 	}
 
@@ -181,6 +181,52 @@ func TestVanityGatewayInvocationRetriesPlainNotFoundDuringRouteConvergence(t *te
 	}
 	if len(fake.runs) != 2 {
 		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+}
+
+func TestVanityGatewayInvocationDoesNotRetryDecoratedNotFound(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 1, Stderr: vanityRouteNotFoundError + ": upstream route failure"},
+		{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`},
+	}
+
+	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
+		context.Background(), "vanity.localhost", "/bdd/echo", "1",
+		&godog.DocString{Content: `{"message":"vanity"}`},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want decorated 404 failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	}
+}
+
+func TestVanityGatewayInvocationDoesNotRetryWhenWaitReachesDeadline(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 1, Stderr: vanityRouteNotFoundError},
+		{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`},
+	}
+
+	previousInterval := vanityInvocationRetryInterval
+	vanityInvocationRetryInterval = time.Second
+	t.Cleanup(func() { vanityInvocationRetryInterval = previousInterval })
+
+	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
+		context.Background(), "vanity.localhost", "/bdd/echo", "0.05",
+		&godog.DocString{Content: `{"message":"vanity"}`},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want initial route convergence failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want no attempt after retry deadline", len(fake.runs))
 	}
 }
 
