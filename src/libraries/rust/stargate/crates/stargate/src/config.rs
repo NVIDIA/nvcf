@@ -26,22 +26,28 @@ use serde_with::{DurationMilliSeconds, serde_as};
 use stargate_protocol::{TunnelTransportProtocol, parse_explicit_http_uri};
 
 pub const SCHEMA_VERSION: u32 = 1;
-pub const DEFAULT_PROXY_MAX_REPLAY_BODY_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_GRPC_LISTEN_PORT: u16 = 50071;
+pub const DEFAULT_MODEL_DISCOVERY_LISTEN_PORT: u16 = 50073;
+pub const DEFAULT_HTTP_LISTEN_PORT: u16 = 8000;
+pub const DEFAULT_ADVERTISED_HOSTNAME_TEMPLATE: &str = "{pod_name}.stargate.external";
+pub const DEFAULT_KUBERNETES_POD_DISCOVERY_POLL_INTERVAL_MS: u64 = 1_000;
+pub const DEFAULT_KUBERNETES_POD_DISCOVERY_RESOLVER_TTL_MS: u64 = 1_000;
+pub const DEFAULT_REVERSE_CONNECT_TIMEOUT_MS: u64 = 10_000;
 
 fn default_schema_version() -> u32 {
     SCHEMA_VERSION
 }
 
 fn default_grpc_listen_addr() -> SocketAddr {
-    SocketAddr::from(([0, 0, 0, 0], 50071))
+    SocketAddr::from(([0, 0, 0, 0], DEFAULT_GRPC_LISTEN_PORT))
 }
 
 fn default_model_discovery_listen_addr() -> SocketAddr {
-    SocketAddr::from(([0, 0, 0, 0], 50073))
+    SocketAddr::from(([0, 0, 0, 0], DEFAULT_MODEL_DISCOVERY_LISTEN_PORT))
 }
 
 fn default_http_listen_addr() -> SocketAddr {
-    SocketAddr::from(([0, 0, 0, 0], 8000))
+    SocketAddr::from(([0, 0, 0, 0], DEFAULT_HTTP_LISTEN_PORT))
 }
 
 fn default_metrics_listen_addr() -> SocketAddr {
@@ -49,11 +55,15 @@ fn default_metrics_listen_addr() -> SocketAddr {
 }
 
 fn default_advertised_hostname_template() -> String {
-    "{pod_name}.stargate.external".to_string()
+    DEFAULT_ADVERTISED_HOSTNAME_TEMPLATE.to_string()
 }
 
-fn default_poll_interval() -> Duration {
-    Duration::from_millis(1_000)
+fn default_kubernetes_pod_discovery_poll_interval() -> Duration {
+    Duration::from_millis(DEFAULT_KUBERNETES_POD_DISCOVERY_POLL_INTERVAL_MS)
+}
+
+fn default_kubernetes_pod_discovery_resolver_ttl() -> Duration {
+    Duration::from_millis(DEFAULT_KUBERNETES_POD_DISCOVERY_RESOLVER_TTL_MS)
 }
 
 fn default_watch_heartbeat() -> Duration {
@@ -73,31 +83,11 @@ fn default_quic_request_timeout() -> Duration {
 }
 
 fn default_reverse_connect_timeout() -> Duration {
-    Duration::from_millis(10_000)
+    Duration::from_millis(DEFAULT_REVERSE_CONNECT_TIMEOUT_MS)
 }
 
 fn default_direct_connections() -> NonZeroUsize {
     NonZeroUsize::MIN
-}
-
-fn default_proxy_connect_retries() -> u32 {
-    2
-}
-
-fn default_proxy_request_retries() -> u32 {
-    2
-}
-
-fn default_proxy_replay_body_bytes() -> usize {
-    DEFAULT_PROXY_MAX_REPLAY_BODY_BYTES
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_request_budget_header() -> String {
-    "x-stargate-max-wait-ms".to_string()
 }
 
 fn default_service_name() -> String {
@@ -538,10 +528,16 @@ impl Default for StargateDiscoveryConfig {
 pub struct KubernetesPodDiscoveryConfig {
     pub headless_service_dns_name: String,
     #[serde_as(as = "DurationMilliSeconds<u64>")]
-    #[serde(rename = "poll_interval_ms", default = "default_poll_interval")]
+    #[serde(
+        rename = "poll_interval_ms",
+        default = "default_kubernetes_pod_discovery_poll_interval"
+    )]
     pub poll_interval: Duration,
     #[serde_as(as = "DurationMilliSeconds<u64>")]
-    #[serde(rename = "resolver_ttl_ms", default = "default_poll_interval")]
+    #[serde(
+        rename = "resolver_ttl_ms",
+        default = "default_kubernetes_pod_discovery_resolver_ttl"
+    )]
     pub resolver_ttl: Duration,
     #[serde(default)]
     pub development_peer_forwarding: Option<DevelopmentPeerForwardingConfig>,
@@ -572,7 +568,7 @@ impl Default for PylonTransportConfig {
     fn default() -> Self {
         Self {
             pylon_grpc_dial_uri: None,
-            tunnel_protocol: TunnelTransportProtocol::RawQuic,
+            tunnel_protocol: TunnelTransportProtocol::default(),
             quic_connect_timeout: default_quic_connect_timeout(),
             quic_request_timeout: default_quic_request_timeout(),
             direct: None,
@@ -643,12 +639,16 @@ pub struct RequestProxyRetryConfig {
 
 impl Default for RequestProxyRetryConfig {
     fn default() -> Self {
+        let defaults = crate::http_proxy::ProxyRetryConfig::default();
         Self {
-            max_connect_retries: default_proxy_connect_retries(),
-            max_request_retries: default_proxy_request_retries(),
-            max_replay_body_bytes: default_proxy_replay_body_bytes(),
-            require_pylon_retry_signal: default_true(),
-            request_budget_header: default_request_budget_header(),
+            max_connect_retries: defaults.max_connect_retries,
+            max_request_retries: defaults.max_request_retries,
+            max_replay_body_bytes: defaults.max_replay_body_bytes,
+            require_pylon_retry_signal: defaults.require_pylon_retry_signal,
+            request_budget_header: defaults
+                .request_retry_budget_ms_header
+                .map(|header| header.as_str().to_string())
+                .unwrap_or_default(),
         }
     }
 }
@@ -784,6 +784,16 @@ namespace = "inference"
 [stargate_network]
 advertise_addr = "10.0.0.2:50071"
 
+[process_lifecycle]
+readiness_warmup_ms = 60000
+readiness_stabilization_sample_interval_ms = 1000
+readiness_stabilization_window = 5
+shutdown_drain_timeout_ms = 30000
+
+[pylon_registration]
+update_idle_timeout_ms = 60000
+update_max_idle_timeout_ms = 300000
+
 [stargate_discovery]
 remote_watch_urls = ["https://remote.example:50071"]
 watch_heartbeat_ms = 5000
@@ -800,7 +810,13 @@ quic_request_timeout_ms = 30000
 
 [pylon_transport.reverse]
 listen_addr = "0.0.0.0:50072"
+pylon_dial_addr = "router.example:50072"
 connect_timeout_ms = 10000
+certificate_path = "/var/run/stargate-tls/tls.crt"
+private_key_path = "/var/run/stargate-tls/tls.key"
+
+[pylon_transport.tls]
+insecure_skip_verify = false
 
 [request_proxy.retry]
 max_connect_retries = 2
@@ -808,11 +824,43 @@ max_request_retries = 2
 max_replay_body_bytes = 67108864
 require_pylon_retry_signal = true
 request_budget_header = "x-stargate-max-wait-ms"
+
+[request_proxy.load_balancer]
+config_path = "/etc/stargate/lb-config.json"
+
+[observability]
+service_name = "stargate-test"
+
+[observability.metrics]
+listen_addr = "127.0.0.1:19090"
+prefix = "test_stargate_"
+
+[observability.tracing]
+endpoint = "https://otel.example:4317"
+
+[observability.tracing.access_token]
+secrets_path = "/var/run/secrets/tracing.json"
+json_path = ["tokens", "tracing"]
+
+[worker_authentication]
+endpoint = "http://worker-auth.example:50051"
+
+[worker_authentication.oauth2]
+provider_host = "https://oauth.example"
+secrets_path = "/var/run/secrets/oauth.json"
 "#,
         )
         .expect("config should parse");
         assert!(config.pylon_transport.reverse.is_some());
         assert!(config.stargate_discovery.kubernetes_pods.is_some());
+        assert!(config.observability.tracing.is_some());
+        assert!(
+            config
+                .worker_authentication
+                .as_ref()
+                .and_then(|auth| auth.oauth2.as_ref())
+                .is_some()
+        );
         let serialized = config
             .to_toml_string()
             .expect("config should serialize to TOML");

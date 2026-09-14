@@ -78,7 +78,9 @@ metadata:
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.apiVersion: v1
+# limitations under the License.
+
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: llm-request-router-stargate
@@ -559,7 +561,7 @@ spec:
         app.kubernetes.io/name: llm-request-router
         app.kubernetes.io/instance: llm-request-router
       annotations:
-        checksum/stargate-config: 14cb8e3d83d2a704cd9d8454f311b6182c73046e47e115f16c9d0b87769e7669
+        checksum/stargate-config: bf3eaeb5ad5c3eaedfc60e6558230f82bbe5228fa32a5e65929e1fbd68579952
         vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-llm-request-router
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/agent-inject-template-file-secrets.json: /vault/config/templates/secrets.json.tmpl

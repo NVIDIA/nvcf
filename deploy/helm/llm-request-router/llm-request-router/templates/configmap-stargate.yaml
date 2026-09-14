@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- $workloadKind := include "llm-request-router.workloadKind" . -}}
+{{ $workloadKind := include "llm-request-router.workloadKind" . -}}
 {{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" -}}
 {{- $directDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) -}}
 {{- $replicaCount := .Values.llmRequestRouter.replicaCount | int -}}
@@ -115,7 +115,7 @@ data:
 {{ if and .Values.llmRequestRouter.observability.tracing.enabled .Values.llmRequestRouter.observability.tracing.endpoint }}
     [observability.tracing]
     endpoint = {{ .Values.llmRequestRouter.observability.tracing.endpoint | quote }}
-{{ if and .Values.llmRequestRouter.auth.workerAuthEndpoint $useVaultSecrets }}
+{{ if $useVaultSecrets }}
 
     [observability.tracing.access_token]
     secrets_path = "/vault/secrets/secrets.json"

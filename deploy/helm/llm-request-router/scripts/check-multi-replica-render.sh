@@ -49,6 +49,11 @@ stargate_config() {
   yq -r 'select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-stargate") | .data."stargate.toml"' "${manifest}"
 }
 
+assert_valid_stargate_toml() {
+  local manifest="$1"
+  stargate_config "${manifest}" | yq -p toml '.' >/dev/null
+}
+
 workload_env_value() {
   local manifest="$1"
   local kind="$2"
@@ -85,6 +90,9 @@ service_field() {
 
 default_manifest="${tmp_dir}/default.yaml"
 render "${default_manifest}"
+assert_valid_stargate_toml "${default_manifest}"
+checked_manifest="$(dirname "${chart_dir}")/bin/manifest.yaml"
+cmp -s "${default_manifest}" "${checked_manifest}" || fail "bin/manifest.yaml is stale; run make template"
 
 [ "$(yq -r '.appVersion' "${chart_dir}/Chart.yaml")" = "${compatible_stargate_version}" ] || fail "chart appVersion must identify the compatible Stargate ${compatible_stargate_version} release"
 [ "$(workload_field "${default_manifest}" Deployment .kind)" = "Deployment" ] || fail "default render did not create Deployment"
@@ -132,6 +140,7 @@ statefulset_manifest="${tmp_dir}/statefulset.yaml"
 render "${statefulset_manifest}" \
   --set llmRequestRouter.workload.kind=StatefulSet \
   --set llmRequestRouter.replicaCount=3
+assert_valid_stargate_toml "${statefulset_manifest}"
 
 [ "$(workload_field "${statefulset_manifest}" StatefulSet .kind)" = "StatefulSet" ] || fail "explicit StatefulSet render did not create StatefulSet"
 [ -z "$(workload_field "${statefulset_manifest}" Deployment .kind)" ] || fail "explicit StatefulSet render also created Deployment"
@@ -163,6 +172,7 @@ render "${single_deployment_manifest}" \
   --set llmRequestRouter.workload.kind=Deployment \
   --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=false
+assert_valid_stargate_toml "${single_deployment_manifest}"
 
 single_deployment_args="$(workload_args "${single_deployment_manifest}" Deployment)"
 single_deployment_config="$(stargate_config "${single_deployment_manifest}")"
@@ -209,6 +219,18 @@ development_remote_backend_args="$(backend_router_args "${development_remote_man
 printf '%s\n' "${development_remote_config}" | grep -Fqx -- 'remote_watch_urls = ["http://127.0.0.1:50071"]' || fail "development HTTP remote Watch URI was not rendered"
 printf '%s\n' "${development_remote_config}" | grep -Fqx -- 'allow_insecure_remote_watch_http = true' || fail "Stargate config missing development HTTP opt-in"
 printf '%s\n' "${development_remote_backend_args}" | grep -qx -- '--allow-insecure-remote-watch-http' || fail "backend router missing development HTTP opt-in"
+
+tracing_without_worker_auth_manifest="${tmp_dir}/tracing-without-worker-auth.yaml"
+render "${tracing_without_worker_auth_manifest}" \
+  --set llmRequestRouter.observability.tracing.enabled=true \
+  --set-string llmRequestRouter.observability.tracing.endpoint=https://otel.example.test:4317 \
+  --set-string llmRequestRouter.auth.workerAuthEndpoint=
+assert_valid_stargate_toml "${tracing_without_worker_auth_manifest}"
+tracing_without_worker_auth_config="$(stargate_config "${tracing_without_worker_auth_manifest}")"
+printf '%s\n' "${tracing_without_worker_auth_config}" | grep -Fqx -- '[observability.tracing.access_token]' || fail "tracing config must use the injected Vault token independently of worker authentication"
+if printf '%s\n' "${tracing_without_worker_auth_config}" | grep -Fq -- '[worker_authentication]'; then
+  fail "disabled worker authentication must not render a worker_authentication section"
+fi
 
 for invalid_remote_url in \
   'region-b.example.test:50071' \

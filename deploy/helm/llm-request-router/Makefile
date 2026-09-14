@@ -20,6 +20,7 @@ helm_dir ?= ./llm-request-router
 values := $(helm_dir)/values.yaml
 
 additional_values ?=
+template_image_repository ?= stargate
 
 OCI_REGISTRY_HOST ?= <your-registry>
 OCI_REGISTRY_NAMESPACE ?= <your-org>
@@ -60,6 +61,7 @@ template:
 		--namespace $(namespace) \
 		$(if $(values),--values $(values),) \
 		$(if $(additional_values),--values $(additional_values),) \
+		--set llmRequestRouter.image.repository=$(template_image_repository) \
 		> bin/manifest.yaml
 
 validate: template

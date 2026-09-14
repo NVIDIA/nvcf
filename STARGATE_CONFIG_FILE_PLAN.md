@@ -7,7 +7,7 @@ TOML configuration file.
 
 Add this CLI option:
 
-~~~
+~~~text
 --config-file <PATH>
 ~~~
 
@@ -85,14 +85,14 @@ pod IP.
 Fields that need a per-process value accept either a literal or an explicit
 environment reference:
 
-~~~
+~~~toml
 id = "stargate-a"
 id = { env = "POD_NAME" }
 ~~~
 
 The Rust representation will use a Serde untagged enum similar to:
 
-~~~
+~~~rust
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum ValueSource<T> {
@@ -107,7 +107,7 @@ startup with the field name and environment variable name.
 
 The Helm chart will define derived address variables after POD_IP, for example:
 
-~~~
+~~~yaml
 - name: POD_IP
   valueFrom:
     fieldRef:
@@ -127,8 +127,8 @@ values from changing TOML syntax.
 
 Use direct TOML and Serde integration:
 
-~~~
-toml = { version = "=1.1.4", default-features = false, features = ["parse", "serde", "std"] }
+~~~toml
+toml = { version = "=1.1.4", default-features = false, features = ["display", "parse", "serde", "std"] }
 serde_with = { version = "=3.22.0", default-features = false, features = ["macros", "std"] }
 ~~~
 
@@ -885,11 +885,11 @@ Primary source files:
 ### 4. Migrate the Helm chart
 
 - Render stargate.toml in a ConfigMap.
-- Mount it read-only under /etc/llm-request-router.
+- Mount it read-only under /etc/stargate.
 - Invoke the main Stargate container with only:
 
-~~~
---config-file=/etc/llm-request-router/stargate.toml
+~~~text
+--config-file=/etc/stargate/stargate.toml
 ~~~
 
 - Define POD_NAME, POD_NAMESPACE, POD_IP, and derived address variables in
@@ -1019,11 +1019,11 @@ those documentation files.
 
 Run from the repository root as applicable:
 
-~~~
-cargo fmt --all -- --check
-cargo test -p stargate
-cargo test -p stargate-bench
-cargo clippy -p stargate -p stargate-bench --all-targets --all-features -- -D warnings
+~~~console
+cargo fmt --manifest-path src/libraries/rust/stargate/Cargo.toml --all -- --check
+cargo test --manifest-path src/libraries/rust/stargate/Cargo.toml -p stargate
+cargo test --manifest-path src/libraries/rust/stargate/Cargo.toml -p stargate-bench
+cargo clippy --manifest-path src/libraries/rust/stargate/Cargo.toml -p stargate -p stargate-bench --all-targets --all-features -- -D warnings
 bazel test //src/libraries/rust/stargate/crates/stargate:stargate_test
 bazel build //src/libraries/rust/stargate/crates/stargate:stargate
 bazel build //src/libraries/rust/stargate/crates/stargate-bench:stargate-bench

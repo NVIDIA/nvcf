@@ -86,26 +86,45 @@ fn parse_grpc_pylon_dial_uri(value: &str) -> std::result::Result<String, String>
 }
 
 #[derive(clap::Parser, Clone, Debug)]
-#[command(name = "stargate", version = BUILD_VERSION)]
+#[command(
+    name = "stargate",
+    version = BUILD_VERSION,
+    after_help = "Legacy CLI and environment configuration is deprecated; use --config-file."
+)]
 struct Args {
     /// Load all Stargate settings from this TOML file. All legacy configuration flags and environment variables are ignored when present.
     #[arg(long, value_name = "PATH")]
     config_file: Option<PathBuf>,
     /// Stable Stargate process or pod identity.
-    #[arg(long, value_name = "ID")]
-    stargate_id: String,
+    #[arg(long, required_unless_present = "config_file", value_name = "ID")]
+    stargate_id: Option<String>,
     /// Local TCP socket for backend-facing WatchStargates and registration.
-    #[arg(long, default_value = "0.0.0.0:50071", value_name = "ADDR")]
-    listen_addr: String,
+    #[arg(
+        long,
+        default_value_t = SocketAddr::from(([0, 0, 0, 0], structured::DEFAULT_GRPC_LISTEN_PORT)),
+        value_name = "ADDR"
+    )]
+    listen_addr: SocketAddr,
     /// Local TCP socket for frontend-facing model discovery (`ListModels`).
-    #[arg(long, default_value = "0.0.0.0:50073", value_name = "ADDR")]
-    model_discovery_listen_addr: String,
+    #[arg(
+        long,
+        default_value_t = SocketAddr::from((
+            [0, 0, 0, 0],
+            structured::DEFAULT_MODEL_DISCOVERY_LISTEN_PORT,
+        )),
+        value_name = "ADDR"
+    )]
+    model_discovery_listen_addr: SocketAddr,
     /// Local HTTP socket for proxy traffic, health probes, and metrics.
-    #[arg(long, default_value = "0.0.0.0:8000", value_name = "ADDR")]
-    http_listen_addr: String,
+    #[arg(
+        long,
+        default_value_t = SocketAddr::from(([0, 0, 0, 0], structured::DEFAULT_HTTP_LISTEN_PORT)),
+        value_name = "ADDR"
+    )]
+    http_listen_addr: SocketAddr,
     /// Self gRPC address published by non-Kubernetes discovery and used as the port source for Kubernetes advertised hostnames.
-    #[arg(long, value_name = "ADDR")]
-    advertise_addr: SocketAddr,
+    #[arg(long, required_unless_present = "config_file", value_name = "ADDR")]
+    advertise_addr: Option<SocketAddr>,
     /// Kubernetes headless Service DNS name used to enumerate local Stargate pods.
     #[arg(long, value_name = "DNS_NAME")]
     stargate_discovery_dns_name: Option<String>,
@@ -144,13 +163,26 @@ struct Args {
     #[arg(long, default_value_t = false)]
     enable_dev_peer_forwarding: bool,
     /// Interval for refreshing DNS-discovered Kubernetes Stargate pods.
-    #[arg(long, default_value_t = 1000, value_parser = parse_nonzero_millis, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::DEFAULT_KUBERNETES_POD_DISCOVERY_POLL_INTERVAL_MS,
+        value_parser = parse_nonzero_millis,
+        value_name = "MS"
+    )]
     dns_poll_ms: u64,
     /// Maximum resolver cache TTL used by Kubernetes Stargate pod discovery.
-    #[arg(long, default_value_t = 1000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::DEFAULT_KUBERNETES_POD_DISCOVERY_RESOLVER_TTL_MS,
+        value_name = "MS"
+    )]
     dns_resolver_ttl_ms: u64,
     /// Maximum interval between unchanged WatchStargates snapshots.
-    #[arg(long, default_value_t = 5000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::StargateDiscoveryConfig::default().watch_heartbeat.as_millis() as u64,
+        value_name = "MS"
+    )]
     watch_heartbeat_ms: u64,
     /// Minimum idle timeout for heartbeat-aware registration streams; 0 disables all enforcement
     #[arg(
@@ -169,18 +201,30 @@ struct Args {
     )]
     registration_update_max_idle_timeout_ms: u64,
     /// Grace period for shutdown tasks after Stargate starts draining.
-    #[arg(long, default_value_t = 30000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::ProcessLifecycleConfig::default().shutdown_drain_timeout.as_millis() as u64,
+        value_name = "MS"
+    )]
     shutdown_drain_timeout_ms: u64,
     /// Timeout for establishing outbound direct QUIC connections and development-only peer relays.
-    #[arg(long, default_value_t = 2000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::PylonTransportConfig::default().quic_connect_timeout.as_millis() as u64,
+        value_name = "MS"
+    )]
     quic_connect_timeout_ms: u64,
     /// Timeout for each proxied request over an established QUIC tunnel.
-    #[arg(long, default_value_t = 30000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::PylonTransportConfig::default().quic_request_timeout.as_millis() as u64,
+        value_name = "MS"
+    )]
     quic_request_timeout_ms: u64,
     /// Number of direct QUIC connections opened per backend.
     #[arg(
         long,
-        default_value_t = 1,
+        default_value_t = structured::DirectPylonTransportConfig::default().connections.get(),
         env = "STARGATE_DIRECT_QUIC_CONNECTIONS",
         value_parser = parse_nonzero_usize,
         value_name = "N"
@@ -189,7 +233,7 @@ struct Args {
     /// Maximum direct QUIC reconnect attempts on the proxy hot path
     #[arg(
         long,
-        default_value_t = 2,
+        default_value_t = structured::RequestProxyRetryConfig::default().max_connect_retries,
         env = "STARGATE_PROXY_MAX_CONNECT_RETRIES",
         value_name = "N"
     )]
@@ -197,7 +241,7 @@ struct Args {
     /// Maximum retries for explicit retryable upstream responses
     #[arg(
         long,
-        default_value_t = 2,
+        default_value_t = structured::RequestProxyRetryConfig::default().max_request_retries,
         env = "STARGATE_PROXY_MAX_REQUEST_RETRIES",
         value_name = "N"
     )]
@@ -205,7 +249,7 @@ struct Args {
     /// Maximum request body bytes buffered for proxy retry replay
     #[arg(
         long,
-        default_value_t = structured::DEFAULT_PROXY_MAX_REPLAY_BODY_BYTES,
+        default_value_t = structured::RequestProxyRetryConfig::default().max_replay_body_bytes,
         env = "STARGATE_PROXY_MAX_REPLAY_BODY_BYTES",
         value_name = "BYTES"
     )]
@@ -214,14 +258,14 @@ struct Args {
     #[arg(
         long,
         action = clap::ArgAction::Set,
-        default_value_t = true,
+        default_value_t = structured::RequestProxyRetryConfig::default().require_pylon_retry_signal,
         env = "STARGATE_PROXY_REQUIRE_PYLON_RETRY_SIGNAL"
     )]
     proxy_require_pylon_retry_signal: bool,
     /// Request header carrying the retry budget in milliseconds; empty disables budget headers
     #[arg(
         long,
-        default_value = "x-stargate-max-wait-ms",
+        default_value_t = structured::RequestProxyRetryConfig::default().request_budget_header,
         env = "STARGATE_PROXY_RETRY_BUDGET_HEADER",
         value_name = "HEADER"
     )]
@@ -246,7 +290,11 @@ struct Args {
     #[arg(long, default_value = stargate::telemetry::DEFAULT_SERVICE_NAME, value_name = "NAME")]
     otel_service_name: String,
     /// Port for Prometheus metrics HTTP server
-    #[arg(long, default_value_t = 9090, value_name = "PORT")]
+    #[arg(
+        long,
+        default_value_t = structured::MetricsConfig::default().listen_addr.port(),
+        value_name = "PORT"
+    )]
     metrics_port: u16,
     /// Prefix prepended to all Prometheus metric names.
     #[arg(long, default_value = stargate::metrics::DEFAULT_PREFIX, value_name = "PREFIX")]
@@ -261,10 +309,18 @@ struct Args {
     #[arg(long, value_name = "ADDR")]
     reverse_tunnel_pylon_dial_addr: Option<String>,
     /// Timeout waiting for a reverse tunnel connection after registration.
-    #[arg(long, default_value_t = 10000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::DEFAULT_REVERSE_CONNECT_TIMEOUT_MS,
+        value_name = "MS"
+    )]
     reverse_tunnel_connect_timeout_ms: u64,
     /// Tunnel protocol used for proxied request streams; must match pylon.
-    #[arg(long, default_value_t = TunnelTransportProtocol::RawQuic, value_name = "PROTOCOL")]
+    #[arg(
+        long,
+        default_value_t = TunnelTransportProtocol::default(),
+        value_name = "PROTOCOL"
+    )]
     tunnel_protocol: TunnelTransportProtocol,
     /// gRPC endpoint for worker authentication (e.g. http://llm-gateway:50051)
     #[arg(long, value_name = "URL")]
@@ -284,7 +340,7 @@ struct Args {
     /// once backends are detected; the fixed window is the upper bound.
     #[arg(
         long,
-        default_value_t = 0,
+        default_value_t = structured::ProcessLifecycleConfig::default().readiness_warmup.as_millis() as u64,
         env = "STARGATE_READINESS_WARMUP_MS",
         value_name = "MS"
     )]
@@ -293,7 +349,7 @@ struct Args {
     /// Only used when `--readiness-warmup-ms` is nonzero.
     #[arg(
         long,
-        default_value_t = 1000,
+        default_value_t = structured::ProcessLifecycleConfig::default().readiness_stabilization_sample_interval.as_millis() as u64,
         value_parser = parse_nonzero_millis,
         env = "STARGATE_READINESS_STABILIZATION_SAMPLE_INTERVAL_MS",
         value_name = "MS"
@@ -304,7 +360,7 @@ struct Args {
     /// Only used when `--readiness-warmup-ms` is nonzero.
     #[arg(
         long,
-        default_value_t = 5,
+        default_value_t = structured::ProcessLifecycleConfig::default().readiness_stabilization_window,
         value_parser = parse_nonzero_u32,
         env = "STARGATE_READINESS_STABILIZATION_WINDOW",
         value_name = "N"
@@ -373,6 +429,12 @@ fn config_from_legacy_args(args: Args) -> Result<structured::StargateConfig> {
         args.config_file.is_none(),
         "internal error: config-file input reached legacy conversion"
     );
+    let stargate_id = args
+        .stargate_id
+        .context("--stargate-id is required in legacy CLI mode")?;
+    let advertise_addr = args
+        .advertise_addr
+        .context("--advertise-addr is required in legacy CLI mode")?;
     ensure!(
         !(args.disable_dns_discovery && args.enable_dev_peer_forwarding),
         "--enable-dev-peer-forwarding cannot be combined with --disable-dns-discovery"
@@ -511,23 +573,17 @@ fn config_from_legacy_args(args: Args) -> Result<structured::StargateConfig> {
     let config = structured::StargateConfig {
         schema_version: structured::SCHEMA_VERSION,
         stargate_identity: structured::StargateIdentityConfig {
-            id: args.stargate_id,
+            id: stargate_id,
             advertised_hostname_template: args
                 .advertised_hostname_template
-                .unwrap_or_else(|| "{pod_name}.stargate.external".to_string()),
+                .unwrap_or_else(|| structured::DEFAULT_ADVERTISED_HOSTNAME_TEMPLATE.to_string()),
             kubernetes,
         },
         stargate_network: structured::StargateNetworkConfig {
-            grpc_listen_addr: args.listen_addr.parse().context("invalid --listen-addr")?,
-            model_discovery_listen_addr: args
-                .model_discovery_listen_addr
-                .parse()
-                .context("invalid --model-discovery-listen-addr")?,
-            http_listen_addr: args
-                .http_listen_addr
-                .parse()
-                .context("invalid --http-listen-addr")?,
-            advertise_addr: args.advertise_addr,
+            grpc_listen_addr: args.listen_addr,
+            model_discovery_listen_addr: args.model_discovery_listen_addr,
+            http_listen_addr: args.http_listen_addr,
+            advertise_addr,
         },
         process_lifecycle: structured::ProcessLifecycleConfig {
             readiness_warmup: Duration::from_millis(args.readiness_warmup_ms),
@@ -592,21 +648,13 @@ fn config_from_legacy_args(args: Args) -> Result<structured::StargateConfig> {
 async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    let argv: Vec<OsString> = std::env::args_os().collect();
-    if argv
-        .iter()
-        .skip(1)
-        .any(|argument| {
-            argument == "--help"
-                || argument == "-h"
-                || argument == "--version"
-                || argument == "-V"
-        })
-    {
-        let _ = Args::parse_from(argv);
-        unreachable!("clap exits after displaying help or version information");
-    }
-    let (config, source) = select_config_from(argv)?;
+    let (config, source) = match select_config_from(std::env::args_os()) {
+        Ok(selected) => selected,
+        Err(error) => match error.downcast::<clap::Error>() {
+            Ok(error) => error.exit(),
+            Err(error) => return Err(error),
+        },
+    };
     run(config, source).await
 }
 
@@ -773,7 +821,7 @@ mod tests {
         DiscoveryAndForwarding, WorkerAuthStartup, bind_reverse_tunnel_from_args,
         make_discovery_with_resolver_and_addresses, proxy_retry_config_from_args,
         proxy_transport_config_from_args, runtime_config_from_args, runtime_from_args,
-        worker_auth_startup_from_args,
+        worker_auth_startup_from_config,
     };
     use super::*;
 
@@ -976,11 +1024,11 @@ advertise_addr = "127.0.0.1:50071"
         make_resolver: impl FnOnce(Duration) -> Result<hickory_resolver::TokioAsyncResolver>,
     ) -> Result<DiscoveryAndForwarding> {
         let config = config_from_legacy_args(args.clone())?;
-        let http_listen_addr = args.http_listen_addr.parse()?;
         make_discovery_with_resolver_and_addresses(
             &config,
-            args.advertise_addr,
-            http_listen_addr,
+            args.advertise_addr
+                .context("test arguments should include --advertise-addr")?,
+            args.http_listen_addr,
             make_resolver,
         )
     }
@@ -989,14 +1037,22 @@ advertise_addr = "127.0.0.1:50071"
         secrets_json_path: Option<&str>,
         oauth2_provider_host: Option<&str>,
     ) -> WorkerAuthStartup {
-        worker_auth_startup_from_args(
-            Some("http://auth.example.test".to_owned()),
-            Some("/var/run/secrets/auth.json".to_owned()),
-            secrets_json_path.map(str::to_owned),
-            oauth2_provider_host.map(str::to_owned),
-        )
-        .expect("worker auth args should be valid")
-        .expect("auth startup should exist")
+        let mut cli = "--worker-auth-endpoint http://auth.example.test \
+                       --secrets-path /var/run/secrets/auth.json"
+            .to_string();
+        if let Some(path) = secrets_json_path {
+            cli.push_str(" --secrets-json-path ");
+            cli.push_str(path);
+        }
+        if let Some(host) = oauth2_provider_host {
+            cli.push_str(" --oauth2-provider-host ");
+            cli.push_str(host);
+        }
+        let config = config_from_legacy_args(parse_args(&cli))
+            .expect("legacy worker auth arguments should normalize");
+        worker_auth_startup_from_config(config.worker_authentication.as_ref())
+            .expect("worker auth args should be valid")
+            .expect("auth startup should exist")
     }
 
     async fn runtime_startup_error(extra: &str) -> anyhow::Error {
@@ -1101,9 +1157,15 @@ advertise_addr = "127.0.0.1:50071"
 
     #[test]
     fn model_discovery_listen_addr_default_and_override_parse() {
-        assert_eq!(parse_args("").model_discovery_listen_addr, "0.0.0.0:50073");
+        assert_eq!(
+            parse_args("").model_discovery_listen_addr,
+            "0.0.0.0:50073".parse().unwrap()
+        );
         let overridden = parse_args("--model-discovery-listen-addr 127.0.0.1:50173");
-        assert_eq!(overridden.model_discovery_listen_addr, "127.0.0.1:50173");
+        assert_eq!(
+            overridden.model_discovery_listen_addr,
+            "127.0.0.1:50173".parse().unwrap()
+        );
     }
 
     #[test]
@@ -1385,19 +1447,19 @@ advertise_addr = "127.0.0.1:50071"
 
     #[test]
     fn worker_auth_errors_when_oauth_host_set_without_secrets() {
-        let result = worker_auth_startup_from_args(
-            Some("http://auth.example.test".to_string()),
-            None,
-            None,
-            Some("https://oauth.example.test".to_string()),
-        );
+        let result = config_from_legacy_args(parse_args(
+            "--worker-auth-endpoint http://auth.example.test \
+             --oauth2-provider-host https://oauth.example.test",
+        ));
         assert!(result.is_err());
     }
 
     #[test]
     fn worker_auth_absent_without_endpoint() {
-        let startup = worker_auth_startup_from_args(None, None, None, None)
-            .expect("worker auth args should be valid");
+        let config =
+            config_from_legacy_args(parse_args("")).expect("legacy arguments should normalize");
+        let startup = worker_auth_startup_from_config(config.worker_authentication.as_ref())
+            .expect("worker auth config should be valid");
         assert!(startup.is_none());
     }
 

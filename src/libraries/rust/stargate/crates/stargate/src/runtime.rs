@@ -99,6 +99,10 @@ pub struct WarmupConfig {
     pub stabilization_window: u32,
 }
 
+const DEFAULT_READINESS_WARMUP: Duration = Duration::ZERO;
+const DEFAULT_READINESS_STABILIZATION_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_READINESS_STABILIZATION_WINDOW: u32 = 5;
+
 pub struct ReverseTunnelConfig {
     socket: UdpSocket,
     /// Already-rendered hostname used as reverse QUIC SNI and routing identity.
@@ -400,13 +404,7 @@ impl StargateRuntime {
             let warmup_config = self.config.warmup.clone();
             let shutdown = tasks.shutdown_signal();
             tasks.task_tracker().spawn(async move {
-                run_warmup_stabilization(
-                    warmup_state,
-                    warmup_config,
-                    ready_token,
-                    shutdown,
-                )
-                .await;
+                run_warmup_stabilization(warmup_state, warmup_config, ready_token, shutdown).await;
             });
         }
 
@@ -435,9 +433,9 @@ impl StargateRuntime {
 impl Default for WarmupConfig {
     fn default() -> Self {
         Self {
-            warmup_duration: Duration::ZERO,
-            sample_interval: Duration::from_secs(1),
-            stabilization_window: 5,
+            warmup_duration: DEFAULT_READINESS_WARMUP,
+            sample_interval: DEFAULT_READINESS_STABILIZATION_SAMPLE_INTERVAL,
+            stabilization_window: DEFAULT_READINESS_STABILIZATION_WINDOW,
         }
     }
 }

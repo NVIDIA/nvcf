@@ -337,48 +337,6 @@ pub(super) fn validate_discovery_args(args: &super::Args) -> Result<()> {
 }
 
 #[cfg(test)]
-pub(super) fn worker_auth_startup_from_args(
-    endpoint: Option<String>,
-    secrets_path: Option<String>,
-    secrets_json_path: Option<String>,
-    oauth2_provider_host: Option<String>,
-) -> Result<Option<WorkerAuthStartup>> {
-    let Some(endpoint) = endpoint else {
-        return Ok(None);
-    };
-    let secrets_path = secrets_path.map(std::path::PathBuf::from);
-    let (bearer_token, oauth2) = if let Some(provider_host) = oauth2_provider_host {
-        (
-            None,
-            Some(stargate::config::OAuth2Config {
-                provider_host,
-                secrets_path: secrets_path.context(
-                    "OAUTH2_PROVIDER_HOST is set but SECRETS_PATH is not; client-credentials worker auth needs the secrets file with the id/secret",
-                )?,
-            }),
-        )
-    } else {
-        (
-            secrets_path.map(|secrets_path| stargate::config::BearerTokenConfig {
-                secrets_path,
-                json_path: secrets_json_path
-                    .as_deref()
-                    .unwrap_or("authToken")
-                    .split('.')
-                    .map(str::to_owned)
-                    .collect(),
-            }),
-            None,
-        )
-    };
-    worker_auth_startup_from_config(Some(&WorkerAuthenticationConfig {
-        endpoint,
-        bearer_token,
-        oauth2,
-    }))
-}
-
-#[cfg(test)]
 mod tests {
     #[test]
     fn system_resolver_initializes_from_host_configuration() {
