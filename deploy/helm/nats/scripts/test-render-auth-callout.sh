@@ -59,6 +59,8 @@ assert_not_contains() {
 
 default_render="$tmpdir/default.yaml"
 render > "$default_render"
+reloader_image="$(yq -r '.nats.reloader.image.registry + "/" + .nats.reloader.image.repository + ":" + .nats.reloader.image.tag' "$chart_dir/values.yaml")"
+assert_contains "$default_render" "image: $reloader_image"
 assert_contains "$default_render" "# Source: helm-nvcf-nats/templates/nats-auth-callout-nkeys-secret.yaml"
 assert_contains "$default_render" "name: nats-auth-callout-nkeys"
 assert_contains "$default_render" "nkey_signature:"

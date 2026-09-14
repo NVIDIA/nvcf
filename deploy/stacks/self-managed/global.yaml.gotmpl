@@ -213,16 +213,22 @@ nats:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
       tag: 2.14.6-alpine3.22
-  # The config reloader is not republished under the public nvidia/nvcf
-  # catalog, so it defaults to its upstream Docker Hub source and a
-  # public-catalog install needs no override. If you mirror the image into
-  # your own registry, set registry and repository below in your environment
-  # file instead of editing this template.
+  {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
+  {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
+  {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
+  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
   reloader:
     image:
-      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default "docker.io" }}
-      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default "natsio/nats-server-config-reloader" }}
-      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.24.0" | quote }}
+      {{- with $natsReloaderRegistry }}
+      registry: {{ . }}
+      {{- end }}
+      {{- with $natsReloaderRepository }}
+      repository: {{ . }}
+      {{- end }}
+      {{- with $natsReloaderTag }}
+      tag: {{ . | quote }}
+      {{- end }}
+  {{- end }}
   natsBox:
     container:
       image:

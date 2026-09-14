@@ -1621,7 +1621,7 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
-	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:0.24.0"
+	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:fixture-tag"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
@@ -1827,13 +1827,7 @@ func seedUpstreamImageStackInputs(t *testing.T, repoRoot string) {
 	if err := os.WriteFile(filepath.Join(stackDir, "Makefile.dist"), []byte("template:\n\t@true\ninstall:\n\t@true\n"), 0o644); err != nil {
 		t.Fatalf("write Makefile.dist: %v", err)
 	}
-	global := `nats:
-  reloader:
-    image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
-      tag: "0.24.0"
-api:
+	global := `api:
   accountBootstrap:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -1852,7 +1846,7 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 	t.Helper()
 	manifests := map[string]string{
 		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
-image: docker.io/natsio/nats-server-config-reloader:0.24.0
+image: docker.io/natsio/nats-server-config-reloader:fixture-tag
 `,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
 		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:1.37.0\n",
