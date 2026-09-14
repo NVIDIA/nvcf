@@ -286,41 +286,53 @@ class AutoscalingConfigurationTest {
     Stream<Arguments> autoscalingConfigurationArgs() {
         return Stream.of(
                 // 1. full config with both scaleUpDetails and scaleDownDetails: 200
-                Arguments.of(readFileAsString(CONFIG_FULL_JSON), HttpStatus.OK),
+                Arguments.of(readFileAsString(CONFIG_FULL_JSON), HttpStatus.OK, null),
                 // 2. no stickiness window in either: 200
-                Arguments.of(readFileAsString(CONFIG_NO_STICKINESS_JSON), HttpStatus.OK),
+                Arguments.of(readFileAsString(CONFIG_NO_STICKINESS_JSON), HttpStatus.OK, null),
                 // 3. only scaleDownDetails (no scaleUpDetails): 200
-                Arguments.of(readFileAsString(CONFIG_ONLY_SCALE_DOWN_JSON), HttpStatus.OK),
+                Arguments.of(readFileAsString(CONFIG_ONLY_SCALE_DOWN_JSON), HttpStatus.OK, null),
                 // 4. only scaleUpDetails (no scaleDownDetails): 200
-                Arguments.of(readFileAsString(CONFIG_ONLY_SCALE_UP_JSON), HttpStatus.OK),
+                Arguments.of(readFileAsString(CONFIG_ONLY_SCALE_UP_JSON), HttpStatus.OK, null),
                 // 5. both details without stickiness: 200
-                Arguments.of(readFileAsString(CONFIG_NO_STICKINESS_BOTH_JSON), HttpStatus.OK),
+                Arguments.of(readFileAsString(CONFIG_NO_STICKINESS_BOTH_JSON), HttpStatus.OK, null),
                 // 6. stickiness missing threshold: 400
                 Arguments.of(readFileAsString(CONFIG_STICKINESS_MISSING_THRESHOLD_JSON),
-                             HttpStatus.BAD_REQUEST),
+                             HttpStatus.BAD_REQUEST,
+                             "Invalid request: Invalid stickiness window"),
                 // 7. stickiness threshold >= size: 400
                 Arguments.of(readFileAsString(CONFIG_STICKINESS_THRESHOLD_GTE_SIZE_JSON),
-                             HttpStatus.BAD_REQUEST),
+                             HttpStatus.BAD_REQUEST,
+                             "Invalid request: Invalid stickiness window"),
                 // 8. stickiness size >= 1 hour: 400
                 Arguments.of(readFileAsString(CONFIG_STICKINESS_SIZE_GTE_1H_JSON),
-                             HttpStatus.BAD_REQUEST),
+                             HttpStatus.BAD_REQUEST,
+                             "Invalid request: Invalid stickiness window"),
                 // 9. scaleUpDetails missing threshold: 400
                 Arguments.of(readFileAsString(CONFIG_MISSING_THRESHOLD_JSON),
-                             HttpStatus.BAD_REQUEST),
+                             HttpStatus.BAD_REQUEST,
+                             "Invalid request: Missing or invalid factor/threshold " +
+                                     "in scaleUpDetails"),
                 // 10. scaleUpDetails negative threshold: 400
                 Arguments.of(readFileAsString(CONFIG_NEGATIVE_THRESHOLD_JSON),
-                              HttpStatus.BAD_REQUEST),
+                              HttpStatus.BAD_REQUEST, null),
                 // 11. scaleUpDetails threshold above 100: 400
                 Arguments.of(readFileAsString(CONFIG_THRESHOLD_ABOVE_100_JSON),
-                             HttpStatus.BAD_REQUEST),
+                             HttpStatus.BAD_REQUEST, null),
                 // 12. scaleUpDetails missing factor: 400
-                Arguments.of(readFileAsString(CONFIG_MISSING_FACTOR_JSON), HttpStatus.BAD_REQUEST),
+                Arguments.of(readFileAsString(CONFIG_MISSING_FACTOR_JSON),
+                             HttpStatus.BAD_REQUEST,
+                             "Invalid request: Missing or invalid factor/threshold " +
+                                     "in scaleUpDetails"),
                 // 13. scaleUpDetails factor <= 1.0: 400
                 Arguments.of(readFileAsString(CONFIG_SCALE_UP_FACTOR_LTE_1_JSON),
-                              HttpStatus.BAD_REQUEST),
+                              HttpStatus.BAD_REQUEST,
+                              "Invalid request: Missing or invalid factor/threshold " +
+                                      "in scaleUpDetails"),
                 // 14. scaleDownDetails factor >= 1.0: 400
                 Arguments.of(readFileAsString(CONFIG_SCALE_DOWN_FACTOR_GTE_1_JSON),
-                             HttpStatus.BAD_REQUEST)
+                             HttpStatus.BAD_REQUEST,
+                             "Invalid request: Missing or invalid factor/threshold " +
+                                     "in scaleDownDetails")
         );
     }
 
@@ -329,7 +341,8 @@ class AutoscalingConfigurationTest {
     @MethodSource("autoscalingConfigurationArgs")
     void shouldCreateFunctionDeploymentWithAutoscalingConfig(
             String configPayload,
-            HttpStatus expectedStatus) {
+            HttpStatus expectedStatus,
+            String expectedErrorField) {
         var deploymentDtoTemplate = readFileAsString(CONFIG_DEPLOYMENT_TEMPLATE_TXT);
         var payload = deploymentDtoTemplate.formatted(configPayload);
         // Create functions in different accounts.
@@ -347,6 +360,14 @@ class AutoscalingConfigurationTest {
 
         var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
         assertThat(responseEntity.getStatusCode()).isEqualTo(expectedStatus);
+        if (expectedErrorField != null) {
+            assertThat(responseEntity.getBody())
+                    .contains(expectedErrorField)
+                    .doesNotContain("autoscalingConfiguration.scaleUpDetails",
+                                    "autoscalingConfiguration.scaleDownDetails",
+                                    "Autoscaling configuration is invalid",
+                                    "AutoscalingConfigurationDto@", "com.nvidia");
+        }
 
         if (HttpStatus.OK.equals(expectedStatus)) {
             var responseBody = responseEntity.getBody();
@@ -403,7 +424,8 @@ class AutoscalingConfigurationTest {
     @ParameterizedTest
     @MethodSource("autoscalingConfigurationArgs")
     void shouldUpdateGpuSpecWithAutoscalingConfig(String configPayload,
-                                                  HttpStatus expectedStatus) {
+                                                   HttpStatus expectedStatus,
+                                                   String expectedErrorField) {
         var deploymentDtoTemplate = readFileAsString(CONFIG_UPDATE_GPU_SPEC_TEMPLATE_TXT);
         var payload = deploymentDtoTemplate.formatted(configPayload);
 
@@ -429,6 +451,14 @@ class AutoscalingConfigurationTest {
 
         var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
         assertThat(responseEntity.getStatusCode()).isEqualTo(expectedStatus);
+        if (expectedErrorField != null) {
+            assertThat(responseEntity.getBody())
+                    .contains(expectedErrorField)
+                    .doesNotContain("autoscalingConfiguration.scaleUpDetails",
+                                    "autoscalingConfiguration.scaleDownDetails",
+                                    "Autoscaling configuration is invalid",
+                                    "AutoscalingConfigurationDto@", "com.nvidia");
+        }
 
         if (HttpStatus.OK.equals(expectedStatus)) {
             var responseBody = responseEntity.getBody();

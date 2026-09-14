@@ -129,62 +129,60 @@ public record AutoscalingConfigurationDto(
                 return true;
             }
 
+            var valid = true;
             if (Objects.nonNull(value.scaleUpDetails())) {
                 var details = value.scaleUpDetails();
-                if (Objects.isNull(details.factor()) || Objects.isNull(details.threshold())) {
+                if (Objects.isNull(details.factor()) || Objects.isNull(details.threshold()) ||
+                        details.factor() <= 1.0f) {
+                    addViolation(context, MESG_INVALID_SCALE_UP_DETAILS);
                     log.info(MESG_INVALID_SCALE_UP_DETAILS);
-                    return false;
+                    valid = false;
                 }
-                // scaleUpDetails factor must be greater than 1.0.
-                if (details.factor() <= 1.0f) {
-                    log.info(MESG_INVALID_SCALE_UP_DETAILS);
-                    return false;
-                }
-                if (!isValidStickinessWindow(details.stickiness())) {
-                    return false;
-                }
+                valid &= isValidStickinessWindow(details.stickiness(), context);
             }
 
             if (Objects.nonNull(value.scaleDownDetails())) {
                 var details = value.scaleDownDetails();
-                if (Objects.isNull(details.factor()) || Objects.isNull(details.threshold())) {
+                if (Objects.isNull(details.factor()) || Objects.isNull(details.threshold()) ||
+                        details.factor() >= 1.0f) {
+                    addViolation(context, MESG_INVALID_SCALE_DOWN_DETAILS);
                     log.info(MESG_INVALID_SCALE_DOWN_DETAILS);
-                    return false;
+                    valid = false;
                 }
-                // scaleDownDetails factor must be less than 1.0.
-                if (details.factor() >= 1.0f) {
-                    log.info(MESG_INVALID_SCALE_DOWN_DETAILS);
-                    return false;
-                }
-                if (!isValidStickinessWindow(details.stickiness())) {
-                    return false;
-                }
+                valid &= isValidStickinessWindow(details.stickiness(), context);
             }
 
-            return true;
+            return valid;
         }
 
         private static final Duration MAX_STICKINESS_SIZE = Duration.ofHours(1);
 
-        private boolean isValidStickinessWindow(StickinessWindow stickiness) {
+        private boolean isValidStickinessWindow(
+                StickinessWindow stickiness,
+                ConstraintValidatorContext context) {
             if (Objects.isNull(stickiness)) {
                 return true;
             }
             if (Objects.isNull(stickiness.size()) || Objects.isNull(stickiness.threshold())) {
+                addViolation(context, MESG_INVALID_STICKINESS_WINDOW);
                 log.info(MESG_INVALID_STICKINESS_WINDOW);
                 return false;
             }
-            // Validate that size is less than or equal to PT1H (1 hour).
-            if (stickiness.size().compareTo(MAX_STICKINESS_SIZE) > 0) {
-                log.info(MESG_INVALID_STICKINESS_WINDOW);
-                return false;
-            }
-            // Validate that threshold is less than size.
-            if (stickiness.threshold().compareTo(stickiness.size()) >= 0) {
+            if (stickiness.size().compareTo(MAX_STICKINESS_SIZE) > 0 ||
+                    stickiness.threshold().compareTo(stickiness.size()) >= 0) {
+                addViolation(context, MESG_INVALID_STICKINESS_WINDOW);
                 log.info(MESG_INVALID_STICKINESS_WINDOW);
                 return false;
             }
             return true;
+        }
+
+        private void addViolation(
+                ConstraintValidatorContext context,
+                String message) {
+            context.disableDefaultConstraintViolation();
+            context.buildConstraintViolationWithTemplate(message)
+                    .addConstraintViolation();
         }
     }
 }
