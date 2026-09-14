@@ -5,12 +5,13 @@
 #
 # Cassandra defaults to the mirrored <global.image.repository>/cassandra path.
 # The NATS config reloader and the account-bootstrap alpine-k8s image are not
-# republished under the public nvidia/nvcf catalog, so they default to their
-# upstream Docker Hub source and a public-catalog install needs no override;
-# a mirror install redirects them from its environment file.
+# republished under the public nvidia/nvcf catalog. The stack supplies the NATS
+# default, while the API chart owns its bootstrap default. A mirror install
+# redirects either image from its environment file.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+api_chart_values="$stack_dir/../../helm/cloud-functions/nvcf-api/values.yaml"
 work_dir="$(mktemp -d)"
 test_stack_dir="$work_dir/self-managed"
 environment_name="image-override-wiring-test"
@@ -23,21 +24,23 @@ fail() {
   exit 1
 }
 
-# Read the Docker Hub default tags from global.yaml.gotmpl itself rather than
-# hardcoding them, so the "no override" assertions below do not need updating
-# every time one of these upstream images is bumped.
+# Read each default from its owner rather than duplicating released versions in
+# this stack-level forwarding test.
 nats_reloader_default_tag="$(
   (grep '"nats" "reloader" "image" "tag"' "$stack_dir/global.yaml.gotmpl" || true) |
     sed 's/.*default "\([^"]*\)".*/\1/'
 )"
-account_bootstrap_default_tag="$(
-  (grep '"api" "accountBootstrap" "image" "tag"' "$stack_dir/global.yaml.gotmpl" || true) |
-    sed 's/.*default "\([^"]*\)".*/\1/'
-)"
+account_bootstrap_default_registry="$(yq -r '.api.accountBootstrap.image.registry // ""' "$api_chart_values")"
+account_bootstrap_default_repository="$(yq -r '.api.accountBootstrap.image.repository // ""' "$api_chart_values")"
+account_bootstrap_default_tag="$(yq -r '.api.accountBootstrap.image.tag // ""' "$api_chart_values")"
 test -n "$nats_reloader_default_tag" ||
   fail "could not read the nats.reloader default image tag from global.yaml.gotmpl"
+test "$account_bootstrap_default_registry" = "docker.io" ||
+  fail "api chart must own the upstream account-bootstrap registry default"
+test "$account_bootstrap_default_repository" = "alpine/k8s" ||
+  fail "api chart must own the upstream account-bootstrap repository default"
 test -n "$account_bootstrap_default_tag" ||
-  fail "could not read the api.accountBootstrap default image tag from global.yaml.gotmpl"
+  fail "api chart must own the account-bootstrap tag default"
 
 mkdir -p "$test_stack_dir"
 cp -R "$stack_dir"/. "$test_stack_dir"
@@ -115,8 +118,8 @@ assert_repository_count() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. No overrides — Cassandra keeps its global.image default, and the two
-#    images nvidia/nvcf does not republish keep their Docker Hub default
+# 1. No overrides — Cassandra and NATS keep their stack defaults. The stack
+#    omits the account-bootstrap image so the API chart retains its default.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -128,8 +131,8 @@ EOF
 render_values "$work_dir/default-values.yaml"
 assert_image "$work_dir/default-values.yaml" \
   natsio/nats-server-config-reloader docker.io "$nats_reloader_default_tag" "nats.reloader default"
-assert_image "$work_dir/default-values.yaml" \
-  alpine/k8s docker.io "$account_bootstrap_default_tag" "api.accountBootstrap default"
+assert_absent "$work_dir/default-values.yaml" \
+  alpine/k8s "api.accountBootstrap chart default"
 assert_absent "$work_dir/default-values.yaml" \
   test/nvcf/nats-server-config-reloader "nats.reloader default"
 # The only remaining mirrored alpine-k8s paths are the inert
@@ -192,10 +195,9 @@ assert_absent "$work_dir/override-values.yaml" \
   alpine/k8s "api.accountBootstrap full override"
 
 # ---------------------------------------------------------------------------
-# 3. Partial override — an unset key keeps its own default. Each key falls
-#    back independently: cassandra to global.image, the reloader and
-#    account-bootstrap images to their Docker Hub coordinates, so a mirror
-#    install sets registry and repository together.
+# 3. Partial override — existing image behavior stays unchanged. For the API
+#    account-bootstrap image, the stack forwards only the supplied key and the
+#    chart supplies the remaining defaults.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -226,7 +228,7 @@ assert_image "$work_dir/partial-values.yaml" \
 assert_image "$work_dir/partial-values.yaml" \
   mirror/nats-server-config-reloader docker.io "$nats_reloader_default_tag" "nats.reloader repository-only override"
 assert_image "$work_dir/partial-values.yaml" \
-  mirror/alpine-k8s docker.io "$account_bootstrap_default_tag" "api.accountBootstrap repository-only override"
+  mirror/alpine-k8s "" "" "api.accountBootstrap repository-only forwarding"
 
 # Tag-only override: the repository still resolves from global.image.
 write_env <<'EOF'
@@ -282,8 +284,8 @@ grep -q 'registry: ""' "$work_dir/empty-values.yaml" &&
   fail "explicit empty: an empty registry reached the chart values"
 assert_image "$work_dir/empty-values.yaml" \
   natsio/nats-server-config-reloader docker.io "$nats_reloader_default_tag" "nats.reloader explicit empty"
-assert_image "$work_dir/empty-values.yaml" \
-  alpine/k8s docker.io "$account_bootstrap_default_tag" "api.accountBootstrap explicit empty"
+assert_absent "$work_dir/empty-values.yaml" \
+  alpine/k8s "api.accountBootstrap explicit empty"
 assert_repository_count "$work_dir/empty-values.yaml" \
   test/nvcf/cassandra 2 "cassandra explicit empty"
 
@@ -301,8 +303,8 @@ EOF
 render_values "$work_dir/public-catalog-values.yaml"
 assert_image "$work_dir/public-catalog-values.yaml" \
   natsio/nats-server-config-reloader docker.io "$nats_reloader_default_tag" "nats.reloader public catalog"
-assert_image "$work_dir/public-catalog-values.yaml" \
-  alpine/k8s docker.io "$account_bootstrap_default_tag" "api.accountBootstrap public catalog"
+assert_absent "$work_dir/public-catalog-values.yaml" \
+  alpine/k8s "api.accountBootstrap public catalog"
 assert_absent "$work_dir/public-catalog-values.yaml" \
   nvidia/nvcf/nats-server-config-reloader "nats.reloader public catalog"
 # The Cassandra server keeps the published public-catalog path.
@@ -336,7 +338,7 @@ render_values "$work_dir/mirror-values.yaml"
 assert_image "$work_dir/mirror-values.yaml" \
   mirror/nvcf/nats-server-config-reloader mirror.example.com "$nats_reloader_default_tag" "nats.reloader mirror install"
 assert_image "$work_dir/mirror-values.yaml" \
-  mirror/nvcf/alpine-k8s mirror.example.com "$account_bootstrap_default_tag" "api.accountBootstrap mirror install"
+  mirror/nvcf/alpine-k8s mirror.example.com "" "api.accountBootstrap mirror forwarding"
 assert_absent "$work_dir/mirror-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader mirror install"
 assert_absent "$work_dir/mirror-values.yaml" \

@@ -28,9 +28,6 @@ Feature: Install a local single-cluster stack with upstream supporting images
       | nats.reloader.image.registry          | docker.io                            |
       | nats.reloader.image.repository        | natsio/nats-server-config-reloader   |
       | nats.reloader.image.tag               | 0.24.0                               |
-      | api.accountBootstrap.image.registry   | docker.io                            |
-      | api.accountBootstrap.image.repository | alpine/k8s                           |
-      | api.accountBootstrap.image.tag        | 1.37.0                               |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     And a single-cluster ncp-local cluster is running
     And the "nvcr-pull-secret" image pull secret exists in namespaces:
@@ -64,8 +61,8 @@ Feature: Install a local single-cluster stack with upstream supporting images
       | nvcf-cassandra-migrations: |
 
     And the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-api" should contain:
-      | text                             |
-      | docker.io/alpine/k8s:1.37.0      |
+      | text                  |
+      | docker.io/alpine/k8s: |
 
     # Keep this focused on the releases that own or exercise the overrides.
     # A full local stack install also starts unrelated service images that may

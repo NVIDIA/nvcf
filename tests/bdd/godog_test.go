@@ -1833,13 +1833,6 @@ func seedUpstreamImageStackInputs(t *testing.T, repoRoot string) {
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
       tag: "0.24.0"
-api:
-  accountBootstrap:
-    image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/alpine-k8s
-      tag: 1.37.0
-      pullPolicy: IfNotPresent
 `
 	if err := os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte(global), 0o644); err != nil {
 		t.Fatalf("write global template: %v", err)
@@ -1855,7 +1848,7 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 image: docker.io/natsio/nats-server-config-reloader:0.24.0
 `,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
-		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:1.37.0\n",
+		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:fixture-tag\n",
 	}
 	root := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out")
 	for relativePath, body := range manifests {

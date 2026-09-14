@@ -15,14 +15,14 @@ Run these from this directory.
 make lint       # helm lint with the shared CI values
 make template   # render to bin/manifest.yaml
 make validate   # template, then kubeconform
-make test       # tests/sidecar_release_artifacts_test.sh
+make test       # focused shell tests under tests/
 ```
 
 `lint`, `template`, and `validate` read
 `tools/ci/helm-validate-values/cloud-functions.yaml`. The chart leaves
-`api.image.registry`, `api.image.repository`, and the matching
-`api.accountBootstrap.image` fields empty on purpose, so it does not render
-without those values.
+`api.image.registry` and `api.image.repository` empty on purpose, so it does
+not render without those values. The account-bootstrap image defaults to its
+public upstream image and can be overridden independently.
 
 `make install`, `make uninstall`, and `make status` default to release `api` in
 namespace `nvcf`.

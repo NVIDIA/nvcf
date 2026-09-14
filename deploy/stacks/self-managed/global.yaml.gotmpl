@@ -506,17 +506,26 @@ api:
     configData:
       {{- toYaml $apiRemoteConfigData | nindent 6 }}
   {{- end }}
-  # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
-  # defaults to its upstream Docker Hub source and a public-catalog install
-  # needs no override. If you mirror the image into your own registry, set
-  # registry and repository below in your environment file instead of editing
-  # this template.
+  {{- $accountBootstrapRegistry := dig "api" "accountBootstrap" "image" "registry" "" .Values }}
+  {{- $accountBootstrapRepository := dig "api" "accountBootstrap" "image" "repository" "" .Values }}
+  {{- $accountBootstrapTag := dig "api" "accountBootstrap" "image" "tag" "" .Values }}
+  {{- $accountBootstrapPullPolicy := dig "api" "accountBootstrap" "image" "pullPolicy" "" .Values }}
   accountBootstrap:
+    {{- if or $accountBootstrapRegistry $accountBootstrapRepository $accountBootstrapTag $accountBootstrapPullPolicy }}
     image:
-      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default "docker.io" }}
-      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
-      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.37.0" | quote }}
-      pullPolicy: IfNotPresent
+      {{- with $accountBootstrapRegistry }}
+      registry: {{ . }}
+      {{- end }}
+      {{- with $accountBootstrapRepository }}
+      repository: {{ . }}
+      {{- end }}
+      {{- with $accountBootstrapTag }}
+      tag: {{ . | quote }}
+      {{- end }}
+      {{- with $accountBootstrapPullPolicy }}
+      pullPolicy: {{ . }}
+      {{- end }}
+    {{- end }}
 
     registryCredentials: []
 

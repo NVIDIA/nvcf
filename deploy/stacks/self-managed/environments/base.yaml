@@ -196,10 +196,10 @@ nvctApi:
   essBaseURL: ""
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
-# republished under the public nvidia/nvcf catalog, so it defaults to its
-# upstream source, docker.io/alpine/k8s:1.37.0. Leave these unset unless you
-# have mirrored the image into your own registry, in which case set registry
-# and repository together:
+# republished under the public nvidia/nvcf catalog. The API chart defaults to
+# its upstream source, docker.io/alpine/k8s:1.37.0. Leave these unset unless
+# you have mirrored the image into your own registry, in which case set
+# registry and repository together:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
