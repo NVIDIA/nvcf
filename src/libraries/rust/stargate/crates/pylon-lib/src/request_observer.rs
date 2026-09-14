@@ -555,7 +555,7 @@ impl RequestObserver {
         };
         RequestObservationEvent {
             observation,
-            request_instance: Some(self.request_instance.clone()),
+            request_instance: self.request_instance.clone(),
             generation: self.generation.clone(),
             changed_generations: Vec::new(),
             input_interval,

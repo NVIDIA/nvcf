@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -51,17 +51,19 @@ impl Default for PylonQueueMismatchRetryConfig {
 pub(crate) struct LiveRequestState {
     inner: Arc<Mutex<QueueAdmissionState>>,
     observation_order: Arc<Mutex<()>>,
+    changed: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Default)]
 struct QueueAdmissionState {
     requests: HashMap<String, LiveRequestRecord>,
     models: HashMap<ModelGeneration, QueueModelState>,
+    pending_publications: BTreeSet<ModelGeneration>,
 }
 
 #[derive(Debug)]
 struct LiveRequestRecord {
-    instance: Option<RequestInstance>,
+    instance: RequestInstance,
     request: LiveRequest,
 }
 
@@ -223,6 +225,24 @@ impl QueueAdmissionDecision {
 }
 
 impl LiveRequestState {
+    pub(crate) async fn changed(&self) {
+        self.changed.notified().await;
+    }
+
+    pub(crate) fn take_pending_publications(&self) -> Vec<ModelGeneration> {
+        std::mem::take(&mut self.inner.lock().pending_publications)
+            .into_iter()
+            .collect()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn request_instance_for_test(&self, request_id: &str) -> (RequestInstance, bool) {
+        self.inner.lock().requests.get(request_id).map_or_else(
+            || (RequestInstance::default(), true),
+            |record| (record.instance.clone(), false),
+        )
+    }
+
     pub(crate) fn request_generation(&self, request_id: &str) -> Option<ModelGeneration> {
         self.inner
             .lock()
@@ -261,6 +281,7 @@ impl LiveRequestState {
             state.remove_request(&request_id);
         }
         state.models.remove(generation);
+        state.pending_publications.remove(generation);
     }
 
     #[cfg(test)]
@@ -309,9 +330,7 @@ impl LiveRequestState {
                     let excluded_request = state
                         .requests
                         .get(&required.request_id)
-                        .filter(|record| {
-                            record.instance.as_ref() == Some(&required.request_instance)
-                        })
+                        .filter(|record| record.instance == required.request_instance)
                         .and_then(|record| match &record.request {
                             LiveRequest::Queue(queue, _) => Some(queue),
                             LiveRequest::Observed(_) => None,
@@ -370,13 +389,20 @@ impl LiveRequestState {
         let _order = self.observation_order.lock();
         let transition = {
             let mut state = self.inner.lock();
-            let retired = state
-                .remove_request(&request_id)
-                .and_then(|(_, request)| request.request.into_observed());
+            let prior = state.remove_request(&request_id);
+            if let Some((_, record)) = &prior {
+                state
+                    .pending_publications
+                    .insert(record.request.generation().clone());
+            }
+            state
+                .pending_publications
+                .insert(request.generation.clone());
+            let retired = prior.and_then(|(_, request)| request.request.into_observed());
             state.insert_request(
                 request_id,
                 LiveRequest::Queue(request, None),
-                Some(required.request_instance.clone()),
+                required.request_instance.clone(),
             );
             RequestObservationTransition {
                 changed_generations: Vec::new(),
@@ -386,6 +412,7 @@ impl LiveRequestState {
             }
         };
         observe(&transition);
+        self.changed.notify_one();
     }
 
     #[cfg(test)]
@@ -437,11 +464,12 @@ impl LiveRequestState {
         observe: impl FnOnce(&RequestObservationTransition),
     ) -> RequestObservationTransition {
         let generation = ModelGeneration::new(observation.model_id.clone(), 0);
+        let (instance, begin_request) = self.request_instance_for_test(&observation.request_id);
         self.transition_generation_observation_with(
             observation,
             Some(&generation),
-            None,
-            false,
+            &instance,
+            begin_request,
             observe,
         )
         .unwrap()
@@ -451,7 +479,7 @@ impl LiveRequestState {
         &self,
         observation: &RequestObservation,
         generation: Option<&ModelGeneration>,
-        instance: Option<&RequestInstance>,
+        instance: &RequestInstance,
         begin_request: bool,
         observe: impl FnOnce(&RequestObservationTransition),
     ) -> Option<RequestObservationTransition> {
@@ -461,7 +489,6 @@ impl LiveRequestState {
             // Starting an observed request replaces both projections under this
             // lock, so generation retirement cannot see different owners.
             if !begin_request
-                && let Some(instance) = instance
                 && generation.is_some()
                 && !state.owns_instance(&observation.request_id, instance)
             {
@@ -476,29 +503,48 @@ impl LiveRequestState {
     pub(crate) fn update_active_output_tps(
         &self,
         request_id: &str,
-        instance: Option<&RequestInstance>,
+        instance: &RequestInstance,
         active_chat_output_tps: Option<f64>,
     ) -> Option<String> {
         let mut state = self.inner.lock();
-        if instance.is_some_and(|instance| !state.owns_instance(request_id, instance)) {
+        if !state.owns_instance(request_id, instance) {
             return None;
         }
         state.update_active_output_tps(request_id, active_chat_output_tps)
     }
 
-    pub(crate) fn finish_queue_request(
-        &self,
-        request_id: &str,
-        instance: Option<&RequestInstance>,
-    ) {
+    pub(crate) fn finish_queue_request(&self, request_id: &str, instance: &RequestInstance) {
         let mut state = self.inner.lock();
-        if instance.is_some_and(|instance| !state.owns_instance(request_id, instance)) {
+        if !state.owns_instance(request_id, instance) {
             return;
         }
-        if let Some((request_id, record)) = state.remove_request(request_id)
-            && let Some(observed) = record.request.into_observed()
-        {
-            state.insert_request(request_id, LiveRequest::Observed(observed), record.instance);
+        if let Some((request_id, record)) = state.remove_request(request_id) {
+            match record.request {
+                LiveRequest::Queue(_, Some(observed)) | LiveRequest::Observed(observed) => {
+                    state.insert_request(
+                        request_id,
+                        LiveRequest::Observed(observed),
+                        record.instance,
+                    );
+                }
+                LiveRequest::Queue(queue, None) => {
+                    state.pending_publications.insert(queue.generation);
+                    self.changed.notify_one();
+                }
+            }
+        }
+    }
+
+    fn advance_request_phase(
+        &self,
+        request_id: &str,
+        instance: &RequestInstance,
+        phase: TrackedPromptPhase,
+    ) {
+        let mut state = self.inner.lock();
+        if let Some(generation) = state.advance_request_phase(request_id, instance, phase) {
+            state.pending_publications.insert(generation);
+            self.changed.notify_one();
         }
     }
 }
@@ -507,22 +553,18 @@ impl QueueAdmissionState {
     fn owns_instance(&self, request_id: &str, instance: &RequestInstance) -> bool {
         self.requests
             .get(request_id)
-            .is_some_and(|record| record.instance.as_ref() == Some(instance))
+            .is_some_and(|record| &record.instance == instance)
     }
 
     fn transition_observation(
         &mut self,
         observation: &RequestObservation,
         generation: Option<&ModelGeneration>,
-        instance: Option<&RequestInstance>,
+        instance: &RequestInstance,
         begin_request: bool,
     ) -> RequestObservationTransition {
         let prior = self.remove_request(&observation.request_id);
-        let instance = instance.cloned().or_else(|| {
-            prior
-                .as_ref()
-                .and_then(|(_, record)| record.instance.clone())
-        });
+        let instance = instance.clone();
         let (request_id, mut prior_queue, prior_observed) =
             match prior.map(|(id, record)| (id, record.request)) {
                 Some((request_id, LiveRequest::Queue(queue, observed))) => {
@@ -619,19 +661,19 @@ impl QueueAdmissionState {
         request_id: &str,
         instance: &RequestInstance,
         next_phase: TrackedPromptPhase,
-    ) {
+    ) -> Option<ModelGeneration> {
         if !self.owns_instance(request_id, instance) {
-            return;
+            return None;
         }
-        let Some(LiveRequest::Queue(request, _)) = self
+        let Some(LiveRequest::Queue(request, observed)) = self
             .requests
             .get_mut(request_id)
             .map(|record| &mut record.request)
         else {
-            return;
+            return None;
         };
         if next_phase <= request.phase {
-            return;
+            return None;
         }
         let model = self
             .models
@@ -640,6 +682,7 @@ impl QueueAdmissionState {
         model.adjust_phase(request.phase, request.priority, request.input_tokens, -1);
         model.adjust_phase(next_phase, request.priority, request.input_tokens, 1);
         request.phase = next_phase;
+        observed.is_none().then(|| request.generation.clone())
     }
 
     fn remove_request(&mut self, request_id: &str) -> Option<(String, LiveRequestRecord)> {
@@ -652,7 +695,7 @@ impl QueueAdmissionState {
         &mut self,
         request_id: String,
         request: LiveRequest,
-        instance: Option<RequestInstance>,
+        instance: RequestInstance,
     ) {
         self.adjust_live_request(&request, 1);
         self.requests
@@ -898,8 +941,7 @@ impl TrackedPromptPhase {
 
 impl QueueTrackedRequestGuard {
     pub(crate) fn on_backend_submission(&mut self) {
-        let mut state = self.live_requests.inner.lock();
-        state.advance_request_phase(
+        self.live_requests.advance_request_phase(
             &self.request_id,
             &self.instance,
             TrackedPromptPhase::InputProcessing,
@@ -907,8 +949,7 @@ impl QueueTrackedRequestGuard {
     }
 
     pub(crate) fn observe_output(&mut self) {
-        let mut state = self.live_requests.inner.lock();
-        state.advance_request_phase(
+        self.live_requests.advance_request_phase(
             &self.request_id,
             &self.instance,
             TrackedPromptPhase::OutputGeneration,
@@ -918,7 +959,7 @@ impl QueueTrackedRequestGuard {
     pub(crate) fn finish(&mut self) {
         if !self.finished {
             self.live_requests
-                .finish_queue_request(&self.request_id, Some(&self.instance));
+                .finish_queue_request(&self.request_id, &self.instance);
             self.finished = true;
         }
     }
@@ -1087,7 +1128,8 @@ mod tests {
                 request_id,
                 RequestObservationState::OutputGeneration,
             ));
-            live_requests.update_active_output_tps(request_id, None, Some(output_tps));
+            let (instance, _) = live_requests.request_instance_for_test(request_id);
+            live_requests.update_active_output_tps(request_id, &instance, Some(output_tps));
         }
 
         let active = live_requests.snapshot_model("model-a");

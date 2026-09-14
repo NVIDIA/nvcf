@@ -27,6 +27,22 @@ use super::aggregator::{
 use super::collector::StatsCollectorConfig;
 
 impl StatsAggregator {
+    pub(super) fn apply_live_request_changes(
+        &mut self,
+        generations: Vec<crate::runtime_state::ModelGeneration>,
+    ) -> Vec<super::aggregator::ModelStatsUpdate> {
+        let mut changed_models = Vec::with_capacity(generations.len());
+        for generation in generations {
+            if let Some(model) = self.per_model.get_mut(generation.model_id())
+                && model.generation == generation
+            {
+                model.metrics.stats_observed_at_unix_ms = current_unix_millis();
+                changed_models.push(generation.model_id().to_string());
+            }
+        }
+        self.snapshots(changed_models)
+    }
+
     pub(super) fn apply_fallback_observation(
         &mut self,
         event: &RequestObservationEvent,

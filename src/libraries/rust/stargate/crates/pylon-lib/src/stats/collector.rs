@@ -350,6 +350,10 @@ async fn run_stats_collector(
     let mut stats_aggregator_latest_models = IndexMap::with_capacity(2);
 
     'collector: loop {
+        // Drain coalesced queue changes even while observation traffic is busy.
+        let updates =
+            aggregator.apply_live_request_changes(runtime_state.take_live_request_changes());
+        publish_model_stats_updates(&runtime_state, updates);
         tokio::select! {
             biased;
             _ = stop.cancelled() => break 'collector,
@@ -382,6 +386,7 @@ async fn run_stats_collector(
                 };
                 publish_observation_event(&mut aggregator, &runtime_state, event);
             }
+            _ = runtime_state.live_requests_changed() => {}
             update = async {
                 match &stats_update_rx {
                     Some(rx) => rx.recv_async().await.ok(),
@@ -800,9 +805,11 @@ mod tests {
             ..crate::runtime_state::OutputCalibrationFacts::default()
         };
         let request_input_tokens = observation.input_tokens;
+        let (request_instance, begin_request) =
+            runtime_state.request_instance_for_test(&observation.request_id);
         runtime_state.observe_request_for_generation(
             crate::runtime_state::RequestObservationEvent {
-                request_instance: None,
+                request_instance,
                 observation,
                 generation,
                 changed_generations: Vec::new(),
@@ -812,7 +819,7 @@ mod tests {
                 upstream_duration: None,
             },
             request_input_tokens,
-            false,
+            begin_request,
         );
     }
 
@@ -4144,5 +4151,88 @@ mod tests {
                 .active_chat_output_tps
                 > 0.0
         );
+    }
+
+    #[tokio::test]
+    async fn unobserved_replacements_publish_load_through_completion() {
+        use crate::request_observer::{RequestObserver, RequiredTunnelHeaders};
+
+        for replacement_model in ["model-a", "model-b"] {
+            for wait_for_submission in [false, true] {
+                let collector = RunningCollector::spawn_with_models(
+                    StatsCollectorConfig::default(),
+                    None,
+                    false,
+                    &["model-a".into(), "model-b".into()],
+                );
+                let runtime = &collector.runtime_state;
+                let required = |model: &str, input_tokens| RequiredTunnelHeaders {
+                    request_id: "reused-id".into(),
+                    request_instance: Default::default(),
+                    routing_key: None,
+                    model_id: model.into(),
+                    priority: None,
+                    input_tokens,
+                    accepted_at: std::time::Instant::now(),
+                };
+                let mut first = RequestObserver::from_required(
+                    RequestObservationEndpoint::ChatCompletions,
+                    required("model-a", 100),
+                    runtime.current_generation("model-a"),
+                    runtime.clone(),
+                );
+                first.on_backend_submission(std::time::Instant::now());
+                collector
+                    .wait_for_stats("first request should be advertised", |stats| {
+                        stats.num_running_queries == 1
+                    })
+                    .await;
+
+                let replacement = required(replacement_model, 20);
+                let generation = runtime.current_generation(replacement_model);
+                runtime.begin_unobserved_request(&replacement, generation.as_ref());
+                let mut guard = runtime
+                    .track_generation_request(&replacement, generation.as_ref())
+                    .unwrap();
+                guard.on_backend_submission();
+                if wait_for_submission {
+                    wait_for_model_stats(
+                        runtime,
+                        replacement_model,
+                        "replacement submission should be advertised",
+                        |stats| {
+                            stats.num_running_queries == 1
+                                && stats.total_query_input_size == 20
+                                && stats.input_processing_queries == 1
+                        },
+                    )
+                    .await;
+                }
+                drop(guard);
+                first.cancel();
+                for model in ["model-a", "model-b"] {
+                    wait_for_model_stats(
+                        runtime,
+                        model,
+                        "completed requests should leave no advertised load",
+                        |stats| {
+                            stats.num_running_queries == 0
+                                && stats.total_query_input_size == 0
+                                && stats.input_processing_queries == 0
+                        },
+                    )
+                    .await;
+                    assert_eq!(
+                        runtime.advertised_models()[model]
+                            .stats
+                            .as_ref()
+                            .unwrap()
+                            .num_running_queries,
+                        0
+                    );
+                }
+                collector.handle.shutdown().await;
+            }
+        }
     }
 }

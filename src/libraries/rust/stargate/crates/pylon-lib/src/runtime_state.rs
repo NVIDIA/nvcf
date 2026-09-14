@@ -106,7 +106,7 @@ pub struct PylonRuntimeState {
 #[derive(Clone, Debug)]
 pub struct RequestObservationEvent {
     pub(crate) observation: RequestObservation,
-    pub(crate) request_instance: Option<RequestInstance>,
+    pub(crate) request_instance: RequestInstance,
     pub(crate) generation: Option<ModelGeneration>,
     pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) input_interval: Option<RequestInputInterval>,
@@ -451,12 +451,19 @@ impl PylonRuntimeState {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn request_instance_for_test(&self, request_id: &str) -> (RequestInstance, bool) {
+        self.live_requests.request_instance_for_test(request_id)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn observe_request_for_test(&self, observation: RequestObservation) {
         let generation = self.current_generation(&observation.model_id);
         let request_input_tokens = observation.input_tokens;
+        let (request_instance, begin_request) =
+            self.request_instance_for_test(&observation.request_id);
         self.observe_request_for_generation(
             RequestObservationEvent {
-                request_instance: None,
+                request_instance,
                 observation,
                 generation,
                 changed_generations: Vec::new(),
@@ -466,7 +473,7 @@ impl PylonRuntimeState {
                 upstream_duration: None,
             },
             request_input_tokens,
-            false,
+            begin_request,
         );
     }
 
@@ -522,9 +529,11 @@ impl PylonRuntimeState {
             .current_generation(&observation.model_id)
             .expect("test model generation should already exist");
         let request_input_tokens = observation.input_tokens;
+        let (request_instance, begin_request) =
+            self.request_instance_for_test(&observation.request_id);
         self.transition_request_observation_for_generation(
             RequestObservationEvent {
-                request_instance: None,
+                request_instance,
                 observation,
                 generation: Some(generation),
                 changed_generations: Vec::new(),
@@ -534,7 +543,7 @@ impl PylonRuntimeState {
                 upstream_duration: None,
             },
             request_input_tokens,
-            false,
+            begin_request,
         )
         .expect("test observation must target a current generation")
     }
@@ -570,7 +579,7 @@ impl PylonRuntimeState {
         let transition = self.live_requests.transition_generation_observation_with(
             &live_observation,
             event.generation.as_ref(),
-            event.request_instance.as_ref(),
+            &event.request_instance,
             begin_request,
             |transition| {
                 if let Some(metrics) = &self.metrics {
@@ -589,13 +598,21 @@ impl PylonRuntimeState {
     ) -> Option<String> {
         self.live_requests.update_active_output_tps(
             &event.observation.request_id,
-            event.request_instance.as_ref(),
+            &event.request_instance,
             active_chat_output_tps,
         )
     }
 
     pub(crate) fn request_generation(&self, request_id: &str) -> Option<ModelGeneration> {
         self.live_requests.request_generation(request_id)
+    }
+
+    pub(crate) async fn live_requests_changed(&self) {
+        self.live_requests.changed().await;
+    }
+
+    pub(crate) fn take_live_request_changes(&self) -> Vec<ModelGeneration> {
+        self.live_requests.take_pending_publications()
     }
 
     pub(crate) fn snapshot_live_model(&self, model_id: &str) -> QueueModelSnapshot {
@@ -672,7 +689,9 @@ impl PylonRuntimeState {
 
     #[cfg(test)]
     pub(crate) fn finish_queue_request(&self, request_id: &str) {
-        self.live_requests.finish_queue_request(request_id, None);
+        let (instance, _) = self.request_instance_for_test(request_id);
+        self.live_requests
+            .finish_queue_request(request_id, &instance);
     }
 
     #[cfg(test)]
@@ -743,9 +762,11 @@ mod tests {
         generation: ModelGeneration,
     ) -> Option<RequestObservationEvent> {
         let request_input_tokens = observation.input_tokens;
+        let (request_instance, begin_request) =
+            runtime_state.request_instance_for_test(&observation.request_id);
         runtime_state.transition_request_observation_for_generation(
             RequestObservationEvent {
-                request_instance: None,
+                request_instance,
                 observation,
                 generation: Some(generation),
                 changed_generations: Vec::new(),
@@ -755,7 +776,7 @@ mod tests {
                 upstream_duration: None,
             },
             request_input_tokens,
-            false,
+            begin_request,
         )
     }
 
