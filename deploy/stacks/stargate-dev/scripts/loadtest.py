@@ -4,6 +4,7 @@
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import json
 import math
@@ -28,6 +29,7 @@ import yaml
 STACK_DIR = Path(__file__).resolve().parents[1]
 SUITE_PATH = STACK_DIR / "loadtest" / "suite.yaml"
 VERIFY_SCRIPT = STACK_DIR / "scripts" / "verify.py"
+POD_RUNNER_SCRIPT = STACK_DIR / "scripts" / "pod_runner.py"
 ALGORITHM_ORDER = ("wait-and-widen", "power-of-n")
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -280,8 +282,18 @@ class Campaign:
         self.port_forward_log = None
         self.token = ""
         self.workloads: dict[str, dict[str, Path]] = {}
-        self.state = self.prepare_output()
-        self.save_state()
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        self.lock_file = (self.output.parent / f".{self.output.name}.lock").open("a")
+        try:
+            fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.state = self.prepare_output()
+            self.save_state()
+        except BlockingIOError as error:
+            self.lock_file.close()
+            raise LoadTestError(f"another campaign is using {self.output}") from error
+        except BaseException:
+            self.lock_file.close()
+            raise
 
     def prepare_output(self) -> dict:
         state_path = self.output / "campaign-state.json"
@@ -385,6 +397,14 @@ class Campaign:
         self.snapshot_environment(image)
         self.prepare_workloads()
         if self.args.spark_pod:
+            self.command(
+                [
+                    "python3",
+                    str(POD_RUNNER_SCRIPT),
+                    "reconcile",
+                    str(self.output / "pod-runs"),
+                ]
+            )
             self.prepare_spark_pod()
         elif not self.args.endpoint:
             self.start_port_forward()
@@ -425,6 +445,11 @@ class Campaign:
         ).stdout.strip()
         if local_version != remote_version:
             raise LoadTestError("local and remote Spark versions differ")
+        self.command(
+            self.pod_exec(
+                "bash", "-c", "command -v nohup setsid timeout grep tr tail cat"
+            )
+        )
         self.command(self.pod_exec("mkdir", "-p", str(self.spark_directory)))
         with tempfile.TemporaryFile() as archive:
             with tarfile.open(fileobj=archive, mode="w:gz") as stream:
@@ -732,33 +757,43 @@ class Campaign:
         )
         if header := self.suite["algorithms"][algorithm]["routingHeader"]:
             command.extend(["--stargate-load-balancing-algorithm", header])
+        expected_seconds = float(
+            duration
+            if duration is not None
+            else max(
+                requests / rate,
+                math.ceil(requests / workers)
+                * (timeout_seconds or defaults["timeoutSeconds"]),
+            )
+        )
         if self.args.spark_pod:
             arguments = command[command.index("--endpoint") :]
-            pid_file = (
-                self.spark_directory / directory.relative_to(self.output) / "spark.pid"
-            )
-            command = self.pod_exec(
-                "bash",
-                "-c",
-                'IFS= read -r OPENAI_API_KEY; export OPENAI_API_KEY; echo $$ > "$1"; shift; exec "$@"',
+            relative = directory.relative_to(self.output)
+            state_name = hashlib.sha256(str(relative).encode()).hexdigest() + ".json"
+            command = [
+                "python3",
+                str(POD_RUNNER_SCRIPT),
+                "run",
+                "--context",
+                self.stargate_context,
+                "--namespace",
+                self.namespace,
+                "--pod",
+                self.args.spark_pod,
+                "--directory",
+                str(self.spark_directory / relative),
+                "--state-file",
+                str(self.output / "pod-runs" / state_name),
+                "--timeout-seconds",
+                str(math.ceil(expected_seconds + 600)),
                 "--",
-                str(pid_file),
                 "spark",
                 *arguments,
-                stdin=True,
-            )
+            ]
         return SparkRun(
             directory=directory,
             command=command,
-            expected_seconds=float(
-                duration
-                if duration is not None
-                else max(
-                    requests / rate,
-                    math.ceil(requests / workers)
-                    * (timeout_seconds or defaults["timeoutSeconds"]),
-                )
-            ),
+            expected_seconds=expected_seconds,
             metadata={
                 "scenario": scenario,
                 "algorithm": algorithm,
@@ -854,31 +889,7 @@ class Campaign:
                     raise LoadTestError("Spark exceeded its expected duration")
                 time.sleep(2)
         except BaseException:
-            try:
-                if self.args.spark_pod:
-                    pid_files = [
-                        str(
-                            self.spark_directory
-                            / run.directory.relative_to(self.output)
-                            / "spark.pid"
-                        )
-                        for run, process in zip(runs, processes)
-                        if process.poll() is None
-                    ]
-                    if pid_files:
-                        self.command(
-                            self.pod_exec(
-                                "bash",
-                                "-c",
-                                'for file in "$@"; do if [ -f "$file" ]; then read -r pid < "$file"; kill -INT "$pid" 2>/dev/null || true; fi; done',
-                                "--",
-                                *pid_files,
-                            ),
-                            timeout=30,
-                            check=False,
-                        )
-            finally:
-                self.stop_processes(processes)
+            self.stop_processes(processes)
             raise
         finally:
             for output in outputs:
@@ -1251,8 +1262,11 @@ class Campaign:
         self.log(f"campaign complete: {self.output}")
 
     def close(self) -> None:
-        self.stop_processes(self.children)
-        self.stop_port_forward()
+        try:
+            self.stop_processes(self.children)
+            self.stop_port_forward()
+        finally:
+            self.lock_file.close()
 
 
 def minimum_measured_minutes(suite: dict, suite_name: str) -> float:
@@ -1301,7 +1315,7 @@ def parse_args(suite: dict) -> argparse.Namespace:
     parser.add_argument("--endpoint")
     parser.add_argument(
         "--spark-pod",
-        help="Run traffic in a dedicated hub Pod with matching Spark, bash, tar, and writable /campaign",
+        help="Run traffic in a dedicated hub Pod with matching Spark, bash, GNU coreutils, setsid, tar, and writable /campaign",
     )
     parser.add_argument("--local-port", type=int, default=18000)
     parser.add_argument("--grafana-url", default="http://localhost:3000")

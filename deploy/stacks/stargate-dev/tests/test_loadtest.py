@@ -43,8 +43,11 @@ class CanonicalSuiteTests(unittest.TestCase):
             campaign = LOADTEST.Campaign(args, LOADTEST.load_suite())
             self.assertEqual(len(campaign.backend_targets()), 8)
             self.assertEqual(campaign.identity["peerRegions"], ["us-east-1"])
-            args.peer_region = []
             args.resume = True
+            with self.assertRaisesRegex(LOADTEST.LoadTestError, "another campaign"):
+                LOADTEST.Campaign(args, LOADTEST.load_suite())
+            campaign.close()
+            args.peer_region = []
             with self.assertRaisesRegex(LOADTEST.LoadTestError, "resume arguments"):
                 LOADTEST.Campaign(args, LOADTEST.load_suite())
 
@@ -241,10 +244,10 @@ class CanonicalSuiteTests(unittest.TestCase):
                 workload=workload,
                 requests=32,
             ).command
-            self.assertEqual(
-                remote[:6], ["kubectl", "--context", "stargate", "-n", "test", "exec"]
-            )
-            self.assertIn("-i", remote)
+            self.assertEqual(remote[:2], ["python3", str(LOADTEST.POD_RUNNER_SCRIPT)])
+            self.assertEqual(remote[remote.index("--context") + 1], "stargate")
+            self.assertEqual(remote[remote.index("--namespace") + 1], "test")
+            self.assertEqual(remote[remote.index("--timeout-seconds") + 1], "720")
             self.assertIn("spark-worker", remote)
             self.assertEqual(
                 remote[remote.index("--workload") + 1],
