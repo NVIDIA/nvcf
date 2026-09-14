@@ -72,9 +72,12 @@ worker_public_key=$(yq -r 'select(.kind == "Secret" and .metadata.name == "nats-
 test "$(yq -r '.service.plugin_configs.nkey.plugin_type' "$plugin_config")" = "nkey"
 test "$(yq -r '.service.plugin_configs.nkey.config.nkey_mappings[0].nkey' "$plugin_config")" = "$worker_public_key"
 test "$(yq -r '.service.plugin_configs.nkey.config.nkey_mappings[0].account' "$plugin_config")" = "APP"
-test "$(yq -r '.service.account_configs.APP.enabled_plugins | length' "$plugin_config")" = "1"
-test "$(yq -r '.service.account_configs.APP.enabled_plugins[0].id' "$plugin_config")" = "nkey"
-test "$(yq -r '.service.plugin_configs.sis // ""' "$plugin_config")" = ""
+test "$(yq -r '.service.plugin_configs.sis.plugin_type' "$plugin_config")" = "webhook"
+test "$(yq -r '.service.plugin_configs.sis.config.url' "$plugin_config")" = "http://api.sis.svc.cluster.local:8080/v1/nvca/nats-authorize"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins | length' "$plugin_config")" = "2"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[0].id' "$plugin_config")" = "sis"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[0].alias' "$plugin_config")" = "oidc"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[1].id' "$plugin_config")" = "nkey"
 # nkey-bao-access RBAC must grant openbao-migrations read on both the
 # shared-worker Secret and the auth-callout Secret so 19_setup_nats-auth-callout.sh
 # can mirror seeds into KV.
