@@ -237,7 +237,17 @@ class Campaign:
     def __init__(self, args: argparse.Namespace, suite: dict):
         self.args = args
         self.suite = suite
-        self.region = load_region(args.region)
+        names = [args.region, *args.peer_region]
+        if len(set(names)) != len(names):
+            raise LoadTestError("region and peer regions must be distinct")
+        self.regions = [load_region(name) for name in names]
+        self.region = self.regions[0]
+        for peer in self.regions[1:]:
+            for field in ("namespace", "modelName", "routingKey"):
+                if peer[field] != self.region[field]:
+                    raise LoadTestError(
+                        f"connected benchmark regions must share {field}"
+                    )
         self.output = args.output.expanduser().resolve()
         self.runs = self.output / "runs"
         self.workload_dir = self.output / "workloads"
@@ -263,6 +273,8 @@ class Campaign:
             else args.endpoint or "kubectl-port-forward",
             "sparkPod": args.spark_pod,
         }
+        if args.peer_region:
+            self.identity["peerRegions"] = args.peer_region
         self.children: list[subprocess.Popen] = []
         self.port_forward: subprocess.Popen | None = None
         self.port_forward_log = None
@@ -336,18 +348,27 @@ class Campaign:
         ).stdout
 
     def verify_region(self) -> None:
-        command = [
-            "python3",
-            str(VERIFY_SCRIPT),
-            "--region",
-            self.args.region,
-            "--phase",
-            "regional",
-        ]
+        commands = []
+        for region in self.regions:
+            command = [
+                "python3",
+                str(VERIFY_SCRIPT),
+                "--region",
+                region["region"],
+                "--phase",
+                "regional",
+            ]
+            for peer in self.regions:
+                if peer["region"] != region["region"]:
+                    command.extend(["--peer-region", peer["region"]])
+            commands.append(command)
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
-            result = self.command(command, timeout=360, check=False)
-            if result.returncode == 0:
+            for command in commands:
+                result = self.command(command, timeout=360, check=False)
+                if result.returncode:
+                    break
+            else:
                 return
             time.sleep(5)
         raise LoadTestError(f"regional health did not converge:\n{result.stdout}")
@@ -479,33 +500,38 @@ class Campaign:
                 mockdc["kubeContext"],
                 f"{mockdc['name']}-stargate-dev-mockdc-backend-{index}",
             )
-            for mockdc in self.region["clusters"]["mockdcs"]
+            for region in self.regions
+            for mockdc in region["clusters"]["mockdcs"]
             for index in range(2)
         ]
 
     def snapshot_environment(self, image: dict) -> None:
         snapshots = {}
-        for cluster in [
-            self.region["clusters"]["stargate"],
-            *self.region["clusters"]["mockdcs"],
-        ]:
-            context = cluster["kubeContext"]
-            snapshots[context] = json.loads(
-                self.kubectl(context, ["get", "deployment", "-o", "json"])
+        load_balancers = {}
+        for region in self.regions:
+            for cluster in [
+                region["clusters"]["stargate"],
+                *region["clusters"]["mockdcs"],
+            ]:
+                context = cluster["kubeContext"]
+                snapshots[context] = json.loads(
+                    self.kubectl(context, ["get", "deployment", "-o", "json"])
+                )
+            load_balancer = json.loads(
+                self.kubectl(
+                    region["clusters"]["stargate"]["kubeContext"],
+                    ["get", "configmap", "llm-request-router-lb", "-o", "json"],
+                )
             )
-        load_balancer = json.loads(
-            self.kubectl(
-                self.stargate_context,
-                ["get", "configmap", "llm-request-router-lb", "-o", "json"],
+            load_balancers[region["region"]] = json.loads(
+                load_balancer["data"]["lb-config.json"]
             )
-        )
         atomic_json(
             self.output / "environment.json",
             {
                 "capturedAt": utc_now(),
-                "loadBalancerConfig": json.loads(
-                    load_balancer["data"]["lb-config.json"]
-                ),
+                "loadBalancerConfig": load_balancers[self.args.region],
+                "loadBalancerConfigsByRegion": load_balancers,
                 "deployments": snapshots,
                 "sparkImage": {
                     "id": image.get("Id"),
@@ -953,20 +979,17 @@ class Campaign:
                 ["rollout", "status", f"deployment/{deployment}", "--timeout=5m"],
                 timeout=330,
             )
-        self.kubectl(
-            self.stargate_context,
-            ["rollout", "restart", "deployment/llm-request-router"],
-        )
-        self.kubectl(
-            self.stargate_context,
-            [
-                "rollout",
-                "status",
-                "deployment/llm-request-router",
-                "--timeout=5m",
-            ],
-            timeout=330,
-        )
+        for region in self.regions:
+            self.kubectl(
+                region["clusters"]["stargate"]["kubeContext"],
+                ["rollout", "restart", "deployment/llm-request-router"],
+            )
+        for region in self.regions:
+            self.kubectl(
+                region["clusters"]["stargate"]["kubeContext"],
+                ["rollout", "status", "deployment/llm-request-router", "--timeout=5m"],
+                timeout=330,
+            )
         self.verify_region()
         if not self.args.endpoint and not self.args.spark_pod:
             self.stop_port_forward()
@@ -1264,6 +1287,12 @@ def parse_args(suite: dict) -> argparse.Namespace:
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--suite", choices=sorted(suite["suites"]))
     parser.add_argument("--region")
+    parser.add_argument(
+        "--peer-region",
+        action="append",
+        default=[],
+        help="Connected region to include in health checks, snapshots, and cache resets. Repeatable.",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--spark-image", default=os.environ.get("STARGATE_SPARK_IMAGE"))
     parser.add_argument(

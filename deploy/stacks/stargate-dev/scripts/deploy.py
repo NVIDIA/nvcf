@@ -152,6 +152,12 @@ def load_deployment_values(region: str, values_path: Path) -> dict:
     return config
 
 
+def observability_role_names(region: str) -> tuple[str, str]:
+    # Preserve the roles used by the original west-region deployment.
+    prefix = "stargate-dev" if region == "us-west-2" else f"stargate-dev-{region}"
+    return f"{prefix}-amp-writer", f"{prefix}-grafana"
+
+
 def validate_deployment_inputs(config: dict, phase: str) -> None:
     if not config.get("deploymentReady"):
         raise DeploymentError(
@@ -214,13 +220,10 @@ def validate_deployment_inputs(config: dict, phase: str) -> None:
     ) == {"0"}:
         raise DeploymentError("observability.amp.workspaceId is invalid")
     account = os.environ.get(config["awsAccountIdEnv"], "")
-    if amp.get("writerRoleArn") != (
-        f"arn:aws:iam::{account}:role/stargate-dev-amp-writer"
-    ):
+    writer_role, grafana_role = observability_role_names(config["region"])
+    if amp.get("writerRoleArn") != (f"arn:aws:iam::{account}:role/{writer_role}"):
         raise DeploymentError("observability.amp.writerRoleArn is invalid")
-    if grafana.get("readerRoleArn") != (
-        f"arn:aws:iam::{account}:role/stargate-dev-grafana"
-    ):
+    if grafana.get("readerRoleArn") != (f"arn:aws:iam::{account}:role/{grafana_role}"):
         raise DeploymentError("observability.grafana.readerRoleArn is invalid")
 
 

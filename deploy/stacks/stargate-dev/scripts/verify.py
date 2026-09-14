@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from deploy import observability_role_names
+
 
 STACK_DIR = Path(__file__).resolve().parents[1]
 ACTIVE_BACKENDS = "stargate_active_inference_servers"
@@ -79,7 +81,7 @@ def parse_active_backends(metrics: str) -> dict[tuple[str, str], float]:
     return values
 
 
-def verify_router_metrics(config: dict) -> None:
+def verify_router_metrics(config: dict, peers: tuple[dict, ...] = ()) -> None:
     context = config["clusters"]["stargate"]["kubeContext"]
     namespace = config["namespace"]
     pod_list = json.loads(
@@ -97,10 +99,10 @@ def verify_router_metrics(config: dict) -> None:
     )["items"]
     if len(pod_list) != 3:
         raise VerificationError(f"found {len(pod_list)} Stargate Pods; expected 3")
-    expected = {
-        (config["routingKey"], config["modelName"]): 2.0
-        * len(config["clusters"]["mockdcs"])
-    }
+    expected: dict[tuple[str, str], float] = {}
+    for region in (config, *peers):
+        key = (region["routingKey"], region["modelName"])
+        expected[key] = expected.get(key, 0) + 2 * len(region["clusters"]["mockdcs"])
     for pod in pod_list:
         name = pod["metadata"]["name"]
         path = f"/api/v1/namespaces/{namespace}/pods/{name}:9090/proxy/metrics"
@@ -140,7 +142,9 @@ def verify_registration_endpoint(config: dict) -> None:
         )
 
 
-def verify_stargate(config: dict, require_backends: bool) -> None:
+def verify_stargate(
+    config: dict, require_backends: bool, peers: tuple[dict, ...] = ()
+) -> None:
     context = config["clusters"]["stargate"]["kubeContext"]
     namespace = config["namespace"]
     require_deployment(context, namespace, "stargate-dev-auth", 1)
@@ -148,7 +152,7 @@ def verify_stargate(config: dict, require_backends: bool) -> None:
     require_deployment(context, namespace, "llm-request-router-backend-router", 3)
     verify_registration_endpoint(config)
     if require_backends:
-        verify_router_metrics(config)
+        verify_router_metrics(config, peers)
 
 
 def verify_mockdc(config: dict, mockdc: dict) -> None:
@@ -204,6 +208,7 @@ def verify_mockdc(config: dict, mockdc: dict) -> None:
 
 def verify_observability(config: dict) -> None:
     namespace = config["observability"]["namespace"]
+    writer_role, _ = observability_role_names(config["region"])
     clusters = [config["clusters"]["stargate"], *config["clusters"]["mockdcs"]]
     for cluster in clusters:
         context = cluster["kubeContext"]
@@ -226,7 +231,7 @@ def verify_observability(config: dict) -> None:
             .get("eks.amazonaws.com/role-arn", "")
         )
         if not re.fullmatch(
-            r"arn:aws:iam::[0-9]{12}:role/stargate-dev-amp-writer", role_arn
+            r"arn:aws:iam::[0-9]{12}:role/" + re.escape(writer_role), role_arn
         ):
             raise VerificationError(
                 f"Alloy in {cluster['name']} does not have the AMP writer role"
@@ -239,6 +244,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--region", required=True)
     parser.add_argument(
+        "--peer-region",
+        action="append",
+        default=[],
+        help="Include this connected region's backends in router verification. Repeatable.",
+    )
+    parser.add_argument(
         "--phase",
         choices=("stargate", "mockdc", "observability", "regional"),
         required=True,
@@ -250,8 +261,14 @@ def main() -> int:
     args = parse_args()
     try:
         config = load_region(args.region)
+        regions = [args.region, *args.peer_region]
+        if len(set(regions)) != len(regions):
+            raise VerificationError("region and peer regions must be distinct")
+        peers = tuple(load_region(region) for region in args.peer_region)
         if args.phase in ("stargate", "regional"):
-            verify_stargate(config, require_backends=args.phase == "regional")
+            verify_stargate(
+                config, require_backends=args.phase == "regional", peers=peers
+            )
         if args.phase in ("mockdc", "regional"):
             for mockdc in config["clusters"]["mockdcs"]:
                 verify_mockdc(config, mockdc)

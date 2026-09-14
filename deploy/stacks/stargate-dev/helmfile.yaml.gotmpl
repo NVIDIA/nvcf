@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 environments:
+  us-east-1:
+    values:
+      - environments/us-east-1.yaml
+      - values/versions.yaml
+      - {{ requiredEnv "STARGATE_DEV_VALUES_FILE" }}
   us-west-2:
     values:
       - environments/us-west-2.yaml
@@ -67,6 +72,8 @@ releases:
           image:
             repository: {{ .Values.images.stargate.repository }}
             digest: {{ .Values.images.stargate.digest }}
+          discovery:
+            remoteWatchUrls: {{ .Values.router.remoteWatchUrls | toJson }}
           loadBalancer:
             config: |
               {

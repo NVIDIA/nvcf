@@ -27,6 +27,16 @@ SPEC.loader.exec_module(OBSERVABILITY)
 
 
 class ObservabilityProvisioningTests(unittest.TestCase):
+    def test_regions_use_distinct_roles_and_preserve_existing_west_roles(self) -> None:
+        self.assertEqual(
+            OBSERVABILITY.deploy.observability_role_names("us-west-2"),
+            ("stargate-dev-amp-writer", "stargate-dev-grafana"),
+        )
+        self.assertEqual(
+            OBSERVABILITY.deploy.observability_role_names("us-east-1"),
+            ("stargate-dev-us-east-1-amp-writer", "stargate-dev-us-east-1-grafana"),
+        )
+
     def test_writer_trust_is_limited_to_each_alloy_service_account(self) -> None:
         config = {
             "observability": {"namespace": "metrics"},

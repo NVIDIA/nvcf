@@ -26,6 +26,28 @@ SPEC.loader.exec_module(LOADTEST)
 
 
 class CanonicalSuiteTests(unittest.TestCase):
+    def test_peer_topology_is_part_of_campaign_resume_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(
+                region="us-west-2",
+                peer_region=["us-east-1"],
+                output=Path(directory) / "campaign",
+                endpoint=None,
+                spark_pod=None,
+                algorithm="both",
+                suite="smoke",
+                spark_image="spark:test",
+                local_port=18000,
+                resume=False,
+            )
+            campaign = LOADTEST.Campaign(args, LOADTEST.load_suite())
+            self.assertEqual(len(campaign.backend_targets()), 8)
+            self.assertEqual(campaign.identity["peerRegions"], ["us-east-1"])
+            args.peer_region = []
+            args.resume = True
+            with self.assertRaisesRegex(LOADTEST.LoadTestError, "resume arguments"):
+                LOADTEST.Campaign(args, LOADTEST.load_suite())
+
     def test_canonical_suite_covers_capacity_and_cache_behavior(
         self,
     ) -> None:
@@ -235,9 +257,10 @@ class CanonicalSuiteTests(unittest.TestCase):
 
     def test_regional_health_waits_for_backend_registration(self) -> None:
         campaign = object.__new__(LOADTEST.Campaign)
-        campaign.args = SimpleNamespace(region="us-west-2")
+        campaign.regions = [{"region": "us-west-2"}, {"region": "us-east-1"}]
         attempts = [
             CompletedProcess([], 1, "three backends"),
+            CompletedProcess([], 0, "verified"),
             CompletedProcess([], 0, "verified"),
         ]
         with (
@@ -246,7 +269,14 @@ class CanonicalSuiteTests(unittest.TestCase):
         ):
             campaign.verify_region()
 
-        self.assertEqual(command.call_count, 2)
+        self.assertEqual(command.call_count, 3)
+        for call, region, peer in [
+            (command.call_args_list[1], "us-west-2", "us-east-1"),
+            (command.call_args_list[2], "us-east-1", "us-west-2"),
+        ]:
+            arguments = call.args[0]
+            self.assertEqual(arguments[arguments.index("--region") + 1], region)
+            self.assertEqual(arguments[arguments.index("--peer-region") + 1], peer)
         sleep.assert_called_once_with(5)
 
     def test_cache_reset_restarts_stargate_after_backends(self) -> None:
@@ -254,17 +284,17 @@ class CanonicalSuiteTests(unittest.TestCase):
             campaign = object.__new__(LOADTEST.Campaign)
             campaign.output = Path(directory)
             campaign.stargate_context = "stargate"
+            campaign.regions = [
+                LOADTEST.load_region(region) for region in ("us-west-2", "us-east-1")
+            ]
             campaign.args = SimpleNamespace(endpoint=None, spark_pod=None)
+            targets = campaign.backend_targets()
+            self.assertEqual(len(targets), 8)
             empty = {
-                "backend-0": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
-                "backend-1": {"kv_cache_entries": 0, "kv_cache_used_tokens": 0},
+                backend: {"kv_cache_entries": 0, "kv_cache_used_tokens": 0}
+                for _, backend in targets
             }
             with (
-                mock.patch.object(
-                    campaign,
-                    "backend_targets",
-                    return_value=[("mock-a", "backend-0"), ("mock-b", "backend-1")],
-                ),
                 mock.patch.object(campaign, "cache_stats", side_effect=[empty, empty]),
                 mock.patch.object(campaign, "kubectl", return_value="") as kubectl,
                 mock.patch.object(campaign, "verify_region") as verify,
@@ -274,12 +304,23 @@ class CanonicalSuiteTests(unittest.TestCase):
             ):
                 campaign.reset_caches("test")
 
-        self.assertIn(
-            mock.call(
-                "stargate", ["rollout", "restart", "deployment/llm-request-router"]
-            ),
-            kubectl.call_args_list,
+        for context, backend in targets:
+            self.assertIn(
+                mock.call(context, ["rollout", "restart", f"deployment/{backend}"]),
+                kubectl.call_args_list,
+            )
+        last_backend_ready = max(
+            index
+            for index, call in enumerate(kubectl.call_args_list)
+            if call.args[1][:2] == ["rollout", "status"] and "mockdc" in call.args[1][2]
         )
+        for context in ("stargate-usw2", "stargate-ue1"):
+            restart = mock.call(
+                context, ["rollout", "restart", "deployment/llm-request-router"]
+            )
+            self.assertGreater(
+                kubectl.call_args_list.index(restart), last_backend_ready
+            )
         verify.assert_called_once_with()
         stop_forward.assert_called_once_with()
         start_forward.assert_called_once_with()

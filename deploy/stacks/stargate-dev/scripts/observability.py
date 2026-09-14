@@ -16,8 +16,6 @@ import deploy
 
 
 AMP_ALIAS = "stargate-dev"
-WRITER_ROLE_NAME = "stargate-dev-amp-writer"
-GRAFANA_ROLE_NAME = "stargate-dev-grafana"
 ALLOY_SERVICE_ACCOUNT = "stargate-dev-alloy"
 GRAFANA_SERVICE_ACCOUNT = "stargate-dev-grafana"
 
@@ -228,9 +226,10 @@ def apply(region: str, values_path: Path) -> None:
     config = deploy.load_deployment_values(region, values_path)
     account = deploy.aws_account(config)
     amp = ensure_amp(region)
+    writer_role_name, grafana_role_name = deploy.observability_role_names(region)
 
     writer_role_arn = ensure_role(
-        WRITER_ROLE_NAME,
+        writer_role_name,
         writer_trust_policy(config, account),
         {
             "Version": "2012-10-17",
@@ -244,7 +243,7 @@ def apply(region: str, values_path: Path) -> None:
         },
     )
     grafana_role_arn = ensure_role(
-        GRAFANA_ROLE_NAME,
+        grafana_role_name,
         grafana_trust_policy(config, account),
         {
             "Version": "2012-10-17",

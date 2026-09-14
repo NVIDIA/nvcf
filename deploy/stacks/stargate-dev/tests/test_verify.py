@@ -4,12 +4,14 @@
 
 import importlib.util
 import json
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
 
 VERIFY_PATH = Path(__file__).resolve().parents[1] / "scripts" / "verify.py"
+sys.path.insert(0, str(VERIFY_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("stargate_dev_verify", VERIFY_PATH)
 VERIFY = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -27,6 +29,33 @@ stargate_active_inference_servers{model="dev-model",routing_key="stargate-dev"} 
             VERIFY.parse_active_backends(metrics),
             {("stargate-dev", "dev-model"): 4.0},
         )
+
+    def test_router_requires_backends_from_connected_regions(self) -> None:
+        west = VERIFY.load_region("us-west-2")
+        east = VERIFY.load_region("us-east-1")
+        pods = {"items": [{"metadata": {"name": f"router-{i}"}} for i in range(3)]}
+        for peers, active, expected_success in [
+            ((), 4, True),
+            ((east,), 8, True),
+            ((east,), 4, False),
+        ]:
+            with self.subTest(peers=bool(peers), active=active):
+                metrics = (
+                    'stargate_active_inference_servers{model="stargate-dev-model",'
+                    f'routing_key="stargate-dev"}} {active}\n'
+                )
+                with mock.patch.object(
+                    VERIFY,
+                    "kubectl",
+                    side_effect=[json.dumps(pods), metrics, metrics, metrics],
+                ):
+                    if expected_success:
+                        VERIFY.verify_router_metrics(west, peers)
+                    else:
+                        with self.assertRaisesRegex(
+                            VERIFY.VerificationError, "expected 8"
+                        ):
+                            VERIFY.verify_router_metrics(west, peers)
 
 
 class MockDcVerificationTests(unittest.TestCase):
