@@ -56,6 +56,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -180,6 +181,9 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	if err != nil {
 		return fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
 	}
+	// Resolved here, checked after the dump: see gpuNSPids on why it cannot
+	// wait until the images exist.
+	gpuNS := gpuNSPids(procBase, gpuPIDs, log)
 	log.WithFields(logrus.Fields{
 		"targetHostPID": targetHostPID,
 		"nsPID":         nsPID,
@@ -340,6 +344,11 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	if moveErr != nil {
 		return fmt.Errorf("criu-v2: move images: %w", moveErr)
 	}
+	// After the move, so it inspects the images where they will actually be
+	// read from rather than a staging copy that is about to be discarded.
+	if err := assertGPUProcessesCaptured(checkpointDir, gpuNS, log); err != nil {
+		return err
+	}
 	log.Info("criu-v2: dump complete, images moved to checkpoint dir")
 	return nil
 }
@@ -404,6 +413,63 @@ func sessionID(procBase string, pid int) (int, error) {
 		return 0, fmt.Errorf("short stat")
 	}
 	return strconv.Atoi(fields[3]) // sid
+}
+
+// gpuNSPids resolves each GPU host pid to its in-namespace pid.
+//
+// Must be called BEFORE the dump: a dump that is not leave-running kills the
+// tree, so /proc/<hostpid>/status is gone by the time the images exist and the
+// mapping can no longer be recovered.
+//
+// A pid that cannot be resolved is skipped rather than fatal. It has usually
+// just exited on its own, and refusing to capture a healthy workload because
+// one short-lived helper raced us would be worse than the gap it leaves.
+func gpuNSPids(procBase string, gpuPIDs []int, log *logrus.Entry) map[int]int {
+	out := make(map[int]int, len(gpuPIDs))
+	for _, hostPID := range gpuPIDs {
+		nsPID, err := nsPidOf(procBase, hostPID)
+		if err != nil {
+			log.WithError(err).WithField("hostPID", hostPID).
+				Warn("criu-v2: cannot resolve ns pid of GPU process; excluded from the capture check")
+			continue
+		}
+		out[hostPID] = nsPID
+	}
+	return out
+}
+
+// assertGPUProcessesCaptured fails the capture when a process the agent
+// identified as holding GPU state is absent from the images.
+//
+// Without this the agent will publish a checkpoint that is missing the very
+// processes the capture exists for, and report success while doing it. That is
+// not hypothetical: quiescing NCCL on a live multi-GPU vLLM can take the
+// executor down with it, and CRIU then dumps the surviving API server perfectly
+// and exits 0. The result is a valid-looking checkpoint roughly 3% of the
+// expected size, whose only symptom is a number nobody is checking.
+//
+// The GPU pid list is the agent's own, gathered moments earlier, so this
+// compares intent against outcome rather than trusting either alone.
+func assertGPUProcessesCaptured(imagesDir string, nsPids map[int]int, log *logrus.Entry) error {
+	if len(nsPids) == 0 {
+		return nil
+	}
+	var missing []int
+	for hostPID, nsPID := range nsPids {
+		if _, err := os.Stat(filepath.Join(imagesDir, fmt.Sprintf("core-%d.img", nsPID))); err != nil {
+			missing = append(missing, hostPID)
+		}
+	}
+	if len(missing) == 0 {
+		log.WithField("gpuProcesses", len(nsPids)).Info("criu-v2: all GPU processes present in the capture")
+		return nil
+	}
+	sort.Ints(missing)
+	return fmt.Errorf(
+		"criu-v2: capture is missing %d of %d GPU process(es) (host pids %v): they held the GPU state this "+
+			"checkpoint exists for, so the images are incomplete and must not be published. The usual cause is "+
+			"the processes exiting between quiesce and dump",
+		len(missing), len(nsPids), missing)
 }
 
 // nsPidOf returns pid as seen inside its innermost pid namespace (last
