@@ -13,34 +13,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM golang:1.23 AS http-server-build
+FROM golang:1.23 AS build
 
-WORKDIR /go/src/http-app
-COPY http-server .
-
+WORKDIR /src
+COPY http-server/go.mod ./
 RUN go mod download
-RUN go vet -v
-RUN go test -v
+COPY http-server/ ./
+RUN CGO_ENABLED=0 go build -o /openai-compatible-sample .
 
-RUN CGO_ENABLED=0 go build -o /go/bin/http-app
+FROM alpine:3.20
 
-FROM python:3.10-bookworm
+COPY --from=build /openai-compatible-sample /app/openai-compatible-sample
+RUN adduser -D -H app && chown app:app /app/openai-compatible-sample
 
-ENV WORKER_COUNT=500
+EXPOSE 8000
 
-WORKDIR /app
+USER app
 
-COPY requirements.txt ./
-
-RUN python -m pip install --no-cache-dir -U pip && \
-    python -m pip install --no-cache-dir -r requirements.txt
-
-COPY grpc-server/echo.proto /app/
-RUN python -m grpc_tools.protoc -I /app/  --python_out=. --pyi_out=. --grpc_python_out=. /app/echo.proto
-
-COPY grpc-server/grpc_echo_server.py /app/
-
-ENV GIN_MODE=release
-COPY --from=http-server-build /go/bin/http-app /app/
-
-CMD python3 /app/grpc_echo_server.py & /app/http-app
+CMD ["/app/openai-compatible-sample"]
