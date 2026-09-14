@@ -78,6 +78,7 @@ struct GatewayTarget {
 struct GatheredScalingInputs {
     inputs: ScalingInputs,
     gateway_target: Option<GatewayTarget>,
+    latest_utilization_timestamp_seconds: Option<i64>,
 }
 
 pub mod bucket;
@@ -244,6 +245,19 @@ async fn get_function_utilization_history(
     );
 
     Ok(utilization_data)
+}
+
+fn utilization_data_age_milliseconds(
+    utilization_timestamp_seconds: Option<i64>,
+    now_timestamp_milliseconds: i64,
+) -> Option<i64> {
+    let utilization_timestamp_milliseconds = utilization_timestamp_seconds?.saturating_mul(1_000);
+
+    Some(
+        now_timestamp_milliseconds
+            .saturating_sub(utilization_timestamp_milliseconds)
+            .max(0),
+    )
 }
 
 /// Get current instance count for BYOC functions from TimeseriesDb
@@ -684,6 +698,10 @@ async fn gather_scaling_inputs(
         scaling_settings.utilization_window_seconds,
     )
     .await?;
+    let latest_utilization_timestamp_seconds = raw_utilization
+        .iter()
+        .map(|(timestamp, _)| *timestamp)
+        .max();
     let utilization_samples = sanitize_utilization(raw_utilization);
 
     let recently_invoked = if metric_source == MetricSource::LlmGateway {
@@ -715,6 +733,7 @@ async fn gather_scaling_inputs(
             recently_invoked,
         },
         gateway_target,
+        latest_utilization_timestamp_seconds,
     }))
 }
 
@@ -933,6 +952,13 @@ async fn make_scaling_requests(
                         return Ok(());
                     };
 
+                    if let Some(data_age_milliseconds) = utilization_data_age_milliseconds(
+                        gathered.latest_utilization_timestamp_seconds,
+                        Utc::now().timestamp_millis(),
+                    ) {
+                        metrics::record_utilization_data_age(data_age_milliseconds);
+                    }
+
                     let desired_instance_count = if let Some(target) = &gathered.gateway_target {
                         gateway_target_desired_instances(
                             decision.desired_instances,
@@ -1128,6 +1154,19 @@ mod tests {
     #[test]
     fn scaling_lock_name_preserves_existing_coordination_key() {
         assert_eq!(scaling_lock_name(7), "util_lock_7_RecentlyInvokedFunctions");
+    }
+
+    #[test]
+    fn utilization_data_age_never_goes_negative() {
+        assert_eq!(
+            utilization_data_age_milliseconds(Some(1_700_000_005), 1_700_000_007_500),
+            Some(2_500)
+        );
+        assert_eq!(
+            utilization_data_age_milliseconds(Some(1_700_000_005), 1_700_000_004_000),
+            Some(0)
+        );
+        assert_eq!(utilization_data_age_milliseconds(None, 0), None);
     }
 
     // ---- Helpers for the metric-acquisition tests ----
@@ -1757,6 +1796,10 @@ mod tests {
         .await
         .expect("gather inputs")
         .expect("current instance data");
+        assert_eq!(
+            gathered.latest_utilization_timestamp_seconds,
+            Some(1_700_000_000)
+        );
         let inputs = gathered.inputs;
 
         assert_eq!(inputs.current_instances, 5);
