@@ -2610,6 +2610,7 @@ func assertNetworkPolicyOmitsTCPPort(t *testing.T, policyYAML, policyName string
 	}
 }
 
+// TestGetEffectiveK8sNetworkCIDRs verifies the network CIDRs used by generated policies.
 func TestGetEffectiveK8sNetworkCIDRs(t *testing.T) {
 	tests := []struct {
 		name          string

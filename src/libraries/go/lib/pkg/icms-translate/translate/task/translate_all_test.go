@@ -356,6 +356,7 @@ func assertTaskUtilsMetricsPort(t *testing.T, container corev1.Container) {
 	}}, container.Ports)
 }
 
+// findTaskVolumeByName returns the named task volume source or fails the test.
 func findTaskVolumeByName(t *testing.T, volumes []corev1.Volume, name string) corev1.VolumeSource {
 	t.Helper()
 

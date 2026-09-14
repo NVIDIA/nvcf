@@ -356,6 +356,12 @@ assert_yaml_value "$worker_monitor_manifest" \
 assert_yaml_value "$worker_monitor_manifest" \
   '.spec.selector.matchExpressions[0].operator' Exists \
   'worker pod label expression operator'
+assert_yaml_value "$worker_monitor_manifest" \
+  '.spec.podMetricsEndpoints[0].port' worker-metrics \
+  'worker metrics port'
+assert_yaml_value "$work_dir/compute-monitor-values.yaml" \
+  '.computePlane.worker.port' worker-metrics \
+  'compute worker metrics Helmfile value'
 
 # The application chart owns its Service labels. Compare them with the shared
 # ServiceMonitor selector so an application label change cannot silently break

@@ -346,6 +346,7 @@ func TestTranslateContainerLLMWithSecretsSharesAssertionTokenWithCredentialManag
 	require.NotNil(t, findVolumeByName(t, pod.Spec.Volumes, common.EssDataVolumeName).EmptyDir)
 }
 
+// TestTranslateNonLLMFunctionsDoNotAddCredentialManager verifies non-LLM workloads omit LLM sidecars.
 func TestTranslateNonLLMFunctionsDoNotAddCredentialManager(t *testing.T) {
 	for _, functionType := range []string{FunctionTypeDefault, FunctionTypeStreaming} {
 		t.Run(functionType, func(t *testing.T) {
