@@ -577,11 +577,14 @@ impl PylonRuntimeState {
 
     pub(crate) fn update_request_active_output_tps(
         &self,
-        request_id: &str,
+        event: &RequestObservationEvent,
         active_chat_output_tps: Option<f64>,
     ) -> Option<String> {
-        self.live_requests
-            .update_active_output_tps(request_id, active_chat_output_tps)
+        self.live_requests.update_active_output_tps(
+            &event.observation.request_id,
+            event.request_instance.as_ref(),
+            active_chat_output_tps,
+        )
     }
 
     pub(crate) fn request_generation(&self, request_id: &str) -> Option<ModelGeneration> {
@@ -633,12 +636,21 @@ impl PylonRuntimeState {
         &self,
         required: &RequiredTunnelHeaders,
         generation: Option<&ModelGeneration>,
+        has_observer: bool,
     ) {
         let Some(generation) = generation else { return };
         let advertised = self.advertised.lock();
         if advertised.current(generation).is_some() {
-            self.live_requests
-                .begin_request(required, generation.clone());
+            self.live_requests.begin_request(
+                required,
+                generation.clone(),
+                has_observer,
+                |transition| {
+                    if let Some(metrics) = &self.metrics {
+                        metrics.observe_request_state_transition(transition);
+                    }
+                },
+            );
         }
     }
 

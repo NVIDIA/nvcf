@@ -187,7 +187,7 @@ impl RequestObserver {
         generation: Option<ModelGeneration>,
         runtime_state: PylonRuntimeState,
     ) -> Self {
-        runtime_state.begin_request(&required, generation.as_ref());
+        runtime_state.begin_request(&required, generation.as_ref(), true);
         let priority = required.queue_priority();
         let RequiredTunnelHeaders {
             request_id,
@@ -744,6 +744,54 @@ mod tests {
             runtime.snapshot_live_model("model-a").num_running_queries,
             0
         );
+    }
+
+    #[test]
+    fn unobserved_replacement_retires_prior_observation_and_gauges() {
+        for replacement_model in ["model-a", "model-b"] {
+            let metrics = crate::PylonMetrics::new().unwrap();
+            let (runtime, _events) = PylonRuntimeState::observed(
+                InferenceServerStatus::Active,
+                &["model-a".into(), "model-b".into()],
+                16,
+                Some(metrics.clone()),
+            );
+            let mut first = RequestObserver::from_required(
+                RequestObservationEndpoint::ChatCompletions,
+                validate_required_tunnel_headers(&request_headers("reused-id", 100)).unwrap(),
+                runtime.current_generation("model-a"),
+                runtime.clone(),
+            );
+            first.submit_now();
+            assert!(metrics.gather_text().unwrap().contains(
+                r#"pylon_requests_state_input_tokens{model="model-a",state="input_processing"} 100"#
+            ));
+
+            let mut headers = request_headers("reused-id", 20);
+            headers.insert(HEADER_MODEL, replacement_model.parse().unwrap());
+            let required = validate_required_tunnel_headers(&headers).unwrap();
+            let generation = runtime.current_generation(replacement_model);
+            runtime.begin_request(&required, generation.as_ref(), false);
+            let guard = runtime
+                .track_generation_request(&required, generation.as_ref())
+                .unwrap();
+            assert_eq!(
+                runtime
+                    .snapshot_live_model(replacement_model)
+                    .num_running_queries,
+                1
+            );
+            drop(guard);
+            first.cancel();
+
+            assert!(runtime.request_generation("reused-id").is_none());
+            for line in metrics.gather_text().unwrap().lines().filter(|line| {
+                line.starts_with("pylon_requests_state")
+                    || line.starts_with("pylon_requests_inflight")
+            }) {
+                assert!(line.ends_with(" 0"), "retained request gauge: {line}");
+            }
+        }
     }
 
     #[test]

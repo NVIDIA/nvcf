@@ -4069,4 +4069,78 @@ mod tests {
         assert!(body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 10"#));
         assert!(!body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 999"#));
     }
+    #[test]
+    fn queued_observations_cannot_change_replacement_output_rate() {
+        use crate::request_observer::{RequestObserver, RequiredTunnelHeaders};
+        use stargate_proto::pb::InferenceServerStatus;
+
+        let (runtime, events) = PylonRuntimeState::observed(
+            InferenceServerStatus::Active,
+            &["model-a".into()],
+            16,
+            None,
+        );
+        let generation = runtime.current_generation("model-a").unwrap();
+        let required = || RequiredTunnelHeaders {
+            request_instance: Default::default(),
+            request_id: "reused-id".into(),
+            routing_key: None,
+            model_id: "model-a".into(),
+            priority: None,
+            input_tokens: 100,
+            accepted_at: std::time::Instant::now() - Duration::from_secs(2),
+        };
+        let mut first = RequestObserver::from_required(
+            RequestObservationEndpoint::ChatCompletions,
+            required(),
+            Some(generation.clone()),
+            runtime.clone(),
+        );
+        first.on_backend_submission(std::time::Instant::now() - Duration::from_secs(1));
+        first.observe_generated_output(
+            std::time::Instant::now() - Duration::from_millis(500),
+            true,
+            100,
+            false,
+        );
+        first.observe_estimated_output_tokens_total(100);
+        let old_events: Vec<_> = events.try_iter().collect();
+        let mut second = RequestObserver::from_required(
+            RequestObservationEndpoint::ChatCompletions,
+            required(),
+            Some(generation.clone()),
+            runtime.clone(),
+        );
+        second.on_backend_submission(std::time::Instant::now() - Duration::from_secs(1));
+        second.observe_generated_output(
+            std::time::Instant::now() - Duration::from_millis(500),
+            true,
+            50,
+            false,
+        );
+        second.observe_estimated_output_tokens_total(50);
+        let before = runtime.snapshot_live_model("model-a");
+        assert_eq!(before.active_chat_output_tps, 0.0);
+        let mut collector = StatsAggregator::new(StatsCollectorConfig::default(), runtime.clone());
+        collector
+            .begin_generation(generation, ModelStatsInitialization::Empty)
+            .unwrap();
+        for event in old_events {
+            collector.apply_fallback_observation(&event);
+        }
+        assert_eq!(
+            runtime.snapshot_live_model("model-a"),
+            before,
+            "an old queued event changed the replacement's output rate"
+        );
+        for event in events.try_iter() {
+            collector.apply_fallback_observation(&event);
+        }
+        assert!(
+            runtime
+                .snapshot_live_model("model-a")
+                .active_chat_output_tps
+                > 0.0
+        );
+    }
 }

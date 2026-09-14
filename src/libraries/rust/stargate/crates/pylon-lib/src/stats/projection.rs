@@ -283,7 +283,7 @@ impl StatsAggregator {
         }
         if let Some(model_id) = self
             .runtime_state
-            .update_request_active_output_tps(&observation.request_id, active_chat_output_tps)
+            .update_request_active_output_tps(event, active_chat_output_tps)
         {
             push_changed_model(&mut changed_models, model_id);
         }

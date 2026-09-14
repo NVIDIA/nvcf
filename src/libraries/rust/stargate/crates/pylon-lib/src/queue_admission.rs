@@ -357,6 +357,8 @@ impl LiveRequestState {
         &self,
         required: &RequiredTunnelHeaders,
         generation: ModelGeneration,
+        has_observer: bool,
+        observe: impl FnOnce(&RequestObservationTransition),
     ) {
         let request_id = required.request_id.clone();
         let request = TrackedPromptRequest {
@@ -366,17 +368,32 @@ impl LiveRequestState {
             phase: TrackedPromptPhase::Pending,
             active_chat_output_tps: None,
         };
-        {
+        let _order = self.observation_order.lock();
+        let transition = {
             let mut state = self.inner.lock();
             let observed = state
                 .remove_request(&request_id)
                 .and_then(|(_, request)| request.request.into_observed());
+            // The first observer event replaces the inherited metric projection.
+            // A request without an observer must retire that projection now.
+            let (inherited, retired) = if has_observer {
+                (observed, None)
+            } else {
+                (None, observed)
+            };
             state.insert_request(
                 request_id,
-                LiveRequest::Queue(request, observed),
+                LiveRequest::Queue(request, inherited),
                 Some(required.request_instance.clone()),
             );
-        }
+            RequestObservationTransition {
+                changed_generations: Vec::new(),
+                input_token_totals: state.input_token_totals([retired.as_ref(), None]),
+                prior: retired,
+                current: None,
+            }
+        };
+        observe(&transition);
     }
 
     #[cfg(test)]
@@ -385,7 +402,7 @@ impl LiveRequestState {
         required: &RequiredTunnelHeaders,
         generation: ModelGeneration,
     ) -> QueueTrackedRequestGuard {
-        self.begin_request(required, generation);
+        self.begin_request(required, generation, true, |_| {});
         self.request_guard(required)
     }
 
@@ -457,11 +474,14 @@ impl LiveRequestState {
     pub(crate) fn update_active_output_tps(
         &self,
         request_id: &str,
+        instance: Option<&RequestInstance>,
         active_chat_output_tps: Option<f64>,
     ) -> Option<String> {
-        self.inner
-            .lock()
-            .update_active_output_tps(request_id, active_chat_output_tps)
+        let mut state = self.inner.lock();
+        if instance.is_some_and(|instance| !state.owns_instance(request_id, instance)) {
+            return None;
+        }
+        state.update_active_output_tps(request_id, active_chat_output_tps)
     }
 
     pub(crate) fn finish_queue_request(
@@ -1061,7 +1081,7 @@ mod tests {
                 request_id,
                 RequestObservationState::OutputGeneration,
             ));
-            live_requests.update_active_output_tps(request_id, Some(output_tps));
+            live_requests.update_active_output_tps(request_id, None, Some(output_tps));
         }
 
         let active = live_requests.snapshot_model("model-a");

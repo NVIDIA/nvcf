@@ -263,11 +263,18 @@ impl PylonMetrics {
         observation: &RequestObservation,
         transition: &RequestObservationTransition,
     ) {
-        if let Some(prior) = &transition.prior {
-            self.adjust_observed_request(prior, -1);
-        }
+        self.observe_request_state_transition(transition);
         if observation.is_terminal() {
             self.record_terminal_observation(observation, request_state_label(observation.state));
+        }
+    }
+
+    pub(crate) fn observe_request_state_transition(
+        &self,
+        transition: &RequestObservationTransition,
+    ) {
+        if let Some(prior) = &transition.prior {
+            self.adjust_observed_request(prior, -1);
         }
         if let Some(current) = &transition.current {
             self.adjust_observed_request(current, 1);
