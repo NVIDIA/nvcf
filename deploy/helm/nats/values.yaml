@@ -78,9 +78,9 @@ nats:
   reloader:
     enabled: true
     image:
-      registry: ""
-      repository: ""
-      tag: 0.23.0
+      registry: docker.io
+      repository: natsio/nats-server-config-reloader
+      tag: 0.24.0
       pullPolicy: IfNotPresent
   natsBox:
     enabled: true

@@ -1,7 +1,7 @@
 @ncp-local @single-cluster @helmfile @upstream-images
 Feature: Install a local single-cluster stack with upstream supporting images
   As a self-managed NVCF operator,
-  I want the documented upstream image overrides to survive Helmfile rendering
+  I want documented upstream image configuration to survive Helmfile rendering
   and installation,
   so that I can use the public supporting images without relying on their NGC
   mirrors.
@@ -25,9 +25,6 @@ Feature: Install a local single-cluster stack with upstream supporting images
       | global.helm.sources.repository        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile                 | disabled                             |
-      | nats.reloader.image.registry          | docker.io                            |
-      | nats.reloader.image.repository        | natsio/nats-server-config-reloader   |
-      | nats.reloader.image.tag               | 0.24.0                               |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     And a single-cluster ncp-local cluster is running
     And the "nvcr-pull-secret" image pull secret exists in namespaces:
@@ -47,11 +44,11 @@ Feature: Install a local single-cluster stack with upstream supporting images
     And the command output should not contain "Error:"
 
     # The current NATS chart renders NKey Secrets directly and has no nkey job
-    # image to override. Check it beside the supporting image override owned by
+    # image to override. Check it beside the supporting image default owned by
     # the same rendered release.
     Then the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-nats" should contain:
       | text                                                               |
-      | docker.io/natsio/nats-server-config-reloader:0.24.0                |
+      | docker.io/natsio/nats-server-config-reloader:                       |
       | # Source: helm-nvcf-nats/templates/nkey-secret.yaml                |
 
     # Cassandra initialization currently uses its migrations image. Selecting
@@ -64,7 +61,7 @@ Feature: Install a local single-cluster stack with upstream supporting images
       | text                  |
       | docker.io/alpine/k8s: |
 
-    # Keep this focused on the releases that own or exercise the overrides.
+    # Keep this focused on the releases that own or exercise this configuration.
     # A full local stack install also starts unrelated service images that may
     # not support the host architecture.
     When I run command "env HELM_REGISTRY_CONFIG=${REPO_ROOT}/tools/ncp-local-cluster/secrets/docker-config.json make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=release-group=dependencies"
@@ -93,4 +90,4 @@ Feature: Install a local single-cluster stack with upstream supporting images
       kubectl get statefulset nats -n nats-system -o 'jsonpath={.spec.template.spec.containers[?(@.name=="reloader")].image}'
       """
     Then the command exit code should be 0
-    And the command output should contain "docker.io/natsio/nats-server-config-reloader:0.24.0"
+    And the command output should contain "docker.io/natsio/nats-server-config-reloader:"

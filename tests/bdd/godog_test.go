@@ -438,11 +438,14 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	const vanityInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function invoke --vanity-host vanity.localhost --path /bdd/echo --timeout 120" +
 		" --request-body '{\"message\":\"bdd-vanity-echo\",\"repeats\":1}'"
+	const helmInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" function invoke --request-body '{\"message\":\"bdd-helm-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test-0.1.0.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -462,6 +465,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		vanityInvokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-vanity-echo\"}\n",
+		},
+		helmInvokeCommand: {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-helm-echo\"}\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage" +
@@ -564,6 +571,16 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-helm-function",
+		"--helm-chart https://charts.example.test/inference-test-0.1.0.tgz",
+		"--helm-chart-service entrypoint",
+		"--inference-url /echo --inference-port 8000") {
+		t.Fatal("Helm sample function was not created through the chart-rendering path")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmInvokeCommand) {
+		t.Fatal("Helm sample function was not invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-openai-compatible-sample",
 		"nvcf-openai-compatible-sample:local",
 		"--function-type LLM",
@@ -576,7 +593,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 4)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
@@ -1118,9 +1135,12 @@ func observabilityAllHelmListJSON() string {
 // multi-cluster feature targets the cp and compute clusters
 // explicitly.
 func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
+	const multiHelmInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" function invoke --request-body '{\"message\":\"bdd-multi-helm-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5"
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test-0.1.0.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	const taskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh"
@@ -1167,6 +1187,10 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
+		},
+		multiHelmInvokeCommand: {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-multi-helm-echo\"}\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage" +
@@ -1291,6 +1315,16 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-multi-helm-function",
+		"--helm-chart https://charts.example.test/inference-test-0.1.0.tgz",
+		"--helm-chart-service entrypoint",
+		"--inference-url /echo --inference-port 8000") {
+		t.Fatal("multi-cluster Helm sample function was not created through the chart-rendering path")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, multiHelmInvokeCommand) {
+		t.Fatal("multi-cluster Helm sample function was not invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-multi-openai-compatible-sample",
 		"nvcf-openai-compatible-sample:local",
 		"--function-type LLM",
@@ -1311,8 +1345,8 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			cleanupCount++
 		}
 	}
-	if cleanupCount != 3 {
-		t.Fatalf("function deployment cleanup commands = %d, want 3", cleanupCount)
+	if cleanupCount != 4 {
+		t.Fatalf("function deployment cleanup commands = %d, want 4", cleanupCount)
 	}
 	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
 		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
@@ -1320,7 +1354,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
 		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 4)
 }
 
 // TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps
@@ -1621,7 +1655,7 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
-	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:0.24.0"
+	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:fixture-tag"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
@@ -1805,7 +1839,7 @@ addons:
 `)
 }
 
-// seedUpstreamImageStackInputs writes the two stack files the focused
+// seedUpstreamImageStackInputs writes the minimal stack files the focused
 // upstream-image feature copies and edits in its wiring test.
 func seedUpstreamImageStackInputs(t *testing.T, repoRoot string) {
 	t.Helper()
@@ -1827,13 +1861,7 @@ func seedUpstreamImageStackInputs(t *testing.T, repoRoot string) {
 	if err := os.WriteFile(filepath.Join(stackDir, "Makefile.dist"), []byte("template:\n\t@true\ninstall:\n\t@true\n"), 0o644); err != nil {
 		t.Fatalf("write Makefile.dist: %v", err)
 	}
-	global := `nats:
-  reloader:
-    image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
-      tag: "0.24.0"
-`
+	global := "{}\n"
 	if err := os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte(global), 0o644); err != nil {
 		t.Fatalf("write global template: %v", err)
 	}
@@ -1845,7 +1873,7 @@ func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
 	t.Helper()
 	manifests := map[string]string{
 		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
-image: docker.io/natsio/nats-server-config-reloader:0.24.0
+image: docker.io/natsio/nats-server-config-reloader:fixture-tag
 `,
 		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
 		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:fixture-tag\n",

@@ -59,6 +59,7 @@ profile_releases_csv() {
     paste -sd, -
 }
 
+# render_monitors renders default monitor manifests for an observability profile.
 render_monitors() {
   local profile="$1"
   local output_name="$2"
@@ -124,6 +125,7 @@ release_needs_csv() {
     paste -sd, -
 }
 
+# assert_equal fails the test when actual and expected values differ.
 assert_equal() {
   local actual="$1"
   local expected="$2"
@@ -133,6 +135,7 @@ assert_equal() {
     fail "$description: expected '$expected', got '$actual'"
 }
 
+# assert_yaml_value verifies that a yq expression resolves to the expected value.
 assert_yaml_value() {
   local file="$1"
   local expression="$2"
@@ -353,6 +356,12 @@ assert_yaml_value "$worker_monitor_manifest" \
 assert_yaml_value "$worker_monitor_manifest" \
   '.spec.selector.matchExpressions[0].operator' Exists \
   'worker pod label expression operator'
+assert_yaml_value "$worker_monitor_manifest" \
+  '.spec.podMetricsEndpoints[0].port' worker-metrics \
+  'worker metrics port'
+assert_yaml_value "$work_dir/compute-monitor-values.yaml" \
+  '.computePlane.worker.port' worker-metrics \
+  'compute worker metrics Helmfile value'
 
 # The application chart owns its Service labels. Compare them with the shared
 # ServiceMonitor selector so an application label change cannot silently break

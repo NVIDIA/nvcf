@@ -30,6 +30,8 @@ import (
 
 const (
 	LLMWorkerContainerName = "llm-worker"
+	// llmMetricsPort is the TCP port exposed by Pylon for Prometheus metrics.
+	llmMetricsPort int32 = 9089
 
 	//nolint:gosec
 	llmCredentialManagerImageEnv = "LLM_CREDENTIAL_MANAGER_IMAGE"
@@ -81,6 +83,7 @@ func upstreamHealthPath(allEnvSet map[string]string) string {
 	return path
 }
 
+// newLLMRouterClientContainer builds the Pylon sidecar for an LLM worker.
 func newLLMRouterClientContainer(
 	ls *LaunchSpecification,
 	allEnvSet map[string]string,
@@ -169,8 +172,13 @@ func newLLMRouterClientContainer(
 		Name:            LLMWorkerContainerName,
 		Image:           llmRouterClientImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Args:            args,
-		Env:             common.SortEnvs(envs),
+		Ports: []corev1.ContainerPort{{
+			Name:          common.WorkerMetricsPortName,
+			ContainerPort: llmMetricsPort,
+			Protocol:      corev1.ProtocolTCP,
+		}},
+		Args: args,
+		Env:  common.SortEnvs(envs),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    *resource.NewMilliQuantity(500, resource.DecimalSI),
