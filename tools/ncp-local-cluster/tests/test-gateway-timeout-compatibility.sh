@@ -34,6 +34,10 @@ case "${1:-}:${2:-}" in
     ;;
   get:crd)
     [[ "${3:-}" == "backendtrafficpolicies.gateway.envoyproxy.io" ]]
+    if [[ "${MOCK_CRD_MISSING_ONCE-}" == true && ! -e "${MOCK_CRD_MARKER}" ]]; then
+      touch "${MOCK_CRD_MARKER}"
+      exit 1
+    fi
     if [[ "$*" == *'.name=="v1alpha1"'* ]]; then
       printf 'v1alpha1\t%s\t%s\n' \
         "${MOCK_V1ALPHA1_SERVED-}" "${MOCK_V1ALPHA1_REQUEST_TIMEOUT_TYPE-}"
@@ -63,6 +67,7 @@ EOF
 chmod +x "$test_dir/bin/helm" "$test_dir/bin/kubectl"
 export PATH="$test_dir/bin:$PATH"
 export TEST_CALL_LOG="$call_log"
+export MOCK_CRD_MARKER="$test_dir/crd-seen"
 
 setup_script="$local_cluster_dir/scripts/setup-gateway-api.sh"
 docs_file="$repo_dir/docs/user/gateway-routing.md"
@@ -100,6 +105,17 @@ grep -Fq "kubectl apply -k" "$call_log" ||
   fail "timeout-capable CRD did not proceed to Gateway creation"
 grep -Fq "supports disabling the LLM worker request timeout" "$test_dir/success.out" ||
   fail "successful capability check was not reported"
+
+: >"$call_log"
+rm -f "$MOCK_CRD_MARKER"
+export MOCK_CRD_MISSING_ONCE=true
+"$setup_script" >"$test_dir/transient.out"
+unset MOCK_CRD_MISSING_ONCE
+crd_get_count="$(grep -Fc 'kubectl get crd backendtrafficpolicies.gateway.envoyproxy.io' "$call_log")"
+[[ "$crd_get_count" -ge 3 ]] ||
+  fail "setup did not retry discovery when the BackendTrafficPolicy CRD was initially missing"
+grep -Fq "supports disabling the LLM worker request timeout" "$test_dir/transient.out" ||
+  fail "setup did not recover after the BackendTrafficPolicy CRD became available"
 
 : >"$call_log"
 export MOCK_V1ALPHA1_REQUEST_TIMEOUT_TYPE=
