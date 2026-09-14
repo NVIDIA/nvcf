@@ -1135,9 +1135,12 @@ func observabilityAllHelmListJSON() string {
 // multi-cluster feature targets the cp and compute clusters
 // explicitly.
 func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
+	const multiHelmInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" function invoke --request-body '{\"message\":\"bdd-multi-helm-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5"
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test-0.1.0.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	const taskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh"
@@ -1184,6 +1187,10 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
+		},
+		multiHelmInvokeCommand: {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-multi-helm-echo\"}\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage" +
@@ -1308,6 +1315,16 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-multi-helm-function",
+		"--helm-chart https://charts.example.test/inference-test-0.1.0.tgz",
+		"--helm-chart-service entrypoint",
+		"--inference-url /echo --inference-port 8000") {
+		t.Fatal("multi-cluster Helm sample function was not created through the chart-rendering path")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, multiHelmInvokeCommand) {
+		t.Fatal("multi-cluster Helm sample function was not invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-multi-openai-compatible-sample",
 		"nvcf-openai-compatible-sample:local",
 		"--function-type LLM",
@@ -1328,8 +1345,8 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			cleanupCount++
 		}
 	}
-	if cleanupCount != 3 {
-		t.Fatalf("function deployment cleanup commands = %d, want 3", cleanupCount)
+	if cleanupCount != 4 {
+		t.Fatalf("function deployment cleanup commands = %d, want 4", cleanupCount)
 	}
 	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
 		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
@@ -1337,7 +1354,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
 		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 4)
 }
 
 // TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps

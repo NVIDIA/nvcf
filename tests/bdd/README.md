@@ -46,7 +46,7 @@ go test -short ./...
 
 Live runs build nvcf-cli, bring up a real k3d cluster, and exercise the
 feature end to end. They require an NGC API key and sample registry
-coordinates. The single-cluster Helmfile run also requires
+coordinates. The single-cluster and multi-cluster Helmfile runs also require
 `SAMPLE_HELM_FUNCTION_CHART`. It must identify a chart that ReVal can fetch
 without credentials. The chart must expose an `entrypoint` Service on port
 8000, answer `/health`, and echo the request message from `/echo`.
@@ -89,6 +89,7 @@ BDD_CLEANUP_MODE=topology-multi \
 # on k3d-ncp-local-compute-1. Same secrets as the single-cluster
 # Helmfile feature.
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_HELM_FUNCTION_CHART=<chart-url-or-oci-reference> \
   go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
 ```
 
