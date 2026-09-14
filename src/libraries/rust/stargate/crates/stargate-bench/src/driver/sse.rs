@@ -17,10 +17,13 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
+const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
 
 #[derive(Default)]
 pub(super) struct CompletionStream {
     event: Vec<u8>,
+    bom_checked: bool,
+    skip_lf: bool,
     output_tokens: Option<u64>,
     complete: bool,
 }
@@ -32,11 +35,31 @@ impl CompletionStream {
             if self.complete {
                 break;
             }
+            // Treat CR, LF and CRLF as one line ending, including split CRLF.
+            if std::mem::replace(&mut self.skip_lf, false) && byte == b'\n' {
+                continue;
+            }
+            let byte = if byte == b'\r' {
+                self.skip_lf = true;
+                b'\n'
+            } else {
+                byte
+            };
             if self.event.len() == MAX_SSE_EVENT_BYTES {
                 bail!("upstream SSE event exceeded {MAX_SSE_EVENT_BYTES} bytes");
             }
             self.event.push(byte);
-            if self.event.ends_with(b"\n\n") || self.event.ends_with(b"\r\n\r\n") {
+            if !self.bom_checked {
+                if UTF8_BOM.starts_with(&self.event) {
+                    if self.event.len() == UTF8_BOM.len() {
+                        self.event.clear();
+                        self.bom_checked = true;
+                    }
+                    continue;
+                }
+                self.bom_checked = true;
+            }
+            if byte == b'\n' && (self.event.len() == 1 || self.event.ends_with(b"\n\n")) {
                 generated_output |= self.consume_event()?;
             }
         }
@@ -131,15 +154,46 @@ mod tests {
 
     #[test]
     fn fragmented_events_preserve_text_and_observed_usage() {
-        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"λ\"}}]}\r\n\r\ndata: {\"choices\":[],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
-        let mut stream = CompletionStream::default();
-        let mut output_events = 0;
-        for byte in body.as_bytes() {
-            output_events += usize::from(stream.push(&[*byte]).unwrap());
+        for separator in [
+            "\n\n", "\r\r", "\r\n\r\n", "\n\r", "\n\r\n", "\r\n\n", "\r\n\r", "\r\r\n",
+        ] {
+            for prefix in ["", "\u{feff}"] {
+                let event = "data: {\"choices\":[{\"delta\":{\"content\":\"\u{03bb}\"}}],\"usage\":{\"completion_tokens\":2}}";
+                let body = format!("{prefix}{event}{separator}data: [DONE]{separator}");
+                for chunk_size in [1, 2, body.len()] {
+                    let mut stream = CompletionStream::default();
+                    let mut output_events = 0;
+                    for chunk in body.as_bytes().chunks(chunk_size) {
+                        output_events += usize::from(stream.push(chunk).unwrap());
+                    }
+                    assert_eq!(output_events, 1, "{body:?}");
+                    assert_eq!(stream.output_tokens(), Some(2), "{body:?}");
+                    assert!(stream.is_complete(), "{body:?}");
+                }
+            }
         }
-        assert_eq!(output_events, 1);
-        assert_eq!(stream.output_tokens(), Some(2));
+    }
+
+    #[test]
+    fn split_crlf_is_one_line_ending() {
+        let mut stream = CompletionStream::default();
+        stream.push(b"data: [DONE]\r").unwrap();
+        assert!(!stream.is_complete());
+        stream.push(b"\n").unwrap();
+        assert!(!stream.is_complete());
+        stream.push(b"\r").unwrap();
         assert!(stream.is_complete());
+    }
+
+    #[test]
+    fn empty_events_do_not_accumulate_or_restart_bom_detection() {
+        let mut stream = CompletionStream::default();
+        assert!(!stream.push(&vec![b'\n'; MAX_SSE_EVENT_BYTES + 1]).unwrap());
+        stream
+            .push(b"\xef\xbb\xbfdata: {\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n")
+            .unwrap();
+        assert!(stream.is_complete());
+        assert_eq!(stream.output_tokens(), None);
     }
 
     #[test]
