@@ -43,10 +43,15 @@ class CanonicalSuiteTests(unittest.TestCase):
             campaign = LOADTEST.Campaign(args, LOADTEST.load_suite())
             self.assertEqual(len(campaign.backend_targets()), 8)
             self.assertEqual(campaign.identity["peerRegions"], ["us-east-1"])
+            campaign.state["currentRuns"] = ["interrupted-run"]
+            campaign.save_state()
             args.resume = True
             with self.assertRaisesRegex(LOADTEST.LoadTestError, "another campaign"):
                 LOADTEST.Campaign(args, LOADTEST.load_suite())
             campaign.close()
+            resumed = LOADTEST.Campaign(args, LOADTEST.load_suite())
+            self.assertNotIn("currentRuns", resumed.state)
+            resumed.close()
             args.peer_region = []
             with self.assertRaisesRegex(LOADTEST.LoadTestError, "resume arguments"):
                 LOADTEST.Campaign(args, LOADTEST.load_suite())

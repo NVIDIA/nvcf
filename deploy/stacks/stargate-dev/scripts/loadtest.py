@@ -309,6 +309,7 @@ class Campaign:
                 )
             state["status"] = "initializing"
             state.pop("error", None)
+            state.pop("currentRuns", None)
             return state
         if self.output.exists() and any(self.output.iterdir()):
             raise LoadTestError(f"output directory is not empty: {self.output}")
