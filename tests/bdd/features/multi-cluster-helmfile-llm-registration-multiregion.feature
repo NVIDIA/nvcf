@@ -53,28 +53,154 @@ Feature: Register an LLM worker securely with routers in two local regions
 
     @llm-registration-multiregion-install
     Scenario: Operator installs two secure regions with distinct router workload identities
-      When I run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-registration-multiregion"
-      Then the command exit code should be 0
-      And the rendered manifests in "deploy/stacks/self-managed/out" should contain:
-        | text                                                                       |
-        | kind: Deployment                                                           |
+      # Region B: visible override values for a second LLM request router
+      # with a distinct StatefulSet identity.
+      Given I write yaml file "tests/bdd/out/region-b-values.yaml" with values:
+        | llmRequestRouter.fullnameOverride                            | llm-request-router-region-b                                            |
+        | llmRequestRouter.replicaCount                                | 2                                                                      |
+        | llmRequestRouter.workload.kind                               | StatefulSet                                                            |
+        | llmRequestRouter.service.headlessName                        | llm-request-router-region-b-headless                                   |
+        | llmRequestRouter.kubernetes.advertisedHostnameTemplate       | {pod_name}.llm-request-router-region-b-headless.nvcf.svc.cluster.local |
+        | llmRequestRouter.discovery.remoteWatchUrls                   | []                                                                     |
+        | llmRequestRouter.backendRouter.enabled                       | true                                                                   |
+        | llmRequestRouter.backendRouter.pylonGrpcDialAddress          | https://region-b-watch.nvcf.svc.cluster.local:50071                    |
+        | llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress | region-b-watch.nvcf.svc.cluster.local:50072                            |
+        | llmRequestRouter.backendRouter.image.pullPolicy              | IfNotPresent                                                           |
+        | llmRequestRouter.serviceAccount.create                       | false                                                                  |
+        | llmRequestRouter.serviceAccount.name                         | llm-request-router                                                     |
+        | llmRequestRouter.pki.enabled                                 | false                                                                  |
+        | llmRequestRouter.certificate.enabled                         | false                                                                  |
+        | llmRequestRouter.tls.mode                                    | existingSecret                                                         |
+        | llmRequestRouter.tls.secretName                              | stargate-quic-tls                                                      |
+        | llmRequestRouter.image.pullPolicy                            | IfNotPresent                                                           |
+      # Region B gateway resources: GRPCRoute, BackendTrafficPolicy, and
+      # cross-namespace ReferenceGrant.
+      And Kubernetes manifest "region-b-gateway" is:
+        """yaml
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: GRPCRoute
+        metadata:
+          name: llm-worker-region-b-grpc
+          namespace: envoy-gateway-system
+        spec:
+          parentRefs:
+            - name: grpc-gw
+              namespace: envoy-gateway-system
+              sectionName: llm-grpc
+          hostnames:
+            - "region-b-watch.nvcf.svc.cluster.local"
+            - "*.llm-request-router-region-b-headless.nvcf.svc.cluster.local"
+          rules:
+            - backendRefs:
+                - name: llm-request-router-region-b-backend-router
+                  namespace: nvcf
+                  port: 50071
+        ---
+        apiVersion: gateway.envoyproxy.io/v1alpha1
+        kind: BackendTrafficPolicy
+        metadata:
+          name: llm-worker-region-b-grpc-streams
+          namespace: envoy-gateway-system
+        spec:
+          targetRefs:
+            - group: gateway.networking.k8s.io
+              kind: GRPCRoute
+              name: llm-worker-region-b-grpc
+          timeout:
+            http:
+              requestTimeout: 0s
+        ---
+        apiVersion: gateway.networking.k8s.io/v1beta1
+        kind: ReferenceGrant
+        metadata:
+          name: allow-llm-worker-region-b-route
+          namespace: nvcf
+        spec:
+          from:
+            - group: gateway.networking.k8s.io
+              kind: GRPCRoute
+              namespace: envoy-gateway-system
+          to:
+            - group: ""
+              kind: Service
+              name: llm-request-router-region-b-backend-router
+        """
+      # The region-b-watch Service and Endpoints alias lets each cluster
+      # reach the Region B backend-router by name. ${CONTROL_PLANE_IP} is
+      # exported later in the scenario and interpolated when the manifest
+      # is applied.
+      And Kubernetes manifest "region-b-watch" is:
+        """yaml
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: region-b-watch
+          namespace: nvcf
+        spec:
+          ports:
+            - name: llm-grpc
+              port: 50071
+              targetPort: llm-grpc
+              protocol: TCP
+            - name: llm-quic
+              port: 50072
+              targetPort: llm-quic
+              protocol: UDP
+        ---
+        apiVersion: v1
+        kind: Endpoints
+        metadata:
+          name: region-b-watch
+          namespace: nvcf
+        subsets:
+          - addresses:
+              - ip: ${CONTROL_PLANE_IP}
+            ports:
+              - name: llm-grpc
+                port: 50071
+                protocol: TCP
+              - name: llm-quic
+                port: 50072
+                protocol: UDP
+        """
+      When I successfully run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-registration-multiregion"
+      Then the rendered manifests in "deploy/stacks/self-managed/out" should contain:
+        | text                                                                      |
+        | kind: Deployment                                                          |
         | --remote-stargate-url=https://region-b-watch.nvcf.svc.cluster.local:50071 |
 
-      When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-registration-multiregion"
-      Then the command exit code should be 0
-      When I run command "kubectl --context k3d-ncp-local-cp wait certificate llm-request-router-grpc-tls -n envoy-gateway-system --for=condition=Ready --timeout=5m"
-      Then the command exit code should be 0
-      When I run command "kubectl --context k3d-ncp-local-cp get certificate llm-request-router-grpc-tls -n envoy-gateway-system -o jsonpath={.spec.dnsNames}"
-      Then the command exit code should be 0
-      And the command output should contain "region-b-watch.nvcf.svc.cluster.local"
-      When I run command "kubectl --context k3d-ncp-local-cp rollout status deployment/llm-request-router -n nvcf --timeout=10m"
-      Then the command exit code should be 0
+      When I successfully run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-registration-multiregion"
+      And I successfully run command "kubectl --context k3d-ncp-local-cp wait certificate llm-request-router-grpc-tls -n envoy-gateway-system --for=condition=Ready --timeout=5m"
+      And I successfully run command "kubectl --context k3d-ncp-local-cp get certificate llm-request-router-grpc-tls -n envoy-gateway-system -o jsonpath={.spec.dnsNames}"
+      Then the command output should contain "region-b-watch.nvcf.svc.cluster.local"
+      And these Kubernetes workloads should complete rollout using context "k3d-ncp-local-cp" within "10m":
+        | kind       | name               | namespace |
+        | Deployment | llm-request-router | nvcf      |
 
-      # This script still hides the Region B release values, routes, alias
-      # endpoints, and rollout waits. Replacing it with visible DSL steps is
-      # tracked in https://github.com/NVIDIA/nvcf/issues/1391.
-      When I run command "tests/bdd/scripts/install-llm-region-b.sh"
-      Then the command exit code should be 0
+      # Region B: export the Region A base values so Region B inherits image
+      # tags and shared config, install Region B with the visible overrides,
+      # then wire the gateway route and the cross-cluster watch alias.
+      When I successfully run command:
+        """
+        /bin/bash -c 'helm --kube-context k3d-ncp-local-cp get values llm-request-router --namespace nvcf --output json | jq "{llmRequestRouter: .llmRequestRouter}" > ${REPO_ROOT}/tests/bdd/out/region-a-base-values.json'
+        """
+      And I successfully run command:
+        """
+        helm --kube-context k3d-ncp-local-cp upgrade --install llm-request-router-region-b ${REPO_ROOT}/deploy/helm/llm-request-router/llm-request-router --namespace nvcf --values ${REPO_ROOT}/tests/bdd/out/region-a-base-values.json --values ${REPO_ROOT}/tests/bdd/out/region-b-values.yaml --wait --timeout 10m
+        """
+      And I successfully apply Kubernetes manifest "region-b-gateway" using contexts:
+        | context          |
+        | k3d-ncp-local-cp |
+      And I successfully run command "kubectl --context k3d-ncp-local-compute-1 get endpoints llm-request-router --namespace nvcf --output jsonpath={.subsets[0].addresses[0].ip}"
+      And I export command output to environment variable "CONTROL_PLANE_IP"
+      And I successfully apply Kubernetes manifest "region-b-watch" using contexts:
+        | context                 |
+        | k3d-ncp-local-cp        |
+        | k3d-ncp-local-compute-1 |
+      Then these Kubernetes workloads should complete rollout using context "k3d-ncp-local-cp" within "10m":
+        | kind        | name                                       | namespace |
+        | StatefulSet | llm-request-router-region-b                | nvcf      |
+        | Deployment  | llm-request-router-region-b-backend-router | nvcf      |
 
       # The initial region advertises an explicit HTTPS recursive seed while
       # retaining every concrete Deployment pod identity. Three distinct
@@ -95,37 +221,33 @@ Feature: Register an LLM worker securely with routers in two local regions
       And the command output should have exactly "2" distinct matches of "llm-request-router-region-b-[0-9]+"
       And the command output should not match "([0-9]{1,3}-){3}[0-9]{1,3}\."
 
-      When I run command:
+      When I successfully run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd-registration-multiregion --control-plane-context k3d-ncp-local-cp --compute-plane-context k3d-ncp-local-compute-1 control-plane profile export --cluster-name ncp-local-cp
         """
-      Then the command exit code should be 0
-      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+      Then file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
       And yaml file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should have non-empty keys:
         | key                                 |
         | managementTls.caBundlePem           |
         | transportTls.trustBundleFingerprint |
         | transportTls.trustBundlePem         |
 
-      And command has succeeded:
+      When command has succeeded:
         """
         /bin/sh -c '${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init >/dev/null'
         """
-      When I run command "kubectl config use-context k3d-ncp-local-compute-1"
-      Then the command exit code should be 0
-      When I run command:
+      And I successfully run command "kubectl config use-context k3d-ncp-local-compute-1"
+      And I successfully run command:
         """
         make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local-compute-1 CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
         """
-      Then the command exit code should be 0
       And the "nvcr-pull-secret" image pull secret exists in namespaces:
         | nvca-operator |
-      When I run command:
+      And I successfully run command:
         """
         make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local-compute-1 HELMFILE_ENV=local-bdd-registration-multiregion COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 NVCF_CLI=${NVCF_CLI}
         """
-      Then the command exit code should be 0
-      And NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
+      Then NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
     @llm-registration-multiregion-runtime
     Scenario: Pylon recursively registers with both regions and serves an authenticated request
