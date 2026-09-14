@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Provider-specific overrides. Copy to override.yaml and edit.
+#
+#   helm template mx-dyn modelexpress-dynamo -f override.yaml
+#
+# The chart defaults are provider-neutral and carry no cloud-specific value.
+# Pick the one block below that matches your fabric.
+
+# ---------------------------------------------------------------------------
+# AWS EFA
+# ---------------------------------------------------------------------------
+# EFA uses NIXL's LIBFABRIC backend. Use the -efa image variant: the stock
+# vllm-runtime:1.2.1 image does not ship libfabric.so.1, while
+# vllm-runtime:1.2.1-efa-amd64 supplies AWS libfabric under /opt/amazon/efa.
+# A validated worker logs both "Backend LIBFABRIC was instantiated" and
+# "NIXL agent ... created ... (backend=LIBFABRIC)".
+#
+# EFA also has to be present on the node before any of this matters. An EFA
+# interface can only be attached when the instance launches, so a running node
+# without one cannot be upgraded in place. Confirm the node advertises the EFA
+# resource before assuming the fabric is available:
+#
+#   kubectl get nodes -o json \
+#     | jq '.items[].status.allocatable | keys' | grep -i efa
+#
+# The security group attached to every EFA must allow all protocols both inbound
+# and outbound to itself. An outbound 0.0.0.0/0 rule is not a substitute for the
+# self-reference because EFA OS-bypass traffic is non-IP. Validate the fabric
+# with a TCP control followed by ucx_perftest over srd, and require EFA hardware
+# receive counters to increase on both peers.
+#
+modelExpress:
+  nixlBackend: LIBFABRIC
+  extraEnv:
+    - name: FI_PROVIDER
+      value: efa
+    - name: MX_ARTIFACT_READY_URL
+      value: http://127.0.0.1:9090/health
+    - name: MX_ARTIFACT_TRANSFER
+      value: "1"
+    - name: UCX_RNDV_SCHEME
+      value: get_zcopy
+    - name: UCX_RNDV_THRESH
+      value: "0"
+    - name: VLLM_RPC_TIMEOUT
+      value: "7200000"
+
+vllmDecodeWorker:
+  image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.1-efa-amd64
+  resources:
+    limits:
+      gpu: "1"
+      custom:
+        # EFA must be declared under limits, not requests. It is an extended
+        # resource, and Kubernetes rejects a Pod that requests one without a
+        # matching limit:
+        #
+        #   Pod "..." is invalid: spec.containers[0].resources.limits:
+        #   Required value: Limit must be set for non overcommitable resources
+        #
+        # The Dynamo operator passes this block through verbatim, so putting it
+        # under requests produces an invalid Pod that never gets created. The
+        # PodClique reports ERR_CREATE_POD and the pods simply never appear,
+        # which looks like a scheduling problem rather than a spec problem.
+        #
+        # Requires the EFA device plugin on the cluster, which is what makes the
+        # interface schedulable at all. Peers must also land in the same subnet;
+        # a cluster placement group is a latency optimization, not a requirement.
+        #
+        # This also caps workers at one per node. EFA-capable G-family instances
+        # expose a single EFA interface and the plugin advertises one unit per
+        # node, so a second worker here stays Pending with "Insufficient
+        # vpc.amazonaws.com/efa". Scale replicas with nodes, not with GPUs per
+        # node.
+        vpc.amazonaws.com/efa: "1"
+    requests:
+      custom:
+        ephemeral-storage: "8Gi"
+
+# ---------------------------------------------------------------------------
+# InfiniBand or RoCE
+# ---------------------------------------------------------------------------
+# Both use the UCX backend, which is already the chart default, so no
+# modelExpress override is needed. What differs is the device resource the node
+# advertises. Replace the resource name below with whatever your RDMA device
+# plugin exposes, then apply only the vllmDecodeWorker block.
+#
+# Not validated by NVCF. Neither fabric exists on AWS, so the settings below are
+# derived from upstream client behavior rather than from a test run. Treat them
+# as a starting point and verify on your own hardware.
+#
+# Verify with a real transfer, not just a healthy worker. On this client version
+# the UCX backend segfaulted the source worker mid-transfer in
+# nixlUcxSharedThread::run(), and it reproduced over plain TCP, so the crash is
+# not fabric-specific and may well appear on InfiniBand or RoCE too. The symptom
+# is a source that dies with EngineDeadError while receivers report
+# NIXL_ERR_REMOTE_DISCONNECT. A worker that reaches Ready proves nothing here,
+# because a failed transfer falls back to downloading and still serves correctly.
+#
+# The device resource goes under limits, for the same reason EFA does above: an
+# extended resource must be declared there or the Pod is rejected at admission.
+# The name varies by plugin, so check what your nodes advertise with
+# kubectl get nodes -o json | jq '.items[].status.allocatable | keys'
+#
+# vllmDecodeWorker:
+#   resources:
+#     limits:
+#       gpu: "1"
+#       custom:
+#         rdma/hca: "1"
+#     requests:
+#       custom:
+#         ephemeral-storage: "8Gi"
+#
+# On hosts with several RDMA NICs, MX_RDMA_NIC_PIN and
+# MX_RDMA_NIC_PIN_MIN_RATE_GBPS control which one is selected. Leave them unset
+# until you have a measured reason to change the default.

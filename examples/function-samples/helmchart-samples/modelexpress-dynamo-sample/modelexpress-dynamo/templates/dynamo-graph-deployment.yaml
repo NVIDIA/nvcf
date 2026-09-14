@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: nvidia.com/v1alpha1
+kind: DynamoGraphDeployment
+metadata:
+  name: modelexpress-dynamo
+spec:
+  services:
+    Frontend:
+      {{- with .Values.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      componentType: frontend
+      replicas: {{ .Values.frontend.replicas | default 1 }}
+      {{- with .Values.frontend.resources }}
+      resources:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      {{- if gt (int .Values.frontend.nodeCount) 1 }}
+      multinode:
+        nodeCount: {{ .Values.frontend.nodeCount }}
+      {{- end }}
+      extraPodSpec:
+        mainContainer:
+          image: {{ .Values.frontend.image }}
+      envs:
+        - name: DYN_ROUTER_MODE
+          value: kv
+    VllmDecodeWorker:
+      {{- with .Values.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      componentType: worker
+      {{- with $worker := .Values.vllmDecodeWorker }}
+      # Do not use Helm's `default` here: zero is considered empty, which turns
+      # an intentional scale-to-zero into one billable GPU worker.
+      replicas: {{ $worker.replicas }}
+      {{- if gt (int $worker.nodeCount) 1 }}
+      multinode:
+        nodeCount: {{ $worker.nodeCount }}
+      {{- end }}
+      resources:
+        {{- (required "vllmDecodeWorker.resources must be set" $worker.resources) | toYaml | nindent 8 }}
+      {{- if $.Values.hfToken }}
+      envFromSecret: hf-token-secret
+      {{- end }}
+      {{- if $.Values.modelExpress.enabled }}
+      envs:
+        - name: MX_SERVER_ADDRESS
+          value: {{ required "modelExpress.serverAddress must be set when modelExpress.enabled is true" $.Values.modelExpress.serverAddress | quote }}
+        {{- if $.Values.modelExpress.setLegacyUrlEnv }}
+        - name: MODEL_EXPRESS_URL
+          value: {{ $.Values.modelExpress.serverAddress | quote }}
+        {{- end }}
+        {{- if $.Values.modelExpress.setVllmPlugin }}
+        - name: VLLM_PLUGINS
+          value: modelexpress
+        {{- end }}
+        {{- with $.Values.modelExpress.nixlBackend }}
+        - name: MX_NIXL_BACKEND
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with $.Values.modelExpress.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- /*
+        With modelExpress.enabled=false no ModelExpress environment is emitted at
+        all, so the worker uses its native loader. That absence is the baseline.
+      */}}
+      extraPodSpec:
+        mainContainer:
+          image: {{ $worker.image }}
+          workingDir: /workspace/examples/backends/vllm
+          command:
+          - python3
+          - -m
+          - dynamo.vllm
+          args:
+          - --model
+          - {{ $.Values.model | quote }}
+          {{- if $.Values.modelExpress.enabled }}
+          # Without this, vLLM uses its own loader and ModelExpress never runs,
+          # even with MX_SERVER_ADDRESS set. The client registers this format.
+          - --load-format
+          - {{ $.Values.modelExpress.loadFormat | default "modelexpress" }}
+          {{- end }}
+          - --tensor-parallel-size
+          - {{ mul (default 1 (int $worker.nodeCount)) (default 1 (int $worker.resources.limits.gpu)) | quote }}
+      {{- end }}

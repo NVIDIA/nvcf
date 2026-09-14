@@ -20,6 +20,7 @@ Functions are long-running services that respond to HTTP or gRPC invocations.
 | [Multi-Node Helm Function](function-samples/helmchart-samples/multi-node-helm-function-test/) | Multi-node Helm chart for running NCCL and GPU bandwidth tests via NVCF. |
 | [Ray Serve Helm Chart](function-samples/helmchart-samples/ray-serve-sample/) | Helm chart that deploys a Ray Serve application as an NVCF function. |
 | [Dynamo Operator Sample](function-samples/helmchart-samples/dynamo-operator-sample/) | Helm chart for a vLLM disaggregated router deployed through NVCF. |
+| [ModelExpress Dynamo Sample](function-samples/helmchart-samples/modelexpress-dynamo-sample/) | Dynamo vLLM function that loads model weights peer-to-peer through ModelExpress. |
 | [Load Tester Supreme](function-samples/load-tester-supreme/) | HTTP and gRPC echo servers designed for load and throughput testing. |
 
 ## Task Samples

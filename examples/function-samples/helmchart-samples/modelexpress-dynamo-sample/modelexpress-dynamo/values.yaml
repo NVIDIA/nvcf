@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Model served by the function. Keep this small while validating: a small model
+# makes cold-start differences easy to observe and keeps a 10 worker run cheap.
+model: Qwen/Qwen3-0.6B
+
+modelExpress:
+  # Set to false to run the identical topology with native model loading. Use
+  # this to collect the baseline that the ModelExpress comparison is measured
+  # against. Nothing else in this chart changes between the two runs.
+  enabled: true
+
+  # Address of the ModelExpress server installed by the cluster administrator.
+  # Namespace and release name come from modelexpress-server-values.yaml.
+  serverAddress: modelexpress.modelexpress.svc.cluster.local:8001
+
+  # The client in vllm-runtime:1.2.1 (modelexpress 0.4.0) reads both
+  # MODEL_EXPRESS_URL and MX_SERVER_ADDRESS. Setting both is safe. Only drop
+  # this if you confirmed the newer name in the image you actually run.
+  setLegacyUrlEnv: true
+
+  # vLLM 0.23 and later detect ModelExpress without help. vllm-runtime:1.2.1
+  # ships vLLM 0.20.1, which does not, so the plugin must be named explicitly.
+  setVllmPlugin: true
+
+  # vLLM only uses the ModelExpress loader when load-format names it. The client
+  # registers "modelexpress" and "mx". Anything else silently falls back to the
+  # native loader, which looks like success while ModelExpress does nothing.
+  loadFormat: modelexpress
+
+  # NIXL transport. The client accepts UCX or LIBFABRIC only, and defaults to
+  # UCX. UCX is the provider-neutral default and the path for InfiniBand/RoCE.
+  # AWS EFA instead needs LIBFABRIC plus the -efa runtime image that supplies
+  # AWS libfabric. Both peers must agree. See override.yaml.sample.
+  #
+  # Known defect on this path. With modelexpress 0.4.0 in vllm-runtime:1.2.1,
+  # the UCX backend segfaulted the source worker while it was serving a
+  # transfer, inside nixlUcxSharedThread::run(). The source dies with
+  # EngineDeadError and the receiver reports NIXL_ERR_REMOTE_DISCONNECT. It
+  # reproduced over plain TCP, so it is not specific to a fabric, and it did
+  # not depend on UCX_RNDV_SCHEME. LIBFABRIC on EFA does not hit it. Only EFA
+  # was validated here, so if you run InfiniBand or RoCE on this client
+  # version, transfer a model between two workers before trusting the path.
+  nixlBackend: UCX
+
+  # Extra environment for the worker, passed straight through. Use this for
+  # provider-specific transport configuration and tuning.
+  #
+  # UCX picks a transport by advertised bandwidth, so it prefers the fabric over
+  # TCP whenever an RDMA device is present. If that device is present but not
+  # functional, the transfer stalls until it times out instead of failing fast,
+  # and the fallback to disk then costs minutes. Confining UCX to TCP is the way
+  # to keep peer-to-peer working while a fabric problem is outstanding:
+  #
+  #   extraEnv:
+  #     - name: UCX_TLS
+  #       value: tcp,self,sm
+  #
+  # Verify the fabric with ucx_perftest before trusting it. See README.md.
+  extraEnv: []
+
+  # There is deliberately no knob here for the locked-memory limit, because it
+  # cannot be fixed from a chart. RDMA registers pinned memory, RLIMIT_MEMLOCK
+  # caps how much a process may pin, and containers inherit that limit from the
+  # node's container runtime. When it is too low UCX cannot register buffers:
+  #
+  #   ibv_reg_mr(...) failed: Cannot allocate memory : Please set max locked
+  #   memory (ulimit -l) to 'unlimited' (current: 8192 kbytes)
+  #
+  # and the worker crashes during engine init. Kubernetes has no ulimit field,
+  # and adding CAP_IPC_LOCK does not help: this image runs as UID 1000, and a
+  # non-root process has an empty effective capability set, so the capability is
+  # never active. The node's runtime has to allow it. See the prerequisites in
+  # README.md for how to check and set this.
+
+frontend:
+  image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.1
+  replicas: 1
+  nodeCount: 1
+
+# Worker replica count is the scale-out dimension under test. Validate at 2, 4,
+# and 10 and repeat each step, because a single run does not show whether the
+# result is consistent.
+#
+# On AWS EFA, keep replicas at or below the advertised vpc.amazonaws.com/efa
+# units. An EFA interface is not shareable between Pods, so on single-interface
+# instances such as the EFA-capable G-family that equals the GPU node count.
+# Surplus replicas sit Pending with Insufficient vpc.amazonaws.com/efa and the
+# run stops measuring what it claims.
+vllmDecodeWorker:
+  image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.1
+  replicas: 2
+  nodeCount: 1
+  resources:
+    limits:
+      # Must be "gpu", not "nvidia.com/gpu". The Dynamo operator translates it.
+      gpu: "1"
+    requests:
+      custom:
+        # Raise this for larger models.
+        ephemeral-storage: "8Gi"
+
+# Token for gated model downloads on the worker side. A worker that finds no peer
+# source downloads the model itself, which is the normal path for the first
+# worker, so a gated model needs this set even when the server holds the weights.
+# Safe to leave empty only for ungated models such as the default Qwen/Qwen3-0.6B.
+hfToken: ""
+
+annotations: {}
+labels: {}
