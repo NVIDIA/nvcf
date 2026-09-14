@@ -886,19 +886,48 @@ const (
 	envoyGatewayControllerSelector = "control-plane=envoy-gateway"
 )
 
-var requiredGatewayResources = []string{"gatewayclasses", "gateways", "httproutes", "grpcroutes"}
+// gatewayRouteRequirements are the route types this repo's own charts apply,
+// each at the exact apiVersion the manifests declare (deploy/helm/gateway-routes).
+// The version is part of the requirement: a CRD served only under some other
+// version still fails the Helm apply, so checking the bare resource name would
+// pass a cluster the stack cannot actually install on.
+var gatewayRouteRequirements = []struct{ groupVersion, resource string }{
+	{gatewayAPIGroup + "/v1", "httproutes"},
+	{gatewayAPIGroup + "/v1", "grpcroutes"},
+	{gatewayAPIGroup + "/v1alpha2", "tcproutes"},
+	{gatewayAPIGroup + "/v1beta1", "referencegrants"},
+}
 
-// discoverGatewayAPIResources returns the set of resource names registered
-// under gateway.networking.k8s.io across every served version. Walking all
-// versions rather than pinning one keeps the check correct regardless of which
-// Gateway API release or channel promoted a given type (GRPCRoute reached v1
-// in 1.1, TCPRoute and UDPRoute in 1.6).
-func discoverGatewayAPIResources(client kubernetes.Interface) (map[string]bool, error) {
+// gatewayControllerResources are created by the Envoy Gateway chart rather than
+// by this repo, so which version it picks is not ours to pin. Presence under
+// any served version is all this check can assert.
+var gatewayControllerResources = []string{"gatewayclasses", "gateways"}
+
+// gatewayAPISurface is what the apiserver serves under gateway.networking.k8s.io.
+type gatewayAPISurface struct {
+	// byGroupVersion is keyed "<groupVersion>/<resource>", for example
+	// "gateway.networking.k8s.io/v1/httproutes".
+	byGroupVersion map[string]bool
+	// anyVersion holds resource names served under at least one version.
+	anyVersion map[string]bool
+}
+
+func (s gatewayAPISurface) hasPair(groupVersion, resource string) bool {
+	return s.byGroupVersion[groupVersion+"/"+resource]
+}
+
+// discoverGatewayAPIResources walks every served version of
+// gateway.networking.k8s.io and records what it finds, keeping the version so
+// callers can require an exact pair where the charts pin one.
+func discoverGatewayAPIResources(client kubernetes.Interface) (gatewayAPISurface, error) {
+	surface := gatewayAPISurface{
+		byGroupVersion: make(map[string]bool),
+		anyVersion:     make(map[string]bool),
+	}
 	groups, err := client.Discovery().ServerGroups()
 	if err != nil {
-		return nil, err
+		return surface, err
 	}
-	found := make(map[string]bool)
 	for _, g := range groups.Groups {
 		if g.Name != gatewayAPIGroup {
 			continue
@@ -907,16 +936,17 @@ func discoverGatewayAPIResources(client kubernetes.Interface) (map[string]bool, 
 			resources, err := client.Discovery().ServerResourcesForGroupVersion(v.GroupVersion)
 			if err != nil {
 				// The group exists, so a failure here is an API problem, not an
-				// absent resource. Swallowing it would leave found incomplete
-				// and report the CRDs as missing on a healthy cluster.
-				return nil, fmt.Errorf("listing resources for %s: %w", v.GroupVersion, err)
+				// absent resource. Swallowing it would leave the surface
+				// incomplete and report the CRDs as missing on a healthy cluster.
+				return surface, fmt.Errorf("listing resources for %s: %w", v.GroupVersion, err)
 			}
 			for _, r := range resources.APIResources {
-				found[r.Name] = true
+				surface.byGroupVersion[v.GroupVersion+"/"+r.Name] = true
+				surface.anyVersion[r.Name] = true
 			}
 		}
 	}
-	return found, nil
+	return surface, nil
 }
 
 // checkGatewayAPICRDs verifies that the Gateway API CRD set is installed and
@@ -926,7 +956,7 @@ func checkGatewayAPICRDs(ctx context.Context, client kubernetes.Interface, state
 	log := state.Log
 	printHeader(log, "Gateway API CRDs")
 
-	found, err := discoverGatewayAPIResources(client)
+	surface, err := discoverGatewayAPIResources(client)
 	if err != nil {
 		// Leave the pointer nil: discovery failure is not evidence the CRDs
 		// are absent, and this row is critical.
@@ -937,9 +967,14 @@ func checkGatewayAPICRDs(ctx context.Context, client kubernetes.Interface, state
 	}
 
 	var missing []string
-	for _, r := range requiredGatewayResources {
-		if !found[r] {
+	for _, r := range gatewayControllerResources {
+		if !surface.anyVersion[r] {
 			missing = append(missing, r)
+		}
+	}
+	for _, req := range gatewayRouteRequirements {
+		if !surface.hasPair(req.groupVersion, req.resource) {
+			missing = append(missing, req.groupVersion+"/"+req.resource)
 		}
 	}
 	if len(missing) > 0 {
@@ -952,8 +987,8 @@ func checkGatewayAPICRDs(ctx context.Context, client kubernetes.Interface, state
 		return
 	}
 
-	printSuccess(log, fmt.Sprintf("Gateway API CRDs installed (%s): %s",
-		gatewayAPIGroup, strings.Join(requiredGatewayResources, ", ")))
+	printSuccess(log, fmt.Sprintf("Gateway API CRDs installed: %s plus the route types the stack applies",
+		strings.Join(gatewayControllerResources, ", ")))
 	ok := true
 	state.GatewayAPICRDsOK = &ok
 }
@@ -1027,7 +1062,7 @@ func checkGatewayRoutes(ctx context.Context, client kubernetes.Interface, state 
 	log := state.Log
 	printHeader(log, "Gateway Route CR Types")
 
-	found, err := discoverGatewayAPIResources(client)
+	surface, err := discoverGatewayAPIResources(client)
 	if err != nil {
 		// Leave the pointer nil: a discovery failure is not evidence that the
 		// route CR types are absent.
@@ -1037,18 +1072,21 @@ func checkGatewayRoutes(ctx context.Context, client kubernetes.Interface, state 
 		return
 	}
 
-	// udproutes is deliberately absent: NVCF creates no UDPRoutes, and a
-	// standard-channel cluster would report it missing forever.
-	required := []string{"httproutes", "tcproutes", "grpcroutes"}
-	var missing []string
-	for _, rt := range required {
-		if !found[rt] {
-			missing = append(missing, rt)
+	// udproutes is deliberately absent: NVCF creates no UDPRoutes, so requiring
+	// it would report a permanent miss on a standard-channel cluster.
+	var missing, present []string
+	for _, req := range gatewayRouteRequirements {
+		pair := req.groupVersion + "/" + req.resource
+		if surface.hasPair(req.groupVersion, req.resource) {
+			present = append(present, pair)
+			continue
 		}
+		missing = append(missing, pair)
 	}
 
 	if len(missing) > 0 {
-		printWarning(log, fmt.Sprintf("Route CR types not registered: %s", strings.Join(missing, ", ")))
+		printWarning(log, fmt.Sprintf("Route CR types not registered at the version the charts apply: %s",
+			strings.Join(missing, ", ")))
 		state.Warnings = append(state.Warnings,
 			"Gateway Route CR Types: missing; install Gateway API CRDs via nvcf up")
 		ok := false
@@ -1056,7 +1094,7 @@ func checkGatewayRoutes(ctx context.Context, client kubernetes.Interface, state 
 		return
 	}
 
-	printSuccess(log, "Route CR types registered: "+strings.Join(required, ", "))
+	printSuccess(log, "Route CR types registered: "+strings.Join(present, ", "))
 	ok := true
 	state.GatewayRoutesOK = &ok
 }
@@ -1556,6 +1594,17 @@ func controlPlaneNamespaceSet() []string {
 	return append(out, extra)
 }
 
+// isOwnedBy reports whether the pod is controlled by the named workload. A
+// label selector alone can match a pod the StatefulSet does not own.
+func isOwnedBy(pod *corev1.Pod, ownerName string) bool {
+	for i := range pod.OwnerReferences {
+		if pod.OwnerReferences[i].Name == ownerName {
+			return true
+		}
+	}
+	return false
+}
+
 // deploymentRolloutStalled reports whether the Deployment controller has given
 // up on the current rollout. Kubernetes sets Progressing=False with reason
 // ProgressDeadlineExceeded once progressDeadlineSeconds elapses without
@@ -1671,6 +1720,16 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 		return
 	}
 
+	if deniedCount > 0 {
+		// Some namespaces were never observed, so "all ready" is not a claim we
+		// can make even though every Deployment we could see passed.
+		printWarning(log, fmt.Sprintf("%d Deployment(s) ready, but %d namespace(s) were not readable",
+			checkedCount, deniedCount))
+		state.Warnings = append(state.Warnings,
+			"Tier-1 Deployments: status unknown (RBAC denied Deployment list in one or more control-plane namespaces)")
+		return
+	}
+
 	printSuccess(log, fmt.Sprintf("All %d Deployments in control-plane namespaces are fully ready", checkedCount))
 	ok := true
 	state.Tier1DeploymentsOK = &ok
@@ -1759,10 +1818,13 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 				continue
 			}
 
+			// Count only Ready pods owned by this StatefulSet. Phase stays
+			// Running through CrashLoopBackOff, and a surplus pod left over
+			// from a rollout would otherwise be reported as a co-location.
 			nodeOwner := make(map[string]string)
 			for j := range pods.Items {
 				p := &pods.Items[j]
-				if p.Status.Phase != corev1.PodRunning {
+				if !isOwnedBy(p, sts.Name) || !isPodReady(p) {
 					continue
 				}
 				if first, dup := nodeOwner[p.Spec.NodeName]; dup {
@@ -1805,7 +1867,15 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 		return
 	}
 
-	printSuccess(log, fmt.Sprintf("All %d quorum StatefulSet(s): 3 Ready pods on distinct nodes", checkedCount))
+	if deniedCount > 0 {
+		printWarning(log, fmt.Sprintf("%d quorum StatefulSet(s) healthy, but %d namespace(s) were not readable",
+			checkedCount, deniedCount))
+		state.Warnings = append(state.Warnings,
+			"Tier-2 StatefulSets: status unknown (RBAC denied StatefulSet list in one or more control-plane namespaces)")
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", checkedCount))
 	ok := true
 	state.Tier2StatefulSetsOK = &ok
 }

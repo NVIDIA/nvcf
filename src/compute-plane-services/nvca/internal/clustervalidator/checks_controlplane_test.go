@@ -652,9 +652,13 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 		objs = append(objs, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("%s-%d", name, i), Namespace: ns, Labels: sel,
+				OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: name}},
 			},
-			Spec:   corev1.PodSpec{NodeName: node},
-			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+			Spec: corev1.PodSpec{NodeName: node},
+			Status: corev1.PodStatus{
+				Phase:      corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			},
 		})
 	}
 	return objs
@@ -747,6 +751,80 @@ func TestCheckTier2StatefulSets_ForbiddenIsNotAPass(t *testing.T) {
 	assert.Nil(t, state.Tier2StatefulSetsOK,
 		"a 403 in every namespace must not publish a green quorum")
 	assert.NotEmpty(t, state.Warnings)
+}
+
+// A denial in only some namespaces still means part of the control plane was
+// never observed, so the healthy remainder must not be published as a pass.
+func TestCheckTier2StatefulSets_PartialDenialIsNotAPass(t *testing.T) {
+	objs := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
+	client := fake.NewSimpleClientset(objs...)
+	client.PrependReactor("list", "statefulsets", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "vault-system" {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: "apps", Resource: "statefulsets"}, "", fmt.Errorf("denied"))
+		}
+		return false, nil, nil
+	})
+
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier2StatefulSetsOK,
+		"a healthy StatefulSet elsewhere must not mask an unreadable namespace")
+	assert.NotEmpty(t, state.Warnings)
+}
+
+func TestCheckTier1Deployments_PartialDenialIsNotAPass(t *testing.T) {
+	two := int32(2)
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvcf-api", Namespace: "nvcf", Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: &two},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 2,
+		},
+	})
+	client.PrependReactor("list", "deployments", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "sis" {
+			return true, nil, apierrors.NewForbidden(
+				schema.GroupResource{Group: "apps", Resource: "deployments"}, "", fmt.Errorf("denied"))
+		}
+		return false, nil, nil
+	})
+
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier1DeploymentsOK,
+		"a ready Deployment elsewhere must not mask an unreadable namespace")
+	assert.NotEmpty(t, state.Warnings)
+}
+
+// A pod matching the selector but not owned by this StatefulSet, or not Ready,
+// must not be counted: either would turn a healthy quorum into a false
+// co-location failure.
+func TestCheckTier2StatefulSets_IgnoresUnownedAndUnreadyPods(t *testing.T) {
+	objs := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
+
+	// A surplus pod on an already-used node: matches the selector, but is
+	// neither owned by the StatefulSet nor Ready.
+	stray := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "stray", Namespace: "nats-system", Labels: map[string]string{"app": "nats"},
+		},
+		Spec: corev1.PodSpec{NodeName: "node-1"},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}},
+		},
+	}
+	client := fake.NewSimpleClientset(append(objs, stray)...)
+
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK,
+		"an unowned, not-Ready pod on an occupied node must not be read as a co-located peer")
 }
 
 // The OpenBao namespace is relocatable, so a cluster that overrides it must not
