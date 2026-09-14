@@ -133,6 +133,9 @@ jobs:
       - name: Test OpenBao plugin catalog refresh hook
         run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
 
+      - name: Test ReVal authorization configuration
+        run: bash deploy/helm/helm-reval/tests/auth-config.sh
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail
