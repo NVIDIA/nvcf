@@ -289,7 +289,7 @@ func TestAllCheckKeysCoversEveryCheckKeyConst(t *testing.T) {
 		CheckKeyGatewayRoutes,
 		CheckKeyExternalLB,
 		CheckKeyNodeToNode,
-		// HA readiness keys (CP Resilience SDD).
+		// Control-plane HA readiness keys.
 		CheckKeyTier1Deployments,
 		CheckKeyTier2StatefulSets,
 	} {

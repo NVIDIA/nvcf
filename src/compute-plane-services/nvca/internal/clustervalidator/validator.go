@@ -38,7 +38,7 @@ const (
 
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
-	Log  *logrus.Entry
+	Log *logrus.Entry
 	// Role is "control-plane" or "compute-plane" (empty = compute-plane default).
 	// printSummary uses it to include only the checks relevant to the role.
 	Role                Role
@@ -192,9 +192,7 @@ func Run(
 		checkEnvoyGateway(ctx, client, state)
 		checkGatewayRoutes(ctx, client, state)
 		checkExternalLoadBalancer(ctx, client, state)
-		// CLI RBAC bootstrap (Req 3) grants DaemonSet create/delete and
-		// pod-create before Job submission; no emitMetrics gate needed.
-		checkNodeToNode(ctx, client, state)
+		checkNodeToNode(ctx, client, state, nodeToNodeProbeImage(netCfg))
 		checkTier1Deployments(ctx, client, state)
 		checkTier2StatefulSets(ctx, client, state)
 	} else {
@@ -245,6 +243,11 @@ func printSummary(state *ValidationState) error {
 		PassMsg  string
 		FailMsg  string
 		Critical bool
+		// Unknown marks a check that did not run. Rendered as its own row so a
+		// critical check cannot silently vanish from the verdict, which would
+		// otherwise make a throttled API call look better than a clean run.
+		Unknown    bool
+		UnknownMsg string
 	}
 
 	// Distinguish "we listed nodes and found N not-ready" (NotReadyNodes>0)
@@ -259,77 +262,81 @@ func printSummary(state *ValidationState) error {
 	}
 
 	checks := []check{
-		{state.ControlPlaneHealthy, "Control Plane: Healthy", "Control Plane: Unhealthy", true},
-		{state.NodesAllReady,
-			"Worker Nodes: All Ready",
-			nodesFailMsg,
-			false},
-		{state.WebhooksSupported, "Admission Webhooks: Mutating & Validating Supported", "Admission Webhooks: Not Supported", true},
-		{state.NetworkPoliciesSupported, "Network Policies: Supported", "Network Policies: Not Confirmed", false},
+		{Passed: state.ControlPlaneHealthy, PassMsg: "Control Plane: Healthy",
+			FailMsg: "Control Plane: Unhealthy", Critical: true},
+		{Passed: state.NodesAllReady, PassMsg: "Worker Nodes: All Ready",
+			FailMsg: nodesFailMsg, Critical: false},
+		{Passed: state.WebhooksSupported, PassMsg: "Admission Webhooks: Mutating & Validating Supported",
+			FailMsg: "Admission Webhooks: Not Supported", Critical: true},
+		{Passed: state.NetworkPoliciesSupported, PassMsg: "Network Policies: Supported",
+			FailMsg: "Network Policies: Not Confirmed", Critical: false},
 	}
 
 	if state.ReachabilityOK != nil {
 		isCritical := state.ReachabilityCriticalOK != nil &&
 			!*state.ReachabilityCriticalOK
 		checks = append(checks, check{
-			*state.ReachabilityOK,
-			"Endpoint Reachability: All Endpoints Reachable",
-			"Endpoint Reachability: One or more endpoints not reachable",
-			isCritical,
+			Passed:   *state.ReachabilityOK,
+			PassMsg:  "Endpoint Reachability: All Endpoints Reachable",
+			FailMsg:  "Endpoint Reachability: One or more endpoints not reachable",
+			Critical: isCritical,
 		})
 	}
 
 	if state.Role == RoleControlPlane {
 		// Control-plane checks: gateway infrastructure and storage. GPU and
 		// SMB checks are compute-plane concerns and are excluded here.
-		if state.DefaultStorageClassOK != nil {
-			checks = append(checks, check{*state.DefaultStorageClassOK,
-				"Default StorageClass: Present", "Default StorageClass: Not Found", true})
+		//
+		// addCP renders a nil pointer as an explicit UNKNOWN row for critical
+		// checks, so an API error during the run cannot quietly drop a critical
+		// row and leave a cleaner-looking summary than a successful run.
+		addCP := func(ptr *bool, label, passDetail, failDetail string, critical bool) {
+			if ptr != nil {
+				checks = append(checks, check{
+					Passed:   *ptr,
+					PassMsg:  label + ": " + passDetail,
+					FailMsg:  label + ": " + failDetail,
+					Critical: critical,
+				})
+				return
+			}
+			if critical {
+				checks = append(checks, check{
+					Critical:   critical,
+					Unknown:    true,
+					UnknownMsg: label + ": Status Unknown (check did not run)",
+				})
+			}
 		}
-		if state.GatewayAPICRDsOK != nil {
-			checks = append(checks, check{*state.GatewayAPICRDsOK,
-				"Gateway API CRDs: Installed", "Gateway API CRDs: Not Installed", true})
-		}
-		if state.EnvoyGatewayOK != nil {
-			// Non-critical: Envoy Gateway is installed by nvcf-cli up, so it is
-			// expected to be absent on a fresh cluster before the first install.
-			// A missing Envoy is informative (tells the operator the stack is not
-			// yet deployed) but must not block a pre-install readiness check.
-			checks = append(checks, check{*state.EnvoyGatewayOK,
-				"Envoy Gateway: Installed and Running", "Envoy Gateway: Not Found or Not Running", false})
-		}
-		if state.GatewayRoutesOK != nil {
-			checks = append(checks, check{*state.GatewayRoutesOK,
-				"Gateway Routes: Present", "Gateway Routes: None Found", false})
-		}
-		if state.ExternalLBOK != nil {
-			checks = append(checks, check{*state.ExternalLBOK,
-				"External Load Balancer: IP Assigned", "External Load Balancer: No IP Assigned", false})
-		}
-		if state.NodeToNodeOK != nil {
-			checks = append(checks, check{*state.NodeToNodeOK,
-				"Node-to-Node Communication: Verified", "Node-to-Node Communication: Failed", true})
-		}
-		if state.Tier1DeploymentsOK != nil {
-			checks = append(checks, check{*state.Tier1DeploymentsOK,
-				"Tier-1 Deployments: All Ready", "Tier-1 Deployments: Under-replicated", true})
-		}
-		if state.Tier2StatefulSetsOK != nil {
-			checks = append(checks, check{*state.Tier2StatefulSetsOK,
-				"Tier-2 StatefulSets: Quorum and Placement OK", "Tier-2 StatefulSets: Quorum or Placement Failed", true})
-		}
+
+		addCP(state.DefaultStorageClassOK, "Default StorageClass", "Present", "Not Found", true)
+		addCP(state.GatewayAPICRDsOK, "Gateway API CRDs", "Installed", "Not Installed", true)
+		// Non-critical: Envoy Gateway is installed by nvcf-cli up, so it is
+		// expected to be absent on a fresh cluster before the first install.
+		// A missing Envoy is informative (tells the operator the stack is not
+		// yet deployed) but must not block a pre-install readiness check.
+		addCP(state.EnvoyGatewayOK, "Envoy Gateway", "Installed and Running", "Not Found or Not Running", false)
+		addCP(state.GatewayRoutesOK, "Gateway Route CR Types", "Registered", "Not Registered", false)
+		addCP(state.ExternalLBOK, "External Load Balancer", "IP Assigned", "No IP Assigned", false)
+		addCP(state.NodeToNodeOK, "Node-to-Node Communication", "Verified", "Failed", true)
+		addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Under-replicated", true)
+		addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets",
+			"Quorum and Placement OK", "Quorum or Placement Failed", true)
 	} else {
 		// Compute-plane checks: GPU resources, GPU operator, SMB CSI driver.
 		// SMB CSI Driver missing is non-blocking: it is required only when
 		// the HelmSharedStorage feature flag is enabled (NVCA model-cache).
 		checks = append(checks,
-			check{state.SMBCSIDriverOK, "SMB CSI Driver: v1.16.0+ Installed", "SMB CSI Driver: Not Installed or Below v1.16.0", false},
-			check{state.GPUAvailable, "GPU Resources: Available", "GPU Resources: Not Available", true},
+			check{Passed: state.SMBCSIDriverOK, PassMsg: "SMB CSI Driver: v1.16.0+ Installed",
+				FailMsg: "SMB CSI Driver: Not Installed or Below v1.16.0", Critical: false},
+			check{Passed: state.GPUAvailable, PassMsg: "GPU Resources: Available",
+				FailMsg: "GPU Resources: Not Available", Critical: true},
 			// GPU Operator missing is non-blocking: clusters registered with
 			// Manual Instance Configuration expose GPUs via an alternative
 			// mechanism (pre-labeled nodes, DaemonSet, etc.) and do not require
 			// GPU Operator. GPU Resources above is the load-bearing signal.
-			check{state.GPUOperatorInstalled, "GPU Operator: Installed", "GPU Operator: Not Installed", false},
+			check{Passed: state.GPUOperatorInstalled, PassMsg: "GPU Operator: Installed",
+				FailMsg: "GPU Operator: Not Installed", Critical: false},
 		)
 	}
 
@@ -337,28 +344,33 @@ func printSummary(state *ValidationState) error {
 		isCritical := state.ConfigurableNetPolCriticalOK != nil &&
 			!*state.ConfigurableNetPolCriticalOK
 		checks = append(checks, check{
-			*state.ConfigurableNetPolOK,
-			"Configurable Network Policies: All Checks Passed",
-			"Configurable Network Policies: One or more checks failed",
-			isCritical,
+			Passed:   *state.ConfigurableNetPolOK,
+			PassMsg:  "Configurable Network Policies: All Checks Passed",
+			FailMsg:  "Configurable Network Policies: One or more checks failed",
+			Critical: isCritical,
 		})
 	}
 	if state.EnforcementOK != nil {
 		checks = append(checks, check{
-			*state.EnforcementOK,
-			"Network Policy Enforcement: Active Validation Passed",
-			"Network Policy Enforcement: Active Validation Failed",
-			state.EnforcementCritical,
+			Passed:   *state.EnforcementOK,
+			PassMsg:  "Network Policy Enforcement: Active Validation Passed",
+			FailMsg:  "Network Policy Enforcement: Active Validation Failed",
+			Critical: state.EnforcementCritical,
 		})
 	}
 
 	for _, c := range checks {
-		if c.Passed {
+		switch {
+		case c.Unknown:
+			// Surfaced, not silently dropped, but it does not fail the verdict:
+			// "we could not observe this" is not "this is broken".
+			printWarning(log, fmt.Sprintf("  %s", c.UnknownMsg))
+		case c.Passed:
 			printSuccess(log, fmt.Sprintf("  %s", c.PassMsg))
-		} else if c.Critical {
+		case c.Critical:
 			printError(log, fmt.Sprintf("  %s", c.FailMsg))
 			isReady = false
-		} else {
+		default:
 			printWarning(log, fmt.Sprintf("  %s", c.FailMsg))
 		}
 	}

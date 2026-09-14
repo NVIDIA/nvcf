@@ -20,15 +20,19 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -108,16 +112,69 @@ func TestCheckGatewayAPICRDs_AbsentOnFakeClient(t *testing.T) {
 
 // -- checkEnvoyGateway --
 
-func TestCheckEnvoyGateway_RunningPods(t *testing.T) {
+// makeEnvoyControllerPod builds a pod carrying the controller label the check
+// selects on. ready=false yields a pod that is Running but not Ready, which is
+// what a CrashLoopBackOff controller looks like via the API.
+func makeEnvoyControllerPod(name string, ready bool) *corev1.Pod {
+	cond := corev1.ConditionFalse
+	if ready {
+		cond = corev1.ConditionTrue
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: envoyGatewayNamespace,
+			Labels:    map[string]string{"control-plane": "envoy-gateway"},
+		},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: cond}},
+		},
+	}
+}
+
+func TestCheckEnvoyGateway_ReadyControllerPod(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}},
-		makePod("envoy-gateway-abc", envoyGatewayNamespace, corev1.PodRunning),
+		makeEnvoyControllerPod("envoy-gateway-abc", true),
 	)
 	state := &ValidationState{Log: testLog()}
 	checkEnvoyGateway(context.Background(), client, state)
 
 	require.NotNil(t, state.EnvoyGatewayOK)
-	assert.True(t, *state.EnvoyGatewayOK, "running Envoy Gateway pods must set EnvoyGatewayOK=true")
+	assert.True(t, *state.EnvoyGatewayOK, "a Ready controller pod must set EnvoyGatewayOK=true")
+}
+
+// A crash-looping controller keeps .status.phase == Running, so the check must
+// key on the Ready condition or a dead gateway reports healthy.
+func TestCheckEnvoyGateway_RunningButNotReadyFails(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}},
+		makeEnvoyControllerPod("envoy-gateway-abc", false),
+	)
+	state := &ValidationState{Log: testLog()}
+	checkEnvoyGateway(context.Background(), client, state)
+
+	require.NotNil(t, state.EnvoyGatewayOK)
+	assert.False(t, *state.EnvoyGatewayOK,
+		"Running-but-not-Ready controller (CrashLoopBackOff) must not pass")
+}
+
+// The data-plane proxies and the certgen Job share this namespace. Counting
+// them lets a dead controller pass, so they must be excluded by the selector.
+func TestCheckEnvoyGateway_IgnoresNonControllerPods(t *testing.T) {
+	dataPlane := makePod("envoy-envoy-gateway-system-eg-abc123", envoyGatewayNamespace, corev1.PodRunning)
+	dataPlane.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}},
+		dataPlane,
+	)
+	state := &ValidationState{Log: testLog()}
+	checkEnvoyGateway(context.Background(), client, state)
+
+	require.NotNil(t, state.EnvoyGatewayOK)
+	assert.False(t, *state.EnvoyGatewayOK,
+		"a Ready data-plane proxy must not satisfy the controller check")
 }
 
 func TestCheckEnvoyGateway_NamespaceAbsent(t *testing.T) {
@@ -221,20 +278,20 @@ func TestCheckExternalLoadBalancer_LBServicePendingNoIP(t *testing.T) {
 func TestCheckNodeToNode_NoNodes(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state)
+	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
 
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.True(t, *state.NodeToNodeOK, "zero schedulable nodes must skip with pass, not fail")
-	assert.NotEmpty(t, state.Warnings, "skip must add a warning")
+	assert.Nil(t, state.NodeToNodeOK,
+		"zero schedulable nodes exercised no overlay path, so the result must be unknown, not Verified")
+	assert.NotEmpty(t, state.Warnings, "skip must add a warning so the banner is qualified")
 }
 
 func TestCheckNodeToNode_SingleNode_Skip(t *testing.T) {
 	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
 	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state)
+	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
 
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.True(t, *state.NodeToNodeOK, "single-node cluster must skip with pass, not fail")
+	assert.Nil(t, state.NodeToNodeOK,
+		"a single-node cluster has no second node to reach, so the result must be unknown")
 	assert.NotEmpty(t, state.Warnings)
 }
 
@@ -247,10 +304,9 @@ func TestCheckNodeToNode_UnschedulableNodesSkipped(t *testing.T) {
 
 	client := fake.NewSimpleClientset(n1, n2)
 	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state)
+	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
 
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.True(t, *state.NodeToNodeOK, "no schedulable nodes must skip, not fail")
+	assert.Nil(t, state.NodeToNodeOK, "no schedulable nodes means the probe never ran")
 }
 
 func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
@@ -272,11 +328,35 @@ func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
 	// capturedLabels is set synchronously by the daemonset create reactor
 	// before any list call, so no synchronisation is needed.
 	var capturedLabels map[string]string
+	var capturedName, capturedNS string
+	// Return a ZEROED status, exactly as a real apiserver does: the DaemonSet
+	// controller populates status asynchronously, so the Create response never
+	// carries DesiredNumberScheduled. Reading it here would yield 0 and fall
+	// back to len(schedulable)=3, which is the regression this guards.
 	client.PrependReactor("create", "daemonsets", func(action ktesting.Action) (bool, runtime.Object, error) {
 		ds := action.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
 		capturedLabels = ds.Labels
-		ds.Status.DesiredNumberScheduled = 2
+		capturedName = ds.Name
+		capturedNS = ds.Namespace
+		ds.Status = appsv1.DaemonSetStatus{}
 		return true, ds, nil
+	})
+
+	// The subsequent Get is where the reconciled status appears: 2, because the
+	// scheduler excludes the tainted node.
+	client.PrependReactor("get", "daemonsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       capturedName,
+				Namespace:  capturedNS,
+				Labels:     capturedLabels,
+				Generation: 1,
+			},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 2,
+				ObservedGeneration:     1,
+			},
+		}, nil
 	})
 
 	// Return 2 Running pods whose labels match the DaemonSet selector.
@@ -286,12 +366,12 @@ func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
 		lbl := capturedLabels
 		return true, &corev1.PodList{Items: []corev1.Pod{
 			{
-				ObjectMeta: metav1.ObjectMeta{Name: "s-1", Namespace: nodeToNodeNamespace, Labels: lbl},
+				ObjectMeta: metav1.ObjectMeta{Name: "s-1", Namespace: capturedNS, Labels: lbl},
 				Spec:       corev1.PodSpec{NodeName: "node-1"},
 				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
 			},
 			{
-				ObjectMeta: metav1.ObjectMeta{Name: "s-2", Namespace: nodeToNodeNamespace, Labels: lbl},
+				ObjectMeta: metav1.ObjectMeta{Name: "s-2", Namespace: capturedNS, Labels: lbl},
 				Spec:       corev1.PodSpec{NodeName: "node-2"},
 				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
 			},
@@ -307,12 +387,12 @@ func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
 	})
 
 	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state)
+	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
 
-	// checkerPodCreateCalled must be true: if waitForDaemonSetPods had
-	// waited for 3 pods (len(schedulable)) instead of 2 (DesiredNumberScheduled),
-	// it would have timed out before reaching pod creation and this flag
-	// would stay false, catching the regression.
+	// checkerPodCreateCalled must be true: if the check had sized its wait from
+	// len(schedulable)=3 rather than polling for DesiredNumberScheduled=2, it
+	// would have timed out before reaching pod creation and this flag would
+	// stay false, catching the regression.
 	require.True(t, checkerPodCreateCalled, "check must reach checker pod creation step")
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.False(t, *state.NodeToNodeOK, "NodeToNodeOK false because checker pod creation failed")
@@ -329,10 +409,80 @@ func TestCheckNodeToNode_DaemonSetCreateFailure(t *testing.T) {
 	})
 
 	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state)
+	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
 
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.False(t, *state.NodeToNodeOK, "DaemonSet create failure must set NodeToNodeOK=false")
+}
+
+// The probe creates a namespace, a DaemonSet, and a pod on every node. If the
+// deferred cleanup regresses, every validator run leaks all three, so assert
+// the deletes are actually issued rather than only that the verdict is right.
+func TestCheckNodeToNode_CleansUpProbeResources(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		makeNode("node-1", true, 0),
+		makeNode("node-2", true, 0),
+	)
+
+	var createdNS string
+	client.PrependReactor("create", "namespaces", func(action ktesting.Action) (bool, runtime.Object, error) {
+		ns := action.(ktesting.CreateAction).GetObject().(*corev1.Namespace)
+		createdNS = ns.Name
+		return false, nil, nil // fall through to the tracker
+	})
+
+	deleted := map[string]bool{}
+	for _, res := range []string{"namespaces", "daemonsets", "pods"} {
+		r := res
+		client.PrependReactor("delete", r, func(_ ktesting.Action) (bool, runtime.Object, error) {
+			deleted[r] = true
+			return false, nil, nil
+		})
+	}
+
+	// Fail the DaemonSet status poll fast so the test does not wait out the
+	// real timeout; cleanup must still run on this path.
+	client.PrependReactor("get", "daemonsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated status read failure")
+	})
+
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
+
+	require.NotEmpty(t, createdNS, "probe must create its own namespace, not use default")
+	assert.True(t, strings.HasPrefix(createdNS, nodeToNodeNSPrefix),
+		"probe namespace %q must carry the sweepable prefix %q", createdNS, nodeToNodeNSPrefix)
+	assert.True(t, deleted["daemonsets"], "deferred cleanup must delete the server DaemonSet")
+	assert.True(t, deleted["pods"], "deferred cleanup must delete the checker pod")
+	assert.True(t, deleted["namespaces"], "deferred cleanup must delete the probe namespace")
+}
+
+// An orphaned probe namespace older than the TTL must be reclaimed; one inside
+// the TTL belongs to a possibly-concurrent run and must be left alone.
+func TestSweepOrphanN2NNamespaces_TTL(t *testing.T) {
+	labels := map[string]string{
+		"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
+		"app.kubernetes.io/component":  "n2n-probe",
+	}
+	stale := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              nodeToNodeNSPrefix + "stale1",
+		Labels:            labels,
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-30 * time.Minute)),
+	}}
+	fresh := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              nodeToNodeNSPrefix + "fresh1",
+		Labels:            labels,
+		CreationTimestamp: metav1.NewTime(time.Now()),
+	}}
+	client := fake.NewSimpleClientset(stale, fresh)
+
+	sweepOrphanN2NNamespaces(context.Background(), testLog(), client, orphanN2NNamespaceTTL)
+
+	_, err := client.CoreV1().Namespaces().Get(context.Background(), stale.Name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "namespace older than the TTL must be swept")
+
+	_, err = client.CoreV1().Namespaces().Get(context.Background(), fresh.Name, metav1.GetOptions{})
+	assert.NoError(t, err, "namespace inside the TTL may belong to a concurrent run and must survive")
 }
 
 // -- checkTier1Deployments --
@@ -394,10 +544,65 @@ func TestCheckTier1Deployments_RollingOutEmitsWarningNotFailure(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkTier1Deployments(context.Background(), client, state)
 
-	require.NotNil(t, state.Tier1DeploymentsOK)
-	assert.True(t, *state.Tier1DeploymentsOK, "in-progress rollout must not set Tier1DeploymentsOK=false")
+	assert.Nil(t, state.Tier1DeploymentsOK,
+		"the only Deployment is mid-rollout, so readiness is unknown, not a pass or a failure")
 	assert.NotEmpty(t, state.Warnings, "rollout in progress must emit a warning")
 	assert.Contains(t, state.Warnings[0], "rollout in progress")
+}
+
+// A stalled rollout is not transient: Kubernetes caps the new ReplicaSet at
+// maxSurge and never progresses, so ProgressDeadlineExceeded must fall through
+// to the replica check rather than being skipped forever as "in progress".
+func TestCheckTier1Deployments_StalledRolloutFails(t *testing.T) {
+	replicas := int32(3)
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvcf-api", Namespace: "nvcf", Generation: 2},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 2,
+			UpdatedReplicas:    1, // wedged on a bad image, never reaches 3
+			ReadyReplicas:      0,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type:   appsv1.DeploymentProgressing,
+				Status: corev1.ConditionFalse,
+				Reason: "ProgressDeadlineExceeded",
+			}},
+		},
+	})
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK,
+		"a rollout that exceeded its progress deadline with 0 ready must fail, not be skipped")
+}
+
+// With one Deployment mid-rollout and another fully ready, the ready one must
+// still be evaluated: the rollout skip must not suppress the whole check.
+func TestCheckTier1Deployments_MixedRollingAndUnderReplicated(t *testing.T) {
+	two := int32(2)
+	client := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "rolling", Namespace: "nvcf", Generation: 3},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration: 2, UpdatedReplicas: 1, ReadyReplicas: 2,
+			},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "degraded", Namespace: "sis", Generation: 1},
+			Spec:       appsv1.DeploymentSpec{Replicas: &two},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration: 1, UpdatedReplicas: 2, ReadyReplicas: 1,
+			},
+		},
+	)
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK,
+		"the under-replicated Deployment must still fail the check alongside a rolling one")
 }
 
 func TestCheckTier1Deployments_PreInstallPassesTrivially(t *testing.T) {
@@ -409,14 +614,154 @@ func TestCheckTier1Deployments_PreInstallPassesTrivially(t *testing.T) {
 	assert.True(t, *state.Tier1DeploymentsOK, "pre-install (no deployments) must pass trivially")
 }
 
-// init is required to register types with the fake client's object tracker.
-func init() {
-	_ = []runtime.Object{
-		&appsv1.DaemonSet{},
-		&storagev1.StorageClass{},
-		&corev1.Namespace{},
-		&corev1.Pod{},
-		&corev1.Service{},
-	}
+// An RBAC denial means the namespace was never observed. Treating it as a pass
+// publishes a green quorum for a control plane nobody looked at.
+func TestCheckTier1Deployments_ForbiddenIsNotAPass(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "deployments", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "apps", Resource: "deployments"}, "", fmt.Errorf("denied"))
+	})
+
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier1DeploymentsOK, "a 403 in every namespace must not reach the trivial-pass exit")
+	assert.NotEmpty(t, state.Warnings, "an RBAC denial must be surfaced as a warning")
 }
 
+// -- checkTier2StatefulSets --
+
+// makeQuorumSTS builds a StatefulSet plus the pods its selector matches, so the
+// co-location scan has something to walk. nodes gives one node name per pod.
+func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []runtime.Object {
+	sel := map[string]string{"app": name}
+	objs := []runtime.Object{&appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: sel},
+		},
+		Status: appsv1.StatefulSetStatus{
+			ReadyReplicas:   ready,
+			CurrentRevision: name + "-r1",
+			UpdateRevision:  name + "-r1",
+		},
+	}}
+	for i, node := range nodes {
+		objs = append(objs, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: fmt.Sprintf("%s-%d", name, i), Namespace: ns, Labels: sel,
+			},
+			Spec:   corev1.PodSpec{NodeName: node},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		})
+	}
+	return objs
+}
+
+func TestCheckTier2StatefulSets_HealthyQuorum(t *testing.T) {
+	objs := makeQuorumSTS("nats", "nats-system", 3, 3, []string{"node-1", "node-2", "node-3"})
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "3 Ready pods on distinct nodes must pass")
+}
+
+func TestCheckTier2StatefulSets_BelowQuorumFails(t *testing.T) {
+	objs := makeQuorumSTS("openbao", "vault-system", 3, 2, []string{"node-1", "node-2"})
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK, "readyReplicas below spec.replicas must fail")
+}
+
+// Two peers on one node means a single node loss takes out the quorum, which is
+// the whole point of the placement half of this check.
+func TestCheckTier2StatefulSets_CoLocatedPeersFail(t *testing.T) {
+	objs := makeQuorumSTS("cassandra", "cassandra-system", 3, 3, []string{"node-1", "node-1", "node-2"})
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK, "two peers on the same node must fail placement")
+}
+
+// StatefulSets roll one pod at a time, so a below-target ready count is the
+// steady state for the whole duration of any upgrade. That must warn, not fail.
+func TestCheckTier2StatefulSets_RollingUpdateWarnsNotFails(t *testing.T) {
+	objs := makeQuorumSTS("nats", "nats-system", 3, 2, []string{"node-1", "node-2"})
+	sts := objs[0].(*appsv1.StatefulSet)
+	sts.Status.UpdateRevision = "nats-r2" // differs from CurrentRevision
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier2StatefulSetsOK,
+		"the only quorum StatefulSet is mid-rollout, so quorum is unknown, not failed")
+	assert.NotEmpty(t, state.Warnings)
+	assert.Contains(t, state.Warnings[0], "rolling update in progress")
+}
+
+// Requiring exactly 3 silently drops an operator-scaled 5-member Cassandra from
+// the check instead of validating it.
+func TestCheckTier2StatefulSets_FiveReplicasStillChecked(t *testing.T) {
+	objs := makeQuorumSTS("cassandra", "cassandra-system", 5, 4,
+		[]string{"node-1", "node-2", "node-3", "node-4"})
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK,
+		"a 5-replica quorum with only 4 Ready must fail, not be skipped")
+}
+
+// An even replica count cannot form a quorum majority, so it is not a Tier-2
+// component and must not be evaluated as one.
+func TestCheckTier2StatefulSets_EvenReplicasSkipped(t *testing.T) {
+	objs := makeQuorumSTS("worker", "nvcf", 4, 2, []string{"node-1", "node-2"})
+	client := fake.NewSimpleClientset(objs...)
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK, "an even-replica StatefulSet is not a quorum member")
+}
+
+func TestCheckTier2StatefulSets_ForbiddenIsNotAPass(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "statefulsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "apps", Resource: "statefulsets"}, "", fmt.Errorf("denied"))
+	})
+
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier2StatefulSetsOK,
+		"a 403 in every namespace must not publish a green quorum")
+	assert.NotEmpty(t, state.Warnings)
+}
+
+// The OpenBao namespace is relocatable, so a cluster that overrides it must not
+// silently drop OpenBao's StatefulSet from the quorum check.
+func TestControlPlaneNamespaceSet_HonoursOpenBaoOverride(t *testing.T) {
+	t.Setenv(openBaoNamespaceEnv, "vault-system-dev")
+	assert.Contains(t, controlPlaneNamespaceSet(), "vault-system-dev")
+
+	t.Setenv(openBaoNamespaceEnv, "vault-system") // already in the base list
+	set := controlPlaneNamespaceSet()
+	count := 0
+	for _, ns := range set {
+		if ns == "vault-system" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "an override matching the default must not duplicate the entry")
+}

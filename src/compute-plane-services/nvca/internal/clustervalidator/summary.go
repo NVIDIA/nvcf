@@ -159,7 +159,7 @@ const (
 	CheckKeyGatewayRoutes       = "gateway_routes"
 	CheckKeyExternalLB          = "external_lb"
 	CheckKeyNodeToNode          = "node_to_node"
-	// HA readiness checks (CP Resilience SDD).
+	// Control-plane HA readiness checks.
 	CheckKeyTier1Deployments  = "tier1_deployments"
 	CheckKeyTier2StatefulSets = "tier2_statefulsets"
 )
@@ -190,8 +190,10 @@ var AllCheckKeys = []string{
 }
 
 // buildSummary projects a ValidationState into the wire format. Checks
-// that were not run (their *bool is nil) are omitted from the Checks
-// map so the agent can distinguish "not run" from "ran and failed".
+// that were not run are omitted from the Checks map so the agent can
+// distinguish "not run" from "ran and failed". For role-gated checks that
+// means the pointer is nil; for the compute-plane bools it means the role
+// is control-plane and they were never invoked.
 func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool, verdict string) *ValidatorSummary {
 	now := time.Now().UTC()
 	s := &ValidatorSummary{
@@ -212,9 +214,15 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 	s.Checks[CheckKeyWorkerNodesAllReady] = state.NodesAllReady
 	s.Checks[CheckKeyWebhooks] = state.WebhooksSupported
 	s.Checks[CheckKeyNetworkPoliciesSupport] = state.NetworkPoliciesSupported
-	s.Checks[CheckKeySMBCSI] = state.SMBCSIDriverOK
-	s.Checks[CheckKeyGPUResources] = state.GPUAvailable
-	s.Checks[CheckKeyGPUOperator] = state.GPUOperatorInstalled
+	// Compute-plane checks are never invoked under the control-plane role, so
+	// their fields hold the zero value. Writing them unconditionally would
+	// publish gpu_resources=0 forever on a control plane that has no GPUs and
+	// was never checked for any, which METRICS.md documents as alertable.
+	if state.Role != RoleControlPlane {
+		s.Checks[CheckKeySMBCSI] = state.SMBCSIDriverOK
+		s.Checks[CheckKeyGPUResources] = state.GPUAvailable
+		s.Checks[CheckKeyGPUOperator] = state.GPUOperatorInstalled
+	}
 
 	if state.ReachabilityOK != nil {
 		s.Checks[CheckKeyEndpointReachability] = *state.ReachabilityOK
