@@ -337,6 +337,8 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # ReVal renders the chart on the control plane before NVCA deploys the
       # workload in the separate compute cluster. Successful invocation proves
       # that the complete chart-backed path works across the cluster boundary.
+      # TODO(#1871): Replace this raw command with a table-backed Helm function
+      # create step so the options remain readable.
       When I successfully run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-multi-helm-function --helm-chart ${SAMPLE_HELM_FUNCTION_CHART} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S

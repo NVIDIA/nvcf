@@ -229,6 +229,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       # Function creation and deployment both cross the ReVal chart-rendering
       # boundary. A deployed ReVal pod alone does not prove this path works.
+      # TODO(#1871): Replace this raw command with a table-backed Helm function
+      # create step so the options remain readable.
       When I successfully run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-helm-function --helm-chart ${SAMPLE_HELM_FUNCTION_CHART} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
