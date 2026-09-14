@@ -13,6 +13,8 @@ navigation:
     contents:
       - page: Release Notes Overview
         path: ../../docs/user/release-notes/index.md
+      - page: 0.6.1 to 0.14.4 Upgrade
+        path: ../../docs/user/release-notes/0.6.1-to-0.14.4-upgrade.md
 
   - section: Before You Deploy
     skip-slug: true
