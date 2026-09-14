@@ -57,6 +57,25 @@ const (
 	maxCreationSkip                       = uint64(50)
 	defaultVisibilityTimeoutSeconds       = int64(30)
 	creationQueueVisibilityTimeoutSeconds = int64(360)
+
+	// queueComponentName identifies the creation queue in the health payload.
+	queueComponentName = "queue"
+
+	// maxCyclesWithoutPoll is how many consecutive SyncQueues invocations may
+	// return before reaching a poll before readiness reports the queue unhealthy.
+	// SyncQueues has several such paths — a failed health refresh, or being
+	// paused with no credentials yet — and none of them record a poll result, so
+	// without this the queue component keeps serving its last successful poll
+	// indefinitely while nothing is being consumed.
+	//
+	// Counted in cycles rather than elapsed time on purpose. SyncQueueInterval is
+	// operator-configurable with no upper bound (defaults to 3s), so any fixed
+	// duration is wrong for some valid configuration: readiness is refreshed at
+	// the top of SyncQueues, before that cycle's poll updates the record, so a
+	// wall-clock tolerance shorter than the configured interval would report
+	// stale on every single cycle and pin a healthy backend at 503 forever.
+	// A cycle count is correct at every interval.
+	maxCyclesWithoutPoll = 5
 )
 
 type QueueManager struct {
@@ -83,6 +102,16 @@ type QueueManager struct {
 	statusGetter health.StatusGetter
 	// health status flag for liveness probe verification
 	healthy atomic.Bool
+	// polled records whether at least one queue poll has completed. healthy is
+	// deliberately not usable for readiness: it is set true in the constructor
+	// before any poll has happened, so it cannot distinguish "the queue is
+	// working" from "the queue has not been tried yet".
+	polled atomic.Bool
+	// cyclesSincePoll counts SyncQueues invocations that have not yet reached a
+	// poll. Incremented on entry, reset by setPollResult, so it detects
+	// "SyncQueues keeps running but never polls" without depending on the
+	// configured interval or on a clock.
+	cyclesSincePoll atomic.Int64
 	// paused indicates if the queue manager is paused (e.g., due to no GPUs available).
 	// When paused, creation messages are not processed but termination messages continue.
 	paused atomic.Bool
@@ -258,6 +287,13 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		"rpc": "QueueManager.SyncQueues",
 	})
 
+	// Counted before the refresh below, because that refresh is what publishes
+	// the queue component to readiness: incrementing afterwards would always
+	// report the previous cycle's count and delay a stall by one tick. Reset by
+	// setPollResult once a poll completes, so this only grows while SyncQueues
+	// is returning early.
+	qm.cyclesSincePoll.Add(1)
+
 	// Always freshen health status to detect capacity/component issues.
 	if ah, err := qm.statusGetter.RefreshStatus(ctx); err != nil {
 		log.WithError(err).Error("Failed to refresh agent health status")
@@ -349,7 +385,7 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 		// Process termination messages
 		if termQWOutput.err != nil {
 			log.WithError(termQWOutput.err).Error("Failed to fetch termination messages")
-			qm.SetStatusOK(false)
+			qm.setPollResult(false)
 			return termQWOutput.err
 		}
 
@@ -382,7 +418,7 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 			}
 		}
 
-		qm.SetStatusOK(true)
+		qm.setPollResult(true)
 		return nil
 	}
 
@@ -501,7 +537,7 @@ func (qm *QueueManager) SyncQueues(ctx context.Context) error {
 	// Wait for all work to finish
 	p.Wait()
 
-	qm.SetStatusOK(!anyQueuePullError)
+	qm.setPollResult(!anyQueuePullError)
 	return nil
 }
 
@@ -612,8 +648,14 @@ func (qm *QueueManager) tryPopMessage(ctx context.Context, qv queueWorkInput) (q
 		WaitTimeSeconds:          maximumWaitTimeSeconds,
 		VisibilityTimeoutSeconds: qv.vtoSec,
 	})
+	gpuLabel := string(qv.gpuName)
+	if gpuLabel == "" {
+		gpuLabel = "none"
+	}
+
 	if qr.err != nil {
 		log.WithError(qr.err).Error("Receive message failed")
+		qm.metrics.RecordQueuePollFailure(qv.queueType, gpuLabel, classifyQueuePollFailure(qr.err))
 	} else {
 		messageCount := len(qr.messages)
 		if messageCount == 0 {
@@ -621,17 +663,12 @@ func (qm *QueueManager) tryPopMessage(ctx context.Context, qv queueWorkInput) (q
 		} else {
 			log.Debugf("fetched %d messages from SQS", messageCount)
 		}
-		// Record dequeue metrics for every attempt (including zero-message pulls)
-		gpuNameStr := string(qv.gpuName)
-		if gpuNameStr == "" {
-			gpuNameStr = "none"
-		}
 		// Only increment dequeued counter when we actually got messages
 		if messageCount > 0 {
-			qm.metrics.RecordQueueMessageDequeued(qv.queueType, gpuNameStr, messageCount)
+			qm.metrics.RecordQueueMessageDequeued(qv.queueType, gpuLabel, messageCount)
 		}
 		// Always record batch size (including zeros) to track empty pulls
-		qm.metrics.RecordQueueDequeueBatchSize(qv.queueType, gpuNameStr, messageCount)
+		qm.metrics.RecordQueueDequeueBatchSize(qv.queueType, gpuLabel, messageCount)
 	}
 
 	return qr
@@ -851,6 +888,144 @@ func (qm *QueueManager) ExtendCreationMessableVisibilityTimeoutV2(ctx context.Co
 func (qm *QueueManager) SetStatusOK(ok bool) { qm.healthy.Store(ok) }
 func (qm *QueueManager) StatusOK() bool      { return qm.healthy.Load() }
 func (qm *QueueManager) Name() string        { return "queuemanager" }
+
+// connectionStateProvider is implemented by queue clients that hold a
+// persistent connection. Declared here, at the consumer, because queue.Client
+// is shared with SQS, which has nothing to report.
+type connectionStateProvider interface {
+	ConnectionClosed() bool
+}
+
+// QueueLiveness is the liveness view of the queue, registered separately from
+// the readiness view so the two can disagree, which they must.
+//
+// A queue that cannot be polled should stop the backend taking new work, and
+// that is readiness' job. It should not restart the pod: while the client is
+// still reconnecting, a restart throws away the reconnect and, during a queue
+// outage, every NVCA across every cluster would restart at once. The one state
+// a restart genuinely fixes is a connection closed for good, because nats.go
+// never reopens one.
+type QueueLiveness struct {
+	qm   *QueueManager
+	conn connectionStateProvider
+}
+
+// NewQueueLiveness pairs a queue manager with its transport's connection state.
+// conn must be captured from the concrete client before any instrumentation
+// wraps it, or the wrapper hides the connection and liveness silently falls
+// back to the poll-based behaviour this exists to avoid.
+func NewQueueLiveness(qm *QueueManager, conn connectionStateProvider) *QueueLiveness {
+	return &QueueLiveness{qm: qm, conn: conn}
+}
+
+func (q *QueueLiveness) Name() string { return q.qm.Name() }
+
+func (q *QueueLiveness) StatusOK() bool {
+	if q.conn == nil {
+		// No persistent connection to judge, so keep the previous poll-based
+		// behaviour rather than silently removing SQS's restart path.
+		return q.qm.StatusOK()
+	}
+	return !q.conn.ConnectionClosed()
+}
+
+// setPollResult records the outcome of a completed queue poll. It keeps polled
+// and healthy in lockstep so readiness can tell "not tried yet" apart from
+// "tried and working", which SetStatusOK alone cannot express.
+func (qm *QueueManager) setPollResult(ok bool) {
+	qm.SetStatusOK(ok)
+	qm.polled.Store(true)
+	qm.cyclesSincePoll.Store(0)
+}
+
+// hasCreationQueues reports whether any creation queue is configured at all.
+//
+// An empty set is not the same as a queue that is briefly skipped: with no
+// creation queue there is nothing for this backend to consume from, so
+// SyncQueues polls only the termination queue, finds no creation errors, and
+// records a successful poll. Readiness would then be healthy on a backend that
+// can never pick up work, which is nvcf#1590 exactly. It is reachable in
+// self-hosted mode, where postProcessQueueCredentials synthesises creation
+// queues from the GPU-usage snapshot and leaves all three sets empty when that
+// snapshot is empty.
+func (qm *QueueManager) hasCreationQueues() bool {
+	qm.qmu.RLock()
+	defer qm.qmu.RUnlock()
+	return len(qm.qcreds.CreationQueues) > 0 ||
+		len(qm.qcreds.ClusterCreationQueues) > 0 ||
+		len(qm.qcreds.TaskClusterCreationQueues) > 0
+}
+
+// pollIsStale reports whether SyncQueues has run repeatedly without polling.
+func (qm *QueueManager) pollIsStale() bool {
+	return qm.cyclesSincePoll.Load() > maxCyclesWithoutPoll
+}
+
+// GetComponentStatus implements health.ComponentStatusGetter so the creation
+// queue gates the readiness probe. Without it /healthz reports the backend
+// healthy purely because startup progressed, even when no consumer exists and
+// every poll is failing, which is what nvcf#1590 reports.
+//
+// StatusLevelError is required, not stylistic: the readiness aggregate only
+// flips overall status unhealthy for components strictly below StatusLevelWarn,
+// so a Warn-level component would appear in the payload and gate nothing.
+func (qm *QueueManager) GetComponentStatus(_ context.Context) (types.AgentHealth, error) {
+	ch := types.ComponentHealth{
+		Status:      types.HealthStatusHealthy,
+		StatusLevel: types.StatusLevelError,
+	}
+	// Deliberately not a case below: a creation queue that is skipped because
+	// every GPU is at capacity, or is in per-GPU backoff, leaves nothing to poll
+	// and is still perfectly healthy. mustSkipQueueForGPU skips a GPU whenever
+	// creationMessagesFetchable is false, and that is false when Capacity <=
+	// Allocated, which is the normal state of a busy cluster. Reporting unhealthy
+	// there would take every saturated backend out of service — the operator
+	// writes agentStatus Unknown on a non-200 — so a full cluster would look
+	// broken. Only the states below mean the backend genuinely cannot consume.
+	switch {
+	case qm.IsPaused():
+		// A paused manager deliberately does not consume creation messages, so
+		// the backend cannot pick up work however the last poll went. None of
+		// the exits from the paused branch of SyncQueues records a poll result,
+		// so without this the component serves its pre-pause status until the
+		// no-poll counter happens to cross the staleness threshold on its own.
+		//
+		// Reported here rather than by having that branch record a poll result:
+		// setPollResult(true) would claim a poll that never happened, and a
+		// manager paused since startup would then report the queue healthy the
+		// moment it resumes, before the first fetch. setPollResult(false) would
+		// label a deliberate stop a polling failure. Leaving the counter to run
+		// also keeps resume fail-closed — it reads stale until a real poll lands.
+		//
+		// It matters that this is reported at all: every caller that pauses
+		// today also drops a separate readiness flag in the same code path, but
+		// Pause is exported, so that coverage is incidental.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors,
+			"queue manager is paused, creation queue is not being consumed")
+	case !qm.polled.Load():
+		// Startup: credentials may exist but nothing has consumed the queue yet.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors, "creation queue has not been polled yet")
+	case !qm.hasCreationQueues():
+		// No creation queue configured, so there is no consumer to be had.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors, "no creation queue is configured")
+	case qm.pollIsStale():
+		// SyncQueues is running but returning before it polls anything.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors,
+			fmt.Sprintf("no queue poll has completed in the last %d sync cycles",
+				maxCyclesWithoutPoll))
+	case !qm.StatusOK():
+		// Polling is failing, e.g. the stream or consumer cannot be reached.
+		ch.Status = types.HealthStatusUnhealthy
+		ch.Errors = append(ch.Errors, "creation queue polling is failing")
+	}
+	return types.AgentHealth{
+		Components: map[string]types.ComponentHealth{queueComponentName: ch},
+	}, nil
+}
 
 // Pause pauses queue processing. Creation messages will not be processed,
 // but termination messages will continue to be processed.

@@ -137,13 +137,11 @@ func TestAgentApis(t *testing.T) {
 		require.NoError(ct, err)
 		assert.Equal(ct, http.StatusOK, resp.StatusCode, string(body))
 	}, 5*time.Second, 100*time.Millisecond)
-	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		resp, err := http.Get("http://" + ag.NVCASvcAddress + health.HTTPReadinessRoutePath)
-		require.NoError(ct, err)
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(ct, err)
-		assert.Equal(ct, http.StatusOK, resp.StatusCode, string(body))
-	}, 5*time.Second, 100*time.Millisecond)
+	// This test pins SyncQueueInterval to a year, so no queue poll can happen on
+	// its own; supply the poll that readiness now requires, then refresh, since
+	// the cached payload is otherwise never recomputed here. See nvcf#1590.
+	markQueuePolled(t, ag)
+	requireRefreshedReadinessStatus(t, ctx, ag, http.StatusOK)
 
 	is := getPostedInstanceStatus(ctx,
 		types.ICMSRequestUpdateInfo{
@@ -425,6 +423,17 @@ func requireHTTPStatus(t *testing.T, address, path string, expected int) {
 	require.Equal(t, expected, resp.StatusCode)
 }
 
+// markQueuePolled stands in for the queue-sync tick that these tests delete
+// from resourceEventWorkerQueues (and that TestAgentApis disables with a
+// year-long SyncQueueInterval). Readiness now requires a completed queue poll,
+// so a harness that suppresses queue syncing has to supply the poll it skipped,
+// or the agent correctly never reports ready. See nvcf#1590.
+func markQueuePolled(t *testing.T, agent *Agent) {
+	t.Helper()
+	require.NotNil(t, agent.queueManager, "queue manager must exist before readiness is asserted")
+	agent.queueManager.setPollResult(true)
+}
+
 func requireRefreshedReadinessStatus(
 	t *testing.T,
 	ctx context.Context,
@@ -501,6 +510,7 @@ func TestAgentStartGracefulNoGPURecoversWhenGPUAppears(t *testing.T) {
 			agent.queueManager.getCreateQueue(testGPUNameDefault))
 		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
 	}, 5*time.Second, 10*time.Millisecond)
+	markQueuePolled(t, agent)
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
 	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 
@@ -560,6 +570,7 @@ func TestAgentStartGracefulNoGPURegistrationFailureRetriesBeforeResuming(t *test
 			agent.queueManager.getCreateQueue(testGPUNameDefault))
 		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
 	}, 5*time.Second, 10*time.Millisecond)
+	markQueuePolled(t, agent)
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
 	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 	require.Len(t, icmsClient.requests(), 2)
@@ -610,6 +621,7 @@ func TestAgentStartGracefulNoGPUStaysPausedWhenGPUDisappearsDuringRegistration(t
 		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
 			agent.queueManager.getCreateQueue(testGPUNameDefault))
 	}, 5*time.Second, 10*time.Millisecond)
+	markQueuePolled(t, agent)
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
 	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 }
@@ -680,6 +692,7 @@ func TestAgentStartGracefulNoGPUSerializesCredentialRenewalBeforeRecovery(t *tes
 			agent.queueManager.getCreateQueue(testGPUNameDefault))
 		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
 	}, 5*time.Second, 10*time.Millisecond)
+	markQueuePolled(t, agent)
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
 	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 }
@@ -777,6 +790,7 @@ func TestAgentStartGracefulNoGPUSerializesPeriodicRegistrationBeforeRecovery(t *
 		assert.Equal(ct, recoveredQueue, agent.queueManager.getCreateQueue(recoveredGPU))
 		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
 	}, 5*time.Second, 10*time.Millisecond)
+	markQueuePolled(t, agent)
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
 	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 }
@@ -2621,7 +2635,12 @@ func TestAgent_PostProcessQueueCredentials(t *testing.T) {
 
 // mockHealthStatusCache is a mock implementation of health.StatusCache for testing
 type mockHealthStatusCache struct {
-	status types.AgentHealth
+	status  types.AgentHealth
+	getters []health.ComponentStatusGetter
+}
+
+func (m *mockHealthStatusCache) AddGetter(_ context.Context, g health.ComponentStatusGetter) {
+	m.getters = append(m.getters, g)
 }
 
 func (m *mockHealthStatusCache) GetStatus() types.AgentHealth {

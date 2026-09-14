@@ -51,6 +51,9 @@ const (
 	MessageQueueProcessedTotalMetricName       = "nvca_queue_message_processed_total"
 	MessageQueueDequeuedTotalMetricName        = "nvca_queue_message_dequeued_total"
 	MessageQueueDequeueBatchSizeMetricName     = "nvca_queue_dequeue_batch_size"
+	QueuePollFailuresTotalMetricName           = "nvca_queue_poll_failures_total"
+	NATSConnectionStateMetricName              = "nvca_nats_connection_state"
+	NATSReconnectsTotalMetricName              = "nvca_nats_reconnects_total"
 	InstanceTypeUnschedulableMetricName        = "nvca_instance_type_unschedulable"
 	ImagePullIssueTotalMetricName              = "nvca_image_pull_issue_total"
 	K8sAPISuccessTotalMetricName               = "nvca_k8s_api_success_total"
@@ -121,34 +124,58 @@ const (
 	SchedulerNameKAI     = "kai-scheduler"
 
 	// Label keys
-	ClusterGroupLabel        = "nvca_cluster_group"
-	ClusterNameLabel         = "nvca_cluster_name"
-	ContainerLabel           = "container"
-	EventNameLabel           = "nvca_event_name"
-	InstanceTypeLabel        = "instance_type"
-	MessageActionLabel       = "message_action"
-	NCAIDLabel               = "nvca_nca_id"
-	VersionLabel             = "nvca_version"
-	ImageRegLabel            = "image_registry"
-	K8sResourceLabel         = "resource"
-	QueueTypeLabel           = "queue_type"
-	GPUNameLabel             = "gpu_name"
-	GPUFamilyLabel           = "gpu_family"
-	GPUMachineLabel          = "gpu_machine"
-	MiniServicePhaseLabel    = "miniservice_phase"
-	FromPhaseLabel           = "from_phase"
-	ToPhaseLabel             = "to_phase"
-	FunctionIDLabel          = "function_id"
-	FunctionVersionIDLabel   = "function_version_id"
-	TaskIDLabel              = "task_id"
-	EndpointLabel            = "endpoint"
-	HTTPCodeLabel            = "http_code"
-	StorageRequestPhaseLabel = "storage_request_phase"
-	EventKindLabel           = "event_kind"
+	ClusterGroupLabel  = "nvca_cluster_group"
+	ClusterNameLabel   = "nvca_cluster_name"
+	ContainerLabel     = "container"
+	EventNameLabel     = "nvca_event_name"
+	InstanceTypeLabel  = "instance_type"
+	MessageActionLabel = "message_action"
+	NCAIDLabel         = "nvca_nca_id"
+	VersionLabel       = "nvca_version"
+	ImageRegLabel      = "image_registry"
+	K8sResourceLabel   = "resource"
+	QueueTypeLabel     = "queue_type"
+	// QueuePollFailureReasonLabel keeps a bounded set of values; see the
+	// NATSConnState and QueuePollFailureReason constants below.
+	QueuePollFailureReasonLabel = "reason"
+	GPUNameLabel                = "gpu_name"
+	GPUFamilyLabel              = "gpu_family"
+	GPUMachineLabel             = "gpu_machine"
+	MiniServicePhaseLabel       = "miniservice_phase"
+	FromPhaseLabel              = "from_phase"
+	ToPhaseLabel                = "to_phase"
+	FunctionIDLabel             = "function_id"
+	FunctionVersionIDLabel      = "function_version_id"
+	TaskIDLabel                 = "task_id"
+	EndpointLabel               = "endpoint"
+	HTTPCodeLabel               = "http_code"
+	StorageRequestPhaseLabel    = "storage_request_phase"
+	EventKindLabel              = "event_kind"
 	// GC labels
 	ResourceTypeLabel = "resource_type"
 	StatusLabel       = "status"
 	CleanerNameLabel  = "cleaner_name"
+
+	// NATS connection states reported by NATSConnectionState. Closed is the
+	// alerting condition: nats.go never reopens a closed connection, so it is
+	// the one queue state a process restart is the only fix for.
+	NATSConnStateDisconnected = 0
+	NATSConnStateConnected    = 1
+	NATSConnStateReconnecting = 2
+	NATSConnStateClosed       = 3
+
+	// Values for QueuePollFailureReasonLabel. Bounded on purpose: the label
+	// feeds a counter, and an unbounded reason string would be a cardinality
+	// leak. The split matters because it separates "the broker is gone" from
+	// "the consumer went stale", which are the two independent failures this
+	// change fixes.
+	QueuePollReasonConnectionClosed = "connection_closed"
+	QueuePollReasonNoServers        = "no_servers"
+	QueuePollReasonAuth             = "auth"
+	QueuePollReasonStreamNotFound   = "stream_not_found"
+	QueuePollReasonConsumerNotFound = "consumer_not_found"
+	QueuePollReasonTimeout          = "timeout"
+	QueuePollReasonOther            = "other"
 
 	// Model cache labels
 	ResultLabel        = "result"
@@ -256,6 +283,14 @@ type Metrics struct {
 	QueueDequeueBatchSize      *prometheus.HistogramVec
 	ImagePullIssueTotal        *prometheus.CounterVec
 
+	// Queue transport health. These are deliberately not behind ClientMetrics:
+	// they exist to make a queue outage visible in production as shipped, and
+	// they are what replaces the pod restart as the signal that something is
+	// wrong now that liveness only reacts to a permanently closed connection.
+	QueuePollFailuresTotal *prometheus.CounterVec
+	NATSConnectionState    *prometheus.GaugeVec
+	NATSReconnectsTotal    *prometheus.CounterVec
+
 	// K8s API server interaction metrics
 	K8sAPISuccessTotal *prometheus.CounterVec
 	K8sAPIFailureTotal *prometheus.CounterVec
@@ -351,6 +386,9 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.QueueMessageProcessedTotal)
 	prometheus.Unregister(m.QueueMessageDequeuedTotal)
 	prometheus.Unregister(m.QueueDequeueBatchSize)
+	prometheus.Unregister(m.QueuePollFailuresTotal)
+	prometheus.Unregister(m.NATSConnectionState)
+	prometheus.Unregister(m.NATSReconnectsTotal)
 	prometheus.Unregister(m.ImagePullIssueTotal)
 	prometheus.Unregister(m.K8sAPISuccessTotal)
 	prometheus.Unregister(m.K8sAPIFailureTotal)
@@ -522,6 +560,26 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		Help:    "Distribution of batch sizes (number of messages) pulled per dequeue operation by queue type and GPU",
 		Buckets: []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
 	}, withDefaultLabels(QueueTypeLabel, GPUNameLabel))
+
+	m.QueuePollFailuresTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: QueuePollFailuresTotalMetricName,
+		Help: "Total failed queue polls by queue type, GPU and reason. A sustained nonzero rate means the backend is not consuming work.",
+	}, withDefaultLabels(QueueTypeLabel, GPUNameLabel, QueuePollFailureReasonLabel))
+
+	m.NATSConnectionState = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: NATSConnectionStateMetricName,
+		Help: "NATS connection state: 0 disconnected, 1 connected, 2 reconnecting, 3 closed. Alert on 3, which is unrecoverable without a restart.",
+	}, withDefaultLabels())
+
+	m.NATSReconnectsTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: NATSReconnectsTotalMetricName,
+		Help: "Total NATS reconnects, so flapping is distinguishable from one long outage",
+	}, withDefaultLabels())
+	// Publish it at zero rather than waiting for the first reconnect. It carries
+	// no variable labels, so there is exactly one series, and a healthy agent
+	// would otherwise expose nothing here at all, leaving dashboards unable to
+	// tell "no reconnects" from "agent not reporting".
+	m.NATSReconnectsTotal.WithLabelValues(m.WithDefaultLabelValues()...)
 
 	m.ImagePullIssueTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
 		Name: ImagePullIssueTotalMetricName,
@@ -1027,6 +1085,18 @@ func (m *Metrics) RecordQueueDequeueBatchSize(queueType, gpuName string, batchSi
 		return
 	}
 	m.QueueDequeueBatchSize.WithLabelValues(m.WithDefaultLabelValues(queueType, gpuName)...).Observe(float64(batchSize))
+}
+
+// RecordQueuePollFailure counts a failed queue poll. Before this, a failing
+// poll was logged and otherwise invisible, which is how a backend could sit
+// consuming nothing while reporting healthy (nvcf#1590). reason must be one of
+// the QueuePollReason constants; it is a counter label, so free-form text would
+// be a cardinality leak.
+func (m *Metrics) RecordQueuePollFailure(queueType, gpuName, reason string) {
+	if m == nil || m.QueuePollFailuresTotal == nil {
+		return
+	}
+	m.QueuePollFailuresTotal.WithLabelValues(m.WithDefaultLabelValues(queueType, gpuName, reason)...).Inc()
 }
 
 // RecordStorageRequestDuration records the duration of a storage request to terminal state
