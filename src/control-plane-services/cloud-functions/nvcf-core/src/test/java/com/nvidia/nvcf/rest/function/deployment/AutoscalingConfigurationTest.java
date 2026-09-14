@@ -363,9 +363,7 @@ class AutoscalingConfigurationTest {
         if (expectedErrorField != null) {
             assertThat(responseEntity.getBody())
                     .contains(expectedErrorField)
-                    .doesNotContain("autoscalingConfiguration.scaleUpDetails",
-                                    "autoscalingConfiguration.scaleDownDetails",
-                                    "Autoscaling configuration is invalid",
+                    .doesNotContain("Autoscaling configuration is invalid",
                                     "AutoscalingConfigurationDto@", "com.nvidia");
         }
 
@@ -454,9 +452,7 @@ class AutoscalingConfigurationTest {
         if (expectedErrorField != null) {
             assertThat(responseEntity.getBody())
                     .contains(expectedErrorField)
-                    .doesNotContain("autoscalingConfiguration.scaleUpDetails",
-                                    "autoscalingConfiguration.scaleDownDetails",
-                                    "Autoscaling configuration is invalid",
+                    .doesNotContain("Autoscaling configuration is invalid",
                                     "AutoscalingConfigurationDto@", "com.nvidia");
         }
 

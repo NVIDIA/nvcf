@@ -134,22 +134,24 @@ public record AutoscalingConfigurationDto(
                 var details = value.scaleUpDetails();
                 if (Objects.isNull(details.factor()) || Objects.isNull(details.threshold()) ||
                         details.factor() <= 1.0f) {
-                    addViolation(context, MESG_INVALID_SCALE_UP_DETAILS);
+                    addViolation(context, MESG_INVALID_SCALE_UP_DETAILS, "scaleUpDetails");
                     log.info(MESG_INVALID_SCALE_UP_DETAILS);
                     valid = false;
                 }
-                valid &= isValidStickinessWindow(details.stickiness(), context);
+                valid &= isValidStickinessWindow(
+                        details.stickiness(), context, "scaleUpDetails");
             }
 
             if (Objects.nonNull(value.scaleDownDetails())) {
                 var details = value.scaleDownDetails();
                 if (Objects.isNull(details.factor()) || Objects.isNull(details.threshold()) ||
                         details.factor() >= 1.0f) {
-                    addViolation(context, MESG_INVALID_SCALE_DOWN_DETAILS);
+                    addViolation(context, MESG_INVALID_SCALE_DOWN_DETAILS, "scaleDownDetails");
                     log.info(MESG_INVALID_SCALE_DOWN_DETAILS);
                     valid = false;
                 }
-                valid &= isValidStickinessWindow(details.stickiness(), context);
+                valid &= isValidStickinessWindow(
+                        details.stickiness(), context, "scaleDownDetails");
             }
 
             return valid;
@@ -159,18 +161,21 @@ public record AutoscalingConfigurationDto(
 
         private boolean isValidStickinessWindow(
                 StickinessWindow stickiness,
-                ConstraintValidatorContext context) {
+                ConstraintValidatorContext context,
+                String detailsProperty) {
             if (Objects.isNull(stickiness)) {
                 return true;
             }
             if (Objects.isNull(stickiness.size()) || Objects.isNull(stickiness.threshold())) {
-                addViolation(context, MESG_INVALID_STICKINESS_WINDOW);
+                addViolation(
+                        context, MESG_INVALID_STICKINESS_WINDOW, detailsProperty, "stickiness");
                 log.info(MESG_INVALID_STICKINESS_WINDOW);
                 return false;
             }
             if (stickiness.size().compareTo(MAX_STICKINESS_SIZE) > 0 ||
                     stickiness.threshold().compareTo(stickiness.size()) >= 0) {
-                addViolation(context, MESG_INVALID_STICKINESS_WINDOW);
+                addViolation(
+                        context, MESG_INVALID_STICKINESS_WINDOW, detailsProperty, "stickiness");
                 log.info(MESG_INVALID_STICKINESS_WINDOW);
                 return false;
             }
@@ -179,10 +184,16 @@ public record AutoscalingConfigurationDto(
 
         private void addViolation(
                 ConstraintValidatorContext context,
-                String message) {
+                String message,
+                String property,
+                String... nestedProperties) {
             context.disableDefaultConstraintViolation();
-            context.buildConstraintViolationWithTemplate(message)
-                    .addConstraintViolation();
+            var violation = context.buildConstraintViolationWithTemplate(message)
+                    .addPropertyNode(property);
+            for (String nestedProperty : nestedProperties) {
+                violation = violation.addPropertyNode(nestedProperty);
+            }
+            violation.addConstraintViolation();
         }
     }
 }
