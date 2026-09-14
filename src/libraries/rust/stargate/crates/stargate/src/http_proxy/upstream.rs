@@ -37,6 +37,7 @@ pub(super) struct UpstreamStreamingResponse {
 pub(super) async fn proxy_via_quic_streaming(
     app: &ProxyAppState,
     registration: &std::sync::Arc<RegistrationGeneration>,
+    terminated_on_backend_loss: prometheus::core::GenericCounter<prometheus::core::AtomicU64>,
     method: Method,
     path_and_query: &str,
     forwarded_headers: HeaderMap,
@@ -71,13 +72,18 @@ pub(super) async fn proxy_via_quic_streaming(
         while let Some(chunk) = body_stream.recv_body().await.transpose() {
             let failed = chunk.is_err();
             if let Err(error) = &chunk {
-                // A mid-stream failure is the only router-side signal that an
-                // in-flight request died with its backend.
+                // A started response is never retried: the client stream ends
+                // here, promptly when the backend was lost.
+                let backend_lost = !registration.is_active();
+                if backend_lost {
+                    terminated_on_backend_loss.inc();
+                }
                 attempt_span.in_scope(|| {
                     warn!(
                         inference_server_id = %registration.inference_server_id(),
                         cluster_id = %registration.cluster_id(),
                         status = status.as_u16(),
+                        source = if backend_lost { "backend_lost" } else { "upstream_stream_error" },
                         error = %error,
                         "upstream response body stream failed"
                     )
@@ -240,6 +246,8 @@ mod tests {
         let result = proxy_via_quic_streaming(
             &app,
             &registration,
+            app.metrics
+                .backend_loss_cancellations_total(None, "test-model", "terminated"),
             Method::POST,
             "/v1/chat/completions",
             HeaderMap::new(),

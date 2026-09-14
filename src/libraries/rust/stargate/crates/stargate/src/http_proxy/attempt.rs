@@ -85,6 +85,16 @@ impl ProxyRequestRun<'_> {
             "proxy.failed_backends",
             self.failed_backend_ids.len() as i64,
         );
+        if std::mem::take(&mut self.backend_loss_pending) {
+            self.app
+                .metrics
+                .backend_loss_cancellations_total(
+                    self.routing_key(),
+                    self.model_id(),
+                    "re_dispatched",
+                )
+                .inc();
+        }
 
         if !chosen.reverse_tunnel
             && self.attempt_counters.connect_retries < self.app.retry.max_connect_retries
@@ -132,9 +142,17 @@ impl ProxyRequestRun<'_> {
             selected.expected_queue_ms,
         );
         let upstream_start = Instant::now();
+        // Resolved here so the body stream can count a mid-stream backend loss
+        // after this handler has returned.
+        let terminated_on_backend_loss = self.app.metrics.backend_loss_cancellations_total(
+            self.routing_key(),
+            self.model_id(),
+            "terminated",
+        );
         let upstream = proxy_via_quic_streaming(
             self.app,
             &chosen.registration,
+            terminated_on_backend_loss,
             self.request.method.clone(),
             &self.request.path_and_query,
             attempt_headers,
@@ -161,6 +179,22 @@ impl ProxyRequestRun<'_> {
                 }
 
                 self.attempt_counters.connect_retries += 1;
+                if is_backend_lost(chosen, status) {
+                    // The generation retired under this attempt; reconnecting to
+                    // it is pointless, so go straight to a sibling backend. The
+                    // outcome is counted once routing shows whether one exists.
+                    self.backend_loss_pending = true;
+                    self.record_retry("backend_lost");
+                    warn!(
+                        inference_server_id = %chosen.inference_server_id,
+                        cluster_id = %chosen.cluster_id,
+                        connect_retries = self.attempt_counters.connect_retries,
+                        "re-dispatching request after backend loss"
+                    );
+                    return ProxyAttemptOutcome::RetryAlternateBackend(
+                        chosen.inference_server_id.clone(),
+                    );
+                }
                 if !chosen.reverse_tunnel {
                     match reconnect_direct(self.app, chosen, "proxy_error").await {
                         Ok(()) => {
@@ -349,9 +383,15 @@ fn finish_attempt(
     upstream: Result<UpstreamStreamingResponse, StatusCode>,
 ) -> ProxyAttemptOutcome {
     let metrics = &run.app.metrics;
+    let backend_lost = matches!(&upstream, Err(status) if is_backend_lost(chosen, *status));
+    if backend_lost {
+        metrics
+            .backend_loss_cancellations_total(run.routing_key(), run.model_id(), "failed")
+            .inc();
+    }
     // Decide before consuming `upstream` so the success path does no capture work.
     let failure = should_log_failure(&disposition, upstream_status(&upstream))
-        .then(|| RequestFailureContext::new(&disposition, &upstream));
+        .then(|| RequestFailureContext::new(&disposition, &upstream, backend_lost));
     if let Some(retry_reason) = disposition.retry_reason() {
         Span::current().record("proxy.retry_reason", retry_reason);
     }
@@ -383,6 +423,12 @@ fn finish_attempt(
     }
 }
 
+/// A pre-response 5xx whose generation has already retired means the backend
+/// was lost under the attempt, not that the transport misbehaved.
+fn is_backend_lost(chosen: &RoutedInferenceServerSnapshot, status: StatusCode) -> bool {
+    status.is_server_error() && !chosen.registration.is_active()
+}
+
 /// Client errors passed through unchanged are the caller's problem; every
 /// server-side or capacity failure, and every locally decided final status,
 /// must be visible in router logs.
@@ -406,6 +452,7 @@ impl RequestFailureContext {
     fn new(
         disposition: &FinalRetryDisposition,
         upstream: &Result<UpstreamStreamingResponse, StatusCode>,
+        backend_lost: bool,
     ) -> Self {
         let upstream_headers = upstream.as_ref().ok().map(|upstream| &upstream.headers);
         let upstream_header = |name| {
@@ -416,10 +463,10 @@ impl RequestFailureContext {
         Self {
             disposition: disposition.label(),
             retry_reason: disposition.retry_reason().map(str::to_owned),
-            source: if upstream.is_ok() {
-                "upstream_response"
-            } else {
-                "proxy_error"
+            source: match (upstream.is_ok(), backend_lost) {
+                (true, _) => "upstream_response",
+                (false, true) => "backend_lost",
+                (false, false) => "proxy_error",
             },
             upstream_retryable: upstream_header(HEADER_STARGATE_RETRYABLE),
             upstream_retry_reason: upstream_header(HEADER_STARGATE_RETRY_REASON),
