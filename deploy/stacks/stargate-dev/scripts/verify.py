@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -33,19 +34,48 @@ def load_region(region: str) -> dict:
     return config
 
 
-def kubectl(context: str, *arguments: str) -> str:
-    result = subprocess.run(
-        ["kubectl", "--context", context, *arguments],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if result.returncode:
-        raise VerificationError(
-            result.stderr.strip() or f"kubectl failed for context {context}"
+def transient_control_error(message: str) -> bool:
+    return any(
+        value in message.lower()
+        for value in (
+            "tls handshake timeout",
+            "connection reset",
+            "i/o timeout",
+            "context deadline exceeded",
+            "unable to connect to the server",
+            "serviceunavailable",
+            "too many requests",
         )
-    return result.stdout
+    )
+
+
+def kubectl(context: str, *arguments: str, timeout: float = 30) -> str:
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                [
+                    "kubectl",
+                    "--context",
+                    context,
+                    f"--request-timeout={max(1, int(timeout) - 5)}s",
+                    *arguments,
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
+                return result.stdout
+            error = result.stderr.strip() or f"kubectl failed for context {context}"
+            if not transient_control_error(error):
+                raise VerificationError(error)
+        except subprocess.TimeoutExpired:
+            error = f"kubectl read timed out for context {context}"
+        if attempt < 2:
+            time.sleep(attempt + 1)
+    raise VerificationError(error)
 
 
 def require_deployment(context: str, namespace: str, name: str, replicas: int) -> None:

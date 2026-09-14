@@ -18,6 +18,7 @@ import yaml
 
 STACK_DIR = Path(__file__).resolve().parents[1]
 LOADTEST_PATH = STACK_DIR / "scripts" / "loadtest.py"
+sys.path.insert(0, str(LOADTEST_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("stargate_dev_loadtest", LOADTEST_PATH)
 LOADTEST = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = LOADTEST

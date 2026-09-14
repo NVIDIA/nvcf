@@ -25,6 +25,8 @@ from typing import Iterable
 
 import yaml
 
+from verify import VerificationError, kubectl as read_kubectl
+
 
 STACK_DIR = Path(__file__).resolve().parents[1]
 SUITE_PATH = STACK_DIR / "loadtest" / "suite.yaml"
@@ -355,6 +357,13 @@ class Campaign:
     def kubectl(
         self, context: str, arguments: list[str], *, timeout: float = 120
     ) -> str:
+        if arguments[:1] == ["get"] or arguments[:2] == ["rollout", "status"]:
+            try:
+                return read_kubectl(
+                    context, "-n", self.namespace, *arguments, timeout=timeout
+                )
+            except VerificationError as error:
+                raise LoadTestError(str(error)) from error
         return self.command(
             ["kubectl", "--context", context, "-n", self.namespace, *arguments],
             timeout=timeout,

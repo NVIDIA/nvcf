@@ -5,6 +5,7 @@
 import importlib.util
 import json
 import sys
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,6 +20,29 @@ SPEC.loader.exec_module(VERIFY)
 
 
 class MetricParsingTests(unittest.TestCase):
+    def test_transient_read_failure_is_retried_but_forbidden_is_not(self) -> None:
+        with (
+            mock.patch.object(
+                VERIFY.subprocess,
+                "run",
+                side_effect=[
+                    subprocess.CompletedProcess([], 1, "", "TLS handshake timeout"),
+                    subprocess.CompletedProcess([], 0, "verified", ""),
+                ],
+            ) as run,
+            mock.patch.object(VERIFY.time, "sleep"),
+        ):
+            self.assertEqual(VERIFY.kubectl("test", "get", "pods"), "verified")
+            self.assertEqual(run.call_count, 2)
+        with mock.patch.object(
+            VERIFY.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess([], 1, "", "Forbidden"),
+        ) as run:
+            with self.assertRaisesRegex(VERIFY.VerificationError, "Forbidden"):
+                VERIFY.kubectl("test", "get", "pods")
+            self.assertEqual(run.call_count, 1)
+
     def test_active_backend_metrics_are_keyed_by_routing_key_and_model(self) -> None:
         metrics = """
 # HELP stargate_active_inference_servers Active inference servers
