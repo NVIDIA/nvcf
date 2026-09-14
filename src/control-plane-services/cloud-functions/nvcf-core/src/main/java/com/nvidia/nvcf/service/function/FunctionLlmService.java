@@ -403,9 +403,9 @@ public class FunctionLlmService {
                     llmConfig.setTokenRateLimit(llmConfigUpdate.tokenRateLimit());
                 }
                 if (llmConfigUpdate.routingMethod() != null) {
-                    LlmConfigValidator.validateRoutingMethod(
-                            modelUpdate.modelName(), llmConfigUpdate.routingMethod());
-                    llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
+                    llmConfig.setRoutingMethod(
+                            LlmConfigValidator.validateAndNormalizeRoutingMethod(
+                                    modelUpdate.modelName(), llmConfigUpdate.routingMethod()));
                 }
                 updated = true;
                 break;
