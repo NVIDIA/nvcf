@@ -32,6 +32,14 @@ rateLimiter:
 
   replicaCount: 1
 
+  # Copies of each counter in the Olric cluster. Empty uses the service default,
+  # which keeps one backup so losing a member does not reset its counters.
+  olricReplicaCount: ""
+
+  # Headroom for the counter hand-off on SIGTERM. The hand-off fits the 30s
+  # Kubernetes default; this leaves room for a slower cluster.
+  terminationGracePeriodSeconds: 60
+
   podDisruptionBudget:
     enabled: false
     # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
