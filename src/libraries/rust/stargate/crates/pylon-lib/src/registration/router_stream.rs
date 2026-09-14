@@ -330,10 +330,8 @@ pub(super) async fn open_registration_stream(
 pub(super) async fn resolve_registration_token(
     provider: &AuthTokenProvider,
 ) -> anyhow::Result<String> {
-    // The top-level context identifies token-file and issuer failures without
-    // exposing a parser's secret-file excerpt through the source chain.
     provider
         .resolve_token()
         .await
-        .map_err(|error| anyhow::anyhow!("failed to resolve registration token: {error}"))
+        .context("failed to resolve registration token")
 }

@@ -1524,16 +1524,75 @@ fn registration_failures_keep_causes_and_suppress_repeated_errors_until_recovery
 #[tokio::test]
 async fn registration_token_errors_do_not_expose_secret_file_excerpts() {
     let file = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(file.path(), br#"{"secret":"do-not-log-this-secret"}"#).unwrap();
     let provider = stargate_auth::AuthTokenProvider::JsonFile {
         path: file.path().to_owned(),
         key: vec!["missing".into()],
     };
+    for contents in [
+        r#"{"secret":"do-not-log-this-secret"}"#,
+        r#"{"secret":"do-not-log-this-secret","missing":invalid}"#,
+    ] {
+        std::fs::write(file.path(), contents).unwrap();
+        let error = super::router_stream::resolve_registration_token(&provider)
+            .await
+            .unwrap_err();
+        let detail = recorded_registration_error(error.as_ref());
+        assert!(detail.contains("failed to resolve registration token"));
+        assert!(detail.contains("failed to extract key"));
+        assert!(!detail.contains("do-not-log-this-secret"));
+    }
+}
+
+#[tokio::test]
+async fn registration_token_errors_preserve_io_causes() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = stargate_auth::AuthTokenProvider::File(directory.path().join("missing-token"));
     let error = super::router_stream::resolve_registration_token(&provider)
         .await
         .unwrap_err();
-    let detail = format!("{error:#}");
-    assert!(detail.contains("failed to resolve registration token"));
-    assert!(detail.contains("failed to extract key"));
-    assert!(!detail.contains("do-not-log-this-secret"));
+    let cause = error.downcast_ref::<std::io::Error>().unwrap();
+    assert_eq!(cause.kind(), std::io::ErrorKind::NotFound);
+    let detail = recorded_registration_error(error.as_ref());
+    assert!(detail.contains("failed to read"));
+    assert!(detail.contains(&cause.to_string()));
+}
+
+#[tokio::test]
+async fn registration_http_errors_keep_transport_causes_without_sensitive_urls() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    // An HTTP peer that closes before responding produces a local client error.
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        drop(socket);
+    });
+    let error = reqwest::Client::new()
+        .get(format!(
+            "http://test:private-password@{address}/token?key=private-query"
+        ))
+        .send()
+        .await
+        .unwrap_err();
+    server.await.unwrap();
+    let detail = recorded_registration_error(&error);
+    assert!(detail.starts_with("HTTP "), "{detail}");
+    assert!(detail.contains(&std::error::Error::source(&error).unwrap().to_string()));
+    assert!(!detail.contains("private-password"));
+    assert!(!detail.contains("private-query"));
+}
+
+fn recorded_registration_error(error: &(dyn std::error::Error + 'static)) -> String {
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _guard = tracing::dispatcher::set_default(&dispatch);
+    super::grpc_endpoint::RegistrationFailureLog::default().report(
+        &grpc_endpoint("router.example.test:50071"),
+        "register_inference_server",
+        error,
+    );
+    subscriber
+        .events()
+        .into_iter()
+        .find_map(|event| event.fields.get("error").cloned())
+        .unwrap()
 }
