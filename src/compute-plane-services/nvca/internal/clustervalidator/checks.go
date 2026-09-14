@@ -906,7 +906,10 @@ func discoverGatewayAPIResources(client kubernetes.Interface) (map[string]bool, 
 		for _, v := range g.Versions {
 			resources, err := client.Discovery().ServerResourcesForGroupVersion(v.GroupVersion)
 			if err != nil {
-				continue
+				// The group exists, so a failure here is an API problem, not an
+				// absent resource. Swallowing it would leave found incomplete
+				// and report the CRDs as missing on a healthy cluster.
+				return nil, fmt.Errorf("listing resources for %s: %w", v.GroupVersion, err)
 			}
 			for _, r := range resources.APIResources {
 				found[r.Name] = true
