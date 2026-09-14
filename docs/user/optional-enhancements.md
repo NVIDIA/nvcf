@@ -21,6 +21,16 @@ installation and configuration guide.
 - [container-cache](./cluster-management/container-cache.md) - Accelerates container image pulls by caching layers locally
 - [gxcache](./cluster-management/gxcache.md) - Shader caching for simulation and rendering workloads
 
+## ModelExpress
+
+- [ModelExpress](./cluster-management/modelexpress.md) - Distributes model weights peer-to-peer between Dynamo workers to reduce repeated downloads during scale-out cold starts
+
+ModelExpress is an optional, opt-in component for self-managed compute planes. It
+is not part of the compute-plane stack, so an existing installation is unchanged
+until you install it yourself. It helps most when several workers start at once
+on a cluster with RDMA-capable networking, and little when a deployment runs a
+single worker or a small model.
+
 ## Vanity Gateway
 
 Vanity Gateway is an optional HTTP gateway service for deployments that need
