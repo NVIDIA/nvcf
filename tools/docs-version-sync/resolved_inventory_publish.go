@@ -278,6 +278,10 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	var coverageWarnings []string
 	for stateIndex, state := range states {
 		stateFile := filepath.Join(copiedRepoRoot, filepath.FromSlash(state.Path))
+		declared, err := declaredHelmfileReleaseNames(stateFile)
+		if err != nil {
+			return resolvedStackInventory{}, err
+		}
 		releases, manifests, stateSourceCharts, err := collectResolvedInventoryState(
 			repoRoot,
 			copiedRepoRoot,
@@ -298,10 +302,6 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 		}
 		for _, chart := range stateSourceCharts {
 			usedSourceCharts[chart] = struct{}{}
-		}
-		declared, err := declaredHelmfileReleaseNames(stateFile)
-		if err != nil {
-			return resolvedStackInventory{}, err
 		}
 		rendered := make(map[string]struct{}, len(releases))
 		for _, release := range releases {
@@ -353,7 +353,10 @@ func collectResolvedStackInventory(repoRoot, configPath string, source stackSour
 	return inventory, nil
 }
 
-var helmfileReleaseNameRE = regexp.MustCompile(`^\s*-\s+name:\s*(?:"([A-Za-z0-9][A-Za-z0-9_.-]*)"|'([A-Za-z0-9][A-Za-z0-9_.-]*)'|([A-Za-z0-9][A-Za-z0-9_.-]*))\s*(?:#.*)?$`)
+var (
+	helmfileListItemRE    = regexp.MustCompile(`^(\s*)-\s+`)
+	helmfileReleaseNameRE = regexp.MustCompile(`^\s*-\s+name:\s*(?:"([A-Za-z0-9][A-Za-z0-9_.-]*)"|'([A-Za-z0-9][A-Za-z0-9_.-]*)'|([A-Za-z0-9][A-Za-z0-9_.-]*))\s*(?:#.*)?$`)
+)
 
 func declaredHelmfileReleaseNames(path string) ([]string, error) {
 	raw, err := os.ReadFile(path)
@@ -361,6 +364,8 @@ func declaredHelmfileReleaseNames(path string) ([]string, error) {
 		return nil, fmt.Errorf("read Helmfile state for coverage: %w", err)
 	}
 	inReleases := false
+	releaseItemIndent := ""
+	haveReleaseItemIndent := false
 	seen := map[string]struct{}{}
 	var names []string
 	for _, line := range strings.Split(string(raw), "\n") {
@@ -372,8 +377,19 @@ func declaredHelmfileReleaseNames(path string) ([]string, error) {
 		if !inReleases {
 			continue
 		}
-		if trimmed != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "{{") {
+		listItemMatch := helmfileListItemRE.FindStringSubmatch(line)
+		if trimmed != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "{{") && listItemMatch == nil {
 			break
+		}
+		if listItemMatch == nil {
+			continue
+		}
+		if !haveReleaseItemIndent {
+			releaseItemIndent = listItemMatch[1]
+			haveReleaseItemIndent = true
+		}
+		if listItemMatch[1] != releaseItemIndent {
+			continue
 		}
 		match := helmfileReleaseNameRE.FindStringSubmatch(line)
 		if match == nil {

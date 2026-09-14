@@ -87,6 +87,9 @@ func TestDeclaredHelmfileReleaseNamesReportsUncoveredOptionalRelease(t *testing.
 releases:
   - name: required
     chart: nvcf/required
+    set:
+      - name: "image.repository"
+        value: example.invalid/required
   - name: "double-quoted-addon"
     chart: nvcf/double-quoted
   - name: 'single-quoted-addon' # optional release
