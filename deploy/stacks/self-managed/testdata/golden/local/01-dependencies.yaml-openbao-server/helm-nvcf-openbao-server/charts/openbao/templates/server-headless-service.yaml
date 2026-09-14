@@ -1,0 +1,29 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/server-headless-service.yaml
+# Service for OpenBao cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao-server-internal
+  namespace: vault-system
+  labels:
+    helm.sh/chart: openbao-0.28.3
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+    openbao-internal: "true"
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: "http"
+      port: 8200
+      targetPort: 8200
+      appProtocol: HTTP
+    - name: https-internal
+      port: 8201
+      targetPort: 8201
+  selector:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    component: server

@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+global:
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+
+observability:
+  profile: disabled
+
+stateMetrics:
+  enabled: false
+
+ingress:
+  gatewayApi:
+    controllerNamespace: gateway
+    gateways:
+      shared:
+        name: shared-gateway
+        namespace: gateway
+      grpc:
+        name: grpc-gateway
+        namespace: gateway

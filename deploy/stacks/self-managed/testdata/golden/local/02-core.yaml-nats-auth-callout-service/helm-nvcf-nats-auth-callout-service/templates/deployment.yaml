@@ -1,0 +1,132 @@
+---
+# Source: helm-nvcf-nats-auth-callout-service/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-auth-callout-service-helm-nvcf-nats-auth-callout-service
+  labels:
+    helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.2.0
+    app.kubernetes.io/name: helm-nvcf-nats-auth-callout-service
+    app.kubernetes.io/instance: nats-auth-callout-service
+    app.kubernetes.io/version: "0.8.3"
+    app.kubernetes.io/managed-by: Helm
+    kratos_logging: 'true'
+    kratos_metrics: 'true'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-nats-auth-callout-service
+      app.kubernetes.io/instance: nats-auth-callout-service
+  template:
+    metadata:
+      annotations:
+        # Force pod restart when configmap changes
+        checksum/config: 367d8d16063c6c5127cb19160495e4abd624f8101c2a718d6c4c60f61c8f6c18
+      labels:
+        helm.sh/chart: helm-nvcf-nats-auth-callout-service-1.2.0
+        app.kubernetes.io/name: helm-nvcf-nats-auth-callout-service
+        app.kubernetes.io/instance: nats-auth-callout-service
+        app.kubernetes.io/version: "0.8.3"
+        app.kubernetes.io/managed-by: Helm
+        kratos_logging: 'true'
+        kratos_metrics: 'true'
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+      containers:
+        - name: helm-nvcf-nats-auth-callout-service
+          image: ":0.8.3"
+          imagePullPolicy: IfNotPresent
+          args:
+            - "server"
+            - "--config"
+            - "/etc/config/config.yaml"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Service and Application Configuration
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NAME
+              value: "nats-auth-callout-service"
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT
+              value: "8080"
+
+            # Kubernetes Runtime Information
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+            # Tracing Configuration
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_ENABLED
+              value: "false"
+
+            # Additional Environment Variables
+
+            # Metrics Configuration
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED
+              value: "false"
+            - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_PORT
+              value: "9090"
+
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: config-volume
+          configMap:
+            name: nats-auth-callout-service-helm-nvcf-nats-auth-callout-service-config

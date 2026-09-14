@@ -1,0 +1,20 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/server-discovery-rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-server-discovery-rolebinding
+  namespace: vault-system
+  labels:
+    helm.sh/chart: openbao-0.28.3
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-server-discovery-role
+subjects:
+- kind: ServiceAccount
+  name: openbao-server
+  namespace: vault-system

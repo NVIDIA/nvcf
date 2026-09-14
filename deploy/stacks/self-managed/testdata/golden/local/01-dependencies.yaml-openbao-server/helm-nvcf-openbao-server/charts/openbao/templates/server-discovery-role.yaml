@@ -1,0 +1,16 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/server-discovery-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: vault-system
+  name: openbao-server-discovery-role
+  labels:
+    helm.sh/chart: openbao-0.28.3
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list", "update", "patch"]

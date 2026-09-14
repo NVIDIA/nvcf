@@ -1,0 +1,124 @@
+---
+# Source: helm-nvcf-nvct-api/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvct-api
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-nvct-api-1.6.0
+    app.kubernetes.io/name: helm-nvcf-nvct-api
+    app.kubernetes.io/instance: nvct-api
+    app.kubernetes.io/version: "1.66.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-nvct-api
+      app.kubernetes.io/instance: nvct-api
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "nvct-api"
+        vault.hashicorp.com/auth-path: "auth/jwt"
+        vault.hashicorp.com/auth-config-token-path: "/var/run/secrets/openbao/token"
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-nvct-api
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl"
+        vault.hashicorp.com/secret-volume-path: "/home/app/vault"
+        vault.hashicorp.com/template-static-secret-render-interval: "1h"
+        checksum/config-env: 84e7951dbae593a9f691d246126003649aa292bde82416576312328dafc19fdf
+      labels:
+        app.kubernetes.io/name: helm-nvcf-nvct-api
+        app.kubernetes.io/instance: nvct-api
+    spec:
+      serviceAccountName: nvct-api
+      securityContext:
+        {}
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                expirationSeconds: 3600
+                path: token
+        - name: vault-config-templates
+          configMap:
+            name: nvct-api-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+      containers:
+        - name: helm-nvcf-nvct-api
+          securityContext:
+            capabilities:
+              add:
+              - NET_BIND_SERVICE
+              drop:
+              - ALL
+            runAsUser: 1000
+          image: "nvcr.io/nvidia/nvcf/nvct-service-oss:1.66.0"
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - mountPath: /var/run/secrets/openbao
+              name: token
+              readOnly: true
+            - mountPath: /vault/config/templates
+              name: vault-config-templates
+              readOnly: true
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "ncp"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: REMOTE_CONFIG_ENABLED
+              value: "true"
+            - name: REMOTE_CONFIG_NAME
+              value: "nvct-api-remote-config"
+          envFrom:
+            - configMapRef:
+                name: nvct-api-env
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+            - name: management
+              containerPort: 8181
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 6
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 1
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 1
+          startupProbe:
+            failureThreshold: 30
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            limits:
+              cpu: 2
+              memory: 4Gi
+            requests:
+              cpu: 1
+              memory: 2Gi

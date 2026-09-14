@@ -1,0 +1,57 @@
+---
+# Source: helm-nvcf-sis/templates/rbac-config-reader.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spot-instance-service-remote-config-reader
+  namespace: sis
+  labels:
+    helm.sh/chart: helm-nvcf-sis-2.3.0
+    app.kubernetes.io/name: helm-nvcf-sis
+    app.kubernetes.io/instance: sis
+    app.kubernetes.io/version: "0.7.1"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  # list + watch only, and namespace-wide: spring-cloud-kubernetes client-config
+  # fetches via listNamespacedConfigMap and filters in memory (get is never
+  # called), and Kubernetes RBAC cannot scope list/watch by resourceNames.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["list", "watch"]
+---
+# Source: helm-nvcf-sis/templates/rbac-config-reader.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spot-instance-service-remote-config-reader
+  namespace: sis
+  labels:
+    helm.sh/chart: helm-nvcf-sis-2.3.0
+    app.kubernetes.io/name: helm-nvcf-sis
+    app.kubernetes.io/instance: sis
+    app.kubernetes.io/version: "0.7.1"
+    app.kubernetes.io/managed-by: Helm
+subjects:
+  # Intentionally hardcoded: matches the chart's ServiceAccount and the OpenBao
+  # JWT auth role (vault.hashicorp.com/role: sis-api) that pin the literal name.
+  - kind: ServiceAccount
+    name: sis-api
+    namespace: sis
+roleRef:
+  kind: Role
+  name: spot-instance-service-remote-config-reader
+  apiGroup: rbac.authorization.k8s.io

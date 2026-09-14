@@ -1,0 +1,19 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/injector-rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-server-agent-injector-leader-elector-binding
+  namespace: vault-system
+  labels:
+    app.kubernetes.io/name: openbao-agent-injector
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-server-agent-injector-leader-elector-role
+subjects:
+  - kind: ServiceAccount
+    name: openbao-server-agent-injector
+    namespace: vault-system

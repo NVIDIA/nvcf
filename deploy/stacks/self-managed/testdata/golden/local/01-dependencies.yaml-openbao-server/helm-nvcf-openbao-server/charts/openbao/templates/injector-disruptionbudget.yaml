@@ -1,0 +1,20 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/injector-disruptionbudget.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: openbao-server-agent-injector
+  namespace: vault-system
+  labels:
+    helm.sh/chart: openbao-0.28.3
+    app.kubernetes.io/name: openbao-agent-injector
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+    component: webhook
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openbao-agent-injector
+      app.kubernetes.io/instance: openbao-server
+      component: webhook
+  minAvailable: 1

@@ -1,0 +1,84 @@
+---
+# Source: helm-nvcf-cassandra/templates/configmap-cassandra-conf.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# cassandra.yaml overrides for the in-house Cassandra node.
+#
+# The official cassandra image ships its own cassandra.yaml and its entrypoint
+# only seds a fixed set of CASSANDRA_* keys (cluster name, seeds, snitch, dc,
+# addresses). Any other setting (auth, auto_repair, uuid_sstable_identifiers,
+# and so on) has no env hook. This ConfigMap carries a single overrides file,
+# rendered from .Values.cassandra.config, which the StatefulSet initContainer
+# deep-merges onto the image's cassandra.yaml (via yq) before the main container
+# starts. Our keys win; the image defaults are kept for everything else. Do not
+# put the entrypoint-templated keys here (see values.yaml config comment).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-conf
+  namespace: cassandra-system
+  labels:
+    app.kubernetes.io/name: cassandra
+    app.kubernetes.io/instance: cassandra
+    app.kubernetes.io/managed-by: Helm
+data:
+  cassandra-overrides.yaml: |
+    authenticator: PasswordAuthenticator
+    authorizer: CassandraAuthorizer
+    auto_repair:
+      enabled: true
+      global_settings:
+        allow_parallel_replica_repair: false
+        allow_parallel_replica_repair_across_schedules: true
+        force_repair_new_node: false
+        ignore_dcs: []
+        initial_scheduler_delay: 30m
+        materialized_view_repair_enabled: false
+        number_of_repair_threads: 1
+        parallel_repair_count: 1
+        parallel_repair_percentage: 3
+        repair_by_keyspace: true
+        repair_max_retries: 3
+        repair_primary_token_range_only: true
+        repair_retry_backoff: 60s
+        repair_session_timeout: 3h
+        sstable_upper_threshold: 10000
+        table_max_repair_time: 4h
+        token_range_splitter:
+          class_name: org.apache.cassandra.repair.autorepair.RepairTokenRangeSplitter
+          parameters:
+            bytes_per_assignment: 50GiB
+            max_bytes_per_schedule: 100GiB
+            max_tables_per_assignment: 64
+            partitions_per_assignment: 1048576
+      history_clear_delete_hosts_buffer_interval: 2h
+      mixed_major_version_repair_enabled: false
+      repair_check_interval: 10m
+      repair_task_min_duration: 5s
+      repair_type_overrides:
+        full:
+          enabled: true
+          min_repair_interval: 5d
+        incremental:
+          enabled: true
+          min_repair_interval: 1d
+        preview_repaired:
+          enabled: false
+          min_repair_interval: 4h
+    reject_repair_compaction_threshold: 1024
+    repair_disk_headroom_reject_ratio: 0.2
+    storage_compatibility_mode: NONE
+    uuid_sstable_identifiers_enabled: true
