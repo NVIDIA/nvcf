@@ -5169,6 +5169,118 @@ func TestProcessICMSRequestWorkDoesNotRateLimitDeletingRequestRetainingFinalizer
 	assert.Zero(t, bc.icmsRequestWQ.NumRequeues(key))
 }
 
+func TestEnqueueNotFoundInstancesOnDeleteEnqueuesEachInstance(t *testing.T) {
+	ctx := newTestContext()
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-deleted", Namespace: RequestsNamespace},
+		Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "req-1"},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-a": {ID: "instance-a"},
+				"instance-b": {ID: "instance-b"},
+			},
+		},
+	}
+
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ:       workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(context.Context, string, string) error { return nil },
+	}
+	bc.enqueueNotFoundInstancesOnDelete(ctx, req)
+
+	assert.Equal(t, 2, bc.notFoundInstanceWQ.Len())
+}
+
+func TestEnqueueNotFoundInstancesOnDeleteNoopsWithoutReporter(t *testing.T) {
+	ctx := newTestContext()
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-deleted", Namespace: RequestsNamespace},
+		Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "req-1"},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			Instances: map[string]nvcav2beta1.InstanceStatus{"instance-a": {ID: "instance-a"}},
+		},
+	}
+
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+	}
+	bc.enqueueNotFoundInstancesOnDelete(ctx, req)
+
+	assert.Zero(t, bc.notFoundInstanceWQ.Len())
+}
+
+func TestEnqueueNotFoundInstancesOnDeleteSkipsTombstoneWithoutPanicking(t *testing.T) {
+	ctx := newTestContext()
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ:       workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(context.Context, string, string) error { return nil },
+	}
+
+	bc.enqueueNotFoundInstancesOnDelete(ctx, cache.DeletedFinalStateUnknown{Key: "nvcf-backend/sr-deleted"})
+
+	assert.Zero(t, bc.notFoundInstanceWQ.Len())
+}
+
+func TestEnqueueNotFoundInstancesOnDeleteReadsTombstoneObj(t *testing.T) {
+	ctx := newTestContext()
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr-deleted", Namespace: RequestsNamespace},
+		Spec:       nvcav2beta1.ICMSRequestSpec{RequestID: "req-1"},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			Instances: map[string]nvcav2beta1.InstanceStatus{"instance-a": {ID: "instance-a"}},
+		},
+	}
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ:       workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(context.Context, string, string) error { return nil },
+	}
+
+	bc.enqueueNotFoundInstancesOnDelete(ctx, cache.DeletedFinalStateUnknown{
+		Key: "nvcf-backend/sr-deleted",
+		Obj: req,
+	})
+
+	assert.Equal(t, 1, bc.notFoundInstanceWQ.Len())
+}
+
+func TestProcessNotFoundInstanceWorkReportsAndForgets(t *testing.T) {
+	ctx := newTestContext()
+	key := notFoundInstanceKey{RequestID: "req-1", InstanceID: "instance-a"}
+
+	var gotReqID, gotInstanceID string
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(_ context.Context, reqID, instanceID string) error {
+			gotReqID, gotInstanceID = reqID, instanceID
+			return nil
+		},
+		tracer: noop.NewTracerProvider().Tracer("test"),
+	}
+	bc.notFoundInstanceWQ.Add(key)
+
+	require.True(t, bc.processNotFoundInstanceWork(ctx))
+	assert.Equal(t, "req-1", gotReqID)
+	assert.Equal(t, "instance-a", gotInstanceID)
+	assert.Zero(t, bc.notFoundInstanceWQ.NumRequeues(key))
+}
+
+func TestProcessNotFoundInstanceWorkRequeuesOnReporterError(t *testing.T) {
+	ctx := newTestContext()
+	key := notFoundInstanceKey{RequestID: "req-1", InstanceID: "instance-a"}
+
+	bc := &BackendK8sCache{
+		notFoundInstanceWQ: workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter: func(_ context.Context, _, _ string) error {
+			return errors.New("icms unavailable")
+		},
+		tracer: noop.NewTracerProvider().Tracer("test"),
+	}
+	bc.notFoundInstanceWQ.Add(key)
+
+	require.True(t, bc.processNotFoundInstanceWork(ctx))
+	assert.Positive(t, bc.notFoundInstanceWQ.NumRequeues(key))
+}
+
 func TestUpdateSchedulerWorkloadMetrics(t *testing.T) {
 	makeReq := func(requestID string, action common.MessageAction) *nvcav2beta1.ICMSRequest {
 		return &nvcav2beta1.ICMSRequest{
