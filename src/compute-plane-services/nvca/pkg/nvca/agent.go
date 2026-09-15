@@ -1082,6 +1082,8 @@ func (a *Agent) Start(ctx context.Context) error {
 	health.HTTPAddReadinessRoute(server.Router, a.readinessCheckGetter)
 	// Provides /version
 	server.AddVersionRoute(ctx)
+	// Provides /info
+	server.AddInfoRoute(ctx)
 	// Provides /metrics
 	nvcametrics.AddMetricsRoute(server.Router, log, nvcametrics.FromContext(ctx).GetDefaultLabelPairs(), "nvca")
 	// Provides /livez

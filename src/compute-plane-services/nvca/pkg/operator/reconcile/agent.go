@@ -557,9 +557,10 @@ func (a *Agent) Start(ctx context.Context) error {
 		core.WithRequestMetrics(a.metricsName),
 		core.WithHandlerTimeout(5*time.Second))...)
 
-	// Provides /healthz, /version, /metrics
+	// Provides /healthz, /version, /info, /metrics
 	server.AddHealthRoute(ctx)
 	server.AddVersionRoute(ctx)
+	server.AddInfoRoute(ctx)
 	server.AddMetricsRoute(ctx)
 
 	_, err = server.Start(ctx)
