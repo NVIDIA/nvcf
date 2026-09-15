@@ -271,16 +271,9 @@ fn record_completion_event(
     let generated_output = value["choices"].as_array().is_some_and(|choices| {
         choices.iter().any(|choice| {
             let delta = &choice["delta"];
-            ["content", "reasoning_content", "reasoning"]
+            ["content", "reasoning_content", "reasoning", "refusal"]
                 .iter()
                 .any(|field| delta[*field].as_str().is_some_and(|text| !text.is_empty()))
-                || delta["tool_calls"].as_array().is_some_and(|calls| {
-                    calls.iter().any(|call| {
-                        call["function"]["arguments"]
-                            .as_str()
-                            .is_some_and(|arguments| !arguments.is_empty())
-                    })
-                })
         })
     });
     if generated_output && result.first_output_ms.is_none() {
@@ -447,6 +440,14 @@ mod tests {
         assert!(result.ok, "{:?}", result.error);
         assert_eq!(result.first_output_ms, None);
         assert_eq!(result.observed_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn refusal_completion_records_output_timing_and_usage() {
+        let (result, _) = drive_test_response("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"refusal\":\"I cannot answer.\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"completion_tokens\":3}}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert!(result.first_output_ms.is_some());
+        assert_eq!(result.observed_output_tokens, Some(3));
     }
 
     #[tokio::test]
