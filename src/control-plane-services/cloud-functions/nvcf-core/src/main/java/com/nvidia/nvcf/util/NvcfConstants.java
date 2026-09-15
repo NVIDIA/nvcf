@@ -32,6 +32,9 @@ public final class NvcfConstants {
     public static final String METADATA_KEY_NVCF_ASSET_DESC = "nvcf-asset-description";
     public static final String DEFAULT_ASSET_DESCRIPTION = "Description not available";
 
+    // Read-only account scopes
+    public static final String SCOPE_ACCOUNTS_LISTING = "accounts_listing";
+
     // Super-Admin Scopes
     public static final String ADMIN_SCOPE_ACCOUNT_SETUP = "account_setup";
     public static final String ADMIN_SCOPE_AUTHORIZE_CLIENTS = "admin:authorize_clients";

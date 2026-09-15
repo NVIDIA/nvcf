@@ -88,9 +88,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping(value = "/v2/nvcf/accounts", produces = APPLICATION_JSON_VALUE)
 @Tag(name = "Account Management For NVIDIA Super Admins",
         description = """
-                Defines Account Management endpoints. These endpoints can only be invoked by
+                Defines Account Management endpoints. Write endpoints can only be invoked by
                  NVIDIA Super Admins and require a bearer token in HTTP Authorization header with
-                 'account_setup' scope.
+                 'account_setup' scope. Read endpoints also accept the read-only
+                 'accounts_listing' scope so reporting consumers can enumerate accounts without
+                 write or delete privileges.
                 """
 )
 public class AccountController {
@@ -99,6 +101,11 @@ public class AccountController {
     private static final String AUTH_DESCRIPTION = """
             Requires a bearer token in the HTTP Authorization header with 'account_setup' scope.
              These endpoints are invoked by NVIDIA Super Admins working across accounts.
+            """;
+    private static final String READ_AUTH_DESCRIPTION = """
+            Requires a bearer token in the HTTP Authorization header with 'account_setup' or the
+             read-only 'accounts_listing' scope. Read-only consumers should use 'accounts_listing'
+             so they can enumerate accounts without holding write or delete privileges.
             """;
 
     private final AccountFacade accountFacade;
@@ -129,9 +136,10 @@ public class AccountController {
     @GetMapping
     @Operation(
             summary = "List all the NVIDIA Cloud Accounts onboarded with Cloud Functions",
-            description = AUTH_DESCRIPTION
+            description = READ_AUTH_DESCRIPTION
     )
-    @PreAuthorize("hasAnyAuthority('account_setup', 'apikey:account_setup')")
+    @PreAuthorize("hasAnyAuthority('account_setup', 'apikey:account_setup', "
+            + "'accounts_listing', 'apikey:accounts_listing')")
     public ListAccountResponse getCloudAccounts(Authentication authentication) {
         return accountFacade.getCloudAccounts(authentication);
     }
@@ -226,9 +234,11 @@ public class AccountController {
     @GetMapping(value = "{ncaId}")
     @Operation(
             summary = "Get NVIDIA Cloud Account details",
-            description = "Gets details of the specified NVIDIA Cloud Account." + AUTH_DESCRIPTION
+            description = "Gets details of the specified NVIDIA Cloud Account."
+                    + READ_AUTH_DESCRIPTION
     )
-    @PreAuthorize("hasAnyAuthority('account_setup', 'apikey:account_setup')")
+    @PreAuthorize("hasAnyAuthority('account_setup', 'apikey:account_setup', "
+            + "'accounts_listing', 'apikey:accounts_listing')")
     public AccountDetailsResponse getCloudAccountDetails(
             @Parameter(description = NCA_ID_DESCRIPTION, required = true)
             @PathVariable String ncaId,
