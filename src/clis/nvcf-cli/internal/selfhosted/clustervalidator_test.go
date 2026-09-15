@@ -575,15 +575,31 @@ func TestCleanValidatorOutput_EmptyInput(t *testing.T) {
 }
 
 func TestKubectlLogsHint(t *testing.T) {
-	got := kubectlLogsHint("nvcf-preflight-validator-12345")
+	got := kubectlLogsHint("", "nvcf-preflight-validator-12345")
 	assert.Equal(t,
 		"kubectl logs -n default job/nvcf-preflight-validator-12345 --tail=-1",
 		got,
 	)
 }
 
+// In ModeSplit the two roles run against different clusters, so the hint has
+// to name the context the Job was actually created in.
+func TestKubectlLogsHint_PinsContext(t *testing.T) {
+	got := kubectlLogsHint("gpu-ctx", "nvcf-preflight-validator-12345")
+	assert.Equal(t,
+		"kubectl --context gpu-ctx logs -n default job/nvcf-preflight-validator-12345 --tail=-1",
+		got,
+	)
+}
+
+func TestKubectlLogsHint_QuotesContext(t *testing.T) {
+	got := kubectlLogsHint("my ctx", "nvcf-preflight-validator-12345")
+	assert.Contains(t, got, "--context 'my ctx'",
+		"a context name with a space must be quoted so the pasted command does not split it")
+}
+
 func TestKubectlLogsHint_EmptyJob(t *testing.T) {
-	assert.Equal(t, "", kubectlLogsHint(""),
+	assert.Equal(t, "", kubectlLogsHint("gpu-ctx", ""),
 		"empty jobName must produce empty hint so callers can compose detail without conditionals")
 }
 

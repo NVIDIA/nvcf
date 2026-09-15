@@ -593,7 +593,7 @@ func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret s
 				Registries:  registries,
 			})
 			r.Logs = result.Logs
-			r.Detail = clusterValidatorDetail(result.JobName)
+			r.Detail = clusterValidatorDetail(kubeContext, result.JobName)
 
 			if result.Err != nil {
 				r.Severity = "warning"
@@ -614,8 +614,8 @@ func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret s
 	}
 }
 
-func clusterValidatorDetail(jobName string) string {
-	hint := kubectlLogsHint(jobName)
+func clusterValidatorDetail(kubeContext, jobName string) string {
+	hint := kubectlLogsHint(kubeContext, jobName)
 	if hint == "" {
 		return ""
 	}
@@ -718,6 +718,11 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 					emptyShell = append(emptyShell, ns.Name)
 				}
 			}
+			// Every hint is pinned to the context that was actually probed.
+			// In split mode the two callers pass different contexts, so a bare
+			// kubectl command would run against whatever context happens to be
+			// current, and these hints delete namespaces.
+			kctl := "kubectl" + kubectlContextArg(kubeContext)
 			var hints []string
 			if len(terminating) > 0 {
 				// spec.finalizers is writable only through the /finalize
@@ -726,25 +731,54 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				// --type=merge` prints "patched" and changes nothing.
 				for _, ns := range terminating {
 					hints = append(hints, fmt.Sprintf(
-						"clear namespace finalizers on %s: kubectl get ns %s -o json | "+
-							"jq '.spec.finalizers=[]' | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
-						ns, ns, ns))
+						"clear namespace finalizers on %s: %s get ns %s -o json | "+
+							"jq '.spec.finalizers=[]' | %s replace --raw /api/v1/namespaces/%s/finalize -f -",
+						ns, kctl, ns, kctl, ns))
 				}
 				hints = append(hints,
 					"if it stays Terminating, the deadlock is on objects inside it: "+
-						"kubectl api-resources --verbs=list --namespaced -o name | "+
-						"xargs -n1 kubectl get -n <ns> --show-kind --ignore-not-found")
+						kctl+" api-resources --verbs=list --namespaced -o name | "+
+						"xargs -n1 "+kctl+" get -n <ns> --show-kind --ignore-not-found")
 			}
 			if len(emptyShell) > 0 {
 				hints = append(hints,
-					fmt.Sprintf("inspect and delete empty namespaces: kubectl delete namespace %s",
-						strings.Join(emptyShell, " ")))
+					fmt.Sprintf("inspect and delete empty namespaces: %s delete namespace %s",
+						kctl, strings.Join(emptyShell, " ")))
 			}
 			r.Message = fmt.Sprintf("%d stale namespace(s) detected: %s. To resolve: %s",
 				len(stale), strings.Join(parts, ", "), strings.Join(hints, "; "))
 			return r
 		},
 	}
+}
+
+// kubectlContextArg renders the probed context as a --context flag for the
+// remediation hints, or "" when no explicit context was given so the hint stays
+// readable for a single-cluster setup. The value is shell-quoted: a context
+// name is operator-supplied and arbitrary.
+func kubectlContextArg(kubeContext string) string {
+	if kubeContext == "" {
+		return ""
+	}
+	return " --context " + shellQuoteArg(kubeContext)
+}
+
+// shellQuoteArg makes s safe to paste into a shell. Unquoted when it holds only
+// characters no shell treats specially, so the common case stays legible.
+func shellQuoteArg(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := strings.IndexFunc(s, func(r rune) bool {
+		return !(r == '-' || r == '_' || r == '.' || r == '/' || r == ':' || r == '@' || r == '=' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z'))
+	}) == -1
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 // placeholderCheck returns a binaryCheckSpec that emits a passing "info"

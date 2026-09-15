@@ -20,6 +20,7 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -273,4 +274,35 @@ func TestControlPlaneNamespaceList_ExcludesRuntimeOwnedNamespaces(t *testing.T) 
 	}
 	assert.NotContains(t, nvcfComputePlaneNamespaces, "nvca-system",
 		"nvca-system is operator-created and hosts no release")
+}
+
+// TestStaleNamespaceCheck_HintsPinTheProbedContext guards the remediation
+// hints in split mode. The two callers probe different clusters, so a bare
+// kubectl command in a hint runs against whatever context is current, and
+// these hints delete namespaces.
+func TestStaleNamespaceCheck_HintsPinTheProbedContext(t *testing.T) {
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{
+			{Name: "nvcf", Reason: "stuck Terminating"},
+			{Name: "api-keys", Reason: "no Helm release"},
+		}, nil
+	}
+	r := staleNamespaceCheck(prober, "cp-ctx", []string{"nvcf", "api-keys"}).Run(context.Background())
+
+	// Every kubectl invocation, including the one piped into xargs, has to
+	// carry the flag: one unpinned command is enough to hit the wrong cluster.
+	for _, cmd := range strings.Split(r.Message, "kubectl ")[1:] {
+		assert.True(t, strings.HasPrefix(cmd, "--context cp-ctx "),
+			"unpinned kubectl invocation in hint: kubectl %s", cmd)
+	}
+	assert.Contains(t, r.Message, "kubectl --context cp-ctx delete namespace api-keys")
+}
+
+func TestStaleNamespaceCheck_HintsQuoteTheContext(t *testing.T) {
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "nvcf", Reason: "no Helm release"}}, nil
+	}
+	r := staleNamespaceCheck(prober, "my ctx", []string{"nvcf"}).Run(context.Background())
+	assert.Contains(t, r.Message, "--context 'my ctx' delete namespace nvcf",
+		"a context name with a space must be quoted so the pasted command does not split it")
 }

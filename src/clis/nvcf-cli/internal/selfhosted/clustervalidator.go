@@ -814,9 +814,13 @@ func cleanValidatorOutput(raw string) string {
 	return s + "\n"
 }
 
-func kubectlLogsHint(jobName string) string {
+// Pinned to the context the Job was created in: in ModeSplit the two roles
+// run against different clusters, so a bare kubectl command resolves to
+// whichever context is current and the hint reports "job not found".
+func kubectlLogsHint(kubeContext, jobName string) string {
 	if jobName == "" {
 		return ""
 	}
-	return fmt.Sprintf("kubectl logs -n %s job/%s --tail=-1", clusterValidatorNamespace, jobName)
+	return fmt.Sprintf("kubectl%s logs -n %s job/%s --tail=-1",
+		kubectlContextArg(kubeContext), clusterValidatorNamespace, jobName)
 }
