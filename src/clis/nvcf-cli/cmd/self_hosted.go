@@ -41,8 +41,8 @@ and 'install --compute-plane' explicitly.`,
 
 // Persistent flags shared by all self-hosted subcommands.
 var (
-	selfHostedControlPlaneStack   string
-	selfHostedComputePlaneStack   string
+	selfHostedControlPlaneStack    string
+	selfHostedComputePlaneStack    string
 	selfHostedEnv                 string
 	selfHostedNoApply             bool
 	selfHostedNonInter            bool
