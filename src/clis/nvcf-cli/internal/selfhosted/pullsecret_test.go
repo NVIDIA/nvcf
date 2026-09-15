@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -501,4 +502,52 @@ func TestWriteDockerConfigSecret_RefusesUnmanagedSameTypeSecret(t *testing.T) {
 		"the operator's credentials must be left untouched")
 	assert.NotContains(t, got.Labels, "app.kubernetes.io/managed-by",
 		"managed labels must not be stamped on it, or the sweep would later delete it")
+}
+
+// If an unmanaged Docker-config Secret appears between our Get and our Create,
+// Create fails with AlreadyExists and the recovery path refetches it. That path
+// must apply the same ownership check as the others, or a lost race silently
+// overwrites an operator-owned secret and marks it for sweep deletion.
+func TestWriteDockerConfigSecret_RefusesUnmanagedAfterCreateRace(t *testing.T) {
+	ctx := context.Background()
+	operatorOwned := dockerConfigBlob(t, "private.registry.test", "operator", "their-secret")
+	ours := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "ours")
+
+	const name = "nvcf-preflight-pull-secret-control-plane"
+	client := fake.NewSimpleClientset()
+
+	// First Get: absent, so the code proceeds to Create. Create: AlreadyExists,
+	// as though another actor won the race. Second Get: their unmanaged secret.
+	gets := 0
+	client.PrependReactor("get", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 1 {
+			return true, nil, apierrors.NewNotFound(corev1.Resource("secrets"), name)
+		}
+		return true, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: clusterValidatorNamespace,
+				Labels:    map[string]string{"owner": "operator"},
+			},
+			Type: corev1.SecretTypeDockerConfigJson,
+			Data: map[string][]byte{corev1.DockerConfigJsonKey: operatorOwned},
+		}, nil
+	})
+	client.PrependReactor("create", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewAlreadyExists(corev1.Resource("secrets"), name)
+	})
+
+	var updated bool
+	client.PrependReactor("update", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		updated = true
+		return true, nil, nil
+	})
+
+	err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, name,
+		clusterValidatorControlPlaneRole, ours)
+
+	require.Error(t, err, "losing the create race to an unmanaged secret must not overwrite it")
+	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
+	assert.False(t, updated, "no Update may be issued against an unmanaged secret")
 }

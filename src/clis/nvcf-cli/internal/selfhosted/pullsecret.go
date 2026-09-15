@@ -257,11 +257,8 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 		// with a colliding name holds their registry credentials, and this
 		// would replace the data and stamp our managed labels on it, after
 		// which the role sweep would delete it outright.
-		if !isManagedByValidatorCLI(current) {
-			return fmt.Errorf(
-				"refusing to overwrite %s/%s which is not managed by nvcf-cli; "+
-					"pass --cluster-validator-pull-secret to choose an explicit secret name",
-				namespace, name)
+		if err := refuseIfUnmanaged(current, namespace, name, ""); err != nil {
+			return err
 		}
 		if current.Data == nil {
 			current.Data = map[string][]byte{}
@@ -283,11 +280,9 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 		// Without this, an operator-owned secret with a colliding name
 		// (e.g. an Opaque secret in 'default' sharing the validator's
 		// pull-secret name) would be silently destroyed.
-		if !isManagedByValidatorCLI(current) {
-			return fmt.Errorf(
-				"refusing to replace %s/%s (type=%s) which is not managed by nvcf-cli; "+
-					"pass --cluster-validator-pull-secret to choose an explicit secret name",
-				namespace, name, current.Type)
+		if err := refuseIfUnmanaged(current, namespace, name,
+			fmt.Sprintf("type=%s", current.Type)); err != nil {
+			return err
 		}
 		if err := secrets.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete incompatible secret type %s: %w", current.Type, err)
@@ -306,6 +301,9 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 		current, getErr := secrets.Get(ctx, name, metav1.GetOptions{})
 		if getErr != nil {
 			return fmt.Errorf("get after create race: %w", getErr)
+		}
+		if err := refuseIfUnmanaged(current, namespace, name, "lost create race"); err != nil {
+			return err
 		}
 		if current.Type != corev1.SecretTypeDockerConfigJson {
 			return fmt.Errorf("create race left secret %s/%s with type %s, want %s",
@@ -332,9 +330,36 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 // writeDockerConfigSecret stamps on every secret it creates. Used to
 // gate the delete-then-recreate branch so we never destroy an operator-
 // or chart-owned secret that happens to share a name with one of ours.
+// refuseIfUnmanaged rejects a Secret nvcf-cli does not own. Every path in
+// writeDockerConfigSecret that mutates an existing Secret must call this:
+// overwriting an operator-owned secret replaces their registry credentials and
+// stamps our managed labels on it, after which the role sweep deletes it.
+//
+// detail is appended to the message when there is something useful to say
+// (the conflicting type, the race), otherwise "".
+func refuseIfUnmanaged(s *corev1.Secret, namespace, name, detail string) error {
+	if isManagedByValidatorCLI(s) {
+		return nil
+	}
+	if detail != "" {
+		detail = " (" + detail + ")"
+	}
+	return fmt.Errorf(
+		"refusing to overwrite %s/%s%s which is not managed by nvcf-cli; "+
+			"pass --cluster-validator-pull-secret to choose an explicit secret name",
+		namespace, name, detail)
+}
+
 func isManagedByValidatorCLI(s *corev1.Secret) bool {
+	return hasValidatorManagedLabels(s.Labels)
+}
+
+// hasValidatorManagedLabels reports whether an object carries the labels this
+// CLI stamps on everything it creates. It is the ownership test for every
+// resource the validator writes to or deletes by name, not just Secrets.
+func hasValidatorManagedLabels(labels map[string]string) bool {
 	for k, v := range clusterValidatorLabels() {
-		if s.Labels[k] != v {
+		if labels[k] != v {
 			return false
 		}
 	}

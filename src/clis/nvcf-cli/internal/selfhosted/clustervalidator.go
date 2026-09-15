@@ -264,6 +264,13 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 	// Update-or-Create so a future CLI version's expanded rules replace the
 	// old set; AlreadyExists tolerance alone would silently keep stale rules.
 	if existing, err := client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{}); err == nil {
+		// Do not rewrite the rules of a ClusterRole we do not own: this is a
+		// cluster-scoped privilege object, and an operator-owned one with a
+		// colliding name would silently have its permissions replaced.
+		if !hasValidatorManagedLabels(existing.Labels) {
+			return fmt.Errorf(
+				"refusing to modify ClusterRole %s which is not managed by nvcf-cli", name)
+		}
 		existing.Rules = cr.Rules
 		existing.Labels = cr.Labels
 		if _, err := client.RbacV1().ClusterRoles().Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
@@ -332,9 +339,23 @@ func validatorConfigNameForRole(role string) string {
 // Errors are swallowed: stale RBAC is preferable to failing the result.
 func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role string) {
 	name := clusterValidatorRBACName(role)
-	_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
-	_ = client.RbacV1().ClusterRoles().Delete(ctx, name, metav1.DeleteOptions{})
-	_ = client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Delete(ctx, name, metav1.DeleteOptions{})
+
+	// Delete by name, but only what we own. These are cluster-scoped objects
+	// and the errors here are swallowed, so an operator-owned ClusterRole with
+	// a colliding name would otherwise vanish with no diagnostic at all.
+	if crb, err := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{}); err == nil &&
+		hasValidatorManagedLabels(crb.Labels) {
+		_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
+	}
+	if cr, err := client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{}); err == nil &&
+		hasValidatorManagedLabels(cr.Labels) {
+		_ = client.RbacV1().ClusterRoles().Delete(ctx, name, metav1.DeleteOptions{})
+	}
+	sa := client.CoreV1().ServiceAccounts(clusterValidatorNamespace)
+	if acct, err := sa.Get(ctx, name, metav1.GetOptions{}); err == nil &&
+		hasValidatorManagedLabels(acct.Labels) {
+		_ = sa.Delete(ctx, name, metav1.DeleteOptions{})
+	}
 }
 
 // Errors are swallowed: a stale Job is preferable to blocking the new run.
@@ -443,7 +464,13 @@ func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interfa
 		return nil
 	}
 
-	// Always update so a newer CLI version's config (or new registries) replaces stale content.
+	// Always update so a newer CLI version's config (or new registries) replaces
+	// stale content, but never overwrite a ConfigMap we do not own.
+	if !hasValidatorManagedLabels(existing.Labels) {
+		return fmt.Errorf(
+			"refusing to overwrite ConfigMap %s/%s which is not managed by nvcf-cli",
+			clusterValidatorNamespace, clusterValidatorConfigName)
+	}
 	existing.Data = desired.Data
 	existing.Labels = desired.Labels
 	if _, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {

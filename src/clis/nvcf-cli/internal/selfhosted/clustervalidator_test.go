@@ -247,8 +247,10 @@ func TestRunClusterValidator_RBACRefreshesClusterRoleRules(t *testing.T) {
 	oldRules := []rbacv1.PolicyRule{
 		{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get"}},
 	}
+	// Labelled as a prior CLI run would have left it: only a ClusterRole we own
+	// may have its rules rewritten.
 	client := fake.NewSimpleClientset(&rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorName},
+		ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorName, Labels: clusterValidatorLabels()},
 		Rules:      oldRules,
 	})
 
@@ -705,4 +707,57 @@ func TestClusterValidatorRBAC_IsScopedPerRole(t *testing.T) {
 
 	_, err = client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Get(ctx, gpuName, metav1.GetOptions{})
 	assert.NoError(t, err, "the other role's ServiceAccount must survive")
+}
+
+// A ClusterRole is a cluster-scoped privilege object. An operator-owned one with
+// a colliding name must not have its rules rewritten, and the sweep must not
+// delete it.
+func TestClusterValidatorRBAC_RefusesUnmanagedClusterRole(t *testing.T) {
+	ctx := context.Background()
+	const role = clusterValidatorControlPlaneRole
+	name := clusterValidatorRBACName(role)
+
+	operatorRules := []rbacv1.PolicyRule{
+		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}},
+	}
+	client := fake.NewSimpleClientset(&rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"owner": "operator"}},
+		Rules:      operatorRules,
+	})
+
+	err := ensureClusterValidatorRBAC(ctx, client, role)
+	require.Error(t, err, "an unmanaged ClusterRole must not be rewritten")
+	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
+
+	got, getErr := client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, getErr)
+	assert.Equal(t, operatorRules, got.Rules, "the operator's rules must be untouched")
+
+	// The sweep must leave it alone too, even though it matches by name.
+	sweepClusterValidatorRBAC(ctx, client, role)
+	_, getErr = client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{})
+	assert.NoError(t, getErr, "the sweep must not delete a ClusterRole it does not own")
+}
+
+// The same invariant for the network-check ConfigMap.
+func TestEnsureClusterValidatorConfig_RefusesUnmanagedConfigMap(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      clusterValidatorConfigName,
+			Namespace: clusterValidatorNamespace,
+			Labels:    map[string]string{"owner": "operator"},
+		},
+		Data: map[string]string{"config.yaml": "operator: content"},
+	})
+
+	err := ensureClusterValidatorConfig(ctx, client, nil)
+	require.Error(t, err, "an unmanaged ConfigMap must not be overwritten")
+	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
+
+	got, getErr := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx,
+		clusterValidatorConfigName, metav1.GetOptions{})
+	require.NoError(t, getErr)
+	assert.Equal(t, "operator: content", got.Data["config.yaml"],
+		"the operator's ConfigMap content must be untouched")
 }
