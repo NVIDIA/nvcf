@@ -95,3 +95,25 @@ func TestResolveStackNamespaces_PrefersStack(t *testing.T) {
 	assert.Equal(t, []string{"from-stack"}, resolveStackNamespaces(dir, []string{"static"}),
 		"a readable stack must win over the static list")
 }
+
+// A `namespace:` key nested inside a release's values block is chart
+// configuration, not a namespace the stack owns. Reading it as one would add a
+// probe target whose remediation is deletion.
+func TestStackReleaseNamespaces_SkipsNestedValuesKeys(t *testing.T) {
+	dir := writeStack(t, map[string]string{
+		"02-core.yaml.gotmpl": `
+releases:
+  - name: api
+    namespace: nvcf
+    values:
+      - serviceMonitor:
+          namespace: monitoring
+      - someChart:
+          namespace: kube-system
+`,
+	})
+
+	got := stackReleaseNamespaces(dir)
+	assert.Equal(t, []string{"nvcf"}, got,
+		"only release-level namespaces may be probed; nested values keys must be ignored")
+}

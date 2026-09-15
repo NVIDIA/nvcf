@@ -25,11 +25,19 @@ import (
 	"strings"
 )
 
-// helmfileNamespaceRE matches a literal `namespace: <name>` declaration in a
-// helmfile release entry. Values containing a Go template action are excluded
-// by the character class: those are operator-configurable (the gateway
-// controller namespace is one), so their rendered value is not knowable here.
-var helmfileNamespaceRE = regexp.MustCompile(`(?m)^\s*namespace:\s*([A-Za-z0-9][A-Za-z0-9.-]*)\s*$`)
+// helmfileNamespaceRE matches a literal `namespace: <name>` declaration on a
+// helmfile release entry.
+//
+// Two deliberate restrictions, because a false positive here becomes a
+// "delete this namespace" remediation:
+//
+//   - Indentation is capped at 4 spaces, the release-entry level. Keys nested
+//     inside a release's `values:` block sit at 6 or more and must not be read
+//     as release namespaces.
+//   - The value must be a bare DNS label. A value containing a Go template
+//     action is operator-configurable (the gateway controller namespace is
+//     one), so its rendered value is not knowable from the source.
+var helmfileNamespaceRE = regexp.MustCompile(`(?m)^ {0,4}namespace:\s*([a-z0-9][a-z0-9.-]*)\s*$`)
 
 // stackReleaseNamespaces returns the namespaces that helmfile releases deploy
 // into for the stack rooted at stackDir, or nil when the stack is not readable.

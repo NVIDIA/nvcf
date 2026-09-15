@@ -33,8 +33,9 @@ import (
 const (
 	registryProbeTimeout = 10 * time.Second
 
-	// certManagerRegistry is the well-known exception from the helmfile:
-	// cert-manager uses quay.io/jetstack images, not global.image.registry.
+	// certManagerRegistry is cert-manager's upstream registry. It is only
+	// contacted when the stack is not rewriting cert-manager images to
+	// global.image.registry, which global.yaml.gotmpl does for all five of them.
 	certManagerRegistry = "quay.io"
 )
 
@@ -52,9 +53,15 @@ func NewRegistryCredentialChecker() RegistryCredentialChecker {
 }
 
 // probeRegistryCredential authenticates to registry using the OCI Bearer token
-// flow. repoHint is the OAuth scope repository path. ECR registries return a
-// clear diagnostic instead of attempting the Bearer flow. When critical is true,
-// anonymous token success is rejected: configured credentials must be present.
+// flow. repoHint is the OAuth scope repository path.
+//
+// When critical is true, anonymous success is not sufficient: the install pulls
+// private repositories, so a local credential must also be present.
+//
+// Returns errRegistryProbeSkipped for registries this flow cannot speak to
+// (ECR's SigV4, a Basic challenge, a 200 that does not look like a registry)
+// and errRegistryCredentialsUnverified when no local credential is readable.
+// Both are advisory: the caller must not fail the run on either.
 func probeRegistryCredential(ctx context.Context, registry, repoHint string, critical bool) error {
 	// ECR uses AWS SigV4, not the OCI Bearer flow, so this probe cannot speak
 	// to it. Skip rather than fail: returning an error here makes an
@@ -138,10 +145,11 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		// not masquerade as credentials for quay.io, GHCR, or Harbor — those
 		// registries reject NGC tokens, which would wrongly produce "credentials
 		// rejected" when the real diagnosis is "no credentials configured."
-		_, _, hasCreds := credentialsForRegistry(registry)
-		if !hasCreds {
-			return fmt.Errorf("no credentials configured for %s "+
-				"(add to ~/.docker/config.json or set NGC_API_KEY for NGC registries)", registry)
+		if _, _, hasCreds := credentialsForRegistry(registry); !hasCreds {
+			// Same situation as the critical path below, so the same verdict:
+			// no readable local credential is not proof that none exists, since
+			// a credential helper is invisible here.
+			return errRegistryCredentialsUnverified{registry: registry}
 		}
 		return fmt.Errorf("credentials rejected by %s: %w", registry, err)
 	}
@@ -251,10 +259,12 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	// Source 2: read global.image.registry from the environment values file.
 	// This catches cases where the operator points at a custom NGC org or a
 	// staging environment that differs from the validator image's registry.
+	stackRegistry := ""
 	if stackValuesFile != "" {
-		if reg := readGlobalImageRegistry(stackValuesFile); reg != "" {
+		stackRegistry = readGlobalImageRegistry(stackValuesFile)
+		if stackRegistry != "" {
 			// If it's an NGC registry, mark critical; customer mirrors are non-critical.
-			add(reg, "", isNGCRegistry(reg))
+			add(stackRegistry, "", isNGCRegistry(stackRegistry))
 		}
 	}
 
@@ -263,7 +273,7 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	// image to global.image.registry, so on a configured stack quay.io is never
 	// contacted and probing it is a pointless round trip. It is only reachable
 	// when no stack values file resolved.
-	if stackValuesFile == "" || readGlobalImageRegistry(stackValuesFile) == "" {
+	if stackRegistry == "" {
 		add(certManagerRegistry, "", false)
 	}
 

@@ -151,8 +151,9 @@ func TestEnumerateRegistries_RepoHintFromImageRef(t *testing.T) {
 	t.Fatal("nvcr.io not found in entries")
 }
 
-func TestEnumerateRegistries_AlwaysIncludesCertManager(t *testing.T) {
-	// cert-manager always uses quay.io — it must appear even when not in extras.
+func TestEnumerateRegistries_IncludesCertManagerWhenStackIsNotMirroring(t *testing.T) {
+	// With no stack values file there is no global.image.registry to mirror
+	// cert-manager to, so its upstream registry is genuinely contacted.
 	entries := EnumerateRegistries("nvcr.io/some/image:1.0", "", nil)
 	found := false
 	for _, e := range entries {
@@ -285,4 +286,52 @@ func errorf(msg string) error { return fmt.Errorf("%s", msg) }
 
 func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
+}
+
+// The stack rewrites every cert-manager image to global.image.registry, so on
+// a configured stack quay.io is never contacted at pull time and probing it is
+// a pointless 10-second round trip on every invocation.
+func TestEnumerateRegistries_SkipsCertManagerWhenStackMirrors(t *testing.T) {
+	dir := t.TempDir()
+	valuesPath := dir + "/base.yaml"
+	require.NoError(t, writeFile(valuesPath, []byte(`
+global:
+  image:
+    registry: mirror.company.internal
+`)))
+
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", valuesPath, nil)
+	for _, e := range entries {
+		assert.NotEqual(t, certManagerRegistry, e.Registry,
+			"a stack mirroring images must not trigger a quay.io probe")
+	}
+}
+
+// A bare IPv6 literal must stay bracketed or the probe URL is malformed.
+func TestEnumerateRegistries_BracketsIPv6Extras(t *testing.T) {
+	entries := EnumerateRegistries("nvcr.io/some/image:1.0", "", []string{"[::1]:5000"})
+
+	found := false
+	for _, e := range entries {
+		if strings.Contains(e.Registry, "::1") {
+			found = true
+			assert.Equal(t, "[::1]:5000", e.Registry,
+				"an IPv6 literal must keep its brackets so the probe URL parses")
+		}
+	}
+	assert.True(t, found, "the IPv6 extra must be enumerated")
+}
+
+// The validator image's registry follows the same Critical policy as every
+// other source. Forcing it true makes an air-gapped install fail preflight for
+// a registry that is never contacted (ImagePullPolicy is IfNotPresent).
+func TestEnumerateRegistries_NonNGCImageRegistryIsNotCritical(t *testing.T) {
+	entries := EnumerateRegistries("mirror.company.internal/nvcf/cluster-validator:1.0", "", nil)
+	for _, e := range entries {
+		if e.Registry == "mirror.company.internal" {
+			assert.False(t, e.Critical, "a non-NGC mirror must not be forced critical")
+			return
+		}
+	}
+	t.Fatal("mirror.company.internal not enumerated")
 }

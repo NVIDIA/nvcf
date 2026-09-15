@@ -138,17 +138,16 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	if err := ensureClusterValidatorRBAC(vctx, client); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
 	}
-	// Remove the ClusterRole and ClusterRoleBinding once the Job has reached a
-	// terminal state, to minimize the window where the elevated SA exists.
-	//
-	// Gated on jobTerminated rather than deferred unconditionally: on the
-	// timeout and ImagePullBackOff paths the pod is still running, and pulling
-	// its RBAC out from under it fills the surviving transcript with "forbidden"
-	// errors that mask the real cause. When --no-cleanup is set the operator
+	// Remove the ClusterRole and ClusterRoleBinding to minimize the window in
+	// which the elevated SA exists. When --no-cleanup is set the operator
 	// expects to inspect the Job, so the RBAC stays either way.
-	jobTerminated := false
+	//
+	// podMayBeRunning is true only between a successful Job create and a clean
+	// wait. Everywhere else nothing is using the RBAC, so reclaim it rather
+	// than leaking a cluster-wide ClusterRole.
+	podMayBeRunning := false
 	defer func() {
-		if !noCleanup && jobTerminated {
+		if !noCleanup && !podMayBeRunning {
 			sweepClusterValidatorRBAC(context.Background(), client)
 		}
 	}()
@@ -176,11 +175,13 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("creating validator Job: %w", err)}
 	}
+	podMayBeRunning = true
 
 	final, waitErr := waitForClusterValidatorJob(vctx, client, jobName)
-	// Only a clean wait means the pod is done; a timeout or a pull failure
-	// leaves it running, so the deferred RBAC sweep must not fire.
-	jobTerminated = waitErr == nil
+	// A clean wait means the pod reached a terminal state, so the RBAC can go.
+	// A timeout or pull failure leaves it running: pulling the RBAC then fills
+	// the surviving transcript with "forbidden" and masks the real cause.
+	podMayBeRunning = waitErr != nil
 
 	// Fetch logs under a fresh ctx from the parent: vctx is expired on the
 	// timeout path, and dropping the partial transcript hurts most there.

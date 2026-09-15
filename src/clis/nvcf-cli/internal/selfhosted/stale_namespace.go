@@ -95,10 +95,18 @@ func NewStaleNamespaceProber() StaleNamespaceProber {
 //
 // Helm 3 marks each release secret with the label owner=helm; absence of any
 // such secret means no live Helm release occupies the namespace.
-// helmReleaseListPageSize bounds each page of the owner=helm scan. A namespace
-// holds at most a handful of release objects, so this is only a ceiling on how
-// much is pulled per round trip while paging past non-matching objects.
-const helmReleaseListPageSize = 100
+const (
+	// helmReleaseListPageSize bounds each page of the owner=helm scan. A
+	// namespace holds at most a handful of release objects, so this is only a
+	// ceiling on how much is pulled per round trip while paging past
+	// non-matching objects.
+	helmReleaseListPageSize = 100
+
+	// helmReleaseListMaxPages stops the scan even if the server keeps handing
+	// back a Continue token. At the page size above this covers 100k objects in
+	// one namespace, far past anything real, and guarantees termination.
+	helmReleaseListMaxPages = 1000
+)
 
 // helmReleaseExists reports whether any owner=helm object exists, paging until
 // it finds one or the server reports no more results.
@@ -109,11 +117,10 @@ const helmReleaseListPageSize = 100
 // ServiceAccount tokens and TLS secrets that sort before sh.helm.release.v1.*,
 // so the first page is routinely empty on a perfectly healthy install.
 func helmReleaseExists(
-	ctx context.Context, namespace string,
 	list func(metav1.ListOptions) (count int, cont string, err error),
 ) (bool, error) {
 	opts := metav1.ListOptions{LabelSelector: "owner=helm", Limit: helmReleaseListPageSize}
-	for {
+	for page := 0; page < helmReleaseListMaxPages; page++ {
 		count, cont, err := list(opts)
 		if err != nil {
 			return false, err
@@ -126,6 +133,7 @@ func helmReleaseExists(
 		}
 		opts.Continue = cont
 	}
+	return false, fmt.Errorf("gave up after %d pages scanning for Helm releases", helmReleaseListMaxPages)
 }
 
 func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, namespaces []string) ([]StaleNamespace, error) {
@@ -147,7 +155,7 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 		// Check Secrets first (the default Helm storage driver), then ConfigMaps
 		// for HELM_DRIVER=configmap clusters. Both label release objects
 		// owner=helm.
-		found, err := helmReleaseExists(ctx, name,
+		found, err := helmReleaseExists(
 			func(opts metav1.ListOptions) (int, string, error) {
 				l, lerr := client.CoreV1().Secrets(name).List(ctx, opts)
 				if lerr != nil {
@@ -161,7 +169,7 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 		if found {
 			continue // healthy: active Helm release found via the secret driver
 		}
-		found, err = helmReleaseExists(ctx, name,
+		found, err = helmReleaseExists(
 			func(opts metav1.ListOptions) (int, string, error) {
 				l, lerr := client.CoreV1().ConfigMaps(name).List(ctx, opts)
 				if lerr != nil {
