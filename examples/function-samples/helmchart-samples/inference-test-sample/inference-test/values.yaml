@@ -20,6 +20,14 @@ image:
   tag: "latest"
   pullPolicy: "IfNotPresent"
 
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
 inferencePort: 8000
 
 # When true, render nvcf-workload-config so NVCA uses worker container readiness

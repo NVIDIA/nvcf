@@ -37,7 +37,7 @@ Package the chart and push it to an OCI registry your cluster can reach, then re
 
 ```bash
 helm package inference-test
-helm push inference-test-0.1.tgz oci://<your-registry>/<namespace>
+helm push inference-test-0.1.1.tgz oci://<your-registry>/<namespace>
 
 nvcf-cli registry add \
   --hostname <your-registry> \
@@ -46,6 +46,10 @@ nvcf-cli registry add \
   --artifact-type HELM \
   --artifact-type CONTAINER
 ```
+
+The chart declares CPU and memory requests and limits because self-managed NVCF
+validates resource limits before admitting Helm function workloads. Override
+`resources` in a values file if the inference container needs different amounts.
 
 To opt into worker-readiness-based instance health, set
 `statusByWorkerReadiness: true` in `inference-test/values.yaml`. This
@@ -57,7 +61,7 @@ Create a function that references the chart, then deploy it:
 ```bash
 nvcf-cli function create \
   --name inference-test \
-  --helm-chart <your-registry>/<namespace>/inference-test:0.1 \
+  --helm-chart <your-registry>/<namespace>/inference-test:0.1.1 \
   --helm-chart-service entrypoint \
   --inference-url /echo \
   --inference-port 8000
