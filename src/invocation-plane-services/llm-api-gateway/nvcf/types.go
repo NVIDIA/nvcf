@@ -38,6 +38,11 @@ type InvocationAuthResponse struct {
 	// Priority is the caller priority resolved by NVCF API, or nil when no
 	// priority config applies. Lower value is higher priority, 0 is highest.
 	Priority *uint32
+	// AccountInputTokenRateLimit and AccountOutputTokenRateLimit are the
+	// account-scoped token rate limit resolved by NVCF API, keyed by ncaId
+	// rather than any one function. Empty when none applies.
+	AccountInputTokenRateLimit  string
+	AccountOutputTokenRateLimit string
 }
 
 // clone returns a copy that shares no mutable state with the receiver, so a
