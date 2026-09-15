@@ -1144,6 +1144,11 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	const taskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh"
+	const taskErrorEventCommand = "env NVCT_BDD_TASK_NAME=bdd-nvct-task-error-event" +
+		" NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x" +
+		` NVCT_BDD_TASK_CONTAINER_ARGS='sh -c "sleep 30; exit 1"'` +
+		" NVCT_BDD_EXPECTED_STATUS=ERRORED NVCT_BDD_EXPECTED_PREVIOUS_STATUS=RUNNING" +
+		" tests/bdd/scripts/run-nvct-task-smoke.sh"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":        {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
@@ -1216,6 +1221,10 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		taskSmokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
+		},
+		taskErrorEventCommand: {
+			ExitCode: 0,
+			Stdout:   "Task bdd-nvct-task-error-event event transition: 'RUNNING' to 'ERRORED'\n",
 		},
 		// Conflict precheck: feature asserts the conflicting
 		// single-cluster is absent.
@@ -1353,6 +1362,9 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
 		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskErrorEventCommand) {
+		t.Fatal("NVCT task error event regression script was not invoked")
 	}
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 4)
 }

@@ -293,6 +293,15 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       Then the command exit code should be 0
       And the command output should contain "COMPLETED"
 
+    @nvct-task-api
+    Scenario: Operator observes an NVCT task transition from running to errored
+      When I run command:
+        """
+        env NVCT_BDD_TASK_NAME=bdd-nvct-task-error-event NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_CONTAINER_ARGS='sh -c "sleep 30; exit 1"' NVCT_BDD_EXPECTED_STATUS=ERRORED NVCT_BDD_EXPECTED_PREVIOUS_STATUS=RUNNING tests/bdd/scripts/run-nvct-task-smoke.sh
+        """
+      Then the command exit code should be 0
+      And the command output should contain "'RUNNING' to 'ERRORED'"
+
     @function-lifecycle
     Scenario: Operator creates, deploys, and invokes the Load Tester Supreme sample function
       Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"

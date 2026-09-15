@@ -295,10 +295,12 @@ func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 		".token // empty",
 		"audience_service_ids",
 		"account-tasks",
+		"list_events",
 		"Key-Issuer-Service",
 		"NVCT_BDD_STATE_PATH",
 		"NVCT_BDD_TASKS_HOST",
 		"NVCT_BDD_TASK_INSTANCE_TYPE must be set",
+		"NVCT_BDD_EXPECTED_PREVIOUS_STATUS",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("NVCT task smoke script does not reference %q", want)

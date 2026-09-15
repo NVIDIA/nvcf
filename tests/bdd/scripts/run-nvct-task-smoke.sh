@@ -54,6 +54,10 @@ TASK_NUM_RESULTS="${NVCT_BDD_TASK_NUM_RESULTS:-1}"
 TASK_DELAY_MINUTES="${NVCT_BDD_TASK_DELAY_MINUTES:-0}"
 TASK_FILE_SIZE_BYTES="${NVCT_BDD_TASK_FILE_SIZE_BYTES:-8192}"
 TASK_INCLUDE_METADATA="${NVCT_BDD_TASK_INCLUDE_METADATA:-false}"
+TASK_CONTAINER_ARGS="${NVCT_BDD_TASK_CONTAINER_ARGS:-}"
+EXPECTED_STATUS="${NVCT_BDD_EXPECTED_STATUS:-COMPLETED}"
+EXPECTED_PREVIOUS_STATUS="${NVCT_BDD_EXPECTED_PREVIOUS_STATUS:-}"
+EVENT_TIMEOUT_SECONDS="${NVCT_BDD_EVENT_TIMEOUT_SECONDS:-60}"
 
 if ! [[ "$TASK_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TASK_TIMEOUT_SECONDS" -eq 0 ]]; then
   echo "NVCT_BDD_TASK_TIMEOUT_SECONDS must be a positive integer" >&2
@@ -61,6 +65,10 @@ if ! [[ "$TASK_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TASK_TIMEOUT_SECONDS" -eq
 fi
 if ! [[ "$TASK_POLL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TASK_POLL_SECONDS" -eq 0 ]]; then
   echo "NVCT_BDD_TASK_POLL_SECONDS must be a positive integer" >&2
+  exit 64
+fi
+if ! [[ "$EVENT_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$EVENT_TIMEOUT_SECONDS" -eq 0 ]]; then
+  echo "NVCT_BDD_EVENT_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 64
 fi
 
@@ -72,6 +80,7 @@ key_response="$tmpdir/create-api-key-response.json"
 request_body="$tmpdir/create-task.json"
 create_response="$tmpdir/create-task-response.json"
 task_response="$tmpdir/task-response.json"
+events_response="$tmpdir/events-response.json"
 
 expires_at_utc() {
   if date -u -d '+1 day' '+%Y-%m-%dT%H:%M:%S.000Z' >/dev/null 2>&1; then
@@ -100,7 +109,8 @@ jq -n \
           scopes: [
             "launch_task",
             "task_details",
-            "list_tasks"
+            "list_tasks",
+            "list_events"
           ]
         }
       ]
@@ -147,6 +157,7 @@ jq -n \
   --arg delayMinutes "$TASK_DELAY_MINUTES" \
   --arg fileSizeBytes "$TASK_FILE_SIZE_BYTES" \
   --arg includeMetadata "$TASK_INCLUDE_METADATA" \
+  --arg containerArgs "$TASK_CONTAINER_ARGS" \
   '{
     name: $name,
     containerImage: $image,
@@ -165,7 +176,7 @@ jq -n \
     maxRuntimeDuration: "PT10M",
     maxQueuedDuration: "PT10M",
     terminationGracePeriodDuration: "PT1M"
-  }' > "$request_body"
+  } + (if $containerArgs == "" then {} else {containerArgs: $containerArgs} end)' > "$request_body"
 
 if ! http_code="$(curl -sS -o "$create_response" -w "%{http_code}" \
   -X POST "$TASKS_URL" \
@@ -195,6 +206,40 @@ fi
 echo "Created NVCT task $TASK_NAME ($task_id)"
 
 deadline=$(( $(date +%s) + TASK_TIMEOUT_SECONDS ))
+
+verify_event_transition() {
+  local expected_transition="'$EXPECTED_PREVIOUS_STATUS' to '$EXPECTED_STATUS'"
+  local event_deadline=$(( $(date +%s) + EVENT_TIMEOUT_SECONDS ))
+
+  while [[ $(date +%s) -lt "$event_deadline" ]]; do
+    if ! http_code="$(curl -sS -o "$events_response" -w "%{http_code}" \
+      -H "Host: ${TASKS_HOST}" \
+      -H "Authorization: Bearer ${API_KEY}" \
+      "$TASKS_URL/$task_id/events")"; then
+      echo "failed to get NVCT task events for $task_id" >&2
+      return 1
+    fi
+
+    if [[ "$http_code" != "200" ]]; then
+      echo "get NVCT task events failed with HTTP $http_code" >&2
+      jq . "$events_response" >&2 || cat "$events_response" >&2
+      return 1
+    fi
+
+    if jq -e --arg expected "$expected_transition" \
+      '[.events[]?.message, .taskEvents[]?.message] | any(. != null and contains($expected))' \
+      "$events_response" >/dev/null; then
+      echo "Task $TASK_NAME event transition: $expected_transition"
+      return 0
+    fi
+    sleep "$TASK_POLL_SECONDS"
+  done
+
+  echo "missing NVCT task event transition after ${EVENT_TIMEOUT_SECONDS}s: $expected_transition" >&2
+  jq . "$events_response" >&2 || cat "$events_response" >&2
+  return 1
+}
+
 while [[ $(date +%s) -lt "$deadline" ]]; do
   if ! http_code="$(curl -sS -o "$task_response" -w "%{http_code}" \
     -H "Host: ${TASKS_HOST}" \
@@ -218,11 +263,16 @@ while [[ $(date +%s) -lt "$deadline" ]]; do
     echo "Task $TASK_NAME status: $status"
   fi
 
+  if [[ "$status" == "$EXPECTED_STATUS" ]]; then
+    if [[ -n "$EXPECTED_PREVIOUS_STATUS" ]]; then
+      verify_event_transition
+    fi
+    exit 0
+  fi
+
   case "$status" in
-    COMPLETED)
-      exit 0
-      ;;
-    ERRORED|CANCELED|EXCEEDED_MAX_RUNTIME_DURATION|EXCEEDED_MAX_QUEUED_DURATION)
+    COMPLETED|ERRORED|CANCELED|EXCEEDED_MAX_RUNTIME_DURATION|EXCEEDED_MAX_QUEUED_DURATION)
+      echo "NVCT task reached $status, expected $EXPECTED_STATUS" >&2
       jq . "$task_response" >&2 || cat "$task_response" >&2
       exit 1
       ;;
