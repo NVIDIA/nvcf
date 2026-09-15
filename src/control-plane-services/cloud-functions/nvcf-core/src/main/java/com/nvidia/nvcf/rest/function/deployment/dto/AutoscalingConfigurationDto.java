@@ -121,6 +121,10 @@ public record AutoscalingConfigurationDto(
                 "Invalid request: Invalid stickiness window - size and threshold required, " +
                         "size must be less than or equal to one hour and threshold must " +
                         "be less than size.";
+        private static final String MESG_INVALID_STICKINESS_SIZE =
+                "Invalid request: Stickiness window size must be less than or equal to one hour.";
+        private static final String MESG_INVALID_STICKINESS_THRESHOLD =
+                "Invalid request: Stickiness window threshold must be less than size.";
 
         @Override
         public boolean isValid(AutoscalingConfigurationDto value,
@@ -172,14 +176,22 @@ public record AutoscalingConfigurationDto(
                 log.info(MESG_INVALID_STICKINESS_WINDOW);
                 return false;
             }
-            if (stickiness.size().compareTo(MAX_STICKINESS_SIZE) > 0 ||
-                    stickiness.threshold().compareTo(stickiness.size()) >= 0) {
+            var valid = true;
+            if (stickiness.size().compareTo(MAX_STICKINESS_SIZE) > 0) {
                 addViolation(
-                        context, MESG_INVALID_STICKINESS_WINDOW, detailsProperty, "stickiness");
-                log.info(MESG_INVALID_STICKINESS_WINDOW);
-                return false;
+                        context, MESG_INVALID_STICKINESS_SIZE,
+                        detailsProperty, "stickiness", "size");
+                log.info(MESG_INVALID_STICKINESS_SIZE);
+                valid = false;
             }
-            return true;
+            if (stickiness.threshold().compareTo(stickiness.size()) >= 0) {
+                addViolation(
+                        context, MESG_INVALID_STICKINESS_THRESHOLD,
+                        detailsProperty, "stickiness", "threshold");
+                log.info(MESG_INVALID_STICKINESS_THRESHOLD);
+                valid = false;
+            }
+            return valid;
         }
 
         private void addViolation(

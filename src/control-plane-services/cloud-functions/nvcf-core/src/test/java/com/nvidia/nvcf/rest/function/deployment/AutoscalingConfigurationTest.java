@@ -301,12 +301,14 @@ class AutoscalingConfigurationTest {
                              "Invalid request: Invalid stickiness window"),
                 // 7. stickiness threshold >= size: 400
                 Arguments.of(readFileAsString(CONFIG_STICKINESS_THRESHOLD_GTE_SIZE_JSON),
-                             HttpStatus.BAD_REQUEST,
-                             "Invalid request: Invalid stickiness window"),
+                              HttpStatus.BAD_REQUEST,
+                              "scaleUpDetails.stickiness.threshold': Invalid request: " +
+                                      "Stickiness window threshold must be less than size"),
                 // 8. stickiness size >= 1 hour: 400
                 Arguments.of(readFileAsString(CONFIG_STICKINESS_SIZE_GTE_1H_JSON),
-                             HttpStatus.BAD_REQUEST,
-                             "Invalid request: Invalid stickiness window"),
+                              HttpStatus.BAD_REQUEST,
+                              "scaleUpDetails.stickiness.size': Invalid request: " +
+                                      "Stickiness window size must be less than or equal to one hour"),
                 // 9. scaleUpDetails missing threshold: 400
                 Arguments.of(readFileAsString(CONFIG_MISSING_THRESHOLD_JSON),
                              HttpStatus.BAD_REQUEST,
