@@ -1902,6 +1902,39 @@ class SuccessCommentTest(unittest.TestCase):
             self.github_plugin_options()["successComment"],
         )
 
+    def release_notes_writer_opts(self):
+        service_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, service_dir, ignore_errors=True)
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "NVIDIA/nvcf"}):
+            self.github_release.write_semantic_release_files(
+                service_dir,
+                "byoo-otel-collector",
+                self.TAG_FORMAT,
+                publish=True,
+                draft=False,
+            )
+        config = json.loads((service_dir / ".releaserc.json").read_text())
+        for plugin in config["plugins"]:
+            if isinstance(plugin, list) and plugin[0] == "@semantic-release/release-notes-generator":
+                return plugin[1]["writerOpts"]
+        self.fail("@semantic-release/release-notes-generator has no writerOpts")
+
+    def test_release_notes_heading_names_the_published_git_tag(self):
+        self.assertIn("{{currentTag}}", self.release_notes_writer_opts()["headerPartial"])
+
+    def test_release_notes_heading_does_not_name_the_rewritten_version(self):
+        # `version` is what semantic-release-monorepo rewrites, and the upstream
+        # template references it twice: once linked, once bare as `{{~version}}`
+        # with a whitespace-control tilde. Checking only `{{version}}` would miss
+        # the second and leave the unlinked heading still wrong.
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        for token in ("{{version}}", "{{~version}}"):
+            self.assertNotIn(token, partial)
+
+    def test_release_notes_heading_still_links_the_compare_range(self):
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        self.assertIn("/compare/{{previousTag}}...{{currentTag}}", partial)
+
     def test_success_comment_wording_matches_the_kind_of_thing_it_is_posted_on(self):
         # Pins both arms and their order. Asserting only that `issue.pull_request`
         # appears would still pass with the arms swapped, which would tell every
