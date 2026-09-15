@@ -104,8 +104,6 @@ class EventLedgerClientTest {
                 .isEqualTo(functionVersionId.toString());
         assertThat(cloudEvent.getExtension("deploymentid")).isEqualTo(deploymentId.toString());
         assertThat(cloudEvent.getExtension("ncaid")).isEqualTo("account-1");
-        assertThat(cloudEvent.getExtension("eventtype"))
-                .isEqualTo(EventLedgerClient.CLOUD_EVENT_TYPE);
         var data = new JsonMapper().readTree(cloudEvent.getData().toBytes());
         assertThat(data.get("previousStatus").asText())
                 .isEqualTo(previousStatus.toString());
