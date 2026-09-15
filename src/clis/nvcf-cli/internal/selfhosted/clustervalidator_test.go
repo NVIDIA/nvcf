@@ -131,7 +131,6 @@ func TestClusterValidatorCheck_OrchestratorErrorStaysWarning(t *testing.T) {
 	assert.Contains(t, r.Message, "cluster-validator did not complete")
 }
 
-
 func TestRunClusterValidator_HappyPath(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	// Capture the Job name the runner picks, then drive Get/List reactors to
@@ -678,4 +677,3 @@ func alreadyExistsReactor(resource, name string) ktesting.ReactionFunc {
 		return true, nil, apierrors.NewAlreadyExists(gr, name)
 	}
 }
-

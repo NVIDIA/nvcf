@@ -710,7 +710,7 @@ type wireClusterRow struct {
 	Event             string `json:"event"`
 	TS                string `json:"ts"`
 	Name              string `json:"name"`
-	Context           string `json:"context,omitempty"`   // M+9: omitted when unknown
+	Context           string `json:"context,omitempty"` // M+9: omitted when unknown
 	GPU               string `json:"gpu"`
 	GPUCount          int    `json:"gpuCount"`
 	ActiveDeployments int    `json:"activeDeployments"`
@@ -766,12 +766,12 @@ type wireCategoryCompleted struct {
 // mode. It carries the Snapshot identity plus all ComponentHealth, ClusterRow,
 // and RecentEvent sub-objects inlined.
 type wireSnapshotComposed struct {
-	Event           string               `json:"event"`
-	TS              string               `json:"ts"`
-	Cluster         string               `json:"cluster"`
-	Verdict         string               `json:"verdict"`
-	ReconcileAgeSec int                  `json:"reconcileAgeSec"`
-	Identity        wireSnapshotIdentity `json:"identity"`
+	Event           string                `json:"event"`
+	TS              string                `json:"ts"`
+	Cluster         string                `json:"cluster"`
+	Verdict         string                `json:"verdict"`
+	ReconcileAgeSec int                   `json:"reconcileAgeSec"`
+	Identity        wireSnapshotIdentity  `json:"identity"`
 	Components      []wireComponentInline `json:"components,omitempty"`
 	ComputeClusters []wireClusterInline   `json:"computeClusters,omitempty"`
 	Events          []wireEventInline     `json:"events,omitempty"`
@@ -781,7 +781,7 @@ type wireSnapshotComposed struct {
 type wireComponentInline struct {
 	Name      string `json:"name"`
 	Cluster   string `json:"cluster,omitempty"`
-	Role      string `json:"role,omitempty"`    // M+9: omitted in single-cluster mode
+	Role      string `json:"role,omitempty"` // M+9: omitted in single-cluster mode
 	Ready     int    `json:"ready"`
 	Total     int    `json:"total"`
 	UptimeSec int    `json:"uptimeSec"`
@@ -792,7 +792,7 @@ type wireComponentInline struct {
 // wireClusterInline is a ClusterRow without event/ts fields.
 type wireClusterInline struct {
 	Name              string `json:"name"`
-	Context           string `json:"context,omitempty"`   // M+9: omitted when unknown
+	Context           string `json:"context,omitempty"` // M+9: omitted when unknown
 	GPU               string `json:"gpu"`
 	GPUCount          int    `json:"gpuCount"`
 	ActiveDeployments int    `json:"activeDeployments"`

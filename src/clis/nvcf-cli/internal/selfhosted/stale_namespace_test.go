@@ -27,7 +27,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 )
 
 // -- probeStaleNamespaces --
@@ -193,7 +195,8 @@ func TestStaleNamespaceCheck_StaleIsError(t *testing.T) {
 	assert.Equal(t, "error", r.Severity,
 		"detected stale namespaces must use error severity so the exit code is non-zero")
 	assert.Contains(t, r.Message, "nvcf")
-	assert.Contains(t, r.Message, "kubectl patch namespace nvcf")
+	assert.Contains(t, r.Message, "/api/v1/namespaces/nvcf/finalize",
+		"the remediation must use the finalize subresource; a plain patch is silently reverted")
 }
 
 func TestStaleNamespaceCheck_CleanPasses(t *testing.T) {
@@ -216,6 +219,58 @@ func TestStaleNamespaceCheck_MessageNamesAllStaleNamespaces(t *testing.T) {
 	r := staleNamespaceCheck(prober, "", []string{"nvcf", "api-keys"}).Run(context.Background())
 	assert.Contains(t, r.Message, "nvcf")
 	assert.Contains(t, r.Message, "api-keys")
-	assert.Contains(t, r.Message, "kubectl patch namespace nvcf")
+	assert.Contains(t, r.Message, "/api/v1/namespaces/nvcf/finalize",
+		"the remediation must use the finalize subresource; a plain patch is silently reverted")
 	assert.Contains(t, r.Message, "kubectl delete namespace api-keys")
+}
+
+// A namespace on a real install holds many non-Helm Secrets (ServiceAccount
+// tokens, TLS, pull secrets) that sort before sh.helm.release.v1.*. The
+// apiserver applies the label selector after paging, so the first page can
+// legitimately come back empty with a Continue token. Treating that as "no
+// release" reports a live namespace stale and tells the operator to delete it.
+func TestProbeStaleNamespaces_PagesPastNonMatchingObjects(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
+		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+	})
+
+	// First page: empty with a Continue token. Second page: the release secret.
+	call := 0
+	client.PrependReactor("list", "secrets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		call++
+		if call == 1 {
+			return true, &corev1.SecretList{
+				ListMeta: metav1.ListMeta{Continue: "next-page-token"},
+			}, nil
+		}
+		return true, &corev1.SecretList{Items: []corev1.Secret{{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "sh.helm.release.v1.nvcf.v1", Namespace: "nvcf",
+				Labels: map[string]string{"owner": "helm"},
+			},
+		}}}, nil
+	})
+
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	require.NoError(t, err)
+	assert.Empty(t, stale,
+		"an empty first page with a Continue token must not be read as 'no Helm release'")
+	assert.Greater(t, call, 1, "the probe must follow the Continue token")
+}
+
+// The remediation for a hit is "delete this namespace", so the list must only
+// contain namespaces a helmfile release actually owns. nvcf-backend is created
+// at runtime by NVCA and holds live worker pods.
+func TestControlPlaneNamespaceList_ExcludesRuntimeOwnedNamespaces(t *testing.T) {
+	for _, ns := range []string{"nvcf-backend", "openbao-system"} {
+		assert.NotContains(t, nvcfControlPlaneNamespaces, ns,
+			"%s hosts no Helm release; probing it yields a destructive false positive", ns)
+	}
+	for _, ns := range []string{"cert-manager", "nvcf-ui"} {
+		assert.Contains(t, nvcfControlPlaneNamespaces, ns,
+			"%s is a real stack namespace and must be probed", ns)
+	}
+	assert.NotContains(t, nvcfComputePlaneNamespaces, "nvca-system",
+		"nvca-system is operator-created and hosts no release")
 }

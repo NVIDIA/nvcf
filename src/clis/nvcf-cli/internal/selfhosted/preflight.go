@@ -19,6 +19,7 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -55,7 +56,7 @@ type CheckResult struct {
 	Message  string
 	Detail   string // optional: short version string or extra context (M+8.11)
 	HintURL  string
-	Err      error // populated only when the check itself failed to execute
+	Err      error  // populated only when the check itself failed to execute
 	Logs     string // optional: full check transcript for --show-logs; not emitted to JSON
 }
 
@@ -646,6 +647,24 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 				Severity: severity,
 			}
 			if err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical); err != nil {
+				// A registry this probe cannot speak to (ECR's SigV4, a Basic
+				// challenge) is not evidence of a credential problem, and an
+				// unreadable credential helper is not evidence of a missing
+				// credential. Neither may block the run.
+				var skipped errRegistryProbeSkipped
+				var unverified errRegistryCredentialsUnverified
+				switch {
+				case errors.As(err, &skipped):
+					r.Passed = true
+					r.Severity = "info"
+					r.Message = entry.Registry + ": skipped (" + skipped.reason + ")"
+					return r
+				case errors.As(err, &unverified):
+					r.Severity = "warning"
+					r.Message = entry.Registry + ": " + err.Error()
+					r.Err = err
+					return r
+				}
 				r.Message = entry.Registry + ": " + err.Error()
 				r.Err = err
 				return r
@@ -676,6 +695,7 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				return r
 			}
 			if len(stale) == 0 {
+				r.Severity = "info"
 				r.Passed = true
 				r.Message = "no stale NVCF namespaces detected"
 				return r
@@ -692,9 +712,20 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 			}
 			var hints []string
 			if len(terminating) > 0 {
+				// spec.finalizers is writable only through the /finalize
+				// subresource: a plain patch or update is silently reverted by
+				// the apiserver's namespace strategy, so `kubectl patch ...
+				// --type=merge` prints "patched" and changes nothing.
+				for _, ns := range terminating {
+					hints = append(hints, fmt.Sprintf(
+						"clear namespace finalizers on %s: kubectl get ns %s -o json | "+
+							"jq '.spec.finalizers=[]' | kubectl replace --raw /api/v1/namespaces/%s/finalize -f -",
+						ns, ns, ns))
+				}
 				hints = append(hints,
-					fmt.Sprintf("remove finalizers on stuck namespaces: kubectl patch namespace %s -p '{\"spec\":{\"finalizers\":[]}}' --type=merge",
-						strings.Join(terminating, " ")))
+					"if it stays Terminating, the deadlock is on objects inside it: "+
+						"kubectl api-resources --verbs=list --namespaced -o name | "+
+						"xargs -n1 kubectl get -n <ns> --show-kind --ignore-not-found")
 			}
 			if len(emptyShell) > 0 {
 				hints = append(hints,

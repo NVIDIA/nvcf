@@ -34,7 +34,7 @@ import (
 type fakeSIS struct {
 	deployments   []ActiveDeployment
 	removeErr     error
-	removeCalled  []string // IDs passed to RemoveDeployment
+	removeCalled  []string          // IDs passed to RemoveDeployment
 	statusResults map[string]string // ID → state string
 	statusCallCnt int32
 }
@@ -73,7 +73,7 @@ func (s *recordSink) Close() error { return nil }
 type discardSink struct{}
 
 func (d *discardSink) Emit(_ context.Context, _ progress.Event) error { return nil }
-func (d *discardSink) Close() error                                    { return nil }
+func (d *discardSink) Close() error                                   { return nil }
 
 // TestDrain_NoActiveDeploymentsIsNoop: empty list → returns nil, no events.
 func TestDrain_NoActiveDeploymentsIsNoop(t *testing.T) {

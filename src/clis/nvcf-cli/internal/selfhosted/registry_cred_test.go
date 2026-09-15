@@ -33,8 +33,10 @@ import (
 // -- probeRegistryCredential --
 
 func TestProbeRegistryCredential_PublicRegistry(t *testing.T) {
-	// Registry returns 200 on /v2/ → public, no credentials needed.
+	// Registry returns 200 on /v2/ with the registry API header → public,
+	// no credentials needed.
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()

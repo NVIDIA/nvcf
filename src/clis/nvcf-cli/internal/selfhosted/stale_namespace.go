@@ -27,19 +27,30 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// nvcfControlPlaneNamespaces is the canonical set of namespaces created on the
-// control-plane cluster by the NVCF self-managed stack. Any of these that
-// exist without an active Helm release, or that are stuck Terminating, are
-// leftover from a failed or partial teardown.
+// nvcfControlPlaneNamespaces lists namespaces that a helmfile release deploys
+// into on the control-plane cluster, per deploy/stacks/self-managed/helmfile.d.
+// Any of these that exist without an active Helm release, or that are stuck
+// Terminating, are leftover from a failed or partial teardown.
+//
+// Only namespaces that actually host a release belong here: the remediation for
+// a hit is "delete this namespace", so a namespace populated by something other
+// than Helm (nvcf-backend, created at runtime by NVCA for worker pods) would be
+// reported stale on a healthy cluster and deleting it would destroy live work.
+//
+// The gateway controller namespace is deliberately absent: the release templates
+// it from .Values.ingress.gatewayApi.controllerNamespace, so hardcoding
+// envoy-gateway-system would probe a namespace the stack may not own.
 var nvcfControlPlaneNamespaces = []string{
-	"cassandra-system", "nats-system", "nvcf", "api-keys", "ess", "sis",
-	"vault-system", "nvcf-backend", "envoy-gateway-system", "openbao-system",
+	"api-keys", "cassandra-system", "cert-manager", "ess",
+	"nats-system", "nvcf", "nvcf-ui", "sis", "vault-system",
 }
 
-// nvcfComputePlaneNamespaces is the canonical set of namespaces created on the
-// compute-plane cluster by the NVCF self-managed stack.
+// nvcfComputePlaneNamespaces lists namespaces that a helmfile release deploys
+// into on the compute-plane cluster, per
+// deploy/stacks/nvcf-compute-plane/helmfile.d. nvca-system is deliberately
+// absent: it is operator-created and hosts no release.
 var nvcfComputePlaneNamespaces = []string{
-	"nvca-operator", "nvca-system",
+	"dynamo-system", "grove-system", "kai-scheduler", "nvca-operator",
 }
 
 // StaleNamespace describes a single NVCF stack namespace that appears to be a
@@ -84,6 +95,39 @@ func NewStaleNamespaceProber() StaleNamespaceProber {
 //
 // Helm 3 marks each release secret with the label owner=helm; absence of any
 // such secret means no live Helm release occupies the namespace.
+// helmReleaseListPageSize bounds each page of the owner=helm scan. A namespace
+// holds at most a handful of release objects, so this is only a ceiling on how
+// much is pulled per round trip while paging past non-matching objects.
+const helmReleaseListPageSize = 100
+
+// helmReleaseExists reports whether any owner=helm object exists, paging until
+// it finds one or the server reports no more results.
+//
+// A single page with Limit set is not a valid existence test: the apiserver
+// applies the label selector after paging, so a page can legitimately return
+// zero items alongside a Continue token. A namespace like nvcf holds dozens of
+// ServiceAccount tokens and TLS secrets that sort before sh.helm.release.v1.*,
+// so the first page is routinely empty on a perfectly healthy install.
+func helmReleaseExists(
+	ctx context.Context, namespace string,
+	list func(metav1.ListOptions) (count int, cont string, err error),
+) (bool, error) {
+	opts := metav1.ListOptions{LabelSelector: "owner=helm", Limit: helmReleaseListPageSize}
+	for {
+		count, cont, err := list(opts)
+		if err != nil {
+			return false, err
+		}
+		if count > 0 {
+			return true, nil
+		}
+		if cont == "" {
+			return false, nil
+		}
+		opts.Continue = cont
+	}
+}
+
 func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, namespaces []string) ([]StaleNamespace, error) {
 	var stale []StaleNamespace
 	for _, name := range namespaces {
@@ -100,28 +144,35 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 			continue
 		}
 
-		// Limit to 1: only existence matters, not the full release history.
-		// Check Secrets first (default Helm storage driver). If none exist,
-		// also check ConfigMaps to handle HELM_DRIVER=configmap clusters;
-		// both storage backends label their release objects with owner=helm.
-		secrets, err := client.CoreV1().Secrets(name).List(ctx, metav1.ListOptions{
-			LabelSelector: "owner=helm",
-			Limit:         1,
-		})
+		// Check Secrets first (the default Helm storage driver), then ConfigMaps
+		// for HELM_DRIVER=configmap clusters. Both label release objects
+		// owner=helm.
+		found, err := helmReleaseExists(ctx, name,
+			func(opts metav1.ListOptions) (int, string, error) {
+				l, lerr := client.CoreV1().Secrets(name).List(ctx, opts)
+				if lerr != nil {
+					return 0, "", lerr
+				}
+				return len(l.Items), l.Continue, nil
+			})
 		if err != nil {
 			return stale, fmt.Errorf("list Helm secrets in %s: %w", name, err)
 		}
-		if len(secrets.Items) > 0 {
-			continue // healthy: active Helm release found via secret driver
+		if found {
+			continue // healthy: active Helm release found via the secret driver
 		}
-		cms, err := client.CoreV1().ConfigMaps(name).List(ctx, metav1.ListOptions{
-			LabelSelector: "owner=helm",
-			Limit:         1,
-		})
+		found, err = helmReleaseExists(ctx, name,
+			func(opts metav1.ListOptions) (int, string, error) {
+				l, lerr := client.CoreV1().ConfigMaps(name).List(ctx, opts)
+				if lerr != nil {
+					return 0, "", lerr
+				}
+				return len(l.Items), l.Continue, nil
+			})
 		if err != nil {
 			return stale, fmt.Errorf("list Helm configmaps in %s: %w", name, err)
 		}
-		if len(cms.Items) == 0 {
+		if !found {
 			stale = append(stale, StaleNamespace{Name: name, Reason: "no Helm release"})
 		}
 	}

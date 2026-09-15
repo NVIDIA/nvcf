@@ -35,12 +35,12 @@ import (
 
 func TestParseImageRef(t *testing.T) {
 	cases := []struct {
-		name    string
-		in      string
-		reg     string
-		repo    string
-		tag     string
-		wantOK  bool
+		name   string
+		in     string
+		reg    string
+		repo   string
+		tag    string
+		wantOK bool
 	}{
 		{"full tag", "stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.0.0-rc.26", "stg.nvcr.io", "nvidia/nvcf-byoc/cluster-validator", "3.0.0-rc.26", true},
 		{"digest", "nvcr.io/foo/bar@sha256:abc", "nvcr.io", "foo/bar", "sha256:abc", true},
@@ -68,8 +68,8 @@ func TestPickBestValidatorTag_StablePreferred(t *testing.T) {
 	tags := []string{
 		"3.0.0-rc.11",
 		"3.0.0-rc.26",
-		"3.0.0",        // stable; should win over any rc
-		"3.1.0-rc.1",   // higher major but pre-release: must lose to 3.0.0
+		"3.0.0",      // stable; should win over any rc
+		"3.1.0-rc.1", // higher major but pre-release: must lose to 3.0.0
 		"sha256-abc.sig",
 		"3.0.0-v50ca53a0", // commit-SHA: filtered out by pattern
 	}

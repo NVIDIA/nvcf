@@ -135,7 +135,7 @@ func fetchValidatorTags(ctx context.Context, registry, repo string) ([]string, e
 }
 
 func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte, error) {
-	client := &http.Client{Timeout: validatorTagFetchTimeout}
+	client := &http.Client{Timeout: validatorTagFetchTimeout, CheckRedirect: refuseInsecureRedirect}
 
 	// First attempt without auth so anonymous-pullable registries work.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -182,6 +182,22 @@ func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte
 	return io.ReadAll(resp.Body)
 }
 
+// refuseInsecureRedirect rejects any redirect hop that is not https.
+//
+// Go strips the Authorization header only when a redirect changes host, and
+// that comparison ignores the scheme. Without this, an https realm that 302s to
+// http on the same host would re-send the operator's credentials in cleartext,
+// defeating the https-only realm check a few lines below.
+func refuseInsecureRedirect(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing redirect to non-https URL %q", req.URL.Redacted())
+	}
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after %d redirects", len(via))
+	}
+	return nil
+}
+
 // exchangeBearerToken implements the OCI Distribution Spec Bearer token flow,
 // parsing realm/service/scope from the WWW-Authenticate header. Falls back to
 // the NGC /proxy_auth endpoint when the header is absent or unparseable.
@@ -214,6 +230,13 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	regHost := strings.ToLower(registry)
 	if h, _, err := net.SplitHostPort(registry); err == nil {
 		regHost = strings.ToLower(h)
+	}
+	// Reject an empty realm host explicitly. "https://:443/token" has a
+	// non-empty u.Host (":443") so it clears the guard above, but Hostname() is
+	// "", and an empty trustedRealmDelegations lookup would then compare equal
+	// and authorize it. Fail closed instead.
+	if realmHost == "" {
+		return "", fmt.Errorf("refusing token exchange at realm %q with no host for %s", realm, registry)
 	}
 	realmOK := realmHost == regHost ||
 		strings.HasSuffix(realmHost, "."+regHost) ||

@@ -20,8 +20,10 @@ package selfhosted
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,15 +56,20 @@ func NewRegistryCredentialChecker() RegistryCredentialChecker {
 // clear diagnostic instead of attempting the Bearer flow. When critical is true,
 // anonymous token success is rejected: configured credentials must be present.
 func probeRegistryCredential(ctx context.Context, registry, repoHint string, critical bool) error {
+	// ECR uses AWS SigV4, not the OCI Bearer flow, so this probe cannot speak
+	// to it. Skip rather than fail: returning an error here makes an
+	// ECR-hosted validator image unconditionally fail preflight, so --wait
+	// could never converge.
 	if isECRRegistry(registry) {
-		return fmt.Errorf("ECR registry detected — credential validation requires AWS CLI; " +
-			"run 'aws ecr get-login-password' to verify manually")
+		return errRegistryProbeSkipped{
+			reason: "ECR uses AWS SigV4; verify manually with 'aws ecr get-login-password'",
+		}
 	}
 
 	pctx, cancel := context.WithTimeout(ctx, registryProbeTimeout)
 	defer cancel()
 
-	client := &http.Client{Timeout: registryProbeTimeout}
+	client := &http.Client{Timeout: registryProbeTimeout, CheckRedirect: refuseInsecureRedirect}
 
 	// Step 1: probe /v2/ unauthenticated.
 	probeURL := "https://" + registry + "/v2/"
@@ -75,11 +82,33 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		return fmt.Errorf("cannot reach %s: %w", registry, err)
 	}
 
+	// A 200 only proves /v2/ is anonymously readable, which says nothing about
+	// the repositories the install actually pulls. Require the registry to
+	// identify itself as an OCI registry so a captive portal or TLS-intercepting
+	// proxy answering 200 HTML is not read as success.
+	isOCI := resp.Header.Get("Docker-Distribution-Api-Version") != "" ||
+		strings.Contains(resp.Header.Get("Www-Authenticate"), "realm")
+
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// Public registry — no credentials needed.
 		resp.Body.Close()
-		return nil
+		if !isOCI {
+			// A captive portal or TLS-intercepting proxy also answers 200. The
+			// header is a Docker convention rather than an OCI requirement, so
+			// a conformant registry may legitimately omit it: report that the
+			// result is unverifiable instead of guessing either way.
+			return errRegistryProbeSkipped{
+				reason: fmt.Sprintf("%s answered 200 but did not identify as an OCI registry; "+
+					"if this is unexpected, check for a proxy or captive portal", registry),
+			}
+		}
+		// Anonymous read works. For a critical registry that is still not
+		// enough: the install pulls private repositories, so fall through to
+		// the credential requirement below rather than returning early.
+		if !critical {
+			return nil
+		}
+		return requireConfiguredCredentials(registry)
 	case http.StatusUnauthorized:
 		// Auth required — proceed with token exchange.
 	default:
@@ -93,6 +122,15 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	// indistinguishable from bad credentials.
 	wwwAuth := resp.Header.Get("Www-Authenticate")
 	resp.Body.Close()
+
+	// Only the Bearer flow is implemented. Self-hosted Harbor and htpasswd
+	// mirrors commonly answer with Basic, where the Bearer path would report a
+	// spurious credential failure, so skip instead.
+	if scheme := authChallengeScheme(wwwAuth); scheme != "" && !strings.EqualFold(scheme, "Bearer") {
+		return errRegistryProbeSkipped{
+			reason: fmt.Sprintf("%s uses %s auth; only the OCI Bearer flow is probed", registry, scheme),
+		}
+	}
 
 	_, err = exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth)
 	if err != nil {
@@ -110,12 +148,54 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	// For critical registries, a successful anonymous token is not enough:
 	// if the actual install pulls private images, anonymous access will fail.
 	if critical {
-		if _, _, hasCreds := credentialsForRegistry(registry); !hasCreds {
-			return fmt.Errorf("no credentials configured for %s "+
-				"(add to ~/.docker/config.json or set NGC_API_KEY for NGC registries)", registry)
-		}
+		return requireConfiguredCredentials(registry)
 	}
 	return nil
+}
+
+// errRegistryProbeSkipped marks a registry this probe cannot speak to. The
+// caller reports it as a skip rather than a credential failure.
+type errRegistryProbeSkipped struct{ reason string }
+
+func (e errRegistryProbeSkipped) Error() string { return e.reason }
+
+// authChallengeScheme returns the auth scheme named by a WWW-Authenticate
+// header, or "" when the header is absent or malformed.
+func authChallengeScheme(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ""
+	}
+	if i := strings.IndexByte(header, ' '); i > 0 {
+		return header[:i]
+	}
+	return header
+}
+
+// requireConfiguredCredentials reports an error when no credential is reachable
+// for the registry.
+//
+// A missing credential is a warning, not a hard failure: credsFromDockerConfig
+// reads only inline auth entries, so a workstation using a credential helper
+// (credsStore on Docker Desktop, docker-credential-pass on Linux) has a working
+// docker login that is invisible here. The install path also mints or mirrors a
+// pull secret of its own, so preflight must not be the thing that blocks.
+func requireConfiguredCredentials(registry string) error {
+	if _, _, ok := credentialsForRegistry(registry); ok {
+		return nil
+	}
+	return errRegistryCredentialsUnverified{registry: registry}
+}
+
+// errRegistryCredentialsUnverified means no credential was found locally. The
+// caller downgrades this to a warning.
+type errRegistryCredentialsUnverified struct{ registry string }
+
+func (e errRegistryCredentialsUnverified) Error() string {
+	return fmt.Sprintf("no local credentials found for %s "+
+		"(a credential helper such as credsStore is not readable here); "+
+		"if 'docker pull' works this can be ignored, otherwise add an entry to "+
+		"~/.docker/config.json or set NGC_API_KEY for NGC registries", e.registry)
 }
 
 // isECRRegistry returns true for AWS Elastic Container Registry hostnames,
@@ -147,22 +227,25 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	seen := make(map[string]bool)
 	var out []RegistryEntry
 
-	add := func(registry string, critical bool) {
+	add := func(registry, repoHint string, critical bool) {
 		registry = strings.TrimSpace(registry)
 		if registry == "" || seen[registry] {
 			return
 		}
 		seen[registry] = true
-		out = append(out, RegistryEntry{Registry: registry, Critical: critical})
+		out = append(out, RegistryEntry{Registry: registry, RepoHint: repoHint, Critical: critical})
 	}
 
 	// Source 1: base registry from the configured validator image.
 	// Carry the repo path as a scope hint so the token exchange uses the
 	// operator's actual org rather than a fake one — NGC returns 403 for
 	// orgs the API key cannot access, even if the key itself is valid.
+	//
+	// Critical follows the same rule as every other source rather than being
+	// forced true: an air-gapped install that side-loaded the image never
+	// contacts this registry at pull time (ImagePullPolicy is IfNotPresent).
 	if reg, repo, _, ok := parseImageRef(imageRef); ok && reg != "" {
-		seen[reg] = true
-		out = append(out, RegistryEntry{Registry: reg, RepoHint: repo, Critical: true})
+		add(reg, repo, isNGCRegistry(reg))
 	}
 
 	// Source 2: read global.image.registry from the environment values file.
@@ -171,17 +254,23 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	if stackValuesFile != "" {
 		if reg := readGlobalImageRegistry(stackValuesFile); reg != "" {
 			// If it's an NGC registry, mark critical; customer mirrors are non-critical.
-			add(reg, isNGCRegistry(reg))
+			add(reg, "", isNGCRegistry(reg))
 		}
 	}
 
-	// Source 3: cert-manager's well-known exception (quay.io/jetstack).
-	// cert-manager ignores global.image.registry and always pulls from quay.io.
-	add(certManagerRegistry, false)
+	// Source 3: cert-manager, but only when the stack is not mirroring it.
+	// deploy/stacks/self-managed/global.yaml.gotmpl rewrites every cert-manager
+	// image to global.image.registry, so on a configured stack quay.io is never
+	// contacted and probing it is a pointless round trip. It is only reachable
+	// when no stack values file resolved.
+	if stackValuesFile == "" || readGlobalImageRegistry(stackValuesFile) == "" {
+		add(certManagerRegistry, "", false)
+	}
 
 	// Source 4: operator-supplied extras (--cluster-validator-registries).
-	// Preserve non-443 ports in the registry string so probeRegistryCredential
-	// builds the correct https://host:port/v2/ URL.
+	// Preserve non-443 ports so probeRegistryCredential builds the correct
+	// https://host:port/v2/ URL. net.JoinHostPort brackets IPv6 literals, which
+	// a bare "%s:%d" would corrupt into https://::1:5000/v2/.
 	for _, e := range extras {
 		host, port := parseRegistryHostPort(e)
 		if host == "" {
@@ -189,9 +278,11 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 		}
 		reg := host
 		if port != 0 && port != 443 {
-			reg = fmt.Sprintf("%s:%d", host, port)
+			reg = net.JoinHostPort(host, strconv.Itoa(port))
+		} else if strings.Contains(host, ":") {
+			reg = "[" + host + "]" // bare IPv6 literal on the default port
 		}
-		add(reg, false)
+		add(reg, "", false)
 	}
 
 	return out
