@@ -33,15 +33,47 @@ type SessionTimeoutSeconds int
 type ShadowSamplingMethod string
 
 const (
-	ShadowSamplingMethodRandom       ShadowSamplingMethod = "random"
-	ShadowSamplingMethodPerBearerKey ShadowSamplingMethod = "perBearerKey"
+	ShadowSamplingMethodRandom           ShadowSamplingMethod = "random"
+	ShadowSamplingMethodPerBearerKey     ShadowSamplingMethod = "perBearerKey"
+	ShadowSamplingMethodPromptCacheKey   ShadowSamplingMethod = "promptCacheKey"
+	ShadowSamplingMethodFirstMessageHash ShadowSamplingMethod = "firstMessageHash"
+	DefaultPromptCacheKeyHeader                               = "x-multi-turn-session-id"
 )
 
+type ShadowSamplingMethods []ShadowSamplingMethod
+
+func (m *ShadowSamplingMethods) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "null" {
+		*m = nil
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var methods []ShadowSamplingMethod
+		if err := json.Unmarshal(data, &methods); err != nil {
+			return fmt.Errorf("must be a string or list of strings: %w", err)
+		}
+		*m = methods
+		return nil
+	}
+
+	var method ShadowSamplingMethod
+	if err := json.Unmarshal(data, &method); err != nil {
+		return fmt.Errorf("must be a string or list of strings: %w", err)
+	}
+	if method == "" {
+		*m = nil
+		return nil
+	}
+	*m = ShadowSamplingMethods{method}
+	return nil
+}
+
 type ShadowConfig struct {
-	ModelName                string               `json:"modelName" yaml:"modelName"`
-	Percentage               *int                 `json:"percentage,omitempty" yaml:"percentage,omitempty"`
-	SamplingMethod           ShadowSamplingMethod `json:"samplingMethod,omitempty" yaml:"samplingMethod,omitempty"`
-	CancelOnClientDisconnect bool                 `json:"cancelOnClientDisconnect,omitempty" yaml:"cancelOnClientDisconnect,omitempty"`
+	ModelName                string                `json:"modelName" yaml:"modelName"`
+	Percentage               *int                  `json:"percentage,omitempty" yaml:"percentage,omitempty"`
+	SamplingMethod           ShadowSamplingMethods `json:"samplingMethod,omitempty" yaml:"samplingMethod,omitempty"`
+	CancelOnClientDisconnect bool                  `json:"cancelOnClientDisconnect,omitempty" yaml:"cancelOnClientDisconnect,omitempty"`
 }
 
 // decodeShadowConfig rejects unknown and null keys, which encoding/json would
@@ -131,8 +163,9 @@ type ModelFunctionDetails struct {
 	ShadowModelName                string                `json:"shadowModelName,omitempty" yaml:"shadowModelName,omitempty"`
 	ShadowModelNames               []string              `json:"shadowModelNames,omitempty" yaml:"shadowModelNames,omitempty"`
 	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty" yaml:"shadowPercentage,omitempty"` // 1-100 when set; omitted defaults to 100
-	ShadowSamplingMethod           ShadowSamplingMethod  `json:"shadowSamplingMethod,omitempty" yaml:"shadowSamplingMethod,omitempty"`
+	ShadowSamplingMethod           ShadowSamplingMethods `json:"shadowSamplingMethod,omitempty" yaml:"shadowSamplingMethod,omitempty"`
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty" yaml:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadows on client cancellation or primary proxy failure; default false
+	PromptCacheKeyHeaders          []string              `json:"promptCacheKeyHeaders,omitempty" yaml:"promptCacheKeyHeaders,omitempty"`
 	FunctionType                   FunctionType          `json:"functionType,omitempty"`
 	shadowsPresent                 bool
 	shadowsNotList                 bool
@@ -169,6 +202,10 @@ func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 			strings.EqualFold(field, "shadowSamplingMethod"),
 			strings.EqualFold(field, "shadowCancelOnClientDisconnect"):
 			legacyShadowFieldsPresent = true
+		case strings.EqualFold(field, "promptCacheKeyHeaders"):
+			if isJSONNull(raw) {
+				return fmt.Errorf("decode model %q: promptCacheKeyHeaders must not be null", modelName)
+			}
 		}
 	}
 
@@ -255,7 +292,7 @@ func (m ModelFunctionDetails) EffectiveShadows() []ShadowConfig {
 		shadows = append(shadows, ShadowConfig{
 			ModelName:                modelName,
 			Percentage:               cloneInt(m.ShadowPercentage),
-			SamplingMethod:           m.ShadowSamplingMethod,
+			SamplingMethod:           slices.Clone(m.ShadowSamplingMethod),
 			CancelOnClientDisconnect: m.ShadowCancelOnClientDisconnect,
 		})
 	}
@@ -264,7 +301,15 @@ func (m ModelFunctionDetails) EffectiveShadows() []ShadowConfig {
 
 func cloneShadowConfig(shadow ShadowConfig) ShadowConfig {
 	shadow.Percentage = cloneInt(shadow.Percentage)
+	shadow.SamplingMethod = slices.Clone(shadow.SamplingMethod)
 	return shadow
+}
+
+func (m ModelFunctionDetails) EffectivePromptCacheKeyHeaders() []string {
+	if m.PromptCacheKeyHeaders != nil {
+		return slices.Clone(m.PromptCacheKeyHeaders)
+	}
+	return []string{DefaultPromptCacheKeyHeader}
 }
 
 func cloneInt(value *int) *int {
@@ -279,7 +324,7 @@ func (m ModelFunctionDetails) hasLegacyShadowConfig() bool {
 	return m.ShadowModelName != "" ||
 		len(m.ShadowModelNames) > 0 ||
 		m.ShadowPercentage != nil ||
-		m.ShadowSamplingMethod != "" ||
+		m.ShadowSamplingMethod != nil ||
 		m.ShadowCancelOnClientDisconnect
 }
 
@@ -430,12 +475,12 @@ func shadowTargetLocation(location string, index int, perTarget bool) string {
 	return fmt.Sprintf("%s.shadows[%d]", location, index)
 }
 
-func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
+func validateOpenAIShadowConfig(location string, sectionName string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
 	if err := validateShadowFormShape(location, entry); err != nil {
 		return nil, err
 	}
 	if entry.hasShadowsField() {
-		if err := validatePerTargetShadowConfigs(location, entry.Shadows); err != nil {
+		if err := validatePerTargetShadowConfigs(location, sectionName, entry.Shadows); err != nil {
 			return nil, err
 		}
 		return entry.EffectiveShadows(), nil
@@ -446,7 +491,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		return nil, fmt.Errorf("%s: %w", location, err)
 	}
 
-	if err := validateShadowSamplingMethod(location, entry.ShadowSamplingMethod); err != nil {
+	if err := validateSamplingMethods(location, "shadowSamplingMethod", sectionName, entry.ShadowSamplingMethod); err != nil {
 		return nil, err
 	}
 
@@ -461,7 +506,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		if entry.ShadowPercentage != nil {
 			return nil, fmt.Errorf("%s: shadowPercentage requires at least one shadow target", location)
 		}
-		if entry.ShadowSamplingMethod != "" {
+		if entry.ShadowSamplingMethod != nil {
 			return nil, fmt.Errorf("%s: shadowSamplingMethod requires at least one shadow target", location)
 		}
 		if entry.ShadowCancelOnClientDisconnect {
@@ -472,7 +517,7 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 	return entry.EffectiveShadows(), nil
 }
 
-func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) error {
+func validatePerTargetShadowConfigs(location string, sectionName string, shadows []ShadowConfig) error {
 	seen := make(map[string]struct{}, len(shadows))
 	for i, shadow := range shadows {
 		shadowLocation := shadowTargetLocation(location, i, true)
@@ -490,27 +535,45 @@ func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) err
 				return fmt.Errorf("%s: percentage must be between 1 and 100", shadowLocation)
 			}
 		}
-		if err := validateSamplingMethod(shadowLocation, "samplingMethod", shadow.SamplingMethod); err != nil {
+		if err := validateSamplingMethods(shadowLocation, "samplingMethod", sectionName, shadow.SamplingMethod); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateShadowSamplingMethod(location string, method ShadowSamplingMethod) error {
-	return validateSamplingMethod(location, "shadowSamplingMethod", method)
+func validateSamplingMethods(location string, fieldName string, sectionName string, methods ShadowSamplingMethods) error {
+	if methods == nil {
+		return nil
+	}
+	if len(methods) == 0 {
+		return fmt.Errorf("%s: %s must not be an empty list", location, fieldName)
+	}
+
+	seen := make(map[ShadowSamplingMethod]struct{}, len(methods))
+	for i, method := range methods {
+		switch method {
+		case ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
+		case ShadowSamplingMethodPromptCacheKey, ShadowSamplingMethodFirstMessageHash:
+			if !supportsRequestBodySampling(sectionName) {
+				return fmt.Errorf("%s: %s method %q is unsupported for openai.%s", location, fieldName, method, sectionName)
+			}
+		default:
+			return fmt.Errorf("%s: %s contains unknown method %q", location, fieldName, method)
+		}
+		if _, ok := seen[method]; ok {
+			return fmt.Errorf("%s: %s contains duplicate method %q", location, fieldName, method)
+		}
+		seen[method] = struct{}{}
+		if method == ShadowSamplingMethodRandom && i != len(methods)-1 {
+			return fmt.Errorf("%s: %s method %q must be last", location, fieldName, method)
+		}
+	}
+	return nil
 }
 
-func validateSamplingMethod(location string, fieldName string, method ShadowSamplingMethod) error {
-	switch method {
-	case "", ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
-		return nil
-	default:
-		return fmt.Errorf(
-			"%s: %s must be %q or %q",
-			location, fieldName, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey,
-		)
-	}
+func supportsRequestBodySampling(sectionName string) bool {
+	return sectionName == "chatCompletions" || sectionName == "responses"
 }
 
 func (c *GatewayConfig) Validate() error {
@@ -550,6 +613,9 @@ func validateOpenAISection(sectionName string, entries map[string]ModelFunctionD
 			return err
 		}
 		if err := validateFunctionType(location, sectionName, entry); err != nil {
+			return err
+		}
+		if err := validatePromptCacheKeyHeaders(location, sectionName, entry.PromptCacheKeyHeaders); err != nil {
 			return err
 		}
 	}
@@ -592,7 +658,7 @@ func validateMultipartOpenAISection(sectionName string, entries map[string]Model
 func validateOpenAIShadowTargets(sectionName string, entries map[string]ModelFunctionDetails, modelNames map[string]struct{}) error {
 	for modelKey, entry := range entries {
 		location := "openai." + sectionName + "." + modelKey
-		shadowTargets, err := validateOpenAIShadowConfig(location, entry)
+		shadowTargets, err := validateOpenAIShadowConfig(location, sectionName, entry)
 		if err != nil {
 			return err
 		}
@@ -649,6 +715,31 @@ var reservedCustomHeaderNames = map[string]struct{}{
 // rather than value, so a configured value would fail every request.
 var llmGatewayReservedCustomHeaderNames = map[string]struct{}{
 	"x-priority": {},
+}
+
+func validatePromptCacheKeyHeaders(location string, sectionName string, headers []string) error {
+	if headers == nil {
+		return nil
+	}
+	if !supportsRequestBodySampling(sectionName) {
+		return fmt.Errorf("%s: promptCacheKeyHeaders is unsupported for openai.%s", location, sectionName)
+	}
+
+	seenNames := make(map[string]string, len(headers))
+	for _, name := range headers {
+		if name == "" {
+			return fmt.Errorf("%s: promptCacheKeyHeaders cannot contain empty header names", location)
+		}
+		if !isHTTPFieldName(name) {
+			return fmt.Errorf("%s: promptCacheKeyHeaders header %q has invalid HTTP field name", location, name)
+		}
+		lowerName := strings.ToLower(name)
+		if existingName, ok := seenNames[lowerName]; ok {
+			return fmt.Errorf("%s: promptCacheKeyHeaders cannot contain duplicate header names %q and %q", location, existingName, name)
+		}
+		seenNames[lowerName] = name
+	}
+	return nil
 }
 
 func validateCustomHeaders(location string, headers CustomHeaders) error {

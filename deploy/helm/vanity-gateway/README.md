@@ -151,10 +151,14 @@ An `openai` route may mirror traffic to other routes in the same endpoint with
 primary:
   modelName: example/primary
   functionID: primary-function-id
+  promptCacheKeyHeaders:
+    - x-multi-turn-session-id
   shadows:
     - modelName: private/example/shadow-a
       percentage: 10                  # 1-100, default 100
-      samplingMethod: perBearerKey    # random (default) or perBearerKey
+      samplingMethod:
+        - promptCacheKey
+        - firstMessageHash
       cancelOnClientDisconnect: true  # default false
     - modelName: private/example/shadow-b
 shadow-a:
@@ -167,10 +171,43 @@ shadow-b:
 
 - a route with both legacy form and new form is rejected
 - an entry needs `modelName`; unknown entry keys are rejected
+- `samplingMethod` accepts one method or an ordered list
+- every method list has an implicit terminal `random` fallback
 
 The legacy route-level fields `shadowModelName`, `shadowModelNames`,
 `shadowPercentage`, `shadowSamplingMethod`, and `shadowCancelOnClientDisconnect`
-keep working unchanged; they apply one policy to every target on the route.
+remain supported; they apply one policy to every target on the route.
+`shadowSamplingMethod` also accepts one method or an ordered list.
+
+The supported methods are `random`, `perBearerKey`, `promptCacheKey`, and
+`firstMessageHash`. The gateway evaluates a list in order and advances only
+when a method cannot find usable source material. A valid bucket rejection is
+final. An explicit `random` must be last. Empty lists and entries, duplicates,
+unknown methods, and methods after `random` are rejected. A `100` percent target
+is admitted without parsing sampling material or drawing a random bucket.
+
+`promptCacheKey` and `firstMessageHash` are limited to `chatCompletions` and
+`responses`. `promptCacheKey` first uses a nonempty string
+`prompt_cache_key` from the JSON body, then checks `promptCacheKeyHeaders` in
+order. This route-level header list applies to both shadow forms. It defaults to
+`x-multi-turn-session-id`; set it to `[]` to disable header lookup. A header is
+usable only when it has exactly one nonempty value after trimming. Only the
+value is hashed, so equal values receive equal buckets across body and header
+sources and across both endpoints.
+
+`firstMessageHash` uses a versioned, endpoint-specific canonical JSON envelope.
+For Chat Completions it hashes leading `system` and `developer` messages and the
+first `user` message. For Responses it hashes nonempty `instructions` and the
+first user input; a string `input` is user content. Object-key order is
+normalized, while array and content-part order is preserved. Later turns are
+ignored. Sampling is stateless and does not recover input through conversations,
+`previous_response_id`, or streamed deltas.
+
+All deterministic methods use SHA-256, the first 8 digest bytes as a big-endian
+integer, and modulo 100. Missing bearer credentials now reach the implicit
+`random` fallback for scalar `perBearerKey` configuration instead of skipping
+the target. Sampling does not change forwarded request bytes. Raw credentials,
+prompt cache keys, and message content are not added to telemetry.
 
 ## Notes
 

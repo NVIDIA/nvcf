@@ -143,10 +143,14 @@ v2config:
           X-Provider-Feature: enabled
           X-Request-Source: vanity-gateway
         tooManyRequestsMessage: "Try again later or use a partner endpoint."
+        promptCacheKeyHeaders:
+          - x-multi-turn-session-id
         shadows:
           - modelName: private/meta/llama-3.1-8b-shadow
             percentage: 10
-            samplingMethod: perBearerKey
+            samplingMethod:
+              - promptCacheKey
+              - firstMessageHash
             cancelOnClientDisconnect: false
       private_meta_llama-3_1-8b-shadow:
         modelName: private/meta/llama-3.1-8b-shadow
@@ -193,12 +197,13 @@ v2config:
 | `shadows` | No | List of per-target shadow configs. It must be a list; `null` is rejected, and so is `null` for any field inside an entry. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
 | `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
-| `shadows[].samplingMethod` | No | Admission method for this target. Allowed values are `random` and `perBearerKey`. Defaults to `random`. |
+| `shadows[].samplingMethod` | No | Admission method or ordered method list for this target. All endpoints support `random` and `perBearerKey`. Chat Completions and Responses also support `promptCacheKey` and `firstMessageHash`. Defaults to `random`. |
 | `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the primary request context is canceled. Defaults to `false`. |
+| `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions and Responses. Omitted defaults to `x-multi-turn-session-id`; `[]` disables header lookup. |
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
 | `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
 | `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
-| `shadowSamplingMethod` | No | Legacy admission method applied to every legacy target. Allowed values are `random` and `perBearerKey`. Missing, empty, or `null` defaults to `random`. |
+| `shadowSamplingMethod` | No | Legacy admission method or ordered method list applied to every legacy target. It supports the same methods and fallback behavior as `shadows[].samplingMethod`. Missing, empty, or `null` defaults to `random`. |
 | `shadowCancelOnClientDisconnect` | No | Legacy cancellation policy applied to every legacy target. When `true`, cancels shadow work if the primary request context is canceled. Defaults to `false`. |
 
 ### Shadow Traffic Support
@@ -222,26 +227,64 @@ top-level `shadowPercentage`, `shadowSamplingMethod`, and
 combine `shadows` with any legacy top-level shadow field. Config validation
 rejects the mixed form.
 
-The default sampling method, `random`, draws one request-local bucket from `0`
-to `99` for each primary request. Every `random` shadow on that request uses the
-same bucket and admits the request when `bucket < percentage`.
+Sampling configuration accepts one method or an ordered list. The gateway tries
+methods in order and proceeds only when a method has no usable source material.
+The first available method makes the final decision, including when its bucket
+rejects the request. The gateway appends an implicit terminal `random` method.
+An explicit `random` must be last. Empty lists, empty entries, duplicate methods,
+unknown methods, and methods after `random` are rejected.
+
+All sampling buckets are request-scoped and shared across targets. A target is
+admitted when `bucket < percentage`. A `100` percent target is admitted without
+parsing sampling material or drawing a random bucket. Deterministic methods hash
+their resolved material with SHA-256, read the first 8 digest bytes as a
+big-endian `uint64`, and use `value % 100` as the bucket.
+
+The default `random` method draws one bucket from `0` to `99` for each primary
+request. Every `random` shadow on that request uses the same bucket.
 
 The `perBearerKey` method makes admission sticky by bearer credential. It
 requires exactly one `Authorization` header whose value starts with the
 case-insensitive `Bearer` auth scheme followed by whitespace. The gateway strips
 only the `Bearer` scheme and following separator whitespace, then hashes the
-complete remaining credential as opaque UTF-8 bytes. It computes SHA-256, reads
-the first 8 digest bytes as a big-endian `uint64`, sets
-`bucket = value % 100`, and admits the request when
-`bucket < percentage`. Every `perBearerKey` shadow on the request uses the same
-credential bucket. Bearer credential prefixes such as `nvapi`,
+complete remaining credential as opaque UTF-8 bytes. Every `perBearerKey`
+shadow on the request uses the same credential bucket. Bearer credential
+prefixes such as `nvapi`,
 `nvapi-stg`, and `nvapi-nvcf` remain part of the credential and are not
-stripped. Missing, malformed, duplicate, or non-Bearer authorization skips
-each `perBearerKey` target whose `percentage` is below `100`. It does not affect
-targets that use `random`.
+stripped. Missing, malformed, duplicate, or non-Bearer authorization makes this
+method unavailable, so evaluation continues to the next configured method. For
+existing scalar `perBearerKey` configuration, this changes missing bearer
+credentials from skipping the target to using the implicit random fallback.
 
 `perBearerKey` is key-level sampling. It is not true user or session sampling
 and can skew shadow volume when a few bearer keys dominate traffic.
+
+The `promptCacheKey` method first checks the JSON body for a nonempty string
+`prompt_cache_key`. If it is unavailable, the gateway checks
+`promptCacheKeyHeaders` in configured order. A header is usable only when it has
+exactly one value and that value is nonempty after trimming. The first usable
+body or header value makes the final admission decision. A valid rejection does
+not try another source or method. Only the resolved value is hashed, so the same
+value has the same bucket across the body, different header names, Chat
+Completions, and Responses. Header names must be valid HTTP field names and
+cannot repeat case-insensitively. Set `promptCacheKeyHeaders: []` to disable
+header lookup.
+
+The `firstMessageHash` method hashes a versioned, endpoint-specific canonical
+JSON envelope. It preserves roles, full content values, array order, and content
+part order while normalizing JSON object-key order. For Chat Completions, it
+includes leading `system` and `developer` messages in request order and the
+first `user` message. Other preceding roles and all later messages are ignored.
+For Responses, it includes nonempty `instructions` and the first user input. A
+string `input` is user content; an array is scanned to its first `role: user`
+item. A null, empty string, empty array, or empty object first-user content makes
+the method unavailable.
+
+`promptCacheKey` and `firstMessageHash` are only valid in the `chatCompletions`
+and `responses` mapping sections. Sampling is stateless. The gateway does not
+resolve conversations, `previous_response_id`, or streamed deltas to recover
+earlier input. If a request does not carry the required material, evaluation
+continues to the next method.
 
 Shadow traffic is not supported for multipart image endpoints: `imageEdits` and
 `imageVariations`. Config validation rejects effective shadow settings in those
@@ -253,6 +296,9 @@ shadow timeout. Normal primary response completion does not cancel shadow work.
 When a target's `cancelOnClientDisconnect` is `true`, the gateway cancels only
 that target if the client disconnects or cancels the primary request before the
 primary response completes. Other targets continue under their own policies.
+Sampling does not change primary validation, forwarded request bytes, or
+headers. Raw bearer credentials, prompt cache keys, and message content are not
+added to logs, traces, or metric labels.
 
 ### Vanity Mapping Fields
 

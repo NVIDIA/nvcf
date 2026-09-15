@@ -31,6 +31,10 @@ func intPtr(v int) *int {
 	return &v
 }
 
+func samplingMethods(methods ...ShadowSamplingMethod) ShadowSamplingMethods {
+	return methods
+}
+
 func drainSharedNotifications() {
 	for {
 		select {
@@ -132,12 +136,12 @@ func TestGatewayConfigValidateAcceptsPerTargetShadows(t *testing.T) {
 				{
 					ModelName:                "private/facebook/opt-125m-shadow-a",
 					Percentage:               &percentage,
-					SamplingMethod:           ShadowSamplingMethodPerBearerKey,
+					SamplingMethod:           samplingMethods(ShadowSamplingMethodPerBearerKey),
 					CancelOnClientDisconnect: true,
 				},
 				{
 					ModelName:      "private/facebook/opt-125m-shadow-b",
-					SamplingMethod: ShadowSamplingMethodRandom,
+					SamplingMethod: samplingMethods(ShadowSamplingMethodRandom),
 				},
 			},
 		},
@@ -180,7 +184,7 @@ func TestModelFunctionDetailsEffectiveShadowsNormalizesLegacyFields(t *testing.T
 		ShadowModelName:                "shadow-a",
 		ShadowModelNames:               []string{"shadow-b"},
 		ShadowPercentage:               &percentage,
-		ShadowSamplingMethod:           ShadowSamplingMethodPerBearerKey,
+		ShadowSamplingMethod:           samplingMethods(ShadowSamplingMethodPerBearerKey),
 		ShadowCancelOnClientDisconnect: true,
 	}
 
@@ -191,7 +195,7 @@ func TestModelFunctionDetailsEffectiveShadowsNormalizesLegacyFields(t *testing.T
 	for _, shadow := range shadows {
 		require.NotNil(t, shadow.Percentage)
 		assert.Equal(t, 25, *shadow.Percentage)
-		assert.Equal(t, ShadowSamplingMethodPerBearerKey, shadow.SamplingMethod)
+		assert.Equal(t, samplingMethods(ShadowSamplingMethodPerBearerKey), shadow.SamplingMethod)
 		assert.True(t, shadow.CancelOnClientDisconnect)
 	}
 
@@ -226,20 +230,20 @@ func TestModelFunctionDetailsEffectiveShadowsLegacyAndPerTargetEquivalent(t *tes
 				ShadowModelName:                "shadow-a",
 				ShadowModelNames:               []string{"shadow-b"},
 				ShadowPercentage:               intPtr(25),
-				ShadowSamplingMethod:           ShadowSamplingMethodPerBearerKey,
+				ShadowSamplingMethod:           samplingMethods(ShadowSamplingMethodPerBearerKey),
 				ShadowCancelOnClientDisconnect: true,
 			},
 			perTarget: ModelFunctionDetails{Shadows: []ShadowConfig{
 				{
 					ModelName:                "shadow-a",
 					Percentage:               intPtr(25),
-					SamplingMethod:           ShadowSamplingMethodPerBearerKey,
+					SamplingMethod:           samplingMethods(ShadowSamplingMethodPerBearerKey),
 					CancelOnClientDisconnect: true,
 				},
 				{
 					ModelName:                "shadow-b",
 					Percentage:               intPtr(25),
-					SamplingMethod:           ShadowSamplingMethodPerBearerKey,
+					SamplingMethod:           samplingMethods(ShadowSamplingMethodPerBearerKey),
 					CancelOnClientDisconnect: true,
 				},
 			}},
@@ -352,7 +356,7 @@ v2config:
 	require.Len(t, shadows, 2)
 	assert.Equal(t, "private/facebook/opt-125m-shadow-a", shadows[0].ModelName)
 	assert.Equal(t, 10, *shadows[0].Percentage)
-	assert.Equal(t, ShadowSamplingMethodPerBearerKey, shadows[0].SamplingMethod)
+	assert.Equal(t, samplingMethods(ShadowSamplingMethodPerBearerKey), shadows[0].SamplingMethod)
 	assert.True(t, shadows[0].CancelOnClientDisconnect)
 	assert.Equal(t, "private/facebook/opt-125m-shadow-b", shadows[1].ModelName)
 	assert.Equal(t, 50, *shadows[1].Percentage)
@@ -641,7 +645,7 @@ v2config:
 	require.NoError(t, err)
 
 	cfg := reloadable.Get()
-	assert.Equal(t, ShadowSamplingMethodPerBearerKey, cfg.OpenAI.ChatCompletions["primary"].ShadowSamplingMethod)
+	assert.Equal(t, samplingMethods(ShadowSamplingMethodPerBearerKey), cfg.OpenAI.ChatCompletions["primary"].ShadowSamplingMethod)
 }
 
 func TestGatewayConfigLoadAcceptsSessionTimeout(t *testing.T) {
@@ -982,7 +986,7 @@ func TestGatewayConfigValidateRejectsMixedShadowForms(t *testing.T) {
 		{
 			name: "legacy sampling method",
 			apply: func(entry *ModelFunctionDetails) {
-				entry.ShadowSamplingMethod = ShadowSamplingMethodRandom
+				entry.ShadowSamplingMethod = samplingMethods(ShadowSamplingMethodRandom)
 			},
 		},
 		{
@@ -1063,9 +1067,9 @@ func TestGatewayConfigValidateRejectsInvalidPerTargetShadows(t *testing.T) {
 			name: "invalid sampling method",
 			shadows: []ShadowConfig{{
 				ModelName:      "private/facebook/opt-125m-shadow-a",
-				SamplingMethod: ShadowSamplingMethod("weighted"),
+				SamplingMethod: samplingMethods(ShadowSamplingMethod("weighted")),
 			}},
-			expected: "samplingMethod must be",
+			expected: "samplingMethod contains unknown method",
 		},
 		{
 			name: "self reference",
@@ -1141,11 +1145,11 @@ func TestGatewayConfigValidateRejectsInvalidOpenAIShadowPercentage(t *testing.T)
 func TestGatewayConfigValidateAcceptsShadowSamplingMethod(t *testing.T) {
 	tests := []struct {
 		name   string
-		method ShadowSamplingMethod
+		method ShadowSamplingMethods
 	}{
-		{name: "omitted", method: ""},
-		{name: "random", method: ShadowSamplingMethodRandom},
-		{name: "per bearer key", method: ShadowSamplingMethodPerBearerKey},
+		{name: "omitted", method: nil},
+		{name: "random", method: samplingMethods(ShadowSamplingMethodRandom)},
+		{name: "per bearer key", method: samplingMethods(ShadowSamplingMethodPerBearerKey)},
 	}
 
 	for _, tc := range tests {
@@ -1176,7 +1180,7 @@ func TestGatewayConfigValidateRejectsInvalidShadowSamplingMethod(t *testing.T) {
 			ModelName:            "facebook/opt-125m",
 			FunctionID:           "func-id",
 			ShadowModelName:      "private/facebook/opt-125m-shadow",
-			ShadowSamplingMethod: ShadowSamplingMethod("weighted"),
+			ShadowSamplingMethod: samplingMethods(ShadowSamplingMethod("weighted")),
 		},
 		"shadow": {
 			ModelName:  "private/facebook/opt-125m-shadow",
@@ -1195,7 +1199,7 @@ func TestGatewayConfigValidateRejectsShadowSamplingMethodWithoutShadowTarget(t *
 		"primary": {
 			ModelName:            "facebook/opt-125m",
 			FunctionID:           "func-id",
-			ShadowSamplingMethod: ShadowSamplingMethodPerBearerKey,
+			ShadowSamplingMethod: samplingMethods(ShadowSamplingMethodPerBearerKey),
 		},
 	}
 
@@ -1452,7 +1456,7 @@ func TestGatewayConfigValidateRejectsShadowOnMultipartImageSections(t *testing.T
 					"edit": {
 						ModelName:            "qwen/qwen-image-edit-2511",
 						FunctionID:           "edit-id",
-						ShadowSamplingMethod: ShadowSamplingMethodPerBearerKey,
+						ShadowSamplingMethod: samplingMethods(ShadowSamplingMethodPerBearerKey),
 					},
 				}
 			},
@@ -1464,7 +1468,7 @@ func TestGatewayConfigValidateRejectsShadowOnMultipartImageSections(t *testing.T
 					"var": {
 						ModelName:            "qwen/qwen-image-var",
 						FunctionID:           "var-id",
-						ShadowSamplingMethod: ShadowSamplingMethodPerBearerKey,
+						ShadowSamplingMethod: samplingMethods(ShadowSamplingMethodPerBearerKey),
 					},
 				}
 			},
@@ -1538,6 +1542,226 @@ func TestGatewayConfigValidateRejectsVanityShadowSamplingMethod(t *testing.T) {
 	err := cfg.Validate()
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "shadow config is unsupported for vanity routes")
+}
+
+func TestGatewayConfigLoadAcceptsOrderedShadowSamplingMethodsAndPromptCacheKeyHeaders(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    chatCompletions:
+      legacy:
+        modelName: acme/legacy
+        functionID: legacy-id
+        shadowModelName: private/acme/legacy-shadow
+        shadowSamplingMethod:
+          - promptCacheKey
+          - firstMessageHash
+        promptCacheKeyHeaders:
+          - X-Session-ID
+          - X-Request-Group
+      legacy-shadow:
+        modelName: private/acme/legacy-shadow
+        functionID: legacy-shadow-id
+      per-target:
+        modelName: acme/per-target
+        functionID: per-target-id
+        promptCacheKeyHeaders: []
+        shadows:
+          - modelName: private/acme/per-target-shadow
+            samplingMethod: firstMessageHash
+      per-target-shadow:
+        modelName: private/acme/per-target-shadow
+        functionID: per-target-shadow-id
+`), 0600)
+	require.NoError(t, err)
+
+	reloadable, err := SetupConfigWithConfigPath(configPath)
+	require.NoError(t, err)
+
+	legacy := reloadable.Get().OpenAI.ChatCompletions["legacy"]
+	assert.Equal(t, samplingMethods(
+		ShadowSamplingMethodPromptCacheKey,
+		ShadowSamplingMethodFirstMessageHash,
+	), legacy.ShadowSamplingMethod)
+	assert.Equal(t, []string{"X-Session-ID", "X-Request-Group"}, legacy.EffectivePromptCacheKeyHeaders())
+
+	perTarget := reloadable.Get().OpenAI.ChatCompletions["per-target"]
+	require.Len(t, perTarget.Shadows, 1)
+	assert.Equal(t, samplingMethods(ShadowSamplingMethodFirstMessageHash), perTarget.Shadows[0].SamplingMethod)
+	assert.Empty(t, perTarget.EffectivePromptCacheKeyHeaders())
+	assert.Equal(t, []string{DefaultPromptCacheKeyHeader}, ModelFunctionDetails{}.EffectivePromptCacheKeyHeaders())
+}
+
+func TestModelFunctionDetailsEffectiveShadowConfigReturnsDeepCopies(t *testing.T) {
+	perTarget := ModelFunctionDetails{
+		PromptCacheKeyHeaders: []string{"X-Session-ID"},
+		Shadows: []ShadowConfig{{
+			ModelName:      "shadow",
+			SamplingMethod: samplingMethods(ShadowSamplingMethodPromptCacheKey, ShadowSamplingMethodFirstMessageHash),
+		}},
+	}
+
+	shadows := perTarget.EffectiveShadows()
+	headers := perTarget.EffectivePromptCacheKeyHeaders()
+	shadows[0].SamplingMethod[0] = ShadowSamplingMethodRandom
+	headers[0] = "X-Changed"
+
+	assert.Equal(t, ShadowSamplingMethodPromptCacheKey, perTarget.Shadows[0].SamplingMethod[0])
+	assert.Equal(t, "X-Session-ID", perTarget.PromptCacheKeyHeaders[0])
+
+	legacy := ModelFunctionDetails{
+		ShadowModelName:      "legacy-shadow",
+		ShadowSamplingMethod: samplingMethods(ShadowSamplingMethodFirstMessageHash),
+	}
+	legacyShadows := legacy.EffectiveShadows()
+	legacyShadows[0].SamplingMethod[0] = ShadowSamplingMethodRandom
+	assert.Equal(t, ShadowSamplingMethodFirstMessageHash, legacy.ShadowSamplingMethod[0])
+}
+
+func TestGatewayConfigValidateRejectsInvalidOrderedShadowSamplingMethods(t *testing.T) {
+	tests := []struct {
+		name    string
+		methods ShadowSamplingMethods
+		want    string
+	}{
+		{name: "empty list", methods: ShadowSamplingMethods{}, want: "must not be an empty list"},
+		{name: "empty entry", methods: samplingMethods(""), want: `unknown method ""`},
+		{name: "duplicate", methods: samplingMethods(ShadowSamplingMethodPerBearerKey, ShadowSamplingMethodPerBearerKey), want: "duplicate method"},
+		{name: "unknown", methods: samplingMethods("weighted"), want: "unknown method"},
+		{name: "random not last", methods: samplingMethods(ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey), want: `method "random" must be last`},
+	}
+
+	for _, tc := range tests {
+		for _, perTarget := range []bool{false, true} {
+			form := "legacy"
+			if perTarget {
+				form = "per target"
+			}
+			t.Run(tc.name+" "+form, func(t *testing.T) {
+				cfg := gatewayConfigWithShadow("chatCompletions", tc.methods, nil, perTarget)
+				err := cfg.Validate()
+				require.Error(t, err)
+				assert.ErrorContains(t, err, tc.want)
+			})
+		}
+	}
+}
+
+func TestGatewayConfigValidateScopesRequestBodyShadowSampling(t *testing.T) {
+	methods := samplingMethods(ShadowSamplingMethodPromptCacheKey, ShadowSamplingMethodFirstMessageHash)
+	for _, section := range []string{"chatCompletions", "responses"} {
+		t.Run("accepts "+section, func(t *testing.T) {
+			require.NoError(t, gatewayConfigWithShadow(section, methods, nil, true).Validate())
+			require.NoError(t, gatewayConfigWithShadow(section, methods, nil, false).Validate())
+		})
+	}
+	for _, section := range []string{"completions", "embeddings", "imageGenerations"} {
+		for _, perTarget := range []bool{false, true} {
+			form := "legacy"
+			if perTarget {
+				form = "per target"
+			}
+			t.Run("rejects "+section+" "+form, func(t *testing.T) {
+				err := gatewayConfigWithShadow(section, methods, nil, perTarget).Validate()
+				require.Error(t, err)
+				assert.ErrorContains(t, err, "is unsupported for openai."+section)
+			})
+		}
+	}
+}
+
+func TestGatewayConfigValidatePromptCacheKeyHeaders(t *testing.T) {
+	for _, headers := range [][]string{nil, {}, {"X-Session-ID", "X-Request-Group"}} {
+		require.NoError(t, gatewayConfigWithShadow(
+			"chatCompletions",
+			samplingMethods(ShadowSamplingMethodPromptCacheKey),
+			headers,
+			true,
+		).Validate())
+	}
+
+	tests := []struct {
+		name    string
+		headers []string
+		want    string
+	}{
+		{name: "empty name", headers: []string{""}, want: "cannot contain empty header names"},
+		{name: "invalid name", headers: []string{"Bad Header"}, want: "invalid HTTP field name"},
+		{name: "case insensitive duplicate", headers: []string{"X-Session-ID", "x-session-id"}, want: "duplicate header names"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := gatewayConfigWithShadow(
+				"responses",
+				samplingMethods(ShadowSamplingMethodPromptCacheKey),
+				tc.headers,
+				true,
+			).Validate()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.want)
+		})
+	}
+
+	err := gatewayConfigWithShadow("embeddings", samplingMethods(ShadowSamplingMethodRandom), []string{}, true).Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "promptCacheKeyHeaders is unsupported")
+}
+
+func TestGatewayConfigLoadRejectsNullPromptCacheKeyHeaders(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  openai:
+    responses:
+      primary:
+        modelName: acme/primary
+        functionID: primary-id
+        promptCacheKeyHeaders: null
+`), 0600)
+	require.NoError(t, err)
+
+	_, err = SetupConfigWithConfigPath(configPath)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "promptCacheKeyHeaders must not be null")
+}
+
+func gatewayConfigWithShadow(
+	section string,
+	methods ShadowSamplingMethods,
+	headers []string,
+	perTarget bool,
+) *GatewayConfig {
+	primary := ModelFunctionDetails{
+		ModelName:             "acme/primary",
+		FunctionID:            "primary-id",
+		PromptCacheKeyHeaders: headers,
+	}
+	if perTarget {
+		primary.Shadows = []ShadowConfig{{ModelName: "private/acme/shadow", SamplingMethod: methods}}
+	} else {
+		primary.ShadowModelName = "private/acme/shadow"
+		primary.ShadowSamplingMethod = methods
+	}
+	entries := map[string]ModelFunctionDetails{
+		"primary": primary,
+		"shadow":  {ModelName: "private/acme/shadow", FunctionID: "shadow-id"},
+	}
+
+	cfg := &GatewayConfig{}
+	switch section {
+	case "chatCompletions":
+		cfg.OpenAI.ChatCompletions = entries
+	case "completions":
+		cfg.OpenAI.Completions = entries
+	case "embeddings":
+		cfg.OpenAI.Embeddings = entries
+	case "responses":
+		cfg.OpenAI.Responses = entries
+	case "imageGenerations":
+		cfg.OpenAI.ImageGenerations = entries
+	}
+	return cfg
 }
 
 func llmModelConfig(section string, entry ModelFunctionDetails) *GatewayConfig {

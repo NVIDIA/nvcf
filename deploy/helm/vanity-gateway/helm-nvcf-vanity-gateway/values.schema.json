@@ -319,7 +319,7 @@
           "$ref": "#/definitions/nonEmptyString"
         },
         "chatCompletions": {
-          "$ref": "#/definitions/openAILLMEndpointRoutes"
+          "$ref": "#/definitions/openAIStickyEndpointRoutes"
         },
         "completions": {
           "$ref": "#/definitions/openAINonLLMEndpointRoutes"
@@ -328,7 +328,7 @@
           "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "responses": {
-          "$ref": "#/definitions/openAILLMEndpointRoutes"
+          "$ref": "#/definitions/openAIStickyEndpointRoutes"
         },
         "imageGenerations": {
           "$ref": "#/definitions/openAINonLLMEndpointRoutes"
@@ -348,6 +348,12 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/openAIModelRoute"
+      }
+    },
+    "openAIStickyEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAILLMModelRoute"
       }
     },
     "openAIMultipartEndpointRoutes": {
@@ -410,8 +416,14 @@
         "modelName",
         "functionID"
       ],
-      "$comment": "The gateway reads the shadows key and the legacy shadow keys in any letter case, so the shadows rules use (?i) patterns. That flag is Go regexp syntax, which Helm uses; ECMA-262 validators do not accept it. The legacy keys keep the exact-name checks above so their behavior is unchanged.",
+      "$comment": "The gateway reads the shadows key and legacy shadow keys in any letter case, so their rules use (?i) patterns. That flag is Go regexp syntax, which Helm uses; ECMA-262 validators do not accept it.",
       "patternProperties": {
+        "^(?i)shadowsamplingmethod$": {
+          "$ref": "#/definitions/shadowSamplingMethod"
+        },
+        "^(?i)promptcachekeyheaders$": {
+          "$ref": "#/definitions/promptCacheKeyHeaders"
+        },
         "^(?i)shadows$": {
           "type": "array",
           "items": {
@@ -455,13 +467,107 @@
         }
       ]
     },
-    "shadowSamplingMethod": {
+    "shadowSamplingMethodValue": {
       "type": "string",
       "enum": [
-        "",
         "random",
-        "perBearerKey"
+        "perBearerKey",
+        "promptCacheKey",
+        "firstMessageHash"
       ]
+    },
+    "orderedShadowSamplingMethods": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/definitions/shadowSamplingMethodValue"
+      },
+      "not": {
+        "anyOf": [
+          {
+            "minItems": 2,
+            "items": [
+              {
+                "const": "random"
+              }
+            ]
+          },
+          {
+            "minItems": 3,
+            "items": [
+              {},
+              {
+                "const": "random"
+              }
+            ]
+          },
+          {
+            "minItems": 4,
+            "items": [
+              {},
+              {},
+              {
+                "const": "random"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "shadowSamplingMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "",
+            "random",
+            "perBearerKey",
+            "promptCacheKey",
+            "firstMessageHash"
+          ]
+        },
+        {
+          "$ref": "#/definitions/orderedShadowSamplingMethods"
+        }
+      ]
+    },
+    "basicShadowSamplingMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "",
+            "random",
+            "perBearerKey"
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/definitions/orderedShadowSamplingMethods"
+            },
+            {
+              "items": {
+                "enum": [
+                  "random",
+                  "perBearerKey"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "promptCacheKeyHeaders": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+      }
     },
     "shadowTarget": {
       "type": "object",
@@ -490,6 +596,39 @@
         }
       },
       "additionalProperties": false
+    },
+    "basicShadowTarget": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/shadowTarget"
+        },
+        {
+          "patternProperties": {
+            "^(?i)samplingmethod$": {
+              "$ref": "#/definitions/basicShadowSamplingMethod"
+            }
+          }
+        }
+      ]
+    },
+    "nonRequestBodyShadowSampling": {
+      "type": "object",
+      "patternProperties": {
+        "^(?i)shadowsamplingmethod$": {
+          "$ref": "#/definitions/basicShadowSamplingMethod"
+        },
+        "^(?i)shadows$": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/basicShadowTarget"
+          }
+        }
+      },
+      "propertyNames": {
+        "not": {
+          "pattern": "^(?i)promptcachekeyheaders$"
+        }
+      }
     },
     "vanityRoutes": {
       "type": "object",
@@ -609,8 +748,18 @@
     "openAILLMEndpointRoutes": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/definitions/openAILLMModelRoute"
+        "$ref": "#/definitions/openAINonStickyLLMModelRoute"
       }
+    },
+    "openAINonStickyLLMModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAILLMModelRoute"
+        },
+        {
+          "$ref": "#/definitions/nonRequestBodyShadowSampling"
+        }
+      ]
     },
     "openAINonLLMModelRoute": {
       "allOf": [
@@ -623,6 +772,9 @@
               "functionType"
             ]
           }
+        },
+        {
+          "$ref": "#/definitions/nonRequestBodyShadowSampling"
         }
       ]
     },
