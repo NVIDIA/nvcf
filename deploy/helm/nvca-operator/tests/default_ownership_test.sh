@@ -14,6 +14,15 @@ fail() {
   exit 1
 }
 
+for schema in \
+  "${chart}/values.schema.json" \
+  "${chart_root}/../../../src/compute-plane-services/nvca/deployments/nvca-operator/values.schema.json"; do
+  test "$(yq -r '.properties.selfManaged.properties.region.default' "${schema}")" = "us-west-1" ||
+    fail "${schema} does not declare the selfManaged.region default"
+  test "$(yq -r '.properties.helmManaged.properties | has("region")' "${schema}")" = "false" ||
+    fail "${schema} incorrectly declares region under helmManaged"
+done
+
 render() {
   local manifest="$1"
   shift
@@ -45,8 +54,8 @@ default_config="$(agent_config "${default_manifest}")"
 default_policy="$(printf '%s' "${default_config}" | yq -r '.cluster.validationPolicy.name')"
 test "${default_policy}" = "Unrestricted" ||
   fail "chart default validation policy is ${default_policy:-missing}, expected Unrestricted"
-default_quic="$(printf '%s' "${default_config}" | yq -r '.workload.stargateQUICInsecure // "omitted"')"
-test "${default_quic}" = "omitted" ||
+default_quic_present="$(printf '%s' "${default_config}" | yq -r '(.workload // {}) | has("stargateQUICInsecure")')"
+test "${default_quic_present}" = "false" ||
   fail "chart serializes the runtime-default stargateQUICInsecure value"
 default_region="$(backend_config "${default_manifest}" | yq -r '.region')"
 test "${default_region}" = "us-west-1" ||
