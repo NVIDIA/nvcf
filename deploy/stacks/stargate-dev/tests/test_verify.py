@@ -21,19 +21,27 @@ SPEC.loader.exec_module(VERIFY)
 
 class MetricParsingTests(unittest.TestCase):
     def test_transient_read_failure_is_retried_but_forbidden_is_not(self) -> None:
-        with (
-            mock.patch.object(
-                VERIFY.subprocess,
-                "run",
-                side_effect=[
-                    subprocess.CompletedProcess([], 1, "", "TLS handshake timeout"),
-                    subprocess.CompletedProcess([], 0, "verified", ""),
-                ],
-            ) as run,
-            mock.patch.object(VERIFY.time, "sleep"),
+        for error in (
+            "TLS handshake timeout",
+            "http2: client connection lost",
+            "http2: server sent GOAWAY and closed the connection",
+            "use of closed network connection",
+            "unexpected EOF",
         ):
-            self.assertEqual(VERIFY.kubectl("test", "get", "pods"), "verified")
-            self.assertEqual(run.call_count, 2)
+            with (
+                self.subTest(error=error),
+                mock.patch.object(
+                    VERIFY.subprocess,
+                    "run",
+                    side_effect=[
+                        subprocess.CompletedProcess([], 1, "", error),
+                        subprocess.CompletedProcess([], 0, "verified", ""),
+                    ],
+                ) as run,
+                mock.patch.object(VERIFY.time, "sleep"),
+            ):
+                self.assertEqual(VERIFY.kubectl("test", "get", "pods"), "verified")
+                self.assertEqual(run.call_count, 2)
         with mock.patch.object(
             VERIFY.subprocess,
             "run",

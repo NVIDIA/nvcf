@@ -40,6 +40,10 @@ def transient_control_error(message: str) -> bool:
         for value in (
             "tls handshake timeout",
             "connection reset",
+            "http2: client connection lost",
+            "http2: server sent goaway and closed the connection",
+            "use of closed network connection",
+            "unexpected eof",
             "i/o timeout",
             "context deadline exceeded",
             "unable to connect to the server",
