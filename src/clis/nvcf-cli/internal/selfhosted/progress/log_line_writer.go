@@ -41,12 +41,12 @@ import (
 // EventSink is responsible for its own concurrency (JSONLRenderer's mu;
 // TTYRenderer's tea.Program.Send is goroutine-safe by design).
 type LogLineWriter struct {
-	mu      sync.Mutex
-	buf     bytes.Buffer
-	sink    EventSink
-	stream  string // "stdout" | "stderr"
-	source  string // short producer tag, e.g. "helmfile-cp"
-	closed  bool
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	sink   EventSink
+	stream string // "stdout" | "stderr"
+	source string // short producer tag, e.g. "helmfile-cp"
+	closed bool
 }
 
 // NewLogLineWriter constructs a LogLineWriter feeding into sink. stream and

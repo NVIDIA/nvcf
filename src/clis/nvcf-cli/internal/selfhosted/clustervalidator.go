@@ -19,9 +19,13 @@ package selfhosted
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +34,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -41,6 +46,9 @@ const (
 	clusterValidatorPollInterval = 2 * time.Second
 	clusterValidatorTTLSeconds   = int32(600)
 	clusterValidatorHintURL      = "https://docs.nvidia.com/nvcf/self-managed-clusters#cluster-validator"
+	// orphanValidatorRBACTTL is the minimum age before leftover validator RBAC
+	// is reclaimed. Must exceed the validator timeout so a live run is never hit.
+	orphanValidatorRBACTTL = 30 * time.Minute
 )
 
 // Vars (not consts) so tests can shorten without the full production budget.
@@ -71,6 +79,15 @@ type ClusterValidatorParams struct {
 	Image       string
 	PullSecret  string
 	NoCleanup   bool
+	// Role selects which check set the validator runs: "control-plane" or
+	// "compute-plane" (empty = compute-plane default). Passed to the Job as
+	// VALIDATOR_ROLE. See clustervalidator.RoleControlPlane / RoleComputePlane.
+	Role string
+	// Registries is a list of additional "host:port" registry endpoints to
+	// probe for reachability in the control-plane validator ConfigMap (in
+	// addition to nvcr.io which is always included). Ignored for the
+	// compute-plane role.
+	Registries []string
 }
 
 // Err is non-nil only when the run failed to execute (RBAC bootstrap,
@@ -98,12 +115,12 @@ func NewClusterValidator() ClusterValidator {
 		if err != nil {
 			return ClusterValidatorResult{Err: fmt.Errorf("building kubernetes client: %w", err)}
 		}
-		return runClusterValidator(ctx, client, p.Image, p.PullSecret, p.NoCleanup)
+		return runClusterValidator(ctx, client, p.Image, p.PullSecret, p.NoCleanup, p.Role, p.Registries)
 	}
 }
 
 // Testable core. Pass a fake clientset to unit-test without a real cluster.
-func runClusterValidator(ctx context.Context, client kubernetes.Interface, image, pullSecret string, noCleanup bool) ClusterValidatorResult {
+func runClusterValidator(ctx context.Context, client kubernetes.Interface, image, pullSecret string, noCleanup bool, role string, registries []string) ClusterValidatorResult {
 	if image == "" {
 		// Defensive: callers gate on configured image before invoking the
 		// validator, so this branch shouldn't fire in normal use.
@@ -113,31 +130,78 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	vctx, cancel := context.WithTimeout(ctx, clusterValidatorTimeout)
 	defer cancel()
 
+	// podMayBeRunning is true only between a successful Job create and a clean
+	// wait. Both cleanup defers below key off it: outside that window nothing
+	// is using the pull secret or the RBAC, so reclaiming them is safe, and
+	// inside it reclaiming them breaks the pod that is still running.
+	podMayBeRunning := false
+
 	// Resolver errors are non-fatal: fall through to the caller's value and
 	// let waitForClusterValidatorJob surface ImagePullBackOff if needed.
-	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image); err == nil {
+	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image, role); err == nil {
 		pullSecret = resolved
 	}
-	// Sweep any pull secrets we created (mirror or env-mint) after the
-	// Job terminates. Uses a fresh context so cleanup runs even when
-	// vctx has expired. Operator-supplied secrets via the flag aren't
-	// labeled by us and are skipped.
-	defer sweepManagedPullSecrets(context.Background(), client)
+	// Sweep only this role's managed pull secret, and only once the pod can no
+	// longer need it. Sweeping unconditionally deletes the Secret out from
+	// under a pod that is still retrying its pull, which the kubelet then
+	// reports as FailedToRetrieveImagePullSecret. Operator-supplied secrets via
+	// the flag aren't labeled by us and are skipped.
+	defer func() {
+		if !podMayBeRunning {
+			sweepManagedPullSecrets(context.Background(), client, role)
+		}
+	}()
 
-	if err := ensureClusterValidatorRBAC(vctx, client); err != nil {
+	// Random per-run identity for the SA/ClusterRole/ClusterRoleBinding, so a
+	// predictable name cannot be pre-created by someone else and then bound to
+	// the validator's cluster-wide permissions.
+	runID, err := newValidatorRunID()
+	if err != nil {
+		return ClusterValidatorResult{Err: err}
+	}
+	if err := ensureClusterValidatorRBAC(vctx, client, role, runID); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
 	}
+	// Remove the ClusterRole and ClusterRoleBinding to minimize the window in
+	// which the elevated SA exists. When --no-cleanup is set the operator
+	// expects to inspect the Job, so the RBAC stays either way.
+	defer func() {
+		if !noCleanup && !podMayBeRunning {
+			sweepClusterValidatorRBAC(context.Background(), client, role, runID)
+		}
+	}()
 
-	sweepPriorClusterValidatorJobs(vctx, client)
+	// For the control-plane role, create a ConfigMap with reachability
+	// endpoints and enforcement config so the validator runs its configurable
+	// checks. Best-effort: a failure here is logged but does not abort the
+	// run — the validator gracefully skips configurable checks when the
+	// ConfigMap is absent.
+	var configNote string
+	if role == clusterValidatorControlPlaneRole {
+		if err := ensureClusterValidatorConfig(vctx, client, registries); err != nil {
+			// Non-fatal: continue without the ConfigMap; the validator skips
+			// configurable reachability and enforcement checks silently unless
+			// we surface this note in the transcript.
+			configNote = fmt.Sprintf("note: validator config not applied (%v); reachability checks may be skipped", err)
+		}
+	}
+
+	sweepOrphanClusterValidatorRBAC(vctx, client, orphanValidatorRBACTTL)
+	sweepPriorClusterValidatorJobs(vctx, client, role)
 
 	jobName := fmt.Sprintf("%s-%d", clusterValidatorName, time.Now().UnixNano())
 	if _, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
-		vctx, buildClusterValidatorJob(jobName, image, pullSecret, noCleanup), metav1.CreateOptions{},
+		vctx, buildClusterValidatorJob(jobName, image, pullSecret, role, runID, noCleanup), metav1.CreateOptions{},
 	); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("creating validator Job: %w", err)}
 	}
+	podMayBeRunning = true
 
 	final, waitErr := waitForClusterValidatorJob(vctx, client, jobName)
+	// A clean wait means the pod reached a terminal state, so the RBAC can go.
+	// A timeout or pull failure leaves it running: pulling the RBAC then fills
+	// the surviving transcript with "forbidden" and masks the real cause.
+	podMayBeRunning = waitErr != nil
 
 	// Fetch logs under a fresh ctx from the parent: vctx is expired on the
 	// timeout path, and dropping the partial transcript hurts most there.
@@ -145,6 +209,9 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	defer logCancel()
 	rawLogs, _ := fetchClusterValidatorLogs(logCtx, client, jobName)
 	cleaned := cleanValidatorOutput(rawLogs)
+	if configNote != "" {
+		cleaned = configNote + "\n" + cleaned
+	}
 
 	if waitErr != nil {
 		return ClusterValidatorResult{
@@ -167,64 +234,72 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 }
 
 // Creates the SA/ClusterRole/ClusterRoleBinding the validator pod runs under,
-// idempotent via AlreadyExists tolerance. Permissions mirror the
-// nvca-operator chart's validator rbac.yaml (read-only). Resources persist
-// across runs; the sweep only deletes Jobs.
-func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface) error {
-	labels := clusterValidatorLabels()
+// idempotent via AlreadyExists tolerance. ClusterRole uses update-or-create so
+// newer CLI versions replace stale rules without the operator needing to delete.
+func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role, runID string) error {
+	roleLabels := clusterValidatorRoleLabels(role)
+	name := clusterValidatorRBACName(role, runID)
 
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusterValidatorName,
+			Name:      name,
 			Namespace: clusterValidatorNamespace,
-			Labels:    labels,
+			Labels:    roleLabels,
 		},
 	}
-	if _, err := client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+	// No AlreadyExists tolerance: the name carries a random per-run suffix, so
+	// anything already sitting there was not put there by this run and must not
+	// be adopted and bound to the validator ClusterRole.
+	if _, err := client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create service account: %w", err)
 	}
 
 	cr := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorName, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: roleLabels},
 		Rules: []rbacv1.PolicyRule{
-			{APIGroups: []string{""}, Resources: []string{"nodes", "pods", "namespaces", "services", "configmaps"}, Verbs: []string{"get", "list", "watch"}},
+			// Read-only: cluster inventory and configuration.
+			{APIGroups: []string{""}, Resources: []string{"nodes", "configmaps"}, Verbs: []string{"get", "list", "watch"}},
+			// Read + write: enforcement checks create and delete probe namespaces
+			// and pods; the active-LB check creates and deletes a probe service.
+			{APIGroups: []string{""}, Resources: []string{"namespaces", "pods", "services"}, Verbs: []string{"get", "list", "watch", "create", "delete"}},
+			// Pod log subresource: read probe output without exec.
+			{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}},
 			{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"csidrivers", "storageclasses"}, Verbs: []string{"get", "list"}},
-			{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"get", "list"}},
+			// NetworkPolicies: read for CNI detection; write for enforcement
+			// check which creates/updates/deletes policies in the temp namespace.
+			{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"}, Verbs: []string{"get", "list", "create", "update", "delete"}},
 			{APIGroups: []string{"admissionregistration.k8s.io"}, Resources: []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"}, Verbs: []string{"get", "list"}},
-			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "daemonsets", "statefulsets"}, Verbs: []string{"get", "list"}},
+			// Deployments/StatefulSets: list for Tier-1/Tier-2 HA readiness checks.
+			// DaemonSets: create/delete for the node-to-node DaemonSet probe; list to watch pod readiness.
+			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "statefulsets"}, Verbs: []string{"get", "list"}},
+			{APIGroups: []string{"apps"}, Resources: []string{"daemonsets"}, Verbs: []string{"get", "list", "create", "delete"}},
+			// Gateway API: control-plane gateway and route health checks.
+			{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{"gatewayclasses", "gateways", "httproutes", "grpcroutes"}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/version", "/healthz"}, Verbs: []string{"get"}},
 		},
 	}
-	// Update-or-Create so a future CLI version's expanded rules replace the
-	// old set; AlreadyExists tolerance alone would silently keep stale rules.
-	if existing, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorName, metav1.GetOptions{}); err == nil {
-		existing.Rules = cr.Rules
-		existing.Labels = cr.Labels
-		if _, err := client.RbacV1().ClusterRoles().Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update cluster role: %w", err)
-		}
-	} else if apierrors.IsNotFound(err) {
-		if _, err := client.RbacV1().ClusterRoles().Create(ctx, cr, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create cluster role: %w", err)
-		}
-	} else {
-		return fmt.Errorf("get cluster role: %w", err)
+	// Create only, for the same reason as the ServiceAccount above. The name is
+	// unique per run, so there are no stale rules from an older CLI to refresh
+	// and nothing legitimate to overwrite.
+	if _, err := client.RbacV1().ClusterRoles().Create(ctx, cr, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create cluster role: %w", err)
 	}
 
 	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorName, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: roleLabels},
 		Subjects: []rbacv1.Subject{{
 			Kind:      rbacv1.ServiceAccountKind,
-			Name:      clusterValidatorName,
+			Name:      name,
 			Namespace: clusterValidatorNamespace,
 		}},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "ClusterRole",
-			Name:     clusterValidatorName,
+			Name:     name,
 		},
 	}
-	if _, err := client.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+	// Create only, same reasoning as above.
+	if _, err := client.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("create cluster role binding: %w", err)
 	}
 	return nil
@@ -238,15 +313,123 @@ func clusterValidatorLabels() map[string]string {
 	}
 }
 
+// clusterValidatorRoleLabels adds the role so the prior-run sweep only matches
+// Jobs from the same role. Without it, a ModeSingle run deletes the other
+// role's Job mid-command, including under --no-cleanup, which makes the
+// printed `kubectl logs job/...` hint 404.
+func clusterValidatorRoleLabels(role string) map[string]string {
+	l := clusterValidatorLabels()
+	l[clusterValidatorRoleLabel] = role
+	return l
+}
+
+// validatorConfigNameForRole returns the network-check ConfigMap name the Job
+// should read. Only the control-plane role has one; the compute-plane role gets
+// a sentinel that resolves to nothing so it cannot inherit the control-plane's
+// reachability and enforcement config.
+func validatorConfigNameForRole(role string) string {
+	if role == clusterValidatorControlPlaneRole {
+		return clusterValidatorConfigName
+	}
+	return clusterValidatorNoConfigName
+}
+
+// sweepClusterValidatorRBAC removes the SA, ClusterRole, and ClusterRoleBinding
+// created by ensureClusterValidatorRBAC. Called after Job completion (when
+// --no-cleanup is not set) to close the window where the elevated ClusterRole
+// exists. The next run recreates them via ensureClusterValidatorRBAC.
+// Errors are swallowed: stale RBAC is preferable to failing the result.
+// sweepOrphanClusterValidatorRBAC removes validator RBAC left behind by a run
+// that died before its deferred cleanup (SIGKILL, OOM, lost terminal).
+//
+// Needed because the names are random per run: a fixed name self-healed by
+// being reused, these would accumulate. Only objects carrying our labels and
+// older than the TTL are removed, so a concurrent run is never disturbed.
+func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, ttl time.Duration) {
+	// Derived from the same map the objects are stamped with, so the selector
+	// cannot drift from the labels. All three managed labels are required: the
+	// component label is part of what identifies these as ours.
+	opts := metav1.ListOptions{LabelSelector: labels.SelectorFromSet(clusterValidatorLabels()).String()}
+	cutoff := metav1.Time{Time: time.Now().Add(-ttl)}
+
+	// reclaimable requires the generated name as well as the labels and the
+	// age. Labels alone are three public constants and can be copied onto
+	// anything, and this deletes cluster-scoped objects with errors swallowed.
+	reclaimable := func(o metav1.Object) bool {
+		if !strings.HasPrefix(o.GetName(), clusterValidatorName) {
+			return false
+		}
+		ts := o.GetCreationTimestamp()
+		return ts.Before(&cutoff)
+	}
+
+	if l, err := client.RbacV1().ClusterRoleBindings().List(ctx, opts); err == nil {
+		for i := range l.Items {
+			if o := &l.Items[i]; reclaimable(o) {
+				_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, o.Name, deleteExactly(o))
+			}
+		}
+	}
+	if l, err := client.RbacV1().ClusterRoles().List(ctx, opts); err == nil {
+		for i := range l.Items {
+			if o := &l.Items[i]; reclaimable(o) {
+				_ = client.RbacV1().ClusterRoles().Delete(ctx, o.Name, deleteExactly(o))
+			}
+		}
+	}
+	sa := client.CoreV1().ServiceAccounts(clusterValidatorNamespace)
+	if l, err := sa.List(ctx, opts); err == nil {
+		for i := range l.Items {
+			if o := &l.Items[i]; reclaimable(o) {
+				_ = sa.Delete(ctx, o.Name, deleteExactly(o))
+			}
+		}
+	}
+}
+
+func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role, runID string) {
+	name := clusterValidatorRBACName(role, runID)
+
+	// Delete by name, but only what we own. These are cluster-scoped objects
+	// and the errors here are swallowed, so an operator-owned ClusterRole with
+	// a colliding name would otherwise vanish with no diagnostic at all.
+	if crb, err := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{}); err == nil &&
+		hasValidatorManagedLabels(crb.Labels) {
+		_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, name, deleteExactly(crb))
+	}
+	if cr, err := client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{}); err == nil &&
+		hasValidatorManagedLabels(cr.Labels) {
+		_ = client.RbacV1().ClusterRoles().Delete(ctx, name, deleteExactly(cr))
+	}
+	sa := client.CoreV1().ServiceAccounts(clusterValidatorNamespace)
+	if acct, err := sa.Get(ctx, name, metav1.GetOptions{}); err == nil &&
+		hasValidatorManagedLabels(acct.Labels) {
+		_ = sa.Delete(ctx, name, deleteExactly(acct))
+	}
+}
+
 // Errors are swallowed: a stale Job is preferable to blocking the new run.
-func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Interface) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli", clusterValidatorAppLabel)
+func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Interface, role string) {
+	// Scope to this role: in ModeSingle both roles run against the same
+	// cluster, so an unscoped selector deletes the other role's Job mid-command.
+	//
+	// List-then-delete rather than DeleteCollection: the name has to be checked
+	// too, which a collection selector cannot express, and the labels alone are
+	// public constants that anything could carry.
+	jobs := client.BatchV1().Jobs(clusterValidatorNamespace)
+	l, err := jobs.List(ctx, metav1.ListOptions{LabelSelector: validatorRoleSelector(role)})
+	if err != nil {
+		return
+	}
 	propagation := metav1.DeletePropagationBackground
-	_ = client.BatchV1().Jobs(clusterValidatorNamespace).DeleteCollection(
-		ctx,
-		metav1.DeleteOptions{PropagationPolicy: &propagation},
-		metav1.ListOptions{LabelSelector: selector},
-	)
+	for i := range l.Items {
+		if !strings.HasPrefix(l.Items[i].Name, clusterValidatorName) {
+			continue
+		}
+		opts := deleteExactly(&l.Items[i])
+		opts.PropagationPolicy = &propagation
+		_ = jobs.Delete(ctx, l.Items[i].Name, opts)
+	}
 }
 
 // sweepManagedPullSecrets removes any docker-registry secrets in
@@ -257,31 +440,207 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 // Operator-supplied secrets via --cluster-validator-pull-secret aren't
 // labeled by us and are skipped by the selector. Errors are swallowed:
 // failing to clean up is preferable to failing the check itself.
-func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli", clusterValidatorAppLabel)
-	_ = client.CoreV1().Secrets(clusterValidatorNamespace).DeleteCollection(
-		ctx,
-		metav1.DeleteOptions{},
-		metav1.ListOptions{LabelSelector: selector},
-	)
+func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, role string) {
+	// Same reasoning as sweepPriorClusterValidatorJobs: the generated name is
+	// part of the ownership test, not just the labels.
+	secrets := client.CoreV1().Secrets(clusterValidatorNamespace)
+	l, err := secrets.List(ctx, metav1.ListOptions{LabelSelector: validatorRoleSelector(role)})
+	if err != nil {
+		return
+	}
+	for i := range l.Items {
+		if !strings.HasPrefix(l.Items[i].Name, validatorPullSecretName) {
+			continue
+		}
+		_ = secrets.Delete(ctx, l.Items[i].Name, deleteExactly(&l.Items[i]))
+	}
 }
 
-// IfNotPresent so locally-imported images (k3d image import, kind load) are
-// reused. VALIDATOR_CONFIG_NAME is empty so the validator skips the
-// configurable reachability/network-policy sections (ConfigMap support is a
-// follow-up).
+// validatorRoleSelector matches objects this CLI created for one validator role.
+// Derived from clusterValidatorRoleLabels so it cannot drift from the labels
+// actually stamped on the objects.
+func validatorRoleSelector(role string) string {
+	return labels.SelectorFromSet(clusterValidatorRoleLabels(role)).String()
+}
+
+// clusterValidatorControlPlaneRole is the role value passed as VALIDATOR_ROLE
+// when running against the control-plane cluster. Matches nvca's RoleControlPlane
+// without importing that package.
+const clusterValidatorControlPlaneRole = "control-plane"
+
+// clusterValidatorConfigName is the default ConfigMap name the validator binary
+// looks for when VALIDATOR_CONFIG_NAME is empty. Must stay in sync with
+// defaultConfigMapName in nvca/cmd/cluster-validator/main.go.
+const clusterValidatorConfigName = "cluster-validator-network-checks"
+
+// clusterValidatorNoConfigName is a name no ConfigMap uses. VALIDATOR_CONFIG_NAME
+// must be non-empty to suppress the validator's own default-name fallback, so
+// "no config" has to be spelled as a name that resolves to nothing.
+const clusterValidatorNoConfigName = "cluster-validator-no-config"
+
+// clusterValidatorRoleLabel scopes Job selectors to a single validator role.
+const clusterValidatorRoleLabel = "nvcf.nvidia.com/validator-role"
+
+// clusterValidatorRBACName returns the ServiceAccount / ClusterRole /
+// ClusterRoleBinding name for one run of one role.
 //
-// VALIDATOR_PREFLIGHT=true puts the validator in preflight mode: it runs the
-// readiness checks and exits, but does NOT write its summary ConfigMap. The
-// ConfigMap exists for the metrics path (the NVCA agent watches it and
-// republishes on /metrics), which is meaningless here because preflight runs
-// before NVCA is installed and our RBAC bootstrap grants no configmaps
-// create/update. Tagging the invocation keeps preflight a clean no-op rather
-// than emitting a confusing "failed to create summary ConfigMap" warning.
-func buildClusterValidatorJob(name, image, pullSecret string, noCleanup bool) *batchv1.Job {
+// The runID is random per run, which is what makes the name safe to create.
+// A predictable name can be squatted: the managed labels are three public
+// constants, so anyone who can create a ServiceAccount in the probe namespace
+// could pre-create one carrying them, and a label check alone would then adopt
+// it and bind it to the validator ClusterRole. With an unguessable name there
+// is no collision to adopt, so the resources are only ever created by us.
+//
+// Per-role naming also matters because ModeSplit runs both validators
+// concurrently against contexts that can resolve to the same cluster.
+func clusterValidatorRBACName(role, runID string) string {
+	name := clusterValidatorName
+	if role != "" {
+		name += "-" + role
+	}
+	if runID != "" {
+		name += "-" + runID
+	}
+	return name
+}
+
+// newValidatorRunID returns an unguessable suffix for this run's RBAC names.
+// crypto/rand, not math/rand: a predictable value would defeat the point.
+func newValidatorRunID() (string, error) {
+	b := make([]byte, 5)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", fmt.Errorf("generating run id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// controlPlaneValidatorConfigTemplate is the baseline network-check ConfigMap for
+// control-plane preflight: nvcr.io reachability (critical) and NetworkPolicy
+// enforcement (non-critical). Extra registries are appended as non-critical probes.
+const controlPlaneValidatorConfigTemplate = `reachability:
+  endpoints:
+    - name: nvcr.io
+      host: nvcr.io
+      port: 443
+      protocol: tcp+tls
+      critical: true
+enforcement:
+  enabled: true
+  testImage: busybox:1.36
+  timeoutSeconds: 60
+  critical: false
+`
+
+// ensureClusterValidatorConfig creates or updates the network-check ConfigMap.
+// extraRegistries are added as non-critical tcp+tls probes. Best-effort: the
+// validator skips configurable checks when the ConfigMap is absent.
+func ensureClusterValidatorConfig(ctx context.Context, client kubernetes.Interface, extraRegistries []string) error {
+	content := buildControlPlaneValidatorConfig(extraRegistries)
+	desired := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      clusterValidatorConfigName,
+			Namespace: clusterValidatorNamespace,
+			Labels:    clusterValidatorLabels(),
+		},
+		Data: map[string]string{"config.yaml": content},
+	}
+
+	existing, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(ctx, clusterValidatorConfigName, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get validator config ConfigMap: %w", err)
+		}
+		if _, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Create(ctx, desired, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("create validator config ConfigMap: %w", err)
+		}
+		return nil
+	}
+
+	// Always update so a newer CLI version's config (or new registries) replaces
+	// stale content, but never overwrite a ConfigMap we do not own.
+	if !hasValidatorManagedLabels(existing.Labels) {
+		return fmt.Errorf(
+			"refusing to overwrite ConfigMap %s/%s which is not managed by nvcf-cli",
+			clusterValidatorNamespace, clusterValidatorConfigName)
+	}
+	existing.Data = desired.Data
+	existing.Labels = desired.Labels
+	if _, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update validator config ConfigMap: %w", err)
+	}
+	return nil
+}
+
+// buildControlPlaneValidatorConfig assembles the network-check ConfigMap YAML
+// from the baseline template plus any operator-supplied extra registries.
+func buildControlPlaneValidatorConfig(extraRegistries []string) string {
+	if len(extraRegistries) == 0 {
+		return controlPlaneValidatorConfigTemplate
+	}
+
+	// Parse host:port entries and append as non-critical tcp+tls endpoints.
+	var extra strings.Builder
+	for _, reg := range extraRegistries {
+		host, port := parseRegistryHostPort(reg)
+		if host == "" {
+			continue
+		}
+		// Append under the existing reachability.endpoints list. Quote the host:
+		// it comes from operator input, and parseRegistryHostPort passes a value
+		// it cannot split through verbatim. An unquoted "[" or embedded newline
+		// would make the whole ConfigMap unparseable, and the validator then
+		// silently drops every reachability and enforcement check.
+		fmt.Fprintf(&extra,
+			"    - name: %q\n      host: %q\n      port: %d\n      protocol: tcp+tls\n      critical: false\n",
+			host, host, port)
+	}
+	if extra.Len() == 0 {
+		return controlPlaneValidatorConfigTemplate
+	}
+
+	// Insert extra endpoints after the nvcr.io entry (before the enforcement block).
+	return strings.Replace(controlPlaneValidatorConfigTemplate,
+		"enforcement:", extra.String()+"enforcement:", 1)
+}
+
+// parseRegistryHostPort splits a "host:port" string using net.SplitHostPort,
+// which correctly handles IPv6 literals ([::1]:5000) and bare hostnames.
+// Returns port 443 when no port is specified, the port is non-numeric, or
+// the input has a trailing colon with no digit (e.g. "nvcr.io:").
+func parseRegistryHostPort(s string) (host string, port int) {
+	s = strings.TrimSpace(s)
+	// Reject anything that is not a bare host[:port]. Callers interpolate the
+	// result straight into a URL and into the validator ConfigMap, and an empty
+	// host is the signal to skip the entry entirely.
+	if !isBareRegistryHost(s) {
+		return "", 0
+	}
+	h, p, err := net.SplitHostPort(s)
+	if err != nil {
+		// No port present (e.g. "nvcr.io") — return the input as-is.
+		return s, 443
+	}
+	if p == "" {
+		// Trailing colon with no port digit (e.g. "nvcr.io:") is the same typo.
+		return "", 0
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n <= 0 || n > 65535 {
+		// An explicit but unparseable port is a typo, not a request for 443.
+		// Silently probing a different endpoint than configured would report a
+		// result for something the operator never asked about.
+		return "", 0
+	}
+	return h, n
+}
+
+// buildClusterValidatorJob creates the validator Job. PullIfNotPresent reuses
+// locally-imported images. VALIDATOR_PREFLIGHT=true skips the summary ConfigMap
+// write. VALIDATOR_ROLE selects the check set (control-plane vs compute-plane).
+func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCleanup bool) *batchv1.Job {
 	backoff := int32(0)
 	podSpec := corev1.PodSpec{
-		ServiceAccountName: clusterValidatorName,
+		ServiceAccountName: clusterValidatorRBACName(role, runID),
 		RestartPolicy:      corev1.RestartPolicyNever,
 		Containers: []corev1.Container{{
 			Name:            clusterValidatorContainer,
@@ -289,8 +648,15 @@ func buildClusterValidatorJob(name, image, pullSecret string, noCleanup bool) *b
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Env: []corev1.EnvVar{
 				{Name: "VALIDATOR_CONFIG_NAMESPACE", Value: clusterValidatorNamespace},
-				{Name: "VALIDATOR_CONFIG_NAME", Value: ""},
+				// Name the ConfigMap explicitly for the control-plane role and
+				// leave it unresolvable for the compute-plane role. An empty
+				// value is NOT "no config": the validator falls back to its own
+				// default name, so both roles would resolve the same ConfigMap
+				// and the compute-plane preflight would silently run the
+				// control-plane's active NetworkPolicy enforcement.
+				{Name: "VALIDATOR_CONFIG_NAME", Value: validatorConfigNameForRole(role)},
 				{Name: "VALIDATOR_PREFLIGHT", Value: "true"},
+				{Name: "VALIDATOR_ROLE", Value: role},
 			},
 		}},
 	}
@@ -301,12 +667,12 @@ func buildClusterValidatorJob(name, image, pullSecret string, noCleanup bool) *b
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorLabels(),
+			Labels:    clusterValidatorRoleLabels(role),
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: &backoff,
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: clusterValidatorLabels()},
+				ObjectMeta: metav1.ObjectMeta{Labels: clusterValidatorRoleLabels(role)},
 				Spec:       podSpec,
 			},
 		},
@@ -450,9 +816,13 @@ func cleanValidatorOutput(raw string) string {
 	return s + "\n"
 }
 
-func kubectlLogsHint(jobName string) string {
+// Pinned to the context the Job was created in: in ModeSplit the two roles
+// run against different clusters, so a bare kubectl command resolves to
+// whichever context is current and the hint reports "job not found".
+func kubectlLogsHint(kubeContext, jobName string) string {
 	if jobName == "" {
 		return ""
 	}
-	return fmt.Sprintf("kubectl logs -n %s job/%s --tail=-1", clusterValidatorNamespace, jobName)
+	return fmt.Sprintf("kubectl%s logs -n %s job/%s --tail=-1",
+		kubectlContextArg(kubeContext), clusterValidatorNamespace, jobName)
 }

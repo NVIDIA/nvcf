@@ -26,6 +26,35 @@
 | `--icms-url URL` | Public ICMS URL; required when contexts differ | derived from `base_http_url` |
 | `--local-only` | `check --pre` only; skip all kubectl contact | `false` |
 
+## `check`-specific
+
+At least one of `--pre`, `--control-plane`, `--compute-plane`, or `--all` is
+required. Each selects a role; only the selected roles contact a cluster.
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--pre` | Pre-flight: local-host tools plus cluster readiness | `false` |
+| `--control-plane` | Control-plane checks | `false` |
+| `--compute-plane` | Compute-plane checks | `false` |
+| `--all` | Every category | `false` |
+| `--cluster-name NAME` | Cluster name for compute-plane checks | - |
+| `--skip-inotify-check` | Skip the per-node inotify-limits probe. Needed when the kubeconfig user cannot create pods in `default`. Env: `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY` | `false` |
+
+### Cluster-validator flags
+
+The validator runs as a Job in the cluster being checked. The CLI creates a
+ServiceAccount, ClusterRole, and ClusterRoleBinding for it and removes them
+after the run, so the kubeconfig context needs permission to manage those.
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. Unset everywhere skips the probe with a warning | - |
+| `--cluster-validator-registries host:port,...` | Extra registries the control-plane validator probes for reachability. `nvcr.io` is always probed. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries` | `nvcr.io` only |
+| `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and falls back to minting one from `NGC_API_KEY` | auto-detect |
+| `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |
+| `--no-cleanup` | Keep the validator Job (and its RBAC) after the run for debugging. The next run still sweeps prior Jobs | `false` |
+| `--show-logs` | Print the validator transcript to stderr after the check events. The transcript is not JSON, and `--json` also writes to stderr, so leave this off when a parser is reading the stream | `false` |
+
 ## `up`-specific
 
 | Flag | Purpose | Default |

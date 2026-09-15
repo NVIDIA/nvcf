@@ -82,7 +82,7 @@ func TestRenderJSONL_PhaseFailed(t *testing.T) {
 			ErrCategory: "helm_apply", ErrMessage: "helm install api-keys: timed out",
 			RetryClass: "backoff", RetryAfterSec: 60,
 			Remediation: []string{"kubectl describe pod -n cassandra-system cassandra-0", "Re-run with --debug"},
-			Raw: RawFailure{Subprocess: "helmfile", ExitCode: 1, StderrTail: "Error: timeout reached", KubernetesReason: "FailedScheduling"},
+			Raw:         RawFailure{Subprocess: "helmfile", ExitCode: 1, StderrTail: "Error: timeout reached", KubernetesReason: "FailedScheduling"},
 		},
 	}
 	got := runEmit(t, clock, events)

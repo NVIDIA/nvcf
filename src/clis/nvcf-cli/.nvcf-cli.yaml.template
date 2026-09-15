@@ -142,7 +142,13 @@ api_keys_owner_id: svc@nvcf-api.local
 
 # Image reference for the cluster-validator pod used by
 # `nvcf-cli self-hosted check`. The CLI runs this image as a Job in the
-# compute-plane cluster to verify NVCA prerequisites before install.
+# cluster being checked to verify prerequisites before install. One image
+# serves both roles; the Job environment selects the check set.
+#
+# The Job needs a ServiceAccount, ClusterRole, and ClusterRoleBinding, which
+# the CLI creates and removes per run. The kubeconfig context therefore needs
+# permission to manage those objects; without it the probe reports a warning
+# instead of a result.
 #
 # Config key: cluster_validator_image
 # Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_IMAGE
@@ -155,6 +161,18 @@ api_keys_owner_id: svc@nvcf-api.local
 # Staging: stg.nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # Prod:    nvcr.io/nvidia/nvcf-byoc/cluster-validator
 # cluster_validator_image: nvcr.io/nvidia/nvcf-byoc/cluster-validator
+
+# Extra container registries the control-plane validator probes for
+# reachability, as host:port. nvcr.io is always probed, so list only the
+# registries your stack pulls from in addition to it.
+#
+# Config key: cluster_validator_registries (list)
+# Environment variable: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES (comma-separated)
+# Command-line flag: --cluster-validator-registries (repeatable or comma-separated)
+#
+# cluster_validator_registries:
+#   - harbor.example.com:443
+#   - ghcr.io:443
 
 # ==============================================================================
 # General Settings
