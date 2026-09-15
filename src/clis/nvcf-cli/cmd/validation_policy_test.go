@@ -116,6 +116,17 @@ func TestBuildWorkloadValidationPolicy(t *testing.T) {
 		assert.Nil(t, got)
 	})
 
+	t.Run("no flags normalizes unnamed file policy to Default", func(t *testing.T) {
+		existing := &client.HelmValidationPolicyDto{
+			ExtraKubernetesTypes: []client.KubernetesType{{Group: "apps", Version: "v1", Kind: "Deployment"}},
+		}
+		got, err := buildWorkloadValidationPolicy(existing, "", false, nil, false)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, defaultValidationPolicyName, got.Name)
+		assert.Equal(t, []client.KubernetesType{{Group: "apps", Version: "v1", Kind: "Deployment"}}, got.ExtraKubernetesTypes)
+	})
+
 	t.Run("name only over nil existing", func(t *testing.T) {
 		got, err := buildWorkloadValidationPolicy(nil, "Unrestricted", true, nil, false)
 		require.NoError(t, err)
@@ -251,6 +262,23 @@ func TestBuildClusterValidationPolicy(t *testing.T) {
 	})
 }
 
+// --- ignoreExistingPolicyConflict ---
+
+func TestIgnoreExistingPolicyConflict(t *testing.T) {
+	t.Run("nil policy is allowed", func(t *testing.T) {
+		assert.NoError(t, ignoreExistingPolicyConflict("cl-1", nil))
+	})
+
+	t.Run("non-nil policy is rejected with flag names and cluster", func(t *testing.T) {
+		policy := &client.ClusterHelmValidationPolicy{Name: "Unrestricted"}
+		err := ignoreExistingPolicyConflict("cl-1", policy)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), flagValidationPolicy)
+		assert.Contains(t, err.Error(), flagValidationExtraType)
+		assert.Contains(t, err.Error(), "cl-1")
+	})
+}
+
 // --- applyTaskValidationPolicyFlags ---
 
 func newTaskPolicyTestCmd(t *testing.T, args []string) *cobra.Command {
@@ -320,5 +348,19 @@ func TestApplyTaskValidationPolicyFlags(t *testing.T) {
 		err := applyTaskValidationPolicyFlags(cmd, spec)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "group/version/kind")
+	})
+
+	t.Run("no flags normalizes unnamed file policy to Default", func(t *testing.T) {
+		cmd := newTaskPolicyTestCmd(t, nil)
+		spec := &TaskGpuSpecificationInput{
+			HelmValidationPolicy: &TaskHelmValidationInput{
+				ExtraKubernetesTypes: []TaskKubernetesTypeIn{{Group: "apps", Version: "v1", Kind: "Deployment"}},
+			},
+		}
+		require.NoError(t, applyTaskValidationPolicyFlags(cmd, spec))
+		require.NotNil(t, spec.HelmValidationPolicy)
+		assert.Equal(t, defaultValidationPolicyName, spec.HelmValidationPolicy.Name)
+		assert.Equal(t, []TaskKubernetesTypeIn{{Group: "apps", Version: "v1", Kind: "Deployment"}},
+			spec.HelmValidationPolicy.ExtraKubernetesTypes)
 	})
 }

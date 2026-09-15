@@ -650,7 +650,8 @@ func loadTaskCreateConfig(cmd *cobra.Command) (*TaskCreateConfig, error) {
 	if cmd.Flags().Changed("secrets") {
 		// Secrets from CLI flags are merged in runTaskCreate via parseSecretsList.
 	}
-	if cmd.Flags().Changed(flagValidationPolicy) || cmd.Flags().Changed(flagValidationExtraType) {
+	if cmd.Flags().Changed(flagValidationPolicy) || cmd.Flags().Changed(flagValidationExtraType) ||
+		(cfg.GpuSpecification != nil && cfg.GpuSpecification.HelmValidationPolicy != nil) {
 		if cfg.GpuSpecification == nil {
 			cfg.GpuSpecification = &TaskGpuSpecificationInput{}
 		}

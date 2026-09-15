@@ -82,9 +82,14 @@ func splitExtraType(raw string, want int) ([]string, error) {
 // flags replace the file list, and a missing name defaults to Default.
 //
 // nameChanged and typesChanged report whether each flag was set on the command
-// line. When neither is set, existing is returned unchanged.
+// line. When neither is set, a non-nil existing policy is still normalized so an
+// unnamed input-file policy receives the documented Default name; a nil existing
+// policy is returned as nil.
 func buildWorkloadValidationPolicy(existing *client.HelmValidationPolicyDto, name string, nameChanged bool, extraTypes []string, typesChanged bool) (*client.HelmValidationPolicyDto, error) {
 	if !nameChanged && !typesChanged {
+		if existing != nil && existing.Name == "" {
+			existing.Name = defaultValidationPolicyName
+		}
 		return existing, nil
 	}
 	policy := existing
