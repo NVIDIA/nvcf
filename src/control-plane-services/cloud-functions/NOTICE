@@ -1,5 +1,5 @@
 
-Lists of 288 third-party dependencies.
+Lists of 291 third-party dependencies.
      (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.11.2 - https://github.com/yawkat/lz4-java)
      (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.38 - http://logback.qos.ch)
      (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.38 - http://logback.qos.ch)
@@ -48,6 +48,9 @@ Lists of 288 third-party dependencies.
      (Apache-2.0) Apache Commons Codec (commons-codec:commons-codec:1.21.0 - https://commons.apache.org/proper/commons-codec/)
      (Apache-2.0) Apache Commons IO (commons-io:commons-io:2.20.0 - https://commons.apache.org/proper/commons-io/)
      (Apache-2.0) Apache Commons Logging (commons-logging:commons-logging:1.4.0 - https://commons.apache.org/proper/commons-logging/)
+     (The Apache Software License, Version 2.0) CloudEvents - API (io.cloudevents:cloudevents-api:4.1.1 - https://cloudevents.github.io/sdk-java/)
+     (The Apache Software License, Version 2.0) CloudEvents - Core (io.cloudevents:cloudevents-core:4.1.1 - https://cloudevents.github.io/sdk-java/)
+     (The Apache Software License, Version 2.0) CloudEvents - JSON Jackson (io.cloudevents:cloudevents-json-jackson:4.1.1 - https://cloudevents.github.io/sdk-java/)
      (Apache 2.0) io.grpc:grpc-api (io.grpc:grpc-api:1.83.1 - https://github.com/grpc/grpc-java)
      (Apache 2.0) io.grpc:grpc-context (io.grpc:grpc-context:1.83.1 - https://github.com/grpc/grpc-java)
      (Apache 2.0) io.grpc:grpc-core (io.grpc:grpc-core:1.83.1 - https://github.com/grpc/grpc-java)
