@@ -130,6 +130,15 @@ func TestAgentApis(t *testing.T) {
 	body, err := io.ReadAll(versionResp.Body)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, versionResp.StatusCode, string(body))
+
+	// /info is wired next to /version in Agent.Start; assert through the real
+	// server rather than only the shared HTTPAddInfoRoute helper test, so a
+	// regression that drops the AddInfoRoute() call here is caught.
+	infoResp, err := http.Get("http://" + ag.NVCASvcAddress + "/info")
+	require.NoError(t, err)
+	infoBody, err := io.ReadAll(infoResp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, infoResp.StatusCode, string(infoBody))
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
 		resp, err := http.Get("http://" + ag.NVCASvcAddress + health.HTTPLivenessRoutePath)
 		require.NoError(ct, err)
