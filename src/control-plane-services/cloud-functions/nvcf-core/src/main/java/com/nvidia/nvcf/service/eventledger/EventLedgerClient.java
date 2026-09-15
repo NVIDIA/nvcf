@@ -56,8 +56,7 @@ public class EventLedgerClient {
     static final String CLIENT_REGISTRATION_ID = "event-ledger";
     static final String CLOUD_EVENTS_PATH = "/v3/ledger/cloudevents";
     static final String CLOUD_EVENTS_CONTENT_TYPE = CONTENT_TYPE;
-    static final String CLOUD_EVENT_SOURCE = "nvidia-spot";
-    static final String CLOUD_EVENT_TYPE = "nvcf-api";
+    static final String CLOUD_EVENT_SOURCE = "nvidia-cloud-functions";
 
     private static final String MESG_UNKNOWN_FUNCTION_STATUS =
             "Event Ledger unknown function status: {}, skip publishing.";
@@ -208,7 +207,6 @@ public class EventLedgerClient {
                 .withExtension("functionversionid", transition.functionVersionId().toString())
                 .withExtension("deploymentid", transition.deploymentId().toString())
                 .withExtension("ncaid", ncaId)
-                .withExtension("eventtype", CLOUD_EVENT_TYPE)
                 .withData(jsonMapper.writeValueAsString(details).getBytes(StandardCharsets.UTF_8))
                 .build();
     }
