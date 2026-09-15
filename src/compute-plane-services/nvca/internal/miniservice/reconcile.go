@@ -846,7 +846,14 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	infraObjs = append(infraObjs, utilsPod)
 
 	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-		infraObjs = append(infraObjs, nvcfdra.NewSingleChannelComputeDomain())
+		cds, refs, err := nvcfdra.ComputeDomainsForWorkload(workloadObjs...)
+		if err != nil {
+			return reconcile.Result{}, reconcile.TerminalError(fmt.Errorf("compute NVLink ComputeDomains: %w", err))
+		}
+		for _, cd := range cds {
+			infraObjs = append(infraObjs, cd)
+		}
+		metaInput.NVLinkComputeDomains = refs
 	}
 
 	// Create the miniservice metadata ConfigMap before any objects are created
