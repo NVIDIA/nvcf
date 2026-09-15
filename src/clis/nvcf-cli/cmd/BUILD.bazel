@@ -52,6 +52,7 @@ go_library(
         "status.go",
         "task.go",
         "undeploy.go",
+        "validation_policy.go",
         "version.go",
     ],
     importpath = "nvcf-cli/cmd",
@@ -130,6 +131,7 @@ go_test(
         "self_hosted_uninstall_test.go",
         "self_hosted_up_test.go",
         "task_test.go",
+        "validation_policy_test.go",
     ],
     embed = [":cmd"],
     deps = [
