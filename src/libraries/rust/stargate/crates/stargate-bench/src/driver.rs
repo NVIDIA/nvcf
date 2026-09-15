@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -21,12 +22,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, ensure};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sse_core::{SseDecoder, SseEvent};
 use tokio::sync::Semaphore;
 
 use crate::manifest::{Manifest, ManifestRequest};
 
-mod sse;
-use sse::CompletionStream;
+const MAX_SSE_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct DriveConfig {
@@ -221,30 +223,84 @@ async fn execute_request(
         );
     }
     let mut stream = response.bytes_stream();
-    let mut output = CompletionStream::default();
+    let mut decoder = SseDecoder::with_limit(NonZeroUsize::new(MAX_SSE_PAYLOAD_BYTES).unwrap());
     while let Some(chunk) = stream.next().await {
-        let bytes = match chunk {
+        let mut bytes = match chunk {
             Ok(bytes) => bytes,
             Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
         };
-        let progress = output.push(&bytes);
-        result.observed_output_tokens = output.output_tokens();
-        match progress {
-            Ok(true) if result.first_output_ms.is_none() => {
-                result.first_output_ms = Some(duration_ms(dispatch_time.elapsed()));
+        while let Some(event) = decoder.next(&mut bytes) {
+            let event = match event {
+                Ok(SseEvent::Message(event)) => event,
+                Ok(SseEvent::Retry(_)) => continue,
+                Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
+            };
+            match record_completion_event(&mut result, &event.data, dispatch_time) {
+                Ok(true) => {
+                    result.ok = true;
+                    return result.finish(dispatch_time, None);
+                }
+                Ok(false) => {}
+                Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
             }
-            Ok(_) => {}
-            Err(error) => return result.finish(dispatch_time, Some(error.to_string())),
         }
     }
-    if !output.is_complete() {
-        return result.finish(
-            dispatch_time,
-            Some("upstream SSE response ended before [DONE]".into()),
-        );
+    result.finish(
+        dispatch_time,
+        Some("upstream SSE response ended before [DONE]".into()),
+    )
+}
+
+fn record_completion_event(
+    result: &mut RequestResult,
+    data: &str,
+    dispatch_time: Instant,
+) -> anyhow::Result<bool> {
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Ok(true);
     }
-    result.ok = true;
-    result.finish(dispatch_time, None)
+    if data.is_empty() {
+        return Ok(false);
+    }
+    let value: Value = serde_json::from_str(data).context("invalid upstream SSE JSON")?;
+    ensure!(
+        value.get("error").is_none_or(Value::is_null),
+        "upstream returned an SSE error event"
+    );
+    let generated_output = value["choices"].as_array().is_some_and(|choices| {
+        choices.iter().any(|choice| {
+            let delta = &choice["delta"];
+            ["content", "reasoning_content", "reasoning"]
+                .iter()
+                .any(|field| delta[*field].as_str().is_some_and(|text| !text.is_empty()))
+                || delta["tool_calls"].as_array().is_some_and(|calls| {
+                    calls.iter().any(|call| {
+                        call["function"]["arguments"]
+                            .as_str()
+                            .is_some_and(|arguments| !arguments.is_empty())
+                    })
+                })
+        })
+    });
+    if generated_output && result.first_output_ms.is_none() {
+        result.first_output_ms = Some(duration_ms(dispatch_time.elapsed()));
+    }
+    if let Some(tokens) = value
+        .pointer("/usage/completion_tokens")
+        .or_else(|| value.get("output_tokens_so_far"))
+        .filter(|tokens| !tokens.is_null())
+    {
+        result.observed_output_tokens = Some(
+            tokens
+                .as_u64()
+                .context("upstream output token usage is not an unsigned integer")?,
+        );
+    } else if generated_output {
+        // A prior cumulative counter does not cover later uncounted output.
+        result.observed_output_tokens = None;
+    }
+    Ok(false)
 }
 
 fn duration_ms(duration: Duration) -> u64 {
@@ -325,12 +381,13 @@ mod tests {
         }
     }
 
-    async fn drive_test_response(body: &'static str) -> (RequestResult, serde_json::Value) {
+    async fn drive_test_response(body: &str) -> (RequestResult, serde_json::Value) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!(
             "http://{}/v1/chat/completions",
             listener.local_addr().unwrap()
         );
+        let body = body.to_owned();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = read_test_request(&mut socket).await;
@@ -362,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn complete_response_records_actual_usage_and_requests_usage_reporting() {
-        let (result, request) = drive_test_response("data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}],\"usage\":{\"completion_tokens\":2}}\n\ndata: [DONE]\n\n").await;
+        let (result, request) = drive_test_response("\u{feff}data: {\"choices\":[{\"delta\":{\"content\":\"\u{03bb}\"}}]}\r\n\r\ndata: {\"usage\":{\"completion_tokens\":2}}\r\n\r\ndata: [DONE]\r\n\r\n").await;
         assert!(result.ok, "{:?}", result.error);
         assert_eq!(result.output_tokens, 100);
         assert_eq!(result.observed_output_tokens, Some(2));
@@ -381,6 +438,37 @@ mod tests {
             assert_eq!(result.status_code, 200);
             assert!(!result.ok);
             assert!(result.error.unwrap().contains("before [DONE]"));
+        }
+    }
+
+    #[tokio::test]
+    async fn role_only_completion_keeps_output_timing_and_usage_unknown() {
+        let (result, _) = drive_test_response(": keepalive\n\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.first_output_ms, None);
+        assert_eq!(result.observed_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn cumulative_usage_must_cover_the_last_generated_output() {
+        let (result, _) = drive_test_response("data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}],\"output_tokens_so_far\":1}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" two\"}}]}\n\ndata: [DONE]\n\n").await;
+        assert!(result.ok, "{:?}", result.error);
+        assert!(result.first_output_ms.is_some());
+        assert_eq!(result.observed_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn invalid_or_oversized_events_fail_the_request() {
+        for data in [
+            "{bad}".to_owned(),
+            r#"{"error":{"message":"failed"}}"#.to_owned(),
+            r#"{"usage":{"completion_tokens":-1}}"#.to_owned(),
+            serde_json::json!({"choices": [{"delta": {"content": "x".repeat(MAX_SSE_PAYLOAD_BYTES)}}]}).to_string(),
+        ] {
+            let (result, _) =
+                drive_test_response(&format!("data: {data}\n\ndata: [DONE]\n\n")).await;
+            assert!(!result.ok);
+            assert!(result.error.is_some());
         }
     }
 
