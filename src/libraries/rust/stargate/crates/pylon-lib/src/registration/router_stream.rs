@@ -311,7 +311,10 @@ pub(super) async fn open_registration_stream(
         min_update_interval.as_millis().to_string().parse()?,
     );
     if let Some(provider) = auth_token_provider {
-        let token = resolve_registration_token(provider).await?;
+        let token = provider
+            .resolve_token()
+            .await
+            .context("failed to resolve registration token")?;
         request.metadata_mut().insert(
             "authorization",
             format!("Bearer {token}")
@@ -325,13 +328,4 @@ pub(super) async fn open_registration_stream(
         .await?
         .into_inner();
     Ok((ack_stream, update_tx))
-}
-
-pub(super) async fn resolve_registration_token(
-    provider: &AuthTokenProvider,
-) -> anyhow::Result<String> {
-    provider
-        .resolve_token()
-        .await
-        .context("failed to resolve registration token")
 }

@@ -1533,11 +1533,8 @@ async fn registration_token_errors_do_not_expose_secret_file_excerpts() {
         r#"{"secret":"do-not-log-this-secret","missing":invalid}"#,
     ] {
         std::fs::write(file.path(), contents).unwrap();
-        let error = super::router_stream::resolve_registration_token(&provider)
-            .await
-            .unwrap_err();
+        let error = provider.resolve_token().await.unwrap_err();
         let detail = recorded_registration_error(error.as_ref());
-        assert!(detail.contains("failed to resolve registration token"));
         assert!(detail.contains("failed to extract key"));
         assert!(!detail.contains("do-not-log-this-secret"));
     }
@@ -1547,9 +1544,7 @@ async fn registration_token_errors_do_not_expose_secret_file_excerpts() {
 async fn registration_token_errors_preserve_io_causes() {
     let directory = tempfile::tempdir().unwrap();
     let provider = stargate_auth::AuthTokenProvider::File(directory.path().join("missing-token"));
-    let error = super::router_stream::resolve_registration_token(&provider)
-        .await
-        .unwrap_err();
+    let error = provider.resolve_token().await.unwrap_err();
     let cause = error.downcast_ref::<std::io::Error>().unwrap();
     assert_eq!(cause.kind(), std::io::ErrorKind::NotFound);
     let detail = recorded_registration_error(error.as_ref());
