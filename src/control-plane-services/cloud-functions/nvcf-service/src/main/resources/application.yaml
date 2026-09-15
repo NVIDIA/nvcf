@@ -94,6 +94,12 @@ spring:
             client-secret: ${kv.oauth2.client-secret}
             authorization-grant-type: client_credentials
             scope: helmreval:validate
+          event-ledger:
+            provider: event-ledger
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: fnds:createEvent
         provider:
           icms:
             token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
@@ -104,6 +110,8 @@ spring:
           notary:
             token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
           reval:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          event-ledger:
             token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
 
 logging:
@@ -310,6 +318,8 @@ nvcf:
   icms:
     allocator:
       maximum-target-latency: PT10S
+  event-ledger:
+    enabled: true
   notary:
     jwt:
       issuer-uri: ${nvcf.notary.base-url}
