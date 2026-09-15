@@ -364,3 +364,18 @@ func TestStaleNamespaceCheck_HintsOmitUnknownContext(t *testing.T) {
 	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
 	assert.Contains(t, r.Message, "kubectl delete namespace nvcf")
 }
+
+// The probe must run against the same context the hints name. Resolving the
+// current-context after probing leaves a window where it changes in between,
+// which would have the delete hints target a cluster that was never read.
+func TestStaleNamespaceCheck_ProbesTheResolvedContext(t *testing.T) {
+	pinCurrentKubeContext(t, "k3d-local")
+	var probed string
+	prober := func(_ context.Context, kctx string, _ []string) ([]StaleNamespace, error) {
+		probed = kctx
+		return nil, nil
+	}
+	staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
+	assert.Equal(t, "k3d-local", probed,
+		"the probe must target the resolved context, not whatever is current when it runs")
+}

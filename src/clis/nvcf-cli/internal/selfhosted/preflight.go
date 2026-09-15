@@ -695,7 +695,12 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 		HumanLabel: "checking for stale NVCF namespaces…",
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: "error"}
-			stale, err := prober(ctx, kubeContext, namespaces)
+			// Resolve the context before probing, then probe that exact name.
+			// Resolving afterwards leaves a window where the current-context
+			// changes in between, which would have the hints delete namespaces
+			// in a cluster other than the one that was read.
+			probedContext := effectiveKubeContext(kubeContext)
+			stale, err := prober(ctx, probedContext, namespaces)
 			if err != nil {
 				r.Severity = "warning"
 				r.Message = "stale namespace probe failed: " + err.Error()
@@ -718,13 +723,13 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 					emptyShell = append(emptyShell, ns.Name)
 				}
 			}
-			// Every hint is pinned to the context that was actually probed.
+			// Every hint names the context that was actually probed, above.
 			// In split mode the two callers pass different contexts, and with
-			// no context flag the probe followed the current-context at the
-			// time it ran. Either way the name is resolved and written into
-			// the command, because these hints delete namespaces and the
-			// current-context can change between reading this and pasting it.
-			kctl := "kubectl" + kubectlContextArg(effectiveKubeContext(kubeContext))
+			// no context flag the probe followed the current-context. Either
+			// way the name goes into the command, because these hints delete
+			// namespaces and the current-context can change between reading
+			// the output and pasting it.
+			kctl := "kubectl" + kubectlContextArg(probedContext)
 			var hints []string
 			if len(terminating) > 0 {
 				// spec.finalizers is writable only through the /finalize
