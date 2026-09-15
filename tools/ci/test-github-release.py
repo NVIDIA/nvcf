@@ -1902,8 +1902,15 @@ class SuccessCommentTest(unittest.TestCase):
             self.github_plugin_options()["successComment"],
         )
 
-    def test_success_comment_distinguishes_pull_requests_from_issues(self):
-        self.assertIn("issue.pull_request", self.github_plugin_options()["successComment"])
+    def test_success_comment_wording_matches_the_kind_of_thing_it_is_posted_on(self):
+        # Pins both arms and their order. Asserting only that `issue.pull_request`
+        # appears would still pass with the arms swapped, which would tell every
+        # reader the opposite of the truth. Rendering the template for real needs
+        # a Lodash engine, and this suite runs on python3 alone.
+        self.assertIn(
+            "${issue.pull_request ? 'PR is included' : 'issue has been resolved'}",
+            self.github_plugin_options()["successComment"],
+        )
 
 
 if __name__ == "__main__":
