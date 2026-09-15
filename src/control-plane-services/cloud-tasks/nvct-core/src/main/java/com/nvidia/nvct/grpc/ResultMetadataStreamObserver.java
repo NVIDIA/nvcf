@@ -39,6 +39,7 @@ import com.nvidia.nvct.service.metrics.TaskSuccessMetricsService;
 import com.nvidia.nvct.service.result.ResultService;
 import com.nvidia.nvct.service.icms.IcmsService;
 import com.nvidia.nvct.service.task.TaskService;
+import com.nvidia.nvct.service.task.TaskTransitionLock;
 import com.nvidia.nvct.service.token.TokenService;
 import com.nvidia.nvct.util.NvctUtils;
 import io.grpc.stub.StreamObserver;
@@ -83,6 +84,7 @@ public class ResultMetadataStreamObserver implements StreamObserver<ResultMetada
     private final JsonMapper jsonMapper;
     private final TaskSuccessMetricsService taskSuccessMetricsService;
     private final TaskErrorMetricsService taskErrorMetricsService;
+    private final TaskTransitionLock taskTransitionLock;
     private final Tracer tracer;
 
     private UUID taskId;
@@ -98,6 +100,7 @@ public class ResultMetadataStreamObserver implements StreamObserver<ResultMetada
             TaskSuccessMetricsService taskSuccessMetricsService,
             TaskErrorMetricsService taskErrorMetricsService,
             JsonMapper jsonMapper,
+            TaskTransitionLock taskTransitionLock,
             Tracer tracer) {
         this.responseObserver = responseObserver;
         this.taskService = taskService;
@@ -108,12 +111,19 @@ public class ResultMetadataStreamObserver implements StreamObserver<ResultMetada
         this.taskSuccessMetricsService = taskSuccessMetricsService;
         this.taskErrorMetricsService = taskErrorMetricsService;
         this.jsonMapper = jsonMapper;
+        this.taskTransitionLock = taskTransitionLock;
         this.tracer = tracer;
     }
 
     @Override
     public void onNext(ResultMetadataRequest request) {
         this.taskId = UUID.fromString(request.getTaskId());
+        try (var ignored = taskTransitionLock.acquire(taskId)) {
+            onNextLocked(request);
+        }
+    }
+
+    private void onNextLocked(ResultMetadataRequest request) {
         log.info(MESG_START_GRPC_ENDPOINT, taskId, request.getStatus().name());
         var taskEntity = taskService.fetchTask(taskId);
         this.executionStatus = taskEntity.getStatus();

@@ -55,6 +55,7 @@ import com.nvidia.nvct.service.registry.RegistryArtifactService;
 import com.nvidia.nvct.service.result.ResultService;
 import com.nvidia.nvct.service.icms.IcmsService;
 import com.nvidia.nvct.service.task.TaskService;
+import com.nvidia.nvct.service.task.TaskTransitionLock;
 import com.nvidia.nvct.service.token.TokenService;
 import com.nvidia.nvct.util.NvctUtils;
 import io.grpc.stub.StreamObserver;
@@ -102,6 +103,7 @@ public class GrpcWorkerService extends WorkerGrpc.WorkerImplBase {
     private final TaskRunningMetricsService taskRunningMetricsService;
     private final TaskSuccessMetricsService taskSuccessMetricsService;
     private final TaskErrorMetricsService taskErrorMetricsService;
+    private final TaskTransitionLock taskTransitionLock;
     private final Tracer tracer;
 
     public GrpcWorkerService(
@@ -116,6 +118,7 @@ public class GrpcWorkerService extends WorkerGrpc.WorkerImplBase {
             TaskRunningMetricsService taskRunningMetricsService,
             TaskSuccessMetricsService taskSuccessMetricsService,
             TaskErrorMetricsService taskErrorMetricsService,
+            TaskTransitionLock taskTransitionLock,
             Tracer tracer,
             @Value("${nvct.aws.region}") String awsRegion) {
         this.tokenService = tokenService;
@@ -129,6 +132,7 @@ public class GrpcWorkerService extends WorkerGrpc.WorkerImplBase {
         this.taskRunningMetricsService = taskRunningMetricsService;
         this.taskSuccessMetricsService = taskSuccessMetricsService;
         this.taskErrorMetricsService = taskErrorMetricsService;
+        this.taskTransitionLock = taskTransitionLock;
         this.tracer = tracer;
         this.jsonMapper = jsonMapper;
     }
@@ -136,6 +140,15 @@ public class GrpcWorkerService extends WorkerGrpc.WorkerImplBase {
     @Override
     public void connect(ConnectRequest request, StreamObserver<ConnectResponse> responseObserver) {
         var taskId = UUID.fromString(request.getTaskId());
+        try (var ignored = taskTransitionLock.acquire(taskId)) {
+            connectLocked(request, responseObserver, taskId);
+        }
+    }
+
+    private void connectLocked(
+            ConnectRequest request,
+            StreamObserver<ConnectResponse> responseObserver,
+            UUID taskId) {
         log.info(MESG_START_GRPC_ENDPOINT, taskId, "connect");
 
         var taskEntity = taskService.fetchTask(taskId);
@@ -161,6 +174,15 @@ public class GrpcWorkerService extends WorkerGrpc.WorkerImplBase {
             HeartbeatRequest request,
             StreamObserver<HeartbeatResponse> responseObserver) {
         var taskId = UUID.fromString(request.getTaskId());
+        try (var ignored = taskTransitionLock.acquire(taskId)) {
+            sendHeartbeatLocked(request, responseObserver, taskId);
+        }
+    }
+
+    private void sendHeartbeatLocked(
+            HeartbeatRequest request,
+            StreamObserver<HeartbeatResponse> responseObserver,
+            UUID taskId) {
         var uniqueStrForLogs = "sendHeartbeat-" + Instant.now().getEpochSecond();
         log.info(MESG_START_GRPC_ENDPOINT, taskId, uniqueStrForLogs);
 
@@ -286,6 +308,7 @@ public class GrpcWorkerService extends WorkerGrpc.WorkerImplBase {
                                                 taskSuccessMetricsService,
                                                 taskErrorMetricsService,
                                                 jsonMapper,
+                                                taskTransitionLock,
                                                 tracer);
     }
 
