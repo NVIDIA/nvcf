@@ -342,6 +342,24 @@ func resolveStackValuesFile() string {
 	return ""
 }
 
+// localStackDir returns src when it points at a readable local directory.
+// Remote sources (oci://, git@, https://...git) are not fetched here: the
+// stale-namespace check falls back to its static list rather than making
+// preflight depend on a network round trip.
+func localStackDir(src string) string {
+	if src == "" {
+		return ""
+	}
+	src = strings.TrimPrefix(src, "file://")
+	if strings.Contains(src, "://") || strings.HasPrefix(src, "git@") {
+		return ""
+	}
+	if fi, err := os.Stat(src); err == nil && fi.IsDir() {
+		return src
+	}
+	return ""
+}
+
 // configuredValidatorRegistries returns the extra registries from the flag, env
 // var, or config file, normalized to one entry per registry.
 //
@@ -499,6 +517,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
 				ClusterValidatorRegistries: registries,
 				StaleNamespaceProber:       staleNSProber,
+				StackDir:                   localStackDir(selfHostedControlPlaneStack),
 			}
 			cpResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleControlPlane, rc, sink)
 			return nil
@@ -513,6 +532,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
 				StaleNamespaceProber:       staleNSProber,
+				StackDir:                   localStackDir(selfHostedComputePlaneStack),
 			}
 			gpuResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleComputePlane, rc, sink)
 			return nil
@@ -544,6 +564,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
 				ClusterValidatorRegistries: registries,
 				StaleNamespaceProber:       staleForControlPlane,
+				StackDir:                   localStackDir(selfHostedControlPlaneStack),
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleControlPlane, cpRC, sink)...)
@@ -557,6 +578,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
 				StaleNamespaceProber:       staleForComputePlane,
+				StackDir:                   localStackDir(selfHostedComputePlaneStack),
 			}
 			results = append(results,
 				selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleComputePlane, gpuRC, sink)...)

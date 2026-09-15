@@ -313,6 +313,11 @@ type RoleConfig struct {
 	// the check; production wires NewStaleNamespaceProber; tests pass fakes.
 	StaleNamespaceProber StaleNamespaceProber
 
+	// StackDir is the resolved stack checkout. When set, the namespaces to
+	// probe are read from its helmfile.d rather than the static fallback list,
+	// so the check follows the stack instead of drifting from it.
+	StackDir string
+
 	// ClusterValidatorRegistries is an optional list of "host:port" registry
 	// endpoints added to the control-plane validator ConfigMap alongside the
 	// built-in nvcr.io probe. Ignored for the compute-plane validator.
@@ -405,7 +410,8 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 	// before any other cluster work.
 	if rc.StaleNamespaceProber != nil {
 		cat.checks = append(cat.checks,
-			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext, nvcfControlPlaneNamespaces))
+			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
+				resolveStackNamespaces(rc.StackDir, nvcfControlPlaneNamespaces)))
 	}
 	// Containerized cluster-validator probe for control-plane checks
 	// (Gateway API CRDs, Envoy Gateway, StorageClass, external LB,
@@ -440,7 +446,8 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 	// partial teardown surface before any other cluster work.
 	if rc.StaleNamespaceProber != nil {
 		cat.checks = append([]binaryCheckSpec{
-			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext, nvcfComputePlaneNamespaces),
+			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
+				resolveStackNamespaces(rc.StackDir, nvcfComputePlaneNamespaces)),
 		}, cat.checks...)
 	}
 	if rc.SISURL != "" {
