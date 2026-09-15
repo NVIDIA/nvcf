@@ -463,3 +463,40 @@ func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
 	require.Error(t, err, "non-NGC registry must be rejected without issuing a request")
 	assert.Contains(t, err.Error(), "non-NGC registry")
 }
+
+// The registry string is concatenated into "https://" + registry + "/...", so a
+// suffix match alone is not enough to authorize forwarding the NGC API key:
+// "evil.com/x.nvcr.io" ends with a trusted suffix but parses to host evil.com.
+func TestIsNGCRegistry_RejectsHostConfusion(t *testing.T) {
+	for _, tc := range []struct {
+		registry string
+		want     bool
+		why      string
+	}{
+		{"nvcr.io", true, "the canonical host"},
+		{"stg.nvcr.io", true, "a real subdomain"},
+		{"evil.com/x.nvcr.io", false, "path component: the request host is evil.com"},
+		{"evil.com@nvcr.io", false, "userinfo: not a bare host"},
+		{"nvcr.io?x=.nvcr.io", false, "query truncates the host"},
+		{"nvcr.io#.nvcr.io", false, "fragment truncates the host"},
+		{"nvcr.io.evil.com", false, "deceptive suffix"},
+		{"nvcr.io evil.com", false, "whitespace"},
+	} {
+		assert.Equal(t, tc.want, isNGCRegistry(tc.registry),
+			"isNGCRegistry(%q): %s", tc.registry, tc.why)
+	}
+}
+
+// A non-bare registry must never reach the NGC token exchange, which attaches
+// the API key with basic auth.
+func TestExchangeNGCBearerToken_RejectsHostConfusion(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	client := &http.Client{Transport: rec}
+
+	_, err := exchangeNGCBearerToken(context.Background(), client, "evil.com/x.nvcr.io", "repo/img")
+
+	require.Error(t, err)
+	assert.Empty(t, rec.withAuth, "the NGC API key must not be sent to a confused host")
+	assert.Empty(t, rec.requests, "no request may be issued at all")
+}

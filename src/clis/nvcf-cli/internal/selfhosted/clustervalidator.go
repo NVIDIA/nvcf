@@ -233,8 +233,24 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 			Labels:    labels,
 		},
 	}
-	if _, err := client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create service account: %w", err)
+	if _, err := client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Create(ctx, sa, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create service account: %w", err)
+		}
+		// Do not adopt a ServiceAccount we did not create. The ClusterRoleBinding
+		// below would bind it to the validator ClusterRole, handing whoever
+		// controls that account cluster-wide create/delete on namespaces, pods,
+		// services and daemonsets.
+		existing, getErr := client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Get(ctx, name, metav1.GetOptions{})
+		if getErr != nil {
+			return fmt.Errorf("get existing service account: %w", getErr)
+		}
+		if !hasValidatorManagedLabels(existing.Labels) {
+			return fmt.Errorf(
+				"refusing to bind ServiceAccount %s/%s which is not managed by nvcf-cli; "+
+					"remove it or run against a cluster where the name is free",
+				clusterValidatorNamespace, name)
+		}
 	}
 
 	cr := &rbacv1.ClusterRole{
@@ -297,10 +313,51 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 			Name:     name,
 		},
 	}
-	if _, err := client.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create cluster role binding: %w", err)
+	if _, err := client.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create cluster role binding: %w", err)
+		}
+		existing, getErr := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+		if getErr != nil {
+			return fmt.Errorf("get existing cluster role binding: %w", getErr)
+		}
+		// An unowned binding with this name may point anywhere, or bind subjects
+		// we never intended, so never leave it in place and assume it is ours.
+		if !hasValidatorManagedLabels(existing.Labels) {
+			return fmt.Errorf(
+				"refusing to reuse ClusterRoleBinding %s which is not managed by nvcf-cli; "+
+					"remove it or run against a cluster where the name is free", name)
+		}
+		// Ours, but from an older CLI whose RoleRef or subjects differ. RoleRef
+		// is immutable, so replace rather than update.
+		if !clusterRoleBindingMatches(existing, crb) {
+			if delErr := client.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{}); delErr != nil &&
+				!apierrors.IsNotFound(delErr) {
+				return fmt.Errorf("replace stale cluster role binding: %w", delErr)
+			}
+			if _, cErr := client.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); cErr != nil {
+				return fmt.Errorf("recreate cluster role binding: %w", cErr)
+			}
+		}
 	}
 	return nil
+}
+
+// clusterRoleBindingMatches reports whether an existing binding already grants
+// exactly what we intend: the same ClusterRole, to the same single subject.
+func clusterRoleBindingMatches(existing, want *rbacv1.ClusterRoleBinding) bool {
+	if existing.RoleRef != want.RoleRef {
+		return false
+	}
+	if len(existing.Subjects) != len(want.Subjects) {
+		return false
+	}
+	for i := range want.Subjects {
+		if existing.Subjects[i] != want.Subjects[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func clusterValidatorLabels() map[string]string {
@@ -517,7 +574,10 @@ func buildControlPlaneValidatorConfig(extraRegistries []string) string {
 // the input has a trailing colon with no digit (e.g. "nvcr.io:").
 func parseRegistryHostPort(s string) (host string, port int) {
 	s = strings.TrimSpace(s)
-	if s == "" {
+	// Reject anything that is not a bare host[:port]. Callers interpolate the
+	// result straight into a URL and into the validator ConfigMap, and an empty
+	// host is the signal to skip the entry entirely.
+	if !isBareRegistryHost(s) {
 		return "", 0
 	}
 	h, p, err := net.SplitHostPort(s)

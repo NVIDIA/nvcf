@@ -210,20 +210,36 @@ func TestRunClusterValidator_JobFailed(t *testing.T) {
 }
 
 func TestRunClusterValidator_RBACIdempotent(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	// Seed the cluster with the SA, ClusterRole, and ClusterRoleBinding so
-	// each Create returns AlreadyExists. The runner must treat that as
+	// Seed the SA, ClusterRole and ClusterRoleBinding exactly as a prior run
+	// would have left them: present, and carrying our managed labels. Each
+	// Create then returns AlreadyExists and the runner must treat that as
 	// success and proceed to Job creation.
-	existing := []ktesting.ReactionFunc{
-		alreadyExistsReactor("serviceaccounts", clusterValidatorName),
-		alreadyExistsReactor("clusterroles", clusterValidatorName),
-		alreadyExistsReactor("clusterrolebindings", clusterValidatorName),
-	}
-	verbs := []string{"create"}
-	resources := []string{"serviceaccounts", "clusterroles", "clusterrolebindings"}
-	for i, r := range existing {
-		client.PrependReactor(verbs[0], resources[i], r)
-	}
+	//
+	// Seeding real objects rather than faking AlreadyExists with a reactor
+	// matters: the runner refetches on conflict to confirm it owns what it is
+	// about to bind, so a reactor with nothing behind it is not a valid model.
+	client := fake.NewSimpleClientset(
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+			Name: clusterValidatorName, Namespace: clusterValidatorNamespace,
+			Labels: clusterValidatorLabels(),
+		}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: clusterValidatorName, Labels: clusterValidatorLabels(),
+		}},
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: clusterValidatorName, Labels: clusterValidatorLabels(),
+			},
+			Subjects: []rbacv1.Subject{{
+				Kind:      rbacv1.ServiceAccountKind,
+				Name:      clusterValidatorName,
+				Namespace: clusterValidatorNamespace,
+			}},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterValidatorName,
+			},
+		},
+	)
 
 	var jobName atomic.Value
 	jobName.Store("")
@@ -760,4 +776,79 @@ func TestEnsureClusterValidatorConfig_RefusesUnmanagedConfigMap(t *testing.T) {
 	require.NoError(t, getErr)
 	assert.Equal(t, "operator: content", got.Data["config.yaml"],
 		"the operator's ConfigMap content must be untouched")
+}
+
+// An attacker who can create a ServiceAccount in the probe namespace could
+// pre-create one under the generated name. Blindly tolerating AlreadyExists
+// would then bind that account to the validator ClusterRole, handing whoever
+// controls it cluster-wide create/delete on namespaces, pods and daemonsets.
+func TestClusterValidatorRBAC_RefusesUnmanagedServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	const role = clusterValidatorControlPlaneRole
+	name := clusterValidatorRBACName(role)
+
+	client := fake.NewSimpleClientset(&corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: clusterValidatorNamespace,
+			Labels: map[string]string{"owner": "someone-else"},
+		},
+	})
+
+	err := ensureClusterValidatorRBAC(ctx, client, role)
+	require.Error(t, err, "an unowned ServiceAccount must not be adopted")
+	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
+
+	_, bindErr := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(bindErr),
+		"no ClusterRoleBinding may be created for a ServiceAccount we do not own")
+}
+
+// A pre-existing ClusterRoleBinding under our name may bind subjects we never
+// intended, or point at a different role. It must not be silently reused.
+func TestClusterValidatorRBAC_RefusesUnmanagedClusterRoleBinding(t *testing.T) {
+	ctx := context.Background()
+	const role = clusterValidatorControlPlaneRole
+	name := clusterValidatorRBACName(role)
+
+	client := fake.NewSimpleClientset(&rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"owner": "someone-else"}},
+		Subjects: []rbacv1.Subject{{
+			Kind: rbacv1.ServiceAccountKind, Name: "attacker-sa", Namespace: "default",
+		}},
+		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-admin"},
+	})
+
+	err := ensureClusterValidatorRBAC(ctx, client, role)
+	require.Error(t, err, "an unowned ClusterRoleBinding must not be reused")
+	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
+
+	got, getErr := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, getErr)
+	assert.Equal(t, "attacker-sa", got.Subjects[0].Name, "the existing binding must be left untouched")
+}
+
+// A binding we own but from an older CLI can point at a stale RoleRef, which is
+// immutable, so it has to be replaced rather than updated.
+func TestClusterValidatorRBAC_ReplacesOwnedBindingWithStaleRoleRef(t *testing.T) {
+	ctx := context.Background()
+	const role = clusterValidatorControlPlaneRole
+	name := clusterValidatorRBACName(role)
+
+	client := fake.NewSimpleClientset(
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: clusterValidatorLabels()},
+			Subjects: []rbacv1.Subject{{
+				Kind: rbacv1.ServiceAccountKind, Name: "old-name", Namespace: clusterValidatorNamespace,
+			}},
+			RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "old-role"},
+		},
+	)
+
+	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role))
+
+	got, err := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, name, got.RoleRef.Name, "the stale RoleRef must be replaced with the current one")
+	require.Len(t, got.Subjects, 1)
+	assert.Equal(t, name, got.Subjects[0].Name, "the subject must be the current ServiceAccount")
 }

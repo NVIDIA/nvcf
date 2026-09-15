@@ -440,7 +440,37 @@ var ngcApprovedHosts = []string{
 // domain. The check strips any port from the registry string before matching
 // so that nvcr.io:443 is handled correctly, and uses dot-boundary matching to
 // reject deceptive suffixes such as evilnvcr.io or nvidia.com.invalid.
+// isBareRegistryHost reports whether s is a plain host[:port], with nothing in
+// it that could move the request somewhere else once concatenated into a URL.
+//
+// This matters because the registry string is interpolated directly into
+// "https://" + registry + "/...". A value like "evil.com/x.nvcr.io" ends with a
+// trusted suffix but parses to host evil.com, so a suffix check alone would
+// authorize sending credentials to an attacker. IPv6 literals keep their
+// brackets and are allowed.
+func isBareRegistryHost(s string) bool {
+	if s == "" {
+		return false
+	}
+	// "/" and "@" move the host; "?" and "#" truncate it; whitespace and
+	// control characters have no place in a hostname.
+	if strings.ContainsAny(s, "/@?#\\") {
+		return false
+	}
+	for _, r := range s {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 func isNGCRegistry(registry string) bool {
+	// Never treat a value we cannot safely place in a URL as an NGC host: the
+	// caller uses this to decide whether to forward the NGC API key.
+	if !isBareRegistryHost(registry) {
+		return false
+	}
 	host := registry
 	// Strip port if present (e.g. nvcr.io:5000 -> nvcr.io).
 	if h, _, err := net.SplitHostPort(registry); err == nil {
