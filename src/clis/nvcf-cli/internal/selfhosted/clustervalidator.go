@@ -34,6 +34,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -236,14 +237,14 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 // idempotent via AlreadyExists tolerance. ClusterRole uses update-or-create so
 // newer CLI versions replace stale rules without the operator needing to delete.
 func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role, runID string) error {
-	labels := clusterValidatorRoleLabels(role)
+	roleLabels := clusterValidatorRoleLabels(role)
 	name := clusterValidatorRBACName(role, runID)
 
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: clusterValidatorNamespace,
-			Labels:    labels,
+			Labels:    roleLabels,
 		},
 	}
 	// No AlreadyExists tolerance: the name carries a random per-run suffix, so
@@ -254,7 +255,7 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 	}
 
 	cr := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: roleLabels},
 		Rules: []rbacv1.PolicyRule{
 			// Read-only: cluster inventory and configuration.
 			{APIGroups: []string{""}, Resources: []string{"nodes", "configmaps"}, Verbs: []string{"get", "list", "watch"}},
@@ -285,7 +286,7 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 	}
 
 	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: roleLabels},
 		Subjects: []rbacv1.Subject{{
 			Kind:      rbacv1.ServiceAccountKind,
 			Name:      name,
@@ -345,11 +346,10 @@ func validatorConfigNameForRole(role string) string {
 // being reused, these would accumulate. Only objects carrying our labels and
 // older than the TTL are removed, so a concurrent run is never disturbed.
 func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, ttl time.Duration) {
-	// All three managed labels, not two: the component label is part of what
-	// identifies these as ours.
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,app.kubernetes.io/component=preflight",
-		clusterValidatorAppLabel)
-	opts := metav1.ListOptions{LabelSelector: selector}
+	// Derived from the same map the objects are stamped with, so the selector
+	// cannot drift from the labels. All three managed labels are required: the
+	// component label is part of what identifies these as ours.
+	opts := metav1.ListOptions{LabelSelector: labels.SelectorFromSet(clusterValidatorLabels()).String()}
 	cutoff := metav1.Time{Time: time.Now().Add(-ttl)}
 
 	// reclaimable requires the generated name as well as the labels and the
@@ -455,9 +455,10 @@ func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, r
 }
 
 // validatorRoleSelector matches objects this CLI created for one validator role.
+// Derived from clusterValidatorRoleLabels so it cannot drift from the labels
+// actually stamped on the objects.
 func validatorRoleSelector(role string) string {
-	return fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,app.kubernetes.io/component=preflight,%s=%s",
-		clusterValidatorAppLabel, clusterValidatorRoleLabel, role)
+	return labels.SelectorFromSet(clusterValidatorRoleLabels(role)).String()
 }
 
 // clusterValidatorControlPlaneRole is the role value passed as VALIDATOR_ROLE
