@@ -25,7 +25,7 @@ use reqwest::header::{
 };
 use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
-use stargate_protocol::common::{end_to_end_headers, is_hop_by_hop_header};
+use stargate_protocol::common::end_to_end_headers;
 use stargate_protocol::tunnel_contract::{
     HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
     HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
@@ -1380,7 +1380,6 @@ pub(super) fn should_forward_response_header(name: &HeaderName, retry: &PylonRet
 fn is_tunnel_control_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
     // HeaderName is normalized, so this policy stays allocation-free on both hot paths.
     name == retry.upstream_retry_header
-        || is_hop_by_hop_header(name)
         || matches!(
             name.as_str(),
             HEADER_STARGATE_UPSTREAM_RETRYABLE
