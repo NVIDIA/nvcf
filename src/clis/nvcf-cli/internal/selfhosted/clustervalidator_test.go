@@ -276,14 +276,15 @@ func TestRunClusterValidator_RBACRefreshesClusterRoleRules(t *testing.T) {
 // TestEnsureClusterValidatorRBAC_WritableResources verifies that the
 // bootstrapped ClusterRole grants the write verbs required by enforcement
 // checks (namespace/pod create+delete), probe log reading (pods/log get),
-// and the Gateway API checks added in Req 3/4.
+// and the Gateway API checks.
 func TestEnsureClusterValidatorRBAC_WritableResources(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	ctx := context.Background()
 
-	require.NoError(t, ensureClusterValidatorRBAC(ctx, client))
+	const role = clusterValidatorControlPlaneRole
+	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role))
 
-	cr, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorName, metav1.GetOptions{})
+	cr, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorRBACName(role), metav1.GetOptions{})
 	require.NoError(t, err)
 
 	type check struct {
@@ -676,4 +677,32 @@ func alreadyExistsReactor(resource, name string) ktesting.ReactionFunc {
 		}
 		return true, nil, apierrors.NewAlreadyExists(gr, name)
 	}
+}
+
+// ModeSplit runs both validators concurrently, and the two kubecontexts can
+// resolve to the same cluster. With one shared RBAC name the first run to
+// finish deletes the ServiceAccount, ClusterRole and binding out from under the
+// other run's pod, which then fails every API call with "forbidden".
+func TestClusterValidatorRBAC_IsScopedPerRole(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	ctx := context.Background()
+
+	cpName := clusterValidatorRBACName(clusterValidatorControlPlaneRole)
+	gpuName := clusterValidatorRBACName("compute-plane")
+	require.NotEqual(t, cpName, gpuName, "each role needs its own RBAC identity")
+
+	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, clusterValidatorControlPlaneRole))
+	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, "compute-plane"))
+
+	// Sweeping one role must leave the other's RBAC intact.
+	sweepClusterValidatorRBAC(ctx, client, clusterValidatorControlPlaneRole)
+
+	_, err := client.RbacV1().ClusterRoles().Get(ctx, cpName, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "the swept role's ClusterRole must be gone")
+
+	_, err = client.RbacV1().ClusterRoles().Get(ctx, gpuName, metav1.GetOptions{})
+	assert.NoError(t, err, "the other role's ClusterRole must survive")
+
+	_, err = client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Get(ctx, gpuName, metav1.GetOptions{})
+	assert.NoError(t, err, "the other role's ServiceAccount must survive")
 }

@@ -33,15 +33,15 @@ func TestTaskCommandStructure(t *testing.T) {
 
 	t.Run("registers all expected subcommands", func(t *testing.T) {
 		expected := map[string]bool{
-			"create":                   false,
-			"list":                     false,
-			"bulk":                     false,
-			"get [taskId]":             false,
-			"delete [taskId]":          false,
-			"cancel [taskId]":          false,
-			"events [taskId]":          false,
-			"results [taskId]":         false,
-			"update-secrets [taskId]":  false,
+			"create":                  false,
+			"list":                    false,
+			"bulk":                    false,
+			"get [taskId]":            false,
+			"delete [taskId]":         false,
+			"cancel [taskId]":         false,
+			"events [taskId]":         false,
+			"results [taskId]":        false,
+			"update-secrets [taskId]": false,
 		}
 		for _, sub := range taskCmd.Commands() {
 			if _, ok := expected[sub.Use]; ok {

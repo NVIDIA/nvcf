@@ -188,7 +188,6 @@ like { "secrets": [{"name": "...", "value": "..."}] }.`,
 	RunE: runTaskUpdateSecrets,
 }
 
-
 // ============================================================================
 // Configuration structs
 // ============================================================================
@@ -197,23 +196,23 @@ like { "secrets": [{"name": "...", "value": "..."}] }.`,
 // near 1:1 mapping of CreateTaskRequest with secret values typed loosely so
 // users can drop in either strings or objects.
 type TaskCreateConfig struct {
-	Name                           string                             `json:"name"`
-	GpuSpecification               *TaskGpuSpecificationInput         `json:"gpuSpecification,omitempty"`
-	ContainerImage                 string                             `json:"containerImage,omitempty"`
-	ContainerArgs                  string                             `json:"containerArgs,omitempty"`
-	ContainerEnvironment           []ContainerEnvironmentEntry        `json:"containerEnvironment,omitempty"`
-	Models                         []ArtifactConfig                   `json:"models,omitempty"`
-	Resources                      []ArtifactConfig                   `json:"resources,omitempty"`
-	Tags                           []string                           `json:"tags,omitempty"`
-	Description                    string                             `json:"description,omitempty"`
-	MaxRuntimeDuration             string                             `json:"maxRuntimeDuration,omitempty"`
-	MaxQueuedDuration              string                             `json:"maxQueuedDuration,omitempty"`
-	TerminationGracePeriodDuration string                             `json:"terminationGracePeriodDuration,omitempty"`
-	ResultHandlingStrategy         string                             `json:"resultHandlingStrategy,omitempty"`
-	ResultsLocation                string                             `json:"resultsLocation,omitempty"`
-	HelmChart                      string                             `json:"helmChart,omitempty"`
-	Telemetries                    *TaskTelemetriesInput              `json:"telemetries,omitempty"`
-	Secrets                        interface{}                        `json:"secrets,omitempty"` // []string or []SecretConfig
+	Name                           string                      `json:"name"`
+	GpuSpecification               *TaskGpuSpecificationInput  `json:"gpuSpecification,omitempty"`
+	ContainerImage                 string                      `json:"containerImage,omitempty"`
+	ContainerArgs                  string                      `json:"containerArgs,omitempty"`
+	ContainerEnvironment           []ContainerEnvironmentEntry `json:"containerEnvironment,omitempty"`
+	Models                         []ArtifactConfig            `json:"models,omitempty"`
+	Resources                      []ArtifactConfig            `json:"resources,omitempty"`
+	Tags                           []string                    `json:"tags,omitempty"`
+	Description                    string                      `json:"description,omitempty"`
+	MaxRuntimeDuration             string                      `json:"maxRuntimeDuration,omitempty"`
+	MaxQueuedDuration              string                      `json:"maxQueuedDuration,omitempty"`
+	TerminationGracePeriodDuration string                      `json:"terminationGracePeriodDuration,omitempty"`
+	ResultHandlingStrategy         string                      `json:"resultHandlingStrategy,omitempty"`
+	ResultsLocation                string                      `json:"resultsLocation,omitempty"`
+	HelmChart                      string                      `json:"helmChart,omitempty"`
+	Telemetries                    *TaskTelemetriesInput       `json:"telemetries,omitempty"`
+	Secrets                        interface{}                 `json:"secrets,omitempty"` // []string or []SecretConfig
 }
 
 // TaskGpuSpecificationInput maps to GpuSpecificationDto.
@@ -228,8 +227,8 @@ type TaskGpuSpecificationInput struct {
 
 // TaskHelmValidationInput maps to HelmValidationPolicyDto.
 type TaskHelmValidationInput struct {
-	Name                 string                  `json:"name"`
-	ExtraKubernetesTypes []TaskKubernetesTypeIn  `json:"extraKubernetesTypes,omitempty"`
+	Name                 string                 `json:"name"`
+	ExtraKubernetesTypes []TaskKubernetesTypeIn `json:"extraKubernetesTypes,omitempty"`
 }
 
 // TaskKubernetesTypeIn maps to KubernetesType.
@@ -263,11 +262,11 @@ type TaskBulkConfig struct {
 var taskCreateFlags struct {
 	inputFile string
 
-	name           string
-	gpu            string
-	instanceType   string
-	backend        string
-	clusters       []string
+	name         string
+	gpu          string
+	instanceType string
+	backend      string
+	clusters     []string
 
 	containerImage       string
 	containerArgs        string
@@ -323,7 +322,6 @@ var taskUpdateSecretsFlags struct {
 	inputFile string
 	secrets   []string
 }
-
 
 // ============================================================================
 // Init
@@ -1143,4 +1141,3 @@ func runTaskUpdateSecrets(cmd *cobra.Command, args []string) error {
 	logging.Success("Updated %d secret(s) for task %s.", len(secrets), taskID)
 	return nil
 }
-

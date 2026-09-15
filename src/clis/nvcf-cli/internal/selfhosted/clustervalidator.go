@@ -135,7 +135,7 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	// labeled by us and are skipped.
 	defer sweepManagedPullSecrets(context.Background(), client)
 
-	if err := ensureClusterValidatorRBAC(vctx, client); err != nil {
+	if err := ensureClusterValidatorRBAC(vctx, client, role); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
 	}
 	// Remove the ClusterRole and ClusterRoleBinding to minimize the window in
@@ -148,7 +148,7 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	podMayBeRunning := false
 	defer func() {
 		if !noCleanup && !podMayBeRunning {
-			sweepClusterValidatorRBAC(context.Background(), client)
+			sweepClusterValidatorRBAC(context.Background(), client, role)
 		}
 	}()
 
@@ -216,12 +216,13 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 // Creates the SA/ClusterRole/ClusterRoleBinding the validator pod runs under,
 // idempotent via AlreadyExists tolerance. ClusterRole uses update-or-create so
 // newer CLI versions replace stale rules without the operator needing to delete.
-func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface) error {
-	labels := clusterValidatorLabels()
+func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role string) error {
+	labels := clusterValidatorRoleLabels(role)
+	name := clusterValidatorRBACName(role)
 
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusterValidatorName,
+			Name:      name,
 			Namespace: clusterValidatorNamespace,
 			Labels:    labels,
 		},
@@ -231,7 +232,7 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 	}
 
 	cr := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorName, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
 		Rules: []rbacv1.PolicyRule{
 			// Read-only: cluster inventory and configuration.
 			{APIGroups: []string{""}, Resources: []string{"nodes", "configmaps"}, Verbs: []string{"get", "list", "watch"}},
@@ -256,7 +257,7 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 	}
 	// Update-or-Create so a future CLI version's expanded rules replace the
 	// old set; AlreadyExists tolerance alone would silently keep stale rules.
-	if existing, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorName, metav1.GetOptions{}); err == nil {
+	if existing, err := client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{}); err == nil {
 		existing.Rules = cr.Rules
 		existing.Labels = cr.Labels
 		if _, err := client.RbacV1().ClusterRoles().Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
@@ -271,16 +272,16 @@ func ensureClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface
 	}
 
 	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorName, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
 		Subjects: []rbacv1.Subject{{
 			Kind:      rbacv1.ServiceAccountKind,
-			Name:      clusterValidatorName,
+			Name:      name,
 			Namespace: clusterValidatorNamespace,
 		}},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "ClusterRole",
-			Name:     clusterValidatorName,
+			Name:     name,
 		},
 	}
 	if _, err := client.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -323,10 +324,11 @@ func validatorConfigNameForRole(role string) string {
 // --no-cleanup is not set) to close the window where the elevated ClusterRole
 // exists. The next run recreates them via ensureClusterValidatorRBAC.
 // Errors are swallowed: stale RBAC is preferable to failing the result.
-func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface) {
-	_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, clusterValidatorName, metav1.DeleteOptions{})
-	_ = client.RbacV1().ClusterRoles().Delete(ctx, clusterValidatorName, metav1.DeleteOptions{})
-	_ = client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Delete(ctx, clusterValidatorName, metav1.DeleteOptions{})
+func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role string) {
+	name := clusterValidatorRBACName(role)
+	_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
+	_ = client.RbacV1().ClusterRoles().Delete(ctx, name, metav1.DeleteOptions{})
+	_ = client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
 // Errors are swallowed: a stale Job is preferable to blocking the new run.
@@ -377,6 +379,20 @@ const clusterValidatorNoConfigName = "cluster-validator-no-config"
 
 // clusterValidatorRoleLabel scopes Job selectors to a single validator role.
 const clusterValidatorRoleLabel = "nvcf.nvidia.com/validator-role"
+
+// clusterValidatorRBACName returns the ServiceAccount / ClusterRole /
+// ClusterRoleBinding name for a role.
+//
+// Per-role names matter because ModeSplit runs both validators concurrently,
+// and the two kubecontexts can resolve to the same cluster. With one shared
+// name the first run to finish deletes the RBAC out from under the other run's
+// pod, which then fails every API call with "forbidden".
+func clusterValidatorRBACName(role string) string {
+	if role == "" {
+		return clusterValidatorName
+	}
+	return clusterValidatorName + "-" + role
+}
 
 // controlPlaneValidatorConfigTemplate is the baseline network-check ConfigMap for
 // control-plane preflight: nvcr.io reachability (critical) and NetworkPolicy
@@ -443,8 +459,14 @@ func buildControlPlaneValidatorConfig(extraRegistries []string) string {
 		if host == "" {
 			continue
 		}
-		// Append under the existing reachability.endpoints list.
-		fmt.Fprintf(&extra, "    - name: %s\n      host: %s\n      port: %d\n      protocol: tcp+tls\n      critical: false\n", host, host, port)
+		// Append under the existing reachability.endpoints list. Quote the host:
+		// it comes from operator input, and parseRegistryHostPort passes a value
+		// it cannot split through verbatim. An unquoted "[" or embedded newline
+		// would make the whole ConfigMap unparseable, and the validator then
+		// silently drops every reachability and enforcement check.
+		fmt.Fprintf(&extra,
+			"    - name: %q\n      host: %q\n      port: %d\n      protocol: tcp+tls\n      critical: false\n",
+			host, host, port)
 	}
 	if extra.Len() == 0 {
 		return controlPlaneValidatorConfigTemplate
@@ -486,7 +508,7 @@ func parseRegistryHostPort(s string) (host string, port int) {
 func buildClusterValidatorJob(name, image, pullSecret, role string, noCleanup bool) *batchv1.Job {
 	backoff := int32(0)
 	podSpec := corev1.PodSpec{
-		ServiceAccountName: clusterValidatorName,
+		ServiceAccountName: clusterValidatorRBACName(role),
 		RestartPolicy:      corev1.RestartPolicyNever,
 		Containers: []corev1.Container{{
 			Name:            clusterValidatorContainer,

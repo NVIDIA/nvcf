@@ -495,8 +495,12 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 
 	// The cluster-validator image is the same for both roles; VALIDATOR_ROLE
 	// in the Job env selects which check set runs inside the binary.
+	// Gate on the image, not on the compute-plane validator being constructed:
+	// in ModeSplit with --control-plane the compute role is not targeted, so
+	// clusterValidator is nil and keying off it would drop the control-plane
+	// validator check from the run entirely.
 	var cpClusterValidator selfhosted.ClusterValidator
-	if controlPlaneIsTargeted(mode) && clusterValidator != nil {
+	if controlPlaneIsTargeted(mode) && clusterValidatorImage != "" {
 		cpClusterValidator = newClusterValidatorForSelfHosted()
 	}
 
