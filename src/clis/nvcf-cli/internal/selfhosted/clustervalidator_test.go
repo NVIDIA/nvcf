@@ -99,15 +99,6 @@ func podListReactor(waitingReason string) ktesting.ReactionFunc {
 	}
 }
 
-func hasActionPrefix(actions []ktesting.Action, verb, resource string) bool {
-	for _, a := range actions {
-		if a.GetVerb() == verb && a.GetResource().Resource == resource {
-			return true
-		}
-	}
-	return false
-}
-
 func TestRunClusterValidator_EmptyImage(t *testing.T) {
 	// In normal flow the caller gates on a configured image, so this
 	// branch is defensive. Verify it returns a clear error and makes
@@ -174,19 +165,20 @@ func TestRunClusterValidator_HappyPath(t *testing.T) {
 	assert.Equal(t, int32(0), res.ExitCode)
 	assert.NotEmpty(t, res.JobName, "JobName must be populated so operators can read logs after the run")
 
-	// Sweep must run before create so the singleton invariant holds.
+	// Sweep must run before create so the singleton invariant holds. The sweep
+	// lists rather than issuing a DeleteCollection, because the generated name
+	// has to be checked too and a collection selector cannot express that.
 	actions := client.Actions()
-	require.True(t, hasActionPrefix(actions, "delete-collection", "jobs"),
-		"runClusterValidator must sweep prior Jobs before creating the new one")
 	var sweepIdx, createIdx = -1, -1
 	for i, a := range actions {
-		if a.GetVerb() == "delete-collection" && a.GetResource().Resource == "jobs" && sweepIdx == -1 {
+		if a.GetVerb() == "list" && a.GetResource().Resource == "jobs" && sweepIdx == -1 {
 			sweepIdx = i
 		}
 		if a.GetVerb() == "create" && a.GetResource().Resource == "jobs" && createIdx == -1 {
 			createIdx = i
 		}
 	}
+	require.NotEqual(t, -1, sweepIdx, "runClusterValidator must sweep prior Jobs before creating the new one")
 	assert.Less(t, sweepIdx, createIdx, "sweep must precede create in action sequence")
 }
 
@@ -737,35 +729,41 @@ func TestEnsureClusterValidatorRBAC_DoesNotAdoptExistingObjects(t *testing.T) {
 }
 
 // Random names cannot self-heal by being reused next run, so leftovers from a
-// killed run are reclaimed by age. A fresh one must survive: it may belong to a
-// run happening right now.
-func TestSweepOrphanClusterValidatorRBAC_AgeScoped(t *testing.T) {
+// killed run are reclaimed by age. Two things must survive: anything recent
+// (it may belong to a run happening right now) and anything whose name is not
+// one we generate, even when it carries our labels. Those labels are three
+// public constants, so they can be copied onto anything.
+func TestSweepOrphanClusterValidatorRBAC_RequiresNameLabelsAndAge(t *testing.T) {
 	ctx := context.Background()
 	old := metav1.NewTime(time.Now().Add(-2 * time.Hour))
 	now := metav1.NewTime(time.Now())
+	staleName := clusterValidatorRBACName(clusterValidatorControlPlaneRole, "deadbeef01")
+	freshName := clusterValidatorRBACName("compute-plane", "cafebabe02")
 
 	client := fake.NewSimpleClientset(
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
-			Name: "stale", Labels: clusterValidatorLabels(), CreationTimestamp: old,
+			Name: staleName, Labels: clusterValidatorLabels(), CreationTimestamp: old,
 		}},
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
-			Name: "fresh", Labels: clusterValidatorLabels(), CreationTimestamp: now,
+			Name: freshName, Labels: clusterValidatorLabels(), CreationTimestamp: now,
 		}},
+		// Our labels, but not a name we generate: an operator copying the
+		// labels onto their own ClusterRole must not have it deleted.
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
-			Name: "theirs", Labels: map[string]string{"owner": "operator"}, CreationTimestamp: old,
+			Name: "operator-owned-role", Labels: clusterValidatorLabels(), CreationTimestamp: old,
 		}},
 	)
 
 	sweepOrphanClusterValidatorRBAC(ctx, client, orphanValidatorRBACTTL)
 
-	_, err := client.RbacV1().ClusterRoles().Get(ctx, "stale", metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "a leftover past the TTL must be reclaimed")
+	_, err := client.RbacV1().ClusterRoles().Get(ctx, staleName, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "a generated name past the TTL must be reclaimed")
 
-	_, err = client.RbacV1().ClusterRoles().Get(ctx, "fresh", metav1.GetOptions{})
+	_, err = client.RbacV1().ClusterRoles().Get(ctx, freshName, metav1.GetOptions{})
 	assert.NoError(t, err, "a recent one may belong to a concurrent run")
 
-	_, err = client.RbacV1().ClusterRoles().Get(ctx, "theirs", metav1.GetOptions{})
-	assert.NoError(t, err, "an unlabelled ClusterRole is not ours to delete")
+	_, err = client.RbacV1().ClusterRoles().Get(ctx, "operator-owned-role", metav1.GetOptions{})
+	assert.NoError(t, err, "matching labels alone must not authorize deleting someone else's object")
 }
 
 // An explicit but unparseable port is a typo. Silently probing 443 would report
@@ -779,4 +777,40 @@ func TestParseRegistryHostPort_RejectsMalformedExplicitPort(t *testing.T) {
 	host, port := parseRegistryHostPort("registry.example")
 	assert.Equal(t, "registry.example", host, "no explicit port keeps the default")
 	assert.Equal(t, 443, port)
+}
+
+// The prior-run Job sweep deletes by label plus generated name. Labels alone
+// are three public constants, so a Job carrying them under an unrelated name is
+// not ours to delete.
+func TestSweepPriorClusterValidatorJobs_RequiresGeneratedName(t *testing.T) {
+	ctx := context.Background()
+	const role = clusterValidatorControlPlaneRole
+	ours := clusterValidatorName + "-1700000000"
+
+	client := fake.NewSimpleClientset(
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: ours, Namespace: clusterValidatorNamespace,
+			Labels: clusterValidatorRoleLabels(role),
+		}},
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: "operator-owned-job", Namespace: clusterValidatorNamespace,
+			Labels: clusterValidatorRoleLabels(role),
+		}},
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: clusterValidatorName + "-9999999999", Namespace: clusterValidatorNamespace,
+			Labels: clusterValidatorRoleLabels("compute-plane"),
+		}},
+	)
+
+	sweepPriorClusterValidatorJobs(ctx, client, role)
+
+	jobs := client.BatchV1().Jobs(clusterValidatorNamespace)
+	_, err := jobs.Get(ctx, ours, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "this role's prior Job must be swept")
+
+	_, err = jobs.Get(ctx, "operator-owned-job", metav1.GetOptions{})
+	assert.NoError(t, err, "matching labels alone must not authorize deleting someone else's Job")
+
+	_, err = jobs.Get(ctx, clusterValidatorName+"-9999999999", metav1.GetOptions{})
+	assert.NoError(t, err, "the other role's Job must survive")
 }

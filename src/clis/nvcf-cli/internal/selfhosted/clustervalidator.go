@@ -345,21 +345,34 @@ func validatorConfigNameForRole(role string) string {
 // being reused, these would accumulate. Only objects carrying our labels and
 // older than the TTL are removed, so a concurrent run is never disturbed.
 func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, ttl time.Duration) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli",
+	// All three managed labels, not two: the component label is part of what
+	// identifies these as ours.
+	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,app.kubernetes.io/component=preflight",
 		clusterValidatorAppLabel)
-	cutoff := time.Now().Add(-ttl)
 	opts := metav1.ListOptions{LabelSelector: selector}
+	cutoff := metav1.Time{Time: time.Now().Add(-ttl)}
+
+	// reclaimable requires the generated name as well as the labels and the
+	// age. Labels alone are three public constants and can be copied onto
+	// anything, and this deletes cluster-scoped objects with errors swallowed.
+	reclaimable := func(o metav1.Object) bool {
+		if !strings.HasPrefix(o.GetName(), clusterValidatorName) {
+			return false
+		}
+		ts := o.GetCreationTimestamp()
+		return ts.Before(&cutoff)
+	}
 
 	if l, err := client.RbacV1().ClusterRoleBindings().List(ctx, opts); err == nil {
 		for i := range l.Items {
-			if o := &l.Items[i]; o.CreationTimestamp.Before(&metav1.Time{Time: cutoff}) {
+			if o := &l.Items[i]; reclaimable(o) {
 				_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, o.Name, metav1.DeleteOptions{})
 			}
 		}
 	}
 	if l, err := client.RbacV1().ClusterRoles().List(ctx, opts); err == nil {
 		for i := range l.Items {
-			if o := &l.Items[i]; o.CreationTimestamp.Before(&metav1.Time{Time: cutoff}) {
+			if o := &l.Items[i]; reclaimable(o) {
 				_ = client.RbacV1().ClusterRoles().Delete(ctx, o.Name, metav1.DeleteOptions{})
 			}
 		}
@@ -367,7 +380,7 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 	sa := client.CoreV1().ServiceAccounts(clusterValidatorNamespace)
 	if l, err := sa.List(ctx, opts); err == nil {
 		for i := range l.Items {
-			if o := &l.Items[i]; o.CreationTimestamp.Before(&metav1.Time{Time: cutoff}) {
+			if o := &l.Items[i]; reclaimable(o) {
 				_ = sa.Delete(ctx, o.Name, metav1.DeleteOptions{})
 			}
 		}
@@ -399,14 +412,22 @@ func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface,
 func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Interface, role string) {
 	// Scope to this role: in ModeSingle both roles run against the same
 	// cluster, so an unscoped selector deletes the other role's Job mid-command.
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,%s=%s",
-		clusterValidatorAppLabel, clusterValidatorRoleLabel, role)
+	//
+	// List-then-delete rather than DeleteCollection: the name has to be checked
+	// too, which a collection selector cannot express, and the labels alone are
+	// public constants that anything could carry.
+	jobs := client.BatchV1().Jobs(clusterValidatorNamespace)
+	l, err := jobs.List(ctx, metav1.ListOptions{LabelSelector: validatorRoleSelector(role)})
+	if err != nil {
+		return
+	}
 	propagation := metav1.DeletePropagationBackground
-	_ = client.BatchV1().Jobs(clusterValidatorNamespace).DeleteCollection(
-		ctx,
-		metav1.DeleteOptions{PropagationPolicy: &propagation},
-		metav1.ListOptions{LabelSelector: selector},
-	)
+	for i := range l.Items {
+		if !strings.HasPrefix(l.Items[i].Name, clusterValidatorName) {
+			continue
+		}
+		_ = jobs.Delete(ctx, l.Items[i].Name, metav1.DeleteOptions{PropagationPolicy: &propagation})
+	}
 }
 
 // sweepManagedPullSecrets removes any docker-registry secrets in
@@ -418,13 +439,25 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 // labeled by us and are skipped by the selector. Errors are swallowed:
 // failing to clean up is preferable to failing the check itself.
 func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, role string) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,%s=%s",
+	// Same reasoning as sweepPriorClusterValidatorJobs: the generated name is
+	// part of the ownership test, not just the labels.
+	secrets := client.CoreV1().Secrets(clusterValidatorNamespace)
+	l, err := secrets.List(ctx, metav1.ListOptions{LabelSelector: validatorRoleSelector(role)})
+	if err != nil {
+		return
+	}
+	for i := range l.Items {
+		if !strings.HasPrefix(l.Items[i].Name, validatorPullSecretName) {
+			continue
+		}
+		_ = secrets.Delete(ctx, l.Items[i].Name, metav1.DeleteOptions{})
+	}
+}
+
+// validatorRoleSelector matches objects this CLI created for one validator role.
+func validatorRoleSelector(role string) string {
+	return fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,app.kubernetes.io/component=preflight,%s=%s",
 		clusterValidatorAppLabel, clusterValidatorRoleLabel, role)
-	_ = client.CoreV1().Secrets(clusterValidatorNamespace).DeleteCollection(
-		ctx,
-		metav1.DeleteOptions{},
-		metav1.ListOptions{LabelSelector: selector},
-	)
 }
 
 // clusterValidatorControlPlaneRole is the role value passed as VALIDATOR_ROLE

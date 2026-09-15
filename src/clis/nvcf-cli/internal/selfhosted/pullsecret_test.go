@@ -422,29 +422,35 @@ func TestResolveValidatorPullSecret_UnparsableImage(t *testing.T) {
 // Job is still pulling, which the kubelet reports as
 // FailedToRetrieveImagePullSecret.
 //
-// The sweep is asserted through a reactor rather than by observing deletions:
-// the fake clientset implements DeleteCollection as a no-op, so a state-based
-// assertion here would pass whatever the selector said.
+// State-assertable now that the sweep lists and deletes individually; the fake
+// clientset implements DeleteCollection as a no-op.
 func TestManagedPullSecret_IsScopedPerRole(t *testing.T) {
 	ctx := context.Background()
-
 	cpName := validatorPullSecretRoleName(clusterValidatorControlPlaneRole)
 	gpuName := validatorPullSecretRoleName("compute-plane")
 	require.NotEqual(t, cpName, gpuName, "each role needs its own managed pull secret")
 
+	cfg := dockerConfigBlob(t, "private.registry.test", "user", "pass")
 	client := fake.NewSimpleClientset()
-	var gotSelector string
-	client.PrependReactor("delete-collection", "secrets",
-		func(action ktesting.Action) (bool, runtime.Object, error) {
-			gotSelector = action.(ktesting.DeleteCollectionAction).
-				GetListRestrictions().Labels.String()
-			return true, nil, nil
-		})
+	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
+		cpName, clusterValidatorControlPlaneRole, cfg))
+	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
+		gpuName, "compute-plane", cfg))
+	// Our labels, but not a name we generate: must survive.
+	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
+		"operator-owned-secret", clusterValidatorControlPlaneRole, cfg))
 
 	sweepManagedPullSecrets(ctx, client, clusterValidatorControlPlaneRole)
 
-	assert.Contains(t, gotSelector, clusterValidatorRoleLabel+"="+clusterValidatorControlPlaneRole,
-		"the sweep must select on the role so it cannot delete the other role's secret")
+	secrets := client.CoreV1().Secrets(clusterValidatorNamespace)
+	_, err := secrets.Get(ctx, cpName, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "this role's managed secret must be swept")
+
+	_, err = secrets.Get(ctx, gpuName, metav1.GetOptions{})
+	assert.NoError(t, err, "the other role's secret must survive")
+
+	_, err = secrets.Get(ctx, "operator-owned-secret", metav1.GetOptions{})
+	assert.NoError(t, err, "matching labels alone must not authorize deleting someone else's secret")
 }
 
 // The managed labels a created secret carries must satisfy the sweep selector
