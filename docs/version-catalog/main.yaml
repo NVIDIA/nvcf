@@ -260,21 +260,12 @@ version_overrides:
     source: independent source release; not pinned by stack
 publication_pending:
   - cert-manager-acmesolver
-  - crd-upgrader
-  - dynamo-platform
-  - grove-charts
-  - grove-install-crds
-  - grove-operator
   - helm-nvcf-api
   - helm-nvcf-nats
   - helm-nvcf-nats-auth-callout-service
   - icms-service-oss
-  - k8s
-  - kai-scheduler
-  - kubernetes-operator
   - llm-api-gateway
   - nats
-  - nats-server-config-reloader
   - nvca
   - nvca-operator
   - nvcf-ai-api-gateway-service
@@ -289,13 +280,9 @@ publication_pending:
   - nvcf-otel-collector
   - nvcf-ratelimiter
   - nvcf-self-managed-stack
-  - opentelemetry-collector-contrib
   - opentelemetry-operator-chart
-  - opentelemetry-operator-image
-  - operator
   - prometheus-operator-crds
   - pylon
-  - victoria-metrics
   - victoria-metrics-single
 manifest:
   entries:
@@ -892,14 +879,14 @@ release_set:
   status: development
   stacks:
     control-plane:
-      version: 0.20.1
-      source_tag: deploy/stacks/self-managed/v0.20.1
-      source_commit: b251e005abdf8b299b54a748fd22e350000f68e2
+      version: 0.20.3
+      source_tag: deploy/stacks/self-managed/v0.20.3
+      source_commit: f0f76183d44122e2f96c249685cab06d1c0e1dea
       inventory_asset: nvcf-self-managed-stack-inventory.json
     compute-plane:
-      version: 0.4.1
-      source_tag: deploy/stacks/nvcf-compute-plane/v0.4.1
-      source_commit: 377fc3acc2d9ee98e15791e0181e6d1e86945099
+      version: 0.4.2
+      source_tag: deploy/stacks/nvcf-compute-plane/v0.4.2
+      source_commit: 9d00c0334fe1e1b702e7278898c98b2d0feb07d3
       inventory_asset: nvcf-compute-plane-stack-inventory.json
     observability:
       version: 0.2.1
@@ -908,10 +895,10 @@ release_set:
       inventory_asset: nvcf-observability-stack-inventory.json
 stack:
   name: nvcf-self-managed-stack
-  version: 0.20.1
+  version: 0.20.3
   registry: public-resources
-  source_tag: deploy/stacks/self-managed/v0.20.1
-  source_commit: b251e005abdf8b299b54a748fd22e350000f68e2
+  source_tag: deploy/stacks/self-managed/v0.20.3
+  source_commit: f0f76183d44122e2f96c249685cab06d1c0e1dea
   pin_sources:
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
@@ -955,6 +942,7 @@ artifacts:
   - name: k8s
     type: image
     registry: public-images
+    upstream_repository: docker.io/alpine/k8s
     version: 1.37.0
     stacks:
       - self-managed
@@ -962,6 +950,7 @@ artifacts:
   - name: nats-server-config-reloader
     type: image
     registry: public-images
+    upstream_repository: docker.io/natsio/nats-server-config-reloader
     version: 0.24.0
     stacks:
       - compute-plane
@@ -970,6 +959,7 @@ artifacts:
   - name: grove-install-crds
     type: image
     registry: public-images
+    upstream_repository: ghcr.io/ai-dynamo/grove/grove-install-crds
     version: v0.1.0-alpha.12
     stacks:
       - compute-plane
@@ -977,6 +967,7 @@ artifacts:
   - name: grove-operator
     type: image
     registry: public-images
+    upstream_repository: ghcr.io/ai-dynamo/grove/grove-operator
     version: v0.1.0-alpha.12
     stacks:
       - compute-plane
@@ -984,6 +975,7 @@ artifacts:
   - name: crd-upgrader
     type: image
     registry: public-images
+    upstream_repository: ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader
     version: v0.17.1
     stacks:
       - compute-plane
@@ -991,6 +983,7 @@ artifacts:
   - name: operator
     type: image
     registry: public-images
+    upstream_repository: ghcr.io/kai-scheduler/kai-scheduler/operator
     version: v0.17.1
     stacks:
       - compute-plane
@@ -998,6 +991,7 @@ artifacts:
   - name: opentelemetry-collector-contrib
     type: image
     registry: public-images
+    upstream_repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
     version: 0.160.0
     stacks:
       - observability
@@ -1006,6 +1000,7 @@ artifacts:
     name: opentelemetry-operator
     type: image
     registry: public-images
+    upstream_repository: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator
     version: 0.158.0
     stacks:
       - observability
@@ -1020,6 +1015,7 @@ artifacts:
   - name: kubernetes-operator
     type: image
     registry: public-images
+    upstream_repository: nvcr.io/nvidia/ai-dynamo/kubernetes-operator
     version: 1.4.2
     stacks:
       - compute-plane
@@ -1286,6 +1282,7 @@ artifacts:
   - name: victoria-metrics
     type: image
     registry: public-images
+    upstream_repository: docker.io/victoriametrics/victoria-metrics
     version: v1.150.0
     stacks:
       - observability
@@ -1314,6 +1311,7 @@ artifacts:
   - name: dynamo-platform
     type: chart
     registry: public-helm
+    upstream_repository: https://helm.ngc.nvidia.com/nvidia/ai-dynamo
     version: 1.4.2
     stacks:
       - compute-plane
@@ -1518,6 +1516,7 @@ artifacts:
   - name: grove-charts
     type: chart
     registry: public-helm
+    upstream_repository: oci://ghcr.io/ai-dynamo/grove
     version: v0.1.0-alpha.12
     stacks:
       - compute-plane
@@ -1525,6 +1524,7 @@ artifacts:
   - name: kai-scheduler
     type: chart
     registry: public-helm
+    upstream_repository: oci://ghcr.io/kai-scheduler/kai-scheduler
     version: v0.17.1
     stacks:
       - compute-plane
@@ -1541,7 +1541,7 @@ supplemental_artifacts:
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
-    version: 0.4.1
+    version: 0.4.2
     stacks:
       - compute-plane
   - name: nvcf-observability-stack

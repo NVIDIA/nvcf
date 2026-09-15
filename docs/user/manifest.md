@@ -147,8 +147,8 @@ Documentation: `dev` (development)
 
 | Stack | Version | Source tag |
 | --- | --- | --- |
-| Control plane | `0.20.1` | `deploy/stacks/self-managed/v0.20.1` |
-| Compute plane | `0.4.1` | `deploy/stacks/nvcf-compute-plane/v0.4.1` |
+| Control plane | `0.20.3` | `deploy/stacks/self-managed/v0.20.3` |
+| Compute plane | `0.4.2` | `deploy/stacks/nvcf-compute-plane/v0.4.2` |
 | Observability | `0.2.1` | `deploy/stacks/observability/v0.2.1` |
 
 ### Control plane Helm charts
@@ -195,7 +195,7 @@ Documentation: `dev` (development)
 | `cert-manager-webhook` | `v1.20.2` | `self-managed` | Required | Validates and converts cert-manager API resources. | `nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `ess-agent` | `1.4.1` | `self-managed` | Required | Injects encrypted application secrets into function workloads. | `nvcr.io/nvidia/nvcf/ess-agent:1.4.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/ess-agent) |
 | `icms-service-oss` | `0.7.2` | `self-managed` | Required | Manages instance and cluster lifecycle operations. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/instance-cluster-management) |
-| `k8s` | `1.37.0` | `self-managed` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `Publication pending` | [GitHub](https://github.com/alpine-docker/k8s) |
+| `k8s` | `1.37.0` | `self-managed` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.37.0` | [GitHub](https://github.com/alpine-docker/k8s) |
 | `llm-api-gateway` | `0.14.2` | `self-managed` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
 | `nats-box` | `0.19.7-nonroot` | `self-managed` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.14.6-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `nvcr.io/nvidia/nvcf/nats-server:2.14.6-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
@@ -226,12 +226,12 @@ Documentation: `dev` (development)
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
 | `csi-driver-smb` | `supported` | Independent | Optional | Provides SMB persistent volumes for supported deployments. | `https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/master/charts` | [Upstream](https://github.com/kubernetes-csi/csi-driver-smb) |
-| `dynamo-platform` | `1.4.2` | `compute-plane` | Optional | Deploys the optional NVIDIA Dynamo operator. | `Publication pending` | [Upstream](https://github.com/ai-dynamo/dynamo) |
+| `dynamo-platform` | `1.4.2` | `compute-plane` | Optional | Deploys the optional NVIDIA Dynamo operator. | `https://helm.ngc.nvidia.com/nvidia/ai-dynamo/dynamo-platform:1.4.2` | [Upstream](https://github.com/ai-dynamo/dynamo) |
 | `ebs-csi-driver` | `supported` | Independent | Optional | Provides Amazon EBS persistent volumes for EKS clusters. | `https://kubernetes-sigs.github.io/aws-ebs-csi-driver` | [Upstream](https://github.com/kubernetes-sigs/aws-ebs-csi-driver) |
 | `gpu-operator` | `supported` | Independent | Required | Manages NVIDIA GPU software on Kubernetes nodes. | `https://helm.ngc.nvidia.com/nvidia` | [Upstream](https://github.com/NVIDIA/gpu-operator) |
-| `grove-charts` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Deploys the optional Grove operator for topology-aware scheduling. | `Publication pending` | [Upstream](https://github.com/ai-dynamo/grove) |
+| `grove-charts` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Deploys the optional Grove operator for topology-aware scheduling. | `oci://ghcr.io/ai-dynamo/grove/grove-charts:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |
 | `helm-nvca-operator` | `1.28.0` | `compute-plane` | Required | Deploys the NVCA operator and compute-plane integration. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvca-operator:1.28.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvca-operator) |
-| `kai-scheduler` | `v0.17.1` | `compute-plane` | Optional | Deploys the optional KAI Scheduler. | `Publication pending` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
+| `kai-scheduler` | `v0.17.1` | `compute-plane` | Optional | Deploys the optional KAI Scheduler. | `oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `modelexpress` | `supported` | Independent | Optional | Distributes model weights peer-to-peer between Dynamo workers to reduce scale-out cold starts. Installed separately from the compute-plane stack. | `https://helm.ngc.nvidia.com/nvidia/ai-dynamo` | [Upstream](https://github.com/ai-dynamo/modelexpress) |
 | `nvcf-cluster-topology` | `0.1.0` | `compute-plane` | Required | Configures cluster topology resources for compute scheduling. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane/charts/nvcf-cluster-topology) |
 | `nvcf-container-cache` | `0.25.22` | `compute-plane` | Optional | Deploys container image caching on GPU cluster nodes. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-container-cache:0.25.22` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
@@ -240,12 +240,12 @@ Documentation: `dev` (development)
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
-| `crd-upgrader` | `v0.17.1` | `compute-plane` | Optional | Upgrades KAI Scheduler custom resources. | `Publication pending` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
+| `crd-upgrader` | `v0.17.1` | `compute-plane` | Optional | Upgrades KAI Scheduler custom resources. | `ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `gpu-operator-validator` | `supported` | Independent | Required | Validates GPU Operator components on GPU nodes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator` | [Upstream](https://github.com/NVIDIA/gpu-operator) |
-| `grove-install-crds` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Installs Grove custom resource definitions. | `Publication pending` | [Upstream](https://github.com/ai-dynamo/grove) |
-| `grove-operator` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Reconciles Grove topology-aware scheduling resources. | `Publication pending` | [Upstream](https://github.com/ai-dynamo/grove) |
+| `grove-install-crds` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Installs Grove custom resource definitions. | `ghcr.io/ai-dynamo/grove/grove-install-crds:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |
+| `grove-operator` | `v0.1.0-alpha.12` | `compute-plane` | Optional | Reconciles Grove topology-aware scheduling resources. | `ghcr.io/ai-dynamo/grove/grove-operator:v0.1.0-alpha.12` | [Upstream](https://github.com/ai-dynamo/grove) |
 | `k8s-device-plugin` | `supported` | Independent | Required | Advertises NVIDIA GPU resources to Kubernetes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/k8s/containers/device-plugin` | [Upstream](https://github.com/NVIDIA/k8s-device-plugin) |
-| `kubernetes-operator` | `1.4.2` | `compute-plane` | Optional | Reconciles NVIDIA Dynamo workloads on Kubernetes. | `Publication pending` | [Upstream](https://github.com/ai-dynamo/dynamo) |
+| `kubernetes-operator` | `1.4.2` | `compute-plane` | Optional | Reconciles NVIDIA Dynamo workloads on Kubernetes. | `nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.2` | [Upstream](https://github.com/ai-dynamo/dynamo) |
 | `modelexpress-server` | `supported` | Independent | Optional | Serves model weights to Dynamo workers over NIXL RDMA transports. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/containers/modelexpress-server` | [Upstream](https://github.com/ai-dynamo/modelexpress) |
 | `nats` | `2.10.21-alpine` | `compute-plane` | Optional | Provides messaging for the optional NVIDIA Dynamo operator. | `Publication pending` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nvca` | `3.8.0` | `compute-plane` | Required | Registers GPU clusters and orchestrates deployments in-cluster. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvca) |
@@ -253,7 +253,7 @@ Documentation: `dev` (development)
 | `nvcf-container-cache` | `v1.1.36` | `compute-plane` | Optional | Caches container image layers on GPU cluster nodes. | `nvcr.io/nvidia/nvcf/nvcf-container-cache:v1.1.36` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
 | `nvcf-image-credential-helper` | `0.11.1` | `compute-plane` | Required | Resolves container image credentials for function workloads. | `nvcr.io/nvidia/nvcf/nvcf-image-credential-helper:0.11.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/image-credential-helper) |
 | `nvcf-proxy-tls-certs` | `v1.2.10` | `compute-plane` | Optional | Configures TLS trust for the optional container cache proxy. | `nvcr.io/nvidia/nvcf/nvcf-proxy-tls-certs:v1.2.10` |  |
-| `operator` | `v0.17.1` | `compute-plane` | Optional | Reconciles KAI Scheduler resources. | `Publication pending` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
+| `operator` | `v0.17.1` | `compute-plane` | Optional | Reconciles KAI Scheduler resources. | `ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
 | `pylon` | `0.18.0` | `compute-plane` | Optional | Connects LLM worker pods to the LLM request router. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 
 ### Observability Helm charts
@@ -270,9 +270,9 @@ Documentation: `dev` (development)
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
-| `opentelemetry-collector-contrib` | `0.160.0` | `observability` | Required | Collects and exports NVCF telemetry. | `Publication pending` | [Upstream](https://github.com/open-telemetry/opentelemetry-collector-contrib) |
-| `opentelemetry-operator` | `0.158.0` | `observability` | Required | Reconciles OpenTelemetry Collector resources. | `Publication pending` | [Upstream](https://github.com/open-telemetry/opentelemetry-operator) |
-| `victoria-metrics` | `v1.150.0` | `observability` | Required | Stores metrics for the default observability profile. | `Publication pending` | [Upstream](https://github.com/VictoriaMetrics/VictoriaMetrics) |
+| `opentelemetry-collector-contrib` | `0.160.0` | `observability` | Required | Collects and exports NVCF telemetry. | `ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.160.0` | [Upstream](https://github.com/open-telemetry/opentelemetry-collector-contrib) |
+| `opentelemetry-operator` | `0.158.0` | `observability` | Required | Reconciles OpenTelemetry Collector resources. | `ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator:0.158.0` | [Upstream](https://github.com/open-telemetry/opentelemetry-operator) |
+| `victoria-metrics` | `v1.150.0` | `observability` | Required | Stores metrics for the default observability profile. | `docker.io/victoriametrics/victoria-metrics:v1.150.0` | [Upstream](https://github.com/VictoriaMetrics/VictoriaMetrics) |
 
 ### Cross-stack Helm charts
 
@@ -283,7 +283,7 @@ Documentation: `dev` (development)
 
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
-| `nats-server-config-reloader` | `0.24.0` | `compute-plane` / `self-managed` | Required | Reloads NATS configuration for the control plane and optional NVIDIA Dynamo deployment. | `Publication pending` | [Upstream](https://github.com/nats-io/k8s) |
+| `nats-server-config-reloader` | `0.24.0` | `compute-plane` / `self-managed` | Required | Reloads NATS configuration for the control plane and optional NVIDIA Dynamo deployment. | `docker.io/natsio/nats-server-config-reloader:0.24.0` | [Upstream](https://github.com/nats-io/k8s) |
 
 ### EA-only CVE-impacted artifacts
 
@@ -298,8 +298,8 @@ These Early Access artifacts have known CVE impact. Use only the QA-qualified ve
 | Artifact | Version | Stack | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `nvcf-cli` | `1.16.2` | Independent | Manages functions, deployments, and clusters from the command line. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
-| `nvcf-compute-plane-stack` | `0.4.1` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
+| `nvcf-compute-plane-stack` | `0.4.2` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
 | `nvcf-observability-stack` | `0.2.1` | `observability` | Provides the Helmfile bundle for standalone observability deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability) |
-| `nvcf-self-managed-stack` | `0.20.1` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
+| `nvcf-self-managed-stack` | `0.20.3` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 
 {/*docs-version-sync:END manifest-artifact-registry-paths*/}

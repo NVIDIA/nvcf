@@ -52,8 +52,11 @@ a development release set. It updates:
 - The exact source tag, commit, and inventory asset for all three stacks
 
 The update retains publication records only when `name`, `type`, and `version`
-still match. New and changed versions without a matching record are added to
-`publication_pending`.
+still match. It also records a public upstream repository when the released
+stack inventory already references one directly. Those upstream artifacts are
+not added to `publication_pending`. New and changed versions that target the
+NVCF publication repositories still require an exact publication record or a
+`publication_pending` entry.
 
 If the command reports an unclassified artifact, add its metadata under
 `manifest.entries` as described below and rerun the command. Do not edit a
@@ -141,7 +144,9 @@ For a chart or image deployed by any stack:
 4. Run the documentation sync after all selected stack releases have inventory
    assets.
 5. Add a `manifest.entries` record for the new artifact description and source.
-6. Add a verified public publication or leave the artifact pending.
+6. Add a verified public publication or leave the artifact pending. No
+   publication record is needed when the stack inventory already references a
+   supported public upstream repository.
 
 A catalog-backed manifest entry uses `artifact_id` and describes the deployment
 plane, kind, purpose, and public source links. Released inventory data supplies

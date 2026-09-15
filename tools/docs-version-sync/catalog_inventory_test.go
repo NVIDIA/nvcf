@@ -510,6 +510,109 @@ func TestCatalogArtifactsFromResolvedInventoryPreservesTypedIDs(t *testing.T) {
 	}
 }
 
+func TestCatalogArtifactsFromResolvedInventoryPreservesPublicUpstreamRepositories(t *testing.T) {
+	inventory := resolvedStackInventory{
+		Releases: []resolvedInventoryRelease{{Plane: "compute-plane", Name: "dependencies", Required: true}},
+		Artifacts: []resolvedInventoryArtifact{
+			{Type: "container-image", Name: "upstream-image", Repository: "docker.io/example/upstream-image", Version: "1.2.3", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "upstream-docker-short-name", Repository: "example/upstream-docker-short-name", Version: "1.2.4", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "upstream-ngc-image", Repository: "nvcr.io/nvidia/example/upstream-ngc-image", Version: "2.3.4", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "upstream-oci-chart", Repository: "oci://ghcr.io/example/charts", Version: "3.4.5", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "upstream-http-chart", Repository: "https://helm.ngc.nvidia.com/nvidia/example", Version: "4.5.6", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "nvcf-image", Repository: "nvcr.io/nvidia/nvcf/nvcf-image", Version: "5.6.7", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "nvcf-chart", Repository: "https://helm.ngc.nvidia.com/nvidia/nvcf", Version: "6.7.8", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "private-image", Repository: "registry.example.com/private-image", Version: "7.8.9", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "unqualified-image", Repository: "unqualified-image", Version: "8.9.0", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+		},
+	}
+
+	artifacts, err := catalogArtifactsFromResolvedStackInventory(inventory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := newCatalogFromArtifacts("1.0.0", artifacts)
+	for _, artifact := range artifacts {
+		catalog.PublicationPending = append(catalog.PublicationPending, artifact.catalogKey())
+	}
+	catalog.reconcilePublicationPending()
+
+	upstream := map[string]struct {
+		repository   string
+		distribution string
+	}{
+		"upstream-image":             {repository: "docker.io/example/upstream-image", distribution: "docker.io/example/upstream-image:1.2.3"},
+		"upstream-docker-short-name": {repository: "docker.io/example/upstream-docker-short-name", distribution: "docker.io/example/upstream-docker-short-name:1.2.4"},
+		"upstream-ngc-image":         {repository: "nvcr.io/nvidia/example/upstream-ngc-image", distribution: "nvcr.io/nvidia/example/upstream-ngc-image:2.3.4"},
+		"upstream-oci-chart":         {repository: "oci://ghcr.io/example/charts", distribution: "oci://ghcr.io/example/charts/upstream-oci-chart:3.4.5"},
+		"upstream-http-chart":        {repository: "https://helm.ngc.nvidia.com/nvidia/example", distribution: "https://helm.ngc.nvidia.com/nvidia/example/upstream-http-chart:4.5.6"},
+	}
+	for name, want := range upstream {
+		artifact, found := catalog.findArtifact(name)
+		if !found {
+			t.Fatalf("catalog is missing %s", name)
+		}
+		if artifact.UpstreamRepository != want.repository {
+			t.Fatalf("%s upstream repository = %q, want %q", name, artifact.UpstreamRepository, want.repository)
+		}
+		if catalog.publicationIsPending(artifact) {
+			t.Fatalf("%s is publication pending", name)
+		}
+		distribution, err := catalog.artifactDistribution(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if distribution != want.distribution {
+			t.Fatalf("%s distribution = %q, want %q", name, distribution, want.distribution)
+		}
+	}
+	for _, name := range []string{"nvcf-image", "nvcf-chart", "private-image", "unqualified-image"} {
+		artifact, found := catalog.findArtifact(name)
+		if !found {
+			t.Fatalf("catalog is missing %s", name)
+		}
+		if artifact.UpstreamRepository != "" {
+			t.Fatalf("%s upstream repository = %q, want empty", name, artifact.UpstreamRepository)
+		}
+		if !catalog.publicationIsPending(artifact) {
+			t.Fatalf("%s is not publication pending", name)
+		}
+	}
+	if err := ValidateCatalog(catalog); err != nil {
+		t.Fatalf("catalog with public upstream repositories is invalid: %v", err)
+	}
+}
+
+func TestRetainCurrentPublicationsDropsArtifactsWiredUpstream(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Artifacts = []Artifact{
+		{Name: "upstream-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry, UpstreamRepository: "docker.io/example/upstream-image", Version: "1.2.3"},
+		{Name: "nvcf-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "2.3.4"},
+	}
+	catalog.Publications = []Publication{
+		{Name: "upstream-image", Type: ArtifactTypeImage, Version: "1.2.3", Registry: defaultImageRegistry},
+		{Name: "nvcf-image", Type: ArtifactTypeImage, Version: "2.3.4", Registry: defaultImageRegistry},
+	}
+
+	retainCurrentPublications(catalog)
+
+	if len(catalog.Publications) != 1 || catalog.Publications[0].Name != "nvcf-image" {
+		t.Fatalf("retained publications = %#v, want only nvcf-image", catalog.Publications)
+	}
+}
+
+func TestValidateCatalogRejectsUnsupportedUpstreamRepository(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Artifacts = []Artifact{{
+		Name: "private-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry,
+		UpstreamRepository: "registry.example.com/private-image", Version: "1.2.3",
+	}}
+
+	err := ValidateCatalog(catalog)
+	if err == nil || !strings.Contains(err.Error(), "unsupported public upstream repository") {
+		t.Fatalf("ValidateCatalog error = %v, want unsupported upstream repository rejection", err)
+	}
+}
+
 func testCatalogResolvedInventory(t *testing.T, source stackSourceRelease) resolvedStackInventory {
 	t.Helper()
 	releases := []resolvedInventoryRelease{
