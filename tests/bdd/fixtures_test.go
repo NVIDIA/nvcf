@@ -559,6 +559,38 @@ func nestedYAMLValue(values map[string]any, path ...string) (any, bool) {
 	return current, true
 }
 
+func TestSelfManagedLocalBDDFixtureUsesStackOwnedLLMAPIGatewayDefaults(t *testing.T) {
+	const fixturePath = "fixtures/self-managed-local-bdd.yaml"
+
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read single-cluster stack fixture: %v", err)
+	}
+	var values struct {
+		Addons struct {
+			LLM struct {
+				Gateway struct {
+					ReplicaCount int            `yaml:"replicaCount"`
+					Auth         map[string]any `yaml:"auth"`
+					Metrics      map[string]any `yaml:"metrics"`
+				} `yaml:"gateway"`
+			} `yaml:"llm"`
+		} `yaml:"addons"`
+	}
+	if err := yaml.Unmarshal(fixtureBytes, &values); err != nil {
+		t.Fatalf("parse single-cluster stack fixture: %v", err)
+	}
+	if values.Addons.LLM.Gateway.ReplicaCount != 1 {
+		t.Fatalf("local schedulability override replicaCount = %d; want 1", values.Addons.LLM.Gateway.ReplicaCount)
+	}
+	if _, configured := values.Addons.LLM.Gateway.Auth["grpcInsecure"]; configured {
+		t.Fatal("single-cluster fixture must rely on the self-managed gRPC transport default")
+	}
+	if _, configured := values.Addons.LLM.Gateway.Metrics["serviceMonitor"]; configured {
+		t.Fatal("single-cluster fixture must derive ServiceMonitor enablement from the observability profile")
+	}
+}
+
 func TestNVCTTaskSmokeSupportsContainerAndHelmSamples(t *testing.T) {
 	for _, path := range []string{
 		"../../examples/task-samples/task-simple-sample/Dockerfile",

@@ -70,11 +70,6 @@ addons:
     enabled: true
     gateway:
       replicaCount: 1
-      auth:
-        grpcInsecure: true
-      metrics:
-        serviceMonitor:
-          enabled: false
     requestRouter:
       replicaCount: 1
   vanityGateway:

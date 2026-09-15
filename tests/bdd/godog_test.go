@@ -449,6 +449,8 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	const invalidHelmFunctionDeployCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function deploy create --backend ncp-local --gpu H100 --instance-type NCP.GPU.H100_1x" +
 		" --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900"
+	const gatewayTransportCommand = "kubectl --context k3d-ncp-local get configmap/llm-api-gateway -n nvcf -o jsonpath={.data.NVCF_GRPC_INSECURE}"
+	const gatewayServiceMonitorCommand = "helm get manifest llm-api-gateway --namespace nvcf --kube-context k3d-ncp-local"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NGC_API_KEY", "test-key")
@@ -466,6 +468,8 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
 		},
+		gatewayTransportCommand:      {ExitCode: 0, Stdout: "true"},
+		gatewayServiceMonitorCommand: {ExitCode: 0, Stdout: "kind: ConfigMap\nmetadata:\n  name: llm-api-gateway\n"},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
@@ -556,6 +560,11 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV") {
 		t.Fatal("helmfile install make target was never invoked")
+	}
+	for _, command := range []string{gatewayTransportCommand, gatewayServiceMonitorCommand} {
+		if !commandRanExactly(suite.Runner.(*fakeRunner).runs, command) {
+			t.Fatalf("LLM API gateway observable command was never invoked: %s", command)
+		}
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")
