@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -205,7 +206,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// up global.image.registry from the stack values file and any
 	// --cluster-validator-registries extras independently of the image config.
 	if !localOnly {
-		extraRegistries := viper.GetStringSlice("cluster_validator_registries")
+		extraRegistries := configuredValidatorRegistries()
 		stackValuesFile := resolveStackValuesFile()
 		credEntries = selfhosted.EnumerateRegistries(
 			clusterValidatorImage, stackValuesFile, extraRegistries,
@@ -293,29 +294,71 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 }
 
-// resolveStackValuesFile walks up from the current working directory to find
-// the active environment values YAML. Returns "" when not found so callers
-// skip the optional lookup gracefully.
+// resolveStackValuesFile returns the environment values YAML to read
+// global.image.registry from, or "" when none is available.
+//
+// It prefers --control-plane-stack, the same source every sibling command uses,
+// and only falls back to walking up from the working directory. Within a stack
+// it tries HELMFILE_ENV (default "default") and then base.yaml, which is where
+// global.image.registry actually lives. The previous version looked only for
+// environments/local.yaml, which is not a tracked file, so on any clean
+// checkout os.Stat never succeeded and this whole lookup was dead.
 func resolveStackValuesFile() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
+	var roots []string
+	if selfHostedControlPlaneStack != "" {
+		roots = append(roots, selfHostedControlPlaneStack)
 	}
-	// Walk up to 6 directory levels to find the stack environments directory.
-	dir := cwd
-	for i := 0; i < 6; i++ {
-		candidate := filepath.Join(dir,
-			"deploy", "stacks", "self-managed", "environments", "local.yaml")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+	if cwd, err := os.Getwd(); err == nil {
+		dir := cwd
+		for i := 0; i < 6; i++ {
+			roots = append(roots, dir)
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
+	}
+
+	env := os.Getenv("HELMFILE_ENV")
+	if env == "" {
+		env = "default"
+	}
+	names := []string{env + ".yaml", "base.yaml"}
+
+	for _, root := range roots {
+		for _, sub := range [][]string{
+			{"deploy", "stacks", "self-managed", "environments"},
+			{"environments"}, // a stack dir passed directly
+		} {
+			for _, name := range names {
+				candidate := filepath.Join(append(append([]string{root}, sub...), name)...)
+				if _, err := os.Stat(candidate); err == nil {
+					return candidate
+				}
+			}
 		}
-		dir = parent
 	}
 	return ""
+}
+
+// configuredValidatorRegistries returns the extra registries from the flag, env
+// var, or config file, normalized to one entry per registry.
+//
+// viper.GetStringSlice splits a raw env string on whitespace, so the documented
+// comma form "a:443,b:443" arrives as a single element. Left as-is it reaches
+// net.SplitHostPort as "a:443,b:443", which errors with "too many colons" and is
+// then passed through verbatim as a host, producing https://a:443,b:443/v2/.
+func configuredValidatorRegistries() []string {
+	var out []string
+	for _, raw := range viper.GetStringSlice("cluster_validator_registries") {
+		for _, part := range strings.Split(raw, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
 }
 
 // computePlaneIsTargeted reports whether the compute-plane validator should run:
@@ -396,14 +439,18 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
 	}
 
+	// SIS reachability is a compute-plane concern, and it is skipped pre-install
+	// because SIS is not up yet. The previous `!checkPre` form was also true
+	// whenever --control-plane was passed, so a control-plane run fired an HTTP
+	// request at SIS that the operator never asked for.
 	icmsURL := ""
-	if checkAll || checkComputePlane || !checkPre {
+	if computePlaneIsTargeted(mode) && !checkPre {
 		icmsURL = resolveICMSURL(selfHostedICMSURL)
 	}
 
 	skipInotify := checkSkipInotifyCheck || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY") != ""
 	var inotifyProber selfhosted.NodeInotifyProber
-	if !skipInotify {
+	if computePlaneIsTargeted(mode) && !skipInotify {
 		inotifyProber = newInotifyProberForSelfHosted()
 	}
 
@@ -413,8 +460,12 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	// Either way, leave clusterValidator nil so the validator row is
 	// omitted from the check stream; the caller already emitted a
 	// one-line stderr notice explaining which case applies.
+	// Gate on the role predicate as well as the image, mirroring
+	// cpClusterValidator below. Without this, --control-plane in ModeSplit
+	// still creates a ServiceAccount, cluster-wide ClusterRole/CRB, pull secret
+	// and validator Job in the compute cluster.
 	var clusterValidator selfhosted.ClusterValidator
-	if clusterValidatorImage != "" {
+	if computePlaneIsTargeted(mode) && clusterValidatorImage != "" {
 		clusterValidator = newClusterValidatorForSelfHosted()
 	}
 
@@ -422,7 +473,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 
 	// Additional registries to probe in the control-plane validator ConfigMap.
 	// Priority: flag > env > config file.
-	registries := viper.GetStringSlice("cluster_validator_registries")
+	registries := configuredValidatorRegistries()
 
 	// The cluster-validator image is the same for both roles; VALIDATOR_ROLE
 	// in the Job env selects which check set runs inside the binary.
@@ -469,28 +520,48 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		_ = eg.Wait()
 		return append(cpResults, gpuResults...)
 
-	default: // ModeSingle — no context flags; union both role check sets sequentially.
-		cpRC := selfhosted.RoleConfig{
-			SISURL:                     icmsURL,
-			ClusterValidator:           cpClusterValidator,
-			ClusterValidatorImage:      clusterValidatorImage,
-			ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-			ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-			ClusterValidatorRegistries: registries,
-			StaleNamespaceProber:       staleNSProber,
+	default: // ModeSingle — one cluster; run only the roles the flags target.
+		var results []selfhosted.CheckResult
+
+		// The stale-namespace probe goes to exactly one role. Both roles share
+		// the cluster here, so handing it to both emits two check_completed
+		// events with the same ID and loads the kubeconfig twice, which means a
+		// second exec-credential-plugin prompt.
+		staleForControlPlane := staleNSProber
+		staleForComputePlane := staleNSProber
+		if controlPlaneIsTargeted(mode) {
+			staleForComputePlane = nil
+		} else {
+			staleForControlPlane = nil
 		}
-		gpuRC := selfhosted.RoleConfig{
-			SISURL:                     icmsURL,
-			InotifyProber:              inotifyProber,
-			ClusterValidator:           clusterValidator,
-			ClusterValidatorImage:      clusterValidatorImage,
-			ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-			ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-			StaleNamespaceProber:       staleNSProber,
+
+		if controlPlaneIsTargeted(mode) {
+			cpRC := selfhosted.RoleConfig{
+				SISURL:                     icmsURL,
+				ClusterValidator:           cpClusterValidator,
+				ClusterValidatorImage:      clusterValidatorImage,
+				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
+				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+				ClusterValidatorRegistries: registries,
+				StaleNamespaceProber:       staleForControlPlane,
+			}
+			results = append(results,
+				selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleControlPlane, cpRC, sink)...)
 		}
-		cpResults := selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleControlPlane, cpRC, sink)
-		gpuResults := selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleComputePlane, gpuRC, sink)
-		return append(cpResults, gpuResults...)
+		if computePlaneIsTargeted(mode) {
+			gpuRC := selfhosted.RoleConfig{
+				SISURL:                     icmsURL,
+				InotifyProber:              inotifyProber,
+				ClusterValidator:           clusterValidator,
+				ClusterValidatorImage:      clusterValidatorImage,
+				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
+				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+				StaleNamespaceProber:       staleForComputePlane,
+			}
+			results = append(results,
+				selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
+		}
+		return results
 	}
 }
 

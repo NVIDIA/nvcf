@@ -20,12 +20,13 @@ package selfhosted
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -341,33 +342,69 @@ func TestIsNGCRegistry(t *testing.T) {
 
 // -- exchangeBearerToken realm host authorization --
 
+// recordingTransport records every request it sees and reports whether any
+// carried an Authorization header, so a test can assert that no credential
+// escaped rather than only that an error was returned.
+type recordingTransport struct {
+	mu       sync.Mutex
+	requests []*http.Request
+	withAuth []string
+	inner    http.RoundTripper
+}
+
+func (rt *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.requests = append(rt.requests, r)
+	if r.Header.Get("Authorization") != "" {
+		rt.withAuth = append(rt.withAuth, r.URL.String())
+	}
+	rt.mu.Unlock()
+	if rt.inner == nil {
+		return nil, fmt.Errorf("no inner transport")
+	}
+	return rt.inner.RoundTrip(r)
+}
+
 func TestExchangeBearerToken_RejectsAttackerRealm(t *testing.T) {
-	// A malicious registry returns a realm on an attacker-controlled host.
-	// The function must reject this without forwarding credentials.
-	spy := &spyTransport{t: t}
+	// A malicious registry returns a realm on an attacker-controlled host. The
+	// realm check must reject it, and crucially must do so before any request
+	// carrying the operator's credentials leaves the process.
+	//
+	// Credentials have to be configured for the assertion to mean anything: if
+	// none were present, no request could carry an Authorization header whether
+	// the control works or not.
+	t.Setenv("NGC_API_KEY", "test-key")
 
-	// Set up a fake registry server that returns 401 with an attacker realm.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Www-Authenticate", `Bearer realm="https://attacker.example.com/token",service="harbor.company.internal"`)
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	client := &http.Client{Transport: rec}
 
-	client := srv.Client()
-	// Replace the transport with the spy AFTER the TLS is set up; the spy
-	// wraps the original to preserve TLS but fails on any attacker call.
-	origTransport := client.Transport
-	client.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-		if r.Host == "attacker.example.com" || strings.Contains(r.URL.Host, "attacker") {
-			t.Fatalf("credentials must not be forwarded to attacker host: %s", r.URL)
-		}
-		return origTransport.RoundTrip(r)
-	})
-	_ = spy
+	const wwwAuth = `Bearer realm="https://attacker.example.com/token",service="harbor.company.internal"`
+	_, err := exchangeBearerToken(context.Background(), client,
+		"harbor.company.internal", "myrepo/image", wwwAuth)
 
-	_, err := exchangeBearerToken(context.Background(), client, "harbor.company.internal", "myrepo/image", `Bearer realm="https://attacker.example.com/token",service="harbor.company.internal"`)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not authorized for registry")
+	assert.Empty(t, rec.withAuth,
+		"no request carrying an Authorization header may be issued once the realm is rejected")
+	for _, r := range rec.requests {
+		assert.NotContains(t, r.URL.Host, "attacker",
+			"no request at all may reach the attacker host")
+	}
+}
+
+// An empty realm host must fail closed. "https://:443/token" has a non-empty
+// u.Host (":443") so it clears the relative-realm guard, but Hostname() is "",
+// and an empty trustedRealmDelegations lookup would compare equal to it.
+func TestExchangeBearerToken_RejectsEmptyRealmHost(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	rec := &recordingTransport{inner: http.DefaultTransport}
+	client := &http.Client{Transport: rec}
+
+	_, err := exchangeBearerToken(context.Background(), client,
+		"harbor.company.internal", "myrepo/image", `Bearer realm="https://:443/token"`)
+
+	require.Error(t, err)
+	assert.Empty(t, rec.withAuth, "an empty realm host must not receive credentials")
 }
 
 // -- exchangeNGCBearerToken --
@@ -387,18 +424,32 @@ func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { r
 
 func TestExchangeBearerToken_DockerHubDelegatedRealm(t *testing.T) {
 	// Docker Hub uses registry-1.docker.io as the pull host and auth.docker.io
-	// for token exchange. The realm host check must allow this documented
-	// delegation rather than rejecting it as an unauthorized host.
-	wwwAuth := `Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/ubuntu:pull"`
-	realm, _, _ := parseWWWAuthenticate(wwwAuth)
-	u, err := url.Parse(realm)
-	require.NoError(t, err)
+	// for token exchange. The realm check must authorize that delegation, so
+	// drive exchangeBearerToken and assert the request actually reached the
+	// auth host rather than comparing the delegation map against itself.
+	t.Setenv("NGC_API_KEY", "test-key")
 
-	realmHost := strings.ToLower(u.Hostname())
-	regHost := "registry-1.docker.io"
-	delegated := trustedRealmDelegations[regHost]
-	assert.Equal(t, "auth.docker.io", delegated, "Docker Hub auth host must be in trusted delegation map")
-	assert.Equal(t, delegated, realmHost, "auth.docker.io realm must be authorized for registry-1.docker.io")
+	rec := &recordingTransport{inner: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "auth.docker.io" {
+			return nil, fmt.Errorf("unexpected host %s", r.URL.Host)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"token":"dockerhub-token"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	client := &http.Client{Transport: rec}
+
+	const wwwAuth = `Bearer realm="https://auth.docker.io/token",service="registry.docker.io",` +
+		`scope="repository:library/ubuntu:pull"`
+	tok, err := exchangeBearerToken(context.Background(), client,
+		"registry-1.docker.io", "library/ubuntu", wwwAuth)
+
+	require.NoError(t, err, "the documented Docker Hub delegation must be authorized")
+	assert.Equal(t, "dockerhub-token", tok)
+	require.NotEmpty(t, rec.requests, "the token exchange must actually be issued")
+	assert.Equal(t, "auth.docker.io", rec.requests[0].URL.Host)
 }
 
 func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {

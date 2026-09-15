@@ -138,14 +138,20 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	if err := ensureClusterValidatorRBAC(vctx, client); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
 	}
-	// Remove the ClusterRole and ClusterRoleBinding after the Job finishes
-	// (when cleanup is enabled) to minimize the window where the elevated SA
-	// exists. Uses a fresh context so cleanup runs even when vctx is expired.
-	// When --no-cleanup is set, the operator expects to inspect the Job; we
-	// leave the RBAC in place so they can re-exec the pod without re-bootstrap.
-	if !noCleanup {
-		defer sweepClusterValidatorRBAC(context.Background(), client)
-	}
+	// Remove the ClusterRole and ClusterRoleBinding once the Job has reached a
+	// terminal state, to minimize the window where the elevated SA exists.
+	//
+	// Gated on jobTerminated rather than deferred unconditionally: on the
+	// timeout and ImagePullBackOff paths the pod is still running, and pulling
+	// its RBAC out from under it fills the surviving transcript with "forbidden"
+	// errors that mask the real cause. When --no-cleanup is set the operator
+	// expects to inspect the Job, so the RBAC stays either way.
+	jobTerminated := false
+	defer func() {
+		if !noCleanup && jobTerminated {
+			sweepClusterValidatorRBAC(context.Background(), client)
+		}
+	}()
 
 	// For the control-plane role, create a ConfigMap with reachability
 	// endpoints and enforcement config so the validator runs its configurable
@@ -162,7 +168,7 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 		}
 	}
 
-	sweepPriorClusterValidatorJobs(vctx, client)
+	sweepPriorClusterValidatorJobs(vctx, client, role)
 
 	jobName := fmt.Sprintf("%s-%d", clusterValidatorName, time.Now().UnixNano())
 	if _, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
@@ -172,6 +178,9 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	}
 
 	final, waitErr := waitForClusterValidatorJob(vctx, client, jobName)
+	// Only a clean wait means the pod is done; a timeout or a pull failure
+	// leaves it running, so the deferred RBAC sweep must not fire.
+	jobTerminated = waitErr == nil
 
 	// Fetch logs under a fresh ctx from the parent: vctx is expired on the
 	// timeout path, and dropping the partial transcript hurts most there.
@@ -287,6 +296,27 @@ func clusterValidatorLabels() map[string]string {
 	}
 }
 
+// clusterValidatorRoleLabels adds the role so the prior-run sweep only matches
+// Jobs from the same role. Without it, a ModeSingle run deletes the other
+// role's Job mid-command, including under --no-cleanup, which makes the
+// printed `kubectl logs job/...` hint 404.
+func clusterValidatorRoleLabels(role string) map[string]string {
+	l := clusterValidatorLabels()
+	l[clusterValidatorRoleLabel] = role
+	return l
+}
+
+// validatorConfigNameForRole returns the network-check ConfigMap name the Job
+// should read. Only the control-plane role has one; the compute-plane role gets
+// a sentinel that resolves to nothing so it cannot inherit the control-plane's
+// reachability and enforcement config.
+func validatorConfigNameForRole(role string) string {
+	if role == clusterValidatorControlPlaneRole {
+		return clusterValidatorConfigName
+	}
+	return clusterValidatorNoConfigName
+}
+
 // sweepClusterValidatorRBAC removes the SA, ClusterRole, and ClusterRoleBinding
 // created by ensureClusterValidatorRBAC. Called after Job completion (when
 // --no-cleanup is not set) to close the window where the elevated ClusterRole
@@ -299,8 +329,11 @@ func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface)
 }
 
 // Errors are swallowed: a stale Job is preferable to blocking the new run.
-func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Interface) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli", clusterValidatorAppLabel)
+func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Interface, role string) {
+	// Scope to this role: in ModeSingle both roles run against the same
+	// cluster, so an unscoped selector deletes the other role's Job mid-command.
+	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,%s=%s",
+		clusterValidatorAppLabel, clusterValidatorRoleLabel, role)
 	propagation := metav1.DeletePropagationBackground
 	_ = client.BatchV1().Jobs(clusterValidatorNamespace).DeleteCollection(
 		ctx,
@@ -335,6 +368,14 @@ const clusterValidatorControlPlaneRole = "control-plane"
 // looks for when VALIDATOR_CONFIG_NAME is empty. Must stay in sync with
 // defaultConfigMapName in nvca/cmd/cluster-validator/main.go.
 const clusterValidatorConfigName = "cluster-validator-network-checks"
+
+// clusterValidatorNoConfigName is a name no ConfigMap uses. VALIDATOR_CONFIG_NAME
+// must be non-empty to suppress the validator's own default-name fallback, so
+// "no config" has to be spelled as a name that resolves to nothing.
+const clusterValidatorNoConfigName = "cluster-validator-no-config"
+
+// clusterValidatorRoleLabel scopes Job selectors to a single validator role.
+const clusterValidatorRoleLabel = "nvcf.nvidia.com/validator-role"
 
 // controlPlaneValidatorConfigTemplate is the baseline network-check ConfigMap for
 // control-plane preflight: nvcr.io reachability (critical) and NetworkPolicy
@@ -452,7 +493,13 @@ func buildClusterValidatorJob(name, image, pullSecret, role string, noCleanup bo
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Env: []corev1.EnvVar{
 				{Name: "VALIDATOR_CONFIG_NAMESPACE", Value: clusterValidatorNamespace},
-				{Name: "VALIDATOR_CONFIG_NAME", Value: ""},
+				// Name the ConfigMap explicitly for the control-plane role and
+				// leave it unresolvable for the compute-plane role. An empty
+				// value is NOT "no config": the validator falls back to its own
+				// default name, so both roles would resolve the same ConfigMap
+				// and the compute-plane preflight would silently run the
+				// control-plane's active NetworkPolicy enforcement.
+				{Name: "VALIDATOR_CONFIG_NAME", Value: validatorConfigNameForRole(role)},
 				{Name: "VALIDATOR_PREFLIGHT", Value: "true"},
 				{Name: "VALIDATOR_ROLE", Value: role},
 			},
@@ -465,12 +512,12 @@ func buildClusterValidatorJob(name, image, pullSecret, role string, noCleanup bo
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorLabels(),
+			Labels:    clusterValidatorRoleLabels(role),
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: &backoff,
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: clusterValidatorLabels()},
+				ObjectMeta: metav1.ObjectMeta{Labels: clusterValidatorRoleLabels(role)},
 				Spec:       podSpec,
 			},
 		},

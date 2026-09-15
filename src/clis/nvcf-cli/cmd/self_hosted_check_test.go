@@ -494,6 +494,10 @@ func TestCheck_ValidatorSkipNoteAppearsOnComputePlane(t *testing.T) {
 		checkComputePlane = false
 		checkSkipClusterValidation = false
 	})
+	// --skip-cluster-validation does not gate the inotify prober, which lists
+	// every node and creates a privileged pod on each. Without this the test
+	// writes to whatever cluster is in the developer's current kubecontext.
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
 
 	var stderr bytes.Buffer
 	rootCmd.SetErr(&stderr)
