@@ -124,16 +124,27 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	vctx, cancel := context.WithTimeout(ctx, clusterValidatorTimeout)
 	defer cancel()
 
+	// podMayBeRunning is true only between a successful Job create and a clean
+	// wait. Both cleanup defers below key off it: outside that window nothing
+	// is using the pull secret or the RBAC, so reclaiming them is safe, and
+	// inside it reclaiming them breaks the pod that is still running.
+	podMayBeRunning := false
+
 	// Resolver errors are non-fatal: fall through to the caller's value and
 	// let waitForClusterValidatorJob surface ImagePullBackOff if needed.
-	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image); err == nil {
+	if resolved, err := resolveValidatorPullSecret(ctx, client, pullSecret, image, role); err == nil {
 		pullSecret = resolved
 	}
-	// Sweep any pull secrets we created (mirror or env-mint) after the
-	// Job terminates. Uses a fresh context so cleanup runs even when
-	// vctx has expired. Operator-supplied secrets via the flag aren't
-	// labeled by us and are skipped.
-	defer sweepManagedPullSecrets(context.Background(), client)
+	// Sweep only this role's managed pull secret, and only once the pod can no
+	// longer need it. Sweeping unconditionally deletes the Secret out from
+	// under a pod that is still retrying its pull, which the kubelet then
+	// reports as FailedToRetrieveImagePullSecret. Operator-supplied secrets via
+	// the flag aren't labeled by us and are skipped.
+	defer func() {
+		if !podMayBeRunning {
+			sweepManagedPullSecrets(context.Background(), client, role)
+		}
+	}()
 
 	if err := ensureClusterValidatorRBAC(vctx, client, role); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
@@ -141,11 +152,6 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	// Remove the ClusterRole and ClusterRoleBinding to minimize the window in
 	// which the elevated SA exists. When --no-cleanup is set the operator
 	// expects to inspect the Job, so the RBAC stays either way.
-	//
-	// podMayBeRunning is true only between a successful Job create and a clean
-	// wait. Everywhere else nothing is using the RBAC, so reclaim it rather
-	// than leaking a cluster-wide ClusterRole.
-	podMayBeRunning := false
 	defer func() {
 		if !noCleanup && !podMayBeRunning {
 			sweepClusterValidatorRBAC(context.Background(), client, role)
@@ -353,8 +359,9 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 // Operator-supplied secrets via --cluster-validator-pull-secret aren't
 // labeled by us and are skipped by the selector. Errors are swallowed:
 // failing to clean up is preferable to failing the check itself.
-func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface) {
-	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli", clusterValidatorAppLabel)
+func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, role string) {
+	selector := fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/managed-by=nvcf-cli,%s=%s",
+		clusterValidatorAppLabel, clusterValidatorRoleLabel, role)
 	_ = client.CoreV1().Secrets(clusterValidatorNamespace).DeleteCollection(
 		ctx,
 		metav1.DeleteOptions{},
