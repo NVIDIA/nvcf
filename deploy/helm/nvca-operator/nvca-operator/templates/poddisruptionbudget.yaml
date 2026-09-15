@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- if .Values.podDisruptionBudget.enabled }}
+{{- if and .Values.podDisruptionBudget .Values.podDisruptionBudget.enabled }}
 {{- $pdbMinAvail := .Values.podDisruptionBudget.minAvailable | toString }}
 {{- $pdbMaxUnavail := .Values.podDisruptionBudget.maxUnavailable | toString }}
 {{- if and (ne $pdbMinAvail "") (ne $pdbMaxUnavail "") }}
