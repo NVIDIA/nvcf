@@ -156,8 +156,8 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
         """
         clusterName: ncp-local-compute-1
         ncaID: nvcf-default
-        region: us-west-1
         selfManaged:
+          region: us-west-1
           icmsServiceURL: http://sis.localhost:8080
           revalServiceURL: http://reval.localhost:8080
           natsURL: nats://nats.localhost:4222

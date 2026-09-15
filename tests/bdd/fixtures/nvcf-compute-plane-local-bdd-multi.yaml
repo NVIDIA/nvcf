@@ -10,9 +10,6 @@
 # Services in the compute cluster, and the alias Endpoints point at
 # the control-plane load balancer.
 global:
-  nodeSelectors:
-    enabled: false
-
   # REPLACE_WITH_SAMPLE_NGC_ORG / REPLACE_WITH_SAMPLE_NGC_TEAM
   # are overwritten by the feature's Background via
   # `I update yaml file ... with keys:` using ${SAMPLE_NGC_ORG} and
@@ -43,11 +40,3 @@ global:
 # Local BDD does not install the optional observability stack.
 observability:
   profile: disabled
-
-agentConfig:
-  mergeConfig: |
-    cluster:
-      validationPolicy:
-        name: Unrestricted
-    workload:
-      stargateQUICInsecure: false

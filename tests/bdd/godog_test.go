@@ -195,8 +195,8 @@ func writeMulticlusterComputeRegisterValues(t *testing.T, repoRoot, stackDir, cl
 clusterID: 99999999-aaaa-bbbb-cccc-dddddddddddd
 clusterGroupID: cccc-dddd-eeee-ffff
 ncaID: nvcf-default
-region: us-west-1
 selfManaged:
+  region: us-west-1
   identitySource: psat
   icmsServiceURL: http://sis.localhost:8080
   revalServiceURL: http://reval.localhost:8080
@@ -219,8 +219,8 @@ func writeSingleClusterComputeRegisterValues(t *testing.T, repoRoot string) {
 clusterID: 11111111-2222-3333-4444-555555555555
 clusterGroupID: aaaa-bbbb-cccc-dddd
 ncaID: nvcf-default
-region: us-west-1
 selfManaged:
+  region: us-west-1
   identitySource: psat
   icmsServiceURL: http://api.sis.svc.cluster.local:8080
   revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
@@ -240,8 +240,8 @@ func writeHelmfileRegisterValues(t *testing.T, repoRoot string) {
 clusterID: 11111111-2222-3333-4444-555555555555
 clusterGroupID: aaaa-bbbb-cccc-dddd
 ncaID: nvcf-default
-region: us-west-1
 selfManaged:
+  region: us-west-1
   identitySource: psat
   icmsServiceURL: http://api.sis.svc.cluster.local:8080
   revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
@@ -678,7 +678,7 @@ func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 		},
 		"helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml": {
 			ExitCode: 0,
-			Stdout:   "agentConfig:\n  mergeConfig: |\n    workload:\n      stargateQUICInsecure: false\n      transportTLS:\n        trustMode: bundle\n        trustBundleFingerprint: sha256:test\n",
+			Stdout:   "agentConfig:\n  mergeConfig: |\n    workload:\n      transportTLS:\n        trustMode: bundle\n        trustBundleFingerprint: sha256:test\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
@@ -1583,7 +1583,7 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 
 	const (
-		tlsHandshakeCommand     = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
+		tlsHandshakeCommand = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
 			`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
 			`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
 			`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
@@ -2059,8 +2059,6 @@ ingress:
 func seedComputePlaneLocalBDDFixture(t *testing.T, repoRoot string) {
 	t.Helper()
 	writeFixture(t, repoRoot, "nvcf-compute-plane-local-bdd.yaml", `global:
-  nodeSelectors:
-    enabled: false
   nvcaOperator:
     selfManaged:
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
@@ -2068,21 +2066,12 @@ func seedComputePlaneLocalBDDFixture(t *testing.T, repoRoot string) {
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 observability:
   profile: disabled
-agentConfig:
-  mergeConfig: |
-    cluster:
-      validationPolicy:
-        name: Unrestricted
-    workload:
-      stargateQUICInsecure: false
 `)
 }
 
 func seedComputePlaneLocalBDDMultiFixture(t *testing.T, repoRoot string) {
 	t.Helper()
 	writeFixture(t, repoRoot, "nvcf-compute-plane-local-bdd-multi.yaml", `global:
-  nodeSelectors:
-    enabled: false
   nvcaOperator:
     selfManaged:
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
@@ -2090,13 +2079,6 @@ func seedComputePlaneLocalBDDMultiFixture(t *testing.T, repoRoot string) {
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 observability:
   profile: disabled
-agentConfig:
-  mergeConfig: |
-    cluster:
-      validationPolicy:
-        name: Unrestricted
-    workload:
-      stargateQUICInsecure: false
 `)
 }
 
@@ -2165,8 +2147,8 @@ func writeEKSRegisterValues(t *testing.T, repoRoot, clusterName, region string) 
 	body := `clusterID: 11111111-2222-3333-4444-555555555555
 clusterGroupID: aaaa-bbbb-cccc-dddd
 ncaID: nvcf-default
-region: ` + region + `
 selfManaged:
+  region: ` + region + `
   identitySource: psat
   icmsServiceURL: http://wiring-elb.example.invalid
   revalServiceURL: http://wiring-elb.example.invalid

@@ -84,6 +84,7 @@ func TestWriteFileRoundTrip(t *testing.T) {
 		ClusterGroupID: "g-1",
 		SelfManaged: SelfManagedValues{
 			IdentitySource: "psat",
+			Region:         "eu-west-1",
 		},
 		AgentConfig: &AgentConfigValues{MergeConfig: "workload:\n  transportTLS:\n    trustMode: system\n"},
 	}))
@@ -91,6 +92,8 @@ func TestWriteFileRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	var got Values
 	require.NoError(t, yaml.Unmarshal(body, &got))
+	require.NotContains(t, string(body), "\nregion: eu-west-1")
+	require.Contains(t, string(body), "\n    region: eu-west-1")
 	require.NotNil(t, got.AgentConfig)
 	require.Contains(t, got.AgentConfig.MergeConfig, "trustMode: system")
 }

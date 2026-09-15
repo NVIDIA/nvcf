@@ -36,11 +36,11 @@ data:
     clusterName: "ncp-local"
     clusterDescription: "ncp-local"
     clusterGroupName: "nvcf-default"
-    ncaID: "nvcf-default"
+    ncaID: "ncp-local"
     nvcaVersion: "3.8.0"
     oAuthClientId: ""
     cloudProvider: "NCP"
-    region: "us-west-1"
+    region: "us-east-1"
     attributes: []
     capabilities: ["DynamicGPUDiscovery","InfraResourceOverhead","EnforceHelmFunctionResourceLimits","EnforceContainerFunctionResourceLimits","EnforceHelmTaskResourceLimits","EnforceContainerTaskResourceLimits","BYOObservability","KAIScheduler","DynamoOperatorSupport"]
     gpusB64: ""

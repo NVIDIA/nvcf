@@ -243,8 +243,8 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should contain:
         """
         ncaID: nvcf-default
-        region: us-west-1
         selfManaged:
+          region: us-west-1
           identitySource: psat
         """
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should have non-empty keys:

@@ -227,7 +227,7 @@ func TestComputePlaneLocalBDDFixturesUseDefaultHelmResourceEnforcement(t *testin
 	}
 }
 
-func TestComputePlaneLocalBDDFixturesRequireSecureQUIC(t *testing.T) {
+func TestComputePlaneLocalBDDFixturesDeferNVCAChartDefaults(t *testing.T) {
 	for _, fixturePath := range []string{
 		"fixtures/nvcf-compute-plane-local-bdd.yaml",
 		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
@@ -238,6 +238,9 @@ func TestComputePlaneLocalBDDFixturesRequireSecureQUIC(t *testing.T) {
 				t.Fatalf("read compute-plane fixture %s: %v", fixturePath, err)
 			}
 			var fixture struct {
+				Global struct {
+					NodeSelectors map[string]any `yaml:"nodeSelectors"`
+				} `yaml:"global"`
 				AgentConfig struct {
 					MergeConfig string `yaml:"mergeConfig"`
 				} `yaml:"agentConfig"`
@@ -245,21 +248,44 @@ func TestComputePlaneLocalBDDFixturesRequireSecureQUIC(t *testing.T) {
 			if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
 				t.Fatalf("parse compute-plane fixture %s: %v", fixturePath, err)
 			}
-			var mergeConfig struct {
-				Workload struct {
-					StargateQUICInsecure *bool `yaml:"stargateQUICInsecure"`
-				} `yaml:"workload"`
+			if len(fixture.Global.NodeSelectors) != 0 {
+				t.Fatalf("%s contains inert global.nodeSelectors values", fixturePath)
 			}
-			if err := yaml.Unmarshal([]byte(fixture.AgentConfig.MergeConfig), &mergeConfig); err != nil {
-				t.Fatalf("parse agent merge config in %s: %v", fixturePath, err)
-			}
-			if mergeConfig.Workload.StargateQUICInsecure == nil {
-				t.Fatalf("%s does not set workload.stargateQUICInsecure", fixturePath)
-			}
-			if *mergeConfig.Workload.StargateQUICInsecure {
-				t.Fatalf("%s enables insecure QUIC with profile-provided bundle trust", fixturePath)
+			if fixture.AgentConfig.MergeConfig != "" {
+				t.Fatalf("%s shadows NVCA chart defaults with agentConfig.mergeConfig", fixturePath)
 			}
 		})
+	}
+}
+
+func TestNCPRegistrationFixtureDefersNVCAChartAndStackDefaults(t *testing.T) {
+	fixtureBytes, err := os.ReadFile("fixtures/ncp-local-register-values.yaml")
+	if err != nil {
+		t.Fatalf("read registration fixture: %v", err)
+	}
+	var fixture struct {
+		NCAID       string `yaml:"ncaID"`
+		Region      string `yaml:"region"`
+		SelfManaged struct {
+			Region         string `yaml:"region"`
+			IdentitySource string `yaml:"identitySource"`
+			ICMSServiceURL string `yaml:"icmsServiceURL"`
+		} `yaml:"selfManaged"`
+	}
+	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+		t.Fatalf("parse registration fixture: %v", err)
+	}
+	if fixture.NCAID != "" {
+		t.Fatalf("registration fixture masks the stack ncaID mapping with %q", fixture.NCAID)
+	}
+	if fixture.Region != "" || fixture.SelfManaged.Region != "" {
+		t.Fatal("registration fixture overrides the chart selfManaged.region default")
+	}
+	if fixture.SelfManaged.IdentitySource != "" {
+		t.Fatal("render-only registration fixture contains CLI lifecycle metadata")
+	}
+	if fixture.SelfManaged.ICMSServiceURL == "" {
+		t.Fatal("registration fixture must retain its topology-specific ICMS endpoint")
 	}
 }
 

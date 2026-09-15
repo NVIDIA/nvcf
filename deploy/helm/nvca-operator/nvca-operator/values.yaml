@@ -410,6 +410,8 @@ selfManaged:
   gpuManualInstanceConfigB64: ""
   ## @param selfManaged.clusterAttributes (Optional) List of attributes for the cluster. Defaults to an empty array.
   clusterAttributes: []
+  ## @param selfManaged.region Region reported for a self-managed cluster.
+  region: us-west-1
   ## @param selfManaged.imageCredHelper.imageRepository (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param selfManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:

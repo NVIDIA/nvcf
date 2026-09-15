@@ -565,13 +565,16 @@ schema:
 clusterID: <uuid>
 clusterGroupID: <uuid>
 ncaID: <nca-id>
-region: <region>
 selfManaged:
+  region: <region>
   identitySource: psat
   icmsServiceURL: "http://<GATEWAY_ADDR>"
   revalServiceURL: "http://<GATEWAY_ADDR>"
   natsURL: "nats://<GATEWAY_ADDR>:4222"
 ```
+
+`selfManaged.identitySource` is CLI lifecycle metadata used when unregistering
+the cluster; the NVCA Operator chart does not consume it.
 
 For load-balancer-fronted gateways that route by hostname, add the matching host-header
 overrides (`selfManaged.icmsServiceHostHeaderOverride`,

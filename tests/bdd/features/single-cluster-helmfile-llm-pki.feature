@@ -193,7 +193,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
 
       When I run command "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
       Then the command exit code should be 0
-      And the command output should contain "stargateQUICInsecure: false"
+      And the command output should not contain "stargateQUICInsecure: true"
       And the command output should contain "trustMode: bundle"
       And the command output should contain "trustBundleFingerprint: sha256:"
 

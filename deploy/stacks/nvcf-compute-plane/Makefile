@@ -60,7 +60,7 @@ include Makefile.dist
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nats-reloader-alignment test-nvca-entrypoints test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nats-reloader-alignment test-nvca-entrypoints test-nvca-default-ownership test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -181,13 +181,16 @@ test-kube-context:
 test-nvca-entrypoints: render-local
 	@tests/nvca-entrypoints.sh "$(DIST_DIR)/out"
 
+test-nvca-default-ownership:
+	@tests/nvca-default-ownership.sh
+
 test-compare-golden:
 	@tests/test-compare-golden.sh
 
 test-nats-reloader-alignment:
 	@tests/nats-reloader-alignment.sh
 
-test-local: test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nats-reloader-alignment test-nvca-entrypoints
+test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-default-ownership test-compare-golden test-nats-reloader-alignment test-nvca-entrypoints
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local

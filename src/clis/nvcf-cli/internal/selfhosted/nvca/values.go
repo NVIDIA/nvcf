@@ -30,7 +30,6 @@ type Values struct {
 	ClusterID      string             `yaml:"clusterID"`
 	ClusterGroupID string             `yaml:"clusterGroupID"`
 	NCAID          string             `yaml:"ncaID"`
-	Region         string             `yaml:"region"`
 	SelfManaged    SelfManagedValues  `yaml:"selfManaged"`
 	Agent          *AgentValues       `yaml:"agent,omitempty"`
 	AgentConfig    *AgentConfigValues `yaml:"agentConfig,omitempty"`
@@ -59,6 +58,7 @@ type AgentConfigValues struct {
 
 type SelfManagedValues struct {
 	IdentitySource                 string `yaml:"identitySource"`
+	Region                         string `yaml:"region"`
 	ICMSServiceURL                 string `yaml:"icmsServiceURL,omitempty"`
 	ICMSServiceHostHeaderOverride  string `yaml:"icmsServiceHostHeaderOverride,omitempty"`
 	ReValServiceURL                string `yaml:"revalServiceURL,omitempty"`

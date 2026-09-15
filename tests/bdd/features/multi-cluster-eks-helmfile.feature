@@ -330,8 +330,8 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should contain:
         """
         ncaID: nvcf-default
-        region: ${EKS_REGION}
         selfManaged:
+          region: ${EKS_REGION}
           identitySource: psat
         """
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should have non-empty keys:

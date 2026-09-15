@@ -131,8 +131,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
         clusterName: ncp-local
         ncaID: nvcf-default
-        region: us-west-1
         selfManaged:
+          region: us-west-1
           identitySource: psat
           icmsServiceURL: http://api.sis.svc.cluster.local:8080
           revalServiceURL: http://reval.nvcf.svc.cluster.local:8080

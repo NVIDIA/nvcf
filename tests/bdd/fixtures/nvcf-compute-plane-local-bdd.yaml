@@ -12,9 +12,6 @@
 # does not resolve, which is the intended failure mode.
 
 global:
-  nodeSelectors:
-    enabled: false
-
   helm:
     sources:
       repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
@@ -37,11 +34,3 @@ global:
 # Local BDD does not install the optional observability stack.
 observability:
   profile: disabled
-
-agentConfig:
-  mergeConfig: |
-    cluster:
-      validationPolicy:
-        name: Unrestricted
-    workload:
-      stargateQUICInsecure: false

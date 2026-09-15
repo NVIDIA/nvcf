@@ -955,6 +955,11 @@
                     "default": [],
                     "items": {}
                 },
+                "region": {
+                    "type": "string",
+                    "description": "Region reported for a self-managed cluster.",
+                    "default": "us-west-1"
+                },
                 "imageCredHelper": {
                     "type": "object",
                     "properties": {
