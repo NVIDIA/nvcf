@@ -161,6 +161,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -194,6 +195,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -226,6 +228,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -258,6 +261,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -290,6 +294,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -322,6 +327,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -354,6 +360,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -386,6 +393,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -418,6 +426,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -450,6 +459,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -482,6 +492,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -514,6 +525,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
@@ -546,6 +558,7 @@ rust_test(
     tags = [
         "exclusive",
         "no-sandbox",
+        "requires-docker",
         "requires-network",
     ],
     deps = [":nvcf_invocation_service_lib"] +
