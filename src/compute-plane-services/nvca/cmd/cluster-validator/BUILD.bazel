@@ -42,4 +42,7 @@ go_test(
     name = "cluster-validator_test",
     srcs = ["main_test.go"],
     embed = [":cluster-validator_lib"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/clustervalidator",
+    ],
 )

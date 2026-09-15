@@ -25,6 +25,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net"
@@ -42,6 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -64,7 +66,7 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 
 	t.Run("preflight (emitMetrics=false) does not write the summary", func(t *testing.T) {
 		client := fake.NewSimpleClientset()
-		_ = Run(context.Background(), client, ns, "cluster-validator-network-checks", ns, false)
+		_ = Run(context.Background(), client, ns, "cluster-validator-network-checks", ns, false, "")
 		_, err := client.CoreV1().ConfigMaps(ns).Get(
 			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
 		assert.True(t, apierrors.IsNotFound(err),
@@ -73,7 +75,7 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 
 	t.Run("post-install (emitMetrics=true) writes the summary", func(t *testing.T) {
 		client := fake.NewSimpleClientset()
-		_ = Run(context.Background(), client, ns, "cluster-validator-network-checks", ns, true)
+		_ = Run(context.Background(), client, ns, "cluster-validator-network-checks", ns, true, "")
 		cm, err := client.CoreV1().ConfigMaps(ns).Get(
 			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
 		require.NoError(t, err, "summary ConfigMap must be written when emitMetrics=true")
@@ -85,7 +87,7 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 		// Guards the decoupling: a non-operator config namespace must NOT
 		// redirect the summary away from the namespace the agent watches.
 		client := fake.NewSimpleClientset()
-		_ = Run(context.Background(), client, "some-config-ns", "cluster-validator-network-checks", ns, true)
+		_ = Run(context.Background(), client, "some-config-ns", "cluster-validator-network-checks", ns, true, "")
 
 		_, err := client.CoreV1().ConfigMaps(ns).Get(
 			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
@@ -95,6 +97,135 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
 		assert.True(t, apierrors.IsNotFound(err),
 			"summary must NOT be written to the (different) config namespace")
+	})
+}
+
+// runAndReadSummary drives the real Run dispatch for a role and reads back the
+// summary ConfigMap it publishes. Asserting on the published summary rather
+// than on the returned error is what makes the role dispatch observable: the
+// error string is the same constant for every role, so it cannot distinguish
+// them, and the ConfigMap is what the agent actually turns into metrics.
+func runAndReadSummary(t *testing.T, client kubernetes.Interface, role Role) *ValidatorSummary {
+	t.Helper()
+	const ns = "nvca-system"
+	_ = Run(context.Background(), client, "", "", ns, true, role)
+
+	cm, err := client.CoreV1().ConfigMaps(ns).Get(
+		context.Background(), SummaryConfigMapName, metav1.GetOptions{})
+	require.NoError(t, err, "Run must publish the summary ConfigMap")
+
+	var s ValidatorSummary
+	require.NoError(t, json.Unmarshal([]byte(cm.Data[SummaryConfigMapKey]), &s))
+	return &s
+}
+
+// The control-plane role must dispatch the control-plane check set and none of
+// the compute-plane ones. Both halves are asserted on the published summary:
+// a GPU key present at all means either the check ran or its zero value leaked
+// onto the wire, and both are bugs under this role.
+func TestRun_ControlPlaneRoleDispatch(t *testing.T) {
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
+	s := runAndReadSummary(t, client, RoleControlPlane)
+
+	assert.Contains(t, s.Checks, CheckKeyDefaultStorageClass,
+		"control-plane role must run and publish the StorageClass check")
+
+	for _, k := range []string{CheckKeyGPUResources, CheckKeyGPUOperator, CheckKeySMBCSI} {
+		assert.NotContains(t, s.Checks, k,
+			"compute-plane check %q must not be published under the control-plane role", k)
+	}
+}
+
+// The mirror of the above: the compute-plane role publishes the GPU keys and
+// none of the control-plane ones.
+func TestRun_ComputePlaneRoleDispatch(t *testing.T) {
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
+	s := runAndReadSummary(t, client, RoleComputePlane)
+
+	for _, k := range []string{CheckKeyGPUResources, CheckKeyGPUOperator, CheckKeySMBCSI} {
+		assert.Contains(t, s.Checks, k,
+			"compute-plane check %q must be published under the compute-plane role", k)
+	}
+	assert.NotContains(t, s.Checks, CheckKeyDefaultStorageClass,
+		"control-plane check must not run under the compute-plane role")
+}
+
+// TestPrintSummary_ControlPlaneRole verifies that with Role=RoleControlPlane
+// the summary omits GPU rows and includes control-plane check rows.
+func TestPrintSummary_ControlPlaneRole(t *testing.T) {
+	t.Run("control-plane role excludes GPU rows", func(t *testing.T) {
+		ok := true
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			// Control-plane checks all pass
+			DefaultStorageClassOK: &ok,
+			GatewayAPICRDsOK:      &ok,
+			EnvoyGatewayOK:        &ok,
+			GatewayRoutesOK:       &ok,
+			ExternalLBOK:          &ok,
+			K8sVersion:            "v1.30.0",
+			TotalNodes:            "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err, "all control-plane checks passing must yield NVCF-Ready")
+		out := buf.String()
+		assert.NotContains(t, out, "GPU Resources", "GPU row must not appear for control-plane role")
+		assert.NotContains(t, out, "GPU Operator", "GPU Operator row must not appear for control-plane role")
+		assert.Contains(t, out, "Default StorageClass", "StorageClass row must appear for control-plane role")
+		assert.Contains(t, out, "Gateway API CRDs", "Gateway CRD row must appear for control-plane role")
+		assert.Contains(t, out, "Envoy Gateway", "Envoy Gateway row must appear for control-plane role")
+	})
+
+	t.Run("control-plane role critical failure blocks readiness", func(t *testing.T) {
+		fail := false
+		ok := true
+		state := &ValidationState{
+			Log:                      testLog(),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			DefaultStorageClassOK:    &fail, // critical: no default StorageClass
+			GatewayAPICRDsOK:         &ok,
+			EnvoyGatewayOK:           &ok,
+			K8sVersion:               "v1.30.0",
+			TotalNodes:               "2",
+		}
+		err := printSummary(state)
+		assert.Error(t, err, "missing default StorageClass must block control-plane readiness")
+	})
+
+	t.Run("compute-plane role (default) still includes GPU rows", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			Role:                     "",
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			SMBCSIDriverOK:           true,
+			GPUAvailable:             true,
+			GPUOperatorInstalled:     true,
+			K8sVersion:               "v1.30.0",
+			TotalNodes:               "2",
+		}
+		err := printSummary(state)
+		assert.NoError(t, err)
+		out := buf.String()
+		assert.Contains(t, out, "GPU Resources", "GPU row must appear for compute-plane role")
+		assert.NotContains(t, out, "Default StorageClass", "StorageClass row must not appear for compute-plane role")
 	})
 }
 
