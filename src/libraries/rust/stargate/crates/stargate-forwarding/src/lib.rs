@@ -296,17 +296,34 @@ macro_rules! spawn_stream_relay {
     }};
 }
 
+enum IncomingStream {
+    Bi(std::result::Result<(quinn::SendStream, quinn::RecvStream), quinn::ConnectionError>),
+    Uni(std::result::Result<quinn::RecvStream, quinn::ConnectionError>),
+}
+
+// Fair direction selection is separate from the caller's task and shutdown priorities.
+async fn accept_relay_stream(connection: &quinn::Connection) -> IncomingStream {
+    tokio::select! {
+        stream = connection.accept_bi() => IncomingStream::Bi(stream),
+        stream = connection.accept_uni() => IncomingStream::Uni(stream),
+    }
+}
+
 async fn relay_direction(acceptor: quinn::Connection, initiator: quinn::Connection) {
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
-            bi = acceptor.accept_bi() => {
-                spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream,
-                    "accept_bi failed in relay", "bi-stream relay error");
+            biased;
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = result {
+                    warn!(%error, "stream relay task failed");
+                }
             }
-            uni = acceptor.accept_uni() => {
-                spawn_stream_relay!(tasks, uni, initiator, relay_uni_stream,
-                    "accept_uni failed in relay", "uni-stream relay error");
+            stream = accept_relay_stream(&acceptor) => match stream {
+                IncomingStream::Bi(bi) => spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream,
+                    "accept_bi failed in relay", "bi-stream relay error"),
+                IncomingStream::Uni(uni) => spawn_stream_relay!(tasks, uni, initiator, relay_uni_stream,
+                    "accept_uni failed in relay", "uni-stream relay error"),
             }
         }
     }
@@ -323,13 +340,16 @@ async fn relay_direction_until_shutdown(
         tokio::select! {
             biased;
             _ = drain.changed() => break,
-            bi = acceptor.accept_bi() => {
-                spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream_until_delivered,
-                    "accept_bi failed in draining relay", "draining bi-stream relay error");
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(error)) = result {
+                    warn!(%error, "draining stream relay task failed");
+                }
             }
-            uni = acceptor.accept_uni() => {
-                spawn_stream_relay!(tasks, uni, initiator, relay_uni_stream_until_delivered,
-                    "accept_uni failed in draining relay", "draining uni-stream relay error");
+            stream = accept_relay_stream(&acceptor) => match stream {
+                IncomingStream::Bi(bi) => spawn_stream_relay!(tasks, bi, initiator, relay_bi_stream_until_delivered,
+                    "accept_bi failed in draining relay", "draining bi-stream relay error"),
+                IncomingStream::Uni(uni) => spawn_stream_relay!(tasks, uni, initiator, relay_uni_stream_until_delivered,
+                    "accept_uni failed in draining relay", "draining uni-stream relay error"),
             }
         }
     }
@@ -763,6 +783,63 @@ mod tests {
         .expect_err("pending peer connect should time out");
 
         assert_eq!(error.to_string(), "peer QUIC connect timed out after 10ms");
+    }
+
+    #[tokio::test]
+    async fn ready_uni_stream_is_not_held_behind_a_bi_backlog() {
+        const BACKLOG: u32 = 512;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut config = test_server_config();
+            let mut transport = TransportConfig::default();
+            transport.max_concurrent_bidi_streams(BACKLOG.into());
+            config.transport_config(Arc::new(transport));
+            let server_endpoint = Endpoint::server(config, "127.0.0.1:0".parse().unwrap()).unwrap();
+            let mut client_endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+            client_endpoint.set_default_client_config(
+                stargate_tls::build_insecure_quic_client_config().unwrap(),
+            );
+            let (client, server) = tokio::join!(
+                client_endpoint
+                    .connect(server_endpoint.local_addr().unwrap(), "stargate")
+                    .unwrap(),
+                async { server_endpoint.accept().await.unwrap().await.unwrap() },
+            );
+            let client = client.unwrap();
+            let mut pending = Vec::new();
+            for _ in 0..BACKLOG {
+                let (mut send, recv) = client.open_bi().await.unwrap();
+                send.write_all(b"request").await.unwrap();
+                send.finish().unwrap();
+                pending.push((send, recv));
+            }
+            let mut uni = client.open_uni().await.unwrap();
+            uni.write_all(b"control").await.unwrap();
+            uni.finish().unwrap();
+            // FIN acknowledgements establish that both accept queues are ready.
+            for (send, _) in &mut pending {
+                send.stopped().await.unwrap();
+            }
+            uni.stopped().await.unwrap();
+
+            let mut admitted_bi = Vec::new();
+            loop {
+                match accept_relay_stream(&server).await {
+                    IncomingStream::Bi(stream) => admitted_bi.push(stream.unwrap()),
+                    IncomingStream::Uni(stream) => {
+                        assert_eq!(stream.unwrap().read_to_end(1024).await.unwrap(), b"control");
+                        break;
+                    }
+                }
+            }
+            assert!(
+                admitted_bi.len() < BACKLOG as usize,
+                "ready uni stream was admitted after all {BACKLOG} bi streams"
+            );
+            client.close(0u32.into(), b"test complete");
+            server.close(0u32.into(), b"test complete");
+        })
+        .await
+        .expect("queued stream admission should complete");
     }
 
     #[tokio::test]
