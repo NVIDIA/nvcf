@@ -8,21 +8,33 @@ load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//rules/oci:defs.bzl", "rust_oci_image")
 
-# Stamp the real release version into the binary. The legacy Dockerfile did
-# this via the CICD_NEXT_VERSION build-arg -> build.rs -> CARGO_PKG_VERSION; the
-# Bazel build dropped it, so binaries self-reported the placeholder version
-# (e.g. `server --version`, startup logs, and the OTel service.version resource
-# attribute all showed 0.0.0-dev regardless of the released image tag).
-# tools/workspace_status.sh emits STABLE_VERSION; expand_template substitutes it
-# on `--stamp` (release) builds and falls back to 0.0.0-dev otherwise. The file
-# is fed to the Rust targets via rustc_env_files so env!("CARGO_PKG_VERSION")
-# resolves to the release version.
+# Stamp the real release version and commit into the binary. The legacy
+# Dockerfile did this via the CICD_NEXT_VERSION build-arg -> build.rs ->
+# CARGO_PKG_VERSION; the Bazel build dropped it, so binaries self-reported the
+# placeholder version (e.g. `server --version`, startup logs, and the OTel
+# service.version resource attribute all showed 0.0.0-dev regardless of the
+# released image tag). tools/workspace_status.sh emits
+# STABLE_VERSION/STABLE_GIT_COMMIT_FULL; expand_template substitutes them on
+# `--stamp` (release) builds and falls back to dev defaults otherwise. The
+# file is fed to the Rust targets via rustc_env_files so
+# env!("CARGO_PKG_VERSION") resolves to the release version and the GET /info
+# handler's NVCF_GIT_COMMIT (via option_env!, see the shared nvcf-info crate)
+# resolves to the real commit.
 expand_template(
     name = "version_env",
     out = "version.env",
-    stamp_substitutions = {"{VERSION}": "{{STABLE_VERSION}}"},
-    substitutions = {"{VERSION}": "0.0.0-dev"},
-    template = ["CARGO_PKG_VERSION={VERSION}"],
+    stamp_substitutions = {
+        "{VERSION}": "{{STABLE_VERSION}}",
+        "{GIT_COMMIT}": "{{STABLE_GIT_COMMIT_FULL}}",
+    },
+    substitutions = {
+        "{VERSION}": "0.0.0-dev",
+        "{GIT_COMMIT}": "unknown",
+    },
+    template = [
+        "CARGO_PKG_VERSION={VERSION}",
+        "NVCF_GIT_COMMIT={GIT_COMMIT}",
+    ],
 )
 
 # build.rs uses tonic-build + prost-build to compile crates/server/proto/*.proto.
@@ -77,7 +89,10 @@ rust_library(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     rustc_env_files = [":version_env"],
     visibility = ["//visibility:public"],
-    deps = [":build_script"] + all_crate_deps(normal = True),
+    deps = [
+        ":build_script",
+        "//src/libraries/rust/nvcf-info:nvcf-info-invocation",
+    ] + all_crate_deps(normal = True),
 )
 
 rust_binary(
@@ -110,6 +125,458 @@ rust_test(
     ],
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     deps = all_crate_deps(normal_dev = True),
+)
+
+# Integration tests under tests/ are separate crates, so each needs its own
+# target; the crate-based target above only covers unit tests. They start NATS
+# and LocalStack through testcontainers, hence the tags: Docker runs outside
+# the sandbox and needs the bind-mounted config on a real host path, the
+# containers need the network, and testcontainers picks ports dynamically so
+# parallel runs collide. deps needs both normal and normal_dev because an
+# integration test is its own compilation unit and does not inherit the
+# library's dependencies.
+rust_test(
+    name = "test_health",
+    srcs = [
+        "tests/test_health.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_health.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+
+rust_test(
+    name = "test_assets",
+    srcs = [
+        "tests/test_assets.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_assets.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_consumer_creation",
+    srcs = [
+        "tests/test_consumer_creation.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_consumer_creation.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_cors",
+    srcs = [
+        "tests/test_cors.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_cors.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_error_codes",
+    srcs = [
+        "tests/test_error_codes.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_error_codes.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_exec",
+    srcs = [
+        "tests/test_exec.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_exec.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_large_response",
+    srcs = [
+        "tests/test_large_response.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_large_response.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_nats_max_messages",
+    srcs = [
+        "tests/test_nats_max_messages.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_nats_max_messages.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_pexec",
+    srcs = [
+        "tests/test_pexec.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_pexec.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_polling",
+    srcs = [
+        "tests/test_polling.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_polling.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_publish_cancel",
+    srcs = [
+        "tests/test_publish_cancel.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_publish_cancel.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_response_headers",
+    srcs = [
+        "tests/test_response_headers.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_response_headers.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
+)
+rust_test(
+    name = "test_tlb",
+    srcs = [
+        "tests/test_tlb.rs",
+        "tests/mocks/localstack.rs",
+        "tests/mocks/mod.rs",
+        "tests/mocks/nvcf_api_mock.rs",
+        "tests/mocks/nvcf_worker_mock.rs",
+        "tests/mocks/otel_collector.rs",
+        "tests/mocks/rate_limit_mock.rs",
+    ],
+    aliases = aliases(),
+    crate_features = [
+        "default",
+        "jemalloc",
+        "profiling",
+    ],
+    crate_root = "tests/test_tlb.rs",
+    data = ["tests/mocks/nats-server.conf"],
+    edition = "2021",
+    env = {"NATS_SERVER_CONF": "$(rootpath tests/mocks/nats-server.conf)"},
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
+    tags = [
+        "exclusive",
+        "external",
+        "no-sandbox",
+        "requires-docker",
+        "requires-network",
+    ],
+    deps = [":nvcf_invocation_service_lib"] +
+           all_crate_deps(normal = True) +
+           all_crate_deps(normal_dev = True),
 )
 
 # Multi-arch OCI image. Distroless/cc base (libc; required for Rust +

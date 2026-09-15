@@ -19,6 +19,7 @@ use crate::health::{ComponentHealth, Health, HealthStatus as HealthState};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Json;
+use axum::{routing::get, Router};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,6 +52,12 @@ impl From<ComponentHealth> for ComponentHealthResponse {
             last_updated: component.last_updated,
         }
     }
+}
+
+/// Build metadata. Version and commit are stamped by the version_env template
+/// in crates/server/BUILD.bazel on --stamp builds.
+pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
+    Json(nvcf_info::info_response!("nvcf-function-autoscaler"))
 }
 
 /// Liveness: process is alive. No dependency checks.
@@ -96,13 +103,27 @@ pub async fn get_health(state: State<Arc<Health>>) -> (StatusCode, Json<HealthRe
     get_readiness(state).await
 }
 
+/// Shared health/build-metadata router, used by both the probe server (which
+/// starts before Cassandra/TimeseriesDb are ready) and the main app, so the
+/// route wiring only exists in one place and both callers stay in sync.
+pub fn health_router(health: Arc<Health>) -> Router {
+    Router::new()
+        .route("/admin/health/liveness", get(get_liveness))
+        .route("/admin/health/readiness", get(get_readiness))
+        .route("/health", get(get_health))
+        .route("/info", get(get_info))
+        .with_state(health)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::health::Health;
-    use axum::body::to_bytes;
+    use axum::body::{to_bytes, Body};
     use axum::http::header::CONTENT_TYPE;
+    use axum::http::{Method, Request};
     use axum::response::IntoResponse;
+    use tower::ServiceExt;
 
     #[tokio::test]
     async fn liveness_is_always_ok_even_when_dependencies_are_unhealthy() {
@@ -135,6 +156,45 @@ mod tests {
 
         let (status, _) = get_readiness(State(health)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn info_reports_service_version_and_commit() {
+        let Json(info) = get_info().await;
+        assert_eq!(info.service, "nvcf-function-autoscaler");
+        // Stamped only on Bazel --stamp builds; under cargo these are the
+        // unstamped fallbacks. Assert they are populated, not their literals,
+        // so the test does not break on every release bump.
+        assert!(!info.version.is_empty());
+        assert!(!info.commit.is_empty());
+    }
+
+    // Exercises the real router (as both the probe server and the main app
+    // build it via health_router) rather than calling get_info() directly, so
+    // a regression that drops or misregisters the /info route is caught.
+    #[tokio::test]
+    async fn info_route_returns_200_on_get_and_405_on_post() {
+        let health = Arc::new(Health::new());
+        let router = health_router(health);
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/info")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["service"], "nvcf-function-autoscaler");
+
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/info")
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]
