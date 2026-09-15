@@ -313,6 +313,10 @@ certManager:
   enabled: true
   # The ACME solver defaults to quay.io/jetstack/cert-manager-acmesolver.
   # Set acmesolver.image.repository when the deployment uses a private mirror.
+  # acmesolver:
+  #   image:
+  #     repository: nvcr.io/YOUR_ORG/YOUR_TEAM/cert-manager-acmesolver
+  #     tag: "v1.20.2"
 
 openbao:
   enabled: true
