@@ -1,0 +1,510 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  annotations:
+    ak: av
+    instance-count: "1"
+    nca-id: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+    nvcf.nvidia.io/backend: my-cluster
+    nvcf.nvidia.io/environment: stage
+    nvcf.nvidia.io/instance-type-name: DGX-CLOUD.GPU.L40_2x
+    nvcf.nvidia.io/instance-type-value: DGX-CLOUD.GPU.L40
+    nvcf.nvidia.io/region: us-west
+  labels:
+    ENVIRONMENT: stage
+    GPU_COUNT: "2"
+    NCA_ID: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    TASK_ID: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+    environment: stage
+    gpu-name: L40
+    icms-request-id: 9f93ffa2-0376-495e-a723-f6c653ed1e34
+    lk: lv
+    nca-id: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    nvcf.nvidia.io/message-batch-id: 14d2ec9c-25d8-4712-9288-b682570671d6
+    performance_class: DGX-CLOUD.GPU.L40
+    task-id: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+  name: helm-chart-download
+  namespace: my-ns
+stringData:
+  password: 6f634d85-931e-41f6-a2ec-67b8750f127e
+  username: stg-abc123
+type: Opaque
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  annotations:
+    ak: av
+    instance-count: "1"
+    nca-id: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+    nvcf.nvidia.io/backend: my-cluster
+    nvcf.nvidia.io/environment: stage
+    nvcf.nvidia.io/instance-type-name: DGX-CLOUD.GPU.L40_2x
+    nvcf.nvidia.io/instance-type-value: DGX-CLOUD.GPU.L40
+    nvcf.nvidia.io/region: us-west
+  labels:
+    ENVIRONMENT: stage
+    GPU_COUNT: "2"
+    NCA_ID: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    TASK_ID: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+    environment: stage
+    gpu-name: L40
+    icms-request-id: 9f93ffa2-0376-495e-a723-f6c653ed1e34
+    lk: lv
+    nca-id: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    nvcf.nvidia.io/message-batch-id: 14d2ec9c-25d8-4712-9288-b682570671d6
+    performance_class: DGX-CLOUD.GPU.L40
+    task-id: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+  name: worker-fake-object-name-regcred-0
+  namespace: my-ns
+stringData:
+  .dockerconfigjson: '{"auths":{"registry.example.com":{"auth":"JG9hdXRodG9rZW46bnZhcGktc3RnLWFiYzEyMw=="}}}'
+type: kubernetes.io/dockerconfigjson
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    ak: av
+    instance-count: "1"
+    nca-id: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+    nvcf.nvidia.io/backend: my-cluster
+    nvcf.nvidia.io/environment: stage
+    nvcf.nvidia.io/instance-type-name: DGX-CLOUD.GPU.L40_2x
+    nvcf.nvidia.io/instance-type-value: DGX-CLOUD.GPU.L40
+    nvcf.nvidia.io/region: us-west
+  labels:
+    ENVIRONMENT: stage
+    GPU_COUNT: "2"
+    NCA_ID: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    TASK_ID: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+    environment: stage
+    gpu-name: L40
+    icms-request-id: 9f93ffa2-0376-495e-a723-f6c653ed1e34
+    lk: lv
+    nca-id: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    nvcf.nvidia.io/message-batch-id: 14d2ec9c-25d8-4712-9288-b682570671d6
+    performance_class: DGX-CLOUD.GPU.L40
+    task-id: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+  name: rw-pvc-abc123handle
+  namespace: my-ns
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nvcf-sc
+  volumeMode: Filesystem
+status: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    ak: av
+    instance-count: "1"
+    nca-id: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+    nvcf.nvidia.io/backend: my-cluster
+    nvcf.nvidia.io/environment: stage
+    nvcf.nvidia.io/instance-type-name: DGX-CLOUD.GPU.L40_2x
+    nvcf.nvidia.io/instance-type-value: DGX-CLOUD.GPU.L40
+    nvcf.nvidia.io/region: us-west
+  labels:
+    ENVIRONMENT: stage
+    GPU_COUNT: "2"
+    NCA_ID: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    TASK_ID: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+    environment: stage
+    gpu-name: L40
+    icms-request-id: 9f93ffa2-0376-495e-a723-f6c653ed1e34
+    lk: lv
+    nca-id: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    nvcf.nvidia.io/message-batch-id: 14d2ec9c-25d8-4712-9288-b682570671d6
+    performance_class: DGX-CLOUD.GPU.L40
+    task-id: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+  name: writer-job-abc123handle
+  namespace: my-ns
+spec:
+  backoffLimit: 3
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      name: writer-abc123handle
+    spec:
+      containers:
+      - env:
+        - name: ATTACHED_GPU_COUNT
+          value: "2"
+        - name: CLOUD_PROVIDER
+          value: DGXCLOUD
+        - name: GPU_NAME
+          value: L40
+        - name: HELM_REGISTRIES_CREDENTIALS
+          value: eyJrOHNTZWNyZXRzIjpbeyJhdXRocyI6eyJoZWxtLmV4YW1wbGUuY29tIjp7ImF1dGgiOiJjM1JuTFdGaVl6RXlNem8yWmpZek5HUTROUzA1TXpGbExUUXhaall0WVRKbFl5MDJOMkk0TnpVd1pqRXlOMlU9In19fV19
+        - name: ICMS_ENVIRONMENT
+          value: stage
+        - name: INIT_CONTAINER
+          value: registry.example.com/org/worker-init:0.24.10
+        - name: INSTANCE_TYPE
+          value: DGX-CLOUD.GPU.L40
+        - name: INSTANCE_TYPE_NAME
+          value: DGX-CLOUD.GPU.L40_2x
+        - name: INSTANCE_TYPE_VALUE
+          value: DGX-CLOUD.GPU.L40
+        - name: MAX_REQUEST_CONCURRENCY
+          value: "1"
+        - name: NCA_ID
+          value: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+        - name: NVCF_CLOUD_PROVIDER
+          value: DGXCLOUD
+        - name: NVCF_FQDN
+          value: https://us-west-2.api.cloud.example.com
+        - name: NVCF_FQDN_GRPC
+          value: https://grpc.api.cloud.example.com
+        - name: NVCF_FQDN_NATS
+          value: tls://us-west-2.aws.cloud.nats.example.com:4222
+        - name: NVCF_WORKER_TOKEN
+          value: tok
+        - name: OTEL_CONTAINER
+          value: registry.example.com/org/opentelemetry-collector:0.74.0
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: https://prod.otel.example.com:8282
+        - name: SIDECAR_REGISTRY_CREDENTIAL
+          value: eyJhdXRocyI6eyJyZWdpc3RyeS5leGFtcGxlLmNvbSI6eyJhdXRoIjoiSkc5aGRYUm9kRzlyWlc0NmJuWmhjR2t0YzNSbkxXRmlZekV5TXc9PSJ9fX0K
+        - name: TASK_CONTAINER
+          value: registry.example.com/myorg/gpt-3.5-turbo-fine-tune:1.0.0
+        - name: TASK_CONTAINER_ARGS
+          value: -arg1=test1 arg2=test2
+        - name: TASK_CONTAINER_ENV
+          value: W3sia2V5IjoiVEFTS19FTlZfS0VZIiwidmFsdWUiOiJ0YXNrX3ZhbHVlIn1d
+        - name: TASK_HEALTH_ENDPOINT
+          value: /v2/health/ready
+        - name: TASK_HEALTH_EXPECTED_RESPONSE_CODE
+          value: "200"
+        - name: TASK_HEALTH_PORT
+          value: "50051"
+        - name: TASK_ID
+          value: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+        - name: TASK_NAME
+          value: my-task
+        - name: TASK_PORT
+          value: "50051"
+        - name: TASK_PROTOCOL
+          value: GRPC
+        - name: TASK_URL
+          value: /grpc
+        - name: TERMINATION_GRACE_PERIOD
+          value: PT2H
+        - name: TRACING_ACCESS_TOKEN
+          value: trace-tok-1
+        - name: UTILS_CONTAINER
+          value: registry.example.com/org/worker-utils:2.21.4
+        image: registry.example.com/org/worker-init:0.24.10
+        name: init
+        resources: {}
+        securityContext:
+          runAsGroup: 65532
+          runAsUser: 65532
+        volumeMounts:
+        - mountPath: /config/models
+          name: model-data
+        - mountPath: /config/resources
+          name: model-data
+        - mountPath: /config/shared
+          name: config-data
+        - mountPath: /var/run/nvcf/info
+          name: instance-data
+      imagePullSecrets:
+      - name: worker-fake-object-name-regcred-0
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 65532
+      terminationGracePeriodSeconds: 1
+      volumes:
+      - emptyDir: {}
+        name: config-data
+      - name: model-data
+        persistentVolumeClaim:
+          claimName: rw-pvc-abc123handle
+      - emptyDir: {}
+        name: instance-data
+status: {}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  annotations:
+    ak: av
+    instance-count: "1"
+    nca-id: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+    nvcf.nvidia.io/backend: my-cluster
+    nvcf.nvidia.io/environment: stage
+    nvcf.nvidia.io/instance-type-name: DGX-CLOUD.GPU.L40_2x
+    nvcf.nvidia.io/instance-type-value: DGX-CLOUD.GPU.L40
+    nvcf.nvidia.io/region: us-west
+  labels:
+    ENVIRONMENT: stage
+    GPU_COUNT: "2"
+    NCA_ID: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    TASK_ID: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+    environment: stage
+    gpu-name: L40
+    icms-request-id: 9f93ffa2-0376-495e-a723-f6c653ed1e34
+    lk: lv
+    nca-id: nca-_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq-nca
+    nvcf.nvidia.io/message-batch-id: 14d2ec9c-25d8-4712-9288-b682570671d6
+    performance_class: DGX-CLOUD.GPU.L40
+    task-id: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+  name: utils
+  namespace: my-ns
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: my-ns/foo
+            operator: DoesNotExist
+          - key: nvca.nvcf.nvidia.io/instance-type
+            operator: In
+            values:
+            - DGX-CLOUD.GPU.L40
+        - matchExpressions:
+          - key: my-ns/bar
+            operator: In
+            values:
+            - baz
+          - key: nvca.nvcf.nvidia.io/instance-type
+            operator: In
+            values:
+            - DGX-CLOUD.GPU.L40
+  automountServiceAccountToken: false
+  containers:
+  - env:
+    - name: ATTACHED_GPU_COUNT
+      value: "2"
+    - name: CLOUD_PROVIDER
+      value: DGXCLOUD
+    - name: GPU_NAME
+      value: L40
+    - name: HELM_REGISTRIES_CREDENTIALS
+      value: eyJrOHNTZWNyZXRzIjpbeyJhdXRocyI6eyJoZWxtLmV4YW1wbGUuY29tIjp7ImF1dGgiOiJjM1JuTFdGaVl6RXlNem8yWmpZek5HUTROUzA1TXpGbExUUXhaall0WVRKbFl5MDJOMkk0TnpVd1pqRXlOMlU9In19fV19
+    - name: ICMS_ENVIRONMENT
+      value: stage
+    - name: INIT_CONTAINER
+      value: registry.example.com/org/worker-init:0.24.10
+    - name: INSTANCE_ID
+      value: fake-object-name-task
+    - name: INSTANCE_TYPE
+      value: DGX-CLOUD.GPU.L40
+    - name: INSTANCE_TYPE_NAME
+      value: DGX-CLOUD.GPU.L40_2x
+    - name: INSTANCE_TYPE_VALUE
+      value: DGX-CLOUD.GPU.L40
+    - name: MAX_REQUEST_CONCURRENCY
+      value: "1"
+    - name: NCA_ID
+      value: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+    - name: NVCF_CLOUD_PROVIDER
+      value: DGXCLOUD
+    - name: NVCF_FQDN
+      value: https://us-west-2.api.cloud.example.com
+    - name: NVCF_FQDN_GRPC
+      value: https://grpc.api.cloud.example.com
+    - name: NVCF_FQDN_NATS
+      value: tls://us-west-2.aws.cloud.nats.example.com:4222
+    - name: NVCF_WORKER_TOKEN
+      value: tok
+    - name: NVCT_MAX_RUN_TIME_DURATION
+      value: PT2H
+    - name: NVCT_PROGRESS_FILE_PATH
+      value: /var/task/results/progress
+    - name: NVCT_RESULTS_DIR
+      value: /var/task/results
+    - name: NVCT_RESULT_HANDLING_STRATEGY
+      value: UPLOAD
+    - name: OTEL_CONTAINER
+      value: registry.example.com/org/opentelemetry-collector:0.74.0
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: https://prod.otel.example.com:8282
+    - name: SIDECAR_REGISTRY_CREDENTIAL
+      value: eyJhdXRocyI6eyJyZWdpc3RyeS5leGFtcGxlLmNvbSI6eyJhdXRoIjoiSkc5aGRYUm9kRzlyWlc0NmJuWmhjR2t0YzNSbkxXRmlZekV5TXc9PSJ9fX0K
+    - name: TASK_CONTAINER
+      value: registry.example.com/myorg/gpt-3.5-turbo-fine-tune:1.0.0
+    - name: TASK_CONTAINER_ARGS
+      value: -arg1=test1 arg2=test2
+    - name: TASK_CONTAINER_ENV
+      value: W3sia2V5IjoiVEFTS19FTlZfS0VZIiwidmFsdWUiOiJ0YXNrX3ZhbHVlIn1d
+    - name: TASK_HEALTH_ENDPOINT
+      value: /v2/health/ready
+    - name: TASK_HEALTH_EXPECTED_RESPONSE_CODE
+      value: "200"
+    - name: TASK_HEALTH_PORT
+      value: "50051"
+    - name: TASK_ID
+      value: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+    - name: TASK_NAME
+      value: my-task
+    - name: TASK_PORT
+      value: "50051"
+    - name: TASK_PROTOCOL
+      value: GRPC
+    - name: TASK_URL
+      value: /grpc
+    - name: TERMINATION_GRACE_PERIOD
+      value: PT2H
+    - name: TRACING_ACCESS_TOKEN
+      value: trace-tok-1
+    - name: UTILS_CONTAINER
+      value: registry.example.com/org/worker-utils:2.21.4
+    image: registry.example.com/org/worker-utils:2.21.4
+    imagePullPolicy: IfNotPresent
+    livenessProbe:
+      failureThreshold: 2
+      httpGet:
+        path: /v1/health/live
+        port: 8080
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 1
+    name: utils
+    readinessProbe:
+      failureThreshold: 2
+      httpGet:
+        path: /v1/health/ready
+        port: 8080
+      periodSeconds: 10
+      successThreshold: 1
+      timeoutSeconds: 6
+    resources: {}
+    securityContext:
+      capabilities:
+        drop:
+        - NET_RAW
+    startupProbe:
+      failureThreshold: 60
+      httpGet:
+        path: /v1/health/live
+        port: 8080
+      periodSeconds: 1
+      successThreshold: 1
+      timeoutSeconds: 1
+    volumeMounts:
+    - mountPath: /var/task
+      name: task-data
+    - mountPath: /var/run/nvcf/info
+      name: instance-data
+    - mountPath: /config/shared
+      name: config-data
+  imagePullSecrets:
+  - name: worker-fake-object-name-regcred-0
+  initContainers:
+  - env:
+    - name: ATTACHED_GPU_COUNT
+      value: "2"
+    - name: CLOUD_PROVIDER
+      value: DGXCLOUD
+    - name: GPU_NAME
+      value: L40
+    - name: HELM_REGISTRIES_CREDENTIALS
+      value: eyJrOHNTZWNyZXRzIjpbeyJhdXRocyI6eyJoZWxtLmV4YW1wbGUuY29tIjp7ImF1dGgiOiJjM1JuTFdGaVl6RXlNem8yWmpZek5HUTROUzA1TXpGbExUUXhaall0WVRKbFl5MDJOMkk0TnpVd1pqRXlOMlU9In19fV19
+    - name: ICMS_ENVIRONMENT
+      value: stage
+    - name: INIT_CONTAINER
+      value: registry.example.com/org/worker-init:0.24.10
+    - name: INSTANCE_ID
+      value: fake-object-name-task
+    - name: INSTANCE_TYPE
+      value: DGX-CLOUD.GPU.L40
+    - name: INSTANCE_TYPE_NAME
+      value: DGX-CLOUD.GPU.L40_2x
+    - name: INSTANCE_TYPE_VALUE
+      value: DGX-CLOUD.GPU.L40
+    - name: MAX_REQUEST_CONCURRENCY
+      value: "1"
+    - name: NCA_ID
+      value: _lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq
+    - name: NVCF_CLOUD_PROVIDER
+      value: DGXCLOUD
+    - name: NVCF_FQDN
+      value: https://us-west-2.api.cloud.example.com
+    - name: NVCF_FQDN_GRPC
+      value: https://grpc.api.cloud.example.com
+    - name: NVCF_FQDN_NATS
+      value: tls://us-west-2.aws.cloud.nats.example.com:4222
+    - name: NVCF_WORKER_TOKEN
+      value: tok
+    - name: OTEL_CONTAINER
+      value: registry.example.com/org/opentelemetry-collector:0.74.0
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: https://prod.otel.example.com:8282
+    - name: SIDECAR_REGISTRY_CREDENTIAL
+      value: eyJhdXRocyI6eyJyZWdpc3RyeS5leGFtcGxlLmNvbSI6eyJhdXRoIjoiSkc5aGRYUm9kRzlyWlc0NmJuWmhjR2t0YzNSbkxXRmlZekV5TXc9PSJ9fX0K
+    - name: TASK_CONTAINER
+      value: registry.example.com/myorg/gpt-3.5-turbo-fine-tune:1.0.0
+    - name: TASK_CONTAINER_ARGS
+      value: -arg1=test1 arg2=test2
+    - name: TASK_CONTAINER_ENV
+      value: W3sia2V5IjoiVEFTS19FTlZfS0VZIiwidmFsdWUiOiJ0YXNrX3ZhbHVlIn1d
+    - name: TASK_HEALTH_ENDPOINT
+      value: /v2/health/ready
+    - name: TASK_HEALTH_EXPECTED_RESPONSE_CODE
+      value: "200"
+    - name: TASK_HEALTH_PORT
+      value: "50051"
+    - name: TASK_ID
+      value: 13e2b599-96ca-42b5-a419-8fa7f701d5d2
+    - name: TASK_NAME
+      value: my-task
+    - name: TASK_PORT
+      value: "50051"
+    - name: TASK_PROTOCOL
+      value: GRPC
+    - name: TASK_URL
+      value: /grpc
+    - name: TERMINATION_GRACE_PERIOD
+      value: PT2H
+    - name: TRACING_ACCESS_TOKEN
+      value: trace-tok-1
+    - name: UTILS_CONTAINER
+      value: registry.example.com/org/worker-utils:2.21.4
+    image: registry.example.com/org/worker-init:0.24.10
+    imagePullPolicy: IfNotPresent
+    name: init
+    resources: {}
+    securityContext:
+      capabilities:
+        drop:
+        - NET_RAW
+    volumeMounts:
+    - mountPath: /config/models
+      name: model-data
+    - mountPath: /config/resources
+      name: model-data
+    - mountPath: /config/shared
+      name: config-data
+    - mountPath: /var/run/nvcf/info
+      name: instance-data
+  restartPolicy: Never
+  serviceAccountName: my-sa
+  terminationGracePeriodSeconds: 7200
+  tolerations:
+  - effect: NoSchedule
+    key: nvidia.com/gpu
+    operator: Exists
+  volumes:
+  - emptyDir: {}
+    name: instance-data
+  - emptyDir: {}
+    name: model-data
+  - emptyDir: {}
+    name: config-data
+  - emptyDir: {}
+    name: task-data
+status: {}

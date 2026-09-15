@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "restore-entrypoint_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/restore-entrypoint",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/streamer",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
+        "@com_github_balajinvda_go_criu_v8//:go-criu",
+        "@com_github_balajinvda_go_criu_v8//rpc",
+        "@com_github_vishvananda_netlink//:netlink",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_x_sys//unix",
+    ],
+)
+
+go_binary(
+    name = "restore-entrypoint",
+    embed = [":restore-entrypoint_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "restore-entrypoint_test",
+    srcs = ["cold_start_fallback_test.go"],
+    embed = [":restore-entrypoint_lib"],
+)

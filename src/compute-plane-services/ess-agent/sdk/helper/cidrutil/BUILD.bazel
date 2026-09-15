@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cidrutil",
+    srcs = ["cidr.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/cidrutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_hashicorp_errwrap//:errwrap",
+        "@com_github_hashicorp_go_secure_stdlib_strutil//:strutil",
+        "@com_github_hashicorp_go_sockaddr//:go-sockaddr",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cidrutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cidrutil_test",
+    srcs = ["cidr_test.go"],
+    embed = [":cidrutil"],
+    deps = ["@com_github_hashicorp_go_sockaddr//:go-sockaddr"],
+)

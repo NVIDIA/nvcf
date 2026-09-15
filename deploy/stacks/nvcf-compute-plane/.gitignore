@@ -1,0 +1,8 @@
+out/
+bin/
+dist/
+tmp/
+/registration/
+*.raw.tmp
+*.tmp
+nvcf-cli-local.yaml

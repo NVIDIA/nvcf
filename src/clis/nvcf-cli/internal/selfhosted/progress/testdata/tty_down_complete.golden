@@ -1,0 +1,18 @@
+NVCF self-hosted teardown: ncp-local
+Elapsed:                   01m09s
+Target:                    https://nvcf.nvidia.com
+Stack:                     v1.14.2@sha256:deadbeef
+
+Reverse-pipeline (helmfile destroy)
+
+    [✓]  1. Pre-flight checks                   02s
+    [✓]  2. Drain active deployments            05s
+    [✓]  3. Uninstall compute plane             45s
+    [ ]  4. Remove cluster row                  -
+    [ ]  5. Uninstall control plane             -
+    [ ]  6. Remove namespaces                   -
+    [ ]  7. Verify clean                        -
+
+Teardown complete in 52s
+
+press q to quit

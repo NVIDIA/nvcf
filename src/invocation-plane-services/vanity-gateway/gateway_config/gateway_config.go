@@ -1,0 +1,814 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package config
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	rc "ai-api-gateway-service/internal/reloadableconfig"
+)
+
+type SessionTimeoutSeconds int
+
+type ShadowSamplingMethod string
+
+const (
+	ShadowSamplingMethodRandom       ShadowSamplingMethod = "random"
+	ShadowSamplingMethodPerBearerKey ShadowSamplingMethod = "perBearerKey"
+)
+
+type ShadowConfig struct {
+	ModelName                string               `json:"modelName" yaml:"modelName"`
+	Percentage               *int                 `json:"percentage,omitempty" yaml:"percentage,omitempty"`
+	SamplingMethod           ShadowSamplingMethod `json:"samplingMethod,omitempty" yaml:"samplingMethod,omitempty"`
+	CancelOnClientDisconnect bool                 `json:"cancelOnClientDisconnect,omitempty" yaml:"cancelOnClientDisconnect,omitempty"`
+}
+
+// decodeShadowConfig rejects unknown and null keys, which encoding/json would
+// ignore or turn into defaults. Keys match case-insensitively, as encoding/json
+// and the route-level keys do.
+func decodeShadowConfig(data json.RawMessage) (ShadowConfig, error) {
+	// encoding/json decodes null into an empty map, which would surface later as
+	// a missing modelName instead of the real problem.
+	if isJSONNull(data) {
+		return ShadowConfig{}, fmt.Errorf("shadow config must not be null")
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return ShadowConfig{}, fmt.Errorf("shadow config must be a mapping: %w", err)
+	}
+	var unknownFields, nullFields []string
+	for field, raw := range fields {
+		switch {
+		case strings.EqualFold(field, "modelName"),
+			strings.EqualFold(field, "percentage"),
+			strings.EqualFold(field, "samplingMethod"),
+			strings.EqualFold(field, "cancelOnClientDisconnect"):
+			if isJSONNull(raw) {
+				nullFields = append(nullFields, field)
+			}
+		default:
+			unknownFields = append(unknownFields, field)
+		}
+	}
+	slices.Sort(unknownFields)
+	slices.Sort(nullFields)
+	if len(unknownFields) > 0 {
+		return ShadowConfig{}, fmt.Errorf("unknown shadow config field %q", unknownFields[0])
+	}
+	if len(nullFields) > 0 {
+		return ShadowConfig{}, fmt.Errorf("%s must not be null", nullFields[0])
+	}
+
+	var shadow ShadowConfig
+	if err := json.Unmarshal(data, &shadow); err != nil {
+		return ShadowConfig{}, fmt.Errorf("decode shadow config: %w", err)
+	}
+	return shadow, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
+}
+
+type CustomHeaders map[string]string
+
+func (h *CustomHeaders) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*h = nil
+		return nil
+	}
+
+	rawHeaders := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &rawHeaders); err != nil {
+		return err
+	}
+
+	headers := make(CustomHeaders, len(rawHeaders))
+	for name, rawValue := range rawHeaders {
+		var value string
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			return fmt.Errorf("customHeaders.%s must be a string", name)
+		}
+		headers[name] = value
+	}
+	*h = headers
+	return nil
+}
+
+type ModelFunctionDetails struct {
+	ModelName                      string                `json:"modelName"`
+	FunctionID                     string                `json:"functionID"`
+	FunctionVersionID              string                `json:"functionVersionID"`
+	OutgoingPathOverride           string                `json:"outgoingPathOverride"`
+	UsePexec                       bool                  `json:"usePexec"`
+	SessionTimeout                 SessionTimeoutSeconds `json:"sessionTimeout,omitempty"`
+	CustomHeaders                  CustomHeaders         `json:"customHeaders,omitempty"`
+	EOL                            time.Time             `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
+	OfflineMessage                 string                `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
+	TooManyRequestsMessage         string                `json:"tooManyRequestsMessage"`
+	Shadows                        []ShadowConfig        `json:"shadows,omitempty" yaml:"shadows,omitempty"`
+	ShadowModelName                string                `json:"shadowModelName,omitempty" yaml:"shadowModelName,omitempty"`
+	ShadowModelNames               []string              `json:"shadowModelNames,omitempty" yaml:"shadowModelNames,omitempty"`
+	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty" yaml:"shadowPercentage,omitempty"` // 1-100 when set; omitted defaults to 100
+	ShadowSamplingMethod           ShadowSamplingMethod  `json:"shadowSamplingMethod,omitempty" yaml:"shadowSamplingMethod,omitempty"`
+	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty" yaml:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadows on client cancellation or primary proxy failure; default false
+	FunctionType                   FunctionType          `json:"functionType,omitempty"`
+	shadowsPresent                 bool
+	shadowsNotList                 bool
+	legacyShadowFieldsPresent      bool
+}
+
+func (m ModelFunctionDetails) TargetsLLMGateway() bool {
+	return m.FunctionType == FunctionTypeLLM
+}
+
+func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
+	type modelFunctionDetailsAlias ModelFunctionDetails
+
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("decode model: %w", err)
+	}
+	modelName := rawModelName(fields)
+
+	// shadows is decoded separately so its errors can name the list index; the
+	// key is removed here so the alias decode below does not see it twice.
+	var shadowsRaw json.RawMessage
+	shadowsPresent := false
+	legacyShadowFieldsPresent := false
+	for field, raw := range fields {
+		switch {
+		case strings.EqualFold(field, "shadows"):
+			shadowsPresent = true
+			shadowsRaw = raw
+			delete(fields, field)
+		case strings.EqualFold(field, "shadowModelName"),
+			strings.EqualFold(field, "shadowModelNames"),
+			strings.EqualFold(field, "shadowPercentage"),
+			strings.EqualFold(field, "shadowSamplingMethod"),
+			strings.EqualFold(field, "shadowCancelOnClientDisconnect"):
+			legacyShadowFieldsPresent = true
+		}
+	}
+
+	remaining, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("decode model %q: %w", modelName, err)
+	}
+	var alias modelFunctionDetailsAlias
+	if err := json.Unmarshal(remaining, &alias); err != nil {
+		return fmt.Errorf("decode model %q: %w", modelName, err)
+	}
+
+	*m = ModelFunctionDetails(alias)
+	m.shadowsPresent = shadowsPresent
+	m.legacyShadowFieldsPresent = legacyShadowFieldsPresent
+	if !shadowsPresent {
+		return nil
+	}
+	shadows, isList, err := decodeShadowList(shadowsRaw)
+	if err != nil {
+		return fmt.Errorf("decode model %q: %w", modelName, err)
+	}
+	m.shadowsNotList = !isList
+	m.Shadows = shadows
+	return nil
+}
+
+// decodeShadowList reports isList false for null and non-array values so
+// validation can reject them with the route location it knows.
+func decodeShadowList(raw json.RawMessage) (shadows []ShadowConfig, isList bool, err error) {
+	if !strings.HasPrefix(strings.TrimSpace(string(raw)), "[") {
+		return nil, false, nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, true, fmt.Errorf("decode shadows: %w", err)
+	}
+	shadows = make([]ShadowConfig, len(items))
+	for i, item := range items {
+		shadow, err := decodeShadowConfig(item)
+		if err != nil {
+			return nil, true, fmt.Errorf("shadows[%d]: %w", i, err)
+		}
+		shadows[i] = shadow
+	}
+	return shadows, true, nil
+}
+
+// rawModelName gives decode errors a handle on the entry before validation
+// knows its route key.
+func rawModelName(fields map[string]json.RawMessage) string {
+	for field, raw := range fields {
+		if !strings.EqualFold(field, "modelName") {
+			continue
+		}
+		var name string
+		if err := json.Unmarshal(raw, &name); err == nil {
+			return name
+		}
+	}
+	return ""
+}
+
+func (m ModelFunctionDetails) EffectiveShadows() []ShadowConfig {
+	if len(m.Shadows) > 0 {
+		shadows := make([]ShadowConfig, len(m.Shadows))
+		for i, shadow := range m.Shadows {
+			shadows[i] = cloneShadowConfig(shadow)
+		}
+		return shadows
+	}
+
+	modelNames := make([]string, 0, len(m.ShadowModelNames)+1)
+	if m.ShadowModelName != "" {
+		modelNames = append(modelNames, m.ShadowModelName)
+	}
+	modelNames = append(modelNames, m.ShadowModelNames...)
+	if len(modelNames) == 0 {
+		return nil
+	}
+
+	shadows := make([]ShadowConfig, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		shadows = append(shadows, ShadowConfig{
+			ModelName:                modelName,
+			Percentage:               cloneInt(m.ShadowPercentage),
+			SamplingMethod:           m.ShadowSamplingMethod,
+			CancelOnClientDisconnect: m.ShadowCancelOnClientDisconnect,
+		})
+	}
+	return shadows
+}
+
+func cloneShadowConfig(shadow ShadowConfig) ShadowConfig {
+	shadow.Percentage = cloneInt(shadow.Percentage)
+	return shadow
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func (m ModelFunctionDetails) hasLegacyShadowConfig() bool {
+	return m.ShadowModelName != "" ||
+		len(m.ShadowModelNames) > 0 ||
+		m.ShadowPercentage != nil ||
+		m.ShadowSamplingMethod != "" ||
+		m.ShadowCancelOnClientDisconnect
+}
+
+func (m ModelFunctionDetails) hasShadowsField() bool {
+	return m.shadowsPresent || len(m.Shadows) > 0
+}
+
+func (m ModelFunctionDetails) hasLegacyShadowFields() bool {
+	return m.hasLegacyShadowConfig() || m.legacyShadowFieldsPresent
+}
+
+func (m ModelFunctionDetails) hasMixedShadowFields() bool {
+	return m.hasShadowsField() && m.hasLegacyShadowFields()
+}
+
+type PathFunctionDetails struct {
+	Path                    string                 `json:"path"` // incoming path
+	OutgoingPathOverride    *string                `json:"outgoingPathOverride"`
+	FunctionID              string                 `json:"functionID"`
+	FunctionVersionID       string                 `json:"functionVersionID"`
+	UsePexec                bool                   `json:"usePexec"`
+	SessionTimeout          *SessionTimeoutSeconds `json:"sessionTimeout,omitempty"`
+	CustomHeaders           CustomHeaders          `json:"customHeaders,omitempty"`
+	EOL                     time.Time              `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
+	OfflineMessage          string                 `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
+	ShadowFunctionID        string                 `json:"shadowFunctionID,omitempty"`
+	ShadowFunctionVersionID string                 `json:"shadowFunctionVersionID,omitempty"`
+	ShadowPercentage        *int                   `json:"shadowPercentage,omitempty"` // unsupported on vanity routes; rejected during validation
+	ShadowSamplingMethod    ShadowSamplingMethod   `json:"shadowSamplingMethod,omitempty"`
+	sessionTimeoutPresent   bool
+}
+
+func (p *PathFunctionDetails) UnmarshalJSON(data []byte) error {
+	type pathFunctionDetailsAlias PathFunctionDetails
+
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	var alias pathFunctionDetailsAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	*p = PathFunctionDetails(alias)
+	_, p.sessionTimeoutPresent = fields["sessionTimeout"]
+	return nil
+}
+
+type VanityEntry struct {
+	Host  string                         `json:"host"`
+	Paths map[string]PathFunctionDetails `json:"paths"`
+}
+
+// FunctionType selects which upstream serves a model. The empty value keeps the
+// historical behavior of invoking the function through the NVCF invocation API.
+type FunctionType string
+
+const (
+	FunctionTypeDefault FunctionType = ""
+	FunctionTypeLLM     FunctionType = "LLM"
+)
+
+// llmGatewaySections are the OpenAI-compatible sections the LLM Gateway serves.
+var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings"}
+
+type V2Config struct {
+	OpenAI struct {
+		Host             string                          `json:"host"`
+		ChatCompletions  map[string]ModelFunctionDetails `json:"chatCompletions"`
+		Completions      map[string]ModelFunctionDetails `json:"completions"`
+		Embeddings       map[string]ModelFunctionDetails `json:"embeddings"`
+		Responses        map[string]ModelFunctionDetails `json:"responses"`
+		ImageGenerations map[string]ModelFunctionDetails `json:"imageGenerations"`
+		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
+		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
+	} `json:"openai"`
+	Vanity map[string]VanityEntry `json:"vanity"`
+}
+
+// sharedNotifications is a package-level channel shared across all config instances.
+// This ensures that notifications sent after a config reload reach any waiting goroutine.
+var sharedNotifications = make(chan struct{}, 1)
+
+func notifySharedReload() {
+	select {
+	case sharedNotifications <- struct{}{}:
+	default:
+	}
+}
+
+type GatewayConfig struct {
+	V2Config `json:"v2config"`
+}
+
+func (c *GatewayConfig) UnmarshalJSON(data []byte) error {
+	type gatewayConfigAlias GatewayConfig
+
+	var alias gatewayConfigAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	*c = GatewayConfig(alias)
+	return nil
+}
+
+func uniqueShadowModelNames(legacyModelName string, modelNames []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(modelNames)+1)
+	result := make([]string, 0, len(modelNames)+1)
+	if legacyModelName != "" {
+		seen[legacyModelName] = struct{}{}
+		result = append(result, legacyModelName)
+	}
+	for _, modelName := range modelNames {
+		if modelName == "" {
+			return nil, fmt.Errorf("shadowModelNames cannot contain empty model names")
+		}
+		if _, ok := seen[modelName]; ok {
+			return nil, fmt.Errorf("duplicate shadow target %q", modelName)
+		}
+		seen[modelName] = struct{}{}
+		result = append(result, modelName)
+	}
+	return result, nil
+}
+
+// validateShadowFormShape rejects a route that mixes the two shadow forms or
+// gives shadows a value that is not a list. Both forms are validated further
+// by their callers.
+func validateShadowFormShape(location string, entry ModelFunctionDetails) error {
+	if entry.hasMixedShadowFields() {
+		return fmt.Errorf("%s: shadows cannot be combined with legacy shadow fields", location)
+	}
+	if entry.shadowsNotList {
+		return fmt.Errorf("%s: shadows must be a list", location)
+	}
+	return nil
+}
+
+// shadowTargetLocation names one target in an error. Legacy targets share the
+// route location because the legacy fields carry no index.
+func shadowTargetLocation(location string, index int, perTarget bool) string {
+	if !perTarget {
+		return location
+	}
+	return fmt.Sprintf("%s.shadows[%d]", location, index)
+}
+
+func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
+	if err := validateShadowFormShape(location, entry); err != nil {
+		return nil, err
+	}
+	if entry.hasShadowsField() {
+		if err := validatePerTargetShadowConfigs(location, entry.Shadows); err != nil {
+			return nil, err
+		}
+		return entry.EffectiveShadows(), nil
+	}
+
+	shadowTargets, err := uniqueShadowModelNames(entry.ShadowModelName, entry.ShadowModelNames)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", location, err)
+	}
+
+	if err := validateShadowSamplingMethod(location, entry.ShadowSamplingMethod); err != nil {
+		return nil, err
+	}
+
+	if entry.ShadowPercentage != nil {
+		pct := *entry.ShadowPercentage
+		if pct < 1 || pct > 100 {
+			return nil, fmt.Errorf("%s: shadowPercentage must be between 1 and 100", location)
+		}
+	}
+
+	if len(shadowTargets) == 0 {
+		if entry.ShadowPercentage != nil {
+			return nil, fmt.Errorf("%s: shadowPercentage requires at least one shadow target", location)
+		}
+		if entry.ShadowSamplingMethod != "" {
+			return nil, fmt.Errorf("%s: shadowSamplingMethod requires at least one shadow target", location)
+		}
+		if entry.ShadowCancelOnClientDisconnect {
+			return nil, fmt.Errorf("%s: shadowCancelOnClientDisconnect requires at least one shadow target", location)
+		}
+	}
+
+	return entry.EffectiveShadows(), nil
+}
+
+func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) error {
+	seen := make(map[string]struct{}, len(shadows))
+	for i, shadow := range shadows {
+		shadowLocation := shadowTargetLocation(location, i, true)
+		if shadow.ModelName == "" {
+			return fmt.Errorf("%s: modelName is required", shadowLocation)
+		}
+		if _, ok := seen[shadow.ModelName]; ok {
+			return fmt.Errorf("%s: duplicate shadow target %q", shadowLocation, shadow.ModelName)
+		}
+		seen[shadow.ModelName] = struct{}{}
+
+		if shadow.Percentage != nil {
+			percentage := *shadow.Percentage
+			if percentage < 1 || percentage > 100 {
+				return fmt.Errorf("%s: percentage must be between 1 and 100", shadowLocation)
+			}
+		}
+		if err := validateSamplingMethod(shadowLocation, "samplingMethod", shadow.SamplingMethod); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateShadowSamplingMethod(location string, method ShadowSamplingMethod) error {
+	return validateSamplingMethod(location, "shadowSamplingMethod", method)
+}
+
+func validateSamplingMethod(location string, fieldName string, method ShadowSamplingMethod) error {
+	switch method {
+	case "", ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
+		return nil
+	default:
+		return fmt.Errorf(
+			"%s: %s must be %q or %q",
+			location, fieldName, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey,
+		)
+	}
+}
+
+func (c *GatewayConfig) Validate() error {
+	for sectionName, entries := range c.openAISections() {
+		if err := validateOpenAISection(sectionName, entries); err != nil {
+			return err
+		}
+	}
+
+	return c.validateVanityConfig()
+}
+
+func (c *GatewayConfig) openAISections() map[string]map[string]ModelFunctionDetails {
+	return map[string]map[string]ModelFunctionDetails{
+		"chatCompletions":  c.OpenAI.ChatCompletions,
+		"completions":      c.OpenAI.Completions,
+		"embeddings":       c.OpenAI.Embeddings,
+		"responses":        c.OpenAI.Responses,
+		"imageGenerations": c.OpenAI.ImageGenerations,
+		"imageEdits":       c.OpenAI.ImageEdits,
+		"imageVariations":  c.OpenAI.ImageVariations,
+	}
+}
+
+func validateOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
+	modelNames, err := collectOpenAIModelNames(sectionName, entries)
+	if err != nil {
+		return err
+	}
+
+	for modelKey, entry := range entries {
+		location := "openai." + sectionName + "." + modelKey
+		if entry.SessionTimeout < 0 {
+			return fmt.Errorf("%s: sessionTimeout must be greater than or equal to 0", location)
+		}
+		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
+			return err
+		}
+		if err := validateFunctionType(location, sectionName, entry); err != nil {
+			return err
+		}
+	}
+
+	if isMultipartOpenAISection(sectionName) {
+		return validateMultipartOpenAISection(sectionName, entries)
+	}
+	return validateOpenAIShadowTargets(sectionName, entries, modelNames)
+}
+
+func collectOpenAIModelNames(sectionName string, entries map[string]ModelFunctionDetails) (map[string]struct{}, error) {
+	modelNames := make(map[string]struct{}, len(entries))
+	for entryKey, entry := range entries {
+		if entry.ModelName == "" {
+			return nil, fmt.Errorf("openai.%s.%s: modelName is required", sectionName, entryKey)
+		}
+		modelNames[entry.ModelName] = struct{}{}
+	}
+	return modelNames, nil
+}
+
+func isMultipartOpenAISection(sectionName string) bool {
+	// Shadow replay rewrites JSON bodies, so it cannot support multipart image requests.
+	return sectionName == "imageEdits" || sectionName == "imageVariations"
+}
+
+func validateMultipartOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
+	for modelKey, entry := range entries {
+		location := "openai." + sectionName + "." + modelKey
+		if err := validateShadowFormShape(location, entry); err != nil {
+			return err
+		}
+		if len(entry.Shadows) > 0 || entry.hasLegacyShadowConfig() {
+			return fmt.Errorf("%s: shadow config is unsupported for multipart image endpoints", location)
+		}
+	}
+	return nil
+}
+
+func validateOpenAIShadowTargets(sectionName string, entries map[string]ModelFunctionDetails, modelNames map[string]struct{}) error {
+	for modelKey, entry := range entries {
+		location := "openai." + sectionName + "." + modelKey
+		shadowTargets, err := validateOpenAIShadowConfig(location, entry)
+		if err != nil {
+			return err
+		}
+		perTarget := len(entry.Shadows) > 0
+		err = validateShadowTargetNames(location, sectionName, entry.ModelName, shadowTargets, modelNames, perTarget)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateShadowTargetNames(
+	location string,
+	sectionName string,
+	modelName string,
+	shadows []ShadowConfig,
+	modelNames map[string]struct{},
+	perTarget bool,
+) error {
+	for i, shadow := range shadows {
+		shadowLocation := shadowTargetLocation(location, i, perTarget)
+		if shadow.ModelName == modelName {
+			return fmt.Errorf("%s: shadow target cannot reference the same model", shadowLocation)
+		}
+		if _, ok := modelNames[shadow.ModelName]; !ok {
+			return fmt.Errorf("%s: shadow target must reference another model in openai.%s", shadowLocation, sectionName)
+		}
+	}
+	return nil
+}
+
+var reservedCustomHeaderNames = map[string]struct{}{
+	"authorization":       {},
+	"connection":          {},
+	"content-length":      {},
+	"function-id":         {},
+	"function-version-id": {},
+	"host":                {},
+	"keep-alive":          {},
+	"proxy-authenticate":  {},
+	"proxy-authorization": {},
+	"te":                  {},
+	"trailer":             {},
+	"transfer-encoding":   {},
+	"upgrade":             {},
+	"via":                 {},
+	"x-forwarded-for":     {},
+	"x-forwarded-host":    {},
+	"x-forwarded-proto":   {},
+}
+
+// The LLM Gateway rejects any request carrying X-Priority, on header presence
+// rather than value, so a configured value would fail every request.
+var llmGatewayReservedCustomHeaderNames = map[string]struct{}{
+	"x-priority": {},
+}
+
+func validateCustomHeaders(location string, headers CustomHeaders) error {
+	seenNames := make(map[string]string, len(headers))
+	for name := range headers {
+		if err := validateCustomHeaderName(location, name); err != nil {
+			return err
+		}
+		lowerName := strings.ToLower(name)
+		if existingName, ok := seenNames[lowerName]; ok {
+			return fmt.Errorf("%s: customHeaders cannot contain duplicate header names %q and %q", location, existingName, name)
+		}
+		seenNames[lowerName] = name
+	}
+	return nil
+}
+
+func validateCustomHeaderName(location string, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s: customHeaders cannot contain empty header names", location)
+	}
+	if !isHTTPFieldName(name) {
+		return fmt.Errorf("%s: customHeaders header %q has invalid HTTP field name", location, name)
+	}
+	lowerName := strings.ToLower(name)
+	if _, ok := reservedCustomHeaderNames[lowerName]; ok {
+		return fmt.Errorf("%s: customHeaders cannot set reserved header %q", location, name)
+	}
+	if strings.HasPrefix(lowerName, "nvcf-") {
+		return fmt.Errorf("%s: customHeaders cannot set NVCF-managed header %q", location, name)
+	}
+	return nil
+}
+
+func isHTTPFieldName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if !isHTTPFieldNameChar(name[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHTTPFieldNameChar(ch byte) bool {
+	switch {
+	case ch >= 'a' && ch <= 'z':
+		return true
+	case ch >= 'A' && ch <= 'Z':
+		return true
+	case ch >= '0' && ch <= '9':
+		return true
+	}
+	switch ch {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *GatewayConfig) validateVanityConfig() error {
+	for vanityName, vanity := range c.Vanity {
+		if vanity.Host != "" && vanity.Host == c.OpenAI.Host {
+			return fmt.Errorf("vanity.%s.host %q conflicts with openai.host", vanityName, vanity.Host)
+		}
+		for pathKey, path := range vanity.Paths {
+			location := "vanity." + vanityName + ".paths." + pathKey
+			if path.sessionTimeoutPresent || path.SessionTimeout != nil {
+				return fmt.Errorf("%s: sessionTimeout is unsupported for vanity routes", location)
+			}
+			if path.ShadowFunctionID != "" || path.ShadowFunctionVersionID != "" || path.ShadowPercentage != nil || path.ShadowSamplingMethod != "" {
+				return fmt.Errorf("%s: shadow config is unsupported for vanity routes", location)
+			}
+			if err := validateCustomHeaders(location, path.CustomHeaders); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateLLMGatewayModel checks a model routed to the LLM Gateway. The gateway
+// rewrites the request model to functionID/modelName and forwards it, so the
+// invocation-only fields are meaningless here.
+func validateLLMGatewayModel(location string, sectionName string, entry ModelFunctionDetails) error {
+	if !slices.Contains(llmGatewaySections, sectionName) {
+		return fmt.Errorf("%s: functionType %q is only supported in %s", location, FunctionTypeLLM, strings.Join(llmGatewaySections, ", "))
+	}
+	if entry.FunctionID == "" {
+		return fmt.Errorf("%s: functionID is required for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.UsePexec {
+		return fmt.Errorf("%s: usePexec is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.OutgoingPathOverride != "" {
+		return fmt.Errorf("%s: outgoingPathOverride is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.SessionTimeout != 0 {
+		return fmt.Errorf("%s: sessionTimeout is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	for name := range entry.CustomHeaders {
+		if _, ok := llmGatewayReservedCustomHeaderNames[strings.ToLower(name)]; ok {
+			return fmt.Errorf("%s: customHeaders cannot set %q for functionType %q; the LLM Gateway rejects requests carrying it", location, name, FunctionTypeLLM)
+		}
+	}
+	return nil
+}
+
+func validateFunctionType(location string, sectionName string, entry ModelFunctionDetails) error {
+	switch entry.FunctionType {
+	case FunctionTypeDefault:
+		return nil
+	case FunctionTypeLLM:
+		return validateLLMGatewayModel(location, sectionName, entry)
+	default:
+		return fmt.Errorf("%s: functionType must be %q when set", location, FunctionTypeLLM)
+	}
+}
+
+// HasLLMGatewayRoute reports whether any model is routed to the LLM Gateway.
+func (c *GatewayConfig) HasLLMGatewayRoute() bool {
+	for _, entries := range c.openAISections() {
+		for _, entry := range entries {
+			if entry.TargetsLLMGateway() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func SetupConfigWithConfigPath(path string) (rc.ReloadableConfig[GatewayConfig], error) {
+	return SetupConfigWithConfigPathAndTimeout(path, 0)
+}
+
+func SetupConfigWithConfigPathAndTimeout(path string, loadTimeout time.Duration) (rc.ReloadableConfig[GatewayConfig], error) {
+	opts := []rc.ConfigOption[GatewayConfig]{
+		rc.WithValidateFunc(func(c *GatewayConfig) error {
+			return c.Validate()
+		}),
+		rc.WithPostLoadFunc(func(c *GatewayConfig) error {
+			notifySharedReload()
+			return nil
+		}),
+	}
+	if loadTimeout > 0 {
+		opts = append(opts, rc.WithInitialLoadTimeout[GatewayConfig](loadTimeout))
+	}
+
+	config, err := rc.SetupConfig[GatewayConfig](path,
+		opts...)
+	return config, err
+}
+
+func (c *GatewayConfig) WaitForNotification(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-sharedNotifications:
+		return nil
+	}
+}

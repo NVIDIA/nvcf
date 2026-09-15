@@ -1,0 +1,149 @@
+# This file is meant to be used with the REST Client VSCode extension.
+# https://marketplace.visualstudio.com/items?itemName=humao.rest-client
+#
+# Setup:
+#   1. Install the REST Client extension.
+#   2. Copy api-tests/.env.example to api-tests/.env and fill out the fields.
+#   3. Start the server:  make run-local   (or make run-self-hosted)
+#   4. Click "Send Request" above any request below.
+
+@host = {{$dotenv SERVICE_BASE_URL}}
+@bearer-token = {{$dotenv BEARER_TOKEN}}
+
+# A publicly available test chart (Bitnami nginx via OCI).
+@chartUrl = oci://registry-1.docker.io/bitnamicharts/nginx
+
+# A locally served test chart (started by make run-test-regs).
+@localChartUrl = http://localhost:8282/multi-node-secrets-test-0.3.4.tgz
+
+###
+# @name healthz
+GET {{host}}/healthz
+
+###
+# @name validate — public chart, no policy (default type restrictions apply)
+POST {{host}}/v1/validate
+Authorization: Bearer {{bearer-token}}
+Content-Type: application/json
+
+{
+  "helmChart": "{{chartUrl}}",
+  "namespace": "test",
+  "k8sVersion": "1.29.0"
+}
+
+###
+# @name validate — public chart, Unrestricted policy
+POST {{host}}/v1/validate
+Authorization: Bearer {{bearer-token}}
+Content-Type: application/json
+
+{
+  "helmChart": "{{chartUrl}}",
+  "namespace": "test",
+  "k8sVersion": "1.29.0",
+  "validationPolicies": [
+    {
+      "id": "pol-1",
+      "name": "Unrestricted",
+      "allowedExtraKubernetesTypes": []
+    }
+  ]
+}
+
+###
+# @name validate — public chart, Default policy + ClusterIP override
+POST {{host}}/v1/validate
+Authorization: Bearer {{bearer-token}}
+Content-Type: application/json
+
+{
+  "helmChart": "{{chartUrl}}",
+  "namespace": "test",
+  "k8sVersion": "1.29.0",
+  "configuration": {"service": {"type": "ClusterIP"}},
+  "validationPolicies": [
+    {
+      "id": "pol-1",
+      "name": "Default",
+      "allowedExtraKubernetesTypes": [
+        {"group": "networking.k8s.io", "version": "v1", "kind": "NetworkPolicy"},
+        {"group": "policy",            "version": "v1", "kind": "PodDisruptionBudget"}
+      ]
+    }
+  ]
+}
+
+###
+# @name validate — local test chart (requires make run-test-regs)
+POST {{host}}/v1/validate
+Authorization: Bearer {{bearer-token}}
+Content-Type: application/json
+
+{
+  "helmChart": "{{localChartUrl}}",
+  "helmChartServiceName": "mini-service-server",
+  "helmChartServicePort": 8000,
+  "helmRegistryAuthConfig": {
+    "k8sSecrets": [
+      {
+        "auths": {
+          "localhost:8282": {
+            "auth": "JG9hdXRodG9rZW46Zm9vYmFy"
+          }
+        }
+      }
+    ]
+  },
+  "configuration": {
+    "image": {
+      "repository": "localhost:8383/foo/bar",
+      "tag": "latest"
+    }
+  }
+}
+
+###
+# @name render — public chart, Unrestricted policy
+POST {{host}}/v1/render
+Authorization: Bearer {{bearer-token}}
+Content-Type: application/json
+
+{
+  "helmChart": "{{chartUrl}}",
+  "namespace": "test",
+  "k8sVersion": "1.29.0",
+  "validationPolicy": {
+    "name": "Unrestricted",
+    "allowedExtraKubernetesTypes": []
+  }
+}
+
+###
+# @name render — local test chart (requires make run-test-regs)
+POST {{host}}/v1/render
+Authorization: Bearer {{bearer-token}}
+Content-Type: application/json
+
+{
+  "helmChart": "{{localChartUrl}}",
+  "helmChartServiceName": "mini-service-server",
+  "helmChartServicePort": 8000,
+  "helmRegistryAuthConfig": {
+    "k8sSecrets": [
+      {
+        "auths": {
+          "localhost:8282": {
+            "auth": "JG9hdXRodG9rZW46Zm9vYmFy"
+          }
+        }
+      }
+    ]
+  },
+  "configuration": {
+    "image": {
+      "repository": "localhost:8383/foo/bar",
+      "tag": "latest"
+    }
+  }
+}

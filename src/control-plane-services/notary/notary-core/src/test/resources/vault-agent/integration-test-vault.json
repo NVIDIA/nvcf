@@ -1,0 +1,15 @@
+{
+  "kv": {
+    "tracing": {
+      "accessToken": "mock-lightstep-token"
+    },
+    "signing-key": {
+      "kid": "f4a21067-0082-4c64-b3de-dc76e2f95e7f",
+      "alg": "ES256"
+    },
+    "private-key-jwks": {
+      "keys": "{ \"keys\":[{\"alg\":\"ES256\",\"kid\":\"E4a21067-0089-4c64-b3de-dc76e2f95e7f\",\"kty\":\"EC\",\"d\":\"lIKIP8YQm352rWF65BckZ0Htt9n24ytnlVnrk3g1Nn8\",\"crv\":\"P-256\",\"x\":\"VrKv7bxxmB5F8hS6w8mnVspfY_wASD2AF8sB0biHZZo\",\"y\":\"v9Kfxtd9ePO_QpPmaH3Qp8aG4zx_Wz7XamLOhb9KZJk\"},{\"alg\":\"ES256\",\"kty\":\"EC\",\"d\":\"lIKIP8YQm352rWF65BckZ0Htt9n24ytnlVnrk3g1Nn8\",\"crv\":\"P-256\",\"kid\":\"f4a21067-0082-4c64-b3de-dc76e2f95e7f\",\"x\":\"VrKv7bxxmB5F8hS6w8mnVspfY_wASD2AF8sB0biHZZo\",\"y\":\"v9Kfxtd9ePO_QpPmaH3Qp8aG4zx_Wz7XamLOhb9KZJk\"}]}"
+    }
+  }
+}
+

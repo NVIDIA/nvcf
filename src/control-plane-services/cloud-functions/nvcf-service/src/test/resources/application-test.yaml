@@ -1,0 +1,247 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring.main.allow-bean-definition-overriding: true
+
+# Faster JVM exit after integration tests (avoids Surefire fork exit timeout when many
+# @SpringBootTest contexts shut down gRPC + Tomcat + file watchers sequentially).
+server:
+  shutdown: immediate
+
+grpc:
+  server:
+    port: 0  # Random port to avoid BindException when running multiple integration tests
+
+spring:
+  cassandra:
+    contact-points: 127.0.0.1
+    keyspace-name: nvcf
+    request:
+      timeout: 30s
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9092
+          jwk-set-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/.well-known/jwks.json
+          jws-algorithms: ES256
+      client:
+        provider:
+          icms:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          api-keys:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          ess:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          notary:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          reval:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+
+management:
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+  health:
+    # GitLab runner pods expose in-cluster service account files; this indicator
+    # then needs get pods RBAC that test jobs do not have.
+    kubernetes:
+      enabled: false
+
+logging:
+  level:
+    root: WARN   # To see [AUDIT] logs in stdout, this should be set to INFO
+    com.nvidia: DEBUG
+    com.nvidia.nvcf.util: INFO
+    com.nvidia.boot.audit: INFO
+    com.nvidia.nvcf.service.account: ERROR
+    com.nvidia.nvcf.service.registry: ERROR
+    com.nvidia.nvcf.configuration: INFO
+    org.springframework.web.client.RestTemplate: INFO
+    org.springframework.web.HttpLogging: INFO
+    org.springframework.web: DEBUG
+    org.springframework.data.cassandra.core.cql.CqlTemplate: INFO
+    org.springframework.data.cassandra.core.cql.ReactiveCqlTemplate: INFO
+    com.github.tomakehurst.wiremock: DEBUG
+
+nvcf:
+  request:
+    timeout: 1s # only whole seconds
+  fqdn: http://localhost:${server.port}
+  llm-request-router:
+    worker-address: llm-request-router.example.com:50071
+  sidecars:
+    inference-container: stg.nvcr.io/nvidia/tritonserver:23.04-py3
+    init-container: stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_init:0.7.0
+    utils-container-image:
+      go: stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_utils:2.2.1
+    otel-container: docker.io/otel/opentelemetry-collector:0.74.0
+    niclls-container: stg.nvcr.io/nv-cf/nvcf-core/niclls:0.0.1
+    ess-agent-container: stg.nvcr.io/nv-cf/nvcf-core/ess-agent:0.0.4
+    otel-collector-container: stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector:1.2.3
+    llm-credential-manager-image: stg.nvcr.io/nv-cf/nvcf-core/llm-credential-manager:0.1.0
+    llm-router-client-image: stg.nvcr.io/nv-cf/nvcf-core/llm-worker:0.1.0
+  aws:
+    access-key-id: ${kv.aws.accessKeyId}
+    secret-access-key: ${kv.aws.secretAccessKey}
+    region: us-east-1
+    endpoint: http://localhost:4566
+    s3:
+      provisioned-region: us-east-1
+      results:
+        bucket-name: b-strap-results
+        role-arn: arn:aws:iam::000000000000:role/strap-s3-presigned-download-url
+      assets:
+        bucket-name: b-strap-assets
+        role-arn: arn:aws:iam::000000000000:role/strap-s3-presigned-upload-url
+    token:
+      role-arn: arn:aws:iam::000000000000:role/strap-worker-role
+  notary:
+    jwt:
+    base-url: http://localhost:9097
+  ess:
+    base-url: http://localhost:9098
+  reval:
+    base-url: http://localhost:9099
+  icms:
+    base-url: http://localhost:9096
+    allocator:
+      enabled: true
+  api-keys:
+    base-url: http://localhost:9093
+  account:
+    max-functions-allowed: 50
+    max-tasks-allowed: 50
+  scheduler:
+    enabled: false
+  nats:
+    replicas: 1
+    storage-type: memory
+    request-queue-subject-migration-enabled: false
+    oauth2-properties: # oauth2 with auth callout is a separate application
+      enabled: false
+  rate-limiters:
+    account-rate-limiter:
+      policy: BUCKET
+      allowed-invocations-per-second: 200
+      overrides:
+        - policy: BUCKET
+          nca-id: test-nca-id
+          allowed-invocations-per-second: 100
+        - policy: LEGACY
+          nca-id: test-nca-id-2
+          allowed-invocations-per-second: 150
+    function-rate-limiter:
+      policy: BUCKET
+      allowed-invocations-per-second: 250
+      overrides:
+        - policy: BUCKET
+          function-id: 571114ac-13a2-4243-8f9f-1ccbee3b374f
+          function-version-id: 40bf77b3-c59f-42ed-bbb9-32ac2092d70b
+          allowed-invocations-per-second: 300
+        - policy: BUCKET
+          function-id: 6a837946-894a-41c6-8a6f-940815456349
+          function-version-id: d861aa79-eb4b-4407-a8b3-a33a867318e3
+          allowed-invocations-per-second: 2
+  registries:
+    recognized:
+      container:
+        docker:
+          hostname: http://localhost-docker:9101
+          oauth2:
+            base-url: http://localhost:9102
+        ngc:
+          hostname: "http://localhost-ngc:9100"
+        ecr:
+          hostname: http://localhost-ecr:9103
+        ecr-public:
+          hostname: http://localhost-ecr-public:9104
+        volcengine:
+          hostname: http://localhost-volcengine:9105
+        acr:
+          hostname: http://localhost-acr:9106
+          oauth2:
+            base-url: http://localhost-acr:9107
+        harbor:
+          name: "Harbor Registry"
+          hostname: http://localhost-harbor:9108
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9109
+        artifactory:
+          name: "JFrog Artifactory"
+          hostname: http://localhost-artifactory:9110
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-artifactory:9111
+        custom-1:
+          name: "Custom Registry Test 1"
+          hostname: "custom-registry-test-1.com"
+          credential-validation:
+            enabled: false
+          artifact-validation:
+            enabled: false
+      helm:
+        docker:
+          hostname: http://localhost-docker:9101
+          oauth2:
+            base-url: http://localhost:9102
+        ngc:
+          hostname: "http://localhost-ngc:9094"
+          oauth2:
+            base-url: "http://localhost:9095"
+        ecr:
+          hostname: http://localhost-ecr:9103
+        ecr-public:
+          hostname: http://localhost-ecr-public:9104
+        volcengine:
+          hostname: http://localhost-volcengine:9105
+        acr:
+          hostname: http://localhost-acr:9106
+          oauth2:
+            base-url: http://localhost-acr:9107
+        harbor:
+          name: "Harbor Registry"
+          hostname: http://localhost-harbor:9108
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9109
+        artifactory:
+          name: "JFrog Artifactory"
+          hostname: http://localhost-artifactory:9110
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-artifactory:9111
+        custom-1:
+          name: "Custom Registry Test 1"
+          hostname: "custom-registry-test-1.com"
+          credential-validation:
+            enabled: false
+          artifact-validation:
+            enabled: false
+      model:
+        ngc:
+          hostname: "http://localhost-ngc:9094"
+          oauth2:
+            base-url: "http://localhost:9095"
+      resource:
+        ngc:
+          hostname: "http://localhost-ngc:9094"
+          oauth2:
+            base-url: "http://localhost:9095"

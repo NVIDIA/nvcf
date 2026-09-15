@@ -1,0 +1,49 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#1976D2','primaryTextColor':'#FFFFFF','primaryBorderColor':'#0D47A1','lineColor':'#212121','secondaryColor':'#F57C00','tertiaryColor':'#388E3C','actorBkg':'#1976D2','actorBorder':'#0D47A1','actorTextColor':'#FFFFFF','actorLineColor':'#212121','signalColor':'#212121','signalTextColor':'#212121','noteBkgColor':'#FFF59D','noteBorderColor':'#F57F17','noteTextColor':'#212121','activationBkgColor':'#5E35B1','activationBorderColor':'#311B92'}}}%%
+sequenceDiagram
+    participant User as User<br/>(nvsnap thaw / API)
+    participant Srv as nvsnap-server
+    participant K8s as K8s API
+    participant Pod as restore Pod<br/>(scheduled on N2)
+    participant Init as init containers
+    participant Agent as nvsnap-agent<br/>(node N2)
+    participant PeerN1 as nvsnap-agent<br/>(node N1, source)
+    participant Blob as nvsnap-blobstore
+    participant Entry as restore-entrypoint
+    participant CRIU as CRIU
+    participant CC as cuda-checkpoint
+
+    User->>Srv: POST /restore/pod {ckptID, target}
+    Srv->>K8s: apply restore Pod manifest<br/>(nodeName: N2)
+    K8s->>Pod: schedule
+    Pod->>Init: get-uvloop, get-libuv, get-libzmq, get-criu run
+    Init->>Init: populate /nvsnap-lib emptyDir<br/>(wheels, libs, sitecustomize)
+
+    Pod->>Agent: restore container starts<br/>(LD_PRELOAD on, PYTHONPATH set)
+    Agent->>Agent: cascade fetch checkpoint
+    Agent->>Agent: tier-1: local hostPath check
+    alt local hit
+        Agent-->>Pod: ready
+    else miss
+        Agent->>PeerN1: HTTP GET /peer/<ckptID>
+        alt peer hit
+            PeerN1-->>Agent: stream chunks
+        else peer miss
+            Agent->>Blob: GET <ckptID>
+            Blob-->>Agent: stream chunks
+        end
+        Agent->>Agent: write to hostPath
+    end
+
+    Pod->>Entry: exec /nvsnap/restore-entrypoint
+    Entry->>CC: prep GPU state restore<br/>(from nvidia-files.img)
+    Entry->>CRIU: restore --tree=<pid> --external=dev[195/0]:nvidia0 ...
+    CRIU->>CRIU: rebuild fd table, vmas, memory
+    CRIU->>CC: CUDA plugin: replay RM ioctls, H2D copy
+    CC-->>CRIU: GPU state restored
+    CRIU->>Pod: resume process tree
+
+    Pod->>Pod: process resumes inside restored memory image
+    Pod->>Pod: patched uvloop's uv_loop_fork() reinits libuv state
+    Pod-->>User: inference resumes (/v1/completions OK)
+
+    Note over Pod,Entry: NIM 8B restore: ~1 min from pod ready to inference

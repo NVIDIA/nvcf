@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "json",
+    srcs = ["fields.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/third_party/forked/golang/json",
+    importpath = "k8s.io/apimachinery/third_party/forked/golang/json",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":json",
+    visibility = ["//visibility:public"],
+)

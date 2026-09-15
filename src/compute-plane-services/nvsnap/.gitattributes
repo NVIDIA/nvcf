@@ -1,0 +1,3 @@
+# Keep experimental/ out of `git archive` release tarballs (defense-in-depth;
+# the OSS publish allow-list is the primary exclusion).
+experimental/ export-ignore

@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    contact-points: 127.0.0.1
+    # Expect local_env/docker-compose.yml (9042:9042); port defaults from application.yaml.
+    username: cassandra
+    password: cassandra
+
+management:
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+
+logging:
+  level:
+    com.nvidia: DEBUG
+    com.nvidia.nvct.configuration: INFO
+    org.springframework.web: DEBUG
+    org.springframework.data.cassandra.core.cql.CqlTemplate: DEBUG
+
+nvct:
+  aws:
+    region: us-east-1
+  ess:
+    enabled: false
+    base-url: http://localhost:9098
+  notary:
+    audiences:
+      ess: ess-api
+      nvct: nvct-api
+    base-url: http://localhost:9097
+  nvcf:
+    base-url: http://localhost:9119
+  reval:
+    base-url: http://localhost:9099
+  icms:
+    allocator:
+      enabled: false
+    base-url: http://localhost:9096
+  api-keys:
+    base-url: http://localhost:9093
+  scheduled-routines:
+    enabled: false

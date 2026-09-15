@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "execution",
+    srcs = [
+        "errors.go",
+        "interface.go",
+        "runner.go",
+        "runner_mock.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/jq/execution",
+    importpath = "github.com/run-ai/karta/pkg/jq/execution",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/itchyny/gojq",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/mock/gomock",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":execution",
+    visibility = ["//visibility:public"],
+)

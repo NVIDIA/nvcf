@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "envtest",
+    srcs = [
+        "binaries.go",
+        "crd.go",
+        "doc.go",
+        "helper.go",
+        "server.go",
+        "webhook.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/envtest",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/envtest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/admissionregistration/v1:admissionregistration",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1:apiextensions",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/version",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/wait",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/yaml",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/scheme",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/retry",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/apiutil",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/config",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/addr",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/certs",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/controlplane",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/testing/process",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/conversion",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":envtest",
+    visibility = ["//visibility:public"],
+)

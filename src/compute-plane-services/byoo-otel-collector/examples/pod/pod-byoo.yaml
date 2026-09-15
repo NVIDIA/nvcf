@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: byoo-otel-collector
+  labels:
+    app.kubernetes.io/name: byoo-otel-collector
+spec:
+  automountServiceAccountToken: false
+  imagePullSecrets:
+    - name: ngc-registry-secret
+  containers:
+    - name: otel-collector
+      image: registry.example.invalid/byoo-otel-collector:dev
+      imagePullPolicy: Always
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+          ephemeral-storage: 100Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+          ephemeral-storage: 2Gi
+      args:
+        [
+          "--telemetries ewogICAidGVsZW1ldHJpZXMiOiB7CiAgICAgICJtZXRyaWNzVGVsZW1ldHJ5IjogewogICAgICAgICAidGVsZW1ldHJ5SWQiOiAiZmQyOGZjMTMtYjQ0Yy00ZTIxLTkxMzItMWUxODgzZjlkZWM1IiwKICAgICAgICAgIm5hbWUiOiAia3JhdG9zLXRoYW5vcy1zYW5kYm94IiwKICAgICAgICAgImVuZHBvaW50IjogImh0dHBzOi8vc2FuZGJveC1yZWNlaXZlcnMudGhhbm9zLm52aWRpYW5nbi5uZXQvYXBpL3YxL3JlY2VpdmUiLAogICAgICAgICAicHJvdG9jb2wiOiAiSFRUUCIsCiAgICAgICAgICJwcm92aWRlciI6ICJLUkFUT1NfVEhBTk9TIiwKICAgICAgICAgInR5cGVzIjogWwogICAgICAgICAgICAiTUVUUklDUyIKICAgICAgICAgXSwKICAgICAgICAgImNyZWF0ZWRBdCI6ICIyMDI1LTA0LTE2VDE3OjQxOjM0LjAxM1oiCiAgICAgIH0KICAgfQp9",
+        ]
+      env:
+        - name: OTEL_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NVCF_BACKEND_TYPE
+          value: non-gfn
+        - name: NVCF_WORKLOAD_TYPE
+          value: function
+        - name: NVCF_INSTANCE_ID
+          value: fake-instance-id
+        - name: NVCF_ZONE_NAME
+          value: fake-zone-name
+        - name: NVCF_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NVCF_FUNCTION_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['function-id']
+        - name: NVCF_FUNCTION_VERSION_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['function-version-id']
+      volumeMounts:
+        - name: accounts-secrets-volume
+          mountPath: /var/secrets/accounts-secrets.json
+          subPath: accounts-secrets.json
+          readOnly: true
+        - name: config-volume
+          mountPath: /etc/byoo-otel-collector/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: otel-collector-secrets-volume
+          mountPath: /etc/byoo-otel-collector/secrets
+      ports:
+        - containerPort: 18888
+          name: metrics
+          protocol: TCP
+        - containerPort: 14357
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 14358
+          name: otlp-http
+          protocol: TCP
+        - containerPort: 13133
+          name: healthcheck-v2
+          protocol: TCP
+  volumes:
+    - name: config-volume
+      configMap:
+        name: otel-config
+    - name: accounts-secrets-volume
+      configMap:
+        name: accounts-secrets
+    - name: otel-collector-secrets-volume
+      emptyDir: {}

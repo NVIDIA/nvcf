@@ -1,0 +1,11 @@
+_output/
+*.secrets
+.vscode/
+.scannerwork/
+
+# Test items
+__debug_bin*
+coverage.out
+
+# Bazel
+bazel-*

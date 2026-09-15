@@ -1,0 +1,2122 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package storage
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	coordv1 "k8s.io/api/coordination/v1"
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	nvcaenvtest "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/envtest"
+	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+)
+
+func TestReconcile_ModelCache(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg, _, cleanup, err := nvcaenvtest.SetupEnvtest()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	mgr, err := ctrl.NewManager(cfg, manager.Options{
+		Scheme:                  mgrScheme,
+		GracefulShutdownTimeout: new(time.Duration),
+		BaseContext:             func() context.Context { return ctx },
+		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
+		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
+		// Two model-cache envtests run in one process; the controller name
+		// "modelcache" is otherwise globally unique per controller-runtime.
+		Controller: ctrlconfig.Controller{SkipNameValidation: newBool(true)},
+	})
+	require.NoError(t, err)
+
+	defaultTimeConfig := (&k8sutil.TimeConfig{}).Complete()
+	nvcaCfg := nvcaconfig.Config{}
+	err = BuildController(nvcaCfg, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
+	require.NoError(t, err)
+
+	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
+	require.NoError(t, err)
+
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr.GetCache().WaitForCacheSync(cctx)
+	ccancel()
+
+	c := mgr.GetClient()
+
+	srNamespace := &corev1.Namespace{}
+	srNamespace.Name = types.DefaultICMSRequestNamespace
+	err = c.Create(ctx, srNamespace)
+	require.NoError(t, err)
+	err = c.Create(ctx, NewModelCacheInitNamespace())
+	require.NoError(t, err)
+
+	cacheHandle := "abc123handle"
+	srSpec := newModelCacheICMSSpec(cacheHandle)
+
+	sts := []*nvcav1new.StorageRequest{}
+	for i := range 3 {
+		namespace := &corev1.Namespace{}
+		namespace.Name = fmt.Sprintf("sr-%d", i)
+		err = c.Create(ctx, namespace)
+		require.NoError(t, err)
+		sr := &nvcav2beta1.ICMSRequest{}
+		sr.Name, sr.Namespace = namespace.Name, srNamespace.Name
+		sr.Spec = srSpec
+		err = c.Create(ctx, sr)
+		require.NoError(t, err)
+		st := &nvcav1new.StorageRequest{}
+		st.Name, st.Namespace = nvcav1new.ModelCacheRequest.Name(), namespace.Name
+		st.Spec.Type = nvcav1new.ModelCacheRequest
+		st.Spec.ICMSRequestName = sr.Name
+		st.Spec.ICMSRequestNamespace = srNamespace.Name
+		st.Spec.ModelCache = &nvcav1new.ModelCacheSpec{
+			CacheHandle: cacheHandle,
+			Encryption:  &nvcav1new.ModelCacheEncryption{Required: true},
+		}
+		err = c.Create(ctx, st)
+		require.NoError(t, err)
+		sts = append(sts, st)
+	}
+	primaryST := sts[0]
+
+	// Test fan-out on all conditions.
+	for _, st := range sts {
+		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+			err = c.Get(ctx, client.ObjectKeyFromObject(st), st)
+			if assert.NoError(ct, err) {
+				assert.Equal(ct, nvcav1new.StoragePending, st.Status.Phase)
+			}
+		}, 2*time.Second, 50*time.Millisecond)
+	}
+
+	// Ensure init artifacts exist.
+	gotSecret := &corev1.Secret{}
+	err = c.Get(ctx, client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: "scsec-d5f545ee492260223239e813ad6a5795"}, gotSecret)
+	require.NoError(t, err)
+	gotSecret.TypeMeta = metav1.TypeMeta{}
+	assert.Contains(t, gotSecret.Data, "dmcryptKey")
+
+	gotSCName := "sc-d5f545ee492260223239e813ad6a5795"
+	gotSC := &storagev1.StorageClass{}
+	err = c.Get(ctx, client.ObjectKey{Name: "sc-d5f545ee492260223239e813ad6a5795"}, gotSC)
+	require.NoError(t, err)
+	gotSC.ObjectMeta = metav1.ObjectMeta{}
+	gotSC.TypeMeta = metav1.TypeMeta{}
+	vbm := storagev1.VolumeBindingImmediate
+	reclaimPolicy := corev1.PersistentVolumeReclaimRetain
+	assert.Equal(t, &storagev1.StorageClass{
+		Provisioner:          NVMeshStorageClassProvisioner,
+		AllowVolumeExpansion: newBool(true),
+		VolumeBindingMode:    &vbm,
+		ReclaimPolicy:        &reclaimPolicy,
+		Parameters: map[string]string{
+			NVMeshStorageClassVPG:       NVMeshStorageClassVPGType,
+			NVMeshStorageClassCSIFS:     NVMeshStorageClassFS,
+			NVMeshStorageClassCSISecret: "scsec-d5f545ee492260223239e813ad6a5795",
+			NVMeshStorageClassCSINS:     ModelCacheInitNamespace,
+		},
+	}, gotSC)
+
+	rwPVC := &corev1.PersistentVolumeClaim{}
+	err = c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC)
+	require.NoError(t, err)
+	if assert.NotNil(t, rwPVC.Spec.StorageClassName) {
+		assert.Equal(t, gotSCName, *rwPVC.Spec.StorageClassName)
+	}
+
+	initJob := &batchv1.Job{}
+	err = c.Get(ctx, client.ObjectKey{Name: "writer-job-" + cacheHandle, Namespace: ModelCacheInitNamespace}, initJob)
+	require.NoError(t, err)
+
+	// Create the job pod and set to running, ensure job is marked started.
+	initJobPod := &corev1.Pod{}
+	initJobPod.Name, initJobPod.Namespace = initJob.Spec.Template.Name+"-foobar", initJob.Namespace
+	initJobPod.Labels = make(map[string]string, len(initJob.Spec.Template.Labels))
+	maps.Copy(initJobPod.Labels, initJob.Spec.Template.Labels)
+	maps.Copy(initJobPod.Labels, initJob.Spec.Selector.MatchLabels)
+	initJobPod.Annotations = initJob.Spec.Template.Annotations
+	initJobPod.Spec = initJob.Spec.Template.Spec
+	err = c.Create(ctx, initJobPod)
+	require.NoError(t, err)
+	initJobPod.Status = corev1.PodStatus{Phase: corev1.PodRunning}
+	err = c.Status().Update(ctx, initJobPod)
+	require.NoError(t, err)
+
+	initJob.Status.StartTime = &metav1.Time{Time: time.Now().Add(-1 * 1 * time.Minute)}
+	err = c.Status().Update(ctx, initJob)
+	require.NoError(t, err)
+
+	// Ensure primart request is marked init running.
+	// Dependents eventually will be on object updates.
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err = c.Get(ctx, client.ObjectKeyFromObject(primaryST), primaryST)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageInitRunning, primaryST.Status.Phase,
+				fmt.Sprintf("storage request %s/%s", primaryST.Name, primaryST.Namespace))
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	primaryPV := &corev1.PersistentVolume{}
+	primaryPV.Name = "primary-randomsuffix"
+	primaryPV.Spec.ClaimRef = &corev1.ObjectReference{
+		APIVersion: "v1",
+		Kind:       "PersistentVolumeClaim",
+		Namespace:  rwPVC.Namespace,
+		Name:       rwPVC.Name,
+		UID:        rwPVC.UID,
+	}
+	volumeHandlePrefix := "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:"
+	primaryPV.Spec.CSI = &corev1.CSIPersistentVolumeSource{
+		// The real driver name: NVCA keys the reader handle rewrite on it, and
+		// the rest of the model cache code compares it against the selected
+		// StorageClass provisioner.
+		Driver:       NVMeshStorageClassProvisioner,
+		VolumeHandle: volumeHandlePrefix + ModelCacheInitNamespace,
+	}
+	primaryPV.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	primaryPV.Spec.Capacity = corev1.ResourceList{"storage": resource.MustParse("1Gi")}
+	err = c.Create(ctx, primaryPV)
+	require.NoError(t, err)
+
+	rwPVC.Spec.VolumeName = primaryPV.Name
+	err = c.Update(ctx, rwPVC)
+	require.NoError(t, err)
+	rwPVC.Status.Phase = corev1.ClaimBound
+	err = c.Status().Update(ctx, rwPVC)
+	require.NoError(t, err)
+
+	// Ensure all are marked init running after PV/C bind events.
+	for _, st := range sts {
+		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+			err = c.Get(ctx, client.ObjectKeyFromObject(st), st)
+			if assert.NoError(ct, err) {
+				assert.Equal(ct, nvcav1new.StorageInitRunning, st.Status.Phase,
+					fmt.Sprintf("storage request %s/%s", st.Name, st.Namespace))
+			}
+		}, 5*time.Second, 50*time.Millisecond)
+	}
+
+	// Drive the writer Job to completion. The reconciler keys off
+	// CompletionTime + Succeeded (see modelcache.go), not the conditions, but
+	// the apiserver validates the condition shape and its rules differ by
+	// version: k8s >= 1.34 requires SuccessCriteriaMet before Complete, while
+	// k8s 1.30-1.33 reject SuccessCriteriaMet on this NonIndexed Job (it has no
+	// SuccessPolicy). The Job's spec is reconciler-owned and immutable here, so
+	// apply the modern shape and fall back to the pre-1.34 shape only when the
+	// running apiserver returns an Invalid validation error.
+	completeJob(ctx, t, c, initJob)
+
+	for _, st := range sts {
+		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+			err = c.Get(ctx, client.ObjectKeyFromObject(st), st)
+			if assert.NoError(ct, err) {
+				assert.Equal(ct, nvcav1new.StorageCreating, st.Status.Phase,
+					fmt.Sprintf("storage request %s/%s", st.Name, st.Namespace))
+			}
+		}, 5*time.Second, 50*time.Millisecond)
+	}
+
+	err = c.Get(ctx, client.ObjectKeyFromObject(primaryPV), primaryPV)
+	require.NoError(t, err)
+	primaryPV.Status.Phase = corev1.VolumeBound
+	err = c.Status().Update(ctx, primaryPV)
+	require.NoError(t, err)
+
+	roPVCs := make([]*corev1.PersistentVolumeClaim, len(sts))
+	for i, st := range sts {
+		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+			roPVC := &corev1.PersistentVolumeClaim{}
+			err = c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: st.Namespace}, roPVC)
+			if assert.NoError(ct, err) {
+				roPVCs[i] = roPVC
+			}
+		}, 5*time.Second, 50*time.Millisecond)
+	}
+
+	for _, pvc := range roPVCs {
+		if pvc == nil {
+			continue
+		}
+		if assert.NotNil(t, pvc.Spec.StorageClassName) {
+			assert.Equal(t, gotSCName, *pvc.Spec.StorageClassName)
+		}
+		pvc.Status.Phase = corev1.ClaimBound
+		err = c.Status().Update(ctx, pvc)
+		require.NoError(t, err)
+	}
+
+	for _, st := range sts {
+		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+			err = c.Get(ctx, client.ObjectKeyFromObject(st), st)
+			if assert.NoError(ct, err) {
+				assert.Equal(ct, nvcav1new.StorageReady, st.Status.Phase,
+					fmt.Sprintf("storage request %s/%s", st.Name, st.Namespace))
+			}
+		}, 5*time.Second, 50*time.Millisecond)
+	}
+
+	for _, st := range sts {
+		// Ensure secondary PV has updated volume handle.
+		secondaryPV := &corev1.PersistentVolume{}
+		err := c.Get(ctx, client.ObjectKey{Name: "secondary-pv-" + st.Namespace}, secondaryPV)
+		require.NoError(t, err)
+		assert.Equal(t, volumeHandlePrefix+st.Namespace, secondaryPV.Spec.CSI.VolumeHandle)
+
+		err = c.Delete(ctx, st)
+		require.NoError(t, err)
+	}
+
+	for _, st := range sts {
+		assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+			err = c.Get(ctx, client.ObjectKeyFromObject(st), st)
+			assert.True(ct, apierrors.IsNotFound(err))
+		}, 10*time.Second, 50*time.Millisecond)
+	}
+
+	cancel()
+	<-mgrErrCh
+}
+
+func TestGetPVCState(t *testing.T) {
+	tests := []struct {
+		name     string
+		pvc      *corev1.PersistentVolumeClaim
+		expected pvcState
+	}{
+		{
+			name: "bound pvc",
+			pvc: &corev1.PersistentVolumeClaim{
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimBound,
+				},
+			},
+			expected: 1, // pvcBound
+		},
+		{
+			name: "unbound pvc",
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					CreationTimestamp: metav1.Now(),
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimPending,
+				},
+			},
+			expected: 2, // pvcUnbound
+		},
+		{
+			name: "bind failed pvc",
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					CreationTimestamp: metav1.Time{Time: metav1.Now().Add(-time.Hour)},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimPending,
+				},
+			},
+			expected: 3, // pvcBindFailed
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{
+				k8sTimeConfig: (&k8sutil.TimeConfig{
+					ModelCacheROPVCBindTimeGracePeriod: 2 * time.Minute,
+				}).Complete(),
+				metrics: newTestMetrics(),
+			}
+			state := r.getPVCState(tt.pvc)
+			assert.Equal(t, tt.expected, state)
+		})
+	}
+}
+
+func TestGetInitCacheJobState(t *testing.T) {
+	backoffLimit := int32(3)
+	tests := []struct {
+		name     string
+		job      *batchv1.Job
+		expected initCacheJobState
+	}{
+		{
+			name: "job in progress",
+			job: &batchv1.Job{
+				Spec: batchv1.JobSpec{BackoffLimit: &backoffLimit},
+				Status: batchv1.JobStatus{
+					Conditions: []batchv1.JobCondition{
+						{
+							Type:   batchv1.JobComplete,
+							Status: corev1.ConditionFalse,
+						},
+					},
+				},
+			},
+			expected: initCacheJobInProgress,
+		},
+		{
+			name: "job completed",
+			job: &batchv1.Job{
+				Spec: batchv1.JobSpec{BackoffLimit: &backoffLimit},
+				Status: batchv1.JobStatus{
+					CompletionTime: &metav1.Time{},
+					Succeeded:      1,
+				},
+			},
+			expected: initCacheJobCompleted,
+		},
+		{
+			name: "job failed",
+			job: &batchv1.Job{
+				Spec: batchv1.JobSpec{BackoffLimit: &backoffLimit},
+				Status: batchv1.JobStatus{
+					Failed: 4,
+				},
+			},
+			expected: initCacheJobFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{
+				fff:     &featureflagmock.Fetcher{},
+				metrics: newTestMetrics(),
+			}
+			state := r.getInitCacheJobState(context.Background(), tt.job)
+			assert.Equal(t, tt.expected, state)
+		})
+	}
+}
+
+func TestNewInitLease(t *testing.T) {
+	stCopy := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-storage",
+			Namespace: "test-ns",
+		},
+		Spec: nvcav1new.StorageRequestSpec{
+			ICMSRequestName: "test-storage",
+			ModelCache: &nvcav1new.ModelCacheSpec{
+				CacheHandle: "foo",
+			},
+		},
+	}
+
+	lease := newInitLease(stCopy)
+
+	assert.Equal(t, ModelCacheInitNamespace, lease.Namespace)
+	assert.Equal(t, lease.Name, "modelcache-init-foo")
+	assert.NotNil(t, lease.Spec)
+	assert.NotNil(t, lease.Spec.HolderIdentity)
+	assert.Equal(t, stCopy.Spec.ICMSRequestName, *lease.Spec.HolderIdentity)
+}
+
+func TestGetPrimaryPV(t *testing.T) {
+	tests := []struct {
+		name    string
+		objects []client.Object
+		wantErr bool
+	}{
+		{
+			name: "pv found",
+			objects: []client.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "primary-pv",
+						Labels: map[string]string{
+							primaryPVLabelKey:        "true",
+							modelCacheHandleLabelKey: "exp",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "pv not found no label",
+			objects: []client.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "primary-pv",
+						Labels: map[string]string{
+							primaryPVLabelKey: "true",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "pv not found other label",
+			objects: []client.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "primary-pv",
+						Labels: map[string]string{
+							primaryPVLabelKey:        "true",
+							modelCacheHandleLabelKey: "other",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "pv too many",
+			objects: []client.Object{
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "primary-pv-1",
+						Labels: map[string]string{
+							primaryPVLabelKey:        "true",
+							modelCacheHandleLabelKey: "exp",
+						},
+					},
+				},
+				&corev1.PersistentVolume{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "primary-pv-2",
+						Labels: map[string]string{
+							primaryPVLabelKey:        "true",
+							modelCacheHandleLabelKey: "exp",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewClientBuilder().
+				WithScheme(mgrScheme).
+				WithObjects(tt.objects...).
+				Build()
+
+			r := &Reconciler{Client: client, metrics: newTestMetrics()}
+			st := &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						types.NCAIDKey:             "test-nca",
+						types.FunctionIDKey:        "test-function",
+						types.FunctionVersionIDKey: "test-version",
+					},
+				},
+				Spec: nvcav1new.StorageRequestSpec{
+					ModelCache: &nvcav1new.ModelCacheSpec{
+						CacheHandle: "exp",
+					},
+				},
+			}
+			_, err := r.getPrimaryPV(context.Background(), st)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getPrimaryPV() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// newMountOptionDefaultsObjects builds the storage class and ConfigMap that the
+// reconciler consults to decide which mount option defaults apply.
+func newMountOptionDefaultsObjects(provisioner string, cmData map[string]string) []client.Object {
+	objs := []client.Object{}
+	if provisioner != "" {
+		objs = append(objs, &storagev1.StorageClass{
+			ObjectMeta:  metav1.ObjectMeta{Name: DefaultModelCacheStorageClassName},
+			Provisioner: provisioner,
+		})
+	}
+	if cmData != nil {
+		objs = append(objs, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      DefaultCacheMountOptionsConfigMapName,
+				Namespace: ModelCacheInitNamespace,
+			},
+			Data: cmData,
+		})
+	}
+	return objs
+}
+
+var nvmeshMountOptionDefaults = map[string]string{
+	NVMeshStorageClassProvisioner: NVMeshCacheMountOptions,
+}
+
+func TestResolveCacheMountOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		provisioner string
+		cmData      map[string]string
+		configured  []string
+		want        []string
+	}{
+		{
+			name:        "nvmesh provisioner gets its defaults when nothing configured",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name:        "defaults are kept when configuration omits them",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "options already configured are not duplicated",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"nouuid", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "configured rw that would negate a required ro is dropped",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"rw", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "every option negating a default is dropped",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"rw", "recovery", "uuid"},
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			// doModelCacheNVMesh also serves requests with an empty backend, whose
+			// storage class need not be NVMesh at all.
+			name:        "provisioner absent from the configmap uses configured options",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+		{
+			name:        "a new provisioner is picked up from the configmap without a code change",
+			provisioner: "some-other.csi.driver",
+			cmData: map[string]string{
+				"some-other.csi.driver": "ro, nouuid ",
+			},
+			configured: []string{"noatime"},
+			want:       []string{"ro", "nouuid", "noatime"},
+		},
+		{
+			// An unreadable ConfigMap is an error state, not a statement about the
+			// provisioner, so a volume is never created without the options its
+			// mount depends on.
+			name:        "missing configmap falls back to the built-in nvmesh defaults",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nil,
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			// The disabled-flag case: no configured options at all. Without the
+			// built-in fallback this produced a volume with no mount options.
+			name:        "missing configmap with no configured options still gets the defaults",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nil,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			// A readable ConfigMap stays the source of truth: an operator who
+			// removes the entry is respected, no built-in override.
+			name:        "entry removed from a readable configmap is respected",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      map[string]string{"other.csi.driver": "ro"},
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+		{
+			name:        "missing configmap on a non-nvmesh provisioner uses configured options",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nil,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+		{
+			name:        "missing storage class falls back to configured options",
+			provisioner: "",
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().
+				WithScheme(mgrScheme).
+				WithObjects(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData)...).
+				Build()
+			r := newMountOptionsReconciler(t, c, tt.configured)
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+
+			if got := r.resolveCacheMountOptions(context.Background(), pv); !slices.Equal(got, tt.want) {
+				t.Errorf("resolveCacheMountOptions() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The provisioner is a one time init, but the ConfigMap is read on every use so
+// an operator edit takes effect without restarting the agent.
+func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+
+	want := []string{"ro", "norecovery", "nouuid"}
+	if got := r.resolveCacheMountOptions(ctx, pv); !slices.Equal(got, want) {
+		t.Fatalf("before edit = %v, want %v", got, want)
+	}
+
+	cm := &corev1.ConfigMap{}
+	key := client.ObjectKey{Name: DefaultCacheMountOptionsConfigMapName, Namespace: ModelCacheInitNamespace}
+	if err := c.Get(ctx, key, cm); err != nil {
+		t.Fatalf("get configmap: %v", err)
+	}
+	cm.Data[NVMeshStorageClassProvisioner] = "ro,norecovery,nouuid,noatime"
+	if err := c.Update(ctx, cm); err != nil {
+		t.Fatalf("update configmap: %v", err)
+	}
+
+	want = []string{"ro", "norecovery", "nouuid", "noatime"}
+	if got := r.resolveCacheMountOptions(ctx, pv); !slices.Equal(got, want) {
+		t.Errorf("after edit = %v, want %v (edit did not take effect without a restart)", got, want)
+	}
+}
+
+// TestModelCacheStorageClassResolvedOnce covers the storage class NewReconciler
+// resolves for the life of the reconciler: the option override first (tests),
+// then the agent config value, then the default. The config value is the single
+// production source, read here and by model cache backend selection, so the
+// class that is checked cannot drift from the class volumes are created on.
+func TestModelCacheStorageClassResolvedOnce(t *testing.T) {
+	tests := []struct {
+		name     string
+		override string
+		agentCfg string
+		want     string
+	}{
+		{
+			name: "unset falls back to the default",
+			want: DefaultModelCacheStorageClassName,
+		},
+		{
+			name:     "option override wins",
+			override: "custom-sc",
+			want:     "custom-sc",
+		},
+		{
+			name:     "agent config value is used when there is no override",
+			agentCfg: "cfg-sc",
+			want:     "cfg-sc",
+		},
+		{
+			name:     "option override beats the agent config value",
+			override: "custom-sc",
+			agentCfg: "cfg-sc",
+			want:     "custom-sc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newModelCacheStorageClassReconciler(t, tt.agentCfg, tt.override)
+			if got := r.modelCacheStorageClass; got != tt.want {
+				t.Errorf("modelCacheStorageClass = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// newModelCacheStorageClassReconciler builds a Reconciler the way production
+// does, so the storage class resolution under test is the real one.
+func newModelCacheStorageClassReconciler(t *testing.T, agentCfg, override string) *Reconciler {
+	t.Helper()
+	nvcaCfg := nvcaconfig.Config{}
+	nvcaCfg.Agent.ModelCache.StorageClassName = agentCfg
+	return NewReconciler(nvcaCfg,
+		fake.NewClientBuilder().WithScheme(mgrScheme).Build(),
+		nil, nil, "my-cluster", "us-west-1", (&k8sutil.TimeConfig{}).Complete(),
+		WithModelCacheStorageClass(override))
+}
+
+// newMountOptionsReconciler builds a Reconciler through NewReconciler for the
+// mount option tests. They resolve defaults from the model cache storage class,
+// which only NewReconciler fills in.
+func newMountOptionsReconciler(t *testing.T, c client.Client, configured []string) *Reconciler {
+	t.Helper()
+	return NewReconciler(nvcaconfig.Config{}, c, nil, nil, "my-cluster", "us-west-1",
+		(&k8sutil.TimeConfig{}).Complete(), WithCSIVolumeMountOptions(configured))
+}
+
+func TestApplyModelCacheStorageClass(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+
+	tests := []struct {
+		name       string
+		configured string
+		specSC     *string
+		want       string
+	}{
+		{
+			name:       "spec value is replaced by the default",
+			configured: "",
+			specSC:     ptr("some-other-sc"),
+			want:       DefaultModelCacheStorageClassName,
+		},
+		{
+			name:       "spec value is replaced by the configured override",
+			configured: "custom-sc",
+			specSC:     ptr("some-other-sc"),
+			want:       "custom-sc",
+		},
+		{
+			name:       "unset spec value is filled in",
+			configured: "custom-sc",
+			specSC:     nil,
+			want:       "custom-sc",
+		},
+		{
+			name:       "matching spec value is left as-is",
+			configured: "custom-sc",
+			specSC:     ptr("custom-sc"),
+			want:       "custom-sc",
+		},
+		{
+			name:       "empty string in the spec is still replaced",
+			configured: "custom-sc",
+			specSC:     ptr(""),
+			want:       "custom-sc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "rw-pvc-test"},
+				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: tt.specSC},
+			}
+			r := newModelCacheStorageClassReconciler(t, "", tt.configured)
+
+			r.applyModelCacheStorageClass(context.Background(), pvc)
+
+			if pvc.Spec.StorageClassName == nil {
+				t.Fatalf("storage class was left nil, want %q", tt.want)
+			}
+			if got := *pvc.Spec.StorageClassName; got != tt.want {
+				t.Errorf("storage class = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRedactMountOptionValues(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []string
+		want []string
+	}{
+		{
+			name: "bare flags are kept as-is",
+			opts: []string{"ro", "norecovery", "nouuid"},
+			want: []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name: "values are hidden but keys are kept",
+			opts: []string{"ro", "password=hunter2", "vers=3.0"},
+			want: []string{"ro", "password=<redacted>", "vers=<redacted>"},
+		},
+		{
+			name: "an empty value is still redacted",
+			opts: []string{"password="},
+			want: []string{"password=<redacted>"},
+		},
+		{
+			name: "nil stays empty",
+			opts: nil,
+			want: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactMountOptionValues(tt.opts); !slices.Equal(got, tt.want) {
+				t.Errorf("redactMountOptionValues() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcileSecondaryPVMountOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		provisioner string
+		cmData      map[string]string
+		existing    []string
+		configured  []string
+		want        []string
+		wantPatch   bool
+	}{
+		{
+			name:        "pv missing required options is repaired",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    nil,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   true,
+		},
+		{
+			name:        "pv is not stripped when configuration is empty",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   false,
+		},
+		{
+			name:        "pv picks up newly configured options",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+			wantPatch:   true,
+		},
+		{
+			name:        "optional option removed from configuration is removed from the pv",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid", "noatime"},
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   true,
+		},
+		{
+			name:        "configured rw does not make an existing read-only pv writable",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"rw"},
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   false,
+		},
+		{
+			name:        "matching pv is left alone",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"noatime"},
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+			wantPatch:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pv := &corev1.PersistentVolume{
+				ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"},
+				Spec: corev1.PersistentVolumeSpec{
+					MountOptions: tt.existing,
+					PersistentVolumeSource: corev1.PersistentVolumeSource{
+						CSI: &corev1.CSIPersistentVolumeSource{
+							Driver:       tt.provisioner,
+							VolumeHandle: "handle",
+						},
+					},
+				},
+			}
+			objs := append(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData), pv)
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
+			r := newMountOptionsReconciler(t, c, tt.configured)
+
+			stored := &corev1.PersistentVolume{}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, stored); err != nil {
+				t.Fatalf("get pv before reconcile: %v", err)
+			}
+			rvBefore := stored.ResourceVersion
+
+			if err := r.reconcileSecondaryPVMountOptions(context.Background(), pv); err != nil {
+				t.Fatalf("reconcileSecondaryPVMountOptions() error = %v", err)
+			}
+
+			got := &corev1.PersistentVolume{}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, got); err != nil {
+				t.Fatalf("get pv: %v", err)
+			}
+			if !slices.Equal(got.Spec.MountOptions, tt.want) {
+				t.Errorf("persisted mount options = %v, want %v", got.Spec.MountOptions, tt.want)
+			}
+			// An unchanged PV must not be written, otherwise every reconcile
+			// would issue a patch and churn the API server.
+			if patched := got.ResourceVersion != rvBefore; patched != tt.wantPatch {
+				t.Errorf("patched = %v, want %v (resourceVersion %s -> %s)",
+					patched, tt.wantPatch, rvBefore, got.ResourceVersion)
+			}
+		})
+	}
+}
+
+func Test_updateSecondaryPVVolumeHandle(t *testing.T) {
+	namespace := "sr-fd7d88ab-6e18-4442-8a94-344da5f7341e"
+	tests := []struct {
+		name            string
+		volumeHandle    string
+		expVolumeHandle string
+		expError        string
+	}{
+		{
+			name:         "empty",
+			volumeHandle: "",
+			expError:     `volume handle "" has no colons`,
+		},
+		{
+			name:         "no colons",
+			volumeHandle: "foobar",
+			expError:     `volume handle "foobar" has no colons`,
+		},
+		{
+			name:            "colon only",
+			volumeHandle:    ":",
+			expVolumeHandle: ":" + namespace,
+		},
+		{
+			name:            "empty namespace",
+			volumeHandle:    "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:",
+			expVolumeHandle: "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:" + namespace,
+		},
+		{
+			name:            "mcinit namespace",
+			volumeHandle:    "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:" + ModelCacheInitNamespace,
+			expVolumeHandle: "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:" + namespace,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := updateSecondaryPVVolumeHandle(tt.volumeHandle, namespace)
+			if tt.expError != "" {
+				assert.EqualError(t, err, tt.expError)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expVolumeHandle, got)
+			}
+		})
+	}
+}
+
+func getPrimaryPVObj() *corev1.PersistentVolume {
+	return &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "primary-pv",
+			Labels: map[string]string{
+				primaryPVLabelKey:          "true",
+				types.FunctionIDKey:        "test-function",
+				types.FunctionVersionIDKey: "test-version",
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Capacity: corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("1Gi"),
+			},
+			StorageClassName: "test-sc",
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       "test-driver",
+					VolumeHandle: "test-handle",
+				},
+			},
+		},
+	}
+}
+
+func TestMapPodIssuesToFailureReason(t *testing.T) {
+	tests := []struct {
+		name           string
+		podIssues      []string
+		expectedReason string
+	}{
+		{
+			name:           "empty issues returns init_job_failed",
+			podIssues:      []string{},
+			expectedReason: modelcachetypes.ReasonInitJobFailed,
+		},
+		{
+			name:           "image pull issues",
+			podIssues:      []string{"image pull issues"},
+			expectedReason: modelcachetypes.ReasonImagePull,
+		},
+		{
+			name:           "init stuck initializing",
+			podIssues:      []string{"init stuck initializing"},
+			expectedReason: modelcachetypes.ReasonInitStuck,
+		},
+		{
+			name:           "scheduling timeout",
+			podIssues:      []string{"timed out waiting to be scheduled"},
+			expectedReason: modelcachetypes.ReasonSchedulingTimeout,
+		},
+		{
+			name:           "admission rejected",
+			podIssues:      []string{"admission rejected"},
+			expectedReason: modelcachetypes.ReasonAdmissionRejected,
+		},
+		{
+			name:           "unknown issue returns init_job_failed",
+			podIssues:      []string{"some unknown issue"},
+			expectedReason: modelcachetypes.ReasonInitJobFailed,
+		},
+		{
+			name:           "image pull takes priority over other issues",
+			podIssues:      []string{"init stuck initializing", "image pull issues", "admission rejected"},
+			expectedReason: modelcachetypes.ReasonImagePull,
+		},
+		{
+			name:           "init stuck takes priority over scheduling timeout",
+			podIssues:      []string{"timed out waiting to be scheduled", "init stuck initializing"},
+			expectedReason: modelcachetypes.ReasonInitStuck,
+		},
+		{
+			name:           "scheduling timeout takes priority over admission rejected",
+			podIssues:      []string{"admission rejected", "timed out waiting to be scheduled"},
+			expectedReason: modelcachetypes.ReasonSchedulingTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issues := sets.New[string](tt.podIssues...)
+			result := mapPodIssuesToFailureReason(issues)
+			assert.Equal(t, tt.expectedReason, result)
+		})
+	}
+}
+
+// completeJob marks a writer Job as succeeded in a way the running apiserver
+// accepts. The reconciler detects completion via CompletionTime + Succeeded
+// (see modelcache.go), not the Job conditions, but the apiserver still
+// validates the condition shape and its rules changed across versions:
+//   - k8s >= 1.34 requires a SuccessCriteriaMet condition before Complete, and
+//     rejects CompletionTime without Complete.
+//   - k8s 1.30-1.33 reject SuccessCriteriaMet on a NonIndexed Job that has no
+//     SuccessPolicy, which is exactly this writer Job's shape.
+//
+// The Job's spec is reconciler-owned and immutable on update, so the test
+// cannot reshape it to satisfy both. Apply the modern (>= 1.34) condition shape
+// and fall back to the pre-1.34 shape only when the apiserver returns an
+// Invalid validation error (apierrors.IsInvalid).
+func completeJob(ctx context.Context, t *testing.T, c client.Client, job *batchv1.Job) {
+	t.Helper()
+
+	job.Status.Succeeded = 1
+	job.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	job.Status.Conditions = append(job.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	err := c.Status().Update(ctx, job)
+	if err == nil {
+		return
+	}
+	// Only a validation rejection means the modern condition shape is wrong for
+	// this apiserver version. Any other error (conflict, network, RBAC) is a
+	// real failure and must surface, not be masked by the fallback write.
+	require.True(t, apierrors.IsInvalid(err), "unexpected error updating Job status: %v", err)
+
+	// Pre-1.34 apiserver rejected SuccessCriteriaMet. Re-fetch to reset the
+	// stale in-memory status and apply only Complete, which those versions
+	// accept alongside CompletionTime.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(job), job))
+	job.Status.Succeeded = 1
+	job.Status.CompletionTime = &metav1.Time{Time: time.Now()}
+	job.Status.Conditions = append(job.Status.Conditions,
+		batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+	)
+	require.NoError(t, c.Status().Update(ctx, job))
+}
+
+// newModelCacheLaunchEnvB64 builds the encoded launch env consumed by the
+// model cache envtests at runtime. The registry credentials and assertion
+// token are synthetic and assembled here instead of being committed as an
+// encoded blob, which secret scanners flag even for fake values.
+func newModelCacheLaunchEnvB64() string {
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	registryCreds := b64(`{"k8sSecrets":[{"auths":{"nvcr.io":{"auth":"` + b64("stg-user:fake-registry-password") + `"}}}]}`)
+	helmCreds := b64(`{"k8sSecrets":[{"auths":{"helm.ngc.nvidia.com":{"auth":"` + b64("stg-user:fake-registry-password") + `"}}}]}`)
+	sidecarCred := b64(`{"auths":{"nvcr.io":{"auth":"` + b64("$oauthtoken:fake-sidecar-token") + `"}}}`)
+
+	env := strings.Join([]string{
+		`ATTACHED_GPU_COUNT="1"`,
+		"BYOO_OTEL_COLLECTOR_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/byoo-otel-collector:1.2.3",
+		"CLOUD_PROVIDER=ON-PREM",
+		"ESS_AGENT_CONTAINER=nvcr.io/nv-cf/nvcf-core/ess-agent:1.0.0",
+		"FUNCTION_ID=5a3d4a7e-9ee3-4762-8d37-d3b40a6f84c6",
+		"FUNCTION_NAME=my-func",
+		"FUNCTION_VERSION_ID=2c948d9b-db5d-4f93-8c29-f5d8a5d89cb9",
+		"GPU_NAME=L40",
+		"HELM_CHART_INFERENCE_SERVICE_NAME=myservice",
+		"CONTAINER_REGISTRIES_CREDENTIALS=" + registryCreds,
+		"INFERENCE_CONTAINER_ENV=" + b64(`[{"key":"INFERENCE_ENV_KEY","value":"inference_value"}]`),
+		"INFERENCE_HEALTH_ENDPOINT=/v2/health/ready",
+		`INFERENCE_HEALTH_EXPECTED_RESPONSE_CODE="200"`,
+		`INFERENCE_HEALTH_PORT="50051"`,
+		`INFERENCE_PORT="50051"`,
+		"INFERENCE_PROTOCOL=GRPC",
+		"INFERENCE_URL=/grpc",
+		"INIT_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:0.24.10",
+		`MAX_REQUEST_CONCURRENCY="1"`,
+		"NCA_ID=_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq",
+		"NVCF_FQDN=https://us-west-2.api.nvcf.nvidia.com",
+		"NVCF_FQDN_GRPC=https://grpc.api.nvcf.nvidia.com",
+		"NVCF_FQDN_NATS=tls://us-west-2.aws.cloud.nats.nvcf.nvidia.com:4222",
+		"NVCF_WORKER_TOKEN=tok",
+		"OTEL_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/opentelemetry-collector:0.74.0",
+		"OTEL_EXPORTER_OTLP_ENDPOINT=https://prod.otel.kaizen.nvidia.com:8282",
+		"SECRETS_ASSERTION_TOKEN=fake-assertion-token",
+		"SIDECAR_REGISTRY_CREDENTIAL=" + sidecarCred,
+		"TRACING_ACCESS_TOKEN=trace-tok-1",
+		"UTILS_CONTAINER=nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.21.4",
+		"HELM_REGISTRIES_CREDENTIALS=" + helmCreds,
+	}, "\n")
+	return b64(env)
+}
+
+// newModelCacheICMSSpec returns the ICMS request spec used by the model cache
+// envtests (NVMesh and shared-FS). The EnvironmentB64 carries the encoded
+// launch env from which the writer job and cache PVC are decoded.
+func newModelCacheICMSSpec(cacheHandle string) nvcav2beta1.ICMSRequestSpec {
+	return nvcav2beta1.ICMSRequestSpec{
+		FunctionDetails: function.Details{
+			FunctionID:        "funcid-1",
+			FunctionVersionID: "funcverid-1",
+			FunctionType:      "DEFAULT",
+		},
+		Action:         common.FunctionCreationAction,
+		NCAId:          "ncaid-1",
+		RequestID:      "reqid1",
+		MessageBatchID: "mbatchid1",
+		CreationMsgInfo: nvcav2beta1.ICMSCreationMessageInfo{
+			CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
+				Action:            common.FunctionCreationAction,
+				RequestID:         "reqid1",
+				MessageBatchID:    "mbatchid1",
+				InstanceType:      "ON-PREM.GPU.L40",
+				InstanceTypeName:  "ON-PREM.GPU.L40_1x",
+				InstanceTypeValue: "ON-PREM.GPU.L40",
+				GPUType:           "L40",
+				RequestedGPUCount: 1,
+				InstanceCount:     1,
+				NCAID:             "ncaid-1",
+			},
+			FunctionLaunchSpecification: &function.LaunchSpecification{
+				CloudProvider:   "DGXCLOUD",
+				ICMSEnvironment: "prod",
+				GPUName:         "L40",
+				EnvironmentB64:  newModelCacheLaunchEnvB64(),
+				HelmChartLaunchSpecification: &common.HelmChartLaunchSpecification{
+					HelmChartURL: "https://helm.ngc.nvidia.com/myorg/myteam/charts/image-segmentation-1.0.3.tgz",
+					Values:       []byte(`{"foo":{"bar":"baz"}}`),
+				},
+				CacheLaunchSpecification: &common.CacheLaunchSpecification{
+					CacheArtifacts: true,
+					CacheHandle:    cacheHandle,
+					CacheSize:      262144000,
+				},
+			},
+		},
+	}
+}
+
+// TestReconcile_ModelCacheSharedFS drives the shared-FS (nvcf-miniservice-sc) populate
+// path: the cache is populated once via the single-writer init job (no NVMesh
+// primary/secondary PV), then a per-namespace read-only PVC on the shared class
+// is created and the request becomes Ready. The CSI probe is pre-seeded as ROX
+// so the path does not attempt a live probe under envtest.
+func TestReconcile_ModelCacheSharedFS(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg, _, cleanup, err := nvcaenvtest.SetupEnvtest()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	mgr, err := ctrl.NewManager(cfg, manager.Options{
+		Scheme:                  mgrScheme,
+		GracefulShutdownTimeout: new(time.Duration),
+		BaseContext:             func() context.Context { return ctx },
+		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
+		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
+		// Two model-cache envtests run in one process; the controller name
+		// "modelcache" is otherwise globally unique per controller-runtime.
+		Controller: ctrlconfig.Controller{SkipNameValidation: newBool(true)},
+	})
+	require.NoError(t, err)
+
+	defaultTimeConfig := (&k8sutil.TimeConfig{}).Complete()
+	err = BuildController(nvcaconfig.Config{}, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
+	require.NoError(t, err)
+
+	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
+	require.NoError(t, err)
+
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr.GetCache().WaitForCacheSync(cctx)
+	ccancel()
+
+	c := mgr.GetClient()
+
+	srNamespace := &corev1.Namespace{}
+	srNamespace.Name = types.DefaultICMSRequestNamespace
+	require.NoError(t, c.Create(ctx, srNamespace))
+	require.NoError(t, c.Create(ctx, NewModelCacheInitNamespace()))
+
+	// The shared class exists (operator- or Samba-provided).
+	require.NoError(t, c.Create(ctx, &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: HelmCacheSharedStorageClassName},
+		Provisioner: SMBCSIDriverName,
+	}))
+
+	cacheHandle := "sharedfshandle"
+	workloadNS := &corev1.Namespace{}
+	workloadNS.Name = "sr-sharedfs"
+	require.NoError(t, c.Create(ctx, workloadNS))
+
+	sr := &nvcav2beta1.ICMSRequest{}
+	sr.Name, sr.Namespace = workloadNS.Name, srNamespace.Name
+	sr.Spec = newModelCacheICMSSpec(cacheHandle)
+	require.NoError(t, c.Create(ctx, sr))
+
+	st := &nvcav1new.StorageRequest{}
+	st.Name, st.Namespace = nvcav1new.ModelCacheRequest.Name(), workloadNS.Name
+	st.Spec.Type = nvcav1new.ModelCacheRequest
+	st.Spec.ICMSRequestName = sr.Name
+	st.Spec.ICMSRequestNamespace = srNamespace.Name
+	st.Spec.ModelCache = &nvcav1new.ModelCacheSpec{
+		CacheHandle: cacheHandle,
+		Backend:     string(HelmCacheBackendSharedFS),
+	}
+	require.NoError(t, c.Create(ctx, st))
+
+	// The writer job is created on the shared backend.
+	initJob := &batchv1.Job{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "writer-job-" + cacheHandle, Namespace: ModelCacheInitNamespace}, initJob)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// The writer RW PVC is on the shared class, not an NVMesh class.
+	rwPVC := &corev1.PersistentVolumeClaim{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC))
+	if assert.NotNil(t, rwPVC.Spec.StorageClassName) {
+		assert.Equal(t, HelmCacheSharedStorageClassName, *rwPVC.Spec.StorageClassName)
+	}
+
+	// Drive the writer job to "started" so the request moves to InitRunning.
+	initJobPod := &corev1.Pod{}
+	initJobPod.Name, initJobPod.Namespace = initJob.Spec.Template.Name+"-foobar", initJob.Namespace
+	initJobPod.Labels = make(map[string]string, len(initJob.Spec.Template.Labels))
+	maps.Copy(initJobPod.Labels, initJob.Spec.Template.Labels)
+	maps.Copy(initJobPod.Labels, initJob.Spec.Selector.MatchLabels)
+	initJobPod.Annotations = initJob.Spec.Template.Annotations
+	initJobPod.Spec = initJob.Spec.Template.Spec
+	require.NoError(t, c.Create(ctx, initJobPod))
+	initJobPod.Status = corev1.PodStatus{Phase: corev1.PodRunning}
+	require.NoError(t, c.Status().Update(ctx, initJobPod))
+
+	initJob.Status.StartTime = &metav1.Time{Time: time.Now().Add(-1 * time.Minute)}
+	require.NoError(t, c.Status().Update(ctx, initJob))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st), st)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageInitRunning, st.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Bind the writer RW PVC to a volume and complete the job. The writer
+	// volume is the cache, so the reader must be derived from it.
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv-" + cacheHandle},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			StorageClassName:              HelmCacheSharedStorageClassName,
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       SMBCSIDriverName,
+					VolumeHandle: "shared-writer-volume",
+				},
+			},
+		},
+	}
+	require.NoError(t, c.Create(ctx, writerPV))
+	// The controller also writes this claim, so re-read before each update
+	// rather than racing it with a stale resourceVersion.
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC); err != nil {
+			return err
+		}
+		rwPVC.Spec.VolumeName = writerPV.Name
+		return c.Update(ctx, rwPVC)
+	}))
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC); err != nil {
+			return err
+		}
+		rwPVC.Status.Phase = corev1.ClaimBound
+		return c.Status().Update(ctx, rwPVC)
+	}))
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
+	completeJob(ctx, t, c, initJob)
+
+	// A read-only reader PV is derived from the writer volume, and the reader
+	// claim binds to it by name. A claim naming only the shared class would let
+	// a dynamic provisioner hand back a new empty volume, which is what this
+	// path used to do.
+	roPV := &corev1.PersistentVolume{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "secondary-pv-" + sr.Name}, roPV)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NotNil(t, roPV.Spec.CSI)
+	assert.Equal(t, "shared-writer-volume", roPV.Spec.CSI.VolumeHandle,
+		"the reader must address the volume the writer populated")
+	assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}, roPV.Spec.AccessModes)
+	assert.Equal(t, corev1.PersistentVolumeReclaimRetain, roPV.Spec.PersistentVolumeReclaimPolicy)
+
+	roPVC := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: workloadNS.Name}, roPVC)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	assert.Equal(t, roPV.Name, roPVC.Spec.VolumeName)
+	if assert.NotNil(t, roPVC.Spec.StorageClassName) {
+		assert.Empty(t, *roPVC.Spec.StorageClassName,
+			"a StorageClass here would provision a new empty volume")
+		// Kubernetes refuses to bind a pre-bound pair whose classes disagree,
+		// and nothing in this suite runs the binding controller, so the pair
+		// has to be checked against each other here rather than one side at a
+		// time. The reader PV deep-copies the writer, which carries a class.
+		assert.Equal(t, *roPVC.Spec.StorageClassName, roPV.Spec.StorageClassName,
+			"the pre-bound reader PV and claim must agree on storage class or the claim never binds")
+	}
+	assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}, roPVC.Spec.AccessModes)
+
+	// Bind the reader PVC: the request becomes Ready and exposes the RO PVC.
+	roPVC.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, roPVC))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st), st)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageReady, st.Status.Phase)
+			if assert.NotNil(ct, st.Status.ModelCache) {
+				assert.Equal(ct, "ro-pvc-"+cacheHandle, st.Status.ModelCache.ROPVCName)
+			}
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// After population the init job and lease are torn down (partial cleanup)
+	// while the writer PVC is retained as the durable populated marker.
+	lease := &coordv1.Lease{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		leaseErr := c.Get(ctx, client.ObjectKey{Name: buildInitLeaseName(cacheHandle), Namespace: ModelCacheInitNamespace}, lease)
+		assert.True(ct, apierrors.IsNotFound(leaseErr), "init lease must be deleted after shared-FS population")
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// envtest runs no GC controller, so a foreground-deleted Job lingers with a
+	// deletion timestamp; deletion having been initiated is the signal.
+	gotJob := &batchv1.Job{}
+	switch jobErr := c.Get(ctx, client.ObjectKeyFromObject(initJob), gotJob); {
+	case apierrors.IsNotFound(jobErr):
+	default:
+		require.NoError(t, jobErr)
+		assert.NotNil(t, gotJob.DeletionTimestamp, "init job deletion must be initiated after shared-FS population")
+	}
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
+	assert.Nil(t, rwPVC.DeletionTimestamp, "writer PVC must be retained as the populated marker")
+
+	require.NoError(t, c.Delete(ctx, st))
+	cancel()
+	<-mgrErrCh
+}
+
+// TestReconcile_ModelCacheSamba drives the Samba (backend 3) path and asserts it
+// follows the NVMesh lifecycle, differing only in the backing store. The first
+// namespace populates the cache via the single-writer init job; on success the
+// static SMB RW PV is retained as the durable primary-PV marker and the writer
+// job/PVC/lease are torn down. A second namespace with the same handle then
+// binds its own RO reader purely from the marker, without re-running the writer
+// or touching the init lease, which is the cross-namespace / restart-safe
+// behavior the marker provides.
+func TestReconcile_ModelCacheSamba(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg, _, cleanup, err := nvcaenvtest.SetupEnvtest()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	mgr, err := ctrl.NewManager(cfg, manager.Options{
+		Scheme:                  mgrScheme,
+		GracefulShutdownTimeout: new(time.Duration),
+		BaseContext:             func() context.Context { return ctx },
+		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
+		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
+		Controller:              ctrlconfig.Controller{SkipNameValidation: newBool(true)},
+	})
+	require.NoError(t, err)
+
+	defaultTimeConfig := (&k8sutil.TimeConfig{}).Complete()
+	// The Samba path requires the server image to be configured; an empty image
+	// makes EnsureSambaModelCacheInfra return a terminal error.
+	nvcaCfg := nvcaconfig.Config{}
+	nvcaCfg.Agent.SharedStorage.Server.Image = "samba:test"
+	err = BuildController(nvcaCfg, nvcav1new.ModelCacheRequest, mgr, "my-cluster", "us-west-1", defaultTimeConfig, ControllerOptions{})
+	require.NoError(t, err)
+
+	mgrErrCh, err := nvcaenvtest.StartManager(ctx, mgr)
+	require.NoError(t, err)
+
+	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+	mgr.GetCache().WaitForCacheSync(cctx)
+	ccancel()
+
+	c := mgr.GetClient()
+
+	srNamespace := &corev1.Namespace{}
+	srNamespace.Name = types.DefaultICMSRequestNamespace
+	require.NoError(t, c.Create(ctx, srNamespace))
+	require.NoError(t, c.Create(ctx, NewModelCacheInitNamespace()))
+
+	cacheHandle := "sambahandle"
+
+	// newSambaSR creates the ICMSRequest + StorageRequest pair for a workload
+	// namespace, all wired to the shared cache handle on the Samba backend.
+	newSambaSR := func(nsName string) *nvcav1new.StorageRequest {
+		ns := &corev1.Namespace{}
+		ns.Name = nsName
+		require.NoError(t, c.Create(ctx, ns))
+		icms := &nvcav2beta1.ICMSRequest{}
+		icms.Name, icms.Namespace = nsName, srNamespace.Name
+		icms.Spec = newModelCacheICMSSpec(cacheHandle)
+		require.NoError(t, c.Create(ctx, icms))
+		st := &nvcav1new.StorageRequest{}
+		st.Name, st.Namespace = nvcav1new.ModelCacheRequest.Name(), nsName
+		st.Spec.Type = nvcav1new.ModelCacheRequest
+		st.Spec.ICMSRequestName = icms.Name
+		st.Spec.ICMSRequestNamespace = srNamespace.Name
+		st.Spec.ModelCache = &nvcav1new.ModelCacheSpec{
+			CacheHandle: cacheHandle,
+			Backend:     string(HelmCacheBackendSamba),
+		}
+		require.NoError(t, c.Create(ctx, st))
+		return st
+	}
+
+	st1 := newSambaSR("sr-samba-1")
+
+	// The per-handle Samba server Deployment (samba-<handle>) is bootstrapped
+	// idempotently. envtest has no deployment controller, so mark it Available to
+	// unblock the writer init.
+	dep := &appsv1.Deployment{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: sambaModelCacheResourceName(cacheHandle), Namespace: ModelCacheInitNamespace}, dep)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	dep.Status.Replicas = 1
+	dep.Status.ReadyReplicas = 1
+	dep.Status.AvailableReplicas = 1
+	require.NoError(t, c.Status().Update(ctx, dep))
+
+	// The writer job and the STATIC SMB RW PV/PVC are created (no StorageClass).
+	initJob := &batchv1.Job{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "writer-job-" + cacheHandle, Namespace: ModelCacheInitNamespace}, initJob)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+
+	rwPVC := &corev1.PersistentVolumeClaim{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "rw-pvc-" + cacheHandle, Namespace: ModelCacheInitNamespace}, rwPVC))
+	assert.Equal(t, "samba-rw-pv-"+cacheHandle, rwPVC.Spec.VolumeName)
+	if assert.NotNil(t, rwPVC.Spec.StorageClassName) {
+		assert.Equal(t, "", *rwPVC.Spec.StorageClassName, "Samba RW PVC must bind a static PV, not a StorageClass")
+	}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "samba-rw-pv-" + cacheHandle}, &corev1.PersistentVolume{}))
+
+	// Drive the writer pod to running so the request moves to InitRunning.
+	initJobPod := &corev1.Pod{}
+	initJobPod.Name, initJobPod.Namespace = initJob.Spec.Template.Name+"-foobar", initJob.Namespace
+	initJobPod.Labels = make(map[string]string, len(initJob.Spec.Template.Labels))
+	maps.Copy(initJobPod.Labels, initJob.Spec.Template.Labels)
+	maps.Copy(initJobPod.Labels, initJob.Spec.Selector.MatchLabels)
+	initJobPod.Annotations = initJob.Spec.Template.Annotations
+	initJobPod.Spec = initJob.Spec.Template.Spec
+	require.NoError(t, c.Create(ctx, initJobPod))
+	initJobPod.Status = corev1.PodStatus{Phase: corev1.PodRunning}
+	require.NoError(t, c.Status().Update(ctx, initJobPod))
+
+	initJob.Status.StartTime = &metav1.Time{Time: time.Now().Add(-1 * time.Minute)}
+	require.NoError(t, c.Status().Update(ctx, initJob))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st1), st1)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageInitRunning, st1.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Bind the RW PVC and complete the writer job.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
+	rwPVC.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, rwPVC))
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
+	completeJob(ctx, t, c, initJob)
+
+	// On success the per-handle backing PVC (samba-<handle>) is stamped with the
+	// durable populated marker. That label, not an NVMesh primary PV, is the
+	// cross-namespace / restart-safe reuse signal for the Samba backend.
+	backingPVC := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: SambaModelCacheBackingPVCName(cacheHandle), Namespace: ModelCacheInitNamespace}, backingPVC)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, cachePopulatedLabelValue, backingPVC.Labels[cachePopulatedLabelKey])
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// The writer's static plumbing PV is deleted with the writer teardown
+	// (static PVs are never reclaimed by the PV controller, so it must be
+	// removed explicitly). envtest has no PV-protection controller, so accept a
+	// pending deletion (deletionTimestamp set) as deleted.
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		writerPV := &corev1.PersistentVolume{}
+		err := c.Get(ctx, client.ObjectKey{Name: sambaModelCacheWriterPVName(cacheHandle)}, writerPV)
+		assert.True(ct, apierrors.IsNotFound(err) || writerPV.DeletionTimestamp != nil,
+			"writer plumbing PV must be deleted with the writer teardown")
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// First namespace: an RO reader PV/PVC is created against the per-handle share.
+	ro1 := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: st1.Namespace}, ro1)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "samba-ro-pv-" + st1.Namespace + "-" + cacheHandle}, &corev1.PersistentVolume{}))
+	ro1.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, ro1))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st1), st1)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageReady, st1.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// Second namespace, same handle: it must reach Ready purely from the durable
+	// backing-PVC populated marker. The init lease was deleted during the first
+	// namespace's writer teardown; if the second namespace re-ran init it would
+	// recreate the lease. Asserting the lease stays absent proves the marker path
+	// was taken.
+	st2 := newSambaSR("sr-samba-2")
+	ro2 := &corev1.PersistentVolumeClaim{}
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKey{Name: "ro-pvc-" + cacheHandle, Namespace: st2.Namespace}, ro2)
+		assert.NoError(ct, err)
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "samba-ro-pv-" + st2.Namespace + "-" + cacheHandle}, &corev1.PersistentVolume{}))
+	ro2.Status.Phase = corev1.ClaimBound
+	require.NoError(t, c.Status().Update(ctx, ro2))
+
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st2), st2)
+		if assert.NoError(ct, err) {
+			assert.Equal(ct, nvcav1new.StorageReady, st2.Status.Phase)
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	lease := &coordv1.Lease{}
+	leaseErr := c.Get(ctx, client.ObjectKey{Name: buildInitLeaseName(cacheHandle), Namespace: ModelCacheInitNamespace}, lease)
+	assert.True(t, apierrors.IsNotFound(leaseErr),
+		"second namespace must consume the cache via the backing-PVC marker, not re-run the init lease")
+
+	// Deleting a consumer SR must run cleanup to completion and drop the
+	// storage-request finalizer (the workload namespaces are not terminating
+	// here, so this exercises the normal cleanup path, not the escape hatch).
+	// Deleting one consumer must NOT delete the shared per-handle backing PVC;
+	// it is reclaimed only when the cache goes idle (cleanupIdleModelCaches).
+	require.NoError(t, c.Delete(ctx, st1))
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st1), st1)
+		assert.True(ct, apierrors.IsNotFound(err), "st1 must be fully deleted (finalizer removed by cleanup)")
+	}, 10*time.Second, 100*time.Millisecond)
+
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: SambaModelCacheBackingPVCName(cacheHandle), Namespace: ModelCacheInitNamespace}, backingPVC),
+		"shared backing PVC must survive a single consumer's deletion")
+
+	require.NoError(t, c.Delete(ctx, st2))
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		err := c.Get(ctx, client.ObjectKeyFromObject(st2), st2)
+		assert.True(ct, apierrors.IsNotFound(err), "st2 must be fully deleted (finalizer removed by cleanup)")
+	}, 10*time.Second, 100*time.Millisecond)
+
+	cancel()
+	<-mgrErrCh
+}
+
+// TestDoModelCacheSharedFS_Validation covers the early terminal-validation
+// branches of the shared-FS path that run before any probe or client call.
+func TestDoModelCacheSharedFS_Validation(t *testing.T) {
+	tests := []struct {
+		name       string
+		modelCache *nvcav1new.ModelCacheSpec
+	}{
+		{name: "nil modelCache", modelCache: nil},
+		{name: "empty cacheHandle", modelCache: &nvcav1new.ModelCacheSpec{Backend: string(HelmCacheBackendSharedFS)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{
+				Client:  fake.NewClientBuilder().WithScheme(mgrScheme).Build(),
+				metrics: newTestMetrics(),
+				fff:     &featureflagmock.Fetcher{},
+			}
+			st := nvcav1new.StorageRequest{}
+			stCopy := &nvcav1new.StorageRequest{Spec: nvcav1new.StorageRequestSpec{ModelCache: tt.modelCache}}
+			_, err := r.doModelCacheSharedFS(context.Background(), st, stCopy, &nvcav2beta1.ICMSRequest{})
+			require.Error(t, err)
+			assert.True(t, isTerminal(err), "validation failure must be terminal")
+		})
+	}
+}
+
+// TestDoModelCacheSamba_UnreadyServerIsBounded proves a Samba server that never
+// becomes available stops the request instead of requeuing forever: within the
+// threshold it requeues, past it the request fails terminally so the miniservice
+// reconciler continues the install without a cache. This bounds server start-up
+// only, not the model download that follows.
+func TestDoModelCacheSamba_UnreadyServerIsBounded(t *testing.T) {
+	handle := "unreadyhandle"
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	timeConfig := (&k8sutil.TimeConfig{}).Complete()
+
+	tests := []struct {
+		name          string
+		deploymentAge time.Duration
+		wantTerminal  bool
+	}{
+		{
+			name:          "within the threshold requeues",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold - time.Minute,
+			wantTerminal:  false,
+		},
+		{
+			name:          "past the threshold fails the request",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold + time.Minute,
+			wantTerminal:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Seeded with an explicit creation timestamp: the fake client does
+			// not stamp one, and the reconciler measures the wait from it.
+			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name:              sambaModelCacheResourceName(handle),
+				Namespace:         ModelCacheInitNamespace,
+				CreationTimestamp: metav1.NewTime(now.Add(-tt.deploymentAge)),
+			}}
+			nvcaCfg := nvcaconfig.Config{}
+			nvcaCfg.Agent.SharedStorage.Server.Image = "samba:test"
+			r := &Reconciler{
+				Client:        fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(dep).Build(),
+				cfg:           nvcaCfg,
+				metrics:       newTestMetrics(),
+				fff:           &featureflagmock.Fetcher{},
+				nowFunc:       func() time.Time { return now },
+				k8sTimeConfig: timeConfig,
+			}
+			icms := &nvcav2beta1.ICMSRequest{}
+			icms.Name, icms.Namespace = "icms-1", types.DefaultICMSRequestNamespace
+			icms.Spec = newModelCacheICMSSpec(handle)
+			st := nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: nvcav1new.ModelCacheRequest.Name(), Namespace: "ns1"},
+			}
+			stCopy := &nvcav1new.StorageRequest{
+				ObjectMeta: st.ObjectMeta,
+				Spec: nvcav1new.StorageRequestSpec{
+					ModelCache: &nvcav1new.ModelCacheSpec{
+						CacheHandle: handle,
+						Backend:     string(HelmCacheBackendSamba),
+					},
+				},
+			}
+
+			res, err := r.doModelCacheSamba(context.Background(), st, stCopy, icms)
+			if !tt.wantTerminal {
+				require.NoError(t, err)
+				assert.Equal(t, defaultRequeueDelay, res.RequeueAfter, "keeps waiting within the threshold")
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, isTerminal(err), "an unready server past the threshold must not retry forever")
+			assert.Contains(t, err.Error(), handle)
+		})
+	}
+}
+
+// TestDoCleanupModelCacheNVMesh_RequeuesWhileWriterVolumeAttached proves the
+// cleanup never blocks the single reconcile worker polling for volume detach:
+// while the writer volume is still attached read-write it requeues (does not
+// delete the writer PVC or mark cleanup successful), and once detached it
+// completes.
+func TestDoCleanupModelCacheNVMesh_RequeuesWhileWriterVolumeAttached(t *testing.T) {
+	ctx := context.Background()
+	handle := "attachhandle"
+	pvName := "pv-" + handle
+
+	rwPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "rw-pvc-" + handle,
+			Namespace: ModelCacheInitNamespace,
+			Labels:    map[string]string{modelCacheHandleLabelKey: handle},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: pvName},
+	}
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: pvName},
+		Spec: corev1.PersistentVolumeSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		},
+	}
+	va := &storagev1.VolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Name: "va-1"},
+		Spec: storagev1.VolumeAttachmentSpec{
+			Attacher: "smb.csi.k8s.io",
+			NodeName: "node1",
+			Source:   storagev1.VolumeAttachmentSource{PersistentVolumeName: &pvName},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(rwPVC, pv, va).Build()
+	r := &Reconciler{
+		Client:        c,
+		metrics:       newTestMetrics(),
+		fff:           &featureflagmock.Fetcher{},
+		nowFunc:       time.Now,
+		k8sTimeConfig: (&k8sutil.TimeConfig{}).Complete(),
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcav1new.ModelCacheRequest.Name(), Namespace: "ns1"},
+		Spec: nvcav1new.StorageRequestSpec{
+			Type:       nvcav1new.ModelCacheRequest,
+			ModelCache: &nvcav1new.ModelCacheSpec{CacheHandle: handle},
+		},
+	}
+
+	// Still attached read-write: requeue, do not delete the writer PVC, do not
+	// mark cleanup successful.
+	res, err := r.doCleanupModelCacheNVMesh(ctx, st)
+	require.NoError(t, err)
+	assert.Equal(t, volumeDetachRequeueInterval, res.RequeueAfter, "must requeue (not block) while attached")
+	if cond := meta.FindStatusCondition(st.Status.Conditions, ConditionTypeCleanupSuccessful); assert.NotNil(t, cond) {
+		assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	}
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), &corev1.PersistentVolumeClaim{}),
+		"writer PVC must not be deleted while its volume is still attached")
+
+	// Detach: cleanup completes, writer PVC deleted, condition True.
+	require.NoError(t, c.Delete(ctx, va))
+	res, err = r.doCleanupModelCacheNVMesh(ctx, st)
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, res, "must not requeue once detached")
+	if cond := meta.FindStatusCondition(st.Status.Conditions, ConditionTypeCleanupSuccessful); assert.NotNil(t, cond) {
+		assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	}
+	getErr := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), &corev1.PersistentVolumeClaim{})
+	assert.True(t, apierrors.IsNotFound(getErr), "writer PVC must be deleted once detached")
+}
+
+// TestReclaimIdleSharedFSModelCaches proves the retained shared-FS writer PVC
+// (the durable backing claim) is reclaimed once no StorageRequest references
+// its handle and the idle period has passed, while active handles, recently
+// referenced handles, and Samba backing PVCs (reclaimed with their server by
+// the Samba pass) are left alone.
+func TestReclaimIdleSharedFSModelCaches(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	idle := (&k8sutil.TimeConfig{}).Complete().ModelCacheIdlePeriod
+
+	mkPVC := func(name, handle string, lastRef time.Time, sambaComponent bool) *corev1.PersistentVolumeClaim {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ModelCacheInitNamespace,
+				Labels:    map[string]string{cachePopulatedLabelKey: cachePopulatedLabelValue},
+				Annotations: map[string]string{
+					primaryPVLastReferencedAnnotationKey: lastRef.Format(primaryPVLastReferencedTimeFormat),
+				},
+			},
+		}
+		if handle != "" {
+			pvc.Labels[modelCacheHandleLabelKey] = handle
+		}
+		if sambaComponent {
+			pvc.Labels[sambaModelCacheComponentLabelKey] = sambaModelCacheComponentLabelValue
+		}
+		return pvc
+	}
+
+	idlePVC := mkPVC("rw-pvc-idle", "idle-handle", now.Add(-2*idle), false)
+	activePVC := mkPVC("rw-pvc-active", "active-handle", now.Add(-2*idle), false)
+	recentPVC := mkPVC("rw-pvc-recent", "recent-handle", now.Add(-idle/2), false)
+	sambaPVC := mkPVC("samba-idle2", "", now.Add(-2*idle), true)
+
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).
+		WithObjects(idlePVC, activePVC, recentPVC, sambaPVC).Build()
+	r := &Reconciler{
+		Client:        c,
+		metrics:       newTestMetrics(),
+		fff:           &featureflagmock.Fetcher{},
+		nowFunc:       func() time.Time { return now },
+		k8sTimeConfig: (&k8sutil.TimeConfig{}).Complete(),
+	}
+
+	stList := &nvcav1new.StorageRequestList{Items: []nvcav1new.StorageRequest{{
+		Spec: nvcav1new.StorageRequestSpec{
+			Type:       nvcav1new.ModelCacheRequest,
+			ModelCache: &nvcav1new.ModelCacheSpec{CacheHandle: "active-handle"},
+		},
+	}}}
+
+	require.NoError(t, r.reclaimIdleSharedFSModelCaches(ctx, stList))
+
+	err := c.Get(ctx, client.ObjectKeyFromObject(idlePVC), &corev1.PersistentVolumeClaim{})
+	assert.True(t, apierrors.IsNotFound(err), "idle unreferenced writer PVC must be reclaimed")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(activePVC), &corev1.PersistentVolumeClaim{}),
+		"actively referenced handle must be kept")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(recentPVC), &corev1.PersistentVolumeClaim{}),
+		"recently referenced handle must be kept")
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(sambaPVC), &corev1.PersistentVolumeClaim{}),
+		"samba backing PVCs are reclaimed by the samba pass, not here")
+}
+
+// TestDeriveReaderVolumeHandle pins the one vendor specific step in reader
+// derivation. NVMesh encodes the consuming namespace in the CSI volume handle
+// so the reader needs its own substituted in. Every other driver addresses one
+// volume by one handle, so reusing the writer's handle is what gives the
+// reader the writer's data. Both were measured on real clusters.
+func TestDeriveReaderVolumeHandle(t *testing.T) {
+	tests := []struct {
+		name        string
+		provisioner string
+		handle      string
+		want        string
+		wantErr     bool
+	}{
+		{
+			name:        "NVMesh substitutes the reader namespace",
+			provisioner: NVMeshStorageClassProvisioner,
+			handle:      "nvmesh/csivol-abc:nvcf-modelcache-init",
+			want:        "nvmesh/csivol-abc:tenant-ns",
+		},
+		{
+			name:        "Weka reuses the handle unchanged",
+			provisioner: "csi.weka.io",
+			handle:      "weka/v2/csivol-pvc-8e38c07d-I6LIT56NBYME",
+			want:        "weka/v2/csivol-pvc-8e38c07d-I6LIT56NBYME",
+		},
+		{
+			// The FSS handle contains colons, so a rewrite would corrupt the
+			// export path rather than address another namespace.
+			name:        "OCI FSS reuses the handle unchanged",
+			provisioner: "fss.csi.oraclecloud.com",
+			handle:      "ocid1.filesystem.oc1.ap_kulai_2.aaaa:100.64.0.56:/csi-fss-eaf964b0",
+			want:        "ocid1.filesystem.oc1.ap_kulai_2.aaaa:100.64.0.56:/csi-fss-eaf964b0",
+		},
+		{
+			name:        "an unknown driver reuses the handle unchanged",
+			provisioner: "csi.example.test",
+			handle:      "opaque-handle",
+			want:        "opaque-handle",
+		},
+		{
+			name:        "a malformed NVMesh handle is an error",
+			provisioner: NVMeshStorageClassProvisioner,
+			handle:      "no-colons-here",
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := deriveReaderVolumeHandle(tt.provisioner, tt.handle, "tenant-ns")
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestNewSharedFSReaderPVIsReadOnlyWithoutMountOptions covers the shared
+// filesystem case that motivates the read-only CSI source. A provisioner with
+// no declared reader options gets an empty mount option list, so mount options
+// cannot be what keeps the reader read-only, and access modes are only used
+// for binding. Without a read-only CSI source nothing stops a consumer
+// mounting the shared cache read-write.
+func TestNewSharedFSReaderPVIsReadOnlyWithoutMountOptions(t *testing.T) {
+	const wekaProvisioner = "csi.weka.io"
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(wekaProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       wekaProvisioner,
+					VolumeHandle: "weka/v2/csivol-pvc-8e38c07d",
+					ReadOnly:     false,
+				},
+			},
+		},
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req"},
+	}
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Empty(t, roPV.Spec.MountOptions,
+		"this provisioner declares no reader options, so mount options cannot enforce read-only")
+	assert.True(t, roPV.Spec.CSI.ReadOnly,
+		"with no mount options the CSI source is the only thing keeping the reader read-only")
+	assert.Equal(t, "weka/v2/csivol-pvc-8e38c07d", roPV.Spec.CSI.VolumeHandle,
+		"a non-NVMesh handle addresses one volume and is reused unchanged")
+}
+
+// TestNewSharedFSReaderPVResolvesMountOptions pins that a derived reader takes
+// the provisioner's required reader options instead of inheriting the writer's.
+//
+// This matters once NVMesh reaches this path. NVMesh is detected today by the
+// nvcf-sc-30 marker class; when that goes away it is identified by provisioner
+// like every other backend and resolves to the shared filesystem flow. Its
+// reader attaches the same XFS filesystem as the writer, so without nouuid and
+// norecovery the mount fails outright, and inheriting the writer's read-write
+// options is exactly the wrong answer.
+func TestNewSharedFSReaderPVResolvesMountOptions(t *testing.T) {
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			// What the writer was provisioned with, which the reader must not keep.
+			MountOptions: []string{"rw"},
+			Capacity:     corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       NVMeshStorageClassProvisioner,
+					VolumeHandle: "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:writer-ns",
+				},
+			},
+		},
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req"},
+	}
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, roPV.Spec.MountOptions,
+		"a derived reader must take the provisioner's reader options, not the writer's")
+	assert.NotContains(t, roPV.Spec.MountOptions, "rw",
+		"the writer's read-write option must not survive onto a read-only reader")
+	assert.True(t, strings.HasSuffix(roPV.Spec.CSI.VolumeHandle, ":reader-ns"),
+		"the NVMesh handle must be rewritten for the reader namespace")
+	assert.True(t, roPV.Spec.CSI.ReadOnly,
+		"the CSI source must be read-only: access modes are not enforced by the kubelet")
+}

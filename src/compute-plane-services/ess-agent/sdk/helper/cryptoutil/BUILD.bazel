@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cryptoutil",
+    srcs = ["cryptoutil.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/cryptoutil",
+    visibility = ["//visibility:public"],
+    deps = ["@org_golang_x_crypto//blake2b"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cryptoutil",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cryptoutil_test",
+    srcs = ["cryptoutil_test.go"],
+    embed = [":cryptoutil"],
+)

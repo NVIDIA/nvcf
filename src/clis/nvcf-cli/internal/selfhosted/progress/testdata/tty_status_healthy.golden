@@ -1,0 +1,30 @@
+NVCF self-hosted: my-cluster
+Status: ✓ healthy                          Last reconcile: 12s ago
+Target: yotta-prod-us-east-1               Installed: 2026-04-25 14:02 UTC
+Stack:  v1.2.0@sha256:0180e2
+
+Components
+
+   [✓] SIS                       2/2 ready    14d uptime
+   [✓] NATS                      3/3 ready    14d uptime
+   [✓] Cassandra                 1/1 ready    14d uptime
+   [✓] OpenBao                   3/3 ready    14d uptime
+   [✓] API Keys                  1/1 ready    14d uptime
+   [✓] NVCF API                  3/3 ready    14d uptime
+   [✓] Reval                     2/2 ready    14d uptime
+   [✓] Gateway                   1/1 ready    14d uptime
+   [✓] NVCA Operator             1/1 ready     7d uptime
+   [✓] NVCA Worker (ncp-local)   2/2 ready     7d uptime
+
+Compute Clusters
+
+   [✓] ncp-local       H100 ×16       14 active deployments    last seen 12s ago
+   [✓] yotta-east-1    H100 ×32        0 active deployments    last seen 41s ago
+
+Recent events  (5m window)
+
+   [Δ] 02m41s ago    function deploy ACTIVE       echo-test (v1)
+   [+] 04m12s ago    cluster registered           yotta-east-1
+   [Δ] 12m38s ago    function deploy DELETED      echo-test (v1)
+
+press q to quit · w to toggle watch mode

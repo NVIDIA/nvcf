@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "record",
+    srcs = [
+        "reader.go",
+        "record.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/record",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":record",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "record_test",
+    srcs = ["reader_test.go"],
+    embed = [":record"],
+)

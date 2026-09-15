@@ -1,0 +1,31 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+package nvcfratelimiter;
+
+service RateLimitService {
+  rpc RateLimit (RateLimitRequest) returns (RateLimitResponse) {}
+}
+
+message RateLimitRequest {
+  string ncaId = 1;
+  string functionId = 2;
+  string functionVersionId = 3;
+  // clientAuthSubject is the unique caller identity derived from the
+  // invocation credential (API-key owner id, or end-user clientId from a
+  // delegation/InvocationToken assertion). When non-empty and a per-user rate
+  // is configured for the function version, an additional user-tier rate limit
+  // is enforced on top of the NCA-tier limit. Empty value skips user-tier
+  // checks (legacy behavior).
+  string clientAuthSubject = 4;
+}
+
+message RateLimitResponse {
+  RateLimitResult result = 1;
+}
+
+enum RateLimitResult {
+  ALLOW = 0;
+  DISALLOW = 1;
+}

@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "authorizers",
+    srcs = [
+        "bearer.go",
+        "chain.go",
+        "disabled.go",
+        "factory.go",
+        "icms_introspect.go",
+        "local_jwks.go",
+        "types.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/authorizers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "//src/control-plane-services/helm-reval/pkg/reval/jwtparse",
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@io_opentelemetry_go_otel//:otel",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":authorizers",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "authorizers_test",
+    srcs = [
+        "authorizers_test.go",
+        "icms_introspect_test.go",
+        "local_test.go",
+    ],
+    embed = [":authorizers"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "//src/control-plane-services/helm-reval/pkg/reval/jwtparse",
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@com_github_lestrrat_go_jwx_v2//jwk",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_zap//:zap",
+    ],
+)

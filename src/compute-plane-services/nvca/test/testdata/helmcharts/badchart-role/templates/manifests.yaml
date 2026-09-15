@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+---
+apiVersion: v1
+data:
+  .dockerconfigjson: "eyJhdXRocyI6eyJyZWdpc3RyeS5leGFtcGxlLmNvbSI6eyJhdXRoIjoiJG9hdXRodG9rZW46Zm9vYmFyMTIzIn19fQ=="
+kind: Secret
+metadata:
+  name: "image-pull-secret"
+  labels:
+    some: {{ .Values.someAppLabel }}
+type: kubernetes.io/dockerconfigjson
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: entrypoint
+  labels:
+    some: {{ .Values.someAppLabel }}
+spec:
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+  selector:
+    some: {{ .Values.someAppLabel }}
+    my: pod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-name-inference-test
+  labels:
+    some: {{ .Values.someAppLabel }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      some: {{ .Values.someAppLabel }}
+      my: pod
+  template:
+    metadata:
+      labels:
+        some: {{ .Values.someAppLabel }}
+        my: pod
+    spec:
+      imagePullSecrets:
+      - name: image-pull-secret
+      containers:
+      - name: inference
+        image: docker.io/alpine:3.18.0
+        imagePullPolicy: Never
+        command:
+        - sleep
+        - "100000"
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bad-role
+  labels:
+    some: {{ .Values.someAppLabel }}
+rules:
+- apiGroups: [""]
+  apiVersions: ["v1"]
+  resources: ["pods", "services"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["apps"]
+  apiVersions: ["v1"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+# Helm charts are not allowed to create roles with RBAC rules
+- apiGroups: ["rbac.authorization.k8s.io"]
+  apiVersions: ["v1"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]

@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- $serverFullname := include "nvcf-openbao.serverFullname" . }}
+{{- $hookValues := .Values.openbao.hooks.refreshJWTPluginCatalog | default .Values.openbao.hooks.migrations }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $serverFullname }}-refresh-jwt-plugin-catalog
+  namespace: {{ include "nvcf-openbao.namespace" . }}
+  annotations:
+    helm.sh/hook: post-upgrade
+    # Refresh the catalog before migrations use the JWT secret-engine mounts.
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    {{- with $hookValues.podAnnotations }}
+    metadata:
+      annotations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.openbao.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $hookValues.schedulingGates }}
+      schedulingGates:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: OnFailure
+      containers:
+        - name: refresh-jwt-plugin-catalog
+          # The target server image owns the plugin binary whose digest must be
+          # registered before the OnDelete StatefulSet is manually rotated.
+          image: "{{ include "openbao.image" (dict "image" .Values.openbao.server.image "name" "openbao.server.image") }}"
+          imagePullPolicy: {{ .Values.openbao.server.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |-
+              plugin_name="vault-plugin-secrets-jwt"
+              plugin_path="/openbao/plugins/${plugin_name}"
+              test -x "${plugin_path}"
+
+              plugin_sha256="$(sha256sum "${plugin_path}" | awk '{print $1}')"
+              test -n "${plugin_sha256}"
+
+              export BAO_ADDR="http://{{ $serverFullname }}-active:8200"
+              export BAO_TOKEN="$(cat /secrets/root_token/root_token)"
+
+              attempt=1
+              until bao plugin register \
+                -sha256="${plugin_sha256}" \
+                -command="${plugin_name}" \
+                secret "${plugin_name}"; do
+                if [ "${attempt}" -ge 30 ]; then
+                  echo "Failed to refresh JWT plugin catalog after ${attempt} attempts" >&2
+                  exit 1
+                fi
+                echo "OpenBao is not ready for plugin registration; retrying (${attempt}/30)" >&2
+                attempt=$((attempt + 1))
+                sleep 10
+              done
+
+              # Do not reload the plugin here. Existing pods still contain the
+              # previous binary until the OnDelete StatefulSet is rotated.
+              echo "JWT plugin catalog refreshed for the target OpenBao image"
+          volumeMounts:
+            - name: {{ $serverFullname }}-root-token
+              mountPath: /secrets/root_token
+              readOnly: true
+          resources:
+            {{- toYaml $hookValues.resources | nindent 12 }}
+      volumes:
+        - name: {{ $serverFullname }}-root-token
+          secret:
+            secretName: {{ $serverFullname }}-root-token
+            items:
+              - key: root_token
+                path: root_token

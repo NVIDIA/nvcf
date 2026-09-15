@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "telemetry",
+    srcs = ["telemetry.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_go_chi_chi_v5//middleware"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":telemetry",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "telemetry_test",
+    srcs = ["telemetry_test.go"],
+    deps = [
+        ":telemetry",
+        "@com_github_go_chi_chi_v5//middleware",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

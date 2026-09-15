@@ -1,0 +1,45 @@
+# Modified MPL Files
+
+- `.release/docker-entrypoint.sh`: ESS agent rebrand and packaging
+- `Dockerfile`: ESS agent rebrand and packaging
+- `cli.go`: ESS agent rebrand, packaging, and telemetry
+- `cli_test.go`: ESS agent rebrand, packaging, and telemetry
+- `config/config.go`: ESS agent rebrand, telemetry, and SIGTERM shutdown behavior
+- `config/config_test.go`: ESS agent rebrand, telemetry, and SIGTERM shutdown behavior
+- `config/convert.go`: ESS telemetry
+- `config/retry.go`: ESS Vault template behavior
+- `config/template.go`: ESS Vault template behavior
+- `config/template_test.go`: ESS Vault template behavior
+- `config/transport.go`: ESS telemetry
+- `config/vault.go`: ESS agent rebrand and Vault template behavior
+- `config/vault_test.go`: ESS agent rebrand and Vault template behavior
+- `dependency/catalog_datacenters.go`: compatibility fixes
+- `dependency/catalog_node.go`: compatibility fixes
+- `dependency/client_set.go`: ESS agent rebrand
+- `dependency/dependency.go`: ESS telemetry and Vault template behavior
+- `dependency/dependency_test.go`: ESS agent rebrand and CI/integration hardening
+- `dependency/vault_agent_token.go`: ESS telemetry
+- `dependency/vault_common.go`: Vault mount/path handling
+- `dependency/vault_list.go`: ESS agent rebrand and Vault template behavior
+- `dependency/vault_pki.go`: PKI renewal tuning
+- `dependency/vault_read.go`: ESS telemetry, Vault template behavior, and Vault mount/path handling
+- `dependency/vault_read_test.go`: ESS Vault template behavior
+- `dependency/vault_token.go`: ESS telemetry
+- `dependency/vault_token_test.go`: ESS telemetry
+- `dependency/vault_write.go`: ESS telemetry and Vault template behavior
+- `dependency/vault_write_test.go`: ESS agent rebrand
+- `logging/syslog_test.go`: CI/integration hardening
+- `main_test.go`: CI/integration hardening
+- `manager/example_extfuncmap_test.go`: ESS telemetry
+- `manager/example_manager_test.go`: ESS telemetry
+- `manager/manager_test.go`: ESS agent rebrand and CI/integration hardening
+- `manager/runner.go`: ESS agent rebrand, telemetry, and Vault template behavior
+- `manager/runner_test.go`: ESS telemetry
+- `template/funcs.go`: ESS Vault template behavior
+- `template/template.go`: ESS Vault template behavior
+- `test/helpers.go`: SIGTERM shutdown behavior
+- `version/version.go`: ESS agent rebrand and packaging
+- `watch/vault_token.go`: ESS agent rebrand and telemetry
+- `watch/view.go`: ESS telemetry and Vault template behavior
+- `watch/watch_test.go`: ESS agent rebrand and CI/integration hardening
+- `watch/watcher.go`: ESS Vault template behavior

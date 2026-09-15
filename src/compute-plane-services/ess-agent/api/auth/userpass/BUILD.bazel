@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "userpass",
+    srcs = ["userpass.go"],
+    importpath = "github.com/hashicorp/consul-template/api/auth/userpass",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_hashicorp_vault_api//:api"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":userpass",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "userpass_test",
+    srcs = ["userpass_test.go"],
+    embed = [":userpass"],
+    deps = ["@com_github_hashicorp_vault_api//:api"],
+)

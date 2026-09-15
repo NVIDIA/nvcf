@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tracing",
+    srcs = [
+        "config.go",
+        "tracing.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/tracing",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/observability/common",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tracing",
+    visibility = ["//:__subpackages__"],
+)

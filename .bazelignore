@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Bazel skips these directories during package loading and Gazelle traversal.
+# Mostly mirrors gazelle:exclude entries in root BUILD.bazel; .bazelignore is
+# needed in addition because some Bazel commands (build //..., query) load
+# packages directly without consulting BUILD-level directives. ai-tooling is
+# intentionally loadable because the nvcf-cli skill bundle is generated from
+# ai-tooling/user/skills.
+#
+# Native subtrees (src/clis/nvcf-cli, src/libraries/go/lib) have their own
+# vendor/ entries listed below.
+
+# Upstream-owned subtrees with their own historical BUILD files referencing
+# WORKSPACE-style repository names (@io_bazel_rules_go etc.) that conflict
+# with our bzlmod setup. Re-enable per-subtree as Phase B brings each subtree
+# native.
+#
+# src/compute-plane-services is carved out per-subtree rather than ignored
+# wholesale, because nvsnap is now part of the root module and must stay
+# loadable. The siblings below still carry nested MODULE.bazel files.
+# src/control-plane-services is carved out per-subtree: cloud-tasks is native
+# (Phase B) and must stay loadable, while these siblings still carry nested
+# MODULE.bazel / WORKSPACE-style BUILD files that conflict with bzlmod.
+# http-invocation is still a nested Bazel module (Rust, own crate
+# universe); the rest of this tree has migrated to the root module.
+src/libraries/python
+# stargate is a nested Bazel module (own MODULE.bazel under
+# src/libraries/rust/stargate), built via a dedicated CI matrix row with
+# working-directory set to the subtree, the same model as
+# function-autoscaler under the ignored src/control-plane-services tree.
+# The root module keeps it ignored so its crate BUILD files (which load
+# @stargate_crates from the nested module) do not resolve against the
+# umbrella root MODULE.bazel.
+src/libraries/ts
+deploy
+docs
+fern
+infra
+migrations
+# tests/bdd is the standalone `nvcf-bdd` Go module. It is not in go.work.bazel,
+# so its deps (cucumber/godog and friends) are not registered in the root
+# MODULE.bazel. It is run directly with `go test`, not Bazel. Ignore it so
+# `bazel build //...` and query do not try to analyze generated BUILD targets
+# that reference unresolvable external repos.
+tests/bdd
+
+# Note: tools/ is not ignored here so //tools/bazel/java (the root-owned Java
+# build helpers) is loadable. Gazelle is still kept out of tools/ via the
+# gazelle:exclude directive in the root BUILD.bazel.
+
+# The Java subtrees (src/libraries/java/nv-boot-parent and
+# src/control-plane-services/cloud-tasks) are part of the single root module:
+# plain source dirs with BUILD.bazel only, no nested MODULE.bazel. They are
+# intentionally loadable so root labels traverse them. Gazelle is kept out via
+# the root BUILD.bazel gazelle:exclude directives.
+
+# Vendored dependencies inside the two Phase 1 subtrees. Bazel resolves these
+# from MODULE.bazel via Gazelle's go_deps extension, not from on-disk vendor.
+src/libraries/go/lib/vendor
+src/clis/nvcf-cli/vendor
+# image-credential-helper vendors the shared NVCF Go library and ships
+# BUILD.bazel files inside vendor/. Bazel resolves that module through go_deps,
+# so the vendored copy must stay unloadable or the same importpath is declared
+# by two packages and analysis fails on a duplicate.
+src/compute-plane-services/image-credential-helper/vendor
+
+# Tool-pin directory: holds only a //go:build tools file for go.mod and yields
+# no Bazel package. Skipped directly here because some Bazel commands (build
+# //..., query) load packages without consulting BUILD-level gazelle:exclude,
+# which otherwise fails when the transient build/ dir is missing during a scan.
+src/libraries/go/lib/pkg/nvkit/build
+
+# Bazel-managed caches we keep inside the workspace for CI cache: paths.
+.bazel-cache
+
+# Lifted from src/uis/nvcf-ui/.bazelignore on migration into the root module.
+# ui/node_modules in particular is required: aspect_rules_js refuses to evaluate
+# npm_translate_lock unless every nested node_modules pnpm will create is
+# ignored here.
+src/uis/nvcf-ui/ui/node_modules
+src/uis/nvcf-ui/ui/dist
+src/uis/nvcf-ui/ui/coverage
+src/uis/nvcf-ui/backend/static
+src/uis/nvcf-ui/backend/bin
+src/uis/nvcf-ui/node_modules
+
+# Lifted from src/compute-plane-services/ess-agent/.bazelignore on migration into the root module.
+src/compute-plane-services/ess-agent/local
+src/compute-plane-services/ess-agent/vault
+src/compute-plane-services/ess-agent/api/auth/approle
+src/compute-plane-services/ess-agent/api/auth/aws
+src/compute-plane-services/ess-agent/api/auth/azure
+src/compute-plane-services/ess-agent/api/auth/gcp
+src/compute-plane-services/ess-agent/api/auth/ldap
+src/compute-plane-services/ess-agent/api/auth/userpass
+src/compute-plane-services/ess-agent/sdk/helper/ldaputil
+
+# Lifted from src/compute-plane-services/nvcf-unbound/.bazelignore on migration into the root module.
+src/compute-plane-services/nvcf-unbound/deploy
+src/compute-plane-services/nvcf-unbound/docker
+src/compute-plane-services/nvcf-unbound/docs
+src/compute-plane-services/nvcf-unbound/playbooks
+src/compute-plane-services/nvcf-unbound/scripts
+src/compute-plane-services/nvcf-unbound/tests
+
+# Lifted from src/control-plane-services/nats-auth-callout/.bazelignore on migration into the root module.
+src/control-plane-services/nats-auth-callout/local-dev
+src/control-plane-services/nats-auth-callout/deploy
+src/control-plane-services/nats-auth-callout/docs
+src/control-plane-services/nats-auth-callout/vault-agent
+src/control-plane-services/nats-auth-callout/scripts
+src/control-plane-services/nats-auth-callout/tools
+
+# Lifted from src/invocation-plane-services/grpc-proxy/.bazelignore on migration into the root module.
+src/invocation-plane-services/grpc-proxy/local
+src/invocation-plane-services/grpc-proxy/vault
+
+# Lifted from src/invocation-plane-services/llm-api-gateway/.bazelignore on migration into the root module.
+src/invocation-plane-services/llm-api-gateway/kustomize
+
+# Lifted from src/invocation-plane-services/vanity-gateway/.bazelignore on migration into the root module.
+src/invocation-plane-services/vanity-gateway/local
+src/invocation-plane-services/vanity-gateway/vault
+src/invocation-plane-services/vanity-gateway/api/auth/approle
+src/invocation-plane-services/vanity-gateway/api/auth/aws
+src/invocation-plane-services/vanity-gateway/api/auth/azure
+src/invocation-plane-services/vanity-gateway/api/auth/gcp
+src/invocation-plane-services/vanity-gateway/api/auth/ldap
+src/invocation-plane-services/vanity-gateway/api/auth/userpass
+src/invocation-plane-services/vanity-gateway/sdk/helper/ldaputil
+
+# Lifted from src/compute-plane-services/nvca/.bazelignore on migration into the root module.
+src/compute-plane-services/nvca/local
+src/compute-plane-services/nvca/vault
+
+# Lifted from src/control-plane-services/helm-reval/.bazelignore on migration into the root module.
+src/control-plane-services/helm-reval/local
+src/control-plane-services/helm-reval/vault
+src/control-plane-services/helm-reval/vendor/cel.dev/expr/
+src/control-plane-services/helm-reval/vendor/github.com/google/cel-go
+src/control-plane-services/helm-reval/vendor/github.com/grpc-ecosystem/grpc-gateway
+
+# Lifted from src/compute-plane-services/byoo-otel-collector/.bazelignore on migration into the root module.
+src/compute-plane-services/byoo-otel-collector/local
+src/compute-plane-services/byoo-otel-collector/vault
+src/compute-plane-services/byoo-otel-collector/api/auth/approle
+src/compute-plane-services/byoo-otel-collector/api/auth/aws
+src/compute-plane-services/byoo-otel-collector/api/auth/azure
+src/compute-plane-services/byoo-otel-collector/api/auth/gcp
+src/compute-plane-services/byoo-otel-collector/api/auth/ldap
+src/compute-plane-services/byoo-otel-collector/api/auth/userpass
+src/compute-plane-services/byoo-otel-collector/sdk/helper/ldaputil

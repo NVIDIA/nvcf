@@ -1,0 +1,74 @@
+# When running on local via colima it needs min of 6 CPU and 8GB of memory
+# Use make install-local to install the chart locally
+
+cassandra_registry: &cassandra_registry ""
+
+cassandra_repo: &cassandra_repo ""
+cassandra_tag: &cassandra_tag 5.0.6-nv-1
+
+cassandra_migrations_tag: &cassandra_migrations_tag latest
+cassandra_migrations_repo: &cassandra_migrations_repo ""
+
+# change this to Always if you want to pull the image every time
+pullPolicy: &pullPolicy IfNotPresent
+
+cassandra:
+  global:
+    security:
+      allowInsecureImages: true
+    # accepts either a map or a list
+    # imagePullSecrets:
+    #   - name: nvcr-secret
+    #   - name: anotherSecret
+    # imagePullSecrets:
+    #   - nvcr-secret
+    #   - anotherSecret
+    imagePullSecrets:
+      - name: nvcr-secret
+
+  migrations:
+    image:
+      registry: ""
+      repository: ""
+      tag: *cassandra_migrations_tag
+      pullPolicy: *pullPolicy
+
+  # see: https://github.com/bitnami/charts/blob/main/bitnami/cassandra/values.yaml#L373
+  # resourcesPreset: small
+
+  # reduce compute usage
+  replicaCount: 1
+
+  # adjust probes to be more lenient
+  startupProbe:
+    initialDelaySeconds: 15
+
+  readinessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+
+  image:
+    registry: ""
+    repository: ""
+    # tag: *cassandra_tag
+    pullPolicy: *pullPolicy
+
+  dynamicSeedDiscovery:
+    image:
+      registry: ""
+      repository: ""
+      # tag: *cassandra_tag
+      pullPolicy: *pullPolicy
+
+  jvm:
+    # this should only be set for local development with only 1 replica is used.
+    # use of this with more than 1 replica will cause node startups to unexpectedly fail.
+    # cassandra-exporter-agent.jar is required to support prometheus metrics exposure
+    extraOpts: |
+      -javaagent:/opt/bitnami/cassandra/lib/cassandra-exporter-agent.jar 
+      -Dcassandra.superuser_setup_delay_ms=100 
+      -Dcassandra.gossip_settle_min_wait_ms=1000 

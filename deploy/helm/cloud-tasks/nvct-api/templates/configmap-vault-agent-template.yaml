@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nvct-api.fullname" . }}-vault-agent-tpl
+  namespace: {{ include "nvct-api.namespace" . }}
+  labels:
+    {{- include "nvct-api.labels" . | nindent 4 }}
+data:
+  secrets.json.tmpl: |-
+{{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | indent 4 }}

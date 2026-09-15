@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Install only CRDs, disable all other components
+crds:
+  enabled: true
+
+# Disable all Prometheus Operator components
+prometheusOperator:
+  enabled: false
+
+# Disable Prometheus instance
+prometheus:
+  enabled: false
+
+# Disable Alertmanager
+alertmanager:
+  enabled: false
+
+# Disable Grafana
+grafana:
+  enabled: false
+
+# Disable kube-state-metrics (we'll install it separately)
+kubeStateMetrics:
+  enabled: false
+
+# Disable node-exporter
+nodeExporter:
+  enabled: false
+
+# Disable prometheus-node-exporter
+prometheus-node-exporter:
+  enabled: false

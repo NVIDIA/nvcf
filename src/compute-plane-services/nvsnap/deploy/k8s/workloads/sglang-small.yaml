@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# SGLang with TinyLlama-1.1B (single GPU) — criu-v2 checkpoint/restore.
+#
+# No injection stack: the criu-v2 in-namespace CRIU engine handles the process
+# at the OS level, so the container just runs stock SGLang under setsid.
+# Restore lands in a dumb placeholder pod driven by the agent.
+#
+# The legacy interception stack this used to carry is incompatible with
+# criu-v2: /etc/ld.so.preload is mount-namespace wide, and criu-v2 nsenters
+# CRIU into that namespace, so the loader force-loaded the intercept library
+# into CRIU itself and the dump hung before finishing seize.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sglang-small
+  namespace: nvsnap-system
+  labels:
+    app: sglang-small
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "SGLang"
+    nvsnap.io/desc: "TinyLlama 1.1B on SGLang"
+    nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    nvsnap.io/port: "30000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+    nvsnap.io/ckpt-size: "59 GB"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: sglang
+      image: lmsysorg/sglang:v0.5.15.post1-cu129
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          ulimit -c unlimited
+          # criu-v2 convention: launch the workload in its own session via
+          # setsid — the agent dumps the GPU leader's session, never container
+          # init. Stdio goes to a rootfs file so CRIU restores those fds as
+          # plain files; bash stays pid1 to reap orphans and tails the file so
+          # kubectl logs keeps working.
+          nohup setsid python3 -m sglang.launch_server \
+            --model-path TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --host 0.0.0.0 \
+            --port 30000 \
+            --mem-fraction-static 0.8 \
+            --disable-prefill-cuda-graph > /sglang.out 2>&1 < /dev/null &
+          tail -F /sglang.out &
+          while true; do sleep 30; done
+      env:
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: TORCH_CPP_LOG_LEVEL, value: "INFO" }
+        - { name: TORCH_SHOW_CPP_STACKTRACES, value: "1" }
+        # Keep torch off the libuv TCPStore backend: the patched libuv that
+        # used to be injected here is gone with the rest of the stack.
+        - { name: USE_LIBUV, value: "0" }
+      ports:
+        - containerPort: 30000
+          name: http
+      readinessProbe:
+        httpGet:
+          path: /v1/models
+          port: 30000
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+
+  restartPolicy: Never

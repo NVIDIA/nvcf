@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "hclutil",
+    srcs = ["hcl.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/hclutil",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_hashicorp_go_multierror//:go-multierror",
+        "@com_github_hashicorp_hcl//hcl/ast",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":hclutil",
+    visibility = ["//visibility:public"],
+)

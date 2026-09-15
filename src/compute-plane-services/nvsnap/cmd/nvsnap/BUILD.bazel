@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "nvsnap_lib",
+    srcs = [
+        "main.go",
+        "pods.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/podtimings",
+        "@com_github_spf13_cobra//:cobra",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//tools/clientcmd",
+    ],
+)
+
+go_binary(
+    name = "nvsnap",
+    embed = [":nvsnap_lib"],
+    visibility = ["//visibility:public"],
+)

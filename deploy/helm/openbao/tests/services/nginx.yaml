@@ -1,0 +1,162 @@
+###
+# This is a test of known service nvcf-api that uses OpenBao to sign JWT tokens.
+# It is used to test the migration of secrets from Vault to OpenBao.
+# There is a template example and injection of the vault-agent
+#
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvcf-api
+  namespace: nvcf
+  labels:
+    app: nvcf-api 
+
+---
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvcf-api
+  labels:
+    app: nvcf-api
+  annotations:
+    vault.hashicorp.com/agent-inject: 'true'
+    vault.hashicorp.com/agent-init-first: 'true'
+    vault.hashicorp.com/agent-inject-status: 'update'
+    vault.hashicorp.com/agent-configmap: 'vault-agent-configmap'
+    vault.hashicorp.com/secret-volume-path: '/vault/secrets'
+    vault.hashicorp.com/copy-volume-mounts: 'nginx'
+    vault.hashicorp.com/service: http://openbao-server.vault-system.svc.cluster.local:8200
+spec:
+  serviceAccountName: nvcf-api
+  volumes:
+    - name: token
+      projected:
+        sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: 3600
+            audience: http://openbao-server.vault-system.svc.cluster.local:8200
+    - name: vault-agent-configmap
+      configMap:
+        name: vault-agent-configmap
+  
+  containers:
+    - name: nginx
+      image: nginx:latest
+      ports:
+        - containerPort: 80
+      resources:
+        limits:
+          cpu: "0.5"
+          memory: "512Mi"
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+      volumeMounts:
+        - name: token
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+        - name: vault-agent-configmap
+          mountPath: /vault/configs
+          
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-agent-configmap
+data:
+  secrets.tmpl: |
+    {
+      "tokens": {
+        [[- with secret `services/nvcf-api/jwt/sign/nvcf-api` ]]
+        "notary": "[[ .Data.token ]]",
+        [[- end ]]
+        [[- with secret `services/ess-api/jwt/sign/nvcf-api` ]]
+        "jwtToken": "[[ .Data.token ]]",
+        [[- end ]]
+      }
+      
+      "kv": {
+        [[- with secret `services/nvcf-api/kv/data/cassandra/creds` ]]
+        "cassandra": {
+          "username": "[[ .Data.data.username ]]",
+          "password": "[[ .Data.data.password ]]"
+        },
+        [[- end ]]
+        [[- with secret `services/all/kv/data/encryption/keys/audit` ]]
+        "audit": {
+          "kid": "[[ .Data.data.current_kid ]]",
+          "keys": "[[ .Data.data.keys ]]"
+        },
+        [[- end ]]
+        [[- with secret `services/all/kv/data/encryption/keys/stored_data` ]]
+        [[- $keysObj := .Data.data.keys | base64Decode | parseJSON ]]
+        "jwks": {
+          "kid": "[[ .Data.data.current_kid ]]",
+          "currentKey": "[[ index $keysObj.keys 0 | toJSON | base64Encode ]]",
+          "allKeys": "[[ $keysObj.keys | toJSON | base64Encode ]]"
+        }
+        [[- end ]]
+      }
+    }
+  config.hcl: |
+    # Comment this out if running as sidecar instead of initContainer
+    exit_after_auth = false
+
+    pid_file = "/home/vault/pidfile"
+
+    auto_auth {
+        method "jwt" {
+            mount_path = "auth/jwt"
+            config = {
+                role = "nvcf-api"
+                path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+                remove_jwt_after_reading = false
+            }
+        }
+
+        sink "file" {
+            config = {
+                path = "/home/vault/.vault-token"
+            }
+        }
+    }
+
+    template {
+      destination = "/vault/secrets/secrets.json"
+      source = "/vault/configs/secrets.tmpl"
+      left_delimiter = "[["
+      right_delimiter = "]]"
+    }
+
+  config-init.hcl: |
+    # Comment this out if running as sidecar instead of initContainer
+    exit_after_auth = true
+
+    pid_file = "/home/vault/pidfile"
+
+    auto_auth {
+        method "jwt" {
+            mount_path = "auth/jwt"
+            config = {
+                role = "nvcf-api"
+                path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+                remove_jwt_after_reading = false
+            }
+        }
+
+        sink "file" {
+            config = {
+                path = "/home/vault/.vault-token"
+            }
+        }
+    }
+
+    template {
+      destination = "/vault/secrets/secrets.json"
+      source = "/vault/configs/secrets.tmpl"
+      left_delimiter = "[["
+      right_delimiter = "]]"
+    }

@@ -1,0 +1,344 @@
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 8.4725e-05
+go_gc_duration_seconds{quantile="0.25"} 9.7735e-05
+go_gc_duration_seconds{quantile="0.5"} 0.000137554
+go_gc_duration_seconds{quantile="0.75"} 0.000161121
+go_gc_duration_seconds{quantile="1"} 0.000295927
+go_gc_duration_seconds_sum 0.001412233
+go_gc_duration_seconds_count 9
+# HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100. This value is set by the GOGC environment variable, and the runtime/debug.SetGCPercent function. Sourced from /gc/gogc:percent.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent 100
+# HELP go_gc_gomemlimit_bytes Go runtime memory limit configured by the user, otherwise math.MaxInt64. This value is set by the GOMEMLIMIT environment variable, and the runtime/debug.SetMemoryLimit function. Sourced from /gc/gomemlimit:bytes.
+# TYPE go_gc_gomemlimit_bytes gauge
+go_gc_gomemlimit_bytes 9.223372036854776e+18
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 389
+# HELP go_info Information about the Go environment.
+# TYPE go_info gauge
+go_info{version="go1.24.6"} 1
+# HELP go_memstats_alloc_bytes Number of bytes allocated in heap and currently in use. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_alloc_bytes gauge
+go_memstats_alloc_bytes 1.4563864e+07
+# HELP go_memstats_alloc_bytes_total Total number of bytes allocated in heap until now, even if released already. Equals to /gc/heap/allocs:bytes.
+# TYPE go_memstats_alloc_bytes_total counter
+go_memstats_alloc_bytes_total 4.7515144e+07
+# HELP go_memstats_buck_hash_sys_bytes Number of bytes used by the profiling bucket hash table. Equals to /memory/classes/profiling/buckets:bytes.
+# TYPE go_memstats_buck_hash_sys_bytes gauge
+go_memstats_buck_hash_sys_bytes 1.481447e+06
+# HELP go_memstats_frees_total Total number of heap objects frees. Equals to /gc/heap/frees:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_frees_total counter
+go_memstats_frees_total 294982
+# HELP go_memstats_gc_sys_bytes Number of bytes used for garbage collection system metadata. Equals to /memory/classes/metadata/other:bytes.
+# TYPE go_memstats_gc_sys_bytes gauge
+go_memstats_gc_sys_bytes 3.934528e+06
+# HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use, same as go_memstats_alloc_bytes. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 1.4563864e+07
+# HELP go_memstats_heap_idle_bytes Number of heap bytes waiting to be used. Equals to /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_idle_bytes gauge
+go_memstats_heap_idle_bytes 8.364032e+06
+# HELP go_memstats_heap_inuse_bytes Number of heap bytes that are in use. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes
+# TYPE go_memstats_heap_inuse_bytes gauge
+go_memstats_heap_inuse_bytes 2.1684224e+07
+# HELP go_memstats_heap_objects Number of currently allocated objects. Equals to /gc/heap/objects:objects.
+# TYPE go_memstats_heap_objects gauge
+go_memstats_heap_objects 81485
+# HELP go_memstats_heap_released_bytes Number of heap bytes released to OS. Equals to /memory/classes/heap/released:bytes.
+# TYPE go_memstats_heap_released_bytes gauge
+go_memstats_heap_released_bytes 2.752512e+06
+# HELP go_memstats_heap_sys_bytes Number of heap bytes obtained from system. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes + /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_sys_bytes gauge
+go_memstats_heap_sys_bytes 3.0048256e+07
+# HELP go_memstats_last_gc_time_seconds Number of seconds since 1970 of last garbage collection.
+# TYPE go_memstats_last_gc_time_seconds gauge
+go_memstats_last_gc_time_seconds 1.762525241327271e+09
+# HELP go_memstats_mallocs_total Total number of heap objects allocated, both live and gc-ed. Semantically a counter version for go_memstats_heap_objects gauge. Equals to /gc/heap/allocs:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_mallocs_total counter
+go_memstats_mallocs_total 376467
+# HELP go_memstats_mcache_inuse_bytes Number of bytes in use by mcache structures. Equals to /memory/classes/metadata/mcache/inuse:bytes.
+# TYPE go_memstats_mcache_inuse_bytes gauge
+go_memstats_mcache_inuse_bytes 14496
+# HELP go_memstats_mcache_sys_bytes Number of bytes used for mcache structures obtained from system. Equals to /memory/classes/metadata/mcache/inuse:bytes + /memory/classes/metadata/mcache/free:bytes.
+# TYPE go_memstats_mcache_sys_bytes gauge
+go_memstats_mcache_sys_bytes 15704
+# HELP go_memstats_mspan_inuse_bytes Number of bytes in use by mspan structures. Equals to /memory/classes/metadata/mspan/inuse:bytes.
+# TYPE go_memstats_mspan_inuse_bytes gauge
+go_memstats_mspan_inuse_bytes 408960
+# HELP go_memstats_mspan_sys_bytes Number of bytes used for mspan structures obtained from system. Equals to /memory/classes/metadata/mspan/inuse:bytes + /memory/classes/metadata/mspan/free:bytes.
+# TYPE go_memstats_mspan_sys_bytes gauge
+go_memstats_mspan_sys_bytes 489600
+# HELP go_memstats_next_gc_bytes Number of heap bytes when next garbage collection will take place. Equals to /gc/heap/goal:bytes.
+# TYPE go_memstats_next_gc_bytes gauge
+go_memstats_next_gc_bytes 2.9441434e+07
+# HELP go_memstats_other_sys_bytes Number of bytes used for other system allocations. Equals to /memory/classes/other:bytes.
+# TYPE go_memstats_other_sys_bytes gauge
+go_memstats_other_sys_bytes 2.816777e+06
+# HELP go_memstats_stack_inuse_bytes Number of bytes obtained from system for stack allocator in non-CGO environments. Equals to /memory/classes/heap/stacks:bytes.
+# TYPE go_memstats_stack_inuse_bytes gauge
+go_memstats_stack_inuse_bytes 3.506176e+06
+# HELP go_memstats_stack_sys_bytes Number of bytes obtained from system for stack allocator. Equals to /memory/classes/heap/stacks:bytes + /memory/classes/os-stacks:bytes.
+# TYPE go_memstats_stack_sys_bytes gauge
+go_memstats_stack_sys_bytes 3.506176e+06
+# HELP go_memstats_sys_bytes Number of bytes obtained from system. Equals to /memory/classes/total:byte.
+# TYPE go_memstats_sys_bytes gauge
+go_memstats_sys_bytes 4.2292488e+07
+# HELP go_sched_gomaxprocs_threads The current runtime.GOMAXPROCS setting, or the number of operating system threads that can execute user-level Go code simultaneously. Sourced from /sched/gomaxprocs:threads.
+# TYPE go_sched_gomaxprocs_threads gauge
+go_sched_gomaxprocs_threads 12
+# HELP go_threads Number of OS threads created.
+# TYPE go_threads gauge
+go_threads 17
+# HELP nvca_container_crash_total Total number of container crashes of NVCA workload pods
+# TYPE nvca_container_crash_total counter
+nvca_container_crash_total{container="ess",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_crash_total{container="ess-init",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_crash_total{container="init",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_crash_total{container="smb-server",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_crash_total{container="utils",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+# HELP nvca_container_restart_total Total number of container restarts of NVCA workload pods
+# TYPE nvca_container_restart_total counter
+nvca_container_restart_total{container="ess",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_restart_total{container="ess-init",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_restart_total{container="init",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_restart_total{container="smb-server",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_container_restart_total{container="utils",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+# HELP nvca_event_error_total Total error count of NVCA event kind
+# TYPE nvca_event_error_total counter
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="EVENT_MODEL_CACHING_FAILED",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="EVENT_MODEL_CACHING_SUCCESS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="EVENT_PVC_MODEL_CACHING_ERROR",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="EVENT_TRANSLATE_FUNCTION_ERROR",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="EVENT_TRANSLATE_TASK_ERROR",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="EVENT_WORKLOAD_PAUSED",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ACKNOWLEDGE_REQUEST",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_RENEW_ICMS_CREDENTIALS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ROLLOVER_SERVICE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_CLEANUP_UNUSED_RESOURCES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NETWORK_POLICIES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NODE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_PERIODIC_INSTANCE_STATUS_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUESTS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUEST_STATUS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_SQS_QUEUE",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_error_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_UPDATE_HEARTBEAT",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+# HELP nvca_event_process_latency Latency of NVCA event processing
+# TYPE nvca_event_process_latency summary
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ACKNOWLEDGE_REQUEST",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 9.446e-06
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ACKNOWLEDGE_REQUEST",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 2.3309e-05
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ACKNOWLEDGE_REQUEST",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 2.3309e-05
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ACKNOWLEDGE_REQUEST",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 9.8082e-05
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ACKNOWLEDGE_REQUEST",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 9
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_RENEW_ICMS_CREDENTIALS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 0.28978339
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_RENEW_ICMS_CREDENTIALS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 0.28978339
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_RENEW_ICMS_CREDENTIALS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 0.28978339
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_RENEW_ICMS_CREDENTIALS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0.28978339
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_RENEW_ICMS_CREDENTIALS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 1
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ROLLOVER_SERVICE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 3.393e-06
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ROLLOVER_SERVICE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 3.393e-06
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ROLLOVER_SERVICE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 3.393e-06
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ROLLOVER_SERVICE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 3.393e-06
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ROLLOVER_SERVICE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 1
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_CLEANUP_UNUSED_RESOURCES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 5.8008e-05
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_CLEANUP_UNUSED_RESOURCES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 5.8008e-05
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_CLEANUP_UNUSED_RESOURCES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 5.8008e-05
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_CLEANUP_UNUSED_RESOURCES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 5.8008e-05
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_CLEANUP_UNUSED_RESOURCES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 1
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NETWORK_POLICIES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 0.093407329
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NETWORK_POLICIES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 0.101496307
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NETWORK_POLICIES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 0.101496307
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NETWORK_POLICIES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0.370702243
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NETWORK_POLICIES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 4
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NODE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 0.331072139
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NODE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 0.331072139
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NODE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 0.331072139
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NODE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0.331072139
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NODE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 1
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_PERIODIC_INSTANCE_STATUS_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 0.11167293
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_PERIODIC_INSTANCE_STATUS_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 0.113039613
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_PERIODIC_INSTANCE_STATUS_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 0.113039613
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_PERIODIC_INSTANCE_STATUS_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0.224712543
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_PERIODIC_INSTANCE_STATUS_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 2
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUESTS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 6.422e-06
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUESTS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 9.781e-06
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUESTS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 9.781e-06
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUESTS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 2.2602e-05
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUESTS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 3
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUEST_STATUS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 8.126e-06
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUEST_STATUS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 1.0243e-05
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUEST_STATUS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 1.0243e-05
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUEST_STATUS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 3.4169000000000004e-05
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUEST_STATUS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 4
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_SQS_QUEUE",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 3.447430852
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_SQS_QUEUE",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 4.157515374
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_SQS_QUEUE",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 4.204623325
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_SQS_QUEUE",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 36.966503632999995
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_SQS_QUEUE",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 10
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_UPDATE_HEARTBEAT",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.5"} 0.140207148
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_UPDATE_HEARTBEAT",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.9"} 0.140207148
+nvca_event_process_latency{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_UPDATE_HEARTBEAT",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",quantile="0.99"} 0.140207148
+nvca_event_process_latency_sum{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_UPDATE_HEARTBEAT",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0.140207148
+nvca_event_process_latency_count{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_UPDATE_HEARTBEAT",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 1
+# HELP nvca_event_queue_length Lengths of the NVCA event queues
+# TYPE nvca_event_queue_length gauge
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ACKNOWLEDGE_REQUEST",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_RENEW_ICMS_CREDENTIALS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_ROLLOVER_SERVICE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_CLEANUP_UNUSED_RESOURCES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NETWORK_POLICIES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_NODE_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_PERIODIC_INSTANCE_STATUS_UPDATES",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUESTS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_ICMS_REQUEST_STATUS",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_SYNC_SQS_QUEUE",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_event_queue_length{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_event_name="TICK_UPDATE_HEARTBEAT",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+# HELP nvca_http_duration_seconds Duration of HTTP requests.
+# TYPE nvca_http_duration_seconds histogram
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="0.005"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="0.01"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="0.025"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="0.05"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="0.1"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="0.25"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="0.5"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="1"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="2.5"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="5"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="10"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/healthz",le="+Inf"} 9
+nvca_http_duration_seconds_sum{method="GET",path="/healthz"} 0.0018516970000000002
+nvca_http_duration_seconds_count{method="GET",path="/healthz"} 9
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="0.005"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="0.01"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="0.025"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="0.05"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="0.1"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="0.25"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="0.5"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="1"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="2.5"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="5"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="10"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/livez",le="+Inf"} 8
+nvca_http_duration_seconds_sum{method="GET",path="/livez"} 0.000348453
+nvca_http_duration_seconds_count{method="GET",path="/livez"} 8
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="0.005"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="0.01"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="0.025"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="0.05"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="0.1"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="0.25"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="0.5"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="1"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="2.5"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="5"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="10"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/metrics",le="+Inf"} 0
+nvca_http_duration_seconds_sum{method="GET",path="/metrics"} 0
+nvca_http_duration_seconds_count{method="GET",path="/metrics"} 0
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="0.005"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="0.01"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="0.025"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="0.05"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="0.1"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="0.25"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="0.5"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="1"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="2.5"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="5"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="10"} 1
+nvca_http_duration_seconds_bucket{method="GET",path="/version",le="+Inf"} 1
+nvca_http_duration_seconds_sum{method="GET",path="/version"} 3.6135e-05
+nvca_http_duration_seconds_count{method="GET",path="/version"} 1
+# HELP nvca_http_request_counts Counter of HTTP requests.
+# TYPE nvca_http_request_counts counter
+nvca_http_request_counts{method="GET",path="/healthz",status_code="200"} 9
+nvca_http_request_counts{method="GET",path="/livez",status_code="200"} 8
+nvca_http_request_counts{method="GET",path="/version",status_code="200"} 1
+# HELP nvca_instance_type_allocatable Count of instances that can be deployed on available schedulable node resources by instance type
+# TYPE nvca_instance_type_allocatable gauge
+nvca_instance_type_allocatable{instance_type="ON-PREM.GPU.H100_1x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 16
+nvca_instance_type_allocatable{instance_type="ON-PREM.GPU.H100_2x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 8
+nvca_instance_type_allocatable{instance_type="ON-PREM.GPU.H100_4x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 4
+nvca_instance_type_allocatable{instance_type="ON-PREM.GPU.H100_8x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 2
+# HELP nvca_instance_type_capacity Count of instances that could be deployed on schedulable node resources by instance type
+# TYPE nvca_instance_type_capacity gauge
+nvca_instance_type_capacity{instance_type="ON-PREM.GPU.H100_1x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 16
+nvca_instance_type_capacity{instance_type="ON-PREM.GPU.H100_2x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 8
+nvca_instance_type_capacity{instance_type="ON-PREM.GPU.H100_4x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 4
+nvca_instance_type_capacity{instance_type="ON-PREM.GPU.H100_8x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 2
+# HELP nvca_instance_type_unschedulable Count of instances that could be deployed on unschedulable node resources by instance type
+# TYPE nvca_instance_type_unschedulable gauge
+nvca_instance_type_unschedulable{instance_type="ON-PREM.GPU.H100_1x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_instance_type_unschedulable{instance_type="ON-PREM.GPU.H100_2x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_instance_type_unschedulable{instance_type="ON-PREM.GPU.H100_4x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_instance_type_unschedulable{instance_type="ON-PREM.GPU.H100_8x",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+# HELP nvca_k8s_api_success_total Total number of successful K8s API server Get operations
+# TYPE nvca_k8s_api_success_total counter
+nvca_k8s_api_success_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",resource="csidriver"} 13
+nvca_k8s_api_success_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",resource="deployment"} 1
+nvca_k8s_api_success_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",resource="node"} 11
+nvca_k8s_api_success_total{nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2",resource="secret"} 5
+# HELP nvca_queue_message_processed_total Total message count for this NVCA instance
+# TYPE nvca_queue_message_processed_total counter
+nvca_queue_message_processed_total{message_action="RequestSpotInstances",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_queue_message_processed_total{message_action="RequestSpotInstancesForTask",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+nvca_queue_message_processed_total{message_action="TerminateInstances",nvca_cluster_group="mcamp-dt-local",nvca_cluster_name="mcamp-dt-local",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_version="2.49.0-rc2"} 0
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 1.3
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+process_max_fds 1.048576e+06
+# HELP process_network_receive_bytes_total Number of bytes received by the process over the network.
+# TYPE process_network_receive_bytes_total counter
+process_network_receive_bytes_total 1.310055e+06
+# HELP process_network_transmit_bytes_total Number of bytes sent by the process over the network.
+# TYPE process_network_transmit_bytes_total counter
+process_network_transmit_bytes_total 383181
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds 20
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 9.1226112e+07
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.76252520566e+09
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes 1.343725568e+09
+# HELP process_virtual_memory_max_bytes Maximum amount of virtual memory available in bytes.
+# TYPE process_virtual_memory_max_bytes gauge
+process_virtual_memory_max_bytes 1.8446744073709552e+19
+# HELP nvca_controller_runtime_active_workers Number of currently used workers per controller
+# TYPE nvca_controller_runtime_active_workers gauge
+nvca_controller_runtime_active_workers{controller="internalpersistentstorage",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_active_workers{controller="miniservice_controller",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_active_workers{controller="sharedstorage",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+# HELP nvca_controller_runtime_max_concurrent_reconciles Maximum number of concurrent reconciles per controller
+# TYPE nvca_controller_runtime_max_concurrent_reconciles gauge
+nvca_controller_runtime_max_concurrent_reconciles{controller="internalpersistentstorage",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 1
+nvca_controller_runtime_max_concurrent_reconciles{controller="miniservice_controller",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 1
+nvca_controller_runtime_max_concurrent_reconciles{controller="sharedstorage",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 1
+# HELP nvca_controller_runtime_reconcile_errors_total Total number of reconciliation errors per controller
+# TYPE nvca_controller_runtime_reconcile_errors_total counter
+nvca_controller_runtime_reconcile_errors_total{controller="internalpersistentstorage",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_errors_total{controller="miniservice_controller",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_errors_total{controller="sharedstorage",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+# HELP nvca_controller_runtime_reconcile_total Total number of reconciliations per controller
+# TYPE nvca_controller_runtime_reconcile_total counter
+nvca_controller_runtime_reconcile_total{controller="internalpersistentstorage",result="error",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="internalpersistentstorage",result="requeue",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="internalpersistentstorage",result="requeue_after",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="internalpersistentstorage",result="success",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="miniservice_controller",result="error",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="miniservice_controller",result="requeue",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="miniservice_controller",result="requeue_after",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="miniservice_controller",result="success",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="sharedstorage",result="error",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="sharedstorage",result="requeue",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="sharedstorage",result="requeue_after",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0
+nvca_controller_runtime_reconcile_total{controller="sharedstorage",result="success",nvca_nca_id="JPd-JcvUWp0_ZuA-6zmjZqCJk7uj-NkZMG350tC8jOw",nvca_cluster_name="mcamp-dt-local",nvca_cluster_group="mcamp-dt-local",nvca_version="2.49.0-rc2"} 0

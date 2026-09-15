@@ -1,0 +1,2 @@
+{"event":"schemaVersion","version":1}
+{"event":"final","ts":"2026-04-29T01:35:00Z","success":false,"cancelled":true,"clusterId":"abc","durationSec":192,"droppedProgressEvents":0}

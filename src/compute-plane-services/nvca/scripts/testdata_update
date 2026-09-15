@@ -1,0 +1,7 @@
+#! /usr/bin/env bash
+set -eu -o pipefail
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+helm template "${repo_root}/examples/inference-test" \
+  --set="imagePullSecretBase64=eyJhdXRocyI6eyJzdGcubnZjci5pbyI6eyJhdXRoIjoiJG9hdXRodG9rZW46Zm9vYmFyMTIzIn19fQ==" \
+  > "${repo_root}/pkg/nvca/testdata/rendered-inference-test/manifests.yaml"

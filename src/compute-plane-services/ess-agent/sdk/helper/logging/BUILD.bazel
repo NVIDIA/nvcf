@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "logging",
+    srcs = ["logging.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/logging",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_hashicorp_go_hclog//:go-hclog"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":logging",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "logging_test",
+    srcs = ["logging_test.go"],
+    # Upstream vault sdk Test_ParseEnv_VAULT_LOG_FORMAT depends on a
+    # clean process env that Bazel's sandbox does not reliably provide.
+    # ess-agent doesn't own this test surface; tag manual.
+    tags = ["manual"],
+    embed = [":logging"],
+)

@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# PyTorch GPU Test Pod
+# This pod allocates GPU memory and runs a loop - ideal for checkpoint/restore testing
+# 
+# Usage:
+#   kubectl apply -f 01-pytorch-test.yaml
+#   # Wait for ALLOCATED message in logs
+#   # Then checkpoint via agent API
+#
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-test
+  namespace: nvsnap-test
+  labels:
+    app: nvsnap-test
+    test: pytorch
+spec:
+  # Update this to your GPU node
+  # nodeName: your-gpu-node
+  restartPolicy: Never
+  containers:
+  - name: gpu
+    image: pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
+    command: ["python", "-u", "-c"]
+    args:
+    - |
+      import torch, time, os, signal
+      
+      # Ignore SIGPIPE - required for restore (stdout pipe will be broken)
+      signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+      
+      print(f"=== PyTorch GPU Test ===")
+      print(f"PID: {os.getpid()}")
+      print(f"PyTorch: {torch.__version__}")
+      print(f"CUDA available: {torch.cuda.is_available()}")
+      
+      # Allocate GPU tensor with known value
+      x = torch.ones(1000, 1000, device='cuda') * 42.0
+      print(f"ALLOCATED: sum={x.sum().item()}")
+      print(f"GPU Memory: {torch.cuda.memory_allocated() / 1024**2:.1f} MB")
+      
+      # Infinite loop - checkpoint anytime after ALLOCATED message
+      i = 0
+      while True:
+          i += 1
+          val = x[0,0].item()
+          try:
+              print(f"ITER={i} VAL={val}", flush=True)
+          except:
+              pass  # Ignore write errors after restore
+          time.sleep(5)
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+      requests:
+        memory: "8Gi"
+        cpu: "2"

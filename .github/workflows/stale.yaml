@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Stale issues
+
+on:
+  schedule:
+    - cron: "20 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          days-before-issue-stale: 90
+          days-before-issue-close: 30
+          stale-issue-label: stale
+          exempt-issue-labels: no-stale
+          stale-issue-message: >
+            This issue has had no activity for 90 days. It will be closed in
+            30 days if there is no further activity. Maintainers can add
+            no-stale to keep it open.
+          close-issue-message: >
+            Closing this issue because it has had no activity since being
+            marked stale. Reopen it if the issue is still relevant.
+          days-before-pr-stale: -1
+          days-before-pr-close: -1

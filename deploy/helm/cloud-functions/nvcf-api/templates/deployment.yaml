@@ -1,0 +1,129 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvcf-api.fullname" . }}
+  namespace: {{ include "nvcf-api.namespace" . }}
+  labels:
+    {{- include "nvcf-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "nvcf-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "nvcf-api.vaultAnnotations" . | nindent 8 }}
+        {{- with .Values.api.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.api.env }}
+        checksum/config-env: {{ toYaml .Values.api.env | sha256sum }}
+        {{- end }}
+        checksum/vault-agent-template: {{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | sha256sum }}
+      labels:
+        {{- include "nvcf-api.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds }}
+      {{- with .Values.api.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: nvcf-api
+      securityContext:
+        {{- toYaml .Values.api.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- if .Values.api.debugHost }}
+          args: ["java","-agentlib:jdwp=transport=dt_socket,server=n,address={{ .Values.api.debugHost }},suspend=y", "-jar", "/usr/share/app.jar"]
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.api.securityContext | nindent 12 }}
+          image: "{{ include "nvcf-api.image" . }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          lifecycle:
+            {{- toYaml .Values.api.lifecycle | nindent 12 }}
+          volumeMounts:
+            {{- with .Values.api.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+          {{- with .Values.api.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.api.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.api.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: AWS_REGION
+              value: "ncp"
+            - name: SPRING_PROFILES_ACTIVE
+              value: "ncp"
+            {{- if .Values.api.remoteConfig.enabled }}
+            - name: REMOTE_CONFIG_ENABLED
+              value: "true"
+            - name: REMOTE_CONFIG_NAME
+              value: {{ include "nvcf-api.remoteConfigName" . | quote }}
+            {{- end }}
+          {{- if .Values.api.env }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "nvcf-api.fullname" . }}-env
+          {{- end }}
+          ports:
+            {{- range .Values.api.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .containerPort }}
+              protocol: {{ .protocol }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+      volumes:
+        {{- with .Values.api.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "nvcf-api.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+      {{- with .Values.api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

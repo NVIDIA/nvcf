@@ -1,0 +1,51 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "middleware",
+    srcs = [
+        "host.go",
+        "logging.go",
+        "metrics.go",
+        "middleware.go",
+        "shadow_guard.go",
+    ],
+    importpath = "ai-api-gateway-service/middleware",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_go_chi_chi_v5//:chi",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_exporters_prometheus//:prometheus",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":middleware",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "middleware_test",
+    srcs = [
+        "logging_test.go",
+        "metrics_test.go",
+        "shadow_guard_test.go",
+    ],
+    embed = [":middleware"],
+    deps = [
+        "@com_github_go_chi_chi_v5//:chi",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)

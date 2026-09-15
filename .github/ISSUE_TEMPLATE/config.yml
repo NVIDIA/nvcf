@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# GitHub info on config.yml
+# https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository#configuring-the-template-chooser
+# Set to 'false' if you only want the templates to be used.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Ask in Discussions
+    url: https://github.com/NVIDIA/nvcf/discussions
+    about: Use GitHub Discussions for support and usage help.
+  - name: Report a Security Vulnerability
+    url: https://www.nvidia.com/object/submit-security-vulnerability.html
+    about: Do not file security issues on GitHub. Use the NVIDIA PSIRT.

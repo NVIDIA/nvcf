@@ -1,0 +1,263 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "NvSnap × NVCA overview — the one-glance story of how much pod-start time NvSnap is saving the cluster. Cold-start vs NvSnap-restored pod ready-time histogram; per-mode pod counters; cumulative cold-starts avoided.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Pod-ready latency: Cold-start vs NvSnap-restored",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "p50 pod ready-time by mode",
+      "description": "Median wall-clock time from Pod CreationTimestamp to PodReady=True. The headline metric — when NvSnap is working, the restored line stays flat near 30-60s while cold-start spikes during scale events.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, restored) (rate(nvca_nvsnap_pod_first_ready_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{restored}} (restored)",
+          "refId": "A"
+        }
+      ],
+      "options": { "tooltip": { "mode": "single" } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 120 }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "p95 pod ready-time by mode",
+      "description": "95th-percentile latency. NvSnap's win shows here too — restored p95 stays bounded; cold-start p95 reveals how bad the worst startups are during a big scale-out.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, restored) (rate(nvca_nvsnap_pod_first_ready_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{restored}} (restored)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 }
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Pod counts + savings",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 101,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Cold-starts avoided (last 24h)",
+      "description": "Number of pods that came up via NvSnap restore instead of cold-start in the last 24 hours. The total ops-time saved depends on the per-mode latency averages — see the next panel.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "increase(nvca_nvsnap_pods_first_ready_total{mode=\"restored\"}[24h])",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "unit": "none",
+          "decimals": 0
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "textMode": "value" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Cold-starts taken (last 24h)",
+      "description": "Cold-starts during the last 24h. NvSnap's headline trade-off: one cold-start per fvID (which becomes the captured template) buys you many fast restores. Plus the inevitable first-pod on each new fvID.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 10 },
+      "targets": [
+        {
+          "expr": "increase(nvca_nvsnap_pods_first_ready_total{mode=\"cold-start\"}[24h])",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "unit": "none",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "NvSnap speedup (p50)",
+      "description": "Ratio of cold-start p50 to restored p50 over the dashboard's time range. >1 means NvSnap is faster. Customer-facing 'Nx faster' headline.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(nvca_nvsnap_pod_first_ready_seconds_bucket{restored=\"false\"}[$__range]))) / clamp_min(histogram_quantile(0.5, sum by (le) (rate(nvca_nvsnap_pod_first_ready_seconds_bucket{restored=\"true\"}[$__range]))), 1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "yellow", "value": null },
+              { "color": "green", "value": 2 }
+            ]
+          },
+          "unit": "none",
+          "decimals": 1
+        }
+      },
+      "options": { "colorMode": "background", "textMode": "value_and_name" }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Wall-clock time saved (estimate, last 24h)",
+      "description": "(restored count × (cold-start p50 − restored p50)). Rough — uses dashboard-wide percentiles instead of per-pod truths. Good enough for the customer-facing 'we saved you X' number.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 10 },
+      "targets": [
+        {
+          "expr": "increase(nvca_nvsnap_pods_first_ready_total{mode=\"restored\"}[24h]) * (histogram_quantile(0.5, sum by (le) (rate(nvca_nvsnap_pod_first_ready_seconds_bucket{restored=\"false\"}[24h]))) - histogram_quantile(0.5, sum by (le) (rate(nvca_nvsnap_pod_first_ready_seconds_bucket{restored=\"true\"}[24h]))))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "NvSnap internals",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "nvsnap-server in-flight checkpoint/restore operations",
+      "description": "Gauges from nvsnap-server's /metrics. Sustained non-zero values indicate concurrent capture or restore activity.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "targets": [
+        { "expr": "nvsnap_server_active_checkpoints", "legendFormat": "active checkpoints", "refId": "A" },
+        { "expr": "nvsnap_server_active_restores", "legendFormat": "active restores", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "stacking": { "mode": "none" } }
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "nvsnap-agent checkpoint + restore rate (req/s)",
+      "description": "Per-second checkpoint and restore operations on nvsnap-agent. Watch this during a scale event — restores spike as Hook A admits N pods, captures flatten as Hook B catches up.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "targets": [
+        { "expr": "sum(rate(nvsnap_agent_checkpoint_total[$__rate_interval]))", "legendFormat": "checkpoint", "refId": "A" },
+        { "expr": "sum(rate(nvsnap_agent_restore_total[$__rate_interval]))", "legendFormat": "restore", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "fillOpacity": 10 }
+        }
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["nvsnap", "nvca", "gpu", "checkpoint", "restore"],
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "datasource",
+        "label": "Datasource",
+        "query": "prometheus",
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "NvSnap × NVCA — Overview",
+  "uid": "nvsnap-overview",
+  "version": 1,
+  "weekStart": ""
+}

@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "kata",
+    srcs = ["kata.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/metrics",
+        "//src/compute-plane-services/nvca/pkg/nvca/health",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":kata",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "kata_test",
+    srcs = ["kata_test.go"],
+    embed = [":kata"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/node/v1:node",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
+    ],
+)

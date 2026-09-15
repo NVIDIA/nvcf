@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVSNAP Server Dockerfile
+# Multi-stage: build React UI, build Go server (embeds UI), minimal runtime.
+
+# Stage 1: Build React UI
+FROM node:20-alpine AS ui-builder
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json* ./
+RUN npm install --ignore-scripts
+COPY ui/ .
+RUN npm run build
+
+# Stage 2: Build Go server binary (embeds ui/dist from stage 1)
+FROM golang:1.25-bookworm AS go-builder
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Copy built UI into the embed directory
+COPY --from=ui-builder /ui/dist ./ui/dist/
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -X main.version=${VERSION}" \
+    -o nvsnap-server ./cmd/nvsnap-server
+
+# Stage 3: Runtime
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates && adduser -D -u 65532 nvsnap
+COPY --from=go-builder /workspace/nvsnap-server /nvsnap-server
+# Demo workload catalog (deploy/k8s/workloads/*.yaml).
+# nvsnap-server reads this directory at startup. Operators can mount a
+# different dir over /etc/nvsnap/workloads (or set NVSNAP_WORKLOADS_DIR) to
+# customize the demo catalog without rebuilding the image.
+COPY --from=go-builder /workspace/deploy/k8s/workloads /etc/nvsnap/workloads
+USER 65532
+EXPOSE 8080
+ENTRYPOINT ["/nvsnap-server"]

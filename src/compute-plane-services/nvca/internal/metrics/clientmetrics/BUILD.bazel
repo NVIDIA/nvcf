@@ -1,0 +1,47 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "clientmetrics",
+    srcs = [
+        "queueclient.go",
+        "recorder.go",
+        "roundtripper.go",
+        "urltemplate.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/metrics/semconv",
+        "//src/compute-plane-services/nvca/internal/metrics/semconv/httpsemconv",
+        "//src/compute-plane-services/nvca/internal/metrics/semconv/msgsemconv",
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":clientmetrics",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "clientmetrics_test",
+    srcs = [
+        "e2e_scrape_test.go",
+        "family_test.go",
+        "roundtripper_test.go",
+    ],
+    embed = [":clientmetrics"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/prometheus",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/metric",
+    ],
+)

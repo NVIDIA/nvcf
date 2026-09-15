@@ -1,0 +1,197 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  application:
+    name: icms-api
+    version: 1.0
+    env: test
+    host:
+      id: dummy-host-id
+      dc: dummy-host-dc
+  cassandra:
+    keyspaceName: test
+    ssl:
+      enabled: false
+      bundle: "" # override the value configured in application.yaml
+    advanced:
+      control-connection:
+        timeout: 60000
+      connection:
+        init-query-timeout: 60000
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8082
+          jwk-set-uri: http://localhost:8082/.well-known/jwks.json
+          jws-algorithms: ES256
+      client:
+        provider:
+          ngc:
+            token-uri: http://localhost:8082/token
+          fnds:
+            token-uri: http://localhost:8082/token
+          api-keys:
+            token-uri: http://localhost:8082/token
+
+logging:
+  level:
+    com.nvidia: DEBUG
+    org.springframework.web: DEBUG
+
+management:
+  tracing:
+    export:
+      enabled: false
+  health:
+    # GitLab runner pods expose in-cluster service account files; this indicator
+    # then needs get pods RBAC that test jobs do not have.
+    kubernetes:
+      enabled: false
+  metrics:
+    enable:
+      all: false
+    export:
+      key: dummy-key
+      env: test
+      host_id: local-host-id
+      host_dc: localhost
+
+icms:
+  cloud-failure-detection-enabled: true
+  air-gapped-mode-enabled: false
+  queue-per-instance-enabled: false
+  instance-update-task-enabled: true
+  queue-creation-per-instance-type-enabled: true
+  instance-batch-count: 10
+  request-cancel-duration-in-min: 30
+  fail-instance-creation-for-closed-requests: false
+  state-request-deletion-task-enabled: true
+
+  db-query-executor-max-threads: 15
+
+  nats:
+    # Should be disabled to verify success of backward compatible integration test
+    nats-enabled: false
+    create-nats-streams: true
+    create-nats-consumers: true
+
+  aws:
+    region: us-east-1
+    role-arn: dummy-role
+    token-file: local_env/aws/web_token_file
+    endpoint: http://localhost:4566
+    access-key: dummy_access_key
+    secret-key: dummy_secret_key
+    sns:
+      region: us-east-1
+      topics:
+        terminate:
+          name: "gdn-instance-termination-%s.fifo"
+          id: "000000000000"
+    sqs:
+      region: us-east-1
+      endpoint: http://localhost:4566/000000000000/gdn-spot-instance-requests-global.fifo
+      queue-tags:
+        Environment: "test"
+
+  telemetry:
+    enabled: false
+
+  db:
+    query-duration-months: 3 # Its value should always be >= 1 if it is used
+    cloud-health-ttl-in-sec: 1
+    cloud-health-ttl-for-byoc-in-sec: 1
+
+  byoc:
+    skip-health-check-clusters:
+      - dummy-static-zone-nca-id: STATIC-ZONE
+
+  nvca:
+    # Tests exercise OIDC/PSAT cluster identity code paths; enable the feature flag so
+    # they pass. A dedicated OidcClusterIdentityDisabledTest overrides back to false.
+    oidcClusterIdentityEnabled: true
+    # NATS auth-callout webhook endpoint. Subject templates here use {clusterId}
+    # so tests can assert substitution + UUID validation happen end-to-end.
+    natsAuth:
+      account: APP
+      ttl: PT1H
+      permissions:
+        publish:
+          allow:
+            - "nvcf.cluster.{clusterId}.>"
+        subscribe:
+          allow:
+            - "nvcf.cluster.{clusterId}.>"
+            - "_INBOX.>"
+    # placeholders:
+    # 1. clusterGroupId
+    # 2. GPU name
+    creation-queue-name-format: q_gdn_spot_byoc_%s_%s.fifo
+    tasks-creation-queue-name-format: q_gdn_spot_byoc_tasks_%s_%s.fifo
+    # placeholders:
+    # 1. clusterId
+    termination-queue-name-format: q_gdn_spot_byoc_%s.fifo
+    cluster-attributes:
+      - "Confidential Computing Compliant"
+      - "Export Controlled"
+      - "HIPPA Compliant"
+      - "PCI Compliant"
+      - "SOC2 Compliant"
+      - "CacheOptimized"
+      - "KataRuntimeIsolation"
+      - "HostIsolation"
+      - "AccountIsolation"
+      - "Multi Node Supported"
+      - "Graphics Optimized"
+      - "Streaming Optimized"
+      - "NVCF Optimized"
+      - "Preemptible"
+    sis-config:
+      public-key-set-endpoint: http://localhost:9092/.well-known/jwks.json
+      token-url: http://localhost:9092/token
+      spot-service-url: http://localhost:8080
+    vault-config:
+      address: http://localhost:8200
+    cluster-version: |
+      {
+        "computePlatforms": [
+            "AWS",
+            "AZURE",
+            "OCI",
+            "ON-PREM",
+            "GCP",
+            "DGX-CLOUD"
+        ],
+        "attributes": [
+            "KataRuntimeIsolation",
+            "AccountIsolation"
+        ],
+        "nvcaVersions": [
+            {
+                "version": "2.27.0",
+                "capabilities": [
+                    "DynamicGPUDiscovery",
+                    "CachingSupport",
+                    "LogPosting"
+                ],
+                "operatorVersion": "1.1.0"
+            }
+        ]
+      }
+
+  tenant-configurations:
+    valid-tenants:
+      - gdn

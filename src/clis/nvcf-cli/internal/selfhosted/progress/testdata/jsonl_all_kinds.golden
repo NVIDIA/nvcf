@@ -1,0 +1,9 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_started","ts":"2026-04-29T01:00:01Z","phaseNum":1,"phase":"preflight","totalPhases":8}
+{"event":"phase_progress","ts":"2026-04-29T01:00:02Z","phaseNum":1,"phase":"preflight","resource":"crds","done":1,"total":5}
+{"event":"phase_completed","ts":"2026-04-29T01:00:03Z","phaseNum":1,"phase":"preflight","durationSec":10}
+{"event":"phase_failed","ts":"2026-04-29T01:00:04Z","phaseNum":2,"phase":"resolve-stack","durationSec":5,"errCategory":"internal","errMessage":"err","retryClass":"none"}
+{"event":"phase_cancelled","ts":"2026-04-29T01:00:05Z","phaseNum":3,"phase":"apply-cp","reason":"SIGINT"}
+{"event":"waiting","ts":"2026-04-29T01:00:06Z","phaseNum":3,"reason":"throttle"}
+{"event":"last_progress","ts":"2026-04-29T01:00:07Z","phaseNum":3,"detail":"still running"}
+{"event":"final","ts":"2026-04-29T01:00:08Z","success":false,"durationSec":30,"droppedProgressEvents":0}

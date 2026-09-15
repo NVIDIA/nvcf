@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ngc",
+    srcs = [
+        "ngc.go",
+        "types.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/pkg/ngc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/worker-task/internal/metrics",
+        "@com_github_cenkalti_backoff_v4//:backoff",
+        "@com_github_goccy_go_json//:go-json",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":ngc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ngc_test",
+    srcs = ["ngc_test.go"],
+    embed = [":ngc"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

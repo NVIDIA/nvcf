@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{ $profile := include "multi-node-test.effectiveProfileValues" . | fromYaml -}}
+{{ $image := $profile.image | default dict -}}
+{{ $resources := $profile.resources | default dict -}}
+{{ $resourceClaimTemplate := $profile.resourceClaimTemplate | default dict -}}
+{{ $resourceClaimTemplateEnabled := $resourceClaimTemplate.enabled | default false -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  annotations:
+    # Gang scheduling on an NVLink-optimized cluster running KAI Scheduler. KAI
+    # reads these from the StatefulSet, not the pod template, and holds every
+    # replica until they all fit in one clique. Requires the cluster operator to
+    # have installed the nvcf-mnnvl-topology Topology resource.
+    #
+    # kai.scheduler/topology: "nvcf-mnnvl-topology"
+    # kai.scheduler/topology-required-placement: "nvidia.com/gpu.clique"
+  name: {{ include "multi-node-test.name" . }}
+  labels:
+    {{- include "multi-node-test.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "multi-node-test.name" . }}-headless
+  podManagementPolicy: Parallel
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ $profile.nodesPerInstance }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "multi-node-test.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with $profile.podAnnotations }}
+      annotations:
+        # Legacy NVCA placement on an NVLink-optimized cluster:
+        # - Set dra.nvcf.nvidia.io/required-nvlink-domain-index to a logical group index,
+        #   such as "0", for required pod affinity among Pods with the same value.
+        # - Omit dra.nvcf.nvidia.io/required-nvlink-domain-index for preferred
+        #   same-clique placement.
+        # These options are best-effort without KAI Scheduler or Grove
+        # topology-aware scheduling. Different indices do not guarantee
+        # placement in different physical NVLink partitions.
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "multi-node-test.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if $resourceClaimTemplateEnabled }}
+      resourceClaims:
+        - name: {{ $resourceClaimTemplate.claimName }}
+          resourceClaimTemplateName: {{ $resourceClaimTemplate.name }}
+      {{- end }}
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+        - name: temp
+          emptyDir: {}
+      {{- if .Values.ngcImagePullSecretName }}
+      imagePullSecrets:
+      - name: {{ .Values.ngcImagePullSecretName }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          volumeMounts:
+            - mountPath: /dev/shm
+              name: dshm
+            - mountPath: /tmp
+              name: temp
+          securityContext:
+            {{- toYaml ($profile.securityContext | default dict) | nindent 12 }}
+          image: "{{ $image.repository }}:{{ $image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODES_PER_INSTANCE
+              value: {{ $profile.nodesPerInstance | quote }}
+            - name: HEADLESS_SERVICE_NAME
+              value: {{ include "multi-node-test.name" . }}-headless
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          {{- if or $resourceClaimTemplateEnabled (not (empty $resources)) }}
+          resources:
+            {{- with $resources }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $resourceClaimTemplateEnabled }}
+            claims:
+              - name: {{ $resourceClaimTemplate.claimName }}
+            {{- end }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

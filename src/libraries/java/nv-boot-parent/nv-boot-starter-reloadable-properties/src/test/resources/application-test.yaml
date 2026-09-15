@@ -1,0 +1,3 @@
+test:
+  username: ${kv.exampleSecretNoHistoryJson.current.value.username}
+  usernamePrevious: ${kv.exampleSecretHistoryJson.previous[0].value.username}

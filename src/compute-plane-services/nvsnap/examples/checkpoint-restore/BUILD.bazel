@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "checkpoint-restore_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/examples/checkpoint-restore",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "checkpoint-restore",
+    embed = [":checkpoint-restore_lib"],
+    visibility = ["//visibility:public"],
+)

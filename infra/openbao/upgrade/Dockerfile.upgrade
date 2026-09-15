@@ -1,0 +1,13 @@
+# Dockerfile for OpenBao upgrade testing
+# Usage: docker build -f Dockerfile.upgrade --build-arg OPENBAO_VERSION=2.4.04-t nvcr.io/0651155215864979/ncp-dev/nvcf-openbao:2.4.0-upgrade .
+
+ARG OPENBAO_VERSION=2.4.4
+
+FROM openbao/openbao:${OPENBAO_VERSION}
+
+ARG TARGETARCH
+
+RUN apk add --no-cache curl jq bash && \
+    mkdir -p /openbao/plugins
+
+COPY --chmod=775 files/plugins/vault-plugin-secrets-jwt-linux-${TARGETARCH} /openbao/plugins/vault-plugin-secrets-jwt

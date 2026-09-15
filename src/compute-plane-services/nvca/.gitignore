@@ -1,0 +1,17 @@
+_output/
+*.secrets
+*.code-workspace
+.vscode/
+.scannerwork/
+.worktrees/
+.understand-anything/
+docs/dev/
+
+# Test items
+nvca-operator-dev-local.tgz
+clusterdump-*
+
+# Bazel-generated outputs (symlinks; gitignored across all Phase B upstreams)
+/bazel-*
+.bazel-cache/
+.tls/

@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    contact-points: cassandra.cassandra-system.svc.cluster.local
+    local-datacenter: ncp
+    data-center: ncp
+    # Must match the keyspace provisioned by nvcf-cassandra-migrations.
+    keyspace-name: sis_api
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Primary issuer: OpenBao-issued service-to-service JWTs destined for SIS have
+          # iss set to the TARGET service URL (per nvcf-openbao-migrations
+          # generate_jwt_secret_role in migrations/utils/functions.sh), not the signing
+          # service. For nvcf-api → SIS tokens (scope: spot-request, cluster-management,
+          # etc.) the iss claim is http://api.sis.svc.cluster.local.
+          #
+          # The signing KEY for those tokens lives under the sis-api OpenBao JWT mount
+          # (services/sis-api/jwt/sign/<role>, with verification keys at
+          # services/sis-api/jwt/jwks) — not nvcf-api's mount. The chart previously
+          # pointed at services/nvcf-api/jwt/jwks, which verifies notary/uam/reval/ess
+          # tokens but not the spot tokens SIS receives. SIS now reads the
+          # SPRING_SECURITY_* Spring properties directly.
+          issuer-uri: http://api.sis.svc.cluster.local
+          jwk-set-uri: http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/sis-api/jwt/jwks
+          # Admin issuer: a SECOND Spring-security issuer SIS will trust. CLI admin tokens
+          # minted by admin-issuer-proxy (services/nvcf-api/jwt/sign/admin-issuer-proxy,
+          # scope cluster-management) carry iss=http://api.nvcf.svc.cluster.local and must
+          # pass SIS's resolver for direct CLI->SIS cluster-management calls (POST cluster
+          # register, PUT cluster rotate). Without this second issuer SIS's resolver only
+          # routes iss=api.sis service-to-service tokens and rejects admin tokens with 401.
+          #
+          # Maps to AuthManagerResolver's admin-issuer-uri / admin-jwk-set-uri constructor
+          # params; BOTH must be non-blank or the resolver falls back to single-issuer
+          # behavior and admin tokens are rejected.
+          admin-issuer-uri: http://api.nvcf.svc.cluster.local
+          admin-jwk-set-uri: http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/nvcf-api/jwt/jwks
+      client:
+        registration:
+          ngc:
+            client-id: unused      # Override the inherited ${kv.oauth2.*} expression from application.yaml
+            client-secret: unused
+          fnds:
+            client-id: unused
+            client-secret: unused
+          api-keys:
+            client-id: unused
+            client-secret: unused
+        provider:
+          ngc:
+            token-uri: unused
+          fnds:
+            token-uri: unused
+          api-keys:
+            token-uri: unused
+
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          include:
+            - readinessState
+            - cassandra
+            - nats
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+          headers:
+            lightstep-access-token: unused
+  prometheus:
+    metrics:
+      export:
+        enabled: false
+  metrics:
+    enable:
+      all: false
+
+logging:
+  level:
+    com.nvidia: DEBUG
+    org.springframework.web: ERROR
+
+icms:
+  telemetry:
+    enabled: false
+    oauth2:
+      client-id: unused      # Override the inherited ${kv.oauth2.*} expression from application.yaml
+      client-secret: unused
+
+  # Self-hosted NVCF has no NGC / FNDS upstream.
+  ngc:
+    enabled: false
+  fnds_messages_enabled: false
+  fnds_messages_v1_enabled: false
+  fnds_messages_v2_enabled: false
+
+  instance-listing-api-enabled: true
+
+  nats:
+    nats-enabled: true
+    nats-url: nats://nats.nats-system.svc.cluster.local:4222
+    create-nats-streams: true
+    create-nats-consumers: false
+    connection-timeout: 10s
+    ping-interval: 5s
+    reconnect-wait: 100ms
+    reconnect-allowed: false
+    force-reconnect-flush: 5s
+    delay-between-messages: 100ms
+    message-ttl: 96h
+    nkey-seed: ${kv.nkey_seed}
+
+  # Dummy AWS values required for startup.
+  aws:
+    region: dummy_region
+    role-arn: dummy_role
+    token-file: dummy_file
+
+  queue-creation-per-instance-type-enabled: false
+
+  byoc:
+    cloud-health-ttl-for-byoc-in-sec: 600
+    instance-batch-count: 1
+
+  nvca:
+    # Self-hosted uses OIDC/PSAT cluster identity; managed leaves this off.
+    oidcClusterIdentityEnabled: true
+    api-key:
+      enabled: false  # api-keys not supported for ICMS endpoints in self-hosted NVCF
+    # NATS auth-callout defaults for NVCA agents. Each publish permission is
+    # scoped to the verified PSAT clusterId; static _INBOX replies are subscribe-only.
+    natsAuth:
+      permissions:
+        publish:
+          allow:
+            - "$JS.API.CONSUMER.CREATE.CreateNvcaFunctionTaskStream.CreateNvcaFunctionTaskStream-{clusterId}"
+            - "$JS.API.CONSUMER.MSG.NEXT.CreateNvcaFunctionTaskStream.CreateNvcaFunctionTaskStream-{clusterId}"
+            - "$JS.ACK.CreateNvcaFunctionTaskStream.CreateNvcaFunctionTaskStream-{clusterId}.>"
+            - "$JS.ACK.*.*.CreateNvcaFunctionTaskStream.CreateNvcaFunctionTaskStream-{clusterId}.>"
+            - "$JS.API.CONSUMER.CREATE.TerminateNvcaStream.TerminateNvcaStream-{clusterId}"
+            - "$JS.API.CONSUMER.MSG.NEXT.TerminateNvcaStream.TerminateNvcaStream-{clusterId}"
+            - "$JS.ACK.TerminateNvcaStream.TerminateNvcaStream-{clusterId}.>"
+            - "$JS.ACK.*.*.TerminateNvcaStream.TerminateNvcaStream-{clusterId}.>"
+        subscribe:
+          allow:
+            - "_INBOX.>"

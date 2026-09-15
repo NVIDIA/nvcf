@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "noop",
+    srcs = ["noop.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace/noop",
+    importpath = "go.opentelemetry.io/otel/trace/noop",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/codes",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace/embedded",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":noop",
+    visibility = ["//visibility:public"],
+)

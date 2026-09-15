@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# Sync .env image tags into the vendored operator chart defaults.
+#
+# Keeps deployments/nvca-operator/{values.yaml,values.schema.json}
+# consistent with the canonical tags declared in .env. Run via:
+#
+#   make dotenv-dependencies-update
+#
+set -eu -o pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${repo_root}"
+
+chart_dir="deployments/nvca-operator"
+values_file="${chart_dir}/values.yaml"
+schema_file="${chart_dir}/values.schema.json"
+
+# Source .env to get canonical tag values.
+# shellcheck disable=SC1091
+set -a
+# shellcheck source=../.env
+. ./.env
+set +a
+
+: "${NVCF_IMAGE_CREDENTIAL_HELPER_IMAGE_TAG:?NVCF_IMAGE_CREDENTIAL_HELPER_IMAGE_TAG is not set in .env}"
+: "${NVCF_OTEL_COLLECTOR_IMAGE_TAG:?NVCF_OTEL_COLLECTOR_IMAGE_TAG is not set in .env}"
+
+cred_tag="${NVCF_IMAGE_CREDENTIAL_HELPER_IMAGE_TAG}"
+otel_tag="${NVCF_OTEL_COLLECTOR_IMAGE_TAG}"
+
+# --- values.yaml -----------------------------------------------------------
+# Use sed for surgical replacement to preserve formatting. The imageTag fields
+# appear as "    imageTag: <value>" indented under their parent keys. We match
+# the preceding comment line to disambiguate the three otelCollector sections
+# and the two imageCredHelper sections.
+
+# Helper: replace the imageTag line following a unique context line.
+# Usage: replace_after_context <context_pattern> <field> <new_value> <file>
+replace_after_context() {
+  local ctx="$1" field="$2" val="$3" file="$4"
+  # Find line number of context, then replace the next occurrence of the field.
+  local ctx_line
+  ctx_line="$(grep -n "${ctx}" "${file}" | head -1 | cut -d: -f1)"
+  if [[ -z "${ctx_line}" ]]; then
+    echo "ERROR: context pattern '${ctx}' not found in ${file}" >&2
+    exit 1
+  fi
+  # From ctx_line onward, replace the first matching field line.
+  sed -i "${ctx_line},\$ { 0,/^\([[:space:]]*${field}:\).*/s//\1 ${val}/ }" "${file}"
+}
+
+# Top-level otelCollector (preceded by @param otelCollector.imageTag)
+replace_after_context '@param otelCollector.imageTag' 'imageTag' "${otel_tag}" "${values_file}"
+
+# helmManaged.imageCredHelper (preceded by @param helmManaged.imageCredHelper.imageTag)
+replace_after_context '@param helmManaged.imageCredHelper.imageTag' 'imageTag' "${cred_tag}" "${values_file}"
+
+# helmManaged.otelCollector (preceded by @param helmManaged.otelCollector.imageTag)
+replace_after_context '@param helmManaged.otelCollector.imageTag' 'imageTag' "${otel_tag}" "${values_file}"
+
+# selfManaged.imageCredHelper (preceded by @param selfManaged.imageCredHelper.imageTag)
+replace_after_context '@param selfManaged.imageCredHelper.imageTag' 'imageTag' "${cred_tag}" "${values_file}"
+
+# selfManaged.otelCollector (preceded by @param selfManaged.otelCollector.imageTag)
+replace_after_context '@param selfManaged.otelCollector.imageTag' 'imageTag' "${otel_tag}" "${values_file}"
+
+# --- values.schema.json -----------------------------------------------------
+jq --indent 4 --arg cred "${cred_tag}" --arg otel "${otel_tag}" '
+  # top-level otelCollector
+  .properties.otelCollector.properties.imageTag.default = $otel |
+  # helmManaged
+  .properties.helmManaged.properties.imageCredHelper.properties.imageTag.default = $cred |
+  .properties.helmManaged.properties.otelCollector.properties.imageTag.default = $otel |
+  # selfManaged
+  .properties.selfManaged.properties.imageCredHelper.properties.imageTag.default = $cred |
+  .properties.selfManaged.properties.otelCollector.properties.imageTag.default = $otel
+' "${schema_file}" > "${schema_file}.tmp"
+mv "${schema_file}.tmp" "${schema_file}"
+
+echo "dotenv-dependencies-update: synced chart defaults from .env"
+echo "  NVCF_IMAGE_CREDENTIAL_HELPER_IMAGE_TAG=${cred_tag}"
+echo "  NVCF_OTEL_COLLECTOR_IMAGE_TAG=${otel_tag}"

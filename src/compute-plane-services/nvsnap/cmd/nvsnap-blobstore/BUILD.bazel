@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "nvsnap-blobstore_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-blobstore",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/blobstore",
+        "@com_github_sirupsen_logrus//:logrus",
+    ],
+)
+
+go_binary(
+    name = "nvsnap-blobstore",
+    embed = [":nvsnap-blobstore_lib"],
+    visibility = ["//visibility:public"],
+)

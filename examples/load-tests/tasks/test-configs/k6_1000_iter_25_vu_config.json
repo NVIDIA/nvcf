@@ -1,0 +1,19 @@
+{
+  "cloud": {
+    "projectID": 3700549,
+    "distribution": {
+      "dublin": {
+        "loadZone": "amazon:us:ashburn",
+        "percent": 100
+      }
+    }
+  },
+  "scenarios": {
+    "contacts": {
+      "executor": "shared-iterations",
+      "vus": 25,
+      "iterations": 1000,
+      "maxDuration": "15m"
+    }
+  }
+}

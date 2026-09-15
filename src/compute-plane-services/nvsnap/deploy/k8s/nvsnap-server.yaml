@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVSNAP Server Deployment
+# Serves the REST API and embedded React UI.
+# Proxies checkpoint/restore operations to nvsnap-agent on each GPU node.
+#
+# Deploy: kubectl apply -f deploy/k8s/nvsnap-server.yaml
+# Access: kubectl port-forward -n nvsnap-system svc/nvsnap-server 8080:8080
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvsnap-server
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-server
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsnap-server
+rules:
+  # Read nodes to discover GPU nodes and agent IPs
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # Read pods to discover GPU workloads, create placeholder pods for restore
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+  # Read capture-manifest ConfigMaps so the reconciler can ingest
+  # rootfs-only captures (those committed by the agent's watcher,
+  # outside the server's UI flow) into the catalog DB.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  # Read capture PVCs (writer + reader) so the UI can show storage state.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # Full access to GPUCheckpoint and GPURestore CRDs
+  - apiGroups: ["nvsnap.io"]
+    resources: ["gpucheckpoints", "gpucheckpoints/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["nvsnap.io"]
+    resources: ["gpurestores", "gpurestores/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvsnap-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvsnap-server
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-server
+    namespace: nvsnap-system
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvsnap-server
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-server
+spec:
+  replicas: 1
+  # Recreate (not rolling) — the SQLite DB PVC is RWO; rolling-update
+  # would race on volume attach (new pod stuck waiting for the old to
+  # release). Single-replica + Recreate gives clean cutover, brief blip
+  # acceptable for an admin UI.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nvsnap-server
+  template:
+    metadata:
+      labels:
+        app: nvsnap-server
+    spec:
+      serviceAccountName: nvsnap-server
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+      containers:
+        - name: server
+          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-server:v0.0.31
+          imagePullPolicy: Always
+          args:
+            - --address=:8080
+            - --agent-port=8081
+            - --log-level=info
+            - --db-path=/data/nvsnap.db
+          ports:
+            - containerPort: 8080
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: db-storage
+              mountPath: /data
+      volumes:
+        - name: db-storage
+          persistentVolumeClaim:
+            claimName: nvsnap-server-db
+      imagePullSecrets:
+        - name: nvsnap-pull-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-server
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-server
+spec:
+  selector:
+    app: nvsnap-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+  type: LoadBalancer
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nvsnap-server-db
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-server
+spec:
+  storageClassName: nvcf-sc
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

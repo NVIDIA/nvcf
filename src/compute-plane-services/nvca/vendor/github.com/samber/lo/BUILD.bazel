@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "lo",
+    srcs = [
+        "channel.go",
+        "concurrency.go",
+        "condition.go",
+        "constraints.go",
+        "errors.go",
+        "find.go",
+        "func.go",
+        "intersect.go",
+        "map.go",
+        "math.go",
+        "retry.go",
+        "slice.go",
+        "string.go",
+        "time.go",
+        "tuples.go",
+        "type_manipulation.go",
+        "types.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/samber/lo",
+    importpath = "github.com/samber/lo",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/samber/lo/internal/constraints",
+        "//src/compute-plane-services/nvca/vendor/github.com/samber/lo/internal/xrand",
+        "//src/compute-plane-services/nvca/vendor/github.com/samber/lo/internal/xtime",
+        "//src/compute-plane-services/nvca/vendor/github.com/samber/lo/mutable",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/text/cases",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/text/language",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":lo",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "streamer",
+    srcs = [
+        "capture.go",
+        "serve.go",
+        "streamer.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/streamer",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = [
+        "@com_github_pierrec_lz4_v4//:lz4",
+        "@com_github_sirupsen_logrus//:logrus",
+        "@org_golang_x_sys//unix",
+    ],
+)
+
+go_test(
+    name = "streamer_test",
+    srcs = ["streamer_test.go"],
+    embed = [":streamer"],
+    deps = [
+        "@com_github_pierrec_lz4_v4//:lz4",
+        "@org_golang_x_sys//unix",
+    ],
+)

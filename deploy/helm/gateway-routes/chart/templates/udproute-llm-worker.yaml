@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmWorker.enabled }}
+{{- $backendNamespace := include "nvcf-gateway.llmWorkerBackendNamespace" . }}
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.name }}-quic
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmQuic.namespace }}
+  labels:
+    {{- include "nvcf-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-worker-quic-route
+  {{- with .Values.nvcfGatewayRoutes.routes.llmWorker.routeAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - name: {{ .Values.nvcfGatewayRoutes.gateways.llmQuic.name }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmQuic.namespace }}
+      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.llmQuic.listenerName }}
+  rules:
+    - backendRefs:
+        - name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.backend.name }}
+          namespace: {{ $backendNamespace }}
+          port: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.backend.quicPort }}
+{{- end }}

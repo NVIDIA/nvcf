@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "signals",
+    srcs = [
+        "mapstructure.go",
+        "signals.go",
+        "signals_unix.go",
+        "signals_windows.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/signals",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_mitchellh_mapstructure//:mapstructure"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":signals",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "signals_test",
+    srcs = [
+        "mapstructure_test.go",
+        "signals_test.go",
+    ],
+    embed = [":signals"],
+    deps = ["@com_github_mitchellh_mapstructure//:mapstructure"],
+)

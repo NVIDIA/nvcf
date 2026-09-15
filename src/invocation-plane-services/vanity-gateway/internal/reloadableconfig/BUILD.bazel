@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "reloadableconfig",
+    srcs = ["config.go"],
+    importpath = "ai-api-gateway-service/internal/reloadableconfig",
+    visibility = ["//src/invocation-plane-services/vanity-gateway:__subpackages__"],
+    deps = [
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@io_k8s_sigs_yaml//:yaml",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":reloadableconfig",
+    visibility = ["//src/invocation-plane-services/vanity-gateway:__subpackages__"],
+)
+
+go_test(
+    name = "reloadableconfig_test",
+    srcs = ["config_test.go"],
+    embed = [":reloadableconfig"],
+    deps = ["@com_github_stretchr_testify//require"],
+)

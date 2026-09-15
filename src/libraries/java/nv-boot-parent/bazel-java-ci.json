@@ -1,0 +1,6 @@
+{
+  "ci_lane": "docker-host",
+  "component_kind": "java-framework",
+  "id": "nv-boot-parent",
+  "tests_skip": false
+}

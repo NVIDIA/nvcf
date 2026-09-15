@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+---
+# Source: inference-test/templates/secret.yaml
+apiVersion: v1
+data:
+  .dockerconfigjson: "eyJhdXRocyI6eyJzdGcubnZjci5pbyI6eyJhdXRoIjoiJG9hdXRodG9rZW46Zm9vYmFyMTIzIn19fQ=="
+kind: Secret
+metadata:
+  name: "image-pull-secret"
+  labels:
+    helm.sh/chart: inference-test-0.1.0
+    app.kubernetes.io/name: inference-test
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: Helm
+type: kubernetes.io/dockerconfigjson
+---
+# Source: inference-test/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: entrypoint
+  labels:
+    helm.sh/chart: inference-test-0.1.0
+    app.kubernetes.io/name: inference-test
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: inference-test
+    app.kubernetes.io/instance: release-name
+---
+# Source: inference-test/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-name-inference-test
+  labels:
+    helm.sh/chart: inference-test-0.1.0
+    app.kubernetes.io/name: inference-test
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inference-test
+      app.kubernetes.io/instance: release-name
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inference-test
+        app.kubernetes.io/instance: release-name
+    spec:
+      imagePullSecrets:
+      - name: image-pull-secret
+      automountServiceAccountToken: false
+      containers:
+      - name: inference
+        image: "registry.example.com/example/inference-test:0.0.1"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: infer
+          containerPort: 8000
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "64Mi"
+          limits:
+            cpu: "500m"
+            memory: "128Mi"
+            ephemeral-storage: "1Gi"

@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="500" viewBox="0 0 1280 500" role="img" aria-labelledby="title desc">
+  <title id="title">NVCF gRPC invocation path</title>
+  <desc id="desc">Client traffic flows through the public gRPC invocation endpoint, gRPC Proxy, NVCF API and NATS stateful request path, worker CONNECT registration, and the customer gRPC service.</desc>
+  <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --svg-bg: #f7f9f7;
+        --svg-panel: #ffffff;
+        --svg-panel-muted: #eef3ef;
+        --svg-border: #c8d0d6;
+        --svg-text: #1f2520;
+        --svg-muted: #53605a;
+        --svg-line: #53605a;
+        --nvidia-green: #76b900;
+        --svg-blue: #1565c0;
+        --svg-red: #c62828;
+        --svg-amber: #f9a825;
+        --svg-icon-on-accent: #ffffff;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --svg-bg: #101512;
+          --svg-panel: #18201b;
+          --svg-panel-muted: #202a24;
+          --svg-border: #50605a;
+          --svg-text: #f3f7f2;
+          --svg-muted: #b9c8b7;
+          --svg-line: #cbd8c9;
+          --nvidia-green: #8bd80f;
+          --svg-blue: #6eb6ff;
+          --svg-red: #ff8a80;
+          --svg-amber: #ffd166;
+        }
+      }
+
+      .bg { fill: var(--svg-bg); }
+      .panel { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .panel-muted { fill: var(--svg-panel-muted); stroke: var(--svg-border); stroke-width: 2; }
+      .service { fill: var(--svg-panel); stroke: var(--nvidia-green); stroke-width: 3; }
+      .compute { fill: var(--svg-panel-muted); stroke: var(--svg-blue); stroke-width: 2; }
+      .title { fill: var(--svg-text); font: 700 26px Arial, sans-serif; }
+      .label { fill: var(--svg-text); font: 700 17px Arial, sans-serif; }
+      .small { fill: var(--svg-muted); font: 14px Arial, sans-serif; }
+      .line { stroke: var(--svg-line); stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .line-muted { stroke: var(--svg-muted); stroke-width: 2; fill: none; stroke-dasharray: 7 5; marker-end: url(#arrow-muted); }
+      .arrowhead { fill: var(--svg-line); }
+      .arrowhead-muted { fill: var(--svg-muted); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-muted" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="500" />
+  <text class="title" x="48" y="48">gRPC Invocation Path</text>
+  <text class="small" x="48" y="78">gRPC traffic uses the gRPC Proxy and a stateful worker connection path.</text>
+
+  <rect class="panel" x="40" y="150" width="140" height="88" rx="8" />
+  <text class="label" x="110" y="187" text-anchor="middle">Client</text>
+  <text class="small" x="110" y="213" text-anchor="middle">gRPC calls</text>
+
+  <rect class="panel-muted" x="260" y="150" width="196" height="88" rx="8" />
+  <text class="label" x="358" y="180" text-anchor="middle">Public gRPC</text>
+  <text class="small" x="358" y="206" text-anchor="middle">invocation endpoint</text>
+  <text class="small" x="358" y="227" text-anchor="middle">port 10081 or TLS</text>
+
+  <rect class="service" x="536" y="140" width="190" height="108" rx="8" />
+  <text class="label" x="631" y="172" text-anchor="middle">gRPC Proxy</text>
+  <text class="small" x="631" y="199" text-anchor="middle">session binding</text>
+  <text class="small" x="631" y="221" text-anchor="middle">stream relay</text>
+
+  <rect class="service" x="560" y="320" width="206" height="88" rx="8" />
+  <text class="label" x="663" y="351" text-anchor="middle">NVCF API + NATS</text>
+  <text class="small" x="663" y="377" text-anchor="middle">stateful request path</text>
+
+  <rect class="compute" x="820" y="320" width="194" height="88" rx="8" />
+  <text class="label" x="917" y="351" text-anchor="middle">Worker CONNECT</text>
+  <text class="small" x="917" y="377" text-anchor="middle">backend registration</text>
+
+  <rect class="compute" x="1060" y="320" width="182" height="88" rx="8" />
+  <text class="label" x="1151" y="351" text-anchor="middle">Customer gRPC</text>
+  <text class="label" x="1151" y="373" text-anchor="middle">Service</text>
+  <text class="small" x="1151" y="398" text-anchor="middle">model server</text>
+
+  <line class="line" x1="180" y1="194" x2="260" y2="194" />
+  <line class="line" x1="456" y1="194" x2="536" y2="194" />
+  <path class="line-muted" d="M 610 248 L 650 300 L 663 320" />
+  <line class="line-muted" x1="766" y1="364" x2="820" y2="364" />
+  <path class="line-muted" d="M 917 320 L 917 278 L 690 248" />
+  <line class="line" x1="1014" y1="364" x2="1060" y2="364" />
+  <path class="line" d="M 726 194 L 1162 194 L 1162 320" />
+  <text class="small" x="945" y="182" text-anchor="middle">bidirectional stream after worker connects</text>
+</svg>

@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# GPU Restore Pod Template
+# Restores a checkpointed process using the criu-bundle
+#
+# Usage:
+#   1. Set CHECKPOINT_ID environment variable or edit the hostPath
+#   2. kubectl apply -f 02-restore-pod.yaml
+#
+# Prerequisites:
+#   - criu-bundle deployed to /usr/local/criu-bundle on the node
+#   - Checkpoint exists at /var/lib/nvsnap/checkpoints/<CHECKPOINT_ID>
+#
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-restore
+  labels:
+    app: nvsnap-test
+    test: restore
+spec:
+  # Update this to your GPU node (must be same node as checkpoint)
+  # nodeName: your-gpu-node
+  restartPolicy: Never
+  containers:
+  - name: gpu
+    # Use same image as the checkpointed container
+    image: pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      set -e
+      export PATH="/criu-bundle:$PATH"
+      
+      echo "=== NVSNAP Restore ==="
+      echo "Checkpoint: /checkpoint"
+      echo "CRIU version: $(/criu-bundle/criu-wrapper --version 2>&1 | head -1)"
+      
+      # Restore process
+      /criu-bundle/criu-wrapper restore \
+        -D /checkpoint \
+        --shell-job \
+        --restore-detach \
+        --skip-mnt-ns \
+        --skip-file-validation \
+        --skip-lsm \
+        --tcp-close \
+        --manage-cgroups=ignore \
+        --empty-ns net \
+        -v4 \
+        --log-file /tmp/restore.log \
+        --pidfile /tmp/restore.pid
+      
+      if [ $? -ne 0 ]; then
+        echo "CRIU FAILED"
+        grep -iE "Error" /tmp/restore.log | tail -10
+        sleep 300
+        exit 1
+      fi
+      
+      PID=$(cat /tmp/restore.pid)
+      echo "Restored PID: $PID"
+      
+      # Restore GPU state
+      /criu-bundle/cuda-checkpoint --action restore --pid $PID 2>&1 || true
+      /criu-bundle/cuda-checkpoint --action unlock --pid $PID 2>&1 || true
+      echo "GPU State: $(/criu-bundle/cuda-checkpoint --get-state --pid $PID 2>&1)"
+      
+      # Show status
+      echo ""
+      echo "=== Verification ==="
+      nvidia-smi --query-compute-apps=pid,used_memory --format=csv
+      ps -p $PID -o pid,stat,cmd 2>/dev/null | head -3
+      
+      echo ""
+      echo "=== Monitoring Restored Process ==="
+      while kill -0 $PID 2>/dev/null; do
+        echo "[$(date +%H:%M:%S)] PID $PID running"
+        sleep 10
+      done
+      echo "Process exited"
+    securityContext:
+      privileged: true
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+      requests:
+        memory: "8Gi"
+        cpu: "2"
+    volumeMounts:
+    - name: criu-bundle
+      mountPath: /criu-bundle
+      readOnly: true
+    - name: checkpoint
+      mountPath: /checkpoint
+      readOnly: true
+  volumes:
+  - name: criu-bundle
+    hostPath:
+      path: /usr/local/criu-bundle
+      type: Directory
+  - name: checkpoint
+    hostPath:
+      # UPDATE THIS to your checkpoint path
+      path: /var/lib/nvsnap/checkpoints/CHECKPOINT_ID_HERE
+      type: Directory

@@ -1,0 +1,545 @@
+[
+    {
+        "kind": "ConfigMap",
+        "apiVersion": "v1",
+        "metadata": {
+            "name": "mychart-config",
+            "creationTimestamp": null
+        },
+        "data": {
+            "AWS_CONFIG_FILE": "/dev/shm/aws.config",
+            "HEADLESS_SERVICE_NAME": "mychart-headless",
+            "NODES_PER_INSTANCE": "1",
+            "NVCF_AWS_PROFILE_PATH": "/dev/shm/aws.config",
+            "NVCF_MULTI_NODE": "true",
+            "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt"
+        }
+    },
+    {
+        "kind": "ConfigMap",
+        "apiVersion": "v1",
+        "metadata": {
+            "name": "otel-collector-config",
+            "creationTimestamp": null
+        },
+        "data": {
+            "relay": "receivers: {}"
+        }
+    },
+    {
+        "kind": "ConfigMap",
+        "apiVersion": "v1",
+        "metadata": {
+            "name": "secret-extractor",
+            "creationTimestamp": null
+        },
+        "data": {
+            "foo.py": "if __name__ == \"__main__\":\n    main()"
+        }
+    },
+    {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "metadata": {
+            "name": "mychart-headless",
+            "creationTimestamp": null
+        },
+        "spec": {
+            "ports": [
+                {
+                    "name": "health",
+                    "port": 52365,
+                    "targetPort": 52365
+                },
+                {
+                    "name": "vllm",
+                    "port": 8000,
+                    "targetPort": 8001
+                },
+                {
+                    "name": "mychart-gcs",
+                    "port": 6379,
+                    "targetPort": 6379
+                },
+                {
+                    "name": "mychart-dashboard",
+                    "port": 8265,
+                    "targetPort": 8265
+                },
+                {
+                    "name": "mychart-object-manager",
+                    "port": 8076,
+                    "targetPort": 8076
+                },
+                {
+                    "name": "mychart-node-manager",
+                    "port": 8077,
+                    "targetPort": 8077
+                }
+            ],
+            "selector": {
+                "autogen-label-service-b5acad5265": "x373251855x"
+            },
+            "clusterIP": "None",
+            "publishNotReadyAddresses": true
+        },
+        "status": {
+            "loadBalancer": {}
+        }
+    },
+    {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "metadata": {
+            "name": "mychart-service",
+            "creationTimestamp": null
+        },
+        "spec": {
+            "ports": [
+                {
+                    "name": "health",
+                    "port": 52365,
+                    "targetPort": 52365
+                },
+                {
+                    "name": "vllm",
+                    "port": 8000,
+                    "targetPort": 8000
+                },
+                {
+                    "name": "mychart-gcs",
+                    "port": 6379,
+                    "targetPort": 6379
+                },
+                {
+                    "name": "mychart-dashboard",
+                    "port": 8265,
+                    "targetPort": 8265
+                },
+                {
+                    "name": "mychart-object-manager",
+                    "port": 8076,
+                    "targetPort": 8076
+                },
+                {
+                    "name": "mychart-node-manager",
+                    "port": 8077,
+                    "targetPort": 8077
+                }
+            ],
+            "selector": {
+                "apps.kubernetes.io/pod-index": "0",
+                "autogen-label-service-fe2d7c83b6": "x442637682x"
+            },
+            "type": "ClusterIP"
+        },
+        "status": {
+            "loadBalancer": {}
+        }
+    },
+    {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "metadata": {
+            "name": "miniservice-opentelemetry-collector",
+            "namespace": "default",
+            "creationTimestamp": null,
+            "annotations": {
+                "preserved-annotation": "0"
+            }
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {
+                "matchLabels": {
+                    "autogen-label-controller": "x318635015x"
+                }
+            },
+            "template": {
+                "metadata": {
+                    "creationTimestamp": null,
+                    "labels": {
+                        "autogen-label-controller": "x318635015x"
+                    },
+                    "annotations": {
+                        "checksum/config": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+                    }
+                },
+                "spec": {
+                    "volumes": [
+                        {
+                            "name": "opentelemetry-collector-configmap",
+                            "configMap": {
+                                "name": "otel-collector-config",
+                                "items": [
+                                    {
+                                        "key": "relay",
+                                        "path": "relay.yaml"
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "secret-extractor-script",
+                            "configMap": {
+                                "name": "secret-extractor",
+                                "defaultMode": 493
+                            }
+                        },
+                        {
+                            "name": "cert-store",
+                            "emptyDir": {
+                                "medium": "Memory",
+                                "sizeLimit": "5Mi"
+                            }
+                        },
+                        {
+                            "name": "input-secrets",
+                            "secret": {
+                                "secretName": "nvcf-secrets"
+                            }
+                        }
+                    ],
+                    "initContainers": [
+                        {
+                            "name": "secret-extractor",
+                            "image": "nvcr.io/nvidia/distroless/python:3.13-v3.0.10",
+                            "command": [
+                                "python"
+                            ],
+                            "args": [
+                                "/scripts/extractor.py"
+                            ],
+                            "resources": {},
+                            "volumeMounts": [
+                                {
+                                    "name": "secret-extractor-script",
+                                    "mountPath": "/scripts"
+                                },
+                                {
+                                    "name": "cert-store",
+                                    "mountPath": "/etc/mychart-remote-write/certs"
+                                },
+                                {
+                                    "name": "input-secrets",
+                                    "mountPath": "/var/secrets"
+                                }
+                            ],
+                            "securityContext": {
+                                "capabilities": {
+                                    "add": [
+                                        "NET_BIND_SERVICE"
+                                    ],
+                                    "drop": [
+                                        "ALL"
+                                    ]
+                                },
+                                "runAsNonRoot": true,
+                                "readOnlyRootFilesystem": true,
+                                "allowPrivilegeEscalation": false,
+                                "seccompProfile": {
+                                    "type": "RuntimeDefault"
+                                }
+                            }
+                        }
+                    ],
+                    "containers": [
+                        {
+                            "name": "opentelemetry-collector",
+                            "image": "ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.127.0",
+                            "args": [
+                                "--config=/conf/relay.yaml"
+                            ],
+                            "env": [
+                                {
+                                    "name": "MY_POD_IP",
+                                    "valueFrom": {
+                                        "fieldRef": {
+                                            "apiVersion": "v1",
+                                            "fieldPath": "status.podIP"
+                                        }
+                                    }
+                                },
+                                {
+                                    "name": "POD_NS",
+                                    "valueFrom": {
+                                        "fieldRef": {
+                                            "fieldPath": "metadata.namespace"
+                                        }
+                                    }
+                                }
+                            ],
+                            "resources": {},
+                            "volumeMounts": [
+                                {
+                                    "name": "opentelemetry-collector-configmap",
+                                    "mountPath": "/conf"
+                                },
+                                {
+                                    "name": "cert-store",
+                                    "mountPath": "/etc/mychart-remote-write/certs"
+                                }
+                            ],
+                            "livenessProbe": {
+                                "httpGet": {
+                                    "path": "/",
+                                    "port": 13133
+                                }
+                            },
+                            "readinessProbe": {
+                                "httpGet": {
+                                    "path": "/",
+                                    "port": 13133
+                                }
+                            },
+                            "imagePullPolicy": "IfNotPresent",
+                            "securityContext": {
+                                "capabilities": {
+                                    "add": [
+                                        "NET_BIND_SERVICE"
+                                    ],
+                                    "drop": [
+                                        "ALL"
+                                    ]
+                                },
+                                "readOnlyRootFilesystem": true,
+                                "allowPrivilegeEscalation": false,
+                                "seccompProfile": {
+                                    "type": "RuntimeDefault"
+                                }
+                            }
+                        }
+                    ],
+                    "automountServiceAccountToken": false,
+                    "securityContext": {
+                        "runAsNonRoot": true,
+                        "seccompProfile": {
+                            "type": "RuntimeDefault"
+                        }
+                    }
+                }
+            },
+            "strategy": {
+                "type": "RollingUpdate"
+            },
+            "revisionHistoryLimit": 10
+        },
+        "status": {}
+    },
+    {
+        "kind": "StatefulSet",
+        "apiVersion": "apps/v1",
+        "metadata": {
+            "name": "mychart",
+            "creationTimestamp": null
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {
+                "matchLabels": {
+                    "autogen-label-controller": "x562193743x"
+                }
+            },
+            "template": {
+                "metadata": {
+                    "creationTimestamp": null,
+                    "labels": {
+                        "autogen-label-controller": "x562193743x",
+                        "autogen-label-service-b5acad5265": "x373251855x",
+                        "autogen-label-service-fe2d7c83b6": "x442637682x"
+                    }
+                },
+                "spec": {
+                    "volumes": [
+                        {
+                            "name": "dshm",
+                            "emptyDir": {
+                                "medium": "Memory",
+                                "sizeLimit": "500Gi"
+                            }
+                        },
+                        {
+                            "name": "temp",
+                            "emptyDir": {}
+                        },
+                        {
+                            "name": "mychart-config",
+                            "configMap": {
+                                "name": "mychart-config"
+                            }
+                        }
+                    ],
+                    "containers": [
+                        {
+                            "name": "mychart",
+                            "image": "nvcr.io/myorg/mychart-image:1.2.3",
+                            "command": [
+                                "python"
+                            ],
+                            "args": [
+                                "/opt/mychart/scripts/nvcf.py",
+                                "--helm",
+                                "True"
+                            ],
+                            "ports": [
+                                {
+                                    "name": "health",
+                                    "containerPort": 52365,
+                                    "protocol": "TCP"
+                                },
+                                {
+                                    "name": "vllm",
+                                    "containerPort": 8000,
+                                    "protocol": "TCP"
+                                },
+                                {
+                                    "name": "mychart-gcs",
+                                    "containerPort": 6379
+                                },
+                                {
+                                    "name": "mychart-dashboard",
+                                    "containerPort": 8265
+                                },
+                                {
+                                    "name": "mychart-obj-mgr",
+                                    "containerPort": 8076
+                                },
+                                {
+                                    "name": "mychart-node-mgr",
+                                    "containerPort": 8077
+                                }
+                            ],
+                            "envFrom": [
+                                {
+                                    "configMapRef": {
+                                        "name": "mychart-config"
+                                    }
+                                }
+                            ],
+                            "env": [
+                                {
+                                    "name": "POD_NAME",
+                                    "valueFrom": {
+                                        "fieldRef": {
+                                            "fieldPath": "metadata.name"
+                                        }
+                                    }
+                                },
+                                {
+                                    "name": "POD_IP",
+                                    "valueFrom": {
+                                        "fieldRef": {
+                                            "fieldPath": "status.podIP"
+                                        }
+                                    }
+                                },
+                                {
+                                    "name": "NODES_PER_INSTANCE",
+                                    "value": "1"
+                                },
+                                {
+                                    "name": "HEADLESS_SERVICE_NAME",
+                                    "value": "mychart-headless"
+                                }
+                            ],
+                            "resources": {
+                                "limits": {
+                                    "nvidia.com/gpu": "1"
+                                },
+                                "requests": {
+                                    "cpu": "8",
+                                    "memory": "6Gi",
+                                    "nvidia.com/gpu": "1"
+                                }
+                            },
+                            "volumeMounts": [
+                                {
+                                    "name": "dshm",
+                                    "mountPath": "/dev/shm"
+                                },
+                                {
+                                    "name": "temp",
+                                    "mountPath": "/tmp"
+                                }
+                            ],
+                            "livenessProbe": {
+                                "httpGet": {
+                                    "path": "/api/healthz",
+                                    "port": 52365
+                                },
+                                "initialDelaySeconds": 5,
+                                "timeoutSeconds": 15,
+                                "periodSeconds": 60,
+                                "successThreshold": 1,
+                                "failureThreshold": 5
+                            },
+                            "readinessProbe": {
+                                "httpGet": {
+                                    "path": "/api/healthz",
+                                    "port": 52365
+                                },
+                                "initialDelaySeconds": 5,
+                                "timeoutSeconds": 5,
+                                "periodSeconds": 10,
+                                "successThreshold": 1,
+                                "failureThreshold": 3
+                            },
+                            "startupProbe": {
+                                "httpGet": {
+                                    "path": "/api/healthz",
+                                    "port": 52365
+                                },
+                                "initialDelaySeconds": 10,
+                                "timeoutSeconds": 5,
+                                "periodSeconds": 10,
+                                "successThreshold": 1,
+                                "failureThreshold": 120
+                            },
+                            "imagePullPolicy": "Always",
+                            "securityContext": {
+                                "capabilities": {
+                                    "add": [
+                                        "NET_BIND_SERVICE"
+                                    ],
+                                    "drop": [
+                                        "ALL"
+                                    ]
+                                },
+                                "runAsNonRoot": true,
+                                "readOnlyRootFilesystem": true,
+                                "allowPrivilegeEscalation": false,
+                                "seccompProfile": {
+                                    "type": "RuntimeDefault"
+                                }
+                            }
+                        }
+                    ],
+                    "automountServiceAccountToken": false,
+                    "securityContext": {
+                        "seccompProfile": {
+                            "type": "RuntimeDefault"
+                        }
+                    },
+                    "imagePullSecrets": [
+                        {
+                            "name": "inference-container-pull-secret"
+                        }
+                    ],
+                    "subdomain": "mychart-headless",
+                    "tolerations": [
+                        {
+                            "operator": "Exists"
+                        }
+                    ]
+                }
+            },
+            "serviceName": "mychart-headless",
+            "podManagementPolicy": "Parallel",
+            "updateStrategy": {}
+        },
+        "status": {
+            "replicas": 0,
+            "availableReplicas": 0
+        }
+    }
+]

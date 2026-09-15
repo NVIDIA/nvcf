@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if and .Values.nvcfUi.httpRoute.enabled .Values.nvcfUi.httpRoute.referenceGrant.enabled .Values.nvcfUi.httpRoute.namespace (ne .Values.nvcfUi.httpRoute.namespace .Release.Namespace) }}
+# Gateway API requires a ReferenceGrant in the target (Service) namespace to
+# authorize any cross-namespace backendRef. The HTTPRoute lives in the Gateway's
+# namespace (.Values.nvcfUi.httpRoute.namespace), so this grant — created in the release
+# namespace alongside the Service it authorizes — lets that route reach the
+# in-release Service. Mirrors the cluster's allow-routes-to-* grants.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: {{ include "nvcf-ui.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvcf-ui.labels" . | nindent 4 }}
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: {{ .Values.nvcfUi.httpRoute.namespace }}
+  to:
+    - group: ""
+      kind: Service
+      name: {{ include "nvcf-ui.fullname" . }}
+{{- end }}

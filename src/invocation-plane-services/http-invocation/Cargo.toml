@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[workspace]
+members = [
+    "crates/server",
+]
+resolver = "2"
+
+[profile.release]
+lto = true
+debug = true
+
+[profile.profiling]
+inherits = "release"
+debug = true

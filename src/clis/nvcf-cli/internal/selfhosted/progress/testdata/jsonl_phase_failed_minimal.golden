@@ -1,0 +1,2 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_failed","ts":"2026-04-29T01:23:50Z","phaseNum":1,"phase":"preflight","durationSec":5,"errCategory":"internal","errMessage":"fatal","retryClass":"none"}

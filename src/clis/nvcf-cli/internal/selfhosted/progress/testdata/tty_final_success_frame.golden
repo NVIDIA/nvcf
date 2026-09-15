@@ -1,0 +1,22 @@
+NVCF self-hosted install: my-cluster
+Elapsed:                  11m40s
+Target:                   yotta-prod-us-east-1
+Stack:                    v1.2.0@sha256:0180e2
+
+Progress
+
+    [✓]  1. Preflight checks                    08s
+    [✓]  2. Resolve stack bundle                03s
+    [✓]  3. Render control plane                11s
+    [✓]  4. Apply control plane                 05m18s
+    [✓]  5. Check control plane health          22s
+    [✓]  6. Register compute cluster            04s
+    [✓]  7. Apply compute plane                 04m21s
+    [✓]  8. Final health check                  53s
+
+Cluster ID:    cc9f8a98-5853-4e3b-929c-9154d0ac0ecc
+Group ID:      cb0ca171-2363-4c3f-b03a-1fc7d5743dea
+NVCFBackend:   ncp-local (healthy)
+Duration:      11m40s
+
+press q to quit

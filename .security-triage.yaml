@@ -1,0 +1,22 @@
+version: "1.0"
+project: "nvcf"
+last_updated: "2026-07-23T23:43:11Z"
+
+repository_exposure_classification:
+  visibility: "Public"
+  basis: "NVIDIA/nvcf is a public repository on GitHub"
+  confirmed_by: "FamousDirector"
+  date: "2026-07-23"
+
+service_exposure_classification:
+  tier: "External / Regulated"
+  confidence: "high"
+  basis: >-
+    customer-facing APIs; production GPU workloads; credentials, artifacts,
+    request data, secrets, and telemetry
+  confirmed_by: "FamousDirector"
+  date: "2026-07-23"
+
+false_positives: []
+accepted_risks: []
+suppressed_cves: []

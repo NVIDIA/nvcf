@@ -1,0 +1,551 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    contact-points: 127.0.0.1
+    port: 9042
+    data-center: datacenter1
+    keyspace-name: test
+    #schema-action: create-if-not-exists
+    advanced:
+      speculative-execution-policy:
+        class: ConstantSpeculativeExecutionPolicy
+        max-executions: 1
+        delay: 1500 # milliseconds
+      connection:
+        max-requests-per-connection: 10000
+        pool:
+          local:
+            size: 2
+      retry-policy:
+        class: com.nvidia.boot.cassandra.retry.NextHostRetryPolicy
+    username: ${kv.cassandra.username}
+    password: ${kv.cassandra.password}
+    local-datacenter: datacenter1  # ${CASSANDRA_DATACENTER:us-west-2}
+    connection:
+      connect-timeout: 10s
+      init-query-timeout: 10s
+    pool:
+      heartbeat-interval: 30s
+      idle-timeout: 60s
+    request:
+      consistency: local_quorum
+      page-size: 5000
+      serial-consistency: local_serial
+      timeout: 10s
+    session-name: sis-api-session
+    session-metrics:
+      - bytes-sent
+      - connected-nodes
+      - cql-requests
+    node-metrics:
+      - pool.open-connections
+      - pool.in-flight
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9092
+          jwk-set-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/.well-known/jwks.json
+          jws-algorithms: ES256
+      client:
+        registration:
+          ngc:
+            provider: ngc
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: getUisOrgInfo
+          fnds:
+            provider: fnds
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: write
+          api-keys:
+            provider: api-keys
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: pdp-evaluate
+        provider:
+          ngc:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          fnds:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          api-keys:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+  main:
+    allow-bean-definition-overriding: true
+  task:
+    scheduling:
+      pool:
+        size: 5
+      thread-name-prefix: "scheduled-"
+
+logging:
+  level:
+    com.nvidia.icms: INFO
+    org.springframework.web: ERROR
+    com.nvidia.boot.telemetry.client: WARN
+    # Surfaces remote-config ConfigMap resolution (found / loaded / not-found per
+    # source). Logs only at bootstrap and on refresh; silent in steady state.
+    org.springframework.cloud.kubernetes.commons.config.ConfigUtils: DEBUG
+
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      cache:
+        time-to-live: 2s
+      probes:
+        enabled: true
+      show-details: always
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+    vault:
+      enabled: false
+    config:
+      enabled: true
+    # KubernetesClientHealthIndicator is gated by @ConditionalOnCloudPlatform(KUBERNETES)
+    # only — it activates whenever KUBERNETES_SERVICE_HOST is set, independently of
+    # spring.cloud.kubernetes.config.enabled. Left on, it couples /actuator/health readiness to
+    # K8s control-plane reachability (kubelet probes already detect pod health independently).
+    kubernetes:
+      enabled: false
+  tracing:
+    export:
+      enabled: true
+    sampling:
+      probability: 1.0
+    propagation:
+      type: w3c
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:https://dummy:8282}
+          compression: gzip
+          headers:
+            lightstep-access-token: ${kv.lightstep.access_token}
+          timeout: 30s
+          transport: http
+    resource-attributes:
+      cloud.provider: ${CLOUD_PROVIDER:aws}
+      deployment.profiles: ${spring.profiles.active}
+      host.dc: ${spring.application.host.dc:unknown}
+      host.id: ${spring.application.host.id:unknown}
+      host.name: ${spring.application.host.id:unknown}
+      service.name: ${spring.application.name}
+      service.version: ${spring.application.version}
+      service.namespace: spot
+  observations:
+    annotations:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  metrics:
+    enable:
+      all: true
+    tags:
+      env: ${spring.application.env}
+      micro_service: ${spring.application.name}
+      service_version: ${spring.application.version}
+      host_id: ${spring.application.host.id}
+      host_dc: ${spring.application.host.dc}
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true
+      slo:
+        "[http.server.requests]": "5ms,10ms,25ms,50ms,75ms,100ms,200ms,300ms,400ms,500ms,750ms,1s,2s,3s,4s,5s,10s,15s,20s,30s"
+
+  server:
+    port: 8181
+
+server:
+  port: 8080
+
+springdoc:
+  api-docs:
+    path: "/v3/openapi"
+  paths-to-exclude: /v1/sirs/{spotInstanceRequestId},/v1/sirs/{spotInstanceRequestId}/{instanceId}
+
+icms:
+  # First-party compute platforms whose clusters are handled outside the default BYOC flow.
+  # Empty here: this deployment serves only BYOC clusters, so every cluster group is treated as BYOC.
+  # A deployment that operates a first-party platform supplies entries as config data, e.g.:
+  #   compute-platforms:
+  #     - name: <PLATFORM_NAME>
+  #       cluster-group-name: <CLUSTER_GROUP_NAME>
+  #       cluster-group-id: <CLUSTER_GROUP_ID>
+  compute-platforms: []
+  # Additional trusted static JWT issuers, validated in addition to the primary
+  # issuer-uri (and optional admin-issuer-uri). Empty here: only the primary
+  # (and admin) issuer is trusted. A deployment can trust extra issuers by
+  # supplying entries at runtime (remote config / env), e.g.:
+  #   security:
+  #     jwt:
+  #       trusted-issuers:
+  #         - issuer-uri: <ISS_CLAIM>
+  #           jwk-set-uri: <JWKS_URL>
+  security:
+    jwt:
+      trusted-issuers: []
+  aws:
+    region: ${AWS_REGION}
+    role-arn: ${AWS_ROLE_ARN}
+    token-file: ${AWS_WEB_IDENTITY_TOKEN_FILE}
+    access-key: dummy_access_key
+    secret-key: dummy_secret_key
+    sns:
+      region: us-west-2
+      topics:
+        terminate:
+          name: "gdn-instance-termination-%s.fifo"
+          id: "000000000000"
+    sts:
+      role-arn: arn:aws:iam::000000000000:role/spot-queue-access-role
+    sqs:
+      region: us-west-2
+      endpoint: https://sqs.us-west-2.amazonaws.com/000000000000/gdn-spot-instance-requests-global.fifo
+      queue-per-instance-name-format: "gdn-spot-instance-requests-%s.fifo"
+      queue-per-instance-name-format-for-tasks: "gdn-spot-instance-requests-tasks-%s.fifo"
+      queue-attributes:
+        FifoQueue: "true"
+        ContentBasedDeduplication: "true"
+        DelaySeconds: "0"
+        MaximumMessageSize: "262144"
+        MessageRetentionPeriod: "1800"
+        ReceiveMessageWaitTimeSeconds: "0"
+        KmsMasterKeyId: "alias/aws/sqs"
+        KmsDataKeyReusePeriodSeconds: "300"
+      tasks-queue-attributes:
+        FifoQueue: "true"
+        ContentBasedDeduplication: "true"
+        DelaySeconds: "0"
+        MaximumMessageSize: "262144"
+        MessageRetentionPeriod: "86400"
+        ReceiveMessageWaitTimeSeconds: "0"
+        KmsMasterKeyId: "alias/aws/sqs"
+        KmsDataKeyReusePeriodSeconds: "300"
+      byoc-queue-attributes:
+        FifoQueue: "true"
+        ContentBasedDeduplication: "true"
+        DelaySeconds: "0"
+        MaximumMessageSize: "262144"
+        MessageRetentionPeriod: "86400"
+        ReceiveMessageWaitTimeSeconds: "0"
+        KmsMasterKeyId: "alias/aws/sqs"
+        KmsDataKeyReusePeriodSeconds: "300"
+      byoc-tasks-queue-attributes:
+        FifoQueue: "true"
+        ContentBasedDeduplication: "true"
+        DelaySeconds: "0"
+        MaximumMessageSize: "262144"
+        # Message Retention is of 3 days
+        MessageRetentionPeriod: "259200"
+        ReceiveMessageWaitTimeSeconds: "0"
+        KmsMasterKeyId: "alias/aws/sqs"
+        KmsDataKeyReusePeriodSeconds: "300"
+      queue-tags:
+        Environment: "default"
+        Service: "Spot"
+        Owner: "instance-cluster-management"
+        Purpose: "spot-instance-specific-queue"
+        ManagedBy: "instance-cluster-management"
+
+  telemetry:
+    url: ${TELEMETRY_URL:https://dummy}
+    path-prefix: /api/v2/topic
+    source: ${spring.application.name}-${spring.application.host.id}-${spring.application.host.dc}
+    resource-name: icms-service.telemetry
+    oauth2:
+      token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+      client-id: ${kv.oauth2.client-id}
+      client-secret: ${kv.oauth2.client-secret}
+      scope: telemetry-write
+      auth-method: CLIENT_SECRET_BASIC
+    connect-timeout: 5000ms
+    read-timeout: 10000ms
+    enabled: true
+
+  api-keys:
+    url: http://localhost:9097
+    namespace: nvcfsis
+    package-name: apikey
+    policy-name: allow
+
+  ngc:
+    enabled: true
+    nvidia-internal-idp-id: dummy-ngc-idp-id
+    service-url: https://uis.ngc.nvidia.com
+
+  # Feature flag to enable request state transition from OPEN to ACTIVE when first instance is created
+  # Set to true to enable the new behavior, false to maintain backward compatibility
+  request-state-transition-to-active-enabled: false
+  gpu-usage-per-instance-task-enabled: false
+  # Lock duration should be less than cron job duration to make lock is released before next job run
+  # keeping lock duration as 30 mins and cron job duration is 0th min of every hour
+  gpu-usage-task-lock-ttl-in-seconds: 1800
+  # This should be greater than 10x of max pod can be available at any point of time to guarantee randomness to avoid contention
+  gpu-usage-task-bound-sleep-duration-in-seconds: 600
+  gpu-usage-task-secure-random-enabled: true
+  async-wild-card-cache-update-task-schedule-initial-delay: PT5S
+  async-wild-card-cache-update-task-schedule-duration: PT20S
+  wild-card-stale-cached-data-valid-duration-in-sec: 60
+  cluster-group-instance-type-usage-filtering-enabled: true
+  gpu-v5-population-task-enabled: false
+  gpus-v-5-population-task-lock-ttl-in-seconds: 14400
+  include-custom-public-clusters-in-account-info-apis: true
+  # This should not be more than 10, code will override it to 10 is set higher than 10
+  sqs-batch-size: 5
+  sqs-batch-max-size-in-bytes: 261120
+  message-batch-id-config:
+    cancel-request-validation-enabled: true
+    # this value should be higher than icms.request-cancel-duration-in-min
+    validation-duration-in-min: 35
+
+    validation-duration-for-byoc-with-model-in-min: 160
+    # this value should be higher than icms.request-cancel-duration-in-min
+    validation-duration-for-byoc-without-model-in-min: 35
+
+  cancel-request-up-to-past-months: 1
+  message-batch-id-expiry-validation-in-get: false
+  queue-per-instance-enabled: false
+  queue-creation-per-instance-type-enabled: false
+  instance-batch-count: 10
+  # Keep this value as 1 ONLY to fully utilize reserved capacity
+  reserved-instance-batch-count: 1
+  # waitingTimeForScheduleExpireStateUpdate=15*(25+24+23+22+21+20+19+18+17+16+15+14+13+12+11+10) + (10 * 60) sec = 83.75 min
+  # As the request-cancel-duration(30mins) < waitingTimeForScheduleExpireStateUpdate(83 min),
+  # we need not to handle schedule-expired explicitly. In future if decide to increase request-cancel-duration > 83,
+  # then will have to add handling for schedule-expired
+  request-cancel-duration-in-min: 30
+  instance-lifetime-validity-in-days: 90
+  terminate-expired-instances-enabled: false
+  terminate-expired-request-up-to-past-month: 2
+  terminate-expired-request-from-past-months: 5
+
+  #CloudHealthCheckTask
+  cloud-failure-detection-enabled: false
+
+  ttl-to-mark-cloud-unhealthy: 180
+  check-for-duplicate-instances: true
+  populate-acknowledged-instances: false
+  instance-listing-api-enabled: false
+
+  #StaleRequestDeletionTask
+  state-request-deletion-task-enabled: false
+  closed-request-instance-deletion-days: 2
+  stale-requests-telemetry-event-size: 300
+  stale-request-deletion-start-utc-hour-24h: 7
+  stale-request-deletion-end-utc-hour-24h: 9
+  wait-for-instances-to-be-created-in-days: 5
+
+  stale-request-records-in-db-page: 500
+  stale-request-pause-between-pages-in-ms: 1000
+  stale-request-pause-between-records-in-ms: 100
+
+ # lock by ttl configuration
+  cloud-failure-detection-task-lock-ttl-in-seconds: 300
+  cancel-lingering-requests-task-lock-ttl-in-seconds: 360
+  cluster-health-monitor-task-lock-ttl-in-seconds: 14400
+  stale-request-deletion-task-lock-ttl-in-seconds: 14400
+  terminate-expired-instances-task-lock-ttl-in-seconds: 14400
+  wait-for-db-lock-by-ttl-validation-in-seconds: 5
+
+  cloud-failure-detection-task-pause-between-days-in-milliseconds: 250
+
+  async-long-task-schedule-initial-delay: PT5M
+  async-long-task-schedule-duration: PT24H
+  async-short-task-schedule-initial-delay: PT5M
+  async-short-task-schedule-duration: PT30S
+  stale-request-deletion-task-schedule-duration: PT1H
+
+  async-hourly-task-schedule-initial-delay: PT5M
+  async-hourly-task-schedule-duration: PT1H
+
+  shutting-down-instance-termination-task-enabled: false
+  shutting-down-instance-termination-task-lock-ttl-in-seconds: 14400
+  shutting-down-instance-termination-threshold-in-hours: 24
+
+  db-query-executor-max-threads: 15
+
+  database-cleanup-task-enabled: false
+  database-records-ttl-in-days: 100
+  database-cleanup-lookup-period-in-days: 180
+  database-cleanup-lock-ttl-in-seconds: 14400
+  database-cleanup-requests-enabled: false
+  database-cleanup-instances-enabled: false
+  database-cleanup-db-page-size: 500
+
+  find-instance-by-request-id-calls-per-thread: 250
+  find-instance-by-request-id-threads-in-parallel: 4
+
+  find-instances-by-request-id-for-gpu-usage-in-parallel: false
+
+  database-read-page-size: 500
+
+  fnds_messages_enabled: true
+  #feature flags for migration to v2
+  fnds_messages_v1_enabled: true
+  fnds_messages_v2_enabled: false
+
+  air-gapped-mode-enabled: false
+
+  # feature flags to support reservation
+  reservation-backup-enabled: false
+  spot-post-reserved-exhaustion-for-function-enabled: false # Feature flag to enable spot usage after reservation is exhausted for functions
+
+  nats:
+    nats-enabled: false
+    nats-url: nats://localhost:4222
+    create-nats-streams: true
+    create-nats-consumers: false
+    connection-timeout: 10s
+    ping-interval: 5s
+    reconnect-wait: 1s # Increasing it to avoid slow down
+    reconnect-jitter: 1s
+    reconnect-allowed: true
+    force-reconnect-flush: 5s
+    delay-between-messages: 100ms
+    message-ttl: 96h
+    global-stream-validation-task-lock-ttl: 120s
+    global-stream-validation-interval: PT3M
+    global-stream-validation-initial-delay: PT3M
+    global-stream-validation-task-enabled: false
+
+  fnds:
+    fnds-base-url: http://localhost:9099
+
+  datadog:
+    events:
+      enabled: false
+
+  db:
+    query-duration-months: 3 # Its value should always be >= 1 if it is used
+    cloud-health-ttl-in-sec: 900
+
+  byoc:
+    env: default
+    queue-name-format: "q_gdn_spot_byoc_%s.fifo"
+    # todo: update batch account as per requirement, setting initial value as 10
+    instance-batch-count: 10
+    cloud-health-ttl-for-byoc-in-sec: 900
+    # mention * for allowing all cluster-ids
+    terminate-cloud-failed-instances-from-clusters: [ ]
+    # set value to 0 to avoid attaching nvidia.com/gpu to inference container
+    gpu-limit-resource-value: 1
+    k8s-version-validation-enabled: false
+    # Follow steps mentioned in http://nv/Kubernetes-version-validation before updating max and min supported version
+    min-k8s-supported-version: "v1.25.0"
+    max-k8s-supported-version: "v1.31"
+    cluster-health-monitor-task-enabled: false
+    cluster-expiry-time-in-days: 30
+    # This is mapping of nca-id:cluster-name
+    skip-health-check-clusters:
+      - dummy-static-zone-nca-id: STATIC-ZONE
+      - static-on-prem-cluster-nca-id: dummy-on-prem-cluster-id
+    model-caching-enabled: false
+    authorized-nca-id-update-enabled: false
+    # 1000 * 1000 * 1000
+    cache-byte-division-factor: 1000000000
+    # 1Gi
+    cache-bytes-buffer: 1
+    cache-reserved-space: 5
+    auto-termination-of-instances-from-unhealthy-cloud-enabled: false
+    time-for-auto-terminating-instances-from-unhealthy-cloud-in-hours: 24
+
+  nvca:
+    # Feature flag: validate authorized NCA IDs in cluster create/update payloads (skips wildcard "*")
+    authorizedNcaIdRegexValidationEnabled: false
+    # Feature flag: OIDC/PSAT cluster identity (self-hosted NVCF).
+    # Default false = managed-NVCF behavior (legacy auth, no JWKS endpoints).
+    # The ncp profile enables this for self-hosted deployments.
+    oidcClusterIdentityEnabled: false
+    # Feature flag: Set false when api-keys are not supported.
+    api-key:
+      enabled: true
+    # NATS auth-callout webhook endpoint (POST /v1/nvca/nats-authorize). Gated by
+    # oidcClusterIdentityEnabled above. Managed-NVCF defaults stay empty because
+    # this endpoint is disabled there; self-hosted profiles/deployments must
+    # provide cluster-scoped subject templates or authorization fails closed.
+    natsAuth:
+      account: APP
+      allowedPluginNames:
+        - oidc
+      ttl: PT1H
+      permissions:
+        publish:
+          allow: []
+          deny: []
+        subscribe:
+          allow: []
+          deny: []
+    nvca-self-destruct-enabled: false
+    nvca-self-destruct-min-version: 2.45.15
+    # placeholders:
+    # 1. clusterGroupId for clusterGroup queues or clusterId for cluster specific queues
+    # 2. GPU name
+    creation-queue-name-format: q_gdn_spot_byoc_%s_%s.fifo
+    # placeholders:
+    # 1. clusterId
+    # 2. GPU name
+    tasks-creation-queue-name-format: q_gdn_spot_byoc_tasks_%s_%s.fifo
+    tasks-creation-queues-enabled: false
+    # placeholders:
+    # 1. clusterId
+    termination-queue-name-format: q_gdn_spot_byoc_%s.fifo
+    cluster-attributes:
+      - "Confidential Computing Compliant"
+      - "Export Controlled"
+      - "HIPPA Compliant"
+      - "PCI Compliant"
+      - "SOC2 Compliant"
+      - "CacheOptimized"
+      - "KataRuntimeIsolation"
+      - "HostIsolation"
+      - "AccountIsolation"
+      - "Multi Node Supported"
+      - "Graphics Optimized"
+      - "Streaming Optimized"
+      - "NVCF Optimized"
+      - "Preemptible"
+    imageCredentialHelper:
+      imageConfig:
+        repository: stg.nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper
+        tag: 0.3.0
+    sis-config:
+      public-key-set-endpoint: http://localhost:9092/.well-known/jwks.json
+      token-url: http://localhost:9092/token
+      spot-service-url: http://localhost:8080
+    vault-config:
+      address: ${VAULT_ADDR:http://localhost:8200}
+    # (NVCFCLUST-155) For Prod we will keep it as empty for now
+    cluster-version: |
+      {}
+
+  tenant-configurations:
+    valid-tenants:
+      - gdn

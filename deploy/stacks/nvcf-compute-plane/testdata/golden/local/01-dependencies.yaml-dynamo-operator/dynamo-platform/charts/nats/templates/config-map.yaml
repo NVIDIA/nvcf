@@ -1,0 +1,29 @@
+---
+# Source: dynamo-platform/charts/nats/templates/config-map.yaml
+apiVersion: v1
+data:
+  nats.conf: |
+    {
+      "http_port": 8222,
+      "jetstream": {
+        "max_file_store": 10Gi,
+        "max_memory_store": 0,
+        "store_dir": "/data"
+      },
+      "lame_duck_duration": "30s",
+      "lame_duck_grace_period": "10s",
+      "max_payload": 15728640,
+      "pid_file": "/var/run/nats/nats.pid",
+      "port": 4222,
+      "server_name": $SERVER_NAME
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/component: nats
+    app.kubernetes.io/instance: dynamo-operator
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/version: 2.11.1
+    helm.sh/chart: nats-1.3.2
+  name: dynamo-operator-nats-config

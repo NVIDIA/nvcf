@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "validator-cli"
+version = "0.1.0"
+description = "Validator for metrics collected by byoo-otel-collector"
+license = "Apache-2.0"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0.1",
+    "requests>=2.31.0",
+    "rich>=13.7.0",
+]

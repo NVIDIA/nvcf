@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+topology:
+  nodePools:
+    default:
+      gpuProduct: NVIDIA-H100-SXM4-80GB
+      # Keep a one-GPU local instance schedulable after NVCA infrastructure
+      # overhead. Higher-density slices on k3d nodes suppress the required
+      # *_1x registration type.
+      gpuCount: 2
+      gpuMemory: 81559
+  nodePoolLabelKey: run.ai/simulated-gpu-node-pool
+  migStrategy: mixed

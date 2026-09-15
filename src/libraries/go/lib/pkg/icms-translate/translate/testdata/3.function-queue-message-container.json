@@ -1,0 +1,27 @@
+{
+  "functionDetails": {
+    "functionType": "DEFAULT",
+    "functionId": "5a3d4a7e-9ee3-4762-8d37-d3b40a6f84c6",
+    "functionVersionId": "2c948d9b-db5d-4f93-8c29-f5d8a5d89cb9"
+  },
+  "sub": "",
+  "ncaId": "_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq",
+  "requestId": "9f93ffa2-0376-495e-a723-f6c653ed1e34",
+  "messageBatchId": "14d2ec9c-25d8-4712-9288-b682570671d6",
+  "accountName": "foobar",
+  "action": "RequestICMSInstances",
+  "requestedGPUCount": 2,
+  "gpuType": "L40",
+  "instanceCount": 1,
+  "instanceType": "DGX-CLOUD.GPU.L40",
+  "instanceTypeName": "DGX-CLOUD.GPU.L40_2x",
+  "instanceTypeValue": "DGX-CLOUD.GPU.L40",
+  "launchSpecification": {
+    "clusters": null,
+    "regions": null,
+    "attributes": null,
+    "environment": "R1BVX05BTUU9TDQwCg==",
+    "cloudProvider": "DGXCLOUD",
+    "icmsEnvironment": "stage"
+  }
+}

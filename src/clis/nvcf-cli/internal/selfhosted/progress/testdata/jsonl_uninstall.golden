@@ -1,0 +1,8 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":1,"phase":"preflight","totalPhases":3}
+{"event":"phase_completed","ts":"2026-04-29T01:23:45Z","phaseNum":1,"phase":"preflight","durationSec":0}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":2,"phase":"render-uninstall","totalPhases":3}
+{"event":"phase_completed","ts":"2026-04-29T01:23:45Z","phaseNum":2,"phase":"render-uninstall","durationSec":0}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":3,"phase":"helmfile-destroy","totalPhases":3}
+{"event":"phase_completed","ts":"2026-04-29T01:23:45Z","phaseNum":3,"phase":"helmfile-destroy","durationSec":45}
+{"event":"final","ts":"2026-04-29T01:23:45Z","success":true,"clusterId":"test","durationSec":45,"droppedProgressEvents":0}

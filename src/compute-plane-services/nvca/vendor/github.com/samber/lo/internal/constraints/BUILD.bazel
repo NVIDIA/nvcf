@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "constraints",
+    srcs = [
+        "constraints.go",
+        "ordered_go118.go",
+        "ordered_go121.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/samber/lo/internal/constraints",
+    importpath = "github.com/samber/lo/internal/constraints",
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/samber/lo:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":constraints",
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/samber/lo:__subpackages__"],
+)

@@ -1,0 +1,452 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.agent.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvsnap-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "nvsnap.agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nvsnap.agent.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.nodeAffinity }}
+      affinity:
+        nodeAffinity:
+          {{- toYaml . | nindent 10 }}
+      {{- end }}
+      tolerations:
+        {{- toYaml .Values.agent.tolerations | nindent 8 }}
+      hostPID: {{ .Values.agent.hostPID }}
+      hostNetwork: {{ .Values.agent.hostNetwork }}
+      # ClusterFirstWithHostNet is only correct under hostNetwork; with pod
+      # networking it is wrong (it points resolution at the node's resolv.conf).
+      dnsPolicy: {{ if .Values.agent.hostNetwork }}ClusterFirstWithHostNet{{ else }}ClusterFirst{{ end }}
+      serviceAccountName: nvsnap-agent
+      {{- include "nvsnap.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        # nvsnap#147 / nvsnap#184: stage /criu-bundle onto the host's
+        # bundle root (default /var/lib/nvsnap/bundle) so function pods
+        # can mount /nvsnap + /nvsnap-lib via hostPath without needing to
+        # pull nvsnap-agent themselves. The webhook injects those
+        # hostPath volumes — no init container required on the
+        # function-pod side. Atomic via directory rename in the script
+        # (see scripts/restore-bundle-init.sh).
+        - name: nvsnap-bundle-stage
+          image: {{ include "nvsnap.agent.image" . }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          command:
+            - /criu-bundle/restore-bundle-init.sh
+          env:
+            - name: NVSNAP_BUNDLE_TOOLS_DST
+              value: {{ printf "%s/nvsnap" (.Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle") | quote }}
+          volumeMounts:
+            - name: host-bundle
+              # Mount the parent of {tools,lib} so the script can rename
+              # siblings under it atomically.
+              mountPath: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle" | quote }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+      containers:
+        - name: agent
+          image: {{ include "nvsnap.agent.image" . }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          args:
+            {{- if .Values.agent.auth.enabled }}
+            # permissive counts and logs unauthenticated callers but still
+            # serves them; required returns 401. Roll out on permissive until
+            # nvsnap_agent_auth_total{result="missing"} is zero.
+            - --auth-mode={{ .Values.agent.auth.mode }}
+            {{- end }}
+            {{- if not .Values.agent.hostNetwork }}
+            # Pod networking: the init container reaches its node-local agent
+            # through the internalTrafficPolicy:Local Service instead of the
+            # node IP, so no hostPort is needed (GH #490).
+            - --webhook-agent-base-url=http://nvsnap-agent-local.{{ .Release.Namespace }}.svc.cluster.local:8081
+            {{- end }}
+            - --cuda-checkpoint-path=/criu-bundle/cuda-checkpoint
+            - --criu-path=/criu-bundle/criu
+            # Translate in-container --checkpoint-dir to the host path
+            # for the capture-write writer Job. MUST match the hostPath
+            # mount below.
+            - --checkpoint-host-dir={{ .Values.agent.hostPaths.checkpoints }}
+            - --rootfs-capture
+            - --rootfs-cache-dir={{ .Values.agent.hostPaths.nvsnapCache }}
+            {{- if .Values.agent.podCacheDir }}
+            # cachedir (ember) mode: capture ONLY this in-pod dir as the
+            # rox root and RO-mount it back at restore (no overlayfs). The
+            # same value drives the agent capture AND the in-agent webhook
+            # (env+emptyDir inject on capture, RO mount on restore).
+            - --pod-cache-dir={{ .Values.agent.podCacheDir }}
+            # cachedir env template (mounted ConfigMap): edit
+            # nvsnap-cachedir-env to add/remove cache env vars without an
+            # agent rebuild. Capture-side only; restore replays the env
+            # stamped in the manifest.
+            - --cachedir-env-file=/etc/nvsnap/cachedir-env/env
+            {{- end }}
+            - --rootfs-cm-namespace={{ .Release.Namespace }}
+            # nvsnap#194: OverlayFS scratch root. MUST match the
+            # nvsnap-overlays volumeMount path below and the hostPath
+            # path further down — the webhook patches kubelet pod
+            # specs with paths built off this root, and kubelet runs
+            # in host namespace.
+            - --overlay-root={{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
+            {{- if .Values.webhook.enabled }}
+            # In-agent admission webhook. The Service in webhook.yaml
+            # load-balances admission requests across agent pods.
+            - --webhook
+            - --webhook-listen=:8443
+            - --webhook-cert=/etc/nvsnap/webhook/tls.crt
+            - --webhook-key=/etc/nvsnap/webhook/tls.key
+            {{- if and .Values.agent.l2.waitImage .Values.agent.l2.waitImage.repository .Values.agent.l2.waitImage.tag }}
+            # nvsnap#147: nvsnap-l2-wait init container for L2 restore.
+            # Webhook prepends this onto pods annotated with
+            # nvsnap.io/restore-from; it polls nvsnap-server until the
+            # L2 PVC promote is ready, then exits. Empty value
+            # disables the inject (back-compat for clusters without
+            # the image pushed yet).
+            - --webhook-l2-wait-image={{ include "nvsnap.l2wait.image" . }}
+            {{- end }}
+            {{- if .Values.agent.l2.hostBundleRoot }}
+            # nvsnap#147 / nvsnap#184: override the default
+            # on-host directory the agent stages the restore bundle
+            # into. Webhook injects hostPath mounts pointing at
+            # {root}/nvsnap + {root}/nvsnap-lib on function pods.
+            # Default ("/var/lib/nvsnap/bundle") matches the
+            # nvsnap-bundle-stage initContainer destination below.
+            - --webhook-host-bundle-root={{ .Values.agent.l2.hostBundleRoot }}
+            {{- end }}
+            {{- if eq (.Values.webhook.restorePrepStrategy | default "inline") "init-container" }}
+            # nvsnap#202: move OverlayFS mount work out of admission.
+            # The webhook emits a nvsnap-mount-prep init container on
+            # the restored pod that polls the agent's /v1/restore/prep
+            # API until ready. Image defaults to the agent image
+            # (which already contains /nvsnap-mount-prep).
+            - --webhook-restore-prep-strategy=init-container
+            - --webhook-mount-prep-init-image={{ .Values.webhook.mountPrepInitImage | default (include "nvsnap.agent.image" .) }}
+            - --webhook-agent-host-port={{ .Values.webhook.agentHostPort | default 8081 }}
+            {{- end }}
+            # BYOC auto-inject: when a pod carries nvsnap.io/auto-inject: "true"
+            # the webhook stamps in the sitecustomize plumbing using these
+            # images. All four must be set; the agent image MUST match
+            # this DaemonSet's image so libnvsnap_intercept.so build-IDs
+            # line up at restore time.
+            - {{ include "nvsnap.builder.image" (dict "ctx" . "name" "uvloop-builder") }}
+            - {{ include "nvsnap.builder.image" (dict "ctx" . "name" "libuv-builder") }}
+            - {{ include "nvsnap.builder.image" (dict "ctx" . "name" "libzmq-builder") }}
+            - {{ include "nvsnap.agent.image" . }}
+            {{- end }}
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # HOST_IP is what other agents reach this one at for peer-
+            # fanout. The DaemonSet uses hostNetwork + hostPort 8081,
+            # so this is the K8s node's address.
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # POD_IP is what peers dial (--advertise-ip). Under hostNetwork
+            # kubelet reports status.podIP as the node IP, so this is correct
+            # in both network modes and needs no conditional (GH #490).
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- if .Values.agent.auth.enabled }}
+            # Shared bearer token for the agent API (GH #486). Env rather than
+            # a flag: flag values are visible in the pod spec and in `ps`.
+            # The agent uses it both to verify inbound requests and to sign
+            # its own peer calls.
+            - name: NVSNAP_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nvsnap-agent-token
+                  key: token
+            {{- end }}
+            {{- if .Values.server.enabled }}
+            - name: NVSNAP_CATALOG_URL
+              value: "http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.port }}"
+            {{- end }}
+            {{- if .Values.blobstore.enabled }}
+            - name: NVSNAP_BLOB_STORE_URL
+              value: "http://nvsnap-blobstore.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.blobstore.service.port }}"
+            {{- end }}
+            {{- if .Values.jaeger.enabled }}
+            # OTLP/gRPC. The bundled Jaeger all-in-one Pod listens on
+            # 4317 for protobuf-encoded spans. nvsnap-agent reads this
+            # env var via internal/tracing.Init — unset means no-op.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "nvsnap-jaeger-collector.{{ .Release.Namespace }}.svc.cluster.local:4317"
+            {{- end }}
+            {{- if .Values.agent.l2.storageClass }}
+            # nvsnap#63: L2 per-capture PVC backend. Agent provisions
+            # a rwx-<hash> RWX PVC + writer Job + VolumeSnapshot +
+            # rox-<hash> reader PVC after every successful CRIU dump.
+            # Empty storageClass (the default) disables L2 — agents
+            # only do L1 hostpath + L3/L4 fallback.
+            - name: NVSNAP_L2_STORAGE_CLASS
+              value: {{ .Values.agent.l2.storageClass | quote }}
+            - name: NVSNAP_L2_SNAPSHOT_CLASS
+              value: {{ .Values.agent.l2.snapshotClass | quote }}
+            - name: NVSNAP_L2_NAMESPACE
+              value: {{ .Values.agent.l2.namespace | default "nvsnap-system" | quote }}
+            - name: NVSNAP_L2_WRITER_IMAGE
+              value: {{ .Values.agent.l2.writerImage | default (include "nvsnap.agent.image" .) | quote }}
+            {{- end }}
+            {{- if and .Values.agent.replication.objectStore.provider .Values.agent.replication.objectStore.homeBucket }}
+            # Cross-cluster replication (docs/design/cross-cluster-replication.md).
+            # On capture commit the tree+manifest are pushed to homeBucket;
+            # POST /v1/replicate/{hash} probes home then peerBuckets and
+            # replays the commit locally. For the gcs provider, auth is via
+            # Workload Identity (the nvsnap-agent ServiceAccount is annotated
+            # with the GCP SA).
+            - name: NVSNAP_REPLICATION_PROVIDER
+              value: {{ .Values.agent.replication.objectStore.provider | quote }}
+            - name: NVSNAP_REPLICATION_HOME_BUCKET
+              value: {{ .Values.agent.replication.objectStore.homeBucket | quote }}
+            {{- with .Values.agent.replication.objectStore.peerBuckets }}
+            - name: NVSNAP_REPLICATION_PEER_BUCKETS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.agent.replication.pollInterval }}
+            - name: NVSNAP_REPLICATION_POLL_INTERVAL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            - name: PATH
+              value: "/criu-bundle:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            {{- with .Values.agent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - containerPort: 8081
+              {{- if .Values.agent.hostNetwork }}
+              # Binds the API to every node's IP. Only declared under
+              # hostNetwork; with pod networking peers dial the pod IP and
+              # same-node callers use the internalTrafficPolicy:Local
+              # Service, so no node-wide listener is needed (GH #490).
+              hostPort: 8081
+              {{- end }}
+              name: http-api
+            {{- if .Values.webhook.enabled }}
+            - containerPort: 8443
+              name: webhook
+            {{- end }}
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /var/lib/nvsnap/checkpoints
+            {{- if .Values.agent.podCacheDir }}
+            # cachedir env template, read by the webhook on capture inject.
+            - name: cachedir-env
+              mountPath: /etc/nvsnap/cachedir-env
+              readOnly: true
+            {{- end }}
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: host-nvidia-run
+              mountPath: /host/run/nvidia
+              readOnly: true
+            - name: host-usr
+              mountPath: /host/usr
+              readOnly: true
+            # Universal host-root view. Lets runtime libcuda discovery
+            # reach any driver-installer path on any cluster flavor.
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+              mountPropagation: HostToContainer
+            - name: containerd-storage
+              mountPath: {{ .Values.agent.hostPaths.containerdStorage }}
+              mountPropagation: HostToContainer
+            - name: nvsnap-cache
+              mountPath: {{ .Values.agent.hostPaths.nvsnapCache }}
+            - name: nvsnap-staging
+              mountPath: {{ .Values.agent.hostPaths.nvsnapStaging }}
+            # nvsnap#194: OverlayFS scratch root. MUST be a hostPath on
+            # the node's real filesystem (ext/xfs), NOT the agent
+            # container's writable overlayfs layer — overlay-on-overlay
+            # for the upper layer returns EINVAL from mount(2).
+            #
+            # MUST mount at the same path the agent flag --overlay-root
+            # uses, which is also the same path the hostPath below
+            # exposes on the node. The webhook patches kubelet pod
+            # specs with paths off this root, and kubelet runs in host
+            # namespace — host path and container path must match
+            # exactly or kubelet's hostPath type check fails.
+            - name: nvsnap-overlays
+              mountPath: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
+              mountPropagation: Bidirectional
+            {{- if .Values.webhook.enabled }}
+            - name: webhook-tls
+              mountPath: /etc/nvsnap/webhook
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+      volumes:
+        - name: checkpoints
+          hostPath:
+            path: {{ .Values.agent.hostPaths.checkpoints }}
+            type: DirectoryOrCreate
+        {{- if .Values.agent.podCacheDir }}
+        - name: cachedir-env
+          configMap:
+            name: nvsnap-cachedir-env
+            optional: true
+        {{- end }}
+        - name: containerd-sock
+          hostPath:
+            path: {{ .Values.agent.hostPaths.containerdSock }}
+            type: Socket
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: host-nvidia-run
+          hostPath:
+            path: {{ .Values.agent.hostPaths.nvidiaRun }}
+            type: DirectoryOrCreate
+        - name: host-usr
+          hostPath:
+            path: {{ .Values.agent.hostPaths.hostUsr }}
+            type: Directory
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: containerd-storage
+          hostPath:
+            path: {{ .Values.agent.hostPaths.containerdStorage }}
+            type: Directory
+        - name: nvsnap-cache
+          hostPath:
+            path: {{ .Values.agent.hostPaths.nvsnapCache }}
+            type: DirectoryOrCreate
+        - name: nvsnap-staging
+          hostPath:
+            path: {{ .Values.agent.hostPaths.nvsnapStaging }}
+            type: DirectoryOrCreate
+        # nvsnap#194: see mountPath comment above. Default-overridable
+        # so the path can be relocated to the local NVMe on clusters
+        # where the boot disk is small (GKE A3-Mega has 194GB boot
+        # vs 5.5TB local SSD).
+        - name: nvsnap-overlays
+          hostPath:
+            path: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
+            type: DirectoryOrCreate
+        # nvsnap#184: bundle-staging hostPath. The nvsnap-bundle-stage
+        # initContainer writes /nvsnap (tools) + /nvsnap-lib (intercept
+        # payload) under this dir. Function pods mount {root}/nvsnap +
+        # {root}/nvsnap-lib read-only — see internal/webhook/
+        # restore_entrypoint.go for the inject patches.
+        - name: host-bundle
+          hostPath:
+            path: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle" | quote }}
+            type: DirectoryOrCreate
+        {{- if .Values.webhook.enabled }}
+        - name: webhook-tls
+          secret:
+            secretName: nvsnap-webhook-tls
+        {{- end }}
+---
+# Headless Service for direct pod-IP access by tools that need to talk
+# to a specific agent. The Service in webhook.yaml is the cluster-load-
+# balanced one used by the apiserver.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "nvsnap.agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http-api
+  clusterIP: None
+{{- end }}
+
+{{- if not .Values.agent.hostNetwork }}
+---
+# Node-local Service: the pod-network replacement for hostPort (GH #490).
+#
+# Callers that must reach the agent on THEIR OWN node -- the nvsnap-mount-prep
+# init container is the one that matters -- used to do it via
+# http://$(status.hostIP):8081, which requires the API to be bound to every
+# node's IP. internalTrafficPolicy:Local is the Kubernetes-native way to say
+# the same thing: this ClusterIP only ever routes to the endpoint on the
+# calling node, and has no node-IP listener at all.
+#
+# The headless nvsnap-agent Service above stays for tools that want to address
+# a specific agent; this one is for "whichever agent is on my node".
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-agent-local
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "nvsnap.agent.selectorLabels" . | nindent 4 }}
+  internalTrafficPolicy: Local
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http-api
+{{- end }}

@@ -1,0 +1,14 @@
+{
+  "type": "message",
+  "id": "msg_789",
+  "status": "in_progress",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "output_text",
+      "text": "Hello, world!",
+      "annotations": [],
+      "logprobs": []
+    }
+  ]
+}

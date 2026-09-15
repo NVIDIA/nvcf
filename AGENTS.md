@@ -1,0 +1,499 @@
+# AGENTS.md - Guide for AI Coding Agents
+
+Quick reference for NVCF (NVIDIA Cloud Functions) in this repository.
+
+## Repo Layout
+
+This repo is an umbrella layout: upstream services appear as ordinary
+directories arranged under `src/`, `deploy/`, `infra/`, and `migrations/`
+according to `imports.yaml`. Goal: over time, land and maintain code here
+natively while upstream-owned sources are still tracked by commit pin. Tooling
+lives under `tools/` and `tests/`.
+
+Use `python3`, not `python`, when Python is needed. Use the nearest nested `AGENTS.md` for subtree-specific guidance.
+
+Useful pointers:
+
+- `BAZEL.md` for the contributor-facing Bazel build path
+- `docs/AGENTS.md` for in-repo user and developer documentation
+- `tools/AGENTS.md` for repo tooling
+- `imports.yaml` for subtree ownership and commit pins
+- `.cursor/skills/documentation-style/SKILL.md` for docs style
+- `.cursor/skills/` for root dev-skill symlink fanout
+- `ai-tooling/user/skills/` and `ai-tooling/dev/skills/` for public skills
+
+If a referenced skill is outdated, update it before finishing.
+
+## Cross-repo and stack routing
+
+Documentation is monorepo-native. User docs, version catalogs, and Fern
+navigation are owned under `docs/` and `fern/` in this repository. Do not route
+documentation changes through an external documentation repository or an
+external workspace index. Start with `docs/AGENTS.md` and the nearest nested
+guidance.
+
+Use `imports.yaml` to decide whether a subtree is monorepo-native or still
+owned by an upstream repo. Native subprojects are edited here. Upstream-owned
+subtrees usually need the change in the upstream repo and a later commit-pin
+update.
+
+For self-managed stack ownership, deployment order, chart/image-source mapping,
+or "which subtree owns this" questions, use:
+
+- `.cursor/skills/nvcf-explore-stack/SKILL.md` for the in-repo Helmfile,
+  dependency, chart, hook, and image-source map
+
+Do not copy workspace routing boilerplate into subtree `AGENTS.md` files. Local
+guidance should only record subtree-specific ownership exceptions, adjacent
+subtrees that commonly need follow-up, and commands that must be run from that
+subtree.
+
+## OSS Snapshot Hygiene
+
+Treat every file matched by the root or nested `.oss-allowlist` files as public
+GitHub content. Do not add private tracker IDs, private bug IDs, private
+merge-request links or ref names, internal hostnames or URLs, private service
+names, registry endpoints, vault endpoints, or debugging context that external
+readers cannot access.
+
+Keep private context in the internal Merge Request/Pull Request description
+outside the public commit section or in a non-allowlisted runbook. If a change
+requires public wording, generalize it to the user-visible behavior and remove
+the private evidence trail from the allowlisted file.
+
+## Local QA and Testing Environment Safety
+
+For new local QA and testing, including one-click or self-hosted install
+validation, treat stale local state as a test hazard. Start from a fresh
+worktree at the target ref, inventory existing `k3d`, `kubectl`, Helm, and
+local artifact state, then ask the user whether cleanup or a net-new isolated
+environment is appropriate. Never delete clusters, Helm releases, worktrees,
+secrets, or artifact directories without explicit user confirmation.
+
+If creating a net-new environment, use unique cluster names, ports, Helmfile
+environments, secrets files, CLI configs, and artifact directories.
+
+## GitLab CI Manual Actions
+
+Treat manual GitLab CI actions as remote write operations. Before triggering a
+manual job, retrying or restarting a job or pipeline, canceling CI, or using a
+push/API side effect to retrigger CI, ask the user for explicit approval in the
+current thread. Do this even when the user asks an agent to fix CI, restart a
+pipeline or job, get a release unstuck, or investigate a failed pipeline.
+
+The approval request must name the exact project, ref, pipeline or job name and
+ID when available, and the expected side effect. Do not treat a broad request
+such as "fix CI", "restart the pipeline", or "get this released" as permission
+to press a manual CI button or retrigger CI.
+
+## Writing AGENTS.md Files
+
+Every subtree that an agent may work in should have its own `AGENTS.md` with
+build commands, test commands, code style, and any subtree-specific conventions.
+Keep each file under 400 lines. Split long examples or workflow detail into
+separate docs or skills.
+
+Apply `documentation-style` whenever you create or edit `AGENTS.md` or
+`CLAUDE.md`. Keep the guidance short, public-safe, and command-focused.
+
+`AGENTS.md` is the source of truth for agent guidance. Cursor and Codex read it
+directly.
+
+Claude Code reads `CLAUDE.md`. Every directory with an `AGENTS.md` also has a
+sibling `CLAUDE.md` containing only `@AGENTS.md`. That import line tells Claude
+Code to load the adjacent `AGENTS.md`, so all three tools use the same content.
+
+When creating a new `AGENTS.md`, create the companion `CLAUDE.md` in the same
+commit: `printf '@AGENTS.md\n' > CLAUDE.md`. Do not use a symlink, and never put
+unique content in `CLAUDE.md`.
+
+## Skills
+
+Skills are reusable, on-demand agent instructions for specific workflows. They
+follow the [Agent Skills specification](https://agentskills.io/specification)
+and are compatible with the [Vercel Skills CLI](https://github.com/vercel-labs/skills).
+
+Skills are invoked when relevant, not auto-applied. Auto-applied guidance
+belongs in rules, not skills.
+
+Keep durable skills focused on current behavior, stable prerequisites, and
+reusable workflows. Do not put in-progress Pull Request tables, merge-order
+checklists, branch-specific references, or temporary cross-repo coordination
+status in skills. Put that information in Pull Request descriptions, comments
+on the ticket, or temporary runbooks instead.
+
+### Skill structure
+
+Each skill is a directory named to match its `name` frontmatter field, containing at minimum a `SKILL.md`. Names must be lowercase with hyphens only, no leading/trailing/consecutive hyphens.
+
+```
+skill-name/
+    SKILL.md              # Required (under 500 lines)
+    README.md             # Optional: overview and usage
+    examples.md           # Optional: detailed examples
+    references/           # Optional: reference docs
+    scripts/              # Optional: helper scripts
+    assets/               # Optional: images, diagrams
+```
+
+### SKILL.md frontmatter
+
+```yaml
+---
+name: skill-name
+description: >-
+  What the skill does and when to use it.
+  Include trigger keywords for discoverability.
+version: "1.0.0"
+tags:
+  - nvcf
+  - relevant-tag
+tools:
+  - Shell
+  - Read
+---
+```
+
+The `description` must say both what the skill does (actions it enables) and when to use it (trigger phrases, keywords). This is how agents decide whether to invoke the skill.
+
+For public skills under `ai-tooling/user/skills/` or `ai-tooling/dev/skills/`,
+follow `ai-tooling/AGENTS.md`. That file is the full public skill authoring contract
+and includes the required public metadata fields.
+
+### Where skills live
+
+Skills are split by visibility and audience:
+
+- `ai-tooling/user/skills/`: public user-facing NVCF skills.
+- `ai-tooling/dev/skills/`: public developer workflow skills.
+- Private skill source trees use the same `user/skills/` and `dev/skills/`
+  split outside this public snapshot.
+- `.cursor/skills/`: root dev-skill fanout only. Each entry is a symlink to a
+  public dev skill source directory in this repository.
+
+Cross-tool symlinks make root dev skills available to all agents. The root
+fanout directories (`.cursor/skills/`, `.codex/skills/`, `.claude/skills/`)
+must contain symlinks only, never source skill directories or regular skill
+files.
+
+The project hook `.cursor/hooks/validate-skill-fanout.py` audits this before an
+agent finishes. If it reports a fanout error, fix the symlinks or source
+placement before responding.
+
+When adding a skill:
+
+1. Decide visibility (public or private) and audience (`user/skills` or `dev/skills`).
+2. Create the `SKILL.md` with valid frontmatter.
+3. For root-wide dev skills, create matching `.cursor/skills/<name>`, `.codex/skills/<name>`, and `.claude/skills/<name>` symlinks to the same source directory.
+4. Update the relevant public or private skills table.
+
+### Generated artifacts
+
+When editing source files under `ai-tooling/user/skills/nvcf-self-managed-cli/**` or
+`ai-tooling/user/skills/nvcf-self-managed-installation/**`, regenerate the embedded CLI
+data and commit the result in the same Pull Request:
+
+```sh
+cd src/clis/nvcf-cli
+go generate ./internal/agentskill/...
+git add internal/agentskill/skilldata_generated.go
+```
+
+The CI job `check-agent-skill-generated` hard-fails if `src/clis/nvcf-cli/internal/agentskill/skilldata_generated.go`
+is stale. Do not edit this file by hand.
+
+### Where hooks live
+
+Hooks follow the same source-and-fanout pattern as root dev skills.
+Implementation scripts live in `ai-tooling/dev/hooks/`; `.cursor/hooks/`,
+`.codex/hooks/`, and `.claude/hooks/` are symlink fanouts only. Tool-specific
+hook config files outside those fanout directories may be regular files.
+Internal-only stop hooks and private snapshot hygiene checks live outside this
+public snapshot; still follow OSS Snapshot Hygiene manually before finishing.
+
+### Public skills
+
+| Skill | Location | Purpose |
+|-------|----------|---------|
+| `documentation-style` | `ai-tooling/dev/skills/` | Public docs, AGENTS, and skill-writing style |
+| `nvcf-explore-stack` | `ai-tooling/dev/skills/` | Navigate the self-hosted stack topology and dependency graph |
+| `nvca-chart-release` | `ai-tooling/dev/skills/` | Release NVCA Operator chart changes from monorepo source to the vendored Helm chart |
+| `nvca-self-managed-install` | `ai-tooling/dev/skills/` | Install or validate the NVCA Operator chart against a self-managed control plane |
+| `nvca-values-customization` | `ai-tooling/dev/skills/` | Customize NVCA Operator Helm chart values in the monorepo |
+| `nvcf-self-managed-cli` | `ai-tooling/user/skills/` | Install, operate, and manage self-managed NVCF through `nvcf-cli` |
+| `nvcf-self-managed-installation` | `ai-tooling/user/skills/` | Install and deploy the self-managed NVCF stack |
+| `nvcf-self-managed-prerequisite` | `ai-tooling/user/skills/` | Install cluster-level prerequisites such as KAI Scheduler and SMB CSI driver |
+
+## GitLab CI for native subprojects
+
+The umbrella parent pipeline (`.gitlab-ci.yml`) is not where native service
+build, test, helm-lint, or release validation jobs go. `.gitlab-ci.yml` and
+`tools/ci/generated-release-jobs.yml` are internal GitLab CI config not
+present in this public snapshot.
+
+| Job kind | Where to declare it |
+|---|---|
+| `<id>-bazel`, Go checks, custom `checks:` | `tools/ci/subproject-validations.yaml` (runs in `subproject-validations` child pipeline) |
+| Image push, semantic-release, helm publish | `release:` in same YAML, output in `tools/ci/generated-release-jobs.yml` |
+| License scan, bazel-smoke, docs, OSS snapshot | root `.gitlab-ci.yml` only |
+
+Before adding or moving any CI job for a path under `src/`, `deploy/helm/`, or
+`migrations/`, read this section in full.
+Do not add per-service jobs to root `.gitlab-ci.yml` and do not recreate
+`src/**/.gitlab-ci.yml`, `deploy/helm/**/.gitlab-ci.yml`, or
+`migrations/**/.gitlab-ci.yml` for native subprojects. Helm CI-only values
+belong in `tools/ci/helm-validate-values/`, not under chart `ci/` dirs.
+
+## Commit Messages
+
+Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `NVIDIA/nvcf` issue reference.
+
+Format:
+
+```
+<type>(<scope>): <short description>
+
+[optional body]
+```
+
+Types with customer impact (appear in release notes): `feat`, `fix`, `perf` (scope required).
+Foundational types (not in release notes): `docs`, `build`, `test`, `refactor`, `ci`, `chore`, `style`, `revert`.
+
+When a commit adds or updates a third-party dependency, call out the dependency name and version in the body so reviewers can assess license and security impact.
+
+## Pull Requests
+
+Use Conventional Commit format for Pull Request titles, as described in the
+Commit Messages section. Release automation depends on this format. Examples:
+`feat:`, `fix:`, `chore:`, `docs:`.
+
+For GitHub PRs, agents must create or link a public `NVIDIA/nvcf` issue in
+`## Issues` using `Closes #123`, `Fixes #123`, `Resolves NVIDIA/nvcf#123`, or
+`Relates to #123`. If context is private, create a generic public issue. Do not
+use `NO-REF`, Jira keys, private tracker or bug IDs, private URLs, title-only
+refs, other-repo issues, or invented issue numbers for agent-authored PRs.
+
+Use a structured Pull Request description. Start from the root Pull Request
+template. Fall back to this shape only when that template is unavailable. Do
+not include a test plan checklist unless explicitly requested.
+
+Every Pull Request description must explain why the change is needed, not only
+what changed. Include enough context that a reviewer can understand the
+motivation without doing detective work. Always include:
+
+- the problem, requirement, review comment, or CI blocker driving the change
+- what changed and how the changed pieces connect
+- links to upstream Pull Requests, tickets, bugs, or related reviews when
+  relevant
+- tests run, skipped tests, and whether QA is needed
+- dependency changes, license review status, and NOTICE impact
+
+```
+## Why
+<context and motivation for the change>
+
+## What changed
+<high-level summary of changes, not a commit log>
+
+## Customer Release Notes
+<short customer-facing summary for feat/fix/perf, or "Not customer visible">
+
+## Plan Summary
+<resource summary for infrastructure, chart, deploy, or Terraform-like changes; otherwise "Not applicable">
+
+## Usage
+<relevant commands or operator notes, or "Not applicable">
+
+## Testing
+<what you ran and whether QA is needed>
+
+## Notes
+<caveats, follow-up work, or reviewer context>
+
+## References
+<bug, issue, or ticket links at the bottom, or "None">
+
+## Related Pull Requests
+<links or "None">
+
+## Dependencies
+<new or updated third-party packages, license review result, NOTICE update status, or "None">
+```
+
+### Merge preparation
+
+Before merging:
+
+- Set the Pull Request title to the intended squash commit subject.
+- Refresh the description. Remove outdated plans, status, and test results.
+- Squash merge with a concise message that omits intermediate work logs.
+
+## PR scope and batching
+
+Group changes that share a root cause into one Pull Request. Do not open one PR
+per file when a single fix addresses the same underlying problem across multiple
+files or sections. For example, broken-link corrections across several doc pages,
+a style fix applied to multiple files, or a rename propagated through a subtree
+are each one logical change and belong in one PR.
+
+A high volume of fine-grained PRs degrades reviewer throughput and obscures
+signal in the project history. When in doubt, ask: "would a reviewer naturally
+review these together?" If yes, combine them.
+
+## Cross-subtree impact
+
+NVCF clients in this repo (notably `src/clis/nvcf-cli`) are hand-written against
+control-plane and invocation-plane APIs. When changing public API surfaces
+(request/response shapes, auth flow, new endpoints, removed fields), evaluate
+whether `src/clis/nvcf-cli` needs a matching change, and list affected clients
+in the Pull Request "Related Pull Requests" section. If the CLI needs an
+update, file a follow-up issue.
+
+## Tests
+
+Code changes must include tests. If a change does not include tests, explain why
+in the Pull Request description (for example: pure documentation, CI-only
+change, or refactor with full existing coverage).
+
+Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
+
+### Version-pin assertions
+
+Do not assert an exact image tag or chart version unless that literal is the
+behavior under test. Exact literals break on every unrelated pin bump, and
+repeated updates make the test diff easy to overlook.
+If the surrounding wiring (override precedence, cross-chart consistency) is
+worth testing, read the expected value from its source of truth at test
+time. Use `Chart.yaml` `appVersion`, the `.gotmpl`'s `default "..."`, or the
+release's `version:` instead of copying it into the test (see
+`deploy/stacks/self-managed/tests/observability-autoscaler.sh` and
+`llm-pki-release.sh`). Otherwise, delete the assertion.
+
+### Verification commands
+
+Run these from the repo root before opening a PR. They are the general
+default; see `BAZEL.md` for the full command and flag reference, and use the
+nearest nested `AGENTS.md` for subtree-scoped commands.
+
+```bash
+bazel test //src/clis/nvcf-cli/... --test_output=streamed    # scoped: the package(s) you changed, streamed output
+bazel test //...                                              # full suite: broad or cross-cutting changes
+git diff --check HEAD                                         # docs-only: whitespace errors, conflict markers
+fern check                                                     # docs-only: validate Fern nav, links, and config
+```
+
+### Java Bazel test target contract
+
+The `manual` tag placement in `rules/java/defs.bzl` is intentional.
+`nvcf_java_test` creates the native Java target used by IntelliJ and direct test
+runs. Its companion `nvcf_java_coverage_test` remains eligible for wildcard
+selection so each suite runs once and CI receives JUnit and JaCoCo artifacts.
+Do not reverse these tags without also updating `.github/workflows/bazel.yml`,
+Java artifact staging, and `BAZEL.md`.
+
+## Code Style
+
+Write self-documenting code. Add comments only when the logic is non-obvious. Match the existing package structure, naming, and error-handling conventions of each subtree instead of imposing a new framework.
+
+Follow the documentation style rules in `.codex/skills/documentation-style/SKILL.md`
+(same source as `.cursor/skills/documentation-style/SKILL.md` and
+`.claude/skills/documentation-style/SKILL.md`):
+
+- No markdown bold for emphasis.
+- No emojis.
+- No em-dash (U+2014).
+- Be succinct. Prefer short sentences and direct wording.
+- Use only standard ASCII in committed text.
+
+## Third-Party Dependencies
+
+Before adding a third-party dependency:
+
+1. Verify the license is compatible (check `.allowed-licenses.txt` at the root).
+2. Warn the user if the license is not in the allow list.
+3. Update `NOTICE` and any license attribution files required by the subtree.
+
+Do not add unmaintained libraries. Do not add a new library for small functionality that can be implemented safely in existing code. Mention the dependency name and version in the commit body.
+
+## Observability
+
+Priority order for contributions: logs, then tracing, then metrics. This is the minimum bar for any service change. If a change touches request handling, all three tiers apply.
+
+### Logs (required)
+
+Every service must produce structured logs. Use the logging library established in the subtree (`logrus` for Go, `zap` for invocation-plan services, `tracing` for Rust). Do not introduce a new logging library without a strong reason.
+
+Required context fields on every log line where available:
+
+- Request ID
+- Function ID
+- Cluster ID
+- Org/NCA ID (when auth context is present)
+
+Log level contract:
+
+- `error`: something failed and needs operator attention. Include the error message, the operation that failed, and enough context to start debugging without grepping other sources.
+- `warn`: degraded but recoverable. Rate-limited retries, fallback paths taken, near-quota conditions.
+- `info`: normal state transitions. Service startup/shutdown, config reloads, successful deployments, completed queue batches.
+- `debug`: internals useful during development. Request/response bodies, cache hits, detailed reconciliation steps. Must be off by default in production.
+
+Do not log secrets, tokens, credentials, or full request bodies containing user data. Redact or omit them.
+
+When logging errors, include the originating error with `%w` or equivalent wrapping so the full chain is visible. Do not log and return the same error (pick one).
+
+### Tracing (required for cross-service paths)
+
+Add OpenTelemetry spans for cross-service calls, queue processing, and any operation that crosses a network boundary. Use the `otelconfig` packages under `src/libraries/go/lib/pkg/otelconfig` when available.
+
+Span naming: use `service.operation` format (for example `nvca.reconcile`, `ratelimiter.check`, `grpc-proxy.forward`). Keep names stable across releases so dashboards and alerts do not break.
+
+Required span attributes:
+
+- `nvcf.function.id` when operating on a function
+- `nvcf.cluster.id` when operating on a cluster
+- `nvcf.org.id` when auth context is available
+- `error` attribute set to `true` on failure, with `otel.status_code` = `ERROR`
+
+When to create spans:
+
+- New span for each inbound request (HTTP handler, gRPC method, queue message).
+- New child span for each outbound call (HTTP client, gRPC client, database query, queue publish).
+- Do not create spans for pure in-memory computation unless it is a known bottleneck.
+
+Propagate trace context on all outbound HTTP and gRPC calls. Use `W3C Trace Context` headers.
+
+### Metrics (required for request-handling paths)
+
+Use the RED method as the baseline for every request-handling service:
+
+- Rate: request count by endpoint and status.
+- Errors: error count by endpoint and error category.
+- Duration: latency histogram by endpoint.
+
+Naming: `nvcf_<service>_<metric>_<unit>` (for example `nvcf_ratelimiter_requests_total`, `nvcf_nvca_reconcile_duration_seconds`). Use Prometheus naming conventions: snake_case, `_total` suffix for counters, `_seconds` for durations, `_bytes` for sizes.
+
+Cardinality: keep label sets bounded. Do not use unbounded values (user IDs, request IDs, timestamps) as label values. If a label can take more than ~50 distinct values, reconsider whether it belongs as a label or as a log/trace attribute instead.
+
+Pre-initialize counter metrics to zero so they appear on the first Prometheus scrape. See nvca `internal/metrics/` for the pattern. When adding new label values, update the initialization code and tests. Uninitialized counters cause `absent()` alerts to misfire and `rate()` calculations to produce gaps.
+
+Histogram buckets: use default Prometheus buckets unless the operation has a known latency profile. For sub-millisecond operations, add smaller buckets. For long-running operations (minutes), add larger ones.
+
+### Before merging
+
+When a change affects observability, verify:
+
+- New log lines include the required context fields.
+- New spans propagate context and set error attributes on failure.
+- New metrics follow the naming convention and are pre-initialized.
+- Existing dashboards and alerts are not broken by renamed or removed metrics/spans.
+- The Pull Request description calls out the observability impact if dashboards
+  or alerts may need updating.
+
+## Diagrams
+
+When a change modifies runtime behavior, data flow, or component interactions, ask whether architecture or sequence diagrams need updating. If the change modifies an existing documented flow, update that diagram instead of creating a conflicting copy. Prefer ASCII or Mermaid; avoid binary image formats when text is sufficient.
+
+## Issue Tracking
+
+Reference related issues in commits and Pull Request descriptions. When
+creating follow-up work, file a ticket rather than leaving a TODO in code.

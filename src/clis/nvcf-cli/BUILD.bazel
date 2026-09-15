@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# gazelle:prefix nvcf-cli
+# gazelle:exclude tests
+# gazelle:exclude test
+
+go_library(
+    name = "nvcf-cli_lib",
+    srcs = ["main.go"],
+    importpath = "nvcf-cli",
+    visibility = ["//visibility:private"],
+    # Build-time stamping. Replaces the legacy `make build` ldflags. Values
+    # are resolved by tools/workspace_status.sh when bazel is invoked with
+    # --stamp; without --stamp, the defaults declared in main.go (Version
+    # = "dev", etc.) are used instead.
+    x_defs = {
+        "main.Version": "{STABLE_VERSION}",
+        "main.GitCommit": "{STABLE_GIT_COMMIT}",
+        "main.GitBranch": "{STABLE_GIT_BRANCH}",
+        "main.BuildDate": "{BUILD_DATE}",
+        "main.BuildUser": "{STABLE_BUILD_USER}",
+        "main.GoVersion": "{STABLE_GO_VERSION}",
+        "nvcf-cli/cmd.defaultControlPlaneStackOCI": "{CONTROL_PLANE_STACK_OCI}",
+        "nvcf-cli/cmd.defaultComputePlaneStackOCI": "{COMPUTE_PLANE_STACK_OCI}",
+    },
+    deps = ["//src/clis/nvcf-cli/cmd"],
+)
+
+go_binary(
+    name = "nvcf-cli",
+    embed = [":nvcf-cli_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Cross-platform release binaries. Replaces the legacy `make build-all`
+# matrix (linux/darwin/windows x amd64/arm64) with hermetic Bazel builds.
+# Each go_cross_binary produces a single binary for one (os, arch) pair.
+[
+    go_cross_binary(
+        name = "nvcf-cli-{os}-{arch}".format(
+            arch = pair[1],
+            os = pair[0],
+        ),
+        platform = "//platforms:{os}_{arch_bazel}".format(
+            arch_bazel = pair[1] if pair[1] != "amd64" else "x86_64",
+            os = pair[0],
+        ),
+        target = ":nvcf-cli",
+        visibility = ["//visibility:public"],
+    )
+    for pair in [
+        ("linux", "amd64"),
+        ("linux", "arm64"),
+        ("darwin", "amd64"),
+        ("darwin", "arm64"),
+        ("windows", "amd64"),
+    ]
+]
+
+# Aggregate all release binaries; `bazel build //src/clis/nvcf-cli:dist`
+# produces every cross-compiled binary in one shot. Output paths show up
+# under bazel-bin/src/clis/nvcf-cli/.
+filegroup(
+    name = "dist",
+    srcs = [
+        ":nvcf-cli-darwin-amd64",
+        ":nvcf-cli-darwin-arm64",
+        ":nvcf-cli-linux-amd64",
+        ":nvcf-cli-linux-arm64",
+        ":nvcf-cli-windows-amd64",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# OCI image targets for nvcf-cli. Generates:
+#   //src/clis/nvcf-cli:image            host-arch image (for `bazel build`)
+#   //src/clis/nvcf-cli:image_index      multi-arch index (amd64 + arm64)
+#   //src/clis/nvcf-cli:image_load       loads host-arch image into local docker
+#
+# No `registry` is set, so go_oci_image does NOT emit a push target.
+# nvcf-cli is shipped as native binaries (via the `dist` aggregate
+# below), not as a container image, and the public BUILD.bazel should
+# not encode any private registry coordinates. If a private CLI image
+# push is ever needed, declare the push target under a sibling
+# nvidia-internal/BUILD.bazel so the registry value stays off the OSS
+# mirror.
+go_oci_image(
+    name = "image",
+    binary = ":nvcf-cli",
+    tags = ["nvcf-cli"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "framer",
+    srcs = ["framer.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/framer",
+    importpath = "k8s.io/apimachinery/pkg/util/framer",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":framer",
+    visibility = ["//visibility:public"],
+)

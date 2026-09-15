@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Guard the nested-module inventory during the Bazel consolidation.
+#
+# Every nested MODULE.bazel must be classified in tools/ci/nested-modules.txt.
+# The check fails in both directions:
+#
+#   unlisted module   A nested MODULE.bazel exists that the ledger does not
+#                     mention. Usually this means a new service arrived with its
+#                     own module, which is the thing consolidation is trying to
+#                     stop. The fix is normally to build from the root module,
+#                     not to add a ledger line.
+#
+#   stale entry       The ledger names a module that no longer exists. This is
+#                     what a completed migration looks like, and the entry has
+#                     to go, or the file drifts into describing a repository
+#                     that no longer exists.
+#
+# Why a ledger and not one allowlist: the plan separates vendored paths,
+# not-yet-migrated modules, and permanent exceptions, because only the last
+# carries an exception contract. Collapsing them would make every outstanding
+# migration look like an accepted exception.
+#
+# Usage: check-nested-modules [--root DIR] [--ledger FILE]
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ledger=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --root)   root="$2"; shift 2 ;;
+        --ledger) ledger="$2"; shift 2 ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+[ -n "${ledger}" ] || ledger="${root}/tools/ci/nested-modules.txt"
+
+if [ ! -f "${ledger}" ]; then
+    echo "ledger not found: ${ledger}" >&2
+    exit 2
+fi
+
+# Declared paths, by category.
+declared_all="$(mktemp)"; declared_ledger="$(mktemp)"
+declared_exception="$(mktemp)"; found="$(mktemp)"
+trap 'rm -f "${declared_all}" "${declared_ledger}" "${declared_exception}" "${found}" "${found}.raw"' EXIT
+
+lineno=0
+while read -r category path _rest; do
+    lineno=$((lineno + 1))
+    case "${category}" in
+        ''|\#*) continue ;;
+    esac
+    # A row naming a category but no path is a malformed ledger, not an empty
+    # one. Skipping it would let a typo silently shrink the guard's coverage.
+    if [ -z "${path}" ]; then
+        echo "${ledger}:${lineno}: category '${category}' with no path" >&2
+        exit 2
+    fi
+    case "${category}" in
+        vendored|scaffolding) ;;
+        ledger)    printf '%s\n' "${path}" >> "${declared_ledger}" ;;
+        exception) printf '%s\n' "${path}" >> "${declared_exception}" ;;
+        *)
+            echo "${ledger}:${lineno}: unknown category '${category}' for ${path}" >&2
+            exit 2
+            ;;
+    esac
+    printf '%s\n' "${path}" >> "${declared_all}"
+done < "${ledger}"
+
+# One path, one category. Without this a repeated `ledger svc/a` inflates the
+# backlog count, and the same path classified both `ledger` and `exception`
+# inflates both while still passing, which would misreport how much of the
+# migration is actually outstanding.
+dupes="$(sort "${declared_all}" | uniq -d)"
+if [ -n "${dupes}" ]; then
+    {
+        echo "error: ${ledger#"${root}"/} classifies the same path more than once:"
+        printf '  %s\n' ${dupes}
+    } >&2
+    exit 2
+fi
+
+sort -u -o "${declared_all}" "${declared_all}"
+
+# Actual nested modules. The root module is the destination, not a nested one.
+# Discovery failures must terminate: an unreadable tree that yields a partial
+# inventory would quietly narrow what the guard can see, so `.git` is pruned
+# explicitly rather than suppressing find's errors.
+if ! ( cd "${root}" && find . -name .git -prune -o \
+        -name MODULE.bazel ! -path './MODULE.bazel' -printf '%h\n' ) > "${found}.raw"; then
+    echo "error: failed to enumerate nested modules under ${root}" >&2
+    exit 2
+fi
+sed 's|^\./||' "${found}.raw" | sort -u > "${found}"
+
+fail=0
+
+unlisted="$(comm -23 "${found}" "${declared_all}")"
+if [ -n "${unlisted}" ]; then
+    fail=1
+    {
+        echo "error: nested MODULE.bazel not classified in ${ledger#"${root}"/}:"
+        printf '  %s\n' ${unlisted}
+        echo
+        echo "A new nested module works against the consolidation. Prefer building"
+        echo "from the root module. If it genuinely cannot, add it under the"
+        echo "category that describes it, and for 'exception' record the owner,"
+        echo "the rationale, and the residual risk."
+    } >&2
+fi
+
+stale="$(comm -13 "${found}" "${declared_all}")"
+if [ -n "${stale}" ]; then
+    fail=1
+    {
+        echo "error: ${ledger#"${root}"/} lists modules that no longer exist:"
+        printf '  %s\n' ${stale}
+        echo
+        echo "If these migrated, delete their lines. The ledger is the migration"
+        echo "backlog, so a stale entry overstates how much work is left."
+    } >&2
+fi
+
+[ "${fail}" -eq 0 ] || exit 1
+
+remaining=$(wc -l < "${declared_ledger}" 2>/dev/null || echo 0)
+exceptions=$(wc -l < "${declared_exception}" 2>/dev/null || echo 0)
+total=$(wc -l < "${found}")
+echo "nested modules: ${total} classified"
+echo "  awaiting migration: ${remaining}"
+echo "  permanent exceptions: ${exceptions}"

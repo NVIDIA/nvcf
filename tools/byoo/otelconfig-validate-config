@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+tool_root="${repo_root}/tools/byoo"
+examples_root="${repo_root}/src/libraries/go/lib/examples/otelconfig/byoo-otel-collector"
+templates_dir="${repo_root}/src/libraries/go/lib/pkg/otelconfig/backendconfig/templates"
+create_cmd="./testdata/otelconfig/create/main.go"
+
+export ESS_SECRETS_PATH="${examples_root}/secrets"
+cd "${tool_root}"
+mkdir -p _output
+
+if [ ! -x ./_output/bin/otelcol-contrib ]; then
+    echo "Error: ./_output/bin/otelcol-contrib is missing or not executable."
+    echo "       Download the upstream OpenTelemetry Collector contrib release"
+    echo "       and place it there; see tools/byoo/docs/platform-metrics.md and validator docs"
+    echo "       for the setup details."
+    exit 1
+fi
+
+validate_otel_config() {
+    local config_path="$1"
+
+    set +e
+    timeout_output=$(timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
+    exit_code=$?
+    set -e
+
+    if [[ $exit_code -eq 0 || $exit_code -eq 124 || $exit_code -eq 143 ]]; then
+        echo "Configuration check passed"
+    else
+        echo "Unknown error (exit code: $exit_code)"
+        echo "$timeout_output"
+        return 1
+    fi
+}
+
+run_matrix() {
+    local template_file="$1"
+    local backend="$2"
+    local workload="$3"
+
+    mkdir -p _output/test/
+    cp "${templates_dir}/${template_file}" "${templates_dir}/${template_file}.bk"
+    sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' "${templates_dir}/${template_file}"
+    touch _output/test/token
+
+    for input_file in testdata/otelconfig/*.json; do
+        if [ -f "$input_file" ]; then
+            echo "=== Test $input_file ==="
+            for compute in task function; do
+                echo "Generating configs for ${backend} ${workload} ${compute}..."
+                go run "${create_cmd}" "$input_file" _output "${backend}" "${workload}" "${compute}"
+                config_path="_output/byoo-otel-collector/config.${compute}_${backend}_${workload}.yaml"
+                echo "Validate configs ..."
+                ./_output/bin/otelcol-contrib validate --config="$config_path"
+                validate_otel_config "$config_path"
+                rm "$config_path"
+            done
+        fi
+    done
+
+    mv "${templates_dir}/${template_file}.bk" "${templates_dir}/${template_file}"
+    rm -rf _output/test _output/byoo-otel-collector
+}
+
+run_matrix config-vm-container.yaml.tmpl vm container
+run_matrix config-vm-helm.yaml.tmpl vm helm
+run_matrix config-k8s-container.yaml.tmpl k8s container
+run_matrix config-k8s-helm.yaml.tmpl k8s helm

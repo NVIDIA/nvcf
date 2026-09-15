@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@gazelle//:def.bzl", "gazelle")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# gazelle:prefix github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway
+# gazelle:proto disable_global
+# gazelle:go_naming_convention import_alias
+
+# Non-Go top-level dirs that Gazelle should skip entirely.
+# gazelle:exclude bin
+# gazelle:exclude kustomize
+
+gazelle(
+    name = "gazelle",
+)
+
+# Build/load/index/tar targets for the two binaries. Internal NGC
+# publish lanes (kaze, nv-ngc-devops, ncp-dev) are defined under
+# //nvidia-internal:* so the registry coordinates stay out of the
+# public OSS snapshot. Same pattern as nvcf-grpc-proxy, helm-reval,
+# rs-autoscaler.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = "//src/invocation-plane-services/llm-api-gateway/cmd/llm-api-gateway:llm-api-gateway",
+    entrypoint = ["/llm-api-gateway"],
+    visibility = ["//visibility:public"],
+)
+
+go_oci_image(
+    name = "rate_limit_sync_worker_image",
+    base = "@distroless_go",
+    binary = "//src/invocation-plane-services/llm-api-gateway/cmd/llm-api-gateway-rate-limit-sync-worker:llm-api-gateway-rate-limit-sync-worker",
+    entrypoint = ["/llm-api-gateway-rate-limit-sync-worker"],
+    visibility = ["//visibility:public"],
+)

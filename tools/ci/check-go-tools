@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build, vet, and test every Go module under tools/.
+#
+# Nothing did this before. The repo tooling modules carry _test.go files that no
+# workflow ran, so a pull request could break them and still go green. That is
+# how tools/docs-version-sync came to have three failing tests on main without
+# anyone noticing: they had not run in CI since they were written.
+#
+# Modules are discovered rather than listed, so a new tool is covered the moment
+# it has a go.mod. A list would need editing by exactly the person who is least
+# likely to think of it.
+#
+# Modules with no test files are still built and vetted. That is not the same as
+# being tested, and the summary says which is which, because "all modules
+# passed" reads as stronger than it is when half of them have no tests.
+set -uo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${repo_root}"
+
+build_out="$(mktemp -d)"
+trap 'rm -rf "${build_out}"' EXIT
+
+# Modules whose tests are known to fail on main and are not this check's to fix.
+# Each entry needs a tracking issue: the point of an exclusion is that someone
+# comes back for it, and an unexplained one just becomes permanent. Excluded
+# modules are still built and vetted.
+#
+#   docs-version-sync  three manifest tests expect bitnami-cassandra in the
+#                      EA-CVE section and it is no longer classified there.
+#                      The data or the classification moved and the tests did
+#                      not, which is exactly the drift this check exists to
+#                      prevent from recurring. See NVIDIA/nvcf#1223.
+skip_tests=(
+  "tools/docs-version-sync"
+)
+
+skipped() {
+  local m="$1" s
+  for s in "${skip_tests[@]}"; do [ "${m}" = "${s}" ] && return 0; done
+  return 1
+}
+
+modules=()
+while IFS= read -r f; do
+  modules+=("$(dirname "${f}")")
+done < <(find tools -name go.mod -not -path '*/vendor/*' | sort)
+
+if [ "${#modules[@]}" -eq 0 ]; then
+  echo "error: no Go modules found under tools/; has the layout changed?" >&2
+  exit 1
+fi
+
+failures=0
+tested=0
+built_only=0
+excluded=0
+declaration_only=0
+
+for m in "${modules[@]}"; do
+  # A module must at least be readable. `go mod edit -json` is what separates
+  # the two ways a module can have nothing to list: it succeeds on a valid
+  # go.mod with no source, and fails on a malformed one.
+  #
+  # `go list ./...` cannot make that distinction. It exits non-zero and prints
+  # nothing in BOTH cases, so testing its output or its status alone reports a
+  # module with a broken go.mod as "declaration only" and passes it. That is the
+  # exact failure this check exists to catch.
+  if ! out=$(go mod edit -C "${m}" -json 2>&1); then
+    echo "FAIL  ${m}: go.mod is not readable" >&2
+    printf '%s\n' "${out}" >&2
+    failures=$((failures + 1))
+    continue
+  fi
+
+  # tools/go-toolchain declares the Go version and contains no source at all, on
+  # purpose: rules_go's from_file requires a file named exactly go.mod.
+  if [ -z "$(find "${m}" -name '*.go' -not -path '*/vendor/*' -print -quit)" ]; then
+    echo "ok    ${m} (declaration only, no Go source)"
+    declaration_only=$((declaration_only + 1))
+    continue
+  fi
+
+  # Where the build output goes depends on whether the module has a main
+  # package, and getting it wrong breaks one case or the other.
+  #
+  # With a main package, plain `go build ./...` writes the executable into the
+  # working directory, which under -C is the module itself. That leaves binaries
+  # behind and, for tools/changelog-site, rewrites one that is committed, so the
+  # output goes to a scratch directory.
+  #
+  # With no main package, `go build -o <dir> ./...` is itself an error: "no main
+  # packages to build". A library-only module under tools/ is perfectly valid,
+  # so it gets a plain build, whose object output Go discards on its own.
+  if [ -n "$(go list -C "${m}" -f '{{if eq .Name "main"}}x{{end}}' ./... 2>/dev/null)" ]; then
+    out=$(go build -C "${m}" -o "${build_out}/" ./... 2>&1)
+  else
+    out=$(go build -C "${m}" ./... 2>&1)
+  fi
+  if [ $? -ne 0 ]; then
+    echo "FAIL  ${m}: build" >&2
+    printf '%s\n' "${out}" >&2
+    failures=$((failures + 1))
+    continue
+  fi
+  if ! out=$(go vet -C "${m}" ./... 2>&1); then
+    echo "FAIL  ${m}: vet" >&2
+    printf '%s\n' "${out}" >&2
+    failures=$((failures + 1))
+    continue
+  fi
+
+  if skipped "${m}"; then
+    echo "ok    ${m} (built and vetted; tests excluded, see the list in this script)"
+    excluded=$((excluded + 1))
+    continue
+  fi
+
+  # A module with no test files is a pass for build and vet, and nothing more.
+  # Saying so keeps the summary honest.
+  # find, not a glob: bash needs globstar for ** and it is off by default, so
+  # the nested case would silently look like "no tests". tools/byoo keeps its
+  # only test file one directory down.
+  if [ -z "$(find "${m}" -name '*_test.go' -not -path '*/vendor/*' -print -quit)" ]; then
+    echo "ok    ${m} (built and vetted; no tests)"
+    built_only=$((built_only + 1))
+    continue
+  fi
+
+  if ! out=$(go test -C "${m}" ./... 2>&1); then
+    echo "FAIL  ${m}: tests" >&2
+    printf '%s\n' "${out}" >&2
+    failures=$((failures + 1))
+    continue
+  fi
+  echo "ok    ${m} (built, vetted, tested)"
+  tested=$((tested + 1))
+done
+
+echo
+echo "${#modules[@]} modules: ${tested} tested, ${built_only} without tests, ${excluded} with tests excluded, ${declaration_only} declaration only, ${failures} failed"
+
+if [ "${failures}" -gt 0 ]; then
+  exit 1
+fi

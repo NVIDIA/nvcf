@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+spring:
+  application:
+    version: ncp
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://api.nvcf.svc.cluster.local
+          jwk-set-uri: http://openbao-server.vault-system.svc:8200/v1/services/nvcf-api/jwt/jwks
+
+logging:
+  level:
+    root: WARN
+
+notary:
+  issuer-url: http://notary.nvcf.svc.cluster.local:8080
+  signing-scope: ${AUTH_TOKEN_SCOPE:notary-sign}
+  # NCP does not bind tokens by audience — the issuer check alone is sufficient.
+  # require-audience=false opts out of the default fail-closed behavior, allowing
+  # required-audiences to be empty.
+  require-audience: false
+  required-audiences: []

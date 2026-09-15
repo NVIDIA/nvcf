@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: byoo-otel-collector
+  labels:
+    app.kubernetes.io/name: byoo-otel-collector
+spec:
+  automountServiceAccountToken: false
+  imagePullSecrets:
+    - name: ngc-registry-secret
+  containers:
+    - name: otel-collector
+      image: registry.example.invalid/byoo-otel-collector:dev
+      imagePullPolicy: Always
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+          ephemeral-storage: 100Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+          ephemeral-storage: 2Gi
+      args:
+        [
+          "--byoo-accounts-secrets",
+          "/var/secrets/accounts-secrets.json",
+          "--byoo-secrets-folder",
+          "/etc/byoo-otel-collector/secrets/",
+          "--",
+          "--config",
+          "/etc/byoo-otel-collector/config.yaml",
+        ]
+      env:
+        - name: OTEL_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+      volumeMounts:
+        - name: accounts-secrets-volume
+          mountPath: /var/secrets/accounts-secrets.json
+          subPath: accounts-secrets.json
+          readOnly: true
+        - name: config-volume
+          mountPath: /etc/byoo-otel-collector/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: otel-collector-secrets-volume
+          mountPath: /etc/byoo-otel-collector/secrets
+      ports:
+        - containerPort: 8888
+          name: metrics
+          protocol: TCP
+        - containerPort: 4357
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4358
+          name: otlp-http
+          protocol: TCP
+  volumes:
+    - name: config-volume
+      configMap:
+        name: otel-config
+    - name: accounts-secrets-volume
+      configMap:
+        name: accounts-secrets
+    - name: otel-collector-secrets-volume
+      emptyDir: {}

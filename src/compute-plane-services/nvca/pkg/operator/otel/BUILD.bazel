@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "otel",
+    srcs = ["otel.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":otel",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "otel_test",
+    srcs = ["otel_test.go"],
+    embed = [":otel"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+    ],
+)

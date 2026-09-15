@@ -1,0 +1,985 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+openapi: 3.1.0
+info:
+  title: Cloud Functions
+  termsOfService: https://www.nvidia.com/en-us/legal_info
+  contact:
+    name: NVIDIA
+    url: https://www.nvidia.com/
+  version: 2.245.7
+paths:
+  /v2/nvcf/accounts:
+    get:
+      tags:
+      - Account
+      summary: List all the NVIDIA Cloud Accounts onboarded with Cloud Functions
+      operationId: getCloudAccounts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAccountResponse'
+  /v2/nvcf/accounts/{ncaId}/functions:
+    get:
+      tags:
+      - Function Management
+      summary: List Functions
+      description: Lists all the functions associated with the specified NVIDIA Cloud Account.
+      operationId: getAllFunctions
+      parameters:
+      - name: ncaId
+        in: path
+        description: Id of the NVIDIA Cloud Account
+        required: true
+        schema:
+          type: string
+          format: UTF-8
+      - name: visibility
+        in: query
+        description: "Query param 'visibility' indicates the kind of functions to be included\n in the response.\n"
+        required: false
+        schema:
+          type: array
+          default:
+          - authorized
+          - private
+          - public
+          items:
+            type: string
+            format: UTF-8
+            enum:
+            - authorized
+            - private
+            - public
+          minItems: 0
+          uniqueItems: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListFunctionsResponse'
+  /v2/nvcf/accounts/{ncaId}/functions/{functionId}/versions/{functionVersionId}:
+    get:
+      tags:
+      - Function Management
+      summary: Get Function Version Details
+      description: Retrieves detailed information of the specified function version in the specified NVIDIA Cloud Account
+      operationId: getFunctionVersion
+      parameters:
+      - name: ncaId
+        in: path
+        description: Id of the NVIDIA Cloud Account
+        required: true
+        schema:
+          type: string
+          format: UTF-8
+      - name: functionId
+        in: path
+        description: Id of the function
+        required: true
+        schema:
+          type: string
+          format: uuid
+          maxLength: 36
+          minLength: 36
+      - name: functionVersionId
+        in: path
+        description: Version id of the function
+        required: true
+        schema:
+          type: string
+          format: uuid
+          maxLength: 36
+          minLength: 36
+      - name: includeSecrets
+        in: query
+        description: "Query param 'includeSecrets' indicates whether to include secret names for\n the function in the response.\n"
+        required: false
+        schema:
+          type: boolean
+          default: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FunctionResponse'
+  /v2/nvcf/accounts/{ncaId}/deployments:
+    get:
+      tags:
+      - Function Deployment
+      summary: Get All Deployments
+      description: Retrieves deployments details of all the functions in the specified account
+      operationId: getAllFunctionDeployments
+      parameters:
+      - name: ncaId
+        in: path
+        description: Id of the NVIDIA Cloud Account
+        required: true
+        schema:
+          type: string
+          format: UTF-8
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListDeploymentsResponse'
+  /v2/nvcf/accounts/{ncaId}/deployments/functions/{functionId}/versions/{functionVersionId}:
+    get:
+      tags:
+      - Function Deployment
+      summary: Get Function Deployment Details
+      description: Retrieves deployment details of the specified function
+      operationId: getFunctionDeployment
+      parameters:
+      - name: ncaId
+        in: path
+        description: Id of the NVIDIA Cloud Account
+        required: true
+        schema:
+          type: string
+          format: UTF-8
+      - name: functionId
+        in: path
+        description: Function id
+        required: true
+        schema:
+          type: string
+          format: uuid
+          maxLength: 36
+          minLength: 36
+      - name: functionVersionId
+        in: path
+        description: Function version id
+        required: true
+        schema:
+          type: string
+          format: uuid
+          maxLength: 36
+          minLength: 36
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeploymentResponse'
+components:
+  schemas:
+    RateLimitDto:
+      type: object
+      description: Data Transfer Object(DTO) representing Rate limit config
+      properties:
+        rateLimit:
+          type: string
+          format: UTF-8
+          description: Rate
+          pattern: ^(?!.*-([SMHD]).*-\1)[1-9]\d*-[SMHD](,\s*[1-9]\d*-[SMHD])*$
+        exemptedNcaIds:
+          type: array
+          description: NCA ID Exemptions
+          items:
+            type: string
+          maxItems: 32
+          minItems: 0
+          uniqueItems: true
+        perNcaIdRate:
+          type: object
+          additionalProperties:
+            type: string
+          description: Per NCA ID Rate
+        syncCheck:
+          type: boolean
+          description: Sync check. Defaults to false
+        perUserRate:
+          type: string
+          format: UTF-8
+          description: Per-user rate, intended for traffic authenticated with an invocation delegation token (InvocationToken). When set, this single rate is enforced individually against every unique caller identity, in addition to the NCA-tier limit.
+          pattern: ^(?!.*-([SMHD]).*-\1)[1-9]\d*-[SMHD](,\s*[1-9]\d*-[SMHD])*$
+    ArtifactDto:
+      type: object
+      description: Data Transfer Object(DTO) representing an artifact
+      properties:
+        name:
+          type: string
+          format: UTF-8
+          description: Artifact name
+        version:
+          type: string
+          format: UTF-8
+          description: Artifact version
+        uri:
+          type: string
+          format: uri
+          description: Artifact URI
+      required:
+      - name
+      - uri
+      - version
+    ContainerEnvironmentEntryDto:
+      type: object
+      description: Data Transfer Object(DTO) representing a container environment entry
+      properties:
+        key:
+          type: string
+          format: UTF-8
+          description: Container environment key
+        value:
+          type: string
+          format: UTF-8
+          description: Container environment value
+      required:
+      - key
+      - value
+    FunctionDto:
+      type: object
+      description: Data Transfer Object (DTO) representing a function
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique function id
+          maxLength: 36
+          minLength: 36
+        ncaId:
+          type: string
+          format: UTF-8
+          description: NVIDIA Cloud Account Id
+        versionId:
+          type: string
+          format: uuid
+          description: Unique function version id
+          maxLength: 36
+          minLength: 36
+        name:
+          type: string
+          format: UTF-8
+          description: Function name
+        status:
+          type: string
+          format: UTF-8
+          description: Function status
+          enum:
+          - ACTIVE
+          - DEPLOYING
+          - ERROR
+          - INACTIVE
+          - DELETED
+          - DEGRADED
+          - DEGRADING
+        inferenceUrl:
+          type: string
+          format: uri
+          description: Entrypoint for invoking the container to process requests
+        ownedByDifferentAccount:
+          type: boolean
+          description: "Indicates whether the function is owned by another account. If the account\n that is being used to lookup functions happens to be authorized to invoke/list\n this function which is owned by a different account, then this field is set\n to true and ncaId will contain the id of the account that owns the function.\n Otherwise, this field is not set as it defaults to false.\n"
+        inferencePort:
+          type: integer
+          format: int32
+          description: Optional port number where the inference listener is running - defaults to 8000 for Triton
+        containerArgs:
+          type: string
+          format: UTF-8
+          description: Args used to launch the container
+        containerEnvironment:
+          type: array
+          description: Environment settings used to launch the container
+          items:
+            $ref: '#/components/schemas/ContainerEnvironmentEntryDto'
+          minItems: 0
+        models:
+          type: array
+          description: Optional list of models
+          items:
+            $ref: '#/components/schemas/FunctionModelDto'
+          minItems: 0
+        containerImage:
+          type: string
+          format: uri
+          description: Optional custom container
+        apiBodyFormat:
+          type: string
+          format: UTF-8
+          description: Invocation request body format
+          enum:
+          - PREDICT_V2
+          - CUSTOM
+        helmChart:
+          type: string
+          format: uri
+          description: Optional Helm Chart
+        helmChartServiceName:
+          type: string
+          format: UTF-8
+          description: 'Helm Chart Service Name specified only when helmChart property is specified
+
+            '
+        healthUri:
+          type: string
+          format: uri
+          deprecated: true
+          description: Health endpoint for the container or helmChart. Deprecated, use health.uri instead.
+        createdAt:
+          type: string
+          format: date-time
+          description: Function creation timestamp
+        activeInstances:
+          type: array
+          description: List of active instances for this function.
+          items:
+            $ref: '#/components/schemas/InstanceDto'
+          minItems: 0
+        resources:
+          type: array
+          description: Optional set of resources.
+          items:
+            $ref: '#/components/schemas/ArtifactDto'
+          minItems: 0
+          uniqueItems: true
+        tags:
+          type: array
+          description: Optional set of tags. Maximum allowed number of tags per function is 64. Maximum length of each tag is 128 chars.
+          items:
+            type: string
+          minItems: 0
+          uniqueItems: true
+        description:
+          type: string
+          format: UTF-8
+          description: Function/version description
+        health:
+          $ref: '#/components/schemas/HealthDto'
+          description: Function health configuration
+        functionType:
+          type: string
+          format: UTF-8
+          description: Used to indicate a STREAMING function. Defaults to DEFAULT.
+          enum:
+          - DEFAULT
+          - STREAMING
+          - LLM
+        secrets:
+          type: array
+          description: Optional secret names
+          items:
+            type: string
+          minItems: 0
+          uniqueItems: true
+        rateLimit:
+          $ref: '#/components/schemas/RateLimitDto'
+          description: Optional rate limit policy
+        telemetries:
+          $ref: '#/components/schemas/TelemetriesDto'
+          description: Optional telemetry configuration for the function
+      required:
+      - createdAt
+      - functionType
+      - healthUri
+      - id
+      - name
+      - ncaId
+      - status
+      - versionId
+    FunctionModelDto:
+      type: object
+      description: Model associated with a function, including optional LLM routing metadata
+      properties:
+        name:
+          type: string
+          format: UTF-8
+          description: Model name
+        version:
+          type: string
+          format: UTF-8
+          description: Model version. Optional for LLM-type functions.
+        uri:
+          type: string
+          format: uri
+          description: Model URI. Optional for LLM-type functions.
+        llmConfig:
+          $ref: '#/components/schemas/LlmConfigDto'
+          description: LLM-specific configuration for this model. Only relevant for LLM-type functions.
+      required:
+      - name
+    FunctionResponse:
+      type: object
+      description: Response body with function details
+      properties:
+        function:
+          $ref: '#/components/schemas/FunctionDto'
+          description: Function details
+      required:
+      - function
+    HealthDto:
+      type: object
+      description: Data Transfer Object(DTO) representing a function ne
+      properties:
+        protocol:
+          type: string
+          format: UTF-8
+          description: HTTP/gPRC protocol type for health endpoint
+          enum:
+          - HTTP
+          - gRPC
+        uri:
+          type: string
+          format: uri
+          description: Health endpoint for the container or the helmChart
+        port:
+          type: integer
+          format: int32
+          description: Port number where the health listener is running
+        timeout:
+          type: string
+          format: duration
+          description: ISO 8601 duration string in PnDTnHnMn.nS format
+          example: PT10S
+        expectedStatusCode:
+          type: integer
+          format: int32
+          description: Expected return status code considered as successful.
+      required:
+      - expectedStatusCode
+      - port
+      - protocol
+      - timeout
+      - uri
+    InstanceDto:
+      type: object
+      description: Data Transfer Object(DTO) representing an instance
+      properties:
+        instanceId:
+          type: string
+          format: UTF-8
+          description: Unique id of the instance
+        functionId:
+          type: string
+          format: uuid
+          description: Function executing on the instance
+          maxLength: 36
+          minLength: 36
+        functionVersionId:
+          type: string
+          format: uuid
+          description: Function version executing on the instance
+          maxLength: 36
+          minLength: 36
+        instanceType:
+          type: string
+          format: UTF-8
+          description: GPU instance-type powering the instance
+        instanceStatus:
+          type: string
+          format: UTF-8
+          description: Instance status
+          enum:
+          - ACTIVE
+          - STARTING
+          - RUNNING
+          - ERRORED
+          - PREEMPTED
+          - DELETED
+          - TERMINATED
+        icmsRequestId:
+          type: string
+          format: uuid
+          description: ICMS request-id used to launch this instance
+          maxLength: 36
+          minLength: 36
+        ncaId:
+          type: string
+          format: UTF-8
+          description: NVIDIA Cloud Account Id that owns the function running on the instance
+        gpu:
+          type: string
+          format: UTF-8
+          description: GPU name powering the instance
+        backend:
+          type: string
+          format: UTF-8
+          description: Backend where the instance is running
+        location:
+          type: string
+          format: UTF-8
+          description: Location such as zone name or region where the instance is running
+        instanceCreatedAt:
+          type: string
+          format: date-time
+          description: Instance creation timestamp
+        instanceUpdatedAt:
+          type: string
+          format: date-time
+          description: Instance's last updated timestamp
+    LlmConfigDto:
+      type: object
+      description: LLM-specific configuration for a model
+      properties:
+        uris:
+          type: array
+          description: OpenAI-compatible URIs supported by this model (e.g. /v1/chat/completions). Required for LLM models.
+          items:
+            type: string
+          minItems: 1
+        tokenRateLimit:
+          type: string
+          format: UTF-8
+          description: Token-level rate limit for this model.
+        tokenizer:
+          type: string
+          format: UTF-8
+          description: Tokenizer identifier for this model.
+        routingMethod:
+          type: string
+          format: UTF-8
+          description: Routing method for this model.
+      required:
+      - uris
+    TelemetriesDto:
+      type: object
+      description: Telemetry configuration for logs, metrics, and traces.
+      properties:
+        logsTelemetryId:
+          type: string
+          format: uuid
+          description: UUID representing the logs telemetry.
+          maxLength: 36
+          minLength: 36
+        metricsTelemetryId:
+          type: string
+          format: uuid
+          description: UUID representing the metrics telemetry.
+          maxLength: 36
+          minLength: 36
+        tracesTelemetryId:
+          type: string
+          format: uuid
+          description: UUID representing the traces telemetry.
+          maxLength: 36
+          minLength: 36
+    AutoscalingConfigurationDto:
+      type: object
+      description: Data Transfer Object(DTO) representing autoscaling configuration
+      properties:
+        scaleUpDetails:
+          $ref: '#/components/schemas/ScalingDetails'
+          description: Configuration for scaling up
+        scaleDownDetails:
+          $ref: '#/components/schemas/ScalingDetails'
+          description: Configuration for scaling down
+    DeploymentHealthDto:
+      type: object
+      description: Data Transfer Object(DTO) representing deployment error
+      properties:
+        icmsRequestId:
+          type: string
+          format: uuid
+          description: ICMS Request ID
+          maxLength: 36
+          minLength: 36
+        gpu:
+          type: string
+          format: UTF-8
+          description: GPU Type as per SDD
+          minLength: 1
+        backend:
+          type: string
+          format: UTF-8
+          description: Backend/CSP where the GPU powered instance will be launched
+          minLength: 1
+        instanceType:
+          type: string
+          format: UTF-8
+          description: Instance type
+        error:
+          type: string
+          format: UTF-8
+          description: Deployment error
+          minLength: 1
+      required:
+      - backend
+      - error
+      - gpu
+      - icmsRequestId
+    DeploymentResponse:
+      type: object
+      description: Function Deployment Response
+      properties:
+        deployment:
+          $ref: '#/components/schemas/FunctionDeploymentDto'
+          description: Deployment details
+      required:
+      - deployment
+    FunctionDeploymentDto:
+      type: object
+      description: Function deployment response
+      properties:
+        functionId:
+          type: string
+          format: uuid
+          description: Function id
+          maxLength: 36
+          minLength: 36
+        functionVersionId:
+          type: string
+          format: uuid
+          description: Function version id
+          maxLength: 36
+          minLength: 36
+        deploymentId:
+          type: string
+          format: uuid
+          description: Last deployment id
+          maxLength: 36
+          minLength: 36
+        functionName:
+          type: string
+          format: UTF-8
+          description: Function name
+          minLength: 1
+        ncaId:
+          type: string
+          format: UTF-8
+          description: NVIDIA Cloud Account Id
+          minLength: 1
+        functionStatus:
+          type: string
+          format: UTF-8
+          description: Function status
+          enum:
+          - ACTIVE
+          - DEPLOYING
+          - ERROR
+          - INACTIVE
+          - DELETED
+          - DEGRADED
+          - DEGRADING
+        healthInfo:
+          type: array
+          description: "Health info for a deployment specification is included only if there are any\n issues/errors.\n"
+          items:
+            $ref: '#/components/schemas/DeploymentHealthDto'
+          minItems: 0
+        deploymentSpecifications:
+          type: array
+          description: Function deployment details
+          items:
+            $ref: '#/components/schemas/GpuSpecificationDto'
+          minItems: 0
+        createdAt:
+          type: string
+          format: date-time
+          description: Function deployment creation timestamp
+        lastUpdatedAt:
+          type: string
+          format: date-time
+          description: Function deployment modification timestamp
+      required:
+      - createdAt
+      - deploymentId
+      - deploymentSpecifications
+      - functionId
+      - functionName
+      - functionStatus
+      - functionVersionId
+      - lastUpdatedAt
+      - ncaId
+    GpuSpecificationDto:
+      type: object
+      description: Data Transfer Object(DTO) representing GPU specification.
+      properties:
+        gpuSpecificationId:
+          type: string
+          format: uuid
+          description: GPU specification id
+          maxLength: 36
+          minLength: 36
+        gpu:
+          type: string
+          format: UTF-8
+          description: GPU name from the cluster
+          minLength: 1
+        backend:
+          type: string
+          format: UTF-8
+          description: Use clusters instead of this property. Legacy property typically used when deploying a function to GFN.
+        maxInstances:
+          type: integer
+          format: int32
+          description: Maximum number of instances for the deployment
+        minInstances:
+          type: integer
+          format: int32
+          description: Minimum number of instances for the deployment
+        instanceType:
+          type: string
+          format: UTF-8
+          description: Instance type, based on GPU, assigned to a Worker
+          minLength: 1
+        availabilityZones:
+          type: array
+          description: List of availability-zones(or clusters) in the cluster group
+          items:
+            type: string
+          minItems: 0
+        maxRequestConcurrency:
+          type: integer
+          format: int32
+          description: Max request concurrency between 1 (default) and 16384.
+          maximum: 16384
+          minimum: 1
+        configuration:
+          type: object
+          description: "Typically used when the function is based on Helm Charts to substitute\n placeholders in values yaml.\n"
+        clusters:
+          type: array
+          description: 'Specific clusters powered by the selected instance-type to deploy function.
+
+            '
+          items:
+            type: string
+          minItems: 0
+          uniqueItems: true
+        regions:
+          type: array
+          description: 'List of regions allowed to deploy. The instance or worker node will be in one of
+
+            the specified geographical regions.
+
+            '
+          items:
+            type: string
+          minItems: 0
+          uniqueItems: true
+        attributes:
+          type: array
+          description: 'Specific cluster attributes/capabilities to deploy functions. For example,
+
+            HIPPA Compliant, Confidential Compute Compliant, etc.
+
+            '
+          items:
+            type: string
+          minItems: 0
+          uniqueItems: true
+        cpuArch:
+          type: string
+          format: UTF-8
+          description: CPU Architecture details
+        os:
+          type: string
+          format: UTF-8
+          description: Operating System details
+        driverVersion:
+          type: string
+          format: UTF-8
+          description: GPU driver version
+        storage:
+          type: string
+          format: UTF-8
+          description: Amount of available storage, e.g. 80G
+        systemMemory:
+          type: string
+          format: UTF-8
+          description: Amount of RAM
+        gpuMemory:
+          type: string
+          format: UTF-8
+          description: Amount of GPU memory
+        autoscalingConfiguration:
+          $ref: '#/components/schemas/AutoscalingConfigurationDto'
+          description: Customizable autoscaling configuration
+        helmValidationPolicy:
+          $ref: '#/components/schemas/HelmValidationPolicyDto'
+          description: Helm validation policy
+      required:
+      - gpu
+      - instanceType
+      - maxInstances
+      - minInstances
+    HelmValidationPolicyDto:
+      type: object
+      description: Data Transfer Object(DTO) representing Helm validation policy
+      properties:
+        name:
+          type: string
+          format: UTF-8
+          description: Helm validation policy name.
+          enum:
+          - Default
+          - Unrestricted
+        extraKubernetesTypes:
+          type: array
+          description: 'An API Group in Kubernetes is a collection of related functionality.
+
+            When present, must contain at least one entry; each entry must be a valid
+
+            KubernetesType (group, version, kind).
+
+            '
+          items:
+            $ref: '#/components/schemas/KubernetesType'
+          minItems: 1
+      required:
+      - name
+    KubernetesType:
+      type: object
+      properties:
+        group:
+          type: string
+          format: UTF-8
+          description: Name of API Group
+          minLength: 1
+        version:
+          type: string
+          format: UTF-8
+          description: Version of API Group
+          minLength: 1
+        kind:
+          type: string
+          format: UTF-8
+          description: API Group resource or Kind
+          minLength: 1
+      required:
+      - group
+      - kind
+      - version
+    ScalingDetails:
+      type: object
+      properties:
+        metric:
+          type: string
+          format: UTF-8
+          description: Scaling metric
+        factor:
+          type: number
+          format: float
+          description: Scaling factor must be greater-than 1.0 for scale up and less-than 1.0 for scale down. This factor is used to multiply the currentinstance count when specified threshold is met.
+        threshold:
+          type: integer
+          format: int32
+          description: Scaling threshold (0-100) as a percentage of utilizationupon which the number of current instances are multiplied with thespecified factor.
+        stickiness:
+          $ref: '#/components/schemas/StickinessWindow'
+          description: Stickiness window configuration
+      required:
+      - factor
+      - threshold
+    StickinessWindow:
+      type: object
+      properties:
+        size:
+          type: string
+          format: duration
+          description: Window size must be less than or equal to PT1H and will berounded to the nearest minute
+          example: PT30M
+        threshold:
+          type: string
+          format: duration
+          description: Window threshold must be less than size
+          example: PT5M
+      required:
+      - size
+      - threshold
+    AccountDto:
+      type: object
+      description: Data Transfer Object(DTO) representing an account
+      properties:
+        ncaId:
+          type: string
+          format: UTF-8
+          description: NVIDIA Cloud Account id
+        adminClientIds:
+          type: array
+          description: Client Ids associated with the NVIDIA Cloud Account
+          items:
+            type: string
+          minItems: 0
+        name:
+          type: string
+          format: UTF-8
+          description: Account/customer name
+        maxFunctionsAllowed:
+          type: integer
+          format: int32
+          description: Maximum number of functions allowed for Account
+        maxTasksAllowed:
+          type: integer
+          format: int32
+          description: Maximum number of tasks allowed for Account
+        maxTelemetriesAllowed:
+          type: integer
+          format: int32
+          description: Maximum number of telemetries allowed for Account
+        maxRegistryCredentialsAllowed:
+          type: integer
+          format: int32
+          description: Maximum number of registry credentials allowed for Account
+        lastUpdatedAt:
+          type: string
+          format: date-time
+          description: Last time the account was updated.
+      required:
+      - maxFunctionsAllowed
+      - maxRegistryCredentialsAllowed
+      - maxTasksAllowed
+      - maxTelemetriesAllowed
+      - name
+      - ncaId
+    ListFunctionsResponse:
+      type: object
+      description: Response body containing list of functions
+      properties:
+        functions:
+          type: array
+          description: List of functions
+          items:
+            $ref: '#/components/schemas/FunctionDto'
+          minItems: 0
+      required:
+      - functions
+    ListAccountResponse:
+      type: object
+      description: Response body containing list of NVIDIA Cloud Accounts
+      properties:
+        cloudAccounts:
+          type: array
+          description: List of NVIDIA Cloud Accounts
+          items:
+            $ref: '#/components/schemas/AccountDto'
+          minItems: 0
+      required:
+      - cloudAccounts
+    ListDeploymentsResponse:
+      type: object
+      description: Function Deployments Response
+      properties:
+        deployments:
+          type: array
+          description: List of deployments
+          items:
+            $ref: '#/components/schemas/FunctionDeploymentDto'
+          minItems: 0
+      required:
+      - deployments

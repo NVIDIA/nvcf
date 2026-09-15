@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "metrics",
+    srcs = [
+        "http.go",
+        "instrumented_crclient.go",
+        "metrics.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/context",
+        "//src/compute-plane-services/nvca/internal/metrics/modelcachetypes",
+        "//src/compute-plane-services/nvca/internal/metrics/workloadtypes",
+        "//src/compute-plane-services/nvca/pkg/nvca/errors",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/gorilla/mux",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promauto",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus/promhttp",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_model/go",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metrics",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+)
+
+go_test(
+    name = "metrics_test",
+    srcs = [
+        "http_test.go",
+        "instrumented_crclient_test.go",
+        "metrics_test.go",
+    ],
+    embed = [":metrics"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/clustervalidator",
+        "//src/compute-plane-services/nvca/internal/metrics/gctypes",
+        "//src/compute-plane-services/nvca/internal/metrics/modelcachetypes",
+        "//src/compute-plane-services/nvca/internal/metrics/workloadtypes",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/gorilla/mux",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_model/go",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/common/expfmt",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/common/model",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/fake",
+    ],
+)

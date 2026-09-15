@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "logging",
+    srcs = ["logging.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":logging",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+)
+
+go_test(
+    name = "logging_test",
+    srcs = ["logging_test.go"],
+    embed = [":logging"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+    ],
+)

@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHECKER="${SCRIPT_DIR}/../../ci/check-mpl-audit"
+
+TEMP_DIRS=()
+TEMP_FILES=()
+RUN_STATUS=0
+RUN_STDOUT=""
+RUN_STDERR=""
+
+cleanup() {
+    local path
+
+    for path in "${TEMP_DIRS[@]:-}"; do
+        [[ -n "${path}" ]] || continue
+        rm -rf "${path}"
+    done
+
+    for path in "${TEMP_FILES[@]:-}"; do
+        [[ -n "${path}" ]] || continue
+        rm -f "${path}"
+    done
+}
+
+make_tempdir() {
+    local tmpdir
+
+    tmpdir="$(mktemp -d)"
+    TEMP_DIRS+=("${tmpdir}")
+    echo "${tmpdir}"
+}
+
+make_tempfile() {
+    local tmpfile
+
+    tmpfile="$(mktemp)"
+    TEMP_FILES+=("${tmpfile}")
+    echo "${tmpfile}"
+}
+
+trap cleanup EXIT
+
+assert_status() {
+    local expected="$1"
+    local actual="$2"
+    local message="$3"
+
+    if [[ "${actual}" -ne "${expected}" ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected status: ${expected}" >&2
+        echo "actual status:   ${actual}" >&2
+        exit 1
+    fi
+}
+
+assert_contains() {
+    local needle="$1"
+    local haystack="$2"
+    local message="$3"
+
+    if [[ "${haystack}" != *"${needle}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "missing: ${needle}" >&2
+        exit 1
+    fi
+}
+
+write_file() {
+    local path="$1"
+    local content="$2"
+
+    mkdir -p "$(dirname "${path}")"
+    printf '%s' "${content}" > "${path}"
+}
+
+init_git_repo() {
+    local repo_root="$1"
+
+    git -C "${repo_root}" init -q
+    git -C "${repo_root}" config user.email "codex@example.com"
+    git -C "${repo_root}" config user.name "Codex"
+}
+
+run_checker() {
+    local repo_root="$1"
+    local stdout_file stderr_file
+
+    stdout_file="$(make_tempfile)"
+    stderr_file="$(make_tempfile)"
+
+    set +e
+    REPO_ROOT="${repo_root}" "${CHECKER}" >"${stdout_file}" 2>"${stderr_file}"
+    RUN_STATUS=$?
+    set -e
+
+    RUN_STDOUT="$(<"${stdout_file}")"
+    RUN_STDERR="$(<"${stderr_file}")"
+}
+
+test_passes_when_audit_matches_modified_mpl_files() {
+    local repo_root ess_root
+    repo_root="$(make_tempdir)"
+    ess_root="${repo_root}/src/compute-plane-services/ess-agent"
+
+    init_git_repo "${repo_root}"
+    write_file "${ess_root}/mpl-files-modified.md" '# Modified MPL Files
+
+- `config/config.go`: ESS telemetry
+'
+    write_file "${ess_root}/config/config.go" '// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+// Not a contribution
+package config
+'
+    git -C "${repo_root}" add .
+
+    run_checker "${repo_root}"
+
+    assert_status 0 "${RUN_STATUS}" "matching MPL audit should pass"
+    assert_contains "MPL audit file is in sync" "${RUN_STDOUT}" "success output should confirm sync"
+}
+
+test_fails_when_modified_mpl_file_is_missing_from_audit() {
+    local repo_root ess_root
+    repo_root="$(make_tempdir)"
+    ess_root="${repo_root}/src/compute-plane-services/ess-agent"
+
+    init_git_repo "${repo_root}"
+    write_file "${ess_root}/mpl-files-modified.md" '# Modified MPL Files
+'
+    write_file "${ess_root}/config/config.go" '// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+// Not a contribution
+package config
+'
+    git -C "${repo_root}" add .
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "missing audit entry should fail"
+    assert_contains "MPL-modified files missing" "${RUN_STDOUT}${RUN_STDERR}" "failure should report a missing-audit error"
+}
+
+test_fails_when_audit_entry_is_stale() {
+    local repo_root ess_root
+    repo_root="$(make_tempdir)"
+    ess_root="${repo_root}/src/compute-plane-services/ess-agent"
+
+    init_git_repo "${repo_root}"
+    write_file "${ess_root}/mpl-files-modified.md" '# Modified MPL Files
+
+- `config/config.go`: ESS telemetry
+'
+    write_file "${ess_root}/config/config.go" '// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+package config
+'
+    git -C "${repo_root}" add .
+
+    run_checker "${repo_root}"
+
+    assert_status 1 "${RUN_STATUS}" "stale audit entry should fail"
+    assert_contains "missing Not a contribution header" "${RUN_STDOUT}${RUN_STDERR}" "failure should explain why the entry is stale"
+}
+
+main() {
+    test_passes_when_audit_matches_modified_mpl_files
+    test_fails_when_modified_mpl_file_is_missing_from_audit
+    test_fails_when_audit_entry_is_stale
+    echo "PASS: test-check-mpl-audit"
+}
+
+main "$@"

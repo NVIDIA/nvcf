@@ -1,0 +1,25 @@
+{
+  "functionDetails": {
+    "functionType": "DEFAULT",
+    "functionId": "5a3d4a7e-9ee3-4762-8d37-d3b40a6f84c6",
+    "functionVersionId": "2c948d9b-db5d-4f93-8c29-f5d8a5d89cb9"
+  },
+  "sub": "",
+  "ncaId": "_lILXB-1NfNmBnQSk_spqVWOtCAXQm50UEMwj3TRgymJJ2Ayuwcgxq",
+  "requestId": "9f93ffa2-0376-495e-a723-f6c653ed1e34",
+  "messageBatchId": "14d2ec9c-25d8-4712-9288-b682570671d6",
+  "accountName": "foobar",
+  "action": "RequestICMSInstances",
+  "requestedGPUCount": 2,
+  "gpuType": "L40",
+  "instanceCount": 1,
+  "instanceType": "DGX-CLOUD.GPU.L40",
+  "instanceTypeName": "DGX-CLOUD.GPU.L40_2x",
+  "instanceTypeValue": "DGX-CLOUD.GPU.L40",
+  "launchSpecification": {
+    "environment": "R1BVX05BTUU9TDQwCg==",
+    "cloudProvider": "DGXCLOUD",
+    "icmsEnvironment": "stage",
+    "telemetries": "ewoidGVsZW1ldHJpZXMiOiB7CiAgImxvZ3NUZWxlbWV0cnkiOgogICAgIHsKICAgICAgICJwcm90b2NvbCI6ICJodHRwIiwKICAgICAgICJwcm92aWRlciI6ICJHUkFGQU5BX0NMT1VEIiwKICAgICAgICJlbmRwb2ludCI6ICJlbmRwb2ludCIsCiAgICAgICAibmFtZSI6ICJ0ZWxlbWV0cnktZm9vIgogICAgfSwKICAgICJtZXRyaWNzVGVsZW1ldHJ5IjogewogICAgICAicHJvdG9jb2wiOiAiaHR0cCIsCiAgICAgICJwcm92aWRlciI6ICJHUkFGQU5BX0NMT1VEIiwKICAgICAgImVuZHBvaW50IjogImVuZHBvaW50IiwKICAgICAgIm5hbWUiOiAidGVsZW1ldHJ5LWJheiIKICAgfSwKICAgInRyYWNlc1RlbGVtZXRyeSI6IHsKICAgICAicHJvdG9jb2wiOiAiaHR0cCIsCiAgICAgInByb3ZpZGVyIjogIkdSQUZBTkFfQ0xPVUQiLAogICAgICJlbmRwb2ludCI6ICJlbmRwb2ludCIsCiAgICAgIm5hbWUiOiAidGVsZW1ldHJ5LWJhciIKICAgfQogIH0KfQo="
+  }
+}

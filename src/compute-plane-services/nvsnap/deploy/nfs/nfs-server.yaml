@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+---
+# NFS Server for NVSNAP Checkpoints
+# Simple in-cluster NFS for checkpoint storage
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nvsnap-system
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-data
+  namespace: nvsnap-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Gi  # Adjust based on checkpoint needs
+  # storageClassName: local-path  # Uncomment for specific storage class
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-server
+  namespace: nvsnap-system
+  labels:
+    app: nfs-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nfs-server
+  template:
+    metadata:
+      labels:
+        app: nfs-server
+    spec:
+      containers:
+        - name: nfs-server
+          image: itsthenetwork/nfs-server-alpine:latest
+          ports:
+            - containerPort: 2049
+              name: nfs
+          securityContext:
+            privileged: true
+          env:
+            - name: SHARED_DIRECTORY
+              value: /data
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nfs-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nfs-server
+  namespace: nvsnap-system
+spec:
+  ports:
+    - port: 2049
+      targetPort: 2049
+      name: nfs
+  selector:
+    app: nfs-server
+  clusterIP: None  # Headless for stable DNS
+---
+# PV and PVC for checkpoints (uses NFS)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nvsnap-checkpoints
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: nfs-server.nvsnap-system.svc.cluster.local
+    path: /
+  persistentVolumeReclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nvsnap-checkpoints
+  namespace: nvsnap-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
+  volumeName: nvsnap-checkpoints
+  storageClassName: ""  # Use pre-provisioned PV

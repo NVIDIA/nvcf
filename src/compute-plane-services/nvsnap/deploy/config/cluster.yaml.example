@@ -1,0 +1,73 @@
+# GPUCR Cluster Configuration
+# Copy to ~/.gpucr/cluster.yaml and customize
+# chmod 600 ~/.gpucr/cluster.yaml
+
+cluster:
+  name: my-gpu-cluster
+  description: GPU cluster for ML workloads
+
+# SSH configuration
+ssh:
+  user: your_username
+  # Use either password or key_file (key_file preferred for production)
+  password: your_password
+  # key_file: ~/.ssh/id_rsa
+  # port: 22  # Optional, defaults to 22
+  
+# GPU nodes
+nodes:
+  - ip: 10.34.5.64
+    name: gpu-node-1
+    roles:
+      - gpu
+      - master  # Optional: marks as control plane node
+    
+  - ip: 10.86.2.83
+    name: gpu-node-2
+    roles:
+      - gpu
+      
+  - ip: 10.86.6.104
+    name: gpu-node-3
+    roles:
+      - gpu
+
+# Component configuration
+components:
+  # CRIU configuration
+  criu:
+    # 'fork' uses the GPUCR forked CRIU with NVIDIA fixes
+    # 'system' uses the system package manager (not recommended)
+    source: fork
+    # Path to forked CRIU source (required if source=fork)
+    fork_path: $HOME/personal/criu-orig/criu
+    
+  # cuda-checkpoint configuration
+  cuda_checkpoint:
+    # 'local' copies from this machine
+    # 'nvidia' downloads from NVIDIA (requires auth)
+    source: local
+    local_path: /usr/local/bin/cuda-checkpoint
+    
+  # Agent configuration
+  agent:
+    port: 8081
+    checkpoint_dir: /var/lib/gpucr/checkpoints
+    log_level: info
+    # Enable metrics endpoint (optional)
+    metrics: true
+    metrics_port: 9090
+
+# Storage configuration (optional, for shared checkpoints)
+storage:
+  type: local  # 'local', 'nfs', or 's3'
+  
+  # For NFS:
+  # type: nfs
+  # nfs_server: 10.0.0.1
+  # nfs_path: /exports/gpucr
+  
+  # For S3:
+  # type: s3
+  # s3_bucket: gpucr-checkpoints
+  # s3_region: us-west-2

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cache",
+    srcs = ["image_cache.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/reval/cache",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_hashicorp_golang_lru_v2//expirable",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cache",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cache_test",
+    srcs = ["image_cache_test.go"],
+    embed = [":cache"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@org_uber_go_zap//:zap",
+    ],
+)

@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $.Release.Name }}-config
+  namespace: {{ $.Release.Namespace | quote }}
+  labels:
+    app: nvcf-unbound
+    {{- include "nvcf-unbound.labels" . | nindent 4 }}
+data:
+  unbound.conf: |-
+    remote-control:
+    control-enable: yes
+    control-interface: /opt/unbound/run/unbound.ctl
+
+    dnstap:
+    dnstap-enable: yes
+    dnstap-socket-path: "/opt/unbound/etc/unbound/dnstap/dnstap.sock"
+    dnstap-send-identity: no
+    dnstap-send-version: no
+    dnstap-log-resolver-query-messages: yes
+    dnstap-log-resolver-response-messages: yes
+    dnstap-log-client-query-messages: yes
+    dnstap-log-client-response-messages: yes
+    dnstap-log-forwarder-query-messages: yes
+    dnstap-log-forwarder-response-messages: yes
+
+    server:
+    cache-min-ttl: 60
+    cache-max-ttl: 3600
+    cache-max-negative-ttl: 7200
+    infra-host-ttl: 900
+    num-threads: {{ $.Values.unbound.numThreads | default 96 }}
+
+    prefetch: yes
+    minimal-responses: yes
+
+    verbosity: 1
+    extended-statistics: yes
+    do-daemonize: no
+    use-syslog: no
+    log-time-ascii: yes
+    log-queries: no
+    log-replies: no
+    log-servfail: yes
+    log-tag-queryreply: no
+    log-local-actions: no
+    val-log-level: 1
+
+    interface: 0.0.0.0
+    port: 53
+    prefer-ip6: no
+    prefer-ip4: yes
+    do-ip4: yes
+    do-ip6: no
+    do-udp: yes
+    do-tcp: yes
+    access-control: 0.0.0.0/0 allow
+    tcp-upstream: no
+    outgoing-range: {{ $.Values.unbound.outgoingRange | default 8192 }}
+    outgoing-port-permit: "49152-60999"
+    outgoing-num-tcp: {{ $.Values.unbound.outgoingNumTcp | default 250 }}
+    incoming-num-tcp: 10
+    tcp-mss: 0
+    outgoing-tcp-mss: 0
+    tcp-idle-timeout: 3000
+    so-reuseport: yes
+    max-udp-size: 4096
+    stream-wait-size: 4m
+    msg-buffer-size: 65552
+    msg-cache-size: 50m
+    msg-cache-slabs: {{ $.Values.unbound.slabs | default 128 }}
+    num-queries-per-thread: {{ $.Values.unbound.queriesPerThread | default 4192 }}
+    jostle-timeout: 200
+    delay-close: 376
+    udp-connect: yes
+    outbound-msg-retry: 5
+    unknown-server-time-limit: 376
+    rrset-cache-size: 100m
+    rrset-cache-slabs: {{ $.Values.unbound.slabs | default 128 }}
+    infra-cache-min-rtt: 50
+    infra-keep-probing: no
+    infra-cache-slabs: {{ $.Values.unbound.slabs | default 128 }}
+    infra-cache-numhosts: 10000
+    key-cache-size: 4m
+    key-cache-slabs: {{ $.Values.unbound.slabs | default 128 }}
+    neg-cache-size: 4m
+    hide-version: yes
+    hide-trustanchor: yes
+    hide-http-user-agent: yes
+    target-fetch-policy: "3 2 1 0 0"
+    harden-short-bufsize: yes
+    harden-large-queries: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-below-nxdomain: yes
+    harden-referral-path: no
+    harden-algo-downgrade: yes
+    qname-minimisation: yes
+    qname-minimisation-strict: no
+    aggressive-nsec: yes
+    use-caps-for-id: no
+    unwanted-reply-threshold: 10000000
+    do-not-query-localhost: yes
+    serve-expired-client-timeout: 1800
+
+    private-domain: "cluster.local"
+    domain-insecure: "cluster.local"
+
+    # Set the working directory for the program.
+    directory: "/opt/unbound/etc/unbound"
+    # Drop user  privileges after  binding the port.
+    username: "_unbound"
+    # File with trust anchor for  one  zone, which is tracked with RFC5011
+    # probes.
+    # Enable chroot (i.e, change apparent root directory for the current
+    # running process and its children)
+    chroot: ""
+    #root-hints: "/opt/unbound/etc/unbound/root.hints"
+
+    domain-insecure: "in-addr.arpa."
+    local-zone: "in-addr.arpa." always_nxdomain
+
+    {{- range $i, $v := $.Values.unbound.pattern }}
+    {{ $v }}
+    {{- end }}
+
+    local-zone: "nvcf-unbound.test." redirect
+    local-data: "nvcf-unbound.test. 10800 IN NS nvcf-unbound.test."
+    local-data: "nvcf-unbound.test. 10800 IN SOA nvcf-unbound.test. nobody.invalid. 1 3600 1200 604800 10800"
+    local-data: "nvcf-unbound.test. 10800 IN A 127.0.0.1"
+    local-data: "nvcf-unbound.test. 10800 IN AAAA ::1"
+
+    #include: /opt/unbound/etc/unbound/stub-zones.conf
+    stub-zone:
+        name: "cluster.local"
+        stub-addr: {{ $.Values.unbound.stub_nameserver }}
+        stub-first: no
+        stub-no-cache: {{ $.Values.unbound.stubNoCache | default "no"}}

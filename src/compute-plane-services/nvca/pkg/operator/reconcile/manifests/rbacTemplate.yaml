@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Name }}
+  labels:
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/instance: {{ .InstanceName }}
+    app.kubernetes.io/managed-by: {{ .ManagedBy }}
+    app.kubernetes.io/name: {{ .AppName }}
+rules:
+- apiGroups: [""]
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - pods
+  - pods/status
+  - pods/log
+  - secrets
+  - serviceaccounts
+  - services
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+{{- range $i, $rule := .AllowedExtraKubernetesTypes }}
+- apiGroups: ["{{ $rule.Group }}"]
+  resources: ["{{ $rule.Resource }}"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+{{- end }}

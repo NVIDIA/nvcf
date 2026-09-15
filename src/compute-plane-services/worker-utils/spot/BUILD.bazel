@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_binary(
+    name = "spot",
+    embed = [":spot_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_library(
+    name = "spot_lib",
+    srcs = ["spot.go"],
+    embedsrcs = ["clusterGroups.json"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/spot",
+    visibility = ["//visibility:private"],
+    deps = [
+        "@com_github_goccy_go_json//:go-json",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_samber_lo//:lo",
+    ],
+)
+
+go_test(
+    name = "spot_test",
+    srcs = ["spot_extra_test.go"],
+    embed = [":spot_lib"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

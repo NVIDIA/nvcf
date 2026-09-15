@@ -1,0 +1,4 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_progress","ts":"2026-04-29T01:30:10Z","phaseNum":4,"phase":"apply-cp","resource":"namespaces","done":3,"total":5}
+{"event":"phase_progress","ts":"2026-04-29T01:30:12Z","phaseNum":4,"phase":"apply-cp","resource":"deployments","done":9,"total":14}
+{"event":"phase_progress","ts":"2026-04-29T01:30:14Z","phaseNum":4,"phase":"apply-cp","resource":"statefulsets","done":2,"total":4}

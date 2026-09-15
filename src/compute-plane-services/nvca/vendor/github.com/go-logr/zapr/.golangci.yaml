@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+issues:
+  exclude-use-default: false
+
+linters:
+  disable-all: true
+  enable:
+  - asciicheck
+  - errcheck
+  - forcetypeassert
+  - gocritic
+  - gofmt
+  - goimports
+  - gosimple
+  - govet
+  - ineffassign
+  - misspell
+  - revive
+  - staticcheck
+  - typecheck
+  - unused

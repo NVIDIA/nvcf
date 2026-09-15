@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "progress",
+    srcs = [
+        "etas.go",
+        "event.go",
+        "k8s_watcher.go",
+        "log_line_writer.go",
+        "render_check_oneshot.go",
+        "render_jsonl.go",
+        "render_plain.go",
+        "render_status_oneshot.go",
+        "render_tty.go",
+        "select.go",
+        "sink.go",
+    ],
+    importpath = "nvcf-cli/internal/selfhosted/progress",
+    visibility = ["//src/clis/nvcf-cli:__subpackages__"],
+    deps = [
+        "@com_github_charmbracelet_bubbles//progress",
+        "@com_github_charmbracelet_bubbles//spinner",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_charmbracelet_lipgloss//:lipgloss",
+        "@com_github_muesli_termenv//:termenv",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apiextensions_apiserver//pkg/apis/apiextensions/v1:apiextensions",
+        "@io_k8s_apiextensions_apiserver//pkg/client/clientset/clientset",
+        "@io_k8s_apiextensions_apiserver//pkg/client/informers/externalversions",
+        "@io_k8s_apimachinery//pkg/labels",
+        "@io_k8s_client_go//informers",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//tools/cache",
+        "@org_golang_x_term//:term",
+    ],
+)
+
+go_test(
+    name = "progress_test",
+    srcs = [
+        "etas_test.go",
+        "event_test.go",
+        "helpers_test.go",
+        "k8s_watcher_test.go",
+        "log_line_writer_test.go",
+        "render_jsonl_test.go",
+        "render_plain_test.go",
+        "render_status_oneshot_test.go",
+        "render_tty_test.go",
+        "select_test.go",
+        "sink_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":progress"],
+    deps = [
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_muesli_termenv//:termenv",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//apps/v1:apps",
+        "@io_k8s_api//batch/v1:batch",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apiextensions_apiserver//pkg/apis/apiextensions/v1:apiextensions",
+        "@io_k8s_apiextensions_apiserver//pkg/client/clientset/clientset/fake",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_client_go//kubernetes/fake",
+    ],
+)

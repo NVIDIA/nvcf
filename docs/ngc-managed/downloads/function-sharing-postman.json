@@ -1,0 +1,312 @@
+{
+	"info": {
+		"_postman_id": "2d45612c-de8a-48c7-962e-c0cafee9538b",
+		"name": "Function Sharing - Version ID",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "32309907"
+	},
+	"item": [
+		{
+			"name": "List Authorizations",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{ngcPersonalAPIKey}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{ngcDomain}}/v2/nvcf/authorizations/functions/:functionId/versions/:functionVersionId",
+					"host": [
+						"{{ngcDomain}}"
+					],
+					"path": [
+						"v2",
+						"nvcf",
+						"authorizations",
+						"functions",
+						":functionId",
+						"versions",
+						":functionVersionId"
+					],
+					"variable": [
+						{
+							"key": "functionId",
+							"value": ""
+						},
+						{
+							"key": "functionVersionId",
+							"value": ""
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Remove Authorized Party",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{ngcPersonalAPIKey}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "PATCH",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"authorizedParty\": {\n    \"ncaId\": \"{{ncaId}}\"\n  }\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{ngcDomain}}/v2/nvcf/authorizations/functions/:functionId/versions/:functionVersionId/remove",
+					"host": [
+						"{{ngcDomain}}"
+					],
+					"path": [
+						"v2",
+						"nvcf",
+						"authorizations",
+						"functions",
+						":functionId",
+						"versions",
+						":functionVersionId",
+						"remove"
+					],
+					"variable": [
+						{
+							"key": "functionId",
+							"value": ""
+						},
+						{
+							"key": "functionVersionId",
+							"value": ""
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Add Authorized Parties",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{ngcPersonalAPIKey}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"authorizedParties\": [\n    {\n      \"ncaId\": \"{{ncaId}}\"\n    }\n  ]\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{ngcDomain}}/v2/nvcf/authorizations/functions/:functionId/versions/:functionVersionId",
+					"host": [
+						"{{ngcDomain}}"
+					],
+					"path": [
+						"v2",
+						"nvcf",
+						"authorizations",
+						"functions",
+						":functionId",
+						"versions",
+						":functionVersionId"
+					],
+					"variable": [
+						{
+							"key": "functionId",
+							"value": ""
+						},
+						{
+							"key": "functionVersionId",
+							"value": ""
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Add Authorized Party",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{ngcPersonalAPIKey}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "PATCH",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"authorizedParty\": {\n    \"ncaId\": \"{{ncaId}}\"\n  }\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{ngcDomain}}/v2/nvcf/authorizations/functions/:functionId/versions/:functionVersionId/add",
+					"host": [
+						"{{ngcDomain}}"
+					],
+					"path": [
+						"v2",
+						"nvcf",
+						"authorizations",
+						"functions",
+						":functionId",
+						"versions",
+						":functionVersionId",
+						"add"
+					],
+					"variable": [
+						{
+							"key": "functionId",
+							"value": ""
+						},
+						{
+							"key": "functionVersionId",
+							"value": ""
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Test Invocation",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "{{ngcPersonalAPIKeyAuthorizedAccount}}",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a limerick about the wonders of GPU computing.\"\n    }\n  ],\n  \"stream\": true,\n  \"model\": \"meta/llama-3.1-8b-instruct\",\n  \"max_tokens\": 1024,\n  \"presence_penalty\": 0,\n  \"frequency_penalty\": 0,\n  \"top_p\": 0.7,\n  \"temperature\": 0.2\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{nvcfDomain}}/v2/nvcf/pexec/functions/:functionId/versions/:versionId",
+					"host": [
+						"{{nvcfDomain}}"
+					],
+					"path": [
+						"v2",
+						"nvcf",
+						"pexec",
+						"functions",
+						":functionId",
+						"versions",
+						":versionId"
+					],
+					"variable": [
+						{
+							"key": "functionId",
+							"value": ""
+						},
+						{
+							"key": "versionId",
+							"value": ""
+						}
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "ngcPersonalAPIKey",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "ngcDomain",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "ncaId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "ngcPersonalAPIKeyAuthorizedAccount",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "nvcfDomain",
+			"value": "",
+			"type": "string"
+		}
+	]
+}

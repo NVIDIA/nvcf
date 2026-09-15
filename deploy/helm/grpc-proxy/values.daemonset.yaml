@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Sample values overlay for DaemonSet-only deployment
+# Usage: helm install grpc-proxy ./grpc-proxy -f values.daemonset.yaml
+
+grpcproxy:
+  # Required image configuration
+  image:
+    registry: ""
+    repository: ""
+    tag: "latest"
+
+  # Set deployment type to DaemonSet
+  deploymentType: "daemonset"
+
+  # DaemonSet-specific configuration
+  daemonset:
+    # DaemonSet-specific tolerations to run on all nodes
+    tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+    # Node selector for specific node types if needed
+    nodeSelector: {}
+    # Update strategy for DaemonSet
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+
+  # DaemonSet typically uses higher resource requests
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 1000m
+      memory: 1Gi

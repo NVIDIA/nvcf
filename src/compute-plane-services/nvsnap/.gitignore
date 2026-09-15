@@ -1,0 +1,158 @@
+# Binaries
+bin/
+dist/
+# ui/dist/ is the embedded UI bundle that //go:embed in ui/embed.go
+# reads. A placeholder is tracked until the Vite build wires into
+# Bazel. Negate the broader `dist/` pattern above for this path.
+!ui/dist/
+!ui/dist/**
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/restore-entrypoint
+/nvsnap-blobstore
+/nvsnap-server
+/nvsnap-agent
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+coverage/
+*.out
+# Scoped to the coverage artifact rather than a bare *.html: the broad
+# pattern silently swallowed ui/index.html, Vite's entry point, so
+# nvsnap-server could not be built from a clean checkout. The
+# !ui/dist/**.html negation that used to sit here was a workaround for
+# the same over-broad rule and is no longer needed.
+coverage.html
+*.cover.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.tar.gz
+*.zip
+
+# Local configs
+*.local.yaml
+*.local.json
+configs/*-dev.yaml
+!configs/*-example.yaml
+
+# Secrets
+*.pem
+*.key
+secrets/
+
+# Node modules (for UI)
+node_modules/
+ui/node_modules/
+ui/.next/
+# Note: ui/dist/ is intentionally tracked. The Bazel build embeds it
+# via //go:embed in ui/embed.go; a placeholder is checked in until the
+# Vite build is wired into Bazel.
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# CRIU work directories
+/var/lib/gpucr/
+
+# Kubernetes generated
+deploy/helm/nvsnap/charts/
+*.tgz
+
+# Generated code
+api/gen/
+pkg/apis/**/zz_generated.*
+
+# Tools
+bin/tools/
+
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Object files
+*.o
+lib/gpucr_intercept/tests/test_simple_checkpoint
+
+# Credentials
+.gpucr/
+credentials
+/agent
+
+# Build-time copy of CRIU source (synced from docker/phase2/criu-src)
+docker/agent/criu-src/
+criu-src-local/
+
+# Local build artifact: tracks which criu-src commit was used for last base image
+.criu-base-commit
+KUBECON.md
+
+# Terraform
+**/terraform.tfvars
+**/.terraform/
+**/.terraform.lock.hcl
+**/terraform.tfstate
+**/terraform.tfstate.backup
+**/*.tfplan
+**/apply.log
+
+# Bazel
+bazel-bin
+bazel-out
+bazel-testlogs
+bazel-nvsnap
+.bazel-cache/
+user.bazelrc
+
+# built binaries / scratch (never commit)
+/nvsnap
+/python3.12
+
+# Captured ioctl traces / generated binary fixtures (regenerate, don't commit)
+lib/nvsnap_intercept/*.bin
+/nvsnap-rootfs-restore
+/bazel-gpucr
+/tests/iouring/
+
+# compiled binary build artifacts (never commit)
+/nvsnap-server
+/nvsnap-rootfs-restore
+lib/*/nvsnap-restore-helper
+/nvsnap-l2-wait
+/nvsnap-mount-prep
+/nvsnap-blobstore
+/nvsnap
+/agent
+/splice-microbench
+/splice-parallel
+.criu-src-cache/

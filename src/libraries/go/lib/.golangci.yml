@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: "2"
+run:
+  issues-exit-code: 1
+  tests: false
+  allow-parallel-runners: false
+linters:
+  enable:
+    - dupl
+    - goconst
+    - gocritic
+    - gocyclo
+    - goheader
+    - gosec
+    - misspell
+    - nakedret
+    - revive
+    - unconvert
+    - whitespace
+  settings:
+    gosec:
+      config:
+        G306: "0644"
+      excludes:
+      - G601
+    goheader:
+      template-path: .goheader.tmpl
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: line-length-limit # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#line-length-limit
+          arguments: [180]
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - ca
+      - deployment
+      - docker
+      - docs
+      - gitlab-runners
+      - ha
+      - iso
+      - ota
+      - scripts
+    rules:
+      # Exclude goheader for generated files
+      - path: zz_generated\..*\.go
+        linters:
+          - goheader
+      - path: generated\..*\.go
+        linters:
+          - goheader
+      # Exclude goheader for vendored client code
+      - path: pkg/client/
+        linters:
+          - goheader
+      # Exclude goheader for vendor directory
+      - path: vendor/
+        linters:
+          - goheader
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false
+formatters:
+  enable:
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

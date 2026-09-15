@@ -1,0 +1,35 @@
+---
+# Source: kai-scheduler/templates/hooks/pre/crd-upgrader.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crd-upgrader
+  namespace: kai-scheduler
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "2"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        app: crd-upgrader
+    spec:
+      serviceAccountName: kai-scheduler-crd-manager
+      imagePullSecrets:
+        - name: nvcr-pull-secret
+      containers:
+      - name: upgrader
+        image: "ghcr.io/kai-scheduler/kai-scheduler/crd-upgrader:v0.17.1"
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10000
+      restartPolicy: OnFailure

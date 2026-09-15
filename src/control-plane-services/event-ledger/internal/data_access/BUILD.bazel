@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "data_access",
+    srcs = ["db.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/common/core/types",
+        "//src/control-plane-services/event-ledger/pkg/codex",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":data_access",
+    visibility = ["//:__subpackages__"],
+)

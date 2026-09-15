@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "errcode",
+    srcs = ["errors.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/registry/remote/errcode",
+    importpath = "oras.land/oras-go/v2/registry/remote/errcode",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":errcode",
+    visibility = ["//visibility:public"],
+)

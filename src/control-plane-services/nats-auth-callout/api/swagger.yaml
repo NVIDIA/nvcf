@@ -1,0 +1,142 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+basePath: /
+definitions:
+  models.ErrorResponse:
+    properties:
+      code:
+        example: 400
+        format: int32
+        maximum: 599
+        minimum: 100
+        type: integer
+      error:
+        example: request parameter error
+        maxLength: 200
+        type: string
+      message:
+        example: detailed error message
+        maxLength: 500
+        type: string
+    type: object
+  models.HealthResponse:
+    properties:
+      status:
+        enum:
+        - ok
+        - degraded
+        - down
+        example: ok
+        maxLength: 20
+        type: string
+    type: object
+  models.PingResponse:
+    properties:
+      message:
+        example: pong
+        maxLength: 100
+        type: string
+      service:
+        example: nvcf-nats-auth-callout-service
+        maxLength: 100
+        type: string
+      timestamp:
+        example: 1640995200
+        format: int64
+        maximum: 9999999999
+        minimum: 0
+        type: integer
+    type: object
+externalDocs:
+  description: OpenAPI
+  url: https://swagger.io/resources/open-api/
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: 'This is a simple nvcf-nats-auth-callout-service service API built with Gin framework, nSpectId: NSPECT-QG33-Y8G6'
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: nvcf-nats-auth-callout-service Service API
+  version: "1.0"
+paths:
+  /healthz:
+    get:
+      consumes:
+      - application/json
+      description: return service health status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Health check success
+          schema:
+            $ref: '#/definitions/models.HealthResponse'
+        "400":
+          description: Bad request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "429":
+          description: Too many requests
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BasicAuth: []
+      summary: Health check interface
+      tags:
+      - Health
+  /v1/ping:
+    get:
+      consumes:
+      - application/json
+      description: return pong response, for testing if the service is running
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success response
+          schema:
+            $ref: '#/definitions/models.PingResponse'
+        "400":
+          description: Bad request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "429":
+          description: Too many requests
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - BasicAuth: []
+      summary: Ping interface
+      tags:
+      - Health
+schemes:
+- http
+securityDefinitions:
+  BasicAuth:
+    type: basic
+swagger: "2.0"
+tags:
+- description: 'NSPECT-QG33-Y8G6'
+  name: nspect_id

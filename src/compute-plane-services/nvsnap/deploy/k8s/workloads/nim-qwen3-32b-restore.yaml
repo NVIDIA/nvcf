@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# nim-qwen3-32b FRESH restore pod (TP=2). Customer-shape minimal
+# spec; the nvsnap-rootfs-restore admission webhook reads
+# nvsnap.io/restore-from, looks up the manifest CM
+# (nvsnap-capture-<shortHash>) cluster-wide, injects nodeAffinity
+# pinning to the capture-source node, and adds rootfs-extract
+# volumeMounts that bind-mount the pre-warmed NIM/HF cache from
+# /var/lib/nvsnap/cache/<hash>/.
+#
+# test-e2e.sh substitutes the real capture hash for __CAPTURE_HASH__
+# before applying.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nim-qwen3-32b-restored
+  namespace: nvsnap-system
+  labels:
+    app: nim-qwen3-32b-restored
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/restore-from: "__CAPTURE_HASH__"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+    - name: nim-pull-secret
+
+  containers:
+    - name: nim
+      image: nvcr.io/nim/qwen/qwen3-32b:1.0.0
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+        - name: NIM_CACHE_PATH
+          value: "/opt/nim/.cache"
+        - name: HF_HUB_DISABLE_XET
+          value: "1"
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0,1"
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 80
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+        requests:
+          nvidia.com/gpu: "2"
+      securityContext:
+        privileged: true
+        # NIM image defaults to uid=1000(nim). Non-root processes in
+        # a privileged container get NO effective capabilities, so
+        # CRIU restore fails with "Effective capability 21/40
+        # missing" (CAP_SYS_ADMIN / CAP_CHECKPOINT_RESTORE). Force
+        # restore-entrypoint to run as root; CRIU preserves
+        # credentials so the restored NIM process gets uid=1000 back.
+        runAsUser: 0
+      # nim-cache mount intentionally omitted. The webhook injects a
+      # hostPath bind-mount at /opt/nim/.cache pointing at the captured
+      # NIM model + engine bundle. Pre-declaring an emptyDir here would
+      # trigger the Mutator's "customer already mounts this path" skip
+      # path, leaving us with empty cache (effectively cold-start).
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

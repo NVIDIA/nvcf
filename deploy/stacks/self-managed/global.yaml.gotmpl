@@ -1,0 +1,1654 @@
+{{- define "nvcf.nodeSelector" -}}
+{{- if .selectors.enabled -}}
+{{- $ns := dig .type (dict) .selectors -}}
+{{- if or (not $ns) (not (kindIs "map" $ns)) (not (index $ns "key")) -}}
+{{- $ns = dig "all" (dict) .selectors -}}
+{{- end -}}
+{{- if and $ns (kindIs "map" $ns) (index $ns "key") -}}
+nodeSelector:
+  {{ $ns.key }}: {{ $ns.value }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "nvcf.tolerations" -}}
+{{- if .tolerations.enabled -}}
+{{- $tol := dig .type (list) .tolerations -}}
+{{- if not (and $tol (kindIs "slice" $tol)) -}}
+{{- $tol = dig "all" (list) .tolerations -}}
+{{- end -}}
+{{- if and $tol (kindIs "slice" $tol) -}}
+tolerations:
+{{ toYaml $tol }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+cassandra:
+  global:
+    {{- if .Values.global.imagePullSecrets }}
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+    {{- end }}
+    security:
+      allowInsecureImages: true
+    {{- if .Values.global.storageClass }}
+    defaultStorageClass: {{ .Values.global.storageClass }}
+    {{- end }}
+
+  replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
+  resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
+
+  {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+  {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "cassandra" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  persistence:
+    size: {{ .Values.global.storageSize | default "10Gi" }}
+
+  migrations:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-cassandra-migrations
+      {{- if dig "cassandra" "migrations" "image" "tag" "" .Values }}
+      tag: {{ dig "cassandra" "migrations" "image" "tag" "" .Values }}
+      {{- end }}
+      {{- if dig "cassandra" "migrations" "image" "pullPolicy" "" .Values }}
+      pullPolicy: {{ dig "cassandra" "migrations" "image" "pullPolicy" "" .Values }}
+      {{- end }}
+  initialization:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
+  image:
+    registry: {{ dig "cassandra" "image" "registry" "" .Values | default .Values.global.image.registry }}
+    repository: {{ dig "cassandra" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
+    {{- if dig "cassandra" "image" "tag" "" .Values }}
+    tag: {{ dig "cassandra" "image" "tag" "" .Values }}
+    {{- end }}
+  dynamicSeedDiscovery:
+    image:
+      registry: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
+      {{- if dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      tag: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      {{- end }}
+
+# cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
+# passes these through to the upstream cert-manager subchart under the
+# `cert-manager` key. `image.repository` is a full-path override that wins
+# over the upstream `imageRegistry`/`imageNamespace`/`name` construction,
+# so each component pulls from the nvcr.io mirror (regsync-configs !140)
+# instead of quay.io/jetstack.
+cert-manager:
+  {{- if .Values.global.imagePullSecrets }}
+  global:
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+  {{- end }}
+  image:
+    repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-controller
+  webhook:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-webhook
+  cainjector:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-cainjector
+  acmesolver:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-acmesolver
+  startupapicheck:
+    image:
+      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
+
+openbao:
+  {{- if .Values.global.imagePullSecrets }}
+  global:
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+  {{- end }}
+  migrations:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
+      {{- if dig "openbao" "migrations" "image" "tag" "" .Values }}
+      tag: {{ dig "openbao" "migrations" "image" "tag" "" .Values }}
+      {{- end }}
+
+    env:
+      {{- with dig "openbao" "migrations" "env" (list) .Values }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      - name: ADDONS_LLM_ENABLED
+        value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
+      - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+        value: {{ dig "addons" "llm" "pki" "allowedDomains" "" .Values | quote }}
+
+    # merge the rest of the user-supplied migrations block, but drop
+    # image and env sub-blocks so we don't clobber the defaults above.
+    {{- with .Values.openbao.migrations }}
+    {{- range $key, $value := . }}
+    {{- if and (ne $key "image") (ne $key "env") }}
+    {{ $key }}:
+      {{- toYaml $value | nindent 6 }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+
+  injector:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/oss-vault-k8s
+    agentImage:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao
+    {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    replicas: {{ .Values.openbao.injector.replicas }}
+    {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
+    {{- with dig "openbao" "injector" "webhook" dict .Values }}
+    webhook:
+      {{- $webhook := deepCopy . }}
+      {{- $matchExpressions := dig "namespaceSelector" "matchExpressions" list $webhook }}
+      {{- if $nvcfUiEnabled }}
+      {{- range $expr := $matchExpressions }}
+      {{- if and (eq (dig "key" "" $expr) "kubernetes.io/metadata.name") (eq (dig "operator" "" $expr) "In") }}
+      {{- $values := dig "values" list $expr }}
+      {{- if not (has "nvcf-ui" $values) }}
+      {{- $_ := set $expr "values" (append $values "nvcf-ui") }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
+      {{- toYaml $webhook | nindent 6 }}
+    {{- end }}
+    podDisruptionBudget:
+      minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
+  server:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao
+    {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+    {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+
+    dataStorage:
+      {{- if .Values.global.storageClass }}
+      storageClass: {{ .Values.global.storageClass }}
+      {{- end }}
+      size: {{ .Values.global.storageSize | default "10Gi" }}
+
+    ha:
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      disruptionBudget:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+nats:
+  {{- $natsServerTags := dig "nats" "config" "merge" "server_tags" (list "dc:ncp" "aws-region:ncp") .Values }}
+  {{- if .Values.global.imagePullSecrets }}
+  global:
+    image:
+      pullSecretNames:
+        {{- range .Values.global.imagePullSecrets }}
+        - {{ .name }}
+        {{- end }}
+  {{- end }}
+  container:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nats-server
+      tag: 2.14.6-alpine3.22
+  # The config reloader is not republished under the public nvidia/nvcf
+  # catalog, so it defaults to its upstream Docker Hub source and a
+  # public-catalog install needs no override. If you mirror the image into
+  # your own registry, set registry and repository below in your environment
+  # file instead of editing this template.
+  reloader:
+    image:
+      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default "natsio/nats-server-config-reloader" }}
+      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.24.0" | quote }}
+  natsBox:
+    container:
+      image:
+        registry: {{ .Values.global.image.registry }}
+        repository: {{ .Values.global.image.repository }}/nats-box
+        tag: 0.19.7-nonroot
+  nkeyJob:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
+  {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
+  {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
+  {{- if or $natsNs $natsTol }}
+  podTemplate:
+    merge:
+      spec:
+        {{- with $natsNs }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- with $natsTol }}
+        {{- . | nindent 8 }}
+        {{- end }}
+  {{- end }}
+
+  # One merged config: block -- a second config: key under nats: would be
+  # silently collapsed. Surfaces server TLS for split-plane workers that reach
+  # NATS over an L4-passthrough LB: TLS must terminate at the server (an LB
+  # can't -- the INFO-first client deadlocks a terminated handshake), and
+  # allow_non_tls keeps in-cluster plaintext clients on :4222. Emitted only when
+  # set, so an env file that sets neither renders identical.
+  {{- $natsTls := dig "nats" "config" "nats" "tls" dict .Values }}
+  {{- $allowNonTls := dig "nats" "config" "merge" "allow_non_tls" nil .Values }}
+  config:
+    merge:
+      server_tags:
+        {{- toYaml $natsServerTags | nindent 8 }}
+      {{- if kindIs "bool" $allowNonTls }}
+      allow_non_tls: {{ $allowNonTls }}
+      {{- end }}
+    {{- if .Values.global.storageClass }}
+    jetstream:
+      fileStore:
+        pvc:
+          storageClassName: {{ .Values.global.storageClass }}
+    {{- end }}
+    {{- with $natsTls }}
+    nats:
+      tls:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+
+  {{- with dig "nats" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+apikeys:
+  fullnameOverride: api-keys
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-api-keys-service
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "apikeys" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "startupProbe" dict .Values }}
+  startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "env" dict .Values }}
+  env:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+natsAuthCalloutService:
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
+
+{{- $workerEndpoints := dig "global" "workerEndpoints" dict .Values }}
+{{- /* Worker sidecar registry host/repository, shared by the NVCF and NVCT env
+       below. Unset inherits global.image; global.sidecars.* sources the worker
+       sidecars from a separate registry/org while control-plane images stay put. */}}
+{{- $sidecarsHost := dig "global" "sidecars" "hostname" "" .Values | default .Values.global.image.registry }}
+{{- $sidecarsRepo := dig "global" "sidecars" "repository" "" .Values | default .Values.global.image.repository }}
+{{- $nvcfWorkerServiceURL := dig "nvcfServiceURL" "" $workerEndpoints }}
+{{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
+{{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
+{{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
+{{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default "nats://nats.nats-system.svc.cluster.local:4222" }}
+{{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
+{{- /* In-cluster ESS base URL for the API's/NVCT's own ESS calls. Defaults to
+       the worker-advertised ESS URL so existing installs are unchanged; set it
+       to the in-cluster ess-api Service in split-plane deployments so control-
+       plane ESS calls do not hairpin out to the public edge. */}}
+{{- $essApiBaseURL := dig "api" "essBaseURL" "" .Values | default $essWorkerBaseURL }}
+{{- $essNvctApiBaseURL := dig "nvctApi" "essBaseURL" "" .Values | default $essWorkerBaseURL }}
+{{- $nvctWorkerServiceURL := dig "nvctServiceURL" "" $workerEndpoints }}
+{{- $nvctWorkerGrpcServiceURL := dig "nvctGrpcServiceURL" "" $workerEndpoints }}
+{{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
+{{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
+{{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
+{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
+{{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
+{{- if hasPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- else if hasPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- end }}
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- if $llmEnabled }}
+{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
+{{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
+{{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
+{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAuthority }}
+{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAuthority | trimPrefix "[" | trimSuffix "]" }}
+{{- $llmRequestRouterIPv6Valid := true }}
+{{- $llmRequestRouterIPv6CompressionCount := len (regexFindAll `::` $llmRequestRouterIPv6Host -1) }}
+{{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if or (and (hasPrefix `:` $llmRequestRouterIPv6Host) (not (hasPrefix `::` $llmRequestRouterIPv6Host))) (and (hasSuffix `:` $llmRequestRouterIPv6Host) (not (hasSuffix `::` $llmRequestRouterIPv6Host))) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- $llmRequestRouterIPv6HexPart := $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets := 8 }}
+{{- if contains `.` $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv4OctetPattern := `(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)` }}
+{{- $llmRequestRouterIPv4SuffixPattern := printf `(^|:)(%s)(\.%s){3}$` $llmRequestRouterIPv4OctetPattern $llmRequestRouterIPv4OctetPattern }}
+{{- $llmRequestRouterIPv4Suffix := regexFind $llmRequestRouterIPv4SuffixPattern $llmRequestRouterIPv6Host | trimPrefix ":" }}
+{{- if not $llmRequestRouterIPv4Suffix }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- else }}
+{{- $llmRequestRouterIPv6HexPart = trimSuffix $llmRequestRouterIPv4Suffix $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets = 6 }}
+{{- end }}
+{{- end }}
+{{- $llmRequestRouterIPv6ExplicitHextets := 0 }}
+{{- range $llmRequestRouterIPv6Hextet := splitList `:` $llmRequestRouterIPv6HexPart }}
+{{- if $llmRequestRouterIPv6Hextet }}
+{{- $llmRequestRouterIPv6ExplicitHextets = add $llmRequestRouterIPv6ExplicitHextets 1 }}
+{{- if not (regexMatch `^[0-9A-Fa-f]{1,4}$` $llmRequestRouterIPv6Hextet) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 0) (ne $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 1) (ge $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if $llmRequestRouterIPv6Valid }}
+{{- $llmRequestRouterWorkerAddressValid = true }}
+{{- end }}
+{{- end }}
+{{- if not $llmRequestRouterWorkerAddressValid }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
+{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAuthority | atoi }}
+{{- if or (lt $llmRequestRouterWorkerPort 1) (gt $llmRequestRouterWorkerPort 65535) }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
+{{- end }}
+{{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
+{{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
+{{- $configuredApiEnv := dig "api" "env" dict .Values }}
+{{- if not (kindIs "map" $configuredApiEnv) }}
+{{- fail "api.env must be a map" }}
+{{- end }}
+{{- $renderedApiEnv := deepCopy $configuredApiEnv }}
+{{- $legacyPylonEnvKey := "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" }}
+{{- $legacyPylonImageConfigured := hasKey $renderedApiEnv $legacyPylonEnvKey }}
+{{- $legacyPylonImage := "" }}
+{{- if $legacyPylonImageConfigured }}
+{{- $legacyPylonImage = index $renderedApiEnv $legacyPylonEnvKey }}
+{{- if not (kindIs "string" $legacyPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a string" }}
+{{- end }}
+{{- if eq (trim $legacyPylonImage) "" }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a non-empty string" }}
+{{- end }}
+{{- $legacyPylonImage = trim $legacyPylonImage }}
+{{- $_ := unset $renderedApiEnv $legacyPylonEnvKey }}
+{{- end }}
+{{- $configuredApiRemoteConfigData := dig "api" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredApiRemoteConfigData) }}
+{{- fail "api.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $apiRemoteConfigData := deepCopy $configuredApiRemoteConfigData }}
+{{- $configuredNvcfRemoteConfig := dict }}
+{{- if hasKey $apiRemoteConfigData "nvcf" }}
+{{- $configuredNvcfRemoteConfig = index $apiRemoteConfigData "nvcf" }}
+{{- if not (kindIs "map" $configuredNvcfRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf must be a map" }}
+{{- end }}
+{{- end }}
+{{- $configuredSidecarsRemoteConfig := dict }}
+{{- if hasKey $configuredNvcfRemoteConfig "sidecars" }}
+{{- $configuredSidecarsRemoteConfig = index $configuredNvcfRemoteConfig "sidecars" }}
+{{- if not (kindIs "map" $configuredSidecarsRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars must be a map" }}
+{{- end }}
+{{- end }}
+{{- $pylonRemoteConfigKey := "llm-router-client-image" }}
+{{- $configuredPylonImagePresent := hasKey $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- $configuredPylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $configuredPylonImage = index $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- if not (kindIs "string" $configuredPylonImage) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a string" }}
+{{- end }}
+{{- if eq (trim $configuredPylonImage) "" }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a non-empty string" }}
+{{- end }}
+{{- $configuredPylonImage = trim $configuredPylonImage }}
+{{- $_ := set $configuredSidecarsRemoteConfig $pylonRemoteConfigKey $configuredPylonImage }}
+{{- end }}
+{{- if and $legacyPylonImageConfigured $configuredPylonImagePresent (ne $legacyPylonImage $configuredPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE is deprecated and conflicts with api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image" }}
+{{- end }}
+{{- $effectivePylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $effectivePylonImage = $configuredPylonImage }}
+{{- else if $legacyPylonImageConfigured }}
+{{- $effectivePylonImage = $legacyPylonImage }}
+{{- else if $llmEnabled }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.16.2" $sidecarsHost $sidecarsRepo }}
+{{- end }}
+{{- $stackApiRemoteConfigData := dict }}
+{{- $stackNvcfRemoteConfig := dict }}
+{{- if or $llmEnabled $legacyPylonImageConfigured }}
+{{- $_ := set $stackNvcfRemoteConfig "sidecars" (dict $pylonRemoteConfigKey $effectivePylonImage) }}
+{{- end }}
+{{- if $llmEnabled }}
+{{- $_ := set $stackNvcfRemoteConfig "llm-request-router" (dict "worker-address" $llmRequestRouterWorkerAddress) }}
+{{- end }}
+{{- if $stackNvcfRemoteConfig }}
+{{- $_ := set $stackApiRemoteConfigData "nvcf" $stackNvcfRemoteConfig }}
+{{- end }}
+{{- $apiRemoteConfigData = mergeOverwrite $apiRemoteConfigData $stackApiRemoteConfigData }}
+api:
+  fullnameOverride: nvcf-api
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    {{- $apiImageName := dig "api" "image" "name" "nvcf-service-oss" .Values }}
+    {{- $apiImageRepository := printf "%s/%s" .Values.global.image.repository $apiImageName }}
+    repository: {{ dig "api" "image" "repository" $apiImageRepository .Values }}
+    {{- with dig "api" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $apiRemoteConfigData }}
+  remoteConfig:
+    configData:
+      {{- toYaml $apiRemoteConfigData | nindent 6 }}
+  {{- end }}
+  # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
+  # defaults to its upstream Docker Hub source and a public-catalog install
+  # needs no override. If you mirror the image into your own registry, set
+  # registry and repository below in your environment file instead of editing
+  # this template.
+  accountBootstrap:
+    image:
+      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
+      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.37.0" | quote }}
+      pullPolicy: IfNotPresent
+
+    registryCredentials: []
+
+    limits:
+      {{- $maxFunctions := .Values.accounts.limits.maxFunctions | default 50 }}
+      {{- if or (lt $maxFunctions 1) (gt $maxFunctions 50) }}
+      {{- fail "accounts.limits.maxFunctions must be greater than 0 and less than or equal to 50" }}
+      {{- end }}
+      maxFunctions: {{ $maxFunctions }}
+
+      {{- $maxTasks := .Values.accounts.limits.maxTasks | default 50 }}
+      {{- if or (lt $maxTasks 1) (gt $maxTasks 50) }}
+      {{- fail "accounts.limits.maxTasks must be greater than 0 and less than or equal to 50" }}
+      {{- end }}
+      maxTasks: {{ $maxTasks }}
+
+      {{- $maxTelemetries := .Values.accounts.limits.maxTelemetries | default 25 }}
+      {{- if or (lt $maxTelemetries 1) (gt $maxTelemetries 25) }}
+      {{- fail "accounts.limits.maxTelemetries must be greater than 0 and less than or equal to 25" }}
+      {{- end }}
+      maxTelemetries: {{ $maxTelemetries }}
+
+      {{- $maxRegistryCreds := .Values.accounts.limits.maxRegistryCreds | default 10 }}
+      {{- if or (lt $maxRegistryCreds 1) (gt $maxRegistryCreds 25) }}
+      {{- fail "accounts.limits.maxRegistryCreds must be greater than 0 and less than or equal to 25" }}
+      {{- end }}
+      maxRegistryCreds: {{ $maxRegistryCreds }}
+
+  {{- /* Build the fixed API environment first, then merge configured api.env
+         last so operators can override a default without emitting duplicate
+         YAML keys. toYaml provides deterministic key ordering and treats
+         configured values as data rather than evaluating them as templates. */}}
+  {{- $apiEnv := dict
+        "NVCF_NATS_REGION_PLACEMENT_TAG" "dc"
+        "NVCF_SIDECARS_HOSTNAME" $sidecarsHost
+        "NVCF_SIDECARS_REPOSITORY" $sidecarsRepo
+        "MANAGEMENT_TRACING_ENABLED" (printf "%v" .Values.global.observability.tracing.enabled) -}}
+  {{- with $nvcfWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_FQDN" . }}
+  {{- end }}
+  {{- with $nvcfWorkerGrpcServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_GLOBAL_FQDN_GRPC" . }}
+  {{- end }}
+  {{- with $nvcfNatsWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_NATS_WORKER_URL" . }}
+  {{- end }}
+  {{- with $essWorkerBaseURL }}
+  {{- /* Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly. */}}
+  {{- $_ := set $apiEnv "NVCF_ESS_WORKER_BASE_URL" . }}
+  {{- end }}
+  {{- with $essApiBaseURL }}
+  {{- $_ := set $apiEnv "NVCF_ESS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "icmsBaseUrl" nil .Values }}
+  {{- $_ := set $apiEnv "NVCF_ICMS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "issuerUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI" . }}
+  {{- end }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- end }}
+  {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
+  env:
+    {{- toYaml $apiEnv | nindent 4 }}
+
+invocation:
+  {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredInvocationEnv) }}
+  {{- fail "invocation.env must be a map" }}
+  {{- end }}
+  {{- $invocationEnv := dict }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_IP" (printf "%s://%s" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint) }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_PORT" .Values.global.observability.tracing.collectorPort }}
+  {{- else }}
+  {{- $_ := set $invocationEnv "SERVER__ENVFILTER_DIRECTIVE" "otel::tracing=off,otel=off,server=trace,info" }}
+  {{- end }}
+  {{- if .Values.rateLimiter.enabled }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" "http://ratelimiter.nvcf.svc.cluster.local:7777" }}
+  {{- end }}
+  {{- with $invocationWorkerBaseURL }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
+  {{- end }}
+  {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
+  fullnameOverride: invocation-service
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-invocation-service
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+
+  metrics:
+    enabled: {{ or (eq (dig "observability" "profile" "disabled" .Values) "control") (eq (dig "observability" "profile" "disabled" .Values) "all") }}
+    # The observability stack owns the shared ServiceMonitor resources.
+    serviceMonitor:
+      enabled: false
+
+  env:
+    {{- toYaml $invocationEnv | nindent 4 }}
+  {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
+  tracing:
+    baggageAttributeAllowlist:
+    {{- toYaml . | nindent 6 }}
+  {{- end }}
+  {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+nvctApi:
+  fullnameOverride: nvct-api
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvct-service-oss
+    {{- with dig "nvctApi" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+
+  env:
+    NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
+    NVCT_SIDECARS_REPOSITORY: {{ $sidecarsRepo }}
+    {{- with $nvctWorkerServiceURL }}
+    NVCT_FQDN: {{ . | quote }}
+    {{- end }}
+    {{- with $nvctWorkerGrpcServiceURL }}
+    NVCT_GLOBAL_FQDN_GRPC: {{ . | quote }}
+    {{- end }}
+    {{- with $essNvctApiBaseURL }}
+    NVCT_ESS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with $essWorkerBaseURL }}
+    {{- /* Keep the legacy worker alias until all NVCT builds consume the base URL directly. */}}
+    NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}
+    NVCT_ICMS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "issuerUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "jwkSetUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
+    {{- end }}
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+
+grpcproxy:
+  fullnameOverride: grpc-proxy
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-grpc-proxy
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with $grpcProxyWorkerConnectBaseURL }}
+  workerConnectBaseURL: {{ . | quote }}
+  {{- end }}
+
+  env:
+    # Observability
+    {{- if .Values.global.observability.tracing.enabled }}
+    OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    {{- else }}
+    TRACING: "none" # this is ineffective, but the env list must be non-empty
+    {{- end }}
+    {{- with $grpcProxyNVCFGrpcServiceURL }}
+    NVCF_FQDN_GRPC: {{ . | quote }}
+    {{- end }}
+    {{- with $grpcProxyNatsServiceURL }}
+    NATS_FQDN: {{ . | quote }}
+    {{- end }}
+    {{- if .Values.rateLimiter.enabled }}
+    RATE_LIMIT_ENABLED: "true"
+    RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
+    {{- end }}
+  {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+rateLimiter:
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- end }}
+  replicaCount: {{ .Values.rateLimiter.replicaCount }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  env:
+    OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+  {{- end }}
+  {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+ess:
+  fullnameOverride: ess-api
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-ess
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+
+  env:
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+  {{- with dig "ess" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+notary:
+  fullnameOverride: notary-service
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-notary
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+
+  env:
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+
+sis:
+  fullnameOverride: spot-instance-service
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/icms-service-oss
+    {{- if dig "sis" "image" "tag" "" .Values }}
+    tag: {{ dig "sis" "image" "tag" "" .Values }}
+    {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+
+  # LLS/TURN HMAC rotation configuration
+  lls:
+    enabled: {{ dig "addons" "lls" "enabled" false .Values }}
+    hmacRotation:
+      image:
+        registry: {{ .Values.global.image.registry }}
+        repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
+        {{- if dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
+        tag: {{ dig "addons" "lls" "hmacRotation" "image" "tag" "" .Values }}
+        {{- end }}
+
+  env:
+    # Observability
+    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
+    MANAGEMENT_PROMETHEUS_METRICS_EXPORT_ENABLED: {{ .Values.global.observability.metrics.enabled | quote }}
+    MANAGEMENT_METRICS_ENABLE_ALL: {{ .Values.global.observability.metrics.enabled | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+
+adminIssuerProxy:
+  fullnameOverride: admin-token-issuer-proxy
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/admin-token-issuer-proxy
+    {{- with dig "adminIssuerProxy" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  gateway:
+    enabled: true
+    namespace: {{ .Values.ingress.gatewayApi.gateways.shared.namespace }}
+    gatewayRef:
+      name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
+    hostname: "api-keys.{{ .Values.global.domain }}"
+    path: "/v1/admin/keys"
+  {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+stateMetrics:
+  enabled: false
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-state-metrics-service
+  {{- with dig "stateMetrics" "resources" dict .Values }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  # Disable ServiceMonitor for environments without Prometheus Operator
+  serviceMonitor:
+    enabled: false
+
+{{- $observabilityProfile := dig "observability" "profile" "disabled" .Values }}
+{{- $functionAutoscalerEnabled := or (eq $observabilityProfile "control") (eq $observabilityProfile "all") }}
+{{- if $functionAutoscalerEnabled }}
+{{- $defaultMetricsBackendMode := ternary "install" "disabled" (ne $observabilityProfile "disabled") }}
+{{- $metricsBackendMode := dig "metricsBackend" "mode" $defaultMetricsBackendMode .Values }}
+{{- $victoriaMetricsNamespace := dig "victoriaMetrics" "namespace" (dig "observability" "namespace" "monitoring" .Values) .Values }}
+{{- $bundledPromqlEndpoint := printf "http://vmsingle.%s.svc.cluster.local:8428" $victoriaMetricsNamespace }}
+{{- $promqlEndpoint := ternary $bundledPromqlEndpoint (dig "metricsBackend" "promqlEndpoint" "" .Values) (eq $metricsBackendMode "install") }}
+functionautoscaler:
+  {{- $configuredFunctionAutoscalerEnv := dig "functionAutoscaler" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredFunctionAutoscalerEnv) }}
+  {{- fail "functionAutoscaler.env must be a map" }}
+  {{- end }}
+  {{- $functionAutoscalerEnv := dict
+        "CONFIG" "/etc/server/config/settings-local.yaml"
+        "SECRETS_PATH" "/vault/secrets/secrets.json"
+        "REGION" (dig "functionAutoscaler" "region" "local" .Values)
+        "CASSANDRA__CONTACT_POINTS" (dig "functionAutoscaler" "cassandra" "contactPoints" "cassandra.cassandra-system.svc.cluster.local" .Values)
+        "CASSANDRA__IS_DEVELOPMENT" (printf "%v" (dig "functionAutoscaler" "cassandra" "isDevelopment" false .Values))
+        "NVCF_API__NVCF_API_GRPC_ADDRESS" (dig "functionAutoscaler" "nvcfApi" "grpcAddress" "http://api.nvcf.svc.cluster.local:9090" .Values)
+        "NVCF_API__DISABLE_AUTH" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "disableAuth" true .Values))
+        "NVCF_API__DRY_RUN" (printf "%v" (dig "functionAutoscaler" "nvcfApi" "dryRun" false .Values))
+        "TIMESERIES_DB__TIMESERIES_DB_URL" (required "metricsBackend.promqlEndpoint is required for control and all profiles" $promqlEndpoint)
+        "TIMESERIES_DB__AUTH_MODE" (dig "metricsBackend" "authentication" "mode" "none" .Values)
+        "TIMESERIES_DB__IGNORE_ENV" (printf "%v" (dig "functionAutoscaler" "timeseriesDb" "ignoreEnv" true .Values)) -}}
+  {{- with dig "metricsBackend" "authentication" "authnEndpoint" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__AUTHN_URL" . }}
+  {{- end }}
+  {{- with dig "metricsBackend" "authentication" "clientCertificatePath" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__CLIENT_CERTIFICATE_PATH" . }}
+  {{- end }}
+  {{- with dig "metricsBackend" "authentication" "clientPrivateKeyPath" "" .Values }}
+  {{- $_ := set $functionAutoscalerEnv "TIMESERIES_DB__CLIENT_PRIVATE_KEY_PATH" . }}
+  {{- end }}
+  {{- $functionAutoscalerEnv = mergeOverwrite $functionAutoscalerEnv (deepCopy $configuredFunctionAutoscalerEnv) }}
+  namespace: nvcf
+  fullnameOverride: function-autoscaler
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-function-autoscaler
+    {{- with dig "functionAutoscaler" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+  env:
+    {{- toYaml $functionAutoscalerEnv | nindent 4 }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "functionautoscaler" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+reval:
+  fullnameOverride: reval
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/reval-server
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "reval" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+llmApiGateway:
+  enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+  fullnameOverride: llm-api-gateway
+  replicaCount: {{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ dig "addons" "llm" "gateway" "image" "registry" .Values.global.image.registry .Values }}
+    repository: {{ dig "addons" "llm" "gateway" "image" "repository" (printf "%s/llm-api-gateway" .Values.global.image.repository) .Values }}
+    {{- with dig "addons" "llm" "gateway" "image" "tag" "" .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+    {{- with dig "addons" "llm" "gateway" "image" "pullPolicy" "" .Values }}
+    pullPolicy: {{ . | quote }}
+    {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  config:
+    nvcfGrpcInsecure: {{ dig "addons" "llm" "gateway" "auth" "grpcInsecure" true .Values }}
+  metrics:
+    enabled: {{ dig "addons" "llm" "gateway" "metrics" "enabled" true .Values }}
+    serviceMonitor:
+      enabled: {{ dig "addons" "llm" "gateway" "metrics" "serviceMonitor" "enabled" (and (ne $observabilityProfile "disabled") .Values.global.observability.metrics.enabled (dig "addons" "llm" "gateway" "metrics" "enabled" true .Values)) .Values }}
+  observability:
+    tracing:
+      enabled: {{ .Values.global.observability.tracing.enabled }}
+      {{- if .Values.global.observability.tracing.enabled }}
+      endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+      {{- end }}
+  {{- with dig "llmApiGateway" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+{{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
+{{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
+{{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
+{{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
+{{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
+{{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}
+{{- if and $llmEnabled $backendRouterEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
+{{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled $grpcTlsAllowInsecureHttp }}
+{{- fail "addons.llm.requestRouter.grpcTls.enabled and addons.llm.requestRouter.grpcTls.allowInsecureHttp cannot both be true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (not $grpcTlsEnabled) (not $grpcTlsAllowInsecureHttp) }}
+{{- fail "addons.llm.requestRouter.grpcTls.allowInsecureHttp must be true for an explicitly plaintext external LLM worker route" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (empty $pylonGrpcDialAddress) }}
+{{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress is required when ingress.gatewayApi.routes.llmWorker.enabled is true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (ne $llmRequestRouterWorkerAddress $pylonGrpcDialAddress) }}
+{{- fail "global.workerEndpoints.llmRequestRouterAddress and addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress must use the same explicit URI when LLM worker routing is enabled" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled (not (hasPrefix "https://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "secure LLM worker routing requires an explicit https:// global.workerEndpoints.llmRequestRouterAddress" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsAllowInsecureHttp (not (hasPrefix "http://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "development plaintext LLM worker routing requires an explicit http:// global.workerEndpoints.llmRequestRouterAddress" }}
+{{- end }}
+
+llmRequestRouter:
+  enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+  fullnameOverride: llm-request-router
+  replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  workload:
+    kind: {{ dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values | quote }}
+  {{- with dig "addons" "llm" "requestRouter" "discovery" dict .Values }}
+  discovery:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  service:
+    grpcPort: {{ $llmRequestRouterGrpcPort }}
+  readiness:
+    warmupMs: {{ dig "addons" "llm" "requestRouter" "readiness" "warmupMs" 60000 .Values }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/stargate
+    {{- with dig "addons" "llm" "requestRouter" "image" "tag" nil .Values }}
+    tag: {{ . | quote }}
+    {{- end }}
+  {{- /*
+  Backend routing follows the LLM addon rather than being separately opted into.
+  A worker holds one registration stream and one reverse tunnel per replica, and
+  those must reach a named replica, so the router is the connection path in
+  every topology. Keeping it always on means single-cluster installs exercise
+  the same path that split-cluster and multi-region installs depend on, instead
+  of that path only appearing where it is hardest to test.
+
+  The dial addresses default to the backend-router Service in-cluster, so no
+  configuration is required. Split-cluster and multi-region operators override
+  addons.llm.requestRouter.backendRouter.pylon*DialAddress with externally
+  reachable addresses.
+  */}}
+  backendRouter:
+    enabled: {{ $backendRouterEnabled }}
+    replicaCount: {{ dig "addons" "llm" "requestRouter" "backendRouter" "replicaCount" 2 .Values }}
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/stargate
+    {{- with $pylonGrpcDialAddress }}
+    pylonGrpcDialAddress: {{ . | quote }}
+    {{- end }}
+    {{- with $pylonReverseTunnelDialAddress }}
+    pylonReverseTunnelDialAddress: {{ . | quote }}
+    {{- end }}
+    {{- if .Values.global.imagePullSecrets }}
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+    {{- end }}
+  grpcTls:
+    enabled: {{ $grpcTlsEnabled }}
+    allowInsecureHttp: {{ $grpcTlsAllowInsecureHttp }}
+    mode: {{ dig "addons" "llm" "requestRouter" "grpcTls" "mode" "certManager" .Values | quote }}
+    secretName: {{ dig "addons" "llm" "requestRouter" "grpcTls" "secretName" "llm-request-router-grpc-tls" .Values | quote }}
+    dnsNames:
+      {{- dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values | toYaml | nindent 6 }}
+    issuerRef:
+      kind: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "kind" "" .Values | default (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) | quote }}
+      name: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values | default (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) | quote }}
+      {{- with dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "group" "" .Values }}
+      group: {{ . | quote }}
+      {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  metrics:
+    enabled: {{ dig "addons" "llm" "requestRouter" "metrics" "enabled" true .Values }}
+    serviceMonitor:
+      enabled: {{ dig "addons" "llm" "requestRouter" "metrics" "serviceMonitor" "enabled" (and (ne $observabilityProfile "disabled") .Values.global.observability.metrics.enabled (dig "addons" "llm" "requestRouter" "metrics" "enabled" true .Values)) .Values }}
+  observability:
+    tracing:
+      enabled: {{ .Values.global.observability.tracing.enabled }}
+      {{- if .Values.global.observability.tracing.enabled }}
+      endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+      {{- end }}
+  {{- with dig "addons" "llm" "requestRouter" "loadBalancer" dict .Values }}
+  loadBalancer:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- /* Compound guard: skip the entire PKI block (and its required/fail
+       validations) when the LLM addon itself is disabled. helmfile's
+       `condition: addons.llm.enabled` already suppresses the chart release,
+       so an operator staging pki.enabled=true ahead of llm.enabled=true
+       should not be punished with confusing required errors during render. */ -}}
+  {{- if and (dig "addons" "llm" "enabled" false .Values) (dig "addons" "llm" "pki" "enabled" false .Values) }}
+  {{- /* Identity ownership. certManager keeps cert-manager as the owner of
+       issuance and renewal. existingSecret points the router at a Secret the
+       operator already created, so the stack renders no Certificate and pulls
+       in no issuer dependency. Validate the same way as issuerKind: dig only
+       falls back for a missing path, so explicit null and wrongly typed values
+       must be rejected rather than coerced into the default. */ -}}
+  {{- $pkiMode := dig "addons" "llm" "pki" "mode" "certManager" .Values }}
+  {{- if not (kindIs "string" $pkiMode) }}
+  {{- fail "addons.llm.pki.mode must be the string \"certManager\" or \"existingSecret\"" }}
+  {{- end }}
+  {{- if not (has $pkiMode (list "certManager" "existingSecret")) }}
+  {{- fail (printf "addons.llm.pki.mode must be exactly \"certManager\" or \"existingSecret\", got %q" $pkiMode) }}
+  {{- end }}
+  {{- if eq $pkiMode "existingSecret" }}
+  {{- /* The operator owns issuance in this mode, so custom values that steer
+       stack-managed issuance are mixed-ownership conflicts. The stable base
+       profile's managed defaults are tolerated because Helmfile cannot
+       reliably clear inherited values to empty values; any changed value
+       fails loudly. */ -}}
+  {{- $existingSecretPkiValues := dig "addons" "llm" "pki" dict .Values }}
+  {{- if kindIs "map" $existingSecretPkiValues }}
+  {{- $existingSecretClusterIssuer := dig "clusterIssuer" dict $existingSecretPkiValues }}
+  {{- if and (kindIs "map" $existingSecretClusterIssuer) (hasKey $existingSecretClusterIssuer "enabled") }}
+  {{- if index $existingSecretClusterIssuer "enabled" }}
+  {{- fail "addons.llm.pki.clusterIssuer.enabled must be false or unset when addons.llm.pki.mode is existingSecret; cert-manager and the operator cannot both own the request-router certificate" }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- $existingSecretDnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
+  {{- if not (kindIs "slice" $existingSecretDnsNames) }}
+  {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- $defaultManagedDnsNames := list "llm-request-router.nvcf.svc.cluster.local" "*.llm-request-router-headless.nvcf.svc.cluster.local" }}
+  {{- if and (gt (len $existingSecretDnsNames) 0) (not (deepEqual $existingSecretDnsNames $defaultManagedDnsNames)) }}
+  {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate; only the unchanged stable-base defaults are allowed when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- $existingSecretAllowedDomains := dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
+  {{- if and (ne $existingSecretAllowedDomains nil) (not (and (kindIs "string" $existingSecretAllowedDomains) (eq $existingSecretAllowedDomains "cluster.local"))) }}
+  {{- fail "addons.llm.pki.allowedDomains constrains the managed OpenBao signing role; only the unchanged stable-base default is allowed when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- /* No default: the Secret is the operator's, so guessing a name would
+       mount the wrong identity or fail at pod start instead of at render. */ -}}
+  {{- $existingSecretName := required "addons.llm.pki.secretName is required when addons.llm.pki.mode is existingSecret" (dig "addons" "llm" "pki" "secretName" "" .Values) }}
+  certificate:
+    enabled: false
+  tls:
+    mode: existingSecret
+    secretName: {{ $existingSecretName | quote }}
+    mountPath: {{ dig "addons" "llm" "pki" "mountPath" "/etc/stargate/tls" .Values | quote }}
+    certPath: {{ dig "addons" "llm" "pki" "certPath" "/etc/stargate/tls/tls.crt" .Values | quote }}
+    keyPath: {{ dig "addons" "llm" "pki" "keyPath" "/etc/stargate/tls/tls.key" .Values | quote }}
+    quicInsecure: false
+  {{- else }}
+  {{- $secretName := dig "addons" "llm" "pki" "secretName" "stargate-quic-tls" .Values }}
+  {{- /* dig only falls back for a missing path, so explicit null, empty, and
+       wrongly typed values reach these checks. Reject them instead of coercing
+       them: a malformed management flag that silently resolves to false skips
+       the nvcf-pki release in 01-dependencies.yaml.gotmpl while the block
+       below still renders a Certificate referencing the default issuer. Keep
+       this contract identical to the dependency stage. */ -}}
+  {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
+  {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+  {{- if not (kindIs "string" $issuerKind) }}
+  {{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
+  {{- end }}
+  {{- if not (has $issuerKind (list "ClusterIssuer" "Issuer")) }}
+  {{- fail (printf "addons.llm.pki.issuerKind must be exactly \"ClusterIssuer\" or \"Issuer\", got %q" $issuerKind) }}
+  {{- end }}
+  {{- if not (kindIs "string" $issuerName) }}
+  {{- fail "addons.llm.pki.issuerName must be a string" }}
+  {{- end }}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $issuerName) }}
+  {{- fail (printf "addons.llm.pki.issuerName must be a lowercase RFC 1123 DNS subdomain, got %q" $issuerName) }}
+  {{- end }}
+  {{- if gt (len $issuerName) 253 }}
+  {{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
+  {{- end }}
+  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+  {{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
+  {{- if kindIs "map" $pkiValues }}
+  {{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
+  {{- if and (kindIs "map" $clusterIssuerValues) (hasKey $clusterIssuerValues "enabled") }}
+  {{- /* index, not get: helmfile overrides sprig's get with a path-based
+       signature that rejects a map as its first argument. */ -}}
+  {{- $manageSetting := index $clusterIssuerValues "enabled" }}
+  {{- if not (kindIs "bool" $manageSetting) }}
+  {{- fail (printf "addons.llm.pki.clusterIssuer.enabled must be a YAML boolean, true or false. Quoted strings, null, and empty values are rejected. Got %q" (toString $manageSetting)) }}
+  {{- end }}
+  {{- $managedIssuer = $manageSetting }}
+  {{- end }}
+  {{- end }}
+  {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
+  {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+  {{- end }}
+  {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
+  {{- if eq (len $dnsNames) 0 }}
+  {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
+  {{- end }}
+  certificate:
+    enabled: true
+    secretName: {{ $secretName | quote }}
+    issuerRef:
+      kind: {{ $issuerKind | quote }}
+      name: {{ $issuerName | quote }}
+    dnsNames:
+      {{- toYaml $dnsNames | nindent 6 }}
+  tls:
+    secretName: {{ $secretName | quote }}
+    mountPath: {{ dig "addons" "llm" "pki" "mountPath" "/etc/stargate/tls" .Values | quote }}
+    certPath: {{ dig "addons" "llm" "pki" "certPath" "/etc/stargate/tls/tls.crt" .Values | quote }}
+    keyPath: {{ dig "addons" "llm" "pki" "keyPath" "/etc/stargate/tls/tls.key" .Values | quote }}
+    quicInsecure: false
+  {{- if $managedIssuer }}
+  {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
+       PKI tag, then the OpenBao migrations tag, and finally the compatible
+       stack default so a normal environment need not duplicate chart values. */ -}}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.1" }}
+  pki:
+    enabled: true
+    namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
+    allowedDomains: {{ $allowedDomains | quote }}
+    image:
+      registry: {{ dig "addons" "llm" "pki" "image" "registry" .Values.global.image.registry .Values | quote }}
+      repository: {{ dig "addons" "llm" "pki" "image" "repository" (printf "%s/nvcf-openbao-migrations" .Values.global.image.repository) .Values | quote }}
+      tag: {{ $pkiImageTag | quote }}
+      pullPolicy: {{ dig "addons" "llm" "pki" "image" "pullPolicy" "IfNotPresent" .Values | quote }}
+    {{- if .Values.global.imagePullSecrets }}
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with dig "llmRequestRouter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
+vanityGateway:
+  fullnameOverride: vanity-gateway
+  replicaCount: {{ dig "addons" "vanityGateway" "replicaCount" 2 .Values }}
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}/nvcf-ai-api-gateway-service
+    {{- if dig "addons" "vanityGateway" "image" "tag" "" .Values }}
+    tag: {{ dig "addons" "vanityGateway" "image" "tag" "" .Values | quote }}
+    {{- end }}
+    pullPolicy: {{ dig "addons" "vanityGateway" "image" "pullPolicy" "IfNotPresent" .Values }}
+  config:
+    mappingPath: {{ dig "addons" "vanityGateway" "config" "mappingPath" "/etc/vanity-gateway/config/config.yaml" .Values | quote }}
+    nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "http://invocation.nvcf.svc.cluster.local:8080" .Values | quote }}
+    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "http://llm-api-gateway.nvcf.svc.cluster.local:8080" .Values | quote }}
+    {{- if .Values.global.observability.tracing.enabled }}
+    otelExporterOtlpEndpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+    {{- else }}
+    otelExporterOtlpEndpoint: ""
+    {{- end }}
+    secretsPath: {{ dig "addons" "vanityGateway" "config" "secretsPath" "" .Values | quote }}
+    privateModelNameRegexPattern: {{ dig "addons" "vanityGateway" "config" "privateModelNameRegexPattern" "" .Values | quote }}
+    awsRegion: {{ dig "addons" "vanityGateway" "config" "awsRegion" "" .Values | quote }}
+    shadowMaxConcurrent: {{ dig "addons" "vanityGateway" "config" "shadowMaxConcurrent" 256 .Values }}
+  mappingConfig:
+    {{ dig "addons" "vanityGateway" "mappingConfig" (dict "v2config" (dict "openai" (dict) "vanity" (dict))) .Values | toYaml | nindent 4 | trim }}
+  serviceMonitor:
+    enabled: {{ dig "addons" "vanityGateway" "serviceMonitor" "enabled" false .Values }}
+    interval: {{ dig "addons" "vanityGateway" "serviceMonitor" "interval" "60s" .Values | quote }}
+    labels:
+      {{ dig "addons" "vanityGateway" "serviceMonitor" "labels" dict .Values | toYaml | nindent 6 | trim }}
+  {{- with (dig "addons" "vanityGateway" "service" dict .Values) }}
+  service:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "serviceAccount" dict .Values) }}
+  serviceAccount:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "podAnnotations" dict .Values) }}
+  podAnnotations:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "podLabels" dict .Values) }}
+  podLabels:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "podSecurityContext" dict .Values) }}
+  podSecurityContext:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "securityContext" dict .Values) }}
+  securityContext:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "resources" dict .Values) }}
+  resources:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- if .Values.global.nodeSelectors.enabled }}
+  nodeSelector:
+    {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
+  {{- else }}
+  {{- with (dig "addons" "vanityGateway" "nodeSelector" dict .Values) }}
+  nodeSelector:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "tolerations" (list) .Values) }}
+  tolerations:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+  {{- with (dig "addons" "vanityGateway" "affinity" dict .Values) }}
+  affinity:
+    {{ . | toYaml | nindent 4 | trim }}
+  {{- end }}
+
+{{- if dig "addons" "nvcfUi" "enabled" false .Values }}
+{{/* Shared backend coordinates for the services the nvcf-ui proxies to and
+     the control-plane health monitor probes. Read the same way gateway-routes
+     is fed from ingress.gatewayApi.routes.<x>.backend so the config URLs and
+     component endpoints track any operator override; the dict defaults fill the
+     usual case where a route pins no explicit backend. merge lets a partial
+     override (e.g. namespace only) keep the remaining default fields. */}}
+{{- $nvcfApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvcfApi" "backend" dict .Values)) (dict "name" "api" "namespace" "nvcf" "port" 8080) }}
+{{- $nvctApiBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "nvctApi" "backend" dict .Values)) (dict "name" "nvct-api" "namespace" "nvcf" "port" 8080) }}
+{{- $sisBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "sis" "backend" dict .Values)) (dict "name" "api" "namespace" "sis" "port" 8080) }}
+{{- $grpcBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "grpc" "backend" dict .Values)) (dict "name" "grpc" "namespace" "nvcf" "port" 10081) }}
+{{- $invocationBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "invocation" "backend" dict .Values)) (dict "name" "invocation" "namespace" "nvcf" "port" 8080) }}
+{{- $llmApiGatewayBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "llmInvocation" "backend" dict .Values)) (dict "name" "llm-api-gateway" "namespace" "nvcf" "port" 8080) }}
+{{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" "nvcf" "port" 8080) }}
+{{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" "ess" "port" 8080) }}
+{{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
+{{/* openbao-migrations image tag: 0.19.1 is the floor. An operator may pin a
+     newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
+     than the floor is ignored (the migrations job needs >= 0.19.1). */}}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.19.1" }}
+{{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
+{{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.19.1" $nvcfUiMigrationsTagOverride) }}
+{{- $nvcfUiOpenbaoMigrationsTag = $nvcfUiMigrationsTagOverride }}
+{{- end }}
+nvcfUi:
+  fullnameOverride: nvcf-ui
+  image:
+    repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-ui
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  config:
+    nvcfUrl: {{ printf "%s.%s.svc.cluster.local:%v" $nvcfApiBackend.name $nvcfApiBackend.namespace $nvcfApiBackend.port | quote }}
+    nvctUrl: {{ printf "%s.%s.svc.cluster.local:%v" $nvctApiBackend.name $nvctApiBackend.namespace $nvctApiBackend.port | quote }}
+    sisUrl: {{ printf "%s.%s.svc.cluster.local:%v" $sisBackend.name $sisBackend.namespace $sisBackend.port | quote }}
+  openbaoMigrations:
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/nvcf-openbao-migrations
+      tag: {{ $nvcfUiOpenbaoMigrationsTag | quote }}
+  # Components the control-plane health monitor probes. Built here (rather than
+  # taking the chart default) so the list matches what this stack actually
+  # deploys: route-backed services reuse the shared backend coordinates above,
+  # and the optional services are included only when their feature is enabled.
+  controlPlane:
+    components:
+      - name: api
+        namespace: {{ $nvcfApiBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $nvcfApiBackend.name $nvcfApiBackend.namespace $nvcfApiBackend.port }}
+      - name: nvct-api
+        namespace: {{ $nvctApiBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $nvctApiBackend.name $nvctApiBackend.namespace $nvctApiBackend.port }}
+      - name: notary-service
+        namespace: nvcf
+        endpoints:
+          - notary.nvcf.svc.cluster.local:8080/health
+      - name: grpc-proxy
+        namespace: {{ $grpcBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $grpcBackend.name $grpcBackend.namespace $grpcBackend.port }}
+      {{- if dig "rateLimiter" "enabled" false .Values }}
+      - name: ratelimiter
+        namespace: nvcf
+        endpoints:
+          - ratelimiter.nvcf.svc.cluster.local:8080/health
+      {{- end }}
+      {{- if dig "addons" "llm" "enabled" false .Values }}
+      - name: llm-api-gateway
+        namespace: {{ $llmApiGatewayBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/healthz" $llmApiGatewayBackend.name $llmApiGatewayBackend.namespace $llmApiGatewayBackend.port }}
+          - {{ printf "%s.%s.svc.cluster.local:%v/readyz" $llmApiGatewayBackend.name $llmApiGatewayBackend.namespace $llmApiGatewayBackend.port }}
+      - name: llm-request-router
+        namespace: nvcf
+        endpoints:
+          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
+      {{- end }}
+      - name: reval
+        namespace: nvcf
+        endpoints:
+          - reval.nvcf.svc.cluster.local:8082/healthz
+      - name: invocation-service
+        namespace: {{ $invocationBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $invocationBackend.name $invocationBackend.namespace $invocationBackend.port }}
+      {{- if dig "addons" "vanityGateway" "enabled" false .Values }}
+      - name: vanity-gateway
+        namespace: {{ $vanityBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $vanityBackend.name $vanityBackend.namespace $vanityBackend.port }}
+      {{- end }}
+      - name: sis
+        namespace: {{ $sisBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $sisBackend.name $sisBackend.namespace $sisBackend.port }}
+      - name: ess-api
+        namespace: {{ $essBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $essBackend.name $essBackend.namespace $essBackend.port }}
+      - name: api-keys
+        namespace: {{ $apiKeysBackend.namespace }}
+        endpoints:
+          - {{ printf "%s.%s.svc.cluster.local:%v/health" $apiKeysBackend.name $apiKeysBackend.namespace $apiKeysBackend.port }}
+      - name: admin-issuer-proxy
+        namespace: api-keys
+        endpoints:
+          - admin-token-issuer-proxy.api-keys.svc.cluster.local:8080/healthz
+      - name: nats-auth-callout-service
+        namespace: nats-system
+        endpoints:
+          - nvcf-nats-auth-callout-service.nats-system.svc.cluster.local:8080/health
+      {{- if dig "nats" "enabled" true .Values }}
+      - name: nats
+        namespace: nats-system
+        endpoints:
+          - nats-headless.nats-system.svc.cluster.local:8222/healthz?js-server-only
+      {{- end }}
+      {{- if dig "openbao" "enabled" true .Values }}
+      - name: openbao-server
+        namespace: vault-system
+        endpoints:
+          - openbao-server.vault-system.svc.cluster.local:8200/v1/sys/health?standbyok=true
+        k8s_workloads:
+          - name: openbao-server-agent-injector
+            type: deployment
+      {{- end }}
+      {{- if dig "cassandra" "enabled" true .Values }}
+      - name: cassandra
+        namespace: cassandra-system
+        k8s_workloads:
+          - name: cassandra
+            type: statefulset
+      {{- end }}
+      {{- if dig "certManager" "enabled" true .Values }}
+      - name: cert-manager
+        namespace: cert-manager
+        k8s_workloads:
+          - name: cert-manager
+            type: deployment
+          - name: cert-manager-cainjector
+            type: deployment
+          - name: cert-manager-webhook
+            type: deployment
+      {{- end }}
+      {{- if dig "ingress" "gatewayApi" "enabled" false .Values }}
+      - name: envoy-gateway
+        namespace: envoy-gateway-system
+        k8s_workloads:
+          - name: envoy-gateway
+            type: deployment
+      {{- end }}
+  {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
+  {{- . | nindent 2 }}
+  {{- end }}
+{{- end }}
+
+nvcfGatewayRoutes:
+  {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}
+  {{- $essRouteEnabled := dig "ingress" "gatewayApi" "routes" "ess" "enabled" false .Values }}
+  domain: "{{ .Values.global.domain }}"
+  gateways:
+    shared:
+      name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.shared.namespace is required" .Values.ingress.gatewayApi.gateways.shared.namespace }}
+    grpc:
+      name: {{ required "ingress.gatewayApi.gateways.grpc.name is required" .Values.ingress.gatewayApi.gateways.grpc.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.grpc.namespace is required" .Values.ingress.gatewayApi.gateways.grpc.namespace }}
+    {{- if $natsRouteEnabled }}
+    nats:
+      name: {{ required "ingress.gatewayApi.gateways.nats.name is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.nats.namespace is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.namespace }}
+      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "nats" "listenerName" "nats" .Values }}
+    {{- end }}
+    {{- if $llmWorkerRouteEnabled }}
+    llmGrpc:
+      name: {{ required "ingress.gatewayApi.gateways.llmGrpc.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.llmGrpc.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.namespace }}
+      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmGrpc" "listenerName" "llm-grpc" .Values }}
+    llmQuic:
+      name: {{ required "ingress.gatewayApi.gateways.llmQuic.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.llmQuic.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.namespace }}
+      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmQuic" "listenerName" "llm-quic" .Values }}
+    {{- end }}
+  routes:
+    nvcfApi:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+      grpc:
+        enabled: {{ dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "enabled" false .Values }}
+        {{- with $nvcfApiGrpcRouteHostnames }}
+        hostnames:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+    nvctApi:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+      grpc:
+        enabled: {{ dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "enabled" false .Values }}
+        {{- with $nvctApiGrpcRouteHostnames }}
+        hostnames:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+    # apiKeys, sis, and reval attach to the shared Gateway (backend and hostname
+    # come from the chart defaults); only the enable flag and annotations are
+    # environment-driven. The gateway-routes chart owns the default (enabled: true
+    # for all three), so the stack forwards enabled only when an environment file
+    # sets it -- leaving it unset renders the route exactly as before, and a future
+    # chart release that changes a default is not silently overridden. Set it to
+    # false to drop the route (for example, to keep api-keys off the public edge in
+    # a split/multi-cluster deployment).
+    apiKeys:
+      {{- $apiKeysRoute := dig "ingress" "gatewayApi" "routes" "apiKeys" dict .Values }}
+      {{- if hasKey $apiKeysRoute "enabled" }}
+      enabled: {{ $apiKeysRoute.enabled }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "routeAnnotations" dict $apiKeysRoute | toYaml | nindent 8 | trim }}
+    sis:
+      {{- $sisRoute := dig "ingress" "gatewayApi" "routes" "sis" dict .Values }}
+      {{- if hasKey $sisRoute "enabled" }}
+      enabled: {{ $sisRoute.enabled }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "routeAnnotations" dict $sisRoute | toYaml | nindent 8 | trim }}
+    reval:
+      {{- $revalRoute := dig "ingress" "gatewayApi" "routes" "reval" dict .Values }}
+      {{- if hasKey $revalRoute "enabled" }}
+      enabled: {{ $revalRoute.enabled }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "routeAnnotations" dict $revalRoute | toYaml | nindent 8 | trim }}
+    invocation:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    llmInvocation:
+      enabled: {{ dig "addons" "llm" "enabled" false .Values }}
+      backend:
+        name: llm-api-gateway
+        namespace: nvcf
+        port: 8080
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "llmInvocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    vanityGateway:
+      enabled: {{ dig "addons" "vanityGateway" "enabled" false .Values }}
+      hostnames:
+        {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "hostnames" (list) .Values | default (list (printf "vanity.%s" .Values.global.domain)) | toYaml | nindent 8 | trim }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "name" "vanity-gateway" .Values }}
+        namespace: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "namespace" "nvcf" .Values }}
+        port: {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" "port" 8080 .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "vanityGateway" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    # NVCF UI route: created only when the nvcf-ui addon is installed. Backend and
+    # hostname come from the chart's routes.nvcfUi defaults (nvcf-ui Service in the
+    # nvcf-ui namespace, nvcf-ui.<domain>).
+    nvcfUi:
+      enabled: {{ dig "addons" "nvcfUi" "enabled" false .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    eventLedger:
+      enabled: {{ dig "addons" "eventLedger" "enabled" false .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    grpc:
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    grpcWorker:
+      enabled: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "enabled" false .Values }}
+      listenerName: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "listenerName" "worker-tcp" .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    nats:
+      enabled: {{ $natsRouteEnabled }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "nats" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    llmWorker:
+      enabled: {{ $llmWorkerRouteEnabled }}
+      {{- if $llmWorkerRouteEnabled }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "name" "llm-request-router-backend-router" .Values }}
+        namespace: {{ required "ingress.gatewayApi.routes.llmWorker.backend.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.routes.llmWorker.backend.namespace }}
+        grpcPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "grpcPort" 50071 .Values }}
+        quicPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "quicPort" 50072 .Values }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    # ESS route attaches to the shared Gateway (backend/hostname come from chart
+    # defaults); only the enable flag and annotations are environment-driven.
+    ess:
+      enabled: {{ $essRouteEnabled }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "ess" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+  podMonitors:
+    enabled: {{ .Values.global.observability.metrics.enabled }}

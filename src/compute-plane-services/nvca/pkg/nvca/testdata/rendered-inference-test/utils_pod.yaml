@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: utils
+spec:
+  hostNetwork: true
+  imagePullSecrets:
+  - name: inference-container-pull-secret
+  containers:
+  - name: utils
+    image: stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_service:0.8-517d866
+    env:
+    - name: AWS_DEFAULT_REGION
+      value: us-east-1
+    - name: AWS_REQUEST_QUEUE_URL
+      value: http://localhost:4566/000000000000/q-strap-request.fifo
+    - name: AWS_SECRET_ACCESS_KEY
+      value: dummy-secret-key
+    - name: AWS_ACCESS_KEY_ID
+      value: dummy-access-key
+    - name: TRACING_ACCESS_TOKEN
+      value: dummy-tracing-token
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "500m"

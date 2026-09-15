@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "webhook",
+    srcs = [
+        "alias.go",
+        "doc.go",
+        "server.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/webhook",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/gomodules.xyz/jsonpatch/v2:jsonpatch",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/certwatcher",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/healthz",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/httpserver",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/admission",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/webhook/internal/metrics",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":webhook",
+    visibility = ["//visibility:public"],
+)

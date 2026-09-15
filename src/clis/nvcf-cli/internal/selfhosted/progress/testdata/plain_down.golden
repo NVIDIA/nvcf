@@ -1,0 +1,11 @@
+2026-04-29T01:23:45Z [01/7] preflight: starting
+2026-04-29T01:23:45Z [01/7] preflight: complete (0s)
+2026-04-29T01:23:45Z [02/7] drain-active: starting
+2026-04-29T01:23:45Z [02/7] drain-active: function-deploy-1 → REMOVING
+2026-04-29T01:23:45Z [02/7] drain-active: function-deploy-1 → STOPPED
+2026-04-29T01:23:45Z [02/7] drain-active: complete (1s)
+2026-04-29T01:23:45Z [03/7] uninstall-compute-plane: starting
+2026-04-29T01:23:45Z [03/7] uninstall-compute-plane: complete (1m0s)
+2026-04-29T01:23:45Z [04/7] remove-cluster-row: starting
+2026-04-29T01:23:45Z [04/7] remove-cluster-row: complete (1s)
+2026-04-29T01:23:45Z final: success=true cluster=test backend= duration=1m2s dropped=0

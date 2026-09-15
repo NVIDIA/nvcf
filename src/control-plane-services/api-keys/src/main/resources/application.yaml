@@ -1,0 +1,181 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+spring:
+  cassandra:
+    contact-points: ${CASSANDRA_CONTACT_POINTS}
+    keyspace-name: nvcf_api_keys
+    local-datacenter: datacenter1
+    advanced:
+      speculative-execution-policy:
+        class: ConstantSpeculativeExecutionPolicy
+        max-executions: 1
+        delay: 1500 #milliseconds
+      connection:
+        max-requests-per-connection: 10000
+        pool:
+          local:
+            size: 2
+      retry-policy:
+        class: com.nvidia.boot.cassandra.retry.NextHostRetryPolicy
+    port: 9042
+    password: ${kv.cassandra.password}
+    username: ${kv.cassandra.username}
+    compression: lz4
+    ssl:
+      enabled: false
+      bundle: ""
+    connection:
+      connect-timeout: 10s
+      init-query-timeout: 10s
+    pool:
+      heartbeat-interval: 30s
+      idle-timeout: 60s
+    request:
+      consistency: local_quorum
+      page-size: 5000
+      serial-consistency: local_serial
+      timeout: 10s
+    session-name: nvcf-api-keys-session
+    session-metrics:
+      - bytes-sent
+      - connected-nodes
+      - cql-requests
+    node-metrics:
+      - pool.open-connections
+      - pool.in-flight
+
+server:
+  port: 8080
+  max-http-request-header-size: 8KB
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain,application/javascript,text/css
+  forward-headers-strategy: framework
+  tomcat:
+    basedir: /tmp/tomcat
+    threads:
+      max: 200
+      min-spare: 100
+    accesslog:
+      enabled: true
+      pattern: '%{X-Forwarded-For}i %l %u %t "%r" %s %b "%{User-Agent}i" "%{Referer}i" %D'
+      buffered: false
+    max-swallow-size: 4KB # max request body should not exceed this
+
+management:
+  endpoints:
+    web:
+      base-path: /admin
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      cache:
+        time-to-live: 2s
+      group:
+        readiness:
+          include:
+            - readinessState
+            - cassandra
+        liveness:
+          include:
+            - livenessState
+            - cassandra
+  server:
+    port: ${MANAGEMENT_PORT:9090}
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    enable:
+      all: true
+    tags:
+      env: ${spring.application.env}
+      micro_service: ${spring.application.name}
+      service_version: ${spring.application.version}
+      host_id: ${spring.application.host.id}
+      host_dc: ${spring.application.host.dc}
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true
+      slo:
+        "[http.server.requests]": "5ms,10ms,25ms,50ms,75ms,100ms,200ms,300ms,400ms,500ms,750ms,1s,2s,3s,4s,5s,10s,15s,20s,30s"
+  observations:
+    annotations:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+    propagation:
+      type: w3c
+    redaction:
+      cassandra:
+        scan-package: com.nvidia.apikeys
+    export:
+      enabled: true
+  opentelemetry:
+    resource-attributes:
+      service.name: ${spring.application.name}
+      service.version: ${spring.application.version}
+      service.namespace: nvcf-api-keys
+      deployment.profiles: ${spring.profiles.active}
+      host.id: ${spring.application.host.id}
+      host.dc: ${spring.application.host.dc}
+      host.name: ${spring.application.host.id}
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:https://dummy:8282}
+          compression: gzip
+          timeout: 30s
+          transport: http
+          headers:
+            lightstep-access-token: ${kv.tracing.accessToken}
+
+logging:
+  level:
+    com.nvidia: INFO
+    org.springframework.web: INFO
+    # action recorder logs action summary, keep at info
+    com.nvidia.apikeys.services.ActionRecorder: INFO
+
+springdoc:
+  packages-to-scan: "com.nvidia.apikeys"
+
+apikeys:
+  jwks:
+    private-jwks: ${kv.private-key-jwks.keys}
+    jwe-key-mapping:
+      "payload_jwe_kid": ${kv.jwe-key-mapping.payload_jwe_kid}
+  encrypted-model-converter:
+    base-package: com.nvidia.apikeys
+  nca-id: nvcf-default
+  registrations: ${kv.registrations.services}
+  service-id-map:
+    nvcf: nvidia-cloud-functions-ncp-service-id-aketm
+    nvct: nvidia-cloud-tasks-ncp-service-id-nvcttasks
+    event-ledger: nvidia-event-ledger-ncp-service-id-ckozoh6f
+  key-prefix: nvcfapi-
+  data-domain-key: ${kv.data-domain-key.value}
+  keep-after-expired-duration: P2D

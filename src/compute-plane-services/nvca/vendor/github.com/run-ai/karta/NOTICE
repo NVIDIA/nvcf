@@ -1,0 +1,74 @@
+# karta
+Copyright (c) 2026 NVIDIA Corporation
+
+This product includes software developed by NVIDIA Corporation.
+
+This product includes the following third-party software components:
+
+For a complete list of third-party software licenses, please see the
+THIRD_PARTY_LICENSES file.
+
+Third-party dependencies:
+- github.com/davecgh/go-spew/spew (ISC)
+- github.com/emicklei/go-restful/v3 (MIT)
+- github.com/evanphx/json-patch/v5 (BSD-3-Clause)
+- github.com/fxamacker/cbor/v2 (MIT)
+- github.com/go-logr/logr (Apache-2.0)
+- github.com/go-openapi/jsonpointer (Apache-2.0)
+- github.com/go-openapi/jsonreference (Apache-2.0)
+- github.com/go-openapi/swag (Apache-2.0)
+- github.com/go-openapi/swag/cmdutils (Apache-2.0)
+- github.com/go-openapi/swag/conv (Apache-2.0)
+- github.com/go-openapi/swag/fileutils (Apache-2.0)
+- github.com/go-openapi/swag/jsonname (Apache-2.0)
+- github.com/go-openapi/swag/jsonutils (Apache-2.0)
+- github.com/go-openapi/swag/loading (Apache-2.0)
+- github.com/go-openapi/swag/mangling (Apache-2.0)
+- github.com/go-openapi/swag/netutils (Apache-2.0)
+- github.com/go-openapi/swag/stringutils (Apache-2.0)
+- github.com/go-openapi/swag/typeutils (Apache-2.0)
+- github.com/go-openapi/swag/yamlutils (Apache-2.0)
+- github.com/google/gnostic-models (Apache-2.0)
+- github.com/google/go-cmp/cmp (BSD-3-Clause)
+- github.com/google/uuid (BSD-3-Clause)
+- github.com/itchyny/gojq (MIT)
+- github.com/itchyny/timefmt-go (MIT)
+- github.com/json-iterator/go (MIT)
+- github.com/modern-go/concurrent (Apache-2.0)
+- github.com/modern-go/reflect2 (Apache-2.0)
+- github.com/munnerz/goautoneg (BSD-3-Clause)
+- github.com/onsi/gomega (MIT)
+- github.com/samber/lo (MIT)
+- github.com/x448/float16 (MIT)
+- go.uber.org/mock/gomock (Apache-2.0)
+- go.yaml.in/yaml/v2 (Apache-2.0)
+- go.yaml.in/yaml/v3 (MIT)
+- golang.org/x/net (BSD-3-Clause)
+- golang.org/x/oauth2 (BSD-3-Clause)
+- golang.org/x/sys/unix (BSD-3-Clause)
+- golang.org/x/term (BSD-3-Clause)
+- golang.org/x/text (BSD-3-Clause)
+- golang.org/x/time/rate (BSD-3-Clause)
+- google.golang.org/protobuf (BSD-3-Clause)
+- gopkg.in/inf.v0 (BSD-3-Clause)
+- k8s.io/api (Apache-2.0)
+- k8s.io/apimachinery/pkg (Apache-2.0)
+- k8s.io/apimachinery/third_party/forked/golang (BSD-3-Clause)
+- k8s.io/client-go (Apache-2.0)
+- k8s.io/klog/v2 (Apache-2.0)
+- k8s.io/kube-openapi/pkg (Apache-2.0)
+- k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json (BSD-3-Clause)
+- k8s.io/kube-openapi/pkg/validation/spec (Apache-2.0)
+- k8s.io/utils (Apache-2.0)
+- k8s.io/utils/internal/third_party/forked/golang/net (BSD-3-Clause)
+- sigs.k8s.io/controller-runtime/pkg (Apache-2.0)
+- sigs.k8s.io/json (Apache-2.0)
+- sigs.k8s.io/json (BSD-3-Clause)
+- sigs.k8s.io/randfill (Apache-2.0)
+- sigs.k8s.io/structured-merge-diff/v6 (Apache-2.0)
+- sigs.k8s.io/yaml (MIT)
+- sigs.k8s.io/yaml (Apache-2.0)
+- sigs.k8s.io/yaml (BSD-3-Clause)
+
+
+Full license texts for these dependencies are available in the THIRD_PARTY_LICENSES file.

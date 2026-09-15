@@ -1,0 +1,26 @@
+{
+   "telemetries": {
+   "metricsTelemetry": {
+         "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+         "name": "datadog_sre",
+         "endpoint": "https://www.datadoghq.com",
+         "protocol": "GRPC",
+         "provider": "DATADOG",
+         "types": [
+         "METRICS"
+         ],
+         "createdAt": "2025-02-04T17:41:34.013Z"
+      },
+      "tracesTelemetry": {
+         "telemetryId": "fd28fc13-b44c-4e21-9132-1e1883f9dec5",
+         "protocol": "HTTP",
+         "provider": "SERVICENOW",
+         "endpoint": "endpoint:8323",
+         "name": "nv-lightstep-stg",
+         "types": [
+          "TRACES"
+        ],
+        "createdAt": "2025-02-04T17:41:34.013Z"
+      }
+   }
+}

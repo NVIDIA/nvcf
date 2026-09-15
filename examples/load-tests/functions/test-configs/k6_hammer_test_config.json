@@ -1,0 +1,46 @@
+{
+  "cloud": {
+    "projectID": 3702639,
+    "distribution": {
+      "zone_1": {
+        "loadZone": "amazon:us:columbus",
+        "percent": 25
+      },
+      "zone_2": {
+        "loadZone": "amazon:us:columbus",
+        "percent": 25
+      },
+      "zone_3": {
+        "loadZone": "amazon:us:columbus",
+        "percent": 25
+      },
+      "zone_4": {
+        "loadZone": "amazon:us:columbus",
+        "percent": 25
+      }
+    }
+  },
+  "scenarios": {
+    "arrival_rate_scenario": {
+      "executor": "ramping-arrival-rate",
+      "preAllocatedVUs": 50000,
+      "timeUnit": "1s",
+      "startTime": "0s",
+      "gracefulStop": "30s",
+      "env": {
+        "SENT_MESSAGE_SIZE": "100",
+        "RESPONSE_COUNT": "0"
+      },
+      "stages": [
+        {
+          "duration": "10m",
+          "target": 100000
+        },
+        {
+          "duration": "25m",
+          "target": 100000
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "function_call",
+  "id": "fc_123",
+  "status": "completed",
+  "call_id": "call_abc123",
+  "name": "get_weather",
+  "arguments": "{\"location\": \"San Francisco, CA\"}"
+}

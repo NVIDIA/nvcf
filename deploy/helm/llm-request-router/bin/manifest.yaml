@@ -1,0 +1,259 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+# Source: llm-request-router/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llm-request-router
+  labels:
+    helm.sh/chart: llm-request-router-0.0.0
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: llm-request-router/templates/configmap-vault-agent-template.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-request-router-vault-agent-tpl
+  labels:
+    helm.sh/chart: llm-request-router-0.0.0
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  secrets.json.tmpl: |-
+    {
+      {{- with secret `services/nvcf-api/jwt/sign/llm-request-router` }}
+      "nvcfApiToken": "{{ .Data.token }}"
+      {{- end }}
+    }
+---
+# Source: llm-request-router/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llm-request-router-pod-reader
+  labels:
+    helm.sh/chart: llm-request-router-0.0.0
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+---
+# Source: llm-request-router/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llm-request-router-pod-reader
+  labels:
+    helm.sh/chart: llm-request-router-0.0.0
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llm-request-router-pod-reader
+subjects:
+  - kind: ServiceAccount
+    name: llm-request-router
+---
+# Source: llm-request-router/templates/headless-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-request-router-headless
+  labels:
+    helm.sh/chart: llm-request-router-0.0.0
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 50071
+      targetPort: grpc
+      protocol: TCP
+---
+# Source: llm-request-router/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-request-router
+  labels:
+    helm.sh/chart: llm-request-router-0.0.0
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+  ports:
+    - name: grpc
+      port: 50071
+      targetPort: grpc
+      protocol: TCP
+---
+# Source: llm-request-router/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-request-router
+  labels:
+    helm.sh/chart: llm-request-router-0.0.0
+    app.kubernetes.io/name: llm-request-router
+    app.kubernetes.io/instance: llm-request-router
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-request-router
+      app.kubernetes.io/instance: llm-request-router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-request-router
+        app.kubernetes.io/instance: llm-request-router
+      annotations:
+        vault.hashicorp.com/agent-copy-volume-mounts: llm-request-router
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-template-file-secrets.json: /vault/config/templates/secrets.json.tmpl
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/auth-path: auth/jwt
+        vault.hashicorp.com/role: llm-request-router
+        vault.hashicorp.com/secret-volume-path: /vault/secrets
+    spec:
+      serviceAccountName: llm-request-router
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: llm-request-router
+          image: :0.1.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --stargate-id=$(POD_NAME)
+            - --listen-addr=0.0.0.0:50071
+            - --http-listen-addr=0.0.0.0:8000
+            - --advertise-addr=$(POD_IP):50071
+            - --stargate-discovery-dns-name=llm-request-router-headless.default.svc.cluster.local
+            - --pod-name=$(POD_NAME)
+            - --pod-namespace=$(POD_NAMESPACE)
+            - --pod-label-selector=app.kubernetes.io/name=llm-request-router
+            - --dns-poll-ms=1000
+            - --dns-resolver-ttl-ms=1000
+            - --watch-heartbeat-ms=5000
+            - --shutdown-drain-timeout-ms=30000
+            - --quic-connect-timeout-ms=2000
+            - --quic-request-timeout-ms=30000
+            - --metrics-port=9090
+            - --reverse-tunnel-connect-timeout-ms=10000
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+            - name: grpc
+              containerPort: 50071
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          volumeMounts:
+            - name: token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+        - name: vault-config-templates
+          configMap:
+            name: llm-request-router-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl

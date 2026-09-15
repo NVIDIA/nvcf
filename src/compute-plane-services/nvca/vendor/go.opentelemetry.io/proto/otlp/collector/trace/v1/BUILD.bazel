@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "trace",
+    srcs = [
+        "trace_service.pb.go",
+        "trace_service.pb.gw.go",
+        "trace_service_grpc.pb.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/proto/otlp/collector/trace/v1",
+    importpath = "go.opentelemetry.io/proto/otlp/collector/trace/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/runtime",
+        "//src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/utilities",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/proto/otlp/trace/v1:trace",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/codes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/grpclog",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/metadata",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/status",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/proto",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":trace",
+    visibility = ["//visibility:public"],
+)

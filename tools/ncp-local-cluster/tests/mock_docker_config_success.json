@@ -1,0 +1,13 @@
+{
+  "auths": {
+    "my-registry.com": {
+      "auth": "dXNlcjE6cGFzc3dvcmQx" 
+    },
+    "another-registry.io/namespace": {
+      "auth": "dXNlcjI6cGFzc3dvcmQy"
+    },
+    "docker.io": {
+      "auth": "dG9rZW46c2ltcGxlcGFzcw==" 
+    }
+  }
+} 

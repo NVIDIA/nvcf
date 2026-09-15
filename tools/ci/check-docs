@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+set -eu
+
+(set -o pipefail) >/dev/null 2>&1 && set -o pipefail
+
+fern_version="$(node -e "console.log(require('./fern/fern.config.json').version)")"
+npm install -g "fern-api@${fern_version}"
+
+bad="$(
+  find docs fern -type f \( -name '*.md' -o -name '*.mdx' \) -exec grep -nE '<img\b[^>]*[^/]>|<img>' {} \; || true
+)"
+if [ -n "${bad}" ]; then
+  echo "Non-self-closing <img> tags found (MDX requires <img ... />):"
+  echo "${bad}"
+  exit 1
+fi
+
+if [ -f tools/ci/check-doc-version-sync ]; then
+  ./tools/ci/check-doc-version-sync
+fi
+
+fern check

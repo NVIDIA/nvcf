@@ -1,0 +1,619 @@
+#!/bin/bash
+#
+# GPUCR Installer
+# Production-ready installer for GPU checkpoint/restore infrastructure
+#
+# Usage:
+#   ./gpucr-installer --cluster config.yaml    # Deploy to all nodes
+#   ./gpucr-installer --node 10.34.5.64        # Deploy to single node
+#   ./gpucr-installer --verify                 # Verify installation
+#   ./gpucr-installer --uninstall              # Remove GPUCR
+#
+set -euo pipefail
+
+VERSION="0.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Colors
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
+
+# Logging
+log_info()    { echo -e "${GREEN}[INFO]${NC} $*"; }
+log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
+log_step()    { echo -e "${BLUE}[STEP $1]${NC} $2"; }
+log_success() { echo -e "${GREEN}[✓]${NC} $*"; }
+log_fail()    { echo -e "${RED}[✗]${NC} $*"; }
+
+# Default configuration
+CLUSTER_CONFIG="${CLUSTER_CONFIG:-$HOME/.gpucr/cluster.yaml}"
+SSH_PORT=22
+AGENT_PORT=8081
+CHECKPOINT_DIR="/var/lib/gpucr/checkpoints"
+LOG_LEVEL="info"
+
+# Parse YAML (simplified - for production use yq or a proper parser)
+parse_yaml() {
+    local file="$1"
+    local prefix="${2:-}"
+    
+    # Check if yq is available
+    if command -v yq &>/dev/null; then
+        # Use yq for proper YAML parsing
+        return 0
+    fi
+    
+    # Fallback: simple grep-based parsing
+    return 0
+}
+
+# Get value from YAML config
+get_config() {
+    local key="$1"
+    local default="${2:-}"
+    
+    if [[ ! -f "$CLUSTER_CONFIG" ]]; then
+        echo "$default"
+        return
+    fi
+    
+    # Try yq first
+    if command -v yq &>/dev/null; then
+        local value
+        value=$(yq -r ".$key // empty" "$CLUSTER_CONFIG" 2>/dev/null)
+        if [[ -n "$value" && "$value" != "null" ]]; then
+            echo "$value"
+            return
+        fi
+    fi
+    
+    # Fallback to grep
+    local result
+    result=$(grep -E "^\s*${key##*.}:" "$CLUSTER_CONFIG" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
+    if [[ -n "$result" ]]; then
+        echo "$result"
+    else
+        echo "$default"
+    fi
+}
+
+# Get nodes from config
+get_nodes() {
+    if [[ ! -f "$CLUSTER_CONFIG" ]]; then
+        echo ""
+        return
+    fi
+    
+    if command -v yq &>/dev/null; then
+        yq -r '.nodes[].ip' "$CLUSTER_CONFIG" 2>/dev/null | tr '\n' ' '
+    else
+        grep -E "^\s+-?\s*ip:" "$CLUSTER_CONFIG" | awk '{print $NF}' | tr '\n' ' '
+    fi
+}
+
+# SSH wrapper
+ssh_exec() {
+    local host="$1"
+    shift
+    local cmd="$*"
+    
+    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
+    
+    if [[ -n "${SSH_KEY:-}" && -f "$SSH_KEY" ]]; then
+        ssh $ssh_opts -i "$SSH_KEY" "${SSH_USER}@${host}" "$cmd"
+    elif [[ -n "${SSH_PASS:-}" ]]; then
+        sshpass -p "$SSH_PASS" ssh $ssh_opts -o PubkeyAuthentication=no "${SSH_USER}@${host}" "$cmd"
+    else
+        ssh $ssh_opts "${SSH_USER}@${host}" "$cmd"
+    fi
+}
+
+# SCP wrapper
+scp_exec() {
+    local src="$1"
+    local host="$2"
+    local dst="$3"
+    
+    local scp_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+    
+    if [[ -n "${SSH_KEY:-}" && -f "$SSH_KEY" ]]; then
+        scp $scp_opts -i "$SSH_KEY" -r "$src" "${SSH_USER}@${host}:${dst}"
+    elif [[ -n "${SSH_PASS:-}" ]]; then
+        sshpass -p "$SSH_PASS" scp $scp_opts -o PubkeyAuthentication=no -r "$src" "${SSH_USER}@${host}:${dst}"
+    else
+        scp $scp_opts -r "$src" "${SSH_USER}@${host}:${dst}"
+    fi
+}
+
+# Load configuration
+load_config() {
+    if [[ -f "$CLUSTER_CONFIG" ]]; then
+        log_info "Loading configuration from: $CLUSTER_CONFIG"
+        
+        # Load SSH credentials
+        SSH_USER="${SSH_USER:-$(get_config 'ssh.user')}"
+        SSH_PASS="${SSH_PASS:-$(get_config 'ssh.password')}"
+        SSH_KEY="${SSH_KEY:-$(get_config 'ssh.key_file')}"
+        SSH_PORT="${SSH_PORT:-$(get_config 'ssh.port' '22')}"
+        
+        # Load component settings
+        CRIU_SOURCE="${CRIU_SOURCE:-$(get_config 'components.criu.source' 'fork')}"
+        CRIU_FORK_PATH="${CRIU_FORK_PATH:-$(get_config 'components.criu.fork_path' "$PROJECT_ROOT/../criu-orig/criu")}"
+        CUDA_CP_PATH="${CUDA_CP_PATH:-$(get_config 'components.cuda_checkpoint.local_path' '/usr/local/bin/cuda-checkpoint')}"
+        AGENT_PORT="${AGENT_PORT:-$(get_config 'components.agent.port' '8081')}"
+        CHECKPOINT_DIR="${CHECKPOINT_DIR:-$(get_config 'components.agent.checkpoint_dir' '/var/lib/gpucr/checkpoints')}"
+        LOG_LEVEL="${LOG_LEVEL:-$(get_config 'components.agent.log_level' 'info')}"
+    fi
+    
+    # Also try legacy credentials file
+    if [[ -f "$HOME/.gpucr/credentials" ]]; then
+        source "$HOME/.gpucr/credentials"
+    fi
+    
+    # Validate required settings
+    if [[ -z "${SSH_USER:-}" ]]; then
+        log_error "SSH_USER not configured"
+        exit 1
+    fi
+}
+
+# Prepare installation package
+prepare_package() {
+    log_step 1 "Preparing installation package..."
+    
+    local pkg_dir
+    pkg_dir=$(mktemp -d)
+    # Store in global variable for later use
+    PKG_DIR="$pkg_dir"
+    
+    # Check for gpucr-agent binary
+    if [[ -f "$PROJECT_ROOT/bin/gpucr-agent" ]]; then
+        cp "$PROJECT_ROOT/bin/gpucr-agent" "$pkg_dir/"
+        log_success "gpucr-agent binary"
+    else
+        log_warn "gpucr-agent not found. Run 'make build' first."
+    fi
+    
+    # Check for gpucr CLI
+    if [[ -f "$PROJECT_ROOT/bin/gpucr" ]]; then
+        cp "$PROJECT_ROOT/bin/gpucr" "$pkg_dir/"
+        log_success "gpucr CLI"
+    fi
+    
+    # Check for CRIU fork
+    if [[ "$CRIU_SOURCE" == "fork" ]]; then
+        local criu_binary="$CRIU_FORK_PATH/criu/criu"
+        if [[ -f "$criu_binary" ]]; then
+            cp "$criu_binary" "$pkg_dir/criu"
+            log_success "CRIU binary (forked)"
+        else
+            log_error "CRIU fork not found at: $criu_binary"
+            log_info "Build CRIU fork with: cd $CRIU_FORK_PATH && make -j\$(nproc)"
+            exit 1
+        fi
+    fi
+    
+    # Check for cuda-checkpoint
+    if [[ -f "$CUDA_CP_PATH" ]]; then
+        cp "$CUDA_CP_PATH" "$pkg_dir/cuda-checkpoint"
+        log_success "cuda-checkpoint"
+    else
+        log_warn "cuda-checkpoint not found at $CUDA_CP_PATH"
+    fi
+    
+    # Copy systemd service file
+    if [[ -f "$SCRIPT_DIR/systemd/gpucr-agent.service" ]]; then
+        cp "$SCRIPT_DIR/systemd/gpucr-agent.service" "$pkg_dir/"
+    else
+        # Generate systemd service
+        cat > "$pkg_dir/gpucr-agent.service" << EOF
+[Unit]
+Description=GPUCR Agent - GPU Checkpoint/Restore Service
+Documentation=https://github.com/balaji/gpucr
+After=network.target containerd.service nvidia-persistenced.service
+Wants=containerd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gpucr-agent \\
+    --checkpoint-dir=${CHECKPOINT_DIR} \\
+    --criu-path=/usr/local/sbin/criu \\
+    --cuda-checkpoint-path=/usr/local/bin/cuda-checkpoint \\
+    --listen=:${AGENT_PORT} \\
+    --log-level=${LOG_LEVEL}
+
+Restart=always
+RestartSec=5
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=32768
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpucr-agent
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+    log_success "systemd service file"
+    
+    # Create install script
+    cat > "$pkg_dir/install.sh" << 'INSTALLER'
+#!/bin/bash
+set -e
+
+echo "╔═══════════════════════════════════════════════════════════════╗"
+echo "║            GPUCR Node Installation                            ║"
+echo "╚═══════════════════════════════════════════════════════════════╝"
+
+PKG_DIR="${1:-/tmp/gpucr-install}"
+
+# Must run as root
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: This script must be run as root"
+    exit 1
+fi
+
+# Create directories
+echo "[1/6] Creating directories..."
+mkdir -p /usr/local/bin /usr/local/sbin /var/lib/gpucr/checkpoints /etc/gpucr
+chmod 755 /var/lib/gpucr /var/lib/gpucr/checkpoints
+
+# Install CRIU
+if [[ -f "$PKG_DIR/criu" ]]; then
+    echo "[2/6] Installing CRIU..."
+    [[ -f /usr/local/sbin/criu ]] && mv /usr/local/sbin/criu /usr/local/sbin/criu.bak.$(date +%s)
+    cp "$PKG_DIR/criu" /usr/local/sbin/criu
+    chmod +x /usr/local/sbin/criu
+    echo "      Version: $(/usr/local/sbin/criu --version 2>&1 | head -1)"
+else
+    echo "[2/6] CRIU binary not provided, skipping..."
+fi
+
+# Install cuda-checkpoint
+if [[ -f "$PKG_DIR/cuda-checkpoint" ]]; then
+    echo "[3/6] Installing cuda-checkpoint..."
+    cp "$PKG_DIR/cuda-checkpoint" /usr/local/bin/cuda-checkpoint
+    chmod +x /usr/local/bin/cuda-checkpoint
+    echo "      Installed to /usr/local/bin/cuda-checkpoint"
+else
+    echo "[3/6] cuda-checkpoint not provided, checking existing..."
+    if command -v cuda-checkpoint &>/dev/null; then
+        echo "      Found: $(which cuda-checkpoint)"
+    else
+        echo "      WARNING: cuda-checkpoint not found"
+    fi
+fi
+
+# Install gpucr-agent
+if [[ -f "$PKG_DIR/gpucr-agent" ]]; then
+    echo "[4/6] Installing gpucr-agent..."
+    
+    # Stop existing service
+    systemctl stop gpucr-agent 2>/dev/null || true
+    
+    cp "$PKG_DIR/gpucr-agent" /usr/local/bin/gpucr-agent
+    chmod +x /usr/local/bin/gpucr-agent
+    
+    # Install systemd service
+    if [[ -f "$PKG_DIR/gpucr-agent.service" ]]; then
+        cp "$PKG_DIR/gpucr-agent.service" /etc/systemd/system/gpucr-agent.service
+        systemctl daemon-reload
+        systemctl enable gpucr-agent
+    fi
+    echo "      Installed to /usr/local/bin/gpucr-agent"
+else
+    echo "[4/6] gpucr-agent not provided, skipping..."
+fi
+
+# Install gpucr CLI
+if [[ -f "$PKG_DIR/gpucr" ]]; then
+    echo "[5/6] Installing gpucr CLI..."
+    cp "$PKG_DIR/gpucr" /usr/local/bin/gpucr
+    chmod +x /usr/local/bin/gpucr
+else
+    echo "[5/6] gpucr CLI not provided, skipping..."
+fi
+
+# Start and verify agent
+echo "[6/6] Starting gpucr-agent..."
+if [[ -f /etc/systemd/system/gpucr-agent.service ]]; then
+    systemctl start gpucr-agent
+    sleep 2
+    
+    if systemctl is-active --quiet gpucr-agent; then
+        echo "      Status: RUNNING"
+    else
+        echo "      Status: FAILED"
+        echo "      Logs:"
+        journalctl -u gpucr-agent --no-pager -n 5
+    fi
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+echo "Installation Summary"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+echo "Binaries:"
+[[ -x /usr/local/sbin/criu ]] && echo "  ✓ CRIU:            /usr/local/sbin/criu" || echo "  ✗ CRIU:            not installed"
+[[ -x /usr/local/bin/cuda-checkpoint ]] && echo "  ✓ cuda-checkpoint: /usr/local/bin/cuda-checkpoint" || echo "  ✗ cuda-checkpoint: not installed"
+[[ -x /usr/local/bin/gpucr-agent ]] && echo "  ✓ gpucr-agent:     /usr/local/bin/gpucr-agent" || echo "  ✗ gpucr-agent:     not installed"
+[[ -x /usr/local/bin/gpucr ]] && echo "  ✓ gpucr:           /usr/local/bin/gpucr" || echo "  ✗ gpucr:           not installed"
+
+echo ""
+echo "GPU:"
+if command -v nvidia-smi &>/dev/null; then
+    echo "  Driver: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
+    echo "  GPU:    $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+else
+    echo "  nvidia-smi not found"
+fi
+
+echo ""
+echo "Service:"
+if systemctl is-active --quiet gpucr-agent 2>/dev/null; then
+    echo "  ✓ gpucr-agent is running"
+    echo "  API: http://$(hostname -I | awk '{print $1}'):8081"
+else
+    echo "  ✗ gpucr-agent is not running"
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════════════"
+INSTALLER
+    chmod +x "$pkg_dir/install.sh"
+}
+
+# Install on remote node
+install_node() {
+    local node="$1"
+    local pkg_dir="$2"
+    
+    log_info "Installing on node: $node"
+    
+    # Clean up any existing installation directory
+    ssh_exec "$node" "rm -rf /tmp/gpucr-install" 2>/dev/null || true
+    ssh_exec "$node" "mkdir -p /tmp/gpucr-install"
+    
+    # Copy package
+    log_step 2 "Copying files to $node..."
+    for file in "$pkg_dir"/*; do
+        if [[ -f "$file" ]]; then
+            scp_exec "$file" "$node" "/tmp/gpucr-install/"
+        fi
+    done
+    
+    # Run installer
+    log_step 3 "Running installation..."
+    ssh_exec "$node" "sudo bash /tmp/gpucr-install/install.sh /tmp/gpucr-install"
+    
+    # Cleanup
+    ssh_exec "$node" "rm -rf /tmp/gpucr-install" 2>/dev/null || true
+    
+    log_success "Installation complete on $node"
+}
+
+# Verify node installation
+verify_node() {
+    local node="$1"
+    local all_ok=true
+    
+    echo ""
+    echo "Verifying: $node"
+    echo "─────────────────────────────────────────"
+    
+    # Check API health directly (faster than SSH)
+    local health
+    health=$(curl -s --connect-timeout 5 "http://${node}:${AGENT_PORT}/health" 2>/dev/null || echo "")
+    
+    if [[ -n "$health" && "$health" == *"healthy"* ]]; then
+        log_success "API: healthy"
+        
+        # Extract node name from health response
+        local node_name
+        node_name=$(echo "$health" | grep -o '"nodeName":"[^"]*"' | cut -d'"' -f4)
+        [[ -n "$node_name" ]] && log_info "  Node: $node_name"
+    else
+        log_fail "API: not responding (is gpucr-agent running?)"
+        all_ok=false
+    fi
+    
+    # Check GPU processes
+    local procs
+    procs=$(curl -s --connect-timeout 5 "http://${node}:${AGENT_PORT}/processes" 2>/dev/null || echo "")
+    
+    if [[ -n "$procs" && "$procs" == *"processes"* ]]; then
+        local count
+        count=$(echo "$procs" | grep -o '"pid"' | wc -l)
+        log_success "GPU: $count process(es) detected"
+    else
+        log_warn "GPU: no processes or API error"
+    fi
+    
+    echo ""
+    if $all_ok; then
+        log_success "Node $node is operational"
+    else
+        log_warn "Node $node has issues"
+    fi
+    
+    return 0
+}
+
+# Uninstall from node
+uninstall_node() {
+    local node="$1"
+    
+    log_info "Uninstalling from: $node"
+    
+    ssh_exec "$node" "sudo bash -c '
+        systemctl stop gpucr-agent 2>/dev/null || true
+        systemctl disable gpucr-agent 2>/dev/null || true
+        rm -f /etc/systemd/system/gpucr-agent.service
+        systemctl daemon-reload
+        rm -f /usr/local/bin/gpucr-agent
+        rm -f /usr/local/bin/gpucr
+        # Don't remove CRIU and cuda-checkpoint as they may be used by other tools
+        echo \"GPUCR components removed\"
+    '" 2>/dev/null
+    
+    log_success "Uninstalled from $node"
+}
+
+# Print usage
+usage() {
+    cat << EOF
+GPUCR Installer v${VERSION}
+
+Usage:
+  $(basename "$0") [OPTIONS]
+
+Options:
+  --cluster FILE    Use cluster configuration file (default: ~/.gpucr/cluster.yaml)
+  --node IP         Install on a single node
+  --nodes "IP1 IP2" Install on multiple nodes
+  --verify          Verify installation on all nodes
+  --uninstall       Remove GPUCR from nodes
+  --help            Show this help
+
+Environment Variables:
+  SSH_USER          SSH username
+  SSH_PASS          SSH password (or use SSH_KEY)
+  SSH_KEY           Path to SSH private key
+  CLUSTER_CONFIG    Path to cluster config file
+
+Examples:
+  # Deploy to all nodes in cluster config
+  $(basename "$0") --cluster ~/.gpucr/cluster.yaml
+  
+  # Deploy to single node
+  $(basename "$0") --node 10.34.5.64
+  
+  # Deploy to multiple nodes
+  $(basename "$0") --nodes "10.34.5.64 10.86.2.83"
+  
+  # Verify all nodes
+  $(basename "$0") --verify
+  
+  # Uninstall
+  $(basename "$0") --uninstall --cluster ~/.gpucr/cluster.yaml
+
+EOF
+}
+
+# Main
+main() {
+    local action="install"
+    local target_nodes=""
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --cluster)
+                CLUSTER_CONFIG="$2"
+                shift 2
+                ;;
+            --node)
+                target_nodes="$2"
+                shift 2
+                ;;
+            --nodes)
+                target_nodes="$2"
+                shift 2
+                ;;
+            --verify)
+                action="verify"
+                shift
+                ;;
+            --uninstall)
+                action="uninstall"
+                shift
+                ;;
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                usage
+                exit 1
+                ;;
+        esac
+    done
+    
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║            GPUCR Installer v${VERSION}                            ║"
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    # Load configuration
+    load_config
+    
+    # Get target nodes
+    if [[ -z "$target_nodes" ]]; then
+        target_nodes=$(get_nodes)
+    fi
+    
+    if [[ -z "$target_nodes" ]]; then
+        log_error "No nodes specified. Use --node, --nodes, or --cluster"
+        exit 1
+    fi
+    
+    log_info "Target nodes: $target_nodes"
+    log_info "SSH user: $SSH_USER"
+    echo ""
+    
+    case "$action" in
+        install)
+            # Build first if needed
+            if [[ ! -f "$PROJECT_ROOT/bin/gpucr-agent" ]]; then
+                log_info "Building binaries..."
+                (cd "$PROJECT_ROOT" && make build)
+            fi
+            
+            # Prepare package (sets PKG_DIR global variable)
+            prepare_package
+            trap "rm -rf $PKG_DIR" EXIT
+            
+            echo ""
+            
+            # Install on each node
+            for node in $target_nodes; do
+                echo ""
+                install_node "$node" "$PKG_DIR"
+            done
+            
+            echo ""
+            echo "═══════════════════════════════════════════════════════════════"
+            log_success "Installation complete on all nodes"
+            echo ""
+            log_info "Run verification with: $0 --verify"
+            ;;
+            
+        verify)
+            for node in $target_nodes; do
+                verify_node "$node"
+            done
+            ;;
+            
+        uninstall)
+            for node in $target_nodes; do
+                uninstall_node "$node"
+            done
+            log_success "Uninstallation complete"
+            ;;
+    esac
+}
+
+main "$@"

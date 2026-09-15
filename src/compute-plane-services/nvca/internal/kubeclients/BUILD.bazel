@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "kubeclients",
+    srcs = ["kubeclients.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/KAI-scheduler/pkg/apis/scheduling/v2:scheduling",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/discovery",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":kubeclients",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+)

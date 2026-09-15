@@ -1,0 +1,57 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+option go_package = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1;nverrors";
+
+package nvkit.api;
+
+import "google/protobuf/descriptor.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "NV Error Definition"
+    version: "1.0";
+    description: "Documentation for NV Errors",
+    contact: {
+      name: "NV Team",
+    },
+  },
+};
+
+// NVError defines the structure for errors returned by NV services
+message NVError {
+  option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_schema) = {
+    json_schema {
+      title: "NVError",
+      description: "NVError defines the structure for errors returned by NV services"
+    }
+  };
+
+  // Short description of what caused this error
+  string reason = 1 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+    description: "Short description of what caused this error"
+    example: "\"short summary about this error\""
+  }];
+
+  // A brief identifier of the origin of this error
+  string origin = 2 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+    description: "A brief identifier of where this error originated from. This is expected to be unique name that is useful for identifying the service that's originating the error"
+    example: "\"<foo>.nvidia.com\""
+  }];
+
+  // Unique ID for this error. Useful for troubleshooting
+  string error_id = 3 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+    description: "UUID to reference this error with",
+    format: "uuid",
+  }];
+
+  // Optional further information about this error that can be used for debugging/recovering from the error
+  map<string, string> metadata = 4 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+    description: "Optional information that can be used for debugging/recovering from the error"
+    type: OBJECT
+    example: "{\"cause\": \"failed precondition to get access to resource\", \"retry_info\": \"NotRetryable\"}"
+  }];
+}

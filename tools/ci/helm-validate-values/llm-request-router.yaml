@@ -1,0 +1,7 @@
+# CI-only values for helm lint/template validation.
+llmRequestRouter:
+  image:
+    registry: example.com
+    repository: foo/bar/stargate
+  discovery:
+    dnsName: llm-request-router-headless.nvcf.svc.cluster.local

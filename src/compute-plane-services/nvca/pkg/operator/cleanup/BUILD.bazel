@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cleanup",
+    srcs = [
+        "cleanup.go",
+        "sentinelwatcher.go",
+        "shutdown.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/cleanup",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
+        "//src/compute-plane-services/nvca/pkg/operator/types",
+        "//src/compute-plane-services/nvca/pkg/storage",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/retry",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cleanup",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cleanup_test",
+    srcs = [
+        "cleanup_test.go",
+        "sentinelwatcher_test.go",
+        "shutdown_test.go",
+    ],
+    embed = [":cleanup"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/apps/v1:apps",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/rbac/v1:rbac",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
+    ],
+)

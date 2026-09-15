@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Replay-only test pod for the e5-mistral capture (hash 0e6d089...).
+#
+# Goal: take the EXISTING L2 rox PVC dump and restore it into a vanilla
+# test pod that bypasses NVCA's pod-spec injection. If this restore
+# succeeds, the failure observed on the NVCA-stamped restore pod is in
+# NVCA's pod spec (sidecars, extra init containers, network setup);
+# if it fails the same way (TCP socket EADDRNOTAVAIL), the bug is in
+# our restore path or the captured workload's TCP topology and the
+# NVCA-side noise is innocent.
+#
+# Must run in nvcf-backend — that's where the rox-<hash> PVC lives,
+# and K8s PVC mounting is namespace-scoped.
+#
+# Init-container ladder mirrors vllm-small-restore.yaml exactly so
+# mmap byte-identity is preserved (CRIU verifies file size + path of
+# every captured mmap at restore). DO NOT switch to hostPath here —
+# we want this manifest to be a self-contained replay artifact
+# unaffected by the v0.0.20 agent's bundle-staging path.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: e5-mistral-replay
+  namespace: nvcf-backend
+  labels:
+    app: e5-mistral-replay
+    nvsnap.io/test: "replay-rox-0e6d089"
+  annotations:
+    nvsnap.io/purpose: |
+      Isolated CRIU restore from rox-0e6d08905a606c1f4f99a534ee3a1cd0
+      to diagnose the EADDRNOTAVAIL TCP socket failure seen on the
+      NVCA-stamped restore pod 2026-06-04.
+spec:
+  automountServiceAccountToken: false
+  hostPID: true
+
+  imagePullSecrets:
+    - name: nvcr-regcred
+
+  initContainers:
+    # Bundle staging via init container (legacy pattern) so this manifest
+    # doesn't depend on the agent DaemonSet hostPath being in place. Source
+    # image is the nvsnap-agent tag below (kept current by
+    # scripts/sync-versions.sh) — same restore-entrypoint binary the
+    # production deploy uses.
+    - name: get-criu
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.42
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          cp -r /criu-bundle/. /nvsnap/
+          [ -x /usr/local/bin/py-spy ] && cp /usr/local/bin/py-spy /nvsnap/ || true
+          [ -x /usr/bin/nsenter ]      && cp /usr/bin/nsenter      /nvsnap/ || true
+      volumeMounts:
+        - { name: nvsnap-tools, mountPath: /nvsnap }
+
+  containers:
+    - name: restore
+      # MUST match the captured pod's image to preserve namespace +
+      # rootfs identity at restore time. The catalog row for hash
+      # 0e6d089... says docker.io/vllm/vllm-openai:v0.20.0.
+      image: docker.io/vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/nvsnap/restore-entrypoint"]
+      env:
+        # Dump is at the root of the rox PVC (DstSubpath="" in the
+        # agent's L2 promote — see internal/agent/l2_promote_async.go).
+        # Setting CHECKPOINT_ID="" forces restore-entrypoint to use
+        # CHECKPOINT_PATH directly without a sub-join.
+        - { name: CHECKPOINT_ID,         value: "" }
+        - { name: CRIU_BUNDLE_PATH,      value: "/nvsnap" }
+        - { name: CHECKPOINT_PATH,       value: "/checkpoints" }
+        - { name: LD_LIBRARY_PATH,       value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PATH,                  value: "/nvsnap:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" }
+        - { name: PYTHONFAULTHANDLER,    value: "1" }
+        - { name: PYTHONUNBUFFERED,      value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,        value: "4" }   # verbose so we see setupLoopbackAlias output
+        - { name: NVSNAP_ZMQ_INTERCEPT,    value: "0" }
+        - { name: NVSNAP_LAZY_PAGES,       value: "0" }
+        - { name: NVSNAP_SECCOMP_ENABLED,  value: "0" }
+        - { name: NVSNAP_KEEPALIVE_SECONDS,value: "1800" }
+        - { name: VLLM_LOGGING_LEVEL,    value: "INFO" }
+        - { name: CUDA_VISIBLE_DEVICES,  value: "0" }
+      securityContext:
+        privileged: true
+        runAsUser: 0
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      volumeMounts:
+        - { name: nvsnap-tools,  mountPath: /nvsnap }
+        - { name: checkpoints, mountPath: /checkpoints, readOnly: true }
+        - { name: dev-shm,     mountPath: /dev/shm }
+
+  volumes:
+    - name: nvsnap-tools
+      emptyDir: {}
+    - name: checkpoints
+      persistentVolumeClaim:
+        claimName: rox-0e6d08905a606c1f4f99a534ee3a1cd0
+        readOnly: true
+    - name: dev-shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+
+  restartPolicy: Never

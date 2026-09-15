@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "logging",
+    srcs = [
+        "adapters.go",
+        "logging.go",
+        "middleware.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/logging",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "@com_github_go_chi_chi_v5//middleware",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/zapotelspan",
+        "@io_opentelemetry_go_otel//semconv/v1.32.0:v1_32_0",
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":logging",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "logging_test",
+    srcs = ["logging_test.go"],
+    deps = [
+        ":logging",
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_zap//:zap",
+    ],
+)

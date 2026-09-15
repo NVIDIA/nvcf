@@ -1,0 +1,6 @@
+# Generated Helm artifacts
+charts/*.tgz
+packaged-charts/
+
+# Worktrees for branch-isolated development
+.worktrees/

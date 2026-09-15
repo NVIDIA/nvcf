@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "json",
+    srcs = [
+        "collections.go",
+        "json.go",
+        "meta.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer/json",
+    importpath = "k8s.io/apimachinery/pkg/runtime/serializer/json",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/conversion",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer/recognizer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/framer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/yaml",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/json",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":json",
+    visibility = ["//visibility:public"],
+)

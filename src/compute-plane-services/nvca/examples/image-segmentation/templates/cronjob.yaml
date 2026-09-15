@@ -1,0 +1,204 @@
+{{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- $topValues := .Values }}
+{{- if $topValues.applicationSpecs }}
+{{- $applicationSpecs := $topValues.applicationSpecs }}
+{{- $wlSpecs := $topValues.workloadSpecs }}
+{{- range $appname, $appData := $applicationSpecs }}
+{{if and (eq $appData.apptype "cronjob") ($appData.schedule) }}
+{{- $containers := $appData.containers }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $.Chart.Name }}-{{ $appname }}
+  {{- if $topValues.namespace }}
+  namespace: {{ $topValues.namespace }}
+  {{- end }}
+  labels:
+    app: {{ $.Chart.Name }}-{{ $appname }}
+{{ include (print $.Chart.Name "-" $.Chart.AppVersion ".hb.labels.standard" ) . | indent 4 }}
+spec:
+  schedule: "{{$appData.schedule}}"
+  {{- if $appData.extraSpecs }}
+  {{- $appData.extraSpecs | toYaml | nindent 2}}
+  {{- end }}
+  jobTemplate:
+    spec:
+      template:
+        {{- if or ($appData.podLabels) ($topValues.podLabels) ($appData.podAnnotations) ($topValues.podAnnotations)}}
+        metadata:
+          {{- if or ($appData.podLabels) ($topValues.podLabels) }}
+          labels:
+            {{- if $appData.podLabels }}
+            {{- $appData.podLabels | toYaml | nindent 12 }}
+            {{- end }}
+            {{- if $topValues.podLabels }}
+            {{- $topValues.podLabels | toYaml | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if or ($appData.podAnnotations) ($topValues.podAnnotations) }}
+          annotations:
+            {{- if $appData.podAnnotations }}
+            {{- $appData.podAnnotations | toYaml | nindent 12 }}
+            {{- end }}
+            {{- if $topValues.podAnnotations }}
+            {{- $topValues.podAnnotations | toYaml | nindent 12 }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+        spec:
+          {{- if $appData.extraPodSpecs }}
+          {{- $appData.extraPodSpecs | toYaml | nindent 10}}
+          {{- end }}
+          {{- if $topValues.serviceAccount }}
+          serviceAccountName: {{ $topValues.serviceAccount.name }}
+          {{- end }}
+          {{- with $topValues.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+          {{- $appData.podSecurityContext | default $topValues.podSecurityContext | toYaml | nindent 12 }}
+          restartPolicy: {{$appData.restartPolicy | default "OnFailure"}}
+          {{- with $appData.initContainers }}
+          initContainers:
+          {{- range $appData.initContainers }}
+          - {{- toYaml . | nindent 12 }}
+            volumeMounts:
+            {{- if $topValues.defaultVolumeMounts }}
+              #Default volumeMounts
+            {{- toYaml $topValues.defaultVolumeMounts | nindent 12 }}
+            {{- end }}
+            {{- if $topValues.extraPodVolumeMounts }}
+            {{- toYaml $topValues.extraPodVolumeMounts | nindent 12 }}
+            {{- end }}
+            {{- if $appData.volumeMounts }}
+              {{- toYaml $appData.volumeMounts |  nindent 12 }}
+            {{- end }}
+            {{- if $.Files.Glob "files/**" }}
+            - name: external-files-cm
+              mountPath: /opt/ext-files
+            {{- end }}
+            {{- if .resources }}
+              #cont resources
+            resources:
+            {{- toYaml ( mergeOverwrite .resources ( default dict $topValues.resources ) ) | nindent 14 }}
+            {{- else if $topValues.resources }}
+            resources:
+            {{- toYaml $topValues.resources | nindent 14 }}
+            {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if $appData.dnsPolicy }}
+          dnsPolicy: {{ $appData.dnsPolicy }}
+          {{- end }}
+          containers:
+      {{- range $containerName, $container := $containers }}
+          - name: {{ $containerName }}
+            image: {{ $container.image.repository }}:{{ $container.image.tag }}{{if $container.image.pullPolicy }}
+            imagePullPolicy: {{ $container.image.pullPolicy }}{{else if (($topValues.image).pullPolicy) }}
+            imagePullPolicy: {{ $topValues.image.pullPolicy }}
+            {{- end }}
+            {{- if $container.command }}
+            command:
+              {{- toYaml $container.command |  nindent 12 }}
+            {{- end }}
+            {{- if $container.args }}
+            args:
+              {{- toYaml $container.args |  nindent 10 }}
+            {{- end }}
+            env:
+            {{- if $container.env }}
+            {{- toYaml $container.env | nindent 10 }}
+            {{- end }}
+            {{- if $topValues.global }}
+            {{- if $topValues.global.ucfGlobalEnv }}
+            {{- toYaml $topValues.global.ucfGlobalEnv | nindent 10 }}
+            {{- end }}
+            {{- end }}
+            {{- if and ($wlSpecs) ($container.workload) }}
+            {{- if index $wlSpecs $container.workload "wl_env" }}
+            {{- $wl_env:= index $wlSpecs $container.workload "wl_env" }}
+            {{- toYaml $wl_env| nindent 10 }}
+            {{- end }}
+            {{- end }}
+            securityContext:
+            {{- $container.securityContext | default $topValues.securityContext  | toYaml | nindent 14 }}
+            {{- if $container.resources }}
+            #cont resources
+            resources:
+            {{- toYaml ( mergeOverwrite $container.resources ( default dict $topValues.resources ) ) | nindent 14 }}
+            {{- else if $topValues.resources }}
+            resources:
+            {{- toYaml $topValues.resources | nindent 14 }}
+            {{- end }}
+            volumeMounts:
+            {{- if $topValues.defaultVolumeMounts }}
+            #Default volumeMounts
+            {{- toYaml $topValues.defaultVolumeMounts | nindent 12 }}
+            {{- end }}
+            {{- if $topValues.extraPodVolumeMounts }}
+            {{- toYaml $topValues.extraPodVolumeMounts | nindent 12 }}
+            {{- end }}
+            {{- if $container.volumeMounts }}
+              #Container volumeMounts
+              {{- toYaml $container.volumeMounts |  nindent 12 }}
+            {{- end }}
+            {{- if $.Files.Glob "files/**" }}
+            - name: external-files-cm
+              mountPath: /opt/ext-files
+            {{- end }}
+          {{- with $topValues.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $topValues.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $topValues.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumes:
+          {{- if $appData.volumes }}
+            #App Volumes
+            {{- toYaml $appData.volumes |  nindent 10 }}
+          {{- end }}
+          {{- if $topValues.defaultVolumes }}
+          {{- toYaml $topValues.defaultVolumes | nindent 10 }}
+          {{- end }}
+          {{- if $topValues.extraPodVolumes }}
+          {{- toYaml $topValues.extraPodVolumes | nindent 10 }}
+          {{- end }}
+          {{- if $.Files.Glob "files/**" }}
+          - name: external-files-cm
+            configMap:
+              name: {{ $.Chart.Name }}-external-files-cm
+              items:
+              {{- range $path, $_ := $.Files.Glob "files/**" }}
+              - key: {{ trimPrefix "files/" $path | b64enc | replace "=" "-" }}
+                path: "{{ trimPrefix "files/" $path }}"
+              {{- end }}
+          {{- end }}
+       {{- end }}
+
+{{- end }}
+{{- end }}
+{{- end }}

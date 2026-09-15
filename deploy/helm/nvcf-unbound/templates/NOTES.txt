@@ -1,0 +1,12 @@
+{{ $.Chart.Name }} ({{ $.Chart.Version }}) installation complete.
+
+Release Name: {{ $.Release.Name }}
+Namespace: {{ $.Release.Namespace }}
+Deployment Name: {{ $.Release.Name }}-deployment
+Service Name: {{ $.Release.Name }}-service
+
+Helpful commands:
+
+  $ helm --namespace={{ $.Release.Namespace }} status {{ $.Release.Name }}
+  $ helm --namespace={{ $.Release.Namespace }} get all {{ $.Release.Name }}
+  $ kubectl --namespace={{ $.Release.Namespace }} get pod,daemonset,svc,statefulset,secret,pvc --selector='app.kubernetes.io/name={{ $.Chart.Name }},app.kubernetes.io/instance={{ $.Release.Name }}'

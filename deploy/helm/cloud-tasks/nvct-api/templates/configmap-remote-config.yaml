@@ -1,0 +1,12 @@
+{{- if .Values.nvctApi.remoteConfig.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nvct-api.remoteConfigName" . }}
+  namespace: {{ include "nvct-api.namespace" . }}
+  labels:
+    {{- include "nvct-api.labels" . | nindent 4 }}
+data:
+  nvct-api.yaml: |-
+{{ toYaml .Values.nvctApi.remoteConfig.configData | indent 4 }}
+{{- end }}

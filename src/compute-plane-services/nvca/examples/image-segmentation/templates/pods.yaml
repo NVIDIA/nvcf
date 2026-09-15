@@ -1,0 +1,196 @@
+{{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- $topValues := .Values }}
+{{- if $topValues.applicationSpecs }}
+{{- $applicationSpecs := $topValues.applicationSpecs }}
+{{- $wlSpecs := $topValues.workloadSpecs }}
+{{- range $appname, $appData := $applicationSpecs }}
+{{if eq $appData.apptype "static-pod" }}
+{{- $containers := $appData.containers }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $.Chart.Name }}-{{ $appname }}
+  {{- if $topValues.namespace }}
+  namespace: {{ $topValues.namespace }}
+  {{- end }}
+  labels:
+    app: {{ $.Chart.Name }}-{{ $appname }}
+{{ include (print $.Chart.Name "-" $.Chart.AppVersion ".hb.labels.standard" ) . | indent 4 }}
+{{- include "std-helm.labels" $ | nindent 4 }}
+    {{- if $appData.podLabels }}
+    {{- $appData.podLabels | toYaml | nindent 4 }}
+    {{- end }}
+    {{- if $topValues.podLabels }}
+    {{- $topValues.podLabels | toYaml | nindent 4 }}
+    {{- end }}
+  {{- if or ($appData.podAnnotations) ($topValues.podAnnotations) }}
+  annotations:
+    {{- if $appData.podAnnotations }}
+    {{- $appData.podAnnotations | toYaml | nindent 4 }}
+    {{- end }}
+    {{- if $topValues.podAnnotations }}
+    {{- $topValues.podAnnotations | toYaml | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- if $appData.extraPodSpecs }}
+  {{- $appData.extraPodSpecs | toYaml | nindent 2}}
+  {{- end }}
+  {{- if $topValues.serviceAccount }}
+  serviceAccountName: {{ $topValues.serviceAccount.name }}
+  {{- end }}
+  {{- if $appData.restartPolicy }}
+  restartPolicy: {{$appData.restartPolicy}}
+  {{ end }}
+  {{- with $topValues.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $appData.initContainers }}
+  initContainers:
+  {{- range $appData.initContainers }}
+  - {{- toYaml . | nindent 4 }}
+    volumeMounts:
+    {{- if $topValues.defaultVolumeMounts }}
+      #Default volumeMounts
+    {{- toYaml $topValues.defaultVolumeMounts | nindent 6 }}
+    {{- end }}
+    {{- if $topValues.extraPodVolumeMounts }}
+    {{- toYaml $topValues.extraPodVolumeMounts | nindent 6 }}
+    {{- end }}
+    {{- if $appData.volumeMounts }}
+      {{- toYaml $appData.volumeMounts |  nindent 6 }}
+    {{- end }}
+    {{- if $.volumeMounts }}
+    {{- toYaml $.volumeMounts |  nindent 6 }}
+    {{- end }}
+    {{- if $.Files.Glob "files/**" }}
+      - name: external-files-cm
+        mountPath: /opt/ext-files
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  containers:
+  {{- range $containerName, $container := $containers }}
+    - name: {{ $containerName }}
+      image: {{ $container.image.repository }}:{{ $container.image.tag }}{{if $container.image.pullPolicy }}
+      imagePullPolicy: {{ $container.image.pullPolicy }}{{else if (($topValues.image).pullPolicy) }}
+      imagePullPolicy: {{ $topValues.image.pullPolicy }}
+      {{- end }}
+      {{- if $container.command }}
+      command:
+        {{- toYaml $container.command |  nindent 8 }}
+      {{- end }}
+      {{- if $container.args }}
+      args:
+        {{- toYaml $container.args |  nindent 6 }}
+      {{- end }}
+      env:
+      {{- if $container.env }}
+      {{- toYaml $container.env | nindent 6 }}
+      {{- end }}
+      {{- if $topValues.global }}
+      {{- if $topValues.global.ucfGlobalEnv }}
+      {{- toYaml $topValues.global.ucfGlobalEnv | nindent 6 }}
+      {{- end }}
+      {{- end }}
+      {{- if and ($wlSpecs) ($container.workload) }}
+      {{- if index $wlSpecs $container.workload "wl_env" }}
+      {{- $wl_env:= index $wlSpecs $container.workload "wl_env" }}
+      {{- toYaml $wl_env | nindent 6 }}
+      {{- end }}
+      {{- end }}
+      {{- if $container.readinessProbe  }}
+      readinessProbe:
+        {{- toYaml $container.readinessProbe | nindent 8 }}
+      {{- end }}
+      {{- if $container.livenessProbe  }}
+      livenessProbe:
+        {{- toYaml $container.livenessProbe | nindent 8 }}
+      {{- end }}
+      {{- $workload_resources := "" }}
+      {{- if and ($wlSpecs) ($container.workload) }}
+      {{- $workload_resources = index $wlSpecs $container.workload  "wl_resources"  }}
+      {{- end }}
+      {{- if $workload_resources }}
+      #wld resources
+      resources:
+      {{- toYaml $workload_resources| nindent 8 }}
+      {{- else if $container.resources }}
+      #cont resources
+      resources:
+      {{- toYaml $container.resources| nindent 8 }}
+      {{- end }}
+      volumeMounts:
+      {{- if $topValues.defaultVolumeMounts }}
+        #Default volumeMounts
+      {{- toYaml $topValues.defaultVolumeMounts | nindent 8 }}
+      {{- end }}
+      {{- if $topValues.extraPodVolumeMounts }}
+      {{- toYaml $topValues.extraPodVolumeMounts | nindent 8 }}
+      {{- end }}
+      {{- if $container.volumeMounts }}
+          #Container volumeMounts
+        {{- toYaml $container.volumeMounts |  nindent 8 }}
+      {{- end }}
+      {{- if $.Files.Glob "files/**" }}
+        - name: external-files-cm
+          mountPath: /opt/ext-files
+      {{- end }}
+      {{- if $container.ports }}
+      ports:
+        {{- toYaml $container.ports | nindent 8 }}
+      {{- end }}
+  {{- end }}
+  {{- with $topValues.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $topValues.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $topValues.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  volumes:
+  {{- if $appData.volumes }}
+  {{- toYaml $appData.volumes |  nindent 4 }}
+  {{- end }}
+  {{- if $topValues.defaultVolumes }}
+  {{- toYaml $topValues.defaultVolumes | nindent 4 }}
+  {{- end }}
+  {{- if $topValues.extraPodVolumes }}
+  {{- toYaml $topValues.extraPodVolumes | nindent 4 }}
+  {{- end }}
+  {{- if $.Files.Glob "files/**" }}
+    - name: external-files-cm
+      configMap:
+        name: {{ $.Chart.Name }}-external-files-cm
+        items:
+        {{- range $path, $_ := $.Files.Glob "files/**" }}
+        - key: {{ trimPrefix "files/" $path | b64enc | replace "=" "-" }}
+          path: "{{ trimPrefix "files/" $path }}"
+        {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

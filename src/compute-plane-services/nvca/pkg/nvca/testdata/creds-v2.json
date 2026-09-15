@@ -1,0 +1,20 @@
+{
+    "creationQueue": {
+        "A100": {
+            "url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_13e2b598-96cf-41b5-b419-8ea7f700d5d2.fifo",
+            "queueType": "FifoQueue",
+            "accessKeyId": "dummy-access-key-id",
+            "secretAccessKey": "dummy-secret-access-key",
+            "sessionToken": "dummy-session-token",
+            "expiresAt": "2023-05-31T05:26:04.433Z"
+        }
+    },
+    "terminationQueue": {
+        "url": "http://192.168.65.2:4566/000000000000/q_gdn_icms_byoc_oauth-stg-0CBtUXmR8i1HFNvm7t6I1M9VD2NBqpgETUolWrlSv68.fifo",
+        "queueType": "FifoQueue",
+        "accessKeyId": "dummy-access-key-id",
+        "secretAccessKey": "dummy-secret-access-key",
+        "sessionToken": "dummy-session-token",
+        "expiresAt": "2023-05-31T05:26:04.461Z"
+    }
+}

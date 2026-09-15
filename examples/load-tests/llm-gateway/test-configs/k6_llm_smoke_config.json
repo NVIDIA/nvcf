@@ -1,0 +1,13 @@
+{
+  "scenarios": {
+    "smoke": {
+      "executor": "constant-arrival-rate",
+      "rate": 2,
+      "timeUnit": "1s",
+      "duration": "30s",
+      "preAllocatedVUs": 5,
+      "maxVUs": 20,
+      "gracefulStop": "10s"
+    }
+  }
+}

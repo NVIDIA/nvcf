@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../../.." && pwd)"
+runner="${repo_root}/tools/ci/run-go-unit-tests"
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "${workdir}"' EXIT
+
+module_dir="${workdir}/example"
+dep_dir="${workdir}/dep"
+results_dir="${workdir}/results"
+mkdir -p "${module_dir}" "${dep_dir}"
+
+cat > "${dep_dir}/go.mod" <<'EOF'
+module example.com/dep
+
+go 1.24.0
+EOF
+
+cat > "${dep_dir}/dep.go" <<'EOF'
+package dep
+
+func Value() string { return "ok" }
+EOF
+
+cat > "${module_dir}/go.mod" <<'EOF'
+module example.com/test
+
+go 1.24.0
+
+require example.com/dep v0.0.0
+
+replace example.com/dep => ../dep
+EOF
+
+cat > "${module_dir}/main.go" <<'EOF'
+package main
+
+import "example.com/dep"
+
+func value() string {
+	return dep.Value()
+}
+
+func main() {}
+EOF
+
+cat > "${module_dir}/main_test.go" <<'EOF'
+package main
+
+import "testing"
+
+func TestValue(t *testing.T) {
+	if got := value(); got != "ok" {
+		t.Fatalf("value() = %q, want %q", got, "ok")
+	}
+}
+EOF
+
+(
+    cd "${module_dir}"
+    GOWORK=off go mod vendor
+)
+
+cat > "${workdir}/go.work" <<'EOF'
+go 1.24.0
+
+use ./example
+EOF
+
+if ! output="$(GOWORK="${workdir}/go.work" "${runner}" "${module_dir}" --results-dir "${results_dir}" --coverage-threshold 0 2>&1)"; then
+    echo "expected go unit test runner to succeed with workspace mode enabled for the job" >&2
+    echo "${output}" >&2
+    exit 1
+fi
+
+echo "PASS: test-run-go-unit-tests"

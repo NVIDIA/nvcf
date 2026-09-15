@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "nvsnap-mount-prep_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-mount-prep",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "nvsnap-mount-prep",
+    embed = [":nvsnap-mount-prep_lib"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,8 @@
+exports_files([
+    "root_zig.bzl",
+])
+
+exports_files(
+    glob(["patches/*.patch"]),
+    visibility = ["//visibility:public"],
+)

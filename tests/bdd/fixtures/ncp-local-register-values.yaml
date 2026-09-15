@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Stable compute-plane registration handoff for render-only BDD scenarios.
+clusterID: 11111111-2222-3333-4444-555555555555
+clusterGroupID: aaaa-bbbb-cccc-dddd
+ncaID: nvcf-default
+region: us-west-1
+selfManaged:
+  identitySource: psat
+  icmsServiceURL: http://api.sis.svc.cluster.local:8080
+  revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+  natsURL: nats://nats.nats-system.svc.cluster.local:4222

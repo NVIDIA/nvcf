@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "checker",
+    srcs = [
+        "checker.go",
+        "cost.go",
+        "env.go",
+        "errors.go",
+        "format.go",
+        "mapping.go",
+        "options.go",
+        "printer.go",
+        "scopes.go",
+        "types.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/checker",
+    importpath = "github.com/google/cel-go/checker",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/checker/decls",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/ast",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/containers",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/debug",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/decls",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/operators",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/overloads",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/parser",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/api/expr/v1alpha1",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":checker",
+    visibility = ["//visibility:public"],
+)

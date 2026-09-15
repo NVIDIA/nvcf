@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "trustbundle",
+    srcs = ["fingerprint.go"],
+    importpath = "nvcf-cli/internal/trustbundle",
+    visibility = ["//src/clis/nvcf-cli:__subpackages__"],
+)
+
+go_test(
+    name = "trustbundle_test",
+    srcs = ["fingerprint_test.go"],
+    embed = [":trustbundle"],
+)

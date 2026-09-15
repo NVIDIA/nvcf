@@ -1,0 +1,47 @@
+[SERVICE]
+    Flush         5
+    Daemon        off
+    Log_Level     info
+    Parsers_File  parsers.conf
+
+[INPUT]
+    Name              tail
+    Path              {{.LogPath}}
+    Exclude_Path      {{.ExcludePath}}
+    Path_Key          filename
+    Parser            docker
+    Tag               logs.*
+    Refresh_Interval  5
+    Mem_Buf_Limit     5MB
+    Skip_Long_Lines   On
+    Skip_Empty_Lines  On
+    # Disable inotify to prevent "too many open files" error in clusters with many containers
+    # Use polling mode instead (less efficient but more reliable)
+    Read_from_Head    Off
+    Inotify_Watcher   false
+    DB                /fluent-bit/db/flb_kube.db
+    DB.locking        true
+
+# Note: kubernetes filter is intentionally NOT configured
+# Reason: It requires service account tokens and RBAC permissions for K8s API access
+# Design decision: Rely on OTel collector for metadata enrichment instead
+# OTel collector adds metadata via environment variables (NVCF_INSTANCE_ID, NVCF_FUNCTION_ID, etc.)
+# This avoids requiring additional RBAC permissions and API calls
+# Trade-off: Logs won't include pod labels/annotations from K8s API, but will have essential
+# NVCF-specific metadata from the OTel collector
+
+[FILTER]
+    Name    modify
+    Match   *
+    Add     service.name ${POD_NAME}
+    Add     service.namespace ${POD_NAMESPACE}
+
+[OUTPUT]
+    Name  opentelemetry
+    Match *
+    Host  localhost
+    Port  {{.Port}}
+    logs_uri /v1/logs
+    Log_response_payload true
+    tls off
+    tls.verify off

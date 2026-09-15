@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# nvsnap Bazel CI toolchain image.
+#
+# Base ubuntu:22.04 chosen deliberately so the system gcc and glibc
+# ABI match the runtime nvsnap-agent container (also ubuntu:22.04).
+# That removes the hermetic_cc / zig / lld layer entirely; the .so
+# we produce links against the same glibc that hosts it at runtime.
+#
+# Build:
+#   docker build -f ci/Dockerfile.bazel \
+#     -t nvcr.io/0651155215864979/ncp-dev/nvsnap-bazel-ci:${VERSION} .
+#
+# Push (vault-fetched ncp-dev SERVICE_KEY):
+#   docker login nvcr.io -u '$oauthtoken' -p "${NVCR_..._SERVICE_KEY_RW}"
+#   docker push nvcr.io/0651155215864979/ncp-dev/nvsnap-bazel-ci:${VERSION}
+#
+# Version: bumped in lockstep with .gitlab-ci.yml NVSNAP_BAZEL_CI_VERSION
+# whenever this Dockerfile changes. Same tag should never be republished.
+
+FROM ubuntu:22.04
+
+ARG GO_VERSION=1.25.0
+ARG BAZELISK_VERSION=v1.27.0
+ARG NODE_MAJOR=22
+ARG SEMANTIC_RELEASE_VERSION=17.4.4
+ARG SEMANTIC_RELEASE_GITLAB_VERSION=8.0.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Toolchain + build deps. Bazel + gazelle's go_repository_tools need a
+# real Go on PATH (the hermetic go_sdk in MODULE.bazel does not feed
+# Gazelle's tool build). protobuf-compiler covers `protoc` for
+# rules_proto consumers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        gnupg \
+        build-essential \
+        pkg-config \
+        libssl-dev \
+        unzip \
+        zip \
+        jq \
+        protobuf-compiler \
+        python3 \
+        python3-pip \
+        python-is-python3 \
+        xz-utils \
+        buildah \
+        fuse-overlayfs \
+    && rm -rf /var/lib/apt/lists/*
+
+# buildah on this ubuntu base builds the container images (the
+# image-push jobs run here so they share the Debian-based vault
+# tooling, which the Fedora quay buildah image does not support).
+# chroot isolation + vfs storage so RUN steps work in an unprivileged
+# CI container without a nested user namespace.
+ENV BUILDAH_ISOLATION=chroot
+ENV STORAGE_DRIVER=vfs
+
+# Bazelisk -> /usr/local/bin/bazel (reads .bazelversion in the workspace).
+RUN curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/download/${BAZELISK_VERSION}/bazelisk-linux-amd64" \
+        -o /usr/local/bin/bazel \
+    && chmod +x /usr/local/bin/bazel \
+    && /usr/local/bin/bazel version || true
+
+# Go (host). MODULE.bazel pins the hermetic Go SDK for rules_go; this
+# host Go is what Gazelle's go_repository_tools compile under. Must be
+# >= 1.24.12 (gazelle 0.48 lockfile constraint).
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+        -o /tmp/go.tar.gz \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOTOOLCHAIN=local
+
+# Node + semantic-release. compute-next-release-version and
+# semantic-release jobs need npx semantic-release with the gitlab
+# plugin. Pre-install globally so the jobs do not redo apk add +
+# npm install on every pipeline run (which previously took ~30s
+# per job and was a source of "silent failures" when --silent was
+# set on npm install).
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g --no-audit --no-fund --legacy-peer-deps \
+        "semantic-release@${SEMANTIC_RELEASE_VERSION}" \
+        "@semantic-release/gitlab@${SEMANTIC_RELEASE_GITLAB_VERSION}"
+
+# Smoke check.
+RUN go version \
+    && /usr/local/bin/bazel version --gnu_format >/dev/null 2>&1 || true \
+    && node --version \
+    && npx semantic-release --version \
+    && buildah --version
+
+WORKDIR /workspace

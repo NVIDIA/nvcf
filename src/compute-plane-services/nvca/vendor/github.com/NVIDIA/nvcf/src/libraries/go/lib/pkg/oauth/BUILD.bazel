@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "oauth",
+    srcs = [
+        "jwks.go",
+        "jwtcache.go",
+        "types.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/jwt",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":oauth",
+    visibility = ["//visibility:public"],
+)

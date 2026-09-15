@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "clientcmd",
+    srcs = [
+        "auth_loaders.go",
+        "client_config.go",
+        "config.go",
+        "doc.go",
+        "flag.go",
+        "helpers.go",
+        "loader.go",
+        "merge.go",
+        "merged_client_builder.go",
+        "overrides.go",
+        "validation.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd",
+    importpath = "k8s.io/client-go/tools/clientcmd",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/spf13/pflag",
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/term",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/validation",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/plugin/pkg/client/auth/exec",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/auth",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd/api",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd/api/latest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/homedir",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":clientcmd",
+    visibility = ["//visibility:public"],
+)

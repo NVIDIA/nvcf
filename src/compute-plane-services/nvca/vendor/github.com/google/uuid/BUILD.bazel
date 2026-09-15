@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "uuid",
+    srcs = [
+        "dce.go",
+        "doc.go",
+        "hash.go",
+        "marshal.go",
+        "node.go",
+        "node_js.go",
+        "node_net.go",
+        "null.go",
+        "sql.go",
+        "time.go",
+        "util.go",
+        "uuid.go",
+        "version1.go",
+        "version4.go",
+        "version6.go",
+        "version7.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+    importpath = "github.com/google/uuid",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":uuid",
+    visibility = ["//visibility:public"],
+)

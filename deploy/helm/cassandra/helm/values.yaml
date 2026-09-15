@@ -1,0 +1,212 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+cassandra:
+  # Namespace to deploy chart resources. Defaults to the release namespace.
+  namespace: ""
+
+  global:
+    imagePullSecrets: []
+    # Deprecated compatibility fallback. The self-managed stack still routes
+    # global.storageClass to this Bitnami-subchart key; persistence.storageClass
+    # takes precedence and this is only read when that is empty. Remove once the
+    # stack emits cassandra.persistence.storageClass directly.
+    defaultStorageClass: ""
+
+  image:
+    # registry: must be supplied in additional values
+    # repository: must be supplied in additional values
+    registry: ""
+    repository: ""
+    tag: 5.0.8-nv-2.0.1
+    pullPolicy: IfNotPresent
+
+  replicaCount: 3
+
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
+
+  cluster:
+    name: cassandra
+    seed: 2
+    numTokens: 8
+    datacenter: ncp
+    endpointSnitch: GossipingPropertyFileSnitch
+    # Extra seed addresses appended to the in-namespace seeds. Used for
+    # datacenter expansion: set this on a new datacenter to seed off a node in
+    # the existing datacenter (for example a headless DNS name in the other
+    # namespace). Empty for a normal single-datacenter install.
+    extraSeeds: []
+
+  # Overrides deep-merged onto the image's cassandra.yaml by the conf
+  # initContainer (via yq; these keys win, image defaults are kept for
+  # everything else). This is the values-driven way to set any cassandra.yaml
+  # setting. Do NOT set cluster_name, seeds, num_tokens, endpoint_snitch, or the
+  # listen/broadcast/rpc addresses here: the image entrypoint templates those
+  # from the CASSANDRA_* env vars derived from cluster.* above.
+  config:
+    authenticator: PasswordAuthenticator
+    authorizer: CassandraAuthorizer
+    # Required to read sstables written with UUID identifiers, which the
+    # existing Bitnami fleet runs with.
+    uuid_sstable_identifiers_enabled: true
+    # Match the existing Bitnami fleet, which runs storage_compatibility_mode:
+    # NONE (full Cassandra 5.0 native format). The Apache 5.0 default is
+    # CASSANDRA_4; leaving it there makes streaming between this node and a
+    # NONE-mode node fail during a datacenter-expansion rebuild, because the
+    # streaming connection is rejected as version-incompatible even though
+    # gossip and schema exchange succeed.
+    storage_compatibility_mode: NONE
+    # Automatic repair (Cassandra 5.0). Values supplied by the Cassandra SME.
+    reject_repair_compaction_threshold: 1024
+    repair_disk_headroom_reject_ratio: 0.2
+    auto_repair:
+      enabled: true
+      repair_check_interval: 10m
+      repair_task_min_duration: 5s
+      history_clear_delete_hosts_buffer_interval: 2h
+      mixed_major_version_repair_enabled: false
+      global_settings:
+        repair_by_keyspace: true
+        number_of_repair_threads: 1
+        sstable_upper_threshold: 10000
+        table_max_repair_time: 4h
+        ignore_dcs: []
+        repair_primary_token_range_only: true
+        parallel_repair_count: 1
+        parallel_repair_percentage: 3
+        allow_parallel_replica_repair: false
+        allow_parallel_replica_repair_across_schedules: true
+        materialized_view_repair_enabled: false
+        initial_scheduler_delay: 30m
+        repair_session_timeout: 3h
+        force_repair_new_node: false
+        repair_max_retries: 3
+        repair_retry_backoff: 60s
+        token_range_splitter:
+          class_name: org.apache.cassandra.repair.autorepair.RepairTokenRangeSplitter
+          parameters:
+            bytes_per_assignment: 50GiB
+            partitions_per_assignment: 1048576
+            max_tables_per_assignment: 64
+            max_bytes_per_schedule: 100GiB
+      repair_type_overrides:
+        full:
+          enabled: true
+          min_repair_interval: 5d
+        incremental:
+          enabled: true
+          min_repair_interval: 1d
+        preview_repaired:
+          enabled: false
+          min_repair_interval: 4h
+
+  persistence:
+    dataPath: /var/lib/cassandra
+    size: 10Gi
+    storageClass: ""
+    # subPath within the PVC to mount at dataPath. Leave empty for fresh
+    # installs (mount the PVC root). Set to "data" for an over-the-top upgrade
+    # that adopts an existing Bitnami PVC (whose contents are nested under
+    # data/), aligning the old layout with the official image defaults.
+    subPath: ""
+
+  podSecurityContext:
+    fsGroup: 999
+
+  # Cassandra JVM heap bounds. Leave empty to let the image auto-size from host
+  # memory. Set maxHeapSize (e.g. "4G") on shared nodes or multi-node clusters
+  # so a pod does not size its heap to the whole host and get OOMKilled. With
+  # G1 (Cassandra 5.0 default) set only maxHeapSize; leave heapNewSize empty.
+  jvm:
+    maxHeapSize: ""
+    heapNewSize: ""
+
+  # Named resource preset (none/nano/micro/small/medium/large/xlarge/2xlarge).
+  # Sets container requests/limits when `resources` is
+  # empty. When set, MAX_HEAP_SIZE is auto-derived to ~50% of the preset memory
+  # limit unless jvm.maxHeapSize is given. The stack passes resourcesPreset.
+  resourcesPreset: "none"
+
+  # Explicit pod resource requests/limits for the cassandra container. Overrides
+  # resourcesPreset when non-empty. Keep maxHeapSize below the memory limit to
+  # leave room for off-heap and page cache.
+  resources: {}
+
+  # Pod scheduling, passed through to the StatefulSet pod template unchanged.
+  # Empty by default; the stack or operator sets these to pin Cassandra to
+  # specific nodes, tolerate taints, or spread across zones.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  hooks:
+    initializeCluster:
+      # Set false to skip the post-install keyspace-init job. Used when joining
+      # a new datacenter to an existing cluster: the schema arrives through
+      # gossip, so re-running init against the new datacenter is unnecessary and
+      # can race the existing schema. See the datacenter-expansion upgrade guide.
+      enabled: true
+      podAnnotations: {}
+      schedulingGates: []
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    migrations:
+      # Set false to skip the post-install schema-migration job, for the same
+      # datacenter-expansion reason as initializeCluster above. The migrations
+      # include destructive ALTER statements, so running them against a new
+      # datacenter that is not yet in every keyspace's replication can re-apply
+      # them from an earlier version. Leave true for normal installs.
+      enabled: true
+      podAnnotations: {}
+      schedulingGates: []
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+
+  migrations:
+    image:
+      # registry: must be supplied in additional values
+      # repository: must be supplied in additional values
+      registry: ""
+      repository: ""
+      # 0.17.3 includes the current NVCT task schema while preserving tables
+      # required by the published function autoscaler 1.21.0.
+      tag: 0.17.3
+      pullPolicy: Always
+
+  dbUser:
+    user: cassandra
+    forcePassword: true
+    password: "cassandra"
+
+  # Password for service-specific Cassandra roles (e.g., nvcf_api_app_v0)
+  # This should match the value configured in OpenBao migrations
+  # (openbao.migrations.secrets.cassandraPassword)
+  serviceRolePassword: "ch@ng3m3"

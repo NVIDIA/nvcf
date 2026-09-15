@@ -1,0 +1,6 @@
+{
+  "ci_lane": "docker-host",
+  "component_kind": "java-service",
+  "id": "instance-cluster-management",
+  "tests_skip": false
+}

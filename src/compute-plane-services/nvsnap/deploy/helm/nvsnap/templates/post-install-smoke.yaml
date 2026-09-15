@@ -1,0 +1,328 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.postInstallSmoke.enabled }}
+# Post-install / post-upgrade smoke test.
+#
+# Runs after every `helm install` / `helm upgrade`. Probes each NvSnap
+# component's health endpoint and fails the install if anything is
+# broken — giving operators a clear PASS/FAIL beyond raw pod-readiness.
+#
+# Hook delete policy:
+#   - before-hook-creation: clear any prior Job before creating a new one
+#   - hook-succeeded:       delete on success (no clutter in nvsnap-system)
+#   - hook-failed:          KEEP on failure (so operator can `kubectl logs`)
+#
+# Reads the ServiceAccount permissions from a minimal Role/RoleBinding
+# scoped to the release namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nvsnap-post-install-smoke
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-post-install-smoke
+    namespace: {{ .Release.Namespace }}
+---
+# Cluster-scoped read for `nodes` (used by the GPU-node count check).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsnap-post-install-smoke-{{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  # StorageClasses are cluster-scoped; step 7 reads one to confirm the L2
+  # class an operator named actually exists. Without this the check would
+  # fail on RBAC rather than on the thing it is testing.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+  # Same reasoning for the VolumeSnapshotClass step 7 checks when
+  # agent.l2.snapshotClass is set.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvsnap-post-install-smoke-{{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvsnap-post-install-smoke-{{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-post-install-smoke
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.postInstallSmoke.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: nvsnap-post-install-smoke
+    spec:
+      restartPolicy: Never
+      serviceAccountName: nvsnap-post-install-smoke
+      {{- include "nvsnap.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: smoke
+          image: {{ .Values.postInstallSmoke.image.repository }}:{{ .Values.postInstallSmoke.image.tag }}
+          imagePullPolicy: {{ .Values.postInstallSmoke.image.pullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eo pipefail
+              FAIL=0
+              echo "=== NvSnap post-install smoke test ==="
+
+              echo "--- [1/5] nvsnap-agent DaemonSet ready ---"
+              kubectl rollout status ds/nvsnap-agent -n {{ .Release.Namespace }} --timeout=120s
+
+              {{- if .Values.server.enabled }}
+              echo "--- [2/5] nvsnap-server reachable ---"
+              kubectl rollout status deploy/nvsnap-server -n {{ .Release.Namespace }} --timeout=60s
+              if ! curl -fsS --max-time 10 \
+                   http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:8080/healthz \
+                   >/dev/null; then
+                echo "  FAIL: nvsnap-server /healthz not responding"
+                FAIL=1
+              else
+                echo "  OK"
+              fi
+              {{- end }}
+
+              {{- if .Values.blobstore.enabled }}
+              echo "--- [3/5] nvsnap-blobstore Deployment ready ---"
+              # Blobstore has no /healthz endpoint — the readinessProbe in
+              # its Deployment is the source of truth, so rollout status
+              # already proves it's serving.
+              kubectl rollout status deploy/nvsnap-blobstore -n {{ .Release.Namespace }} --timeout=60s
+              echo "  OK"
+              {{- end }}
+
+              {{- if .Values.webhook.enabled }}
+              echo "--- [4/5] webhook TLS cert issued ---"
+              # cert-manager populates this Secret once the Certificate is ready.
+              for i in {1..30}; do
+                if kubectl get secret nvsnap-webhook-tls -n {{ .Release.Namespace }} \
+                     -o jsonpath='{.data.tls\.crt}' 2>/dev/null | grep -q .; then
+                  echo "  OK (TLS cert present)"
+                  break
+                fi
+                sleep 2
+                [ $i -eq 30 ] && { echo "  FAIL: nvsnap-webhook-tls not populated after 60s"; FAIL=1; }
+              done
+              {{- end }}
+
+              echo "--- [5/5] agent → containerd liveness ---"
+              # Each agent's readiness probe already proves containerd
+              # connectivity (per GitLab #42). DS rollout in step 1
+              # implicitly verifies this — just confirm pod count matches
+              # GPU node count.
+              # Read the DaemonSet status snapshot (numberReady vs
+              # desiredNumberScheduled) rather than counting pods in
+              # status.phase=Running. The pod-count approach raced the
+              # rolling-restart window on `helm upgrade` — an agent
+              # mid-restart isn't Running yet, so the count briefly
+              # mismatched and falsely failed the smoke (flipping the
+              # release to "failed" even though step 1's rollout already
+              # passed). The DS status is a single consistent object and
+              # numberReady==desiredNumberScheduled is exactly what
+              # step 1 waited for.
+              DESIRED=$(kubectl get ds nvsnap-agent -n {{ .Release.Namespace }} -o jsonpath='{.status.desiredNumberScheduled}')
+              READY=$(kubectl get ds nvsnap-agent -n {{ .Release.Namespace }} -o jsonpath='{.status.numberReady}')
+              if [ "${DESIRED:-0}" -gt 0 ] && [ "${READY:-0}" -ne "${DESIRED}" ]; then
+                echo "  FAIL: $READY/$DESIRED agents ready"
+                FAIL=1
+              else
+                echo "  OK ($READY/$DESIRED agents ready)"
+              fi
+
+              # Steps 1-5 above prove the components are alive. Everything
+              # below proves they are wired to each other and configured the
+              # way the operator asked. Liveness checks pass happily through
+              # a stale agent image, a silently disabled L2 tier, and a
+              # server that cannot authenticate to its own agents — all three
+              # shipped undetected and are what steps 6-9 exist to catch.
+
+              echo "--- [6/9] agent image matches this release ---"
+              # nvsnap#731: the chart pinned an agent 31 versions behind
+              # versions.sh and every liveness probe stayed green, because a
+              # stale agent is a perfectly healthy agent.
+              WANT="{{ include "nvsnap.agent.image" . }}"
+              GOT=$(kubectl get ds nvsnap-agent -n {{ .Release.Namespace }} -o jsonpath='{.spec.template.spec.containers[0].image}')
+              if [ "$GOT" != "$WANT" ]; then
+                echo "  FAIL: deployed $GOT, chart expects $WANT"
+                FAIL=1
+              else
+                echo "  OK ($GOT)"
+              fi
+
+              echo "--- [7/9] L2 fan-out configuration ---"
+              # An empty storageClass disables L2 and degrades restore to the
+              # L3 peer cascade. That is a legitimate configuration, but it
+              # must be a decision rather than an accident, so say which it is.
+              {{- if .Values.agent.l2.storageClass }}
+              if kubectl get storageclass {{ .Values.agent.l2.storageClass | quote }} >/dev/null 2>&1; then
+                echo "  OK (L2 enabled on StorageClass {{ .Values.agent.l2.storageClass }})"
+                {{- if .Values.agent.l2.snapshotClass }}
+                # A named snapshot class that does not exist is worse than none:
+                # the snapshot-clone promote silently has nowhere to go. An unset
+                # one is NOT an error — internal/checkpointstore/storage_profile.go
+                # only needs it for StrategySnapshotClone (GKE PD, EBS).
+                # SharedVolumePromoter provisioners (nvmesh, EFS) promote
+                # zero-copy and never take a snapshot.
+                if ! kubectl get volumesnapshotclass {{ .Values.agent.l2.snapshotClass | quote }} >/dev/null 2>&1; then
+                  echo "  FAIL: agent.l2.snapshotClass={{ .Values.agent.l2.snapshotClass }} does not exist"
+                  FAIL=1
+                else
+                  echo "  OK (snapshot class {{ .Values.agent.l2.snapshotClass }} present)"
+                fi
+                {{- else }}
+                PROV=$(kubectl get storageclass {{ .Values.agent.l2.storageClass | quote }} -o jsonpath='{.provisioner}' 2>/dev/null)
+                echo "  NOTE: no snapshotClass set; provisioner $PROV must be one that promotes without snapshots"
+                {{- end }}
+              else
+                echo "  FAIL: agent.l2.storageClass={{ .Values.agent.l2.storageClass }} does not exist"
+                FAIL=1
+              fi
+              {{- else }}
+              echo "  WARN: L2 disabled (agent.l2.storageClass unset) — restore falls back to the L3 peer cascade"
+              {{- end }}
+
+              {{- if (.Values.agent.auth).enabled }}
+              echo "--- [8/9] agent token reaches every client ---"
+              # nvsnap#736: nvsnap-server calls the agent API but had no
+              # notion of the token. Under --auth-mode=required its cascade
+              # delete 401'd, returned 204 anyway, dropped the catalog row and
+              # orphaned the dump. Nothing was unhealthy; the wiring was just
+              # incomplete. Assert every component that talks to the agent
+              # actually carries the credential.
+              if ! kubectl get secret nvsnap-agent-token -n {{ .Release.Namespace }} >/dev/null 2>&1; then
+                echo "  FAIL: Secret nvsnap-agent-token missing while auth is enabled"
+                FAIL=1
+              else
+                for pair in "ds/nvsnap-agent:agent"{{ if .Values.server.enabled }}" deploy/nvsnap-server:server"{{ end }}; do
+                  obj="${pair%%:*}"; who="${pair##*:}"
+                  # Check where the value comes from, not just that the name is
+                  # present. A literal, or a secretKeyRef aimed at the wrong
+                  # Secret or key, produces a token that does not match the one
+                  # the agent verifies against — which fails exactly like having
+                  # no token at all, but looks correct in a name-only check.
+                  SRC=$(kubectl get "$obj" -n {{ .Release.Namespace }} -o jsonpath='
+                    {range .spec.template.spec.containers[0].env[?(@.name=="NVSNAP_AGENT_TOKEN")]}
+                    {.valueFrom.secretKeyRef.name}/{.valueFrom.secretKeyRef.key}{end}' 2>/dev/null | tr -d ' \n')
+                  if [ "$SRC" = "nvsnap-agent-token/token" ]; then
+                    echo "  OK ($who reads NVSNAP_AGENT_TOKEN from nvsnap-agent-token/token)"
+                  elif [ -z "$SRC" ] || [ "$SRC" = "/" ]; then
+                    echo "  FAIL: $who has no NVSNAP_AGENT_TOKEN secretKeyRef — its agent calls will 401"
+                    FAIL=1
+                  else
+                    echo "  FAIL: $who reads NVSNAP_AGENT_TOKEN from $SRC, want nvsnap-agent-token/token"
+                    FAIL=1
+                  fi
+                done
+              fi
+
+              echo "--- [9/9] auth is enforced, not merely configured ---"
+              # Prove the guard actually runs: a token-less API call must be
+              # rejected in required mode, and a token-bearing one accepted.
+              # Configuration that is present but not enforced looks identical
+              # to configuration that works.
+              AGENT_URL="http://nvsnap-agent.{{ .Release.Namespace }}.svc.cluster.local:8081"
+              # `|| true` so a missing Secret reports a FAIL below rather than
+              # killing the script under `set -e` and losing the remaining checks.
+              TOK=$(kubectl get secret nvsnap-agent-token -n {{ .Release.Namespace }} -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)
+              AUTHED=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $TOK" "$AGENT_URL/v1/checkpoints" || echo 000)
+              [ "$AUTHED" = "200" ] && echo "  OK (authenticated call accepted)" \
+                || { echo "  FAIL: authenticated call returned $AUTHED, want 200"; FAIL=1; }
+              {{- if eq ((.Values.agent.auth).mode | default "") "required" }}
+              ANON=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$AGENT_URL/v1/checkpoints" || echo 000)
+              [ "$ANON" = "401" ] && echo "  OK (anonymous call rejected)" \
+                || { echo "  FAIL: anonymous call returned $ANON, want 401 — required mode is not enforcing"; FAIL=1; }
+              {{- end }}
+              {{- end }}
+
+              echo
+              if [ "$FAIL" -ne 0 ]; then
+                echo "=== SMOKE TEST FAILED ==="
+                exit 1
+              fi
+              echo "=== SMOKE TEST PASSED ==="
+{{- end }}

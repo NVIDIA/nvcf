@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "interpreter",
+    srcs = [
+        "activation.go",
+        "attribute_patterns.go",
+        "attributes.go",
+        "decorators.go",
+        "dispatcher.go",
+        "evalstate.go",
+        "interpretable.go",
+        "interpreter.go",
+        "optimizations.go",
+        "planner.go",
+        "prune.go",
+        "runtimecost.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/interpreter",
+    importpath = "github.com/google/cel-go/interpreter",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/ast",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/containers",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/functions",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/operators",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/overloads",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/traits",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":interpreter",
+    visibility = ["//visibility:public"],
+)

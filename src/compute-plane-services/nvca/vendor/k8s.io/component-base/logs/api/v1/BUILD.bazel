@@ -1,0 +1,42 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "api",
+    srcs = [
+        "doc.go",
+        "kube_features.go",
+        "options.go",
+        "options_no_slog.go",
+        "options_slog.go",
+        "pflags.go",
+        "registry.go",
+        "text.go",
+        "types.go",
+        "zz_generated.deepcopy.go",
+        "zz_generated.model_name.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/component-base/logs/api/v1",
+    importpath = "k8s.io/component-base/logs/api/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/github.com/spf13/pflag",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/diff",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/validation/field",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/version",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/component-base/cli/flag",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/component-base/featuregate",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/component-base/logs/internal/setverbositylevel",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/component-base/logs/klogflags",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/textlogger",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":api",
+    visibility = ["//visibility:public"],
+)

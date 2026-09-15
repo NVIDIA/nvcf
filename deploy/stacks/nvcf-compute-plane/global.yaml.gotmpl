@@ -1,0 +1,25 @@
+{{- define "nvcf.nodeSelector" -}}
+{{- if .selectors.enabled -}}
+{{- $ns := dig .type (dict) .selectors -}}
+{{- if or (not $ns) (not (kindIs "map" $ns)) (not (index $ns "key")) -}}
+{{- $ns = dig "all" (dict) .selectors -}}
+{{- end -}}
+{{- if and $ns (kindIs "map" $ns) (index $ns "key") -}}
+nodeSelector:
+  {{ $ns.key }}: {{ $ns.value }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "nvcf.tolerations" -}}
+{{- if .tolerations.enabled -}}
+{{- $tol := dig .type (list) .tolerations -}}
+{{- if not (and $tol (kindIs "slice" $tol)) -}}
+{{- $tol = dig "all" (list) .tolerations -}}
+{{- end -}}
+{{- if and $tol (kindIs "slice" $tol) -}}
+tolerations:
+{{ toYaml $tol }}
+{{- end -}}
+{{- end -}}
+{{- end -}}

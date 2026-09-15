@@ -1,0 +1,12 @@
+{
+  "functionId": "464b1dff-05f0-41f9-adf7-ebe880691035",
+  "versionId": "4f4d576d-ddbe-4938-af65-d28c61044f08",
+  "grpcService": "Echo",
+  "grpcMethod": "EchoMessage",
+  "requestBody": {
+    "message": "Hello"
+  },
+  "grpcPlaintext": true,
+  "timeout": 120,
+  "pollDurationSeconds": 10
+}

@@ -1,0 +1,67 @@
+{
+  "name": "advanced-test-function",
+  "containerImage": "nvcr.io/0651155215864979/ncp-dev/load_tester_supreme:0.0.8",
+  "inferenceUrl": "/echo",
+  "inferencePort": 8000,
+  "description": "Test function with all advanced features",
+  "tags": ["test", "advanced", "example"],
+  "functionType": "DEFAULT",
+  "apiBodyFormat": "CUSTOM",
+  "health": {
+    "protocol": "HTTP",
+    "uri": "/health",
+    "port": 8000,
+    "timeout": "PT30S",
+    "expectedStatusCode": 200
+  },
+  "models": [
+    {
+      "name": "pytorch-model",
+      "version": "1.0.0",
+      "uri": "s3://my-bucket/models/pytorch-model.tar.gz"
+    },
+    {
+      "name": "tokenizer",
+      "uri": "s3://my-bucket/tokenizers/bert-tokenizer.tar.gz"
+    }
+  ],
+  "resources": [
+    {
+      "name": "config",
+      "version": "1.0",
+      "uri": "s3://my-bucket/config/model-config.json"
+    }
+  ],
+  "rateLimit": {
+    "rateLimit": "100-S",
+    "exemptedNcaIds": ["nca-exempt-1", "nca-exempt-2"],
+    "syncCheck": true
+  },
+  "telemetries": {
+    "logsTelemetryId": "550e8400-e29b-41d4-a716-446655440001",
+    "metricsTelemetryId": "550e8400-e29b-41d4-a716-446655440002",
+    "tracesTelemetryId": "550e8400-e29b-41d4-a716-446655440003"
+  },
+  "secrets": [
+    {
+      "name": "api-key"
+    },
+    {
+      "name": "db-password"
+    }
+  ],
+  "containerEnvironment": [
+    {
+      "key": "MODEL_PATH",
+      "value": "/models"
+    },
+    {
+      "key": "BATCH_SIZE",
+      "value": "32"
+    },
+    {
+      "key": "LOG_LEVEL",
+      "value": "INFO"
+    }
+  ]
+}

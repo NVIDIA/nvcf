@@ -1,0 +1,4 @@
+2026-04-29T01:24:00Z [03/8] apply-ns: starting
+2026-04-29T01:24:05Z [03/8] (current): waiting on cassandra CRD stabilization
+2026-04-29T01:24:10Z [03/8] (current): namespaces 3/5
+2026-04-29T01:24:20Z [03/8] apply-ns: complete (20s)

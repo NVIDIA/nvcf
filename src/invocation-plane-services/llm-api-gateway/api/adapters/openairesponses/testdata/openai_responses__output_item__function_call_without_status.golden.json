@@ -1,0 +1,7 @@
+{
+  "type": "function_call",
+  "id": "fc_456",
+  "call_id": "call_def456",
+  "name": "get_stock_price",
+  "arguments": "{\"ticker\": \"AAPL\"}"
+}

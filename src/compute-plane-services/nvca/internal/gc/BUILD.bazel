@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "gc",
+    srcs = ["gc.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/gc",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/gc/namespace",
+        "//src/compute-plane-services/nvca/internal/gc/persistentvolume",
+        "//src/compute-plane-services/nvca/internal/gc/pod",
+        "//src/compute-plane-services/nvca/internal/gc/storageclass",
+        "//src/compute-plane-services/nvca/internal/kubeclients",
+        "//src/compute-plane-services/nvca/internal/metrics",
+        "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/sourcegraph/conc/pool",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gc",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+)
+
+go_test(
+    name = "gc_test",
+    srcs = ["gc_test.go"],
+    embed = [":gc"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/kubeclients",
+        "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
+    ],
+)

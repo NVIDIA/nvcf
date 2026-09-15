@@ -1,0 +1,511 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+global:
+  - backend: gfn #vm
+    workload: function
+    metrics:
+      required_attributes:
+        - name: nca_id
+          value: "${env:NCA_ID:-unknown}"
+        - name: instance_id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: host.id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: function_id
+          value: "${env:NVCF_FUNCTION_ID:-unknown}"
+        - name: function_version_id
+          value: "${env:NVCF_FUNCTION_VERSION_ID:-unknown}"
+        - name: zone_name
+          value: "${env:NVCF_ZONE_NAME:-unknown}"
+        - name: cloud_provider
+          value: "gfn"
+
+  - backend: gfn #vm
+    workload: task
+    metrics:
+      required_attributes:
+        - name: nca_id
+          value: "${env:NCA_ID:-unknown}"
+        - name: instance_id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: host.id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: task_id
+          value: "${env:NVCT_TASK_ID:-unknown}"
+        - name: zone_name
+          value: "${env:NVCF_ZONE_NAME:-unknown}"
+        - name: cloud_provider
+          value: "gfn"
+
+  - backend: non-gfn #k8s
+    workload: function
+    metrics:
+      required_attributes:
+        - name: nca_id
+          value: "${env:NCA_ID:-unknown}"
+        - name: cloud_provider
+          value: "${env:NVCF_CLOUD_PROVIDER:-unknown}"
+        - name: instance_id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: host.id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: function_id
+          value: "${env:NVCF_FUNCTION_ID:-unknown}"
+        - name: function_version_id
+          value: "${env:NVCF_FUNCTION_VERSION_ID:-unknown}"
+        - name: cloud_region
+          value: "{{ .ZoneName }}"
+
+  - backend: non-gfn #k8s
+    workload: task
+    metrics:
+      required_attributes:
+        - name: nca_id
+          value: "${env:NCA_ID:-unknown}"
+        - name: cloud_provider
+          value: "${env:NVCF_CLOUD_PROVIDER:-unknown}"
+        - name: instance_id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: host.id
+          value: "${env:NVCF_INSTANCE_ID:-unknown}"
+        - name: task_id
+          value: "${env:NVCT_TASK_ID:-unknown}"
+        - name: cloud_region
+          value: "{{ .ZoneName }}"
+
+metrics:
+  - function_type: helm
+
+    jobs:
+      - name: kubernetes-cadvisor
+        # generate metrics query string for scrape config and doc (params query_string)
+        metric_allow_list:
+          - catagory: CPU
+            list:
+              - name: container_cpu_cfs_throttled_periods_total
+                comment: Only present if container was throttled
+              - name: container_cpu_cfs_throttled_seconds_total
+                comment: Only present if container was throttled
+              - name: container_cpu_usage_seconds_total
+          - catagory: Memory
+            list:
+              - name: container_memory_cache
+              - name: container_memory_rss
+              - name: container_memory_swap
+              - name: container_memory_usage_bytes
+              - name: container_memory_working_set_bytes
+          - catagory: Filesystem
+            docstring: only present if the container is performing IO operations
+            list:
+              - name: container_fs_limit_bytes
+              - name: container_fs_usage_bytes
+              - name: container_fs_reads_total
+              - name: container_fs_writes_total
+              - name: container_fs_writes_bytes_total
+              - name: container_fs_reads_bytes_total
+          - catagory: Network
+            docstring: only present if the container is performing network operations
+            list:
+              - name: container_network_receive_bytes_total
+              - name: container_network_receive_errors_total
+              - name: container_network_receive_packets_dropped_total
+              - name: container_network_receive_packets_total
+              - name: container_network_transmit_bytes_total
+              - name: container_network_transmit_errors_total
+              - name: container_network_transmit_packets_dropped_total
+              - name: container_network_transmit_packets_total
+
+        # generate action: labelkeep
+        attr_allow_list:
+          - catagory: generic
+            docstring: The platform metrics have the following attributes when available
+            list:
+              - name: __name__
+              - name: container
+              - name: cpu
+              - name: device
+              - name: image
+              - name: job
+                comment: attribute is available in Grafana Cloud
+              - name: interface
+              - name: pod
+        # Drop metrics if contains the following attributes(labelkeep). Undocumented.
+        metrics_drop_label_patterns:
+          - catagory: pod
+            backend: gfn
+            list:
+              - name: byoo-otel-collector
+              - name: worker-0-.* # NVCF
+              - name: workload-0 # NVCT
+          - catagory: pod
+            backend: non-gfn
+            list:
+              - name: utils
+              - name: nvcf-smb-server
+          - catagory: container
+            list:
+              - name: byoo-otel-collector
+              - name: utils
+              - name: ess
+
+      - name: kube-state-metrics
+        # generate metrics query string for scrape config and doc (params query_string)
+        metric_allow_list:
+          - catagory: deployment
+            docstring: Only present if helm-based function has a deployment k8s object
+            list:
+              - name: kube_deployment_status_condition
+              - name: kube_deployment_status_replicas
+              - name: kube_deployment_status_replicas_available
+              - name: kube_deployment_status_replicas_ready
+              - name: kube_deployment_status_replicas_unavailable
+              - name: kube_deployment_status_replicas_updated
+              - name: kube_service_created
+          - catagory: replicaset
+            docstring: Only present if helm-based function has a replicaset k8s object. Please notice that metrics are only available if replicaset had the status in the target metric.
+            list:
+              - name: kube_replicaset_status_replicas
+              - name: kube_replicaset_status_ready_replicas
+
+          - catagory: statefulset
+            docstring: Only present if helm-based function has a stateful k8s object
+            list:
+              - name: kube_statefulset_status_replicas
+              - name: kube_statefulset_status_replicas_ready
+
+          - catagory: job/cronjob
+            docstring: Only present if the helm-based function has a job/cronjob k8s object. For NVCT only
+            list:
+              - name: kube_job_status_active
+              - name: kube_job_status_failed
+              - name: kube_job_status_succeeded
+              - name: kube_cronjob_status_active
+
+          - catagory: configmap
+            docstring: Only present if function has a configmap k8s object
+            list:
+              - name: kube_configmap_created
+
+          - catagory: secret
+            docstring: Only present if function has a secret k8s object
+            list:
+              - name: kube_secret_created
+
+          - catagory: pod_container
+            docstring: Only present if function has a pod k8s object, NVCF and NVCT. Please notice that metrics are only available if container had the status in the target metric.
+            list:
+              - name: kube_pod_container_info
+              - name: kube_pod_container_resource_limits
+              - name: kube_pod_container_resource_requests
+                comment: Only present if resources were requested
+              - name: kube_pod_container_status_last_terminated_exitcode
+                comment: Only present if an error happened
+              - name: kube_pod_container_status_last_terminated_reason
+                comment: Only present if an error happened
+              - name: kube_pod_container_status_restarts_total
+              - name: kube_pod_container_status_running
+              - name: kube_pod_container_status_terminated
+                comment: Only present if terminated
+              - name: kube_pod_container_status_terminated_reason
+                comment: Only present if terminated
+              - name: kube_pod_container_status_waiting
+                comment: Only present if pod is waiting
+              - name: kube_pod_container_status_waiting_reason
+                comment: Only present if pod is waiting
+              - name: kube_pod_container_status_ready
+
+          - catagory: pod_general
+            docstring: Only present if function/task helm deployments, NVCF and NVCT
+            list:
+              - name: kube_pod_info
+              - name: kube_pod_status_reason
+
+          - catagory: init_container
+            docstring: Only present if function/task helm defined an init container. Please notice that metrics are only available if init container had the status in the target metric.
+            list:
+              - name: kube_pod_init_container_info
+              - name: kube_pod_init_container_status_ready
+              - name: kube_pod_init_container_status_restarts_total
+              - name: kube_pod_init_container_status_running
+              - name: kube_pod_init_container_last_status_terminated_reason
+              - name: kube_pod_init_container_status_waiting_reason
+              - name: kube_pod_init_container_status_waiting
+
+        # generate action: labelkeep
+        attr_allow_list:
+          - catagory: generic
+            docstring: The platform metrics have the following attributes when available
+            list:
+              - name: __name__
+              - name: condition
+              - name: configmap
+              - name: container
+              - name: created_by_kind
+              - name: created_by_name
+              - name: deployment
+              - name: host_network
+              - name: image
+              - name: job
+                comment: attribute is available in Grafana Cloud
+              - name: phase
+              - name: pod
+              - name: qos_class
+              - name: reason
+              - name: replicaset
+              - name: resource
+              - name: secret
+              - name: service
+              - name: statefulset
+              - name: status
+              - name: unit
+
+        # Drop metrics if contains the following attributes(labelkeep), Undocumented.
+        metrics_drop_label_patterns:
+          - catagory: deployment
+            backend: gfn
+            list:
+              - name: worker-0
+          - catagory: replicaset
+            backend: gfn
+            list:
+              - name: worker-0-.*
+          - catagory: pod
+            backend: gfn
+            list:
+              - name: byoo-otel-collector
+              - name: worker-0-.* # NVCF
+              - name: workload-0 # NVCT
+          - catagory: pod
+            backend: non-gfn
+            list:
+              - name: utils
+              - name: nvcf-smb-server
+          - catagory: image
+            backend: non-gfn
+            list:
+              - name: .*nvcf_worker_init.*
+          - catagory: container
+            list:
+              - name: byoo-otel-collector
+              - name: ess
+              - name: ess-init
+              - name: gxcache-lib-install
+              - name: nvcf-cert-inject
+              - name: utils
+          - catagory: configmap
+            list:
+              - name: byoo-otel-collector
+              - name: kube-root-ca.crt
+          - catagory: secret
+            backend: non-gfn
+            list:
+              - name: helm-chart-download
+              - name: inference-container-pull-secret
+              - name: nvcf-smb-ro-creds
+              - name: nvcf-smb-rw-creds
+              - name: sh.helm.release.v1.mini-service.v1
+              - name: sr-.*-hsec
+              - name: sr-.*-pull-worker
+              - name: ".*-sr-.*-regcred-.*"
+          - catagory: secret
+            backend: gfn
+            list:
+              - name: byoo-otel-collector-secret
+              - name: mini-service-.*
+              - name: monitoring-container-cred
+              - name: sh.helm.release.v1.mini-service-0.v1
+              - name: worker-0-core # NVCF
+              - name: workload-0-core # NVCT
+          - catagory: service
+            backend: gfn
+            list:
+              - name: byoo-otel-collector
+              - name: worker-0 # NVCF
+              - name: workload-0 # NVCT
+          - catagory: service
+            backend: non-gfn
+            list:
+              - name: byoo-otel-collector
+
+      - name: nvidia-dcgm-exporter
+        metric_allow_list:
+          - catagory: GPU
+            docstring: Always present for container and helm, NVCF and NVCT.
+            list:
+              - name: DCGM_FI_DEV_GPU_UTIL
+        attr_allow_list:
+          - catagory: generic
+            docstring: The platform metrics have the following attributes when available
+            list:
+              - name: __name__
+              - name: container
+              - name: DCGM_FI_DRIVER_VERSION
+              - name: device
+              - name: job
+              - name: modelName
+              - name: pci_bus_id
+              - name: pod
+
+      - name: opentelemetry-collector
+        # generate a metric_relabel_configs item source_labels: [__name__] and action: keep
+        metric_allow_list:
+          - catagory: generic
+            docstring: Always present for container and helm, NVCF and NVCT. The final list of metrics depends on telemetries received & exporter by function/task. For instance, if function is not publishing `otlp` logs then there will be no metrics related to logs.
+            list:
+              - name: otelcol_exporter_sent_metric_points_total
+              - name: otelcol_exporter_sent_spans_total
+              - name: otelcol_exporter_sent_log_records_total
+              - name: otelcol_exporter_send_failed_log_records_total
+              - name: otelcol_exporter_send_failed_spans_total
+              - name: otelcol_exporter_send_failed_metric_points_total
+              - name: otelcol_processor_incoming_items_total
+              - name: otelcol_processor_outgoing_items_total
+              - name: otelcol_receiver_accepted_log_records_total
+              - name: otelcol_receiver_accepted_metric_points_total
+              - name: otelcol_receiver_accepted_spans_total
+              - name: otelcol_receiver_refused_log_records_total
+              - name: otelcol_receiver_refused_spans_total
+              - name: otelcol_receiver_refused_metric_points_total
+
+  - function_type: container
+    jobs:
+      - name: kubernetes-cadvisor
+        # generate a metric_relabel_configs item source_labels: [__name__] and action: keep
+        metric_allow_list:
+          - catagory: CPU
+            list:
+              - name: container_cpu_cfs_throttled_periods_total
+              - name: container_cpu_cfs_throttled_seconds_total
+              - name: container_cpu_usage_seconds_total
+          - catagory: Memory
+            list:
+              - name: container_memory_cache
+              - name: container_memory_rss
+              - name: container_memory_swap
+              - name: container_memory_usage_bytes
+              - name: container_memory_working_set_bytes
+
+          - catagory: Filesystem
+            docstring: only present if the container is performing IO operations
+            list:
+              - name: container_fs_limit_bytes
+              - name: container_fs_usage_bytes
+              - name: container_fs_reads_bytes_total
+              - name: container_fs_reads_total
+              - name: container_fs_writes_bytes_total
+              - name: container_fs_writes_total
+
+          - catagory: Network
+            docstring: only present if the container is performing network operations
+            list:
+              - name: container_network_receive_bytes_total
+              - name: container_network_receive_errors_total
+              - name: container_network_receive_packets_dropped_total
+              - name: container_network_receive_packets_total
+              - name: container_network_transmit_bytes_total
+              - name: container_network_transmit_errors_total
+              - name: container_network_transmit_packets_dropped_total
+              - name: container_network_transmit_packets_total
+
+        # generate action: labelkeep
+        attr_allow_list:
+          - catagory: generic
+            docstring: The platform metrics have the following attributes when available
+            list:
+              - name: __name__
+              - name: container
+              - name: cpu
+              - name: device
+              - name: image
+              - name: job
+              - name: interface
+              - name: pod
+
+        # Drop metrics if contains the following attributes(labelkeep). Undocumented.
+        metrics_drop_label_patterns:
+          - catagory: interface
+            backend: gfn
+            list:
+              - name: STORAGE
+              - name: .*cali.*
+
+      - name: kube-state-metrics
+        # generate a metric_relabel_configs item source_labels: [__name__] and action: keep
+        metric_allow_list:
+          - catagory: pod_container
+            docstring: Only present if function has a pod k8s object, NVCF and NVCT. Please notice that metrics are only available if container had the status in the target metric.
+            list:
+              - name: kube_pod_container_info
+              - name: kube_pod_container_resource_limits
+              - name: kube_pod_container_resource_requests
+                comment: Only present if resources were requested
+              - name: kube_pod_container_status_last_terminated_exitcode
+                comment: Only present if an error happened
+              - name: kube_pod_container_status_last_terminated_reason
+                comment: Only present if an error happened
+              - name: kube_pod_container_status_ready
+              - name: kube_pod_container_status_restarts_total
+              - name: kube_pod_container_status_running
+              - name: kube_pod_container_status_terminated
+                comment: Only present if terminated
+              - name: kube_pod_container_status_terminated_reason
+                comment: Only present if terminated
+              - name: kube_pod_container_status_waiting
+                comment: Only present if pod is waiting
+              - name: kube_pod_container_status_waiting_reason
+                comment: Only present if pod is waiting
+
+        # generate action: labelkeep
+        attr_allow_list:
+          - catagory: generic
+            docstring: The platform metrics have the following attributes when available
+            list:
+              - name: __name__
+              - name: container
+              - name: image
+              - name: job
+              - name: pod
+              - name: reason
+              - name: resource
+              - name: unit
+
+      - name: nvidia-dcgm-exporter
+        metric_allow_list:
+          - catagory: GPU
+            list:
+              - name: DCGM_FI_DEV_GPU_UTIL
+
+        # generate action: labelkeep
+        attr_allow_list:
+          - catagory: generic
+            docstring: The platform metrics have the following attributes when available
+            list:
+              - name: __name__
+              - name: container
+              - name: DCGM_FI_DRIVER_VERSION
+              - name: device
+              - name: job
+              - name: modelName
+              - name: pci_bus_id
+              - name: pod
+
+      - name: opentelemetry-collector
+        metric_allow_list:
+          - catagory: generic
+            docstring: Always present for container and helm, NVCF and NVCT. The final list of metrics depends on telemetries received & exporter by function/task. For instance, if function is not publishing `otlp` logs then there will be no metrics related to logs.
+            list:
+              - name: otelcol_receiver_refused_metric_points_total
+              - name: otelcol_receiver_refused_spans_total
+              - name: otelcol_receiver_refused_log_records_total
+              - name: otelcol_receiver_accepted_metric_points_total
+              - name: otelcol_receiver_accepted_spans_total
+              - name: otelcol_receiver_accepted_log_records_total
+              - name: otelcol_exporter_sent_metric_points_total
+              - name: otelcol_exporter_sent_spans_total
+              - name: otelcol_exporter_sent_log_records_total
+              - name: otelcol_exporter_send_failed_metric_points_total
+              - name: otelcol_exporter_send_failed_spans_total
+              - name: otelcol_exporter_send_failed_log_records_total
+              - name: otelcol_processor_incoming_items_total
+              - name: otelcol_processor_outgoing_items_total

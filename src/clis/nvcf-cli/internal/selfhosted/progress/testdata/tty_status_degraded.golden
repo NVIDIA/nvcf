@@ -1,0 +1,23 @@
+NVCF self-hosted: my-cluster
+Status: ‼ degraded — 1 component not ready    Last reconcile: 5s ago
+Target: yotta-prod-us-east-1                  Installed: 2026-04-25 14:02 UTC
+Stack:  v1.2.0@sha256:0180e2
+
+Components
+
+   [✓] SIS                       2/2 ready
+   [✓] NATS                      3/3 ready
+   [✘] Cassandra                 0/1 not ready    cassandra-0 PodInitializing 6m23s
+   [✓] OpenBao                   3/3 ready
+
+Recent events  (5m window)
+
+   [!] 06m23s ago    cassandra-0 readiness lost   PodInitializing
+
+Recommended actions
+
+   →  kubectl describe pod -n cassandra-system cassandra-0
+   →  kubectl logs -n cassandra-system cassandra-0
+   →  See https://docs.nvidia.com/nvcf/self-hosted/troubleshooting#cassandra
+
+press q to quit · w to toggle watch mode

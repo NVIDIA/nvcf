@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.agent.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvsnap-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.agent.labels" . | nindent 4 }}
+  {{- if .Values.agent.replication.objectStore.serviceAccount }}
+  annotations:
+    # Workload Identity: binds this KSA to a GCP service account so the
+    # cross-cluster replication object store (gcs provider) reads/writes
+    # buckets without key material.
+    iam.gke.io/gcp-service-account: {{ .Values.agent.replication.objectStore.serviceAccount | quote }}
+  {{- end }}
+---
+# pods.list+watch: for the rootfs-only watcher's informer.
+# configmaps: ConfigMap-backed manifest registry — globally readable
+#   manifests are what makes admission requests resolvable from any agent.
+# nodes/get: cross-node peer-fetch resolves the captured-on node's IP.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsnap-agent
+  labels:
+    {{- include "nvsnap.agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    # v0.0.51: create+delete needed for the mount-holder pod in the
+    # source workload's namespace (see
+    # internal/checkpointstore/mount_holder.go +
+    # docs/design/ROOTFS-EVERYWHERE.md). The holder is a Kyverno-
+    # compliant pause pod owned by the rwx PVC; the agent creates it
+    # to trigger kubelet to mount the PVC, then deletes it after the
+    # in-process file-tree copy finishes.
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+  # nvsnap#63: L2 per-capture PVC backend. The agent provisions a
+  # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
+  # reader PVC after every successful CRIU dump. Lease is the
+  # cross-node serialization point (one writer per content hash).
+  # Scoped to the namespace agent.l2.namespace lives in (default
+  # nvsnap-system); we keep them ClusterRole for now so the agent can
+  # operate in any namespace via flag.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # persistentvolumes (cluster-scoped): the shared-volume promoter
+  # (NVMesh/EFS cachedir + ember path) Gets the writer's bound primary PV,
+  # Updates its reclaim policy to Retain, and Creates a secondary
+  # ReadOnlyMany PV (transformed volumeHandle) for the rox claim. Without
+  # this the cachedir/NVMesh promote fails Forbidden ("cannot get
+  # persistentvolumes at cluster scope") → capture never commits the rox +
+  # cluster-wide manifest → restore can't find the cachedir → no prewarm.
+  # (root-caused on nvsnap-aws-use1-dev1 2026-06-29; breaks NVCA cachedir
+  # restore identically since it's the same webhook/backend path.)
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # storageclasses.get: the L2 backend probes the configured SC at
+  # startup (internal/agent/l2_integration.go validateL2StorageClass)
+  # to verify it exists and log its provisioner. Without this rule
+  # the agent logs Forbidden and disables L2 (silent regression
+  # surfaced on GCP-H100-a 2026-06-02 after MR 39 landed).
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get"]
+  # volumeattachments.list: the L2 backend waits for the rwx PV to fully
+  # detach before taking the block-level snapshot (nvsnap#105). A
+  # snapshot taken before the writer's unmount flushes captures truncated
+  # files. waitForRWXDetach lists VolumeAttachments (cluster-scoped) to
+  # confirm the PV is no longer attached to any node.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvsnap-agent
+  labels:
+    {{- include "nvsnap.agent.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvsnap-agent
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-agent
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-crowdstrike
+  labels:
+    app.kubernetes.io/name: {{ .AppName }}
+    app.kubernetes.io/instance: {{ .InstanceName }}
+    app.kubernetes.io/version: "1.0"
+    app.kubernetes.io/managed-by: {{ .ManagedBy }}
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: {{ .CrowdstrikeNamespace }}
+      ports:
+      - port: 443
+        protocol: TCP

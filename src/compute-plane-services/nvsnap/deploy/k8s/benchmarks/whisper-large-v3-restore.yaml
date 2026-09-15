@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Restore pod for PDF-bench whisper-large-v3.
+# Runs restore-entrypoint from the staged nvsnap bundle. The quiesce
+# intercept (LD_PRELOAD libnvsnap_intercept.so) is NOT injected: whisper
+# is a Riva/Triton NIM and the intercept hijacks SIGUSR1/SIGUSR2, killing
+# Triton at startup (same reason it's stripped from the source manifest).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-whisper-restored
+  namespace: nvsnap-system
+  labels:
+    app: bench-whisper-restored
+    nvsnap.io/bench: "pdf-matrix"
+spec:
+  automountServiceAccountToken: false
+  nodeName: __NODE_NAME__
+  hostPID: true
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  initContainers:
+    - name: get-criu
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.42
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          cp -r /criu-bundle/. /nvsnap/
+          if [ -x /usr/local/bin/py-spy ]; then cp /usr/local/bin/py-spy /nvsnap/; fi
+          if [ -x /usr/bin/nsenter ]; then cp /usr/bin/nsenter /nvsnap/; fi
+      volumeMounts:
+        - { name: nvsnap-tools, mountPath: /nvsnap }
+
+  containers:
+    - name: restore
+      image: nvcr.io/nim/nvidia/whisper-large-v3:1.5.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-lc"]
+      args:
+        - |
+          set -e
+          /nvsnap/restore-entrypoint
+          sleep 600
+      env:
+        - name: CHECKPOINT_ID
+          value: "__CHECKPOINT_ID__"
+        - { name: CRIU_BUNDLE_PATH,     value: "/nvsnap" }
+        - { name: CHECKPOINT_PATH,      value: "/checkpoints" }
+        # Riva/Triton default LD_LIBRARY_PATH (no /nvsnap-lib prefix — no intercept).
+        - { name: LD_LIBRARY_PATH, value: "/opt/tritonserver/backends/pytorch:/opt/tritonserver/lib:/opt/riva/lib:/usr/local/cuda-13.0/lib64:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PATH,                 value: "/nvsnap:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" }
+        - { name: PYTHONFAULTHANDLER,   value: "1" }
+        - { name: PYTHONUNBUFFERED,     value: "1" }
+        - { name: NVSNAP_KEEPALIVE_SECONDS, value: "1800" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: NIM_TAGS_SELECTOR,    value: "name=whisper-large-v3" }
+        - { name: NIM_CACHE_PATH,       value: "/opt/nim/.cache" }
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 9000 }
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 5
+        failureThreshold: 60
+      securityContext:
+        privileged: true
+        # NIM image default user has no effective caps even in privileged
+        # container — CRIU restore needs CAP_CHECKPOINT_RESTORE.
+        runAsUser: 0
+      resources:
+        limits:   { nvidia.com/gpu: "1" }
+        requests: { nvidia.com/gpu: "1" }
+      volumeMounts:
+        - { name: nvsnap-tools,  mountPath: /nvsnap }
+        - { name: checkpoints, mountPath: /checkpoints }
+        - { name: dev-shm,     mountPath: /dev/shm }
+        - { name: nim-cache,   mountPath: /opt/nim/.cache }
+
+  volumes:
+    - name: nvsnap-tools
+      emptyDir: {}
+    - name: checkpoints
+      hostPath:
+        path: /var/lib/containerd/nvsnap-checkpoints
+        type: Directory
+    - name: dev-shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+    - name: nim-cache
+      emptyDir: {}
+
+  restartPolicy: Never

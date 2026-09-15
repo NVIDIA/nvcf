@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-proxy-cert
+  namespace: kube-system
+data:
+  # The nginx_proxy.crt file is the root certificate for the NVCF Staging environment.
+  # You can get this by `curl http://crls-stg.vpki.nvidia.com/his3/mtk3n2i5ntk2ytjm/ca/pem`.
+  # This should change based on the environment you are using.
+  # `curl http://crls.vpki.nvidia.com/mbhj/mtk3n2i5ntk2ytjm/ca/pem` . for production
+  nginx_container_cache.crt: |
+    -----BEGIN CERTIFICATE-----
+    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
+    4Rc6Yt9uF7Uc3G0CtrxDJNHh9NjgEn8BcQ==
+    -----END CERTIFICATE-----
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: configure-containerd
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: configure-containerd
+  template:
+    metadata:
+      labels:
+        name: configure-containerd
+    spec:
+      hostPID: true
+      hostIPC: true
+      hostNetwork: true
+      containers:
+      - name: configure
+        image: nvcr.io/nvidia/cuda:12.3.2-base-ubuntu22.04
+        env:
+        - name: TARGET_HOST
+          value: "nvcr.io"
+        - name: CONTAINER_CACHE_IP
+          value: "https://10.0.0.4:30345"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: etc-containerd
+          mountPath: /host/etc/containerd
+        - name: ssl-configmap
+          mountPath: /host/
+        - name: ssl-certs
+          mountPath: /host/etc/ssl/
+        command: ["/bin/bash"]
+        args:
+        - -c
+        - |
+          mkdir -p /host/etc/containerd/certs.d/${TARGET_HOST}
+          cat <<EOF >/host/etc/containerd/certs.d/${TARGET_HOST}/hosts.toml
+          server = "https://${TARGET_HOST}"
+          [host."${CONTAINER_CACHE_IP}"]
+            capabilities = ["pull", "resolve"]
+            ca = "/etc/ssl/nginx_container_cache.crt"
+          EOF
+          cp /host/nginx_container_cache.crt /host/etc/ssl/nginx_container_cache.crt
+          while true; do sleep 1000; done
+      volumes:
+      - name: etc-containerd
+        hostPath:
+          path: /etc/containerd
+      - name: ssl-configmap
+        configMap:
+          name: nginx-proxy-cert
+      - name: ssl-certs
+        hostPath:
+          path: /etc/ssl

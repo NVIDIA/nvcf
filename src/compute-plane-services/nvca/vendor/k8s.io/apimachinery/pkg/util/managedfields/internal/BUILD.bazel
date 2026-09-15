@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = [
+        "atmostevery.go",
+        "buildmanagerinfo.go",
+        "capmanagers.go",
+        "conflict.go",
+        "fieldmanager.go",
+        "fields.go",
+        "lastapplied.go",
+        "lastappliedmanager.go",
+        "lastappliedupdater.go",
+        "managedfields.go",
+        "managedfieldsupdater.go",
+        "manager.go",
+        "pathelement.go",
+        "runtimetypeconverter.go",
+        "skipnonapplied.go",
+        "stripmeta.go",
+        "structuredmerge.go",
+        "typeconverter.go",
+        "versioncheck.go",
+        "versionconverter.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields/internal",
+    importpath = "k8s.io/apimachinery/pkg/util/managedfields/internal",
+    visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/validation",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/schemaconv",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/validation/spec",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/fieldpath",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/merge",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/schema",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/typed",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/value",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields:__subpackages__"],
+)

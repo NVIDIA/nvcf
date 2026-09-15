@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jq",
+    srcs = ["validation.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/jq",
+    importpath = "github.com/run-ai/karta/pkg/jq",
+    visibility = ["//visibility:public"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/itchyny/gojq"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jq",
+    visibility = ["//visibility:public"],
+)

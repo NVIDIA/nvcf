@@ -1,0 +1,629 @@
+// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package nvcaconfig
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/yaml"
+)
+
+func TestConfig_Init(t *testing.T) {
+	cfg := Config{
+		Environment: EnvironmentProduction,
+		Cluster: NVCFClusterConfig{
+			ID: "foo",
+		},
+		Agent: AgentConfig{
+			LogLevel:     "debug",
+			FeatureFlags: []string{"Foo"},
+			NamespaceLabels: map[string]string{
+				"foo":                    "bar",
+				"app.kubernetes.io/name": "baz",
+			},
+			AgentTimeConfig: AgentTimeConfig{
+				CredRenewInterval: 2 * time.Millisecond,
+			},
+			NATSURL:           "nats://nats.localhost:14222",
+			SkipSelfDestruct:  false,
+			ForceSelfDestruct: true,
+		},
+		Authz: AuthzConfig{
+			ClientSecretKey: "shouldnotbewritten",
+		},
+		Workload: WorkloadConfig{
+			WorkloadTimeConfig: WorkloadTimeConfig{
+				WorkerDegradationTimeout: 2 * time.Hour,
+			},
+		},
+	}
+
+	expConfigStr := `
+agent:
+  NATSURL: nats://nats.localhost:14222
+  credRenewInterval: 2ms
+  featureFlags:
+  - Foo
+  forceSelfDestruct: true
+  logLevel: debug
+  namespaceLabels:
+    app.kubernetes.io/name: baz
+    foo: bar
+cluster:
+  id: foo
+environment: prod
+workload:
+  workerDegradationTimeout: 2h0m0s
+`
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(cfgPath, []byte(expConfigStr), 0600)
+	require.NoError(t, err)
+
+	gotCfg, err := Init(cfgPath)
+	require.NoError(t, err)
+
+	assert.Empty(t, gotCfg.Authz.ClientSecretKey)
+	cfg.Authz.ClientSecretKey = ""
+	assert.Equal(t, cfg, gotCfg)
+}
+
+func TestConfig_EncodeDecode(t *testing.T) {
+	cfg := Config{
+		Environment: EnvironmentProduction,
+		Cluster: NVCFClusterConfig{
+			ID: "foo",
+		},
+		Agent: AgentConfig{
+			LogLevel:     "debug",
+			FeatureFlags: []string{"Foo"},
+			NamespaceLabels: map[string]string{
+				"foo":                    "bar",
+				"app.kubernetes.io/name": "baz",
+			},
+			AgentTimeConfig: AgentTimeConfig{
+				CredRenewInterval: 2 * time.Millisecond,
+			},
+			NATSURL:           "nats://nats.localhost:14222",
+			SkipSelfDestruct:  false,
+			ForceSelfDestruct: true,
+		},
+		Authz: AuthzConfig{
+			ClientSecretKey: "shouldnotbewritten",
+		},
+		Workload: WorkloadConfig{
+			WorkloadTimeConfig: WorkloadTimeConfig{
+				WorkerDegradationTimeout: 2 * time.Hour,
+			},
+		},
+	}
+
+	expConfigStr := `
+agent:
+  NATSURL: nats://nats.localhost:14222
+  credRenewInterval: 2ms
+  featureFlags:
+  - Foo
+  forceSelfDestruct: true
+  logLevel: debug
+  namespaceLabels:
+    app.kubernetes.io/name: baz
+    foo: bar
+cluster:
+  id: foo
+environment: prod
+workload:
+  workerDegradationTimeout: 2h0m0s
+`
+
+	gotConfigBytes, err := EncodeConfig(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, strings.TrimPrefix(expConfigStr, "\n"), string(gotConfigBytes))
+
+	gotDecodedCfg, err := DecodeConfig([]byte(expConfigStr))
+	require.NoError(t, err)
+	expCfg := cfg
+	expCfg.Authz.ClientSecretKey = ""
+	assert.Equal(t, expCfg, gotDecodedCfg)
+
+	// Check env override.
+	t.Setenv("NVCA_WORKLOAD_WORKER_DEGRADATION_TIMEOUT", "1h")
+	t.Setenv("NVCA_AUTHZ_CLIENT_SECRET_KEY", "shouldalsonotbewritten")
+	expCfg.Workload.WorkerDegradationTimeout = 1 * time.Hour
+
+	gotDecodedCfg, err = DecodeConfig([]byte(expConfigStr))
+	require.NoError(t, err)
+	assert.Equal(t, expCfg, gotDecodedCfg)
+}
+
+func TestConfig_EncodeDecode_ServiceOAuthEndpoints(t *testing.T) {
+	cfg := Config{
+		Agent: AgentConfig{
+			HelmReValServiceURL:                                    "http://reval.localhost:8080",
+			HelmReValStageOAuthTokenURL:                            "https://stage-reval-oauth.example.test/token",
+			HelmReValStageOAuthPublicKeysetEndpoint:                "https://stage-reval-oauth.example.test/.well-known/jwks.json",
+			HelmReValProdOAuthTokenURL:                             "https://prod-reval-oauth.example.test/token",
+			HelmReValProdOAuthPublicKeysetEndpoint:                 "https://prod-reval-oauth.example.test/.well-known/jwks.json",
+			FunctionDeploymentStagesServiceURL:                     "https://deployment-stages.stg.nvcf.nvidia.com",
+			FunctionDeploymentStagesStageOAuthTokenURL:             "https://stage-fnds-oauth.example.test/token",
+			FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://stage-fnds-oauth.example.test/.well-known/jwks.json",
+			FunctionDeploymentStagesProdOAuthTokenURL:              "https://prod-fnds-oauth.example.test/token",
+			FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  "https://prod-fnds-oauth.example.test/.well-known/jwks.json",
+		},
+	}
+
+	expConfigStr := `
+agent:
+  functionDeploymentStagesProdOAuthPublicKeysetEndpoint: https://prod-fnds-oauth.example.test/.well-known/jwks.json
+  functionDeploymentStagesProdOAuthTokenURL: https://prod-fnds-oauth.example.test/token
+  functionDeploymentStagesServiceURL: https://deployment-stages.stg.nvcf.nvidia.com
+  functionDeploymentStagesStageOAuthPublicKeysetEndpoint: https://stage-fnds-oauth.example.test/.well-known/jwks.json
+  functionDeploymentStagesStageOAuthTokenURL: https://stage-fnds-oauth.example.test/token
+  helmReValProdOAuthPublicKeysetEndpoint: https://prod-reval-oauth.example.test/.well-known/jwks.json
+  helmReValProdOAuthTokenURL: https://prod-reval-oauth.example.test/token
+  helmReValServiceURL: http://reval.localhost:8080
+  helmReValStageOAuthPublicKeysetEndpoint: https://stage-reval-oauth.example.test/.well-known/jwks.json
+  helmReValStageOAuthTokenURL: https://stage-reval-oauth.example.test/token
+`
+
+	gotConfigBytes, err := EncodeConfig(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, strings.TrimPrefix(expConfigStr, "\n"), string(gotConfigBytes))
+
+	gotDecodedCfg, err := DecodeConfig([]byte(expConfigStr))
+	require.NoError(t, err)
+	assert.Equal(t, cfg, gotDecodedCfg)
+}
+
+func TestConfig_EncodeDecode_BYOOConfigSwitches(t *testing.T) {
+	cfg, err := DecodeConfig([]byte(`
+agent:
+  byooLogChunking:
+    enabled: true
+    maxBodyBytes: 131072
+    maxPayloadBytes: 262144
+  byooDebugMode:
+    enabled: true
+  byooOtelCollector:
+    exporterHelper:
+      timeout: 30s
+    logSampling:
+      samplingPercentage: 10
+      mode: hash_seed
+      hashSeed: 1234
+      failClosed: false
+      attributeSource: record
+      fromAttribute: log.id
+      samplingPriority: sampling.priority
+    traceSampling:
+      samplingPercentage: 1
+      mode: hash_seed
+      hashSeed: 1234
+      failClosed: false
+`))
+	require.NoError(t, err)
+
+	completed := cfg.Complete()
+	assert.True(t, completed.Agent.BYOOLogChunking.Enabled)
+	assert.Equal(t, int64(262144), completed.Agent.BYOOLogChunking.MaxPayloadBytes)
+	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.True(t, completed.Agent.BYOODebugMode.Enabled)
+	assert.Equal(t, "30s", completed.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", completed.Agent.BYOOOTelCollector.LogSampling.Mode)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *completed.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.Equal(t, "record", completed.Agent.BYOOOTelCollector.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", completed.Agent.BYOOOTelCollector.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", completed.Agent.BYOOOTelCollector.LogSampling.SamplingPriority)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", completed.Agent.BYOOOTelCollector.TraceSampling.Mode)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *completed.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+}
+
+func TestConfig_EncodeDecode_Tolerations(t *testing.T) {
+	cfg := Config{
+		Agent: AgentConfig{
+			Tolerations: []corev1.Toleration{{
+				Key:      "dedicated",
+				Operator: corev1.TolerationOpEqual,
+				Value:    "nvca",
+				Effect:   corev1.TaintEffectNoSchedule,
+			}},
+		},
+		Workload: WorkloadConfig{
+			Tolerations: []corev1.Toleration{{
+				Key:      "workload",
+				Operator: corev1.TolerationOpExists,
+				Effect:   corev1.TaintEffectNoExecute,
+			}},
+		},
+	}
+
+	encoded, err := EncodeConfig(cfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "tolerations:")
+	assert.Contains(t, string(encoded), "dedicated")
+	assert.Contains(t, string(encoded), "workload")
+
+	decoded, err := DecodeConfig(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.Agent.Tolerations, decoded.Agent.Tolerations)
+	assert.Equal(t, cfg.Workload.Tolerations, decoded.Workload.Tolerations)
+}
+
+func TestConfig_Merge(t *testing.T) {
+	t.Setenv("NVCA_AUTHZ_CLIENT_SECRET_KEY", "shouldalsonotbewritten")
+
+	oldCfg := Config{
+		Environment: EnvironmentProduction,
+		Cluster: NVCFClusterConfig{
+			ID: "foo",
+		},
+		Agent: AgentConfig{
+			LogLevel:     "debug",
+			FeatureFlags: []string{"Foo"},
+			NamespaceLabels: map[string]string{
+				"foo":                    "bar",
+				"app.kubernetes.io/name": "baz",
+			},
+			AgentTimeConfig: AgentTimeConfig{
+				CredRenewInterval: 2 * time.Millisecond,
+			},
+			SkipSelfDestruct:  false,
+			ForceSelfDestruct: true,
+		},
+		Authz: AuthzConfig{
+			ClientSecretKey: "shouldnotbewritten",
+		},
+		Workload: WorkloadConfig{
+			WorkloadTimeConfig: WorkloadTimeConfig{
+				WorkerDegradationTimeout: 2 * time.Hour,
+			},
+		},
+	}
+	oldConfigStr := `
+agent:
+  credRenewInterval: 2ms
+  featureFlags:
+  - Foo
+  forceSelfDestruct: true
+  logLevel: debug
+  namespaceLabels:
+    app.kubernetes.io/name: baz
+    foo: bar
+cluster:
+  id: foo
+environment: prod
+workload:
+  workerDegradationTimeout: 2h0m0s
+`
+
+	expCfg := oldCfg
+	expCfg.Authz.ClientSecretKey = ""
+	expCfg.Workload.WorkerDegradationTimeout = 1 * time.Hour
+	expCfg.Agent.LogLevel = "info"
+	expCfg.Agent.AdditionalResourceOverhead = ResourceList{
+		corev1.ResourceCPU:              resource.MustParse("1"),
+		corev1.ResourceMemory:           resource.MustParse("2Gi"),
+		corev1.ResourceEphemeralStorage: resource.MustParse("4Gi"),
+	}
+
+	expConfigStr := `
+agent:
+  credRenewInterval: 2ms
+  featureFlags:
+  - Foo
+  forceSelfDestruct: true
+  logLevel: info
+  namespaceLabels:
+    app.kubernetes.io/name: baz
+    foo: bar
+  additionalResourceOverhead:
+    cpu: "1"
+    memory: 2Gi
+    ephemeral-storage: 4Gi
+cluster:
+  id: foo
+environment: prod
+workload:
+  workerDegradationTimeout: 1h0m0s
+`
+	expConfigBytesJSON, err := yaml.YAMLToJSON([]byte(expConfigStr))
+	require.NoError(t, err)
+
+	gotConfigBytes, err := EncodeConfig(oldCfg, Config{
+		Agent: AgentConfig{
+			LogLevel: "info",
+			AdditionalResourceOverhead: ResourceList{
+				corev1.ResourceCPU:              resource.MustParse("1"),
+				corev1.ResourceMemory:           resource.MustParse("2Gi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("4Gi"),
+			},
+		},
+		Workload: WorkloadConfig{
+			WorkloadTimeConfig: WorkloadTimeConfig{
+				WorkerDegradationTimeout: 1 * time.Hour,
+			},
+		},
+	})
+	require.NoError(t, err)
+	godConfigBytesJSON, err := yaml.YAMLToJSON([]byte(gotConfigBytes))
+	require.NoError(t, err)
+	assert.JSONEq(t, string(expConfigBytesJSON), string(godConfigBytesJSON))
+
+	// Check env override
+	t.Setenv("NVCA_WORKLOAD_WORKER_DEGRADATION_TIMEOUT", "1h")
+	gotDecodedCfg, err := DecodeConfig([]byte(oldConfigStr), []byte(`
+agent:
+  logLevel: info
+  additionalResourceOverhead:
+    cpu: "1"
+    memory: 2Gi
+    ephemeral-storage: 4Gi
+`))
+	require.NoError(t, err)
+	assert.Equal(t, expCfg, gotDecodedCfg)
+}
+
+func TestDecodeConfig(t *testing.T) {
+	t.Run("basic_decode", func(t *testing.T) {
+		data := []byte(`
+environment: stg
+cluster:
+  name: test-cluster
+  id: cluster-123
+agent:
+  logLevel: debug
+`)
+		cfg, err := DecodeConfig(data)
+		require.NoError(t, err)
+		assert.Equal(t, EnvironmentStaging, cfg.Environment)
+		assert.Equal(t, "test-cluster", cfg.Cluster.Name)
+		assert.Equal(t, "cluster-123", cfg.Cluster.ID)
+		assert.Equal(t, "debug", cfg.Agent.LogLevel)
+	})
+
+	t.Run("merge_extra_configs", func(t *testing.T) {
+		base := []byte(`
+cluster:
+  name: base-cluster
+agent:
+  logLevel: info
+`)
+		extra := []byte(`
+agent:
+  logLevel: debug
+  systemNamespace: nvca-system
+`)
+		cfg, err := DecodeConfig(base, extra)
+		require.NoError(t, err)
+		assert.Equal(t, "base-cluster", cfg.Cluster.Name)
+		assert.Equal(t, "debug", cfg.Agent.LogLevel)
+		assert.Equal(t, "nvca-system", cfg.Agent.SystemNamespace)
+	})
+
+	t.Run("invalid_yaml", func(t *testing.T) {
+		data := []byte(`invalid: yaml: content:`)
+		_, err := DecodeConfig(data)
+		assert.Error(t, err)
+	})
+
+	t.Run("camelCase_alias", func(t *testing.T) {
+		// Test that camelCase keys work via aliases
+		data := []byte(`
+agent:
+  logLevel: debug
+  svcAddress: ":8080"
+`)
+		cfg, err := DecodeConfig(data)
+		require.NoError(t, err)
+		assert.Equal(t, "debug", cfg.Agent.LogLevel)
+		assert.Equal(t, ":8080", cfg.Agent.SvcAddress)
+	})
+
+	t.Run("byoo_metric_subset", func(t *testing.T) {
+		data := []byte(`
+agent:
+  byooMetricSubset:
+    enabled: true
+    filterConfig: |
+      error_mode: ignore
+      metric_conditions:
+        - 'metric.name == "drop"'
+  byooWorkloadMetrics:
+    dropLabels:
+      - metric_subset_enabled
+      - custom_label
+`)
+		cfg, err := DecodeConfig(data)
+		require.NoError(t, err)
+		assert.True(t, cfg.Agent.BYOOMetricSubset.Enabled)
+		assert.Contains(t, cfg.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
+		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOWorkloadMetrics.DropLabels)
+	})
+
+	t.Run("rejects_invalid_byoo_sampling", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+agent:
+  byooOtelCollector:
+    logSampling:
+      samplingPercentage: 0.001
+      mode: hash_seed
+`))
+		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: log sampling: samplingPercentage must be 0 or at least")
+	})
+
+	t.Run("rejects_bundle_transport_trust_with_quic_insecure", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: bundle
+`))
+		require.ErrorContains(t, err, "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+		require.ErrorContains(t, err, "set workload.stargateQUICInsecure=false or use trustMode=system")
+	})
+
+	for _, tc := range []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "allows_system_transport_trust_with_quic_insecure",
+			yaml: `
+workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: system
+`,
+		},
+		{
+			name: "allows_bundle_transport_trust_with_quic_insecure_false",
+			yaml: `
+workload:
+  stargateQUICInsecure: false
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+		{
+			name: "allows_bundle_transport_trust_with_quic_insecure_unset",
+			yaml: `
+workload:
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeConfig([]byte(tc.yaml))
+			require.NoError(t, err)
+		})
+	}
+
+	t.Run("duration_parsing", func(t *testing.T) {
+		data := []byte(`
+agent:
+  credRenewInterval: 30m
+  heartbeatInterval: 5m
+workload:
+  maxRunningTimeout: 3h
+`)
+		cfg, err := DecodeConfig(data)
+		require.NoError(t, err)
+		assert.Equal(t, 30*time.Minute, cfg.Agent.CredRenewInterval)
+		assert.Equal(t, 5*time.Minute, cfg.Agent.HeartbeatInterval)
+		assert.Equal(t, 3*time.Hour, cfg.Workload.MaxRunningTimeout)
+	})
+
+}
+
+func TestEncodeConfig(t *testing.T) {
+	t.Run("omits_zero_values", func(t *testing.T) {
+		cfg := Config{
+			Cluster: NVCFClusterConfig{
+				Name: "my-cluster",
+			},
+		}
+		data, err := EncodeConfig(cfg)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "name: my-cluster")
+		assert.NotContains(t, string(data), "id:")
+	})
+
+	t.Run("excludes_mapstructure_dash_fields", func(t *testing.T) {
+		cfg := Config{
+			Authz: AuthzConfig{
+				ClientID:        "secret-id",
+				ClientSecretKey: "secret-key",
+				TokenURL:        "https://auth.example.com",
+			},
+		}
+		data, err := EncodeConfig(cfg)
+		require.NoError(t, err)
+		// These should be excluded due to `mapstructure:"-"`
+		assert.NotContains(t, string(data), "secret-id")
+		assert.NotContains(t, string(data), "secret-key")
+		// This should be included
+		assert.Contains(t, string(data), "tokenURL")
+	})
+
+	t.Run("slice_values", func(t *testing.T) {
+		cfg := Config{
+			Cluster: NVCFClusterConfig{
+				Attributes: []string{"gpu", "nvlink"},
+			},
+		}
+		data, err := EncodeConfig(cfg)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "- gpu")
+		assert.Contains(t, string(data), "- nvlink")
+	})
+
+	t.Run("map_values", func(t *testing.T) {
+		cfg := Config{
+			Agent: AgentConfig{
+				NamespaceLabels: map[string]string{
+					"app": "nvca",
+					"env": "prod",
+				},
+			},
+		}
+		data, err := EncodeConfig(cfg)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "app: nvca")
+		assert.Contains(t, string(data), "env: prod")
+	})
+
+	t.Run("service_host_overrides", func(t *testing.T) {
+		cfg := Config{
+			Agent: AgentConfig{
+				ICMSHostHeaderOverride:             "sis.gateway.example.test",
+				HelmReValServiceHostHeaderOverride: "reval.gateway.example.test",
+				NATSHostOverride:                   "nats.gateway.example.test",
+			},
+		}
+		data, err := EncodeConfig(cfg)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "icmsHostHeaderOverride: sis.gateway.example.test")
+		assert.Contains(t, string(data), "helmReValServiceHostHeaderOverride: reval.gateway.example.test")
+		assert.Contains(t, string(data), "NATSHostOverride: nats.gateway.example.test")
+		assert.NotContains(t, string(data), "icmshost:")
+		assert.NotContains(t, string(data), "helmrevalservicehost:")
+	})
+}
+
+func TestNewViperDecoderConfig(t *testing.T) {
+	// Verify the decoder config is created without error
+	opt := NewViperDecoderConfig()
+	assert.NotNil(t, opt)
+}

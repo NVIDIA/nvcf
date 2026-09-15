@@ -1,0 +1,6 @@
+{
+  "type": "message",
+  "id": "msg_nil",
+  "role": "assistant",
+  "content": []
+}

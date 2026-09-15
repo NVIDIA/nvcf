@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#MISE description="Run the gateway with live reload (embedded Olric for rate limits)"
+
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+export PORT="${PORT:-8080}"
+export OLRIC_ENABLED="${OLRIC_ENABLED:-true}"
+export OLRIC_ENV="${OLRIC_ENV:-local}"
+export STARGATE_URL="${STARGATE_URL:-http://127.0.0.1:8000}"
+export NVCF_REGION="${NVCF_REGION:-local}"
+export NVCF_DEFAULT_FUNCTION_ID="${NVCF_DEFAULT_FUNCTION_ID:-default}"
+export NVCF_DEFAULT_MODEL="${NVCF_DEFAULT_MODEL:-bootstrap-echo}"
+
+exec watchexec \
+  --debounce 200ms \
+  --shell=none \
+  --restart \
+  --stop-signal SIGINT \
+  --exts go,env,toml \
+  go run ./cmd/llm-api-gateway

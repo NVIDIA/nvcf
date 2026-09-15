@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "clustervalidator",
+    srcs = [
+        "checks.go",
+        "config.go",
+        "connectivity.go",
+        "enforcement.go",
+        "netpol.go",
+        "output.go",
+        "summary.go",
+        "validator.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/networking/v1:networking",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/intstr",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/discovery",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":clustervalidator",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+)
+
+go_test(
+    name = "clustervalidator_test",
+    srcs = [
+        "checks_test.go",
+        "config_test.go",
+        "enforcement_test.go",
+        "netpol_test.go",
+        "output_test.go",
+        "summary_test.go",
+        "validator_test.go",
+    ],
+    embed = [":clustervalidator"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/admissionregistration/v1:admissionregistration",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/apps/v1:apps",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/networking/v1:networking",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/intstr",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
+    ],
+)

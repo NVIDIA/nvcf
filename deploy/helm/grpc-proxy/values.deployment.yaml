@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Sample values overlay for Deployment-only deployment with autoscaling
+# Usage: helm install grpc-proxy ./grpc-proxy -f values.deployment.yaml
+
+grpcproxy:
+  # Required image configuration — replace with your registry and image
+  image:
+    registry: "registry.example.com"
+    repository: "your-org/grpc-proxy"
+    tag: "v1.23.4"
+
+  # Set deployment type to Deployment
+  deploymentType: "deployment"
+
+  # Deployment-specific configuration
+  deployment:
+    # Enable autoscaling for deployment
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    # Node affinity for deployment pods
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                - grpc-proxy
+            topologyKey: kubernetes.io/hostname
+    # Node selector for deployment
+    nodeSelector:
+      node-type: worker
+    # Tolerations for deployment
+    tolerations:
+      - key: dedicated
+        operator: Equal
+        value: grpc-proxy
+        effect: NoSchedule
+
+  # Set replica count for non-autoscaling scenarios
+  replicaCount: 3
+
+  # Deployment typically uses moderate resources
+  resources:
+    limits:
+      cpu: 1500m
+      memory: 1.5Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi

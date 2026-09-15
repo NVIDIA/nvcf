@@ -1,0 +1,3 @@
+2026-04-29T01:25:00Z [04/8] apply-cp: failed [helm_apply backoff retry=60s] timed out
+2026-04-29T01:25:00Z [04/8] apply-cp: → kubectl describe pod -n cassandra-system cassandra-0
+2026-04-29T01:25:00Z [04/8] apply-cp: → Re-run with --debug

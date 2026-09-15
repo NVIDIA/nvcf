@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "gen_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/manifests/gen",
+    visibility = ["//visibility:private"],
+    deps = ["//src/compute-plane-services/nvsnap/internal/manifests"],
+)
+
+go_binary(
+    name = "gen",
+    embed = [":gen_lib"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+)

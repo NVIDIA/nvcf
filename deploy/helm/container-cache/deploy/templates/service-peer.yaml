@@ -1,0 +1,51 @@
+{{/*
+SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Per-ordinal peer services for consistent-hash routing.
+Each service selects exactly one StatefulSet pod through the stable
+statefulset.kubernetes.io/pod-name label, giving every ordinal a stable
+DNS name without adding a headless service. The StatefulSet has no
+serviceName today and that field is immutable, so per-ordinal services
+avoid a StatefulSet recreate.
+
+A pod that is not Ready drops out of its peer service endpoints, so the
+owner's nginx upstream fails fast and falls back to the backup ordinal.
+*/}}
+{{- if (.Values.consistentHashRouting).enabled }}
+{{- $n := int .Values.replicaCount }}
+{{- /* ssl listener port; fixed to match the `listen` directives in the server blocks. */}}
+{{- $port := 14128 }}
+{{- range $i := until $n }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-peer-{{ $i }}
+  namespace: {{ $.Release.Namespace | quote }}
+  labels:
+    app: {{ $.Release.Name }}
+    {{- include "nvcf-container-cache.labels" $ | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    statefulset.kubernetes.io/pod-name: {{ $.Release.Name }}-{{ $i }}
+  ports:
+    - name: https-proxy
+      port: {{ $port }}
+      targetPort: {{ $port }}
+      protocol: TCP
+{{- end }}
+{{- end }}

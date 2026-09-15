@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+topology:
+  nodePools:
+    default:
+      gpuProduct: NVIDIA-A100-SXM4-80GB
+      gpuCount: 8
+      gpuMemory: 81920
+  nodePoolLabelKey: test.example.com/node-pool
+  migStrategy: single

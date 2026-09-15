@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.sis.lls.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: addons-lls-turn-hmac-rotation
+  namespace: {{ .Values.sis.lls.namespace }}
+  labels:
+    app.kubernetes.io/name: addons-lls-turn-hmac-rotation
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  schedule: {{ .Values.sis.lls.hmacRotation.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        {{- with .Values.sis.lls.podAnnotations }}
+        metadata:
+          annotations:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ .Values.sis.lls.hmacRotation.serviceAccountName }}
+          {{- with (include "sis.imagePullSecrets" .) }}
+          imagePullSecrets:
+            {{- . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: rotate-hmac
+              image: "{{ include "sis.image.full" (dict "image" .Values.sis.lls.hmacRotation.image "name" "sis.lls.hmacRotation.image") }}"
+              imagePullPolicy: {{ .Values.sis.lls.hmacRotation.image.pullPolicy }}
+              env:
+                - name: BAO_SERVICE
+                  value: {{ (.Values.sis.lls.hmacRotation.baoService | default (printf "openbao-server.%s.svc.cluster.local" .Values.sis.lls.namespace)) | quote }}
+                - name: BAO_PORT
+                  value: {{ .Values.sis.lls.hmacRotation.baoPort | quote }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  
+                  echo "=== TURN HMAC Key Rotation ==="
+                  echo "Started at: $(date -u +"%Y-%m-%dT%H:%M:%S+00:00")"
+                  
+                  # Authenticate to OpenBao using root token
+                  export BAO_ADDR="http://${BAO_SERVICE}:${BAO_PORT}"
+                  export BAO_TOKEN=$(cat /secrets/root_token/root_token)
+                  
+                  # Generate new HMAC key
+                  NEW_ID=$(uuidgen -t | tr '[:upper:]' '[:lower:]')
+                  NEW_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S+00:00")
+                  NEW_VALUE=$(openssl rand -hex 32)
+                  if [ -z "${NEW_VALUE}" ]; then
+                    echo "ERROR: Failed to generate HMAC key"
+                    exit 1
+                  fi
+                  
+                  echo "Rotating HMAC key..."
+                  echo "  New Key ID: ${NEW_ID}"
+                  echo "  Timestamp: ${NEW_TIMESTAMP}"
+                  
+                  # Write new key - OpenBao KV v2 auto-versions
+                  # max_versions=3 is configured on the secret, so old versions auto-cleanup
+                  if bao kv put services/turn/kv/keys/hmac \
+                    id="${NEW_ID}" \
+                    timestamp="${NEW_TIMESTAMP}" \
+                    value="${NEW_VALUE}"; then
+                    echo "HMAC key rotated successfully"
+                    
+                    # Verify the new version
+                    CURRENT_VERSION=$(bao kv metadata get -format=json services/turn/kv/keys/hmac | jq -r '.data.current_version')
+                    echo "  Current version: ${CURRENT_VERSION}"
+                  else
+                    echo "ERROR: Failed to rotate HMAC key"
+                    exit 1
+                  fi
+                  
+                  echo "=== Rotation Complete ==="
+              volumeMounts:
+                - name: root-token
+                  mountPath: /secrets/root_token
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.sis.lls.hmacRotation.resources | nindent 16 }}
+          volumes:
+            - name: root-token
+              secret:
+                secretName: {{ .Values.sis.lls.hmacRotation.rootTokenSecretName }}
+                items:
+                - key: root_token
+                  path: root_token
+{{- end }}

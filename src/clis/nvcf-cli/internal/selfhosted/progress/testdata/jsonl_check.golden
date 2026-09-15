@@ -1,0 +1,9 @@
+{"event":"schemaVersion","version":1}
+{"event":"check_started","ts":"2026-04-29T03:45:01Z","category":"local-host-tools","id":"kubectl-on-path"}
+{"event":"check_completed","ts":"2026-04-29T03:45:01Z","category":"local-host-tools","id":"kubectl-on-path","passed":true,"severity":"info","message":"kubectl 1.30.2 on PATH","detail":"1.30.2"}
+{"event":"check_started","ts":"2026-04-29T03:45:01Z","category":"local-host-tools","id":"helmfile-on-path"}
+{"event":"check_completed","ts":"2026-04-29T03:45:01Z","category":"local-host-tools","id":"helmfile-on-path","passed":true,"severity":"info","message":"helmfile 0.162.0 on PATH","detail":"0.162.0"}
+{"event":"check_started","ts":"2026-04-29T03:45:08Z","category":"pre-kubernetes-setup","id":"gateway-api"}
+{"event":"check_completed","ts":"2026-04-29T03:45:08Z","category":"pre-kubernetes-setup","id":"gateway-api","passed":false,"severity":"error","message":"Gateway API CRDs not installed","hintURL":"https://docs.nvidia.com/nvcf/self-hosted/gateway-api"}
+{"event":"category_completed","ts":"2026-04-29T03:45:08Z","category":"pre-kubernetes-setup","passedCount":13,"failedCount":1,"durationSec":2.4}
+{"event":"final","ts":"2026-04-29T03:45:09Z","success":false,"durationSec":0,"droppedProgressEvents":0,"verdict":"failed","totalChecks":14,"passedCount":13,"failedCount":1}

@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Multi-Token Configuration Example
+# Save this as ~/.nvcf-cli.yaml
+
+# ================================
+# Multi-Token Authentication Setup
+# ================================
+
+# General API operations token (deploy, invoke, delete, list, etc.)
+NVCF_API_KEY: "nvapi-general-operations-token-here"
+
+# Function creation specific token (create function only)
+NVCF_TOKEN: "nvapi-function-creation-token-here"
+
+# ================================
+# Account Configuration
+# ================================
+
+# NVIDIA Cloud Account client ID (replaces hardcoded 'nvcf-default')
+NVCF_CLIENT_ID: "nvcf-default"
+
+# ================================
+# API Configuration
+# ================================
+
+NVCF_BASE_HTTP_URL: "https://api.nvcf.nvidia.com"
+NVCF_BASE_GRPC_URL: "grpc.nvcf.nvidia.com:443"
+
+# ================================
+# Debug Configuration
+# ================================
+
+# Enable HTTP debugging to see which token is used
+debug: false
+
+# ================================
+# Token Usage Rules
+# ================================
+#
+# The CLI will automatically choose the correct token:
+#
+# CREATE FUNCTION operations use:
+#   - NVCF_TOKEN (if available)
+#   - Falls back to NVCF_API_KEY
+#
+# ALL OTHER operations use:
+#   - NVCF_API_KEY (if available) 
+#   - Falls back to NVCF_TOKEN
+#
+# ================================
+# Setup Instructions
+# ================================
+#
+# 1. Get your tokens from NVIDIA:
+#    - Visit https://build.nvidia.com
+#    - Generate separate API keys for different operations
+#    - Or use the same token for both if they have the same permissions
+#
+# 2. Configure this file with your actual tokens
+#
+# 3. Test with debug mode:
+#    ./nvcf-cli create --debug --input-file examples/bg-create.json
+#
+# 4. The debug output will show which token is being used:
+#    DEBUG: HTTP debugging enabled with multi-token support
+#    DEBUG: API key available: true
+#    DEBUG: Function token available: true
+#

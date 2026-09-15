@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# PDF Testing Matrix — LLM (very-large) workload row.
+# DeepSeek-V4-Flash on sglang TP=8 (one node, all 8 H100s).
+#
+# Capture path = cachedir ("ember"). The agent runs with --pod-cache-dir
+# (default /opt/nvsnap), so the webhook injects that emptyDir + redirects
+# every JIT/gemm cache + the model (HOME, TORCHINDUCTOR_CACHE_DIR,
+# deep_gemm via HOME, HF_HOME, NIM_CACHE_PATH, …) into it, captures just
+# that dir as the rox root, and restore page-cache-prewarms it. Therefore
+# this manifest is a PLAIN sglang pod — it must NOT set HF_HOME or mount
+# its own cache volume (that would shadow the webhook's /opt/nvsnap and
+# the gemm/JIT caches would not be captured).
+#
+# Args verbatim from the PDF Testing Matrix doc.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-deepseek-v4-flash
+  namespace: nvsnap-system
+  labels:
+    app: bench-deepseek-v4-flash
+    nvsnap.io/bench: "pdf-matrix"
+    nvsnap.io/bench-row: "llm-xl"
+    nvsnap.io/capture: "true"
+  annotations:
+    nvsnap.io/desc: "PDF bench: deepseek-ai/DeepSeek-V4-Flash TP=8 on sglang"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  containers:
+    - name: sglang
+      image: lmsysorg/sglang:v0.5.12.post1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          exec python3 -m sglang.launch_server \
+            --model-path deepseek-ai/DeepSeek-V4-Flash \
+            --served-model-name deepseek-ai/DeepSeek-V4-Flash \
+            --tp-size 8 \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --trust-remote-code \
+            --mem-fraction-static 0.85 \
+            --context-length 131072 \
+            --moe-runner-backend marlin
+      env:
+        # HF auth + transfer knobs only. HF_HOME is injected by the
+        # webhook (cachedir mode) → /opt/nvsnap/model; do NOT set it here.
+        - { name: HF_HUB_DISABLE_XET,        value: "1" }
+        - { name: HF_XET_DISABLE,            value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+      ports:
+        - { containerPort: 8000, name: http }
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 120
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 240
+      resources:
+        limits:   { nvidia.com/gpu: "8" }
+        requests: { nvidia.com/gpu: "8" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 64Gi }
+
+  restartPolicy: Never

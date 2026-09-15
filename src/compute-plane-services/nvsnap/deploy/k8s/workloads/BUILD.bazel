@@ -1,0 +1,9 @@
+# The conformance tests in //src/compute-plane-services/nvsnap/internal/manifests
+# read these manifests at runtime. Bazel sandboxes tests to their declared
+# inputs, so they have to be exposed as data rather than merely existing in the
+# source tree.
+filegroup(
+    name = "workload_manifests",
+    srcs = glob(["*.yaml"]),
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+)

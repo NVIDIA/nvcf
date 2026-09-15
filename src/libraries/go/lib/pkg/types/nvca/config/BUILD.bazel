@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = [
+        "autobind_env.go",
+        "config.go",
+        "doc.go",
+        "types.go",
+        "zz_generated.deepcopy.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_go_viper_mapstructure_v2//:mapstructure",
+        "@com_github_sirupsen_logrus//:logrus",
+        "@com_github_spf13_viper//:viper",
+        "@in_yaml_go_yaml_v3//:yaml",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/resource",
+    ],
+)
+
+go_test(
+    name = "config_test",
+    srcs = [
+        "autobind_env_test.go",
+        "config_test.go",
+        "deepcopy_test.go",
+        "transport_tls_installer_image_test.go",
+        "types_additional_test.go",
+        "types_test.go",
+    ],
+    embed = [":config"],
+    deps = [
+        "@com_github_spf13_viper//:viper",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/resource",
+        "@io_k8s_sigs_yaml//:yaml",
+    ],
+)

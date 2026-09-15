@@ -1,0 +1,9 @@
+# helm
+nvcr.yaml
+**/charts/*.tgz
+!helm/charts/cassandra-*.tgz
+helm/secrets/
+packaged-charts/
+
+# Git worktrees
+.worktrees/

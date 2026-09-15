@@ -1,0 +1,4 @@
+nvctApi:
+  image:
+    registry: nvcr.io
+    repository: 0651155215864979/ncp-dev/nvct-service-oss

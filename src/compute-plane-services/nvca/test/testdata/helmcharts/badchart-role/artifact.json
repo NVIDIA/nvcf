@@ -1,0 +1,6 @@
+{
+    "repository": "oci://mockregistry.default.svc.cluster.local:5000/helm-charts",
+    "chartname": "badchart-role",
+    "version": "0.1.0",
+    "values": null
+}

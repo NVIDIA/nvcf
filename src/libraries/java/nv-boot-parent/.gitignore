@@ -1,0 +1,44 @@
+# Build
+target/
+**/target/
+/bazel-bin
+/bazel-nv-boot-parent
+/bazel-out
+/bazel-testlogs
+*.jar
+*.war
+*.ear
+*.class
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+.vscode/
+.metadata/
+.recommenders/
+*.tern-project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Maven
+pom.xml.tag
+*.log
+
+# Misc
+*.jtl
+*.pyc
+*.swp
+node_modules
+**/results
+**/logs
+**/tmp
+/nvidia.log
+deploy.sh
+.editorconfig

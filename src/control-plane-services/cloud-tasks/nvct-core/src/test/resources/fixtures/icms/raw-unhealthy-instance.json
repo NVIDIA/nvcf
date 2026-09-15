@@ -1,0 +1,29 @@
+{
+  "CreateTime": "2023-07-06T07:17:53.282Z",
+  "InstanceId": "%s",
+  "LaunchSpecification": {
+    "InstanceType": "%s",
+    "ContainerImage": "stg.nvcr.io/nv-cf/guineapig-1/ediffi:0.0.3",
+    "Placement": null,
+    "Gpu": "%s",
+    "Backend": "GFN",
+    "NcaId": "test-nca-id"
+  },
+  "LaunchedAvailabilityZone": null,
+  "InstanceRequestId": "%s",
+  "CloudProvider": "GFN",
+  "State": "closed",
+  "Status": {
+    "Code": "instance-terminated-by-service",
+    "Message": "Your instance request has been terminated",
+    "UpdateTime": "2023-07-06T07:57:06.731Z"
+  },
+  "InstanceState": {
+    "Code": 48,
+    "Name": "terminated"
+  },
+  "HealthInfo": {
+    "ErrorLog": "%s: Inference container\n is failing\n to come up"
+  },
+  "InstanceInterruptionBehavior": "terminate"
+}

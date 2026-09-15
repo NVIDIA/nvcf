@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "traits",
+    srcs = [
+        "comparer.go",
+        "container.go",
+        "field_tester.go",
+        "indexer.go",
+        "iterator.go",
+        "lister.go",
+        "mapper.go",
+        "matcher.go",
+        "math.go",
+        "receiver.go",
+        "sizer.go",
+        "traits.go",
+        "zeroer.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/traits",
+    importpath = "github.com/google/cel-go/common/types/traits",
+    visibility = ["//visibility:public"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":traits",
+    visibility = ["//visibility:public"],
+)

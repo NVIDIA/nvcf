@@ -1,0 +1,2 @@
+files/nvidia-golang-migrate-linux-arm64 filter=lfs diff=lfs merge=lfs -text
+files/nvidia-golang-migrate-linux-amd64 filter=lfs diff=lfs merge=lfs -text

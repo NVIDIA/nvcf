@@ -1,0 +1,10 @@
+{
+  "scaleUpDetails": {
+    "metric": "worker_utilization",
+    "factor": 1.5,
+    "threshold": 80,
+    "stickiness": {
+      "size": "PT30M"
+    }
+  }
+}

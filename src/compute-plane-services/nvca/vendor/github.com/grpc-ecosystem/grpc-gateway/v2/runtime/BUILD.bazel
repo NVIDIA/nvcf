@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "runtime",
+    srcs = [
+        "context.go",
+        "convert.go",
+        "doc.go",
+        "errors.go",
+        "fieldmask.go",
+        "handler.go",
+        "marshal_httpbodyproto.go",
+        "marshal_json.go",
+        "marshal_jsonpb.go",
+        "marshal_proto.go",
+        "marshaler.go",
+        "marshaler_registry.go",
+        "mux.go",
+        "pattern.go",
+        "proto2_convert.go",
+        "query.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/runtime",
+    importpath = "github.com/grpc-ecosystem/grpc-gateway/v2/runtime",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/internal/httprule",
+        "//src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/utilities",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/api/httpbody",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/codes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/grpclog",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/health/grpc_health_v1",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/metadata",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/status",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/encoding/protojson",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/proto",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoregistry",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/durationpb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/fieldmaskpb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/structpb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/timestamppb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/wrapperspb",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":runtime",
+    visibility = ["//visibility:public"],
+)

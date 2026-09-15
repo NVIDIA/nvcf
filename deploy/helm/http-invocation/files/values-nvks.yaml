@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+replicaCount: 1
+
+nameOverride: nvcf-invocation-service
+
+image:
+  repository: ""
+  pullPolicy: IfNotPresent
+  tag:
+
+entrypoint:
+  command: /bin/server
+  args: []
+
+podAnnotations:
+
+podLabels:
+  kratos_logging: "true"
+  kratos_metrics: "true"
+
+service:
+  host: "nvcf-invocation-service.service.odp.nvidia.com"
+  port: 50051
+  tls_secret: "odp-common-dns"
+  annotations:
+    'consul.hashicorp.com/service-name': 'nvcf-invocation-service'
+    'consul.hashicorp.com/service-sync': 'true'
+    'consul.hashicorp.com/service-tags': 'omni-backstage'
+    'consul.hashicorp.com/service-port': 'grpc'
+  livenessProbe:
+    # The deployment template reads `delaySeconds` (always did, including
+    # under the original rsf-template upstream). The previous `grpcDelay`
+    # spelling here was never read; renaming so the nvks-specific 30s
+    # initial delay actually applies (it was silently falling back to the
+    # 10s default in values.yaml).
+    delaySeconds: 30
+
+ingress:
+  enabled: true
+
+settings:
+  server:
+    metrics_server:
+      addr: 127.0.0.1:6931
+
+# OpenTelemetry collector sidecar for processing logs, metrics, and traces
+otelCollector:
+  enabled: true
+  exporters:
+    debug: {}
+    otlp:
+      endpoint: "http://nvks-opentelemetry-agent-collector.otel-collector.svc.cluster.local:4317"
+      tls:
+        insecure: true
+  service:
+    pipelines:
+      traces:
+        exporters: [otlp, debug]
+      metrics:
+        exporters: [otlp, debug]

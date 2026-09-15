@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cli",
+    srcs = [
+        "config_cmd.go",
+        "root.go",
+        "server.go",
+        "version.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli",
+    # CLI is an implementation detail of the `cmd/` binary; no external
+    # consumer should depend on it. CodeRabbit nit on !25.
+    visibility = ["//src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service:__pkg__"],
+    deps = [
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/logger",
+        "//src/control-plane-services/nats-auth-callout/internal/router",
+        "//src/control-plane-services/nats-auth-callout/internal/service",
+        "//src/control-plane-services/nats-auth-callout/internal/tracing",
+        "//src/control-plane-services/nats-auth-callout/internal/version",
+        "@com_github_spf13_cobra//:cobra",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "cli_test",
+    srcs = [
+        "config_cmd_test.go",
+        "root_test.go",
+        "server_test.go",
+    ],
+    embed = [":cli"],
+    deps = [
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/router",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_pflag//:pflag",
+        "@org_uber_go_zap//:zap",
+    ],
+)

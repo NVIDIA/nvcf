@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvct-api.fullname" . }}
+  namespace: {{ include "nvct-api.namespace" . }}
+  labels:
+    {{- include "nvct-api.labels" . | nindent 4 }}
+spec:
+  replicas: {{ default 1 .Values.nvctApi.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "nvct-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "nvct-api.vaultAnnotations" . | nindent 8 }}
+        {{- with .Values.nvctApi.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.nvctApi.env }}
+        checksum/config-env: {{ toYaml .Values.nvctApi.env | sha256sum }}
+        {{- end }}
+      labels:
+        {{- include "nvct-api.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nvctApi.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: nvct-api
+      securityContext:
+        {{- toYaml .Values.nvctApi.podSecurityContext | nindent 8 }}
+      volumes:
+        {{- with .Values.nvctApi.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "nvct-api.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.nvctApi.securityContext | nindent 12 }}
+          image: "{{ include "nvct-api.image" . }}"
+          imagePullPolicy: {{ .Values.nvctApi.image.pullPolicy }}
+          volumeMounts:
+            {{- with .Values.nvctApi.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ .Values.nvctApi.springProfilesActive | default "ncp" | quote }}
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- if .Values.nvctApi.remoteConfig.enabled }}
+            - name: REMOTE_CONFIG_ENABLED
+              value: "true"
+            - name: REMOTE_CONFIG_NAME
+              value: {{ include "nvct-api.remoteConfigName" . | quote }}
+            {{- end }}
+          {{- if .Values.nvctApi.env }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "nvct-api.fullname" . }}-env
+          {{- end }}
+          ports:
+            {{- range .Values.nvctApi.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .containerPort }}
+              protocol: {{ .protocol }}
+            {{- end }}
+          {{- with .Values.nvctApi.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.nvctApi.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.nvctApi.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.nvctApi.resources | nindent 12 }}
+      {{- with .Values.nvctApi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nvctApi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nvctApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

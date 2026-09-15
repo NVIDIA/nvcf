@@ -1,0 +1,4 @@
+run*.sh
+k6_scratch_test_config.json
+k6
+.DS_Store

@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Restore pod for PDF-bench gpt-oss-120b (TP=4, rootfs path).
+#
+# Customer-shape: no CRIU init ladder, no nodeName pin. The nvsnap
+# webhook injects PVC mounts and (for Local backend) nodeAffinity
+# based on the capture-hash carried in nvsnap.io/restore-from. test-bench.sh
+# substitutes __CAPTURE_HASH__ before applying.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-gpt-oss-120b-restored
+  namespace: nvsnap-system
+  labels:
+    app: bench-gpt-oss-120b-restored
+    nvsnap.io/bench: "pdf-matrix"
+  annotations:
+    nvsnap.io/restore-from: "__CAPTURE_HASH__"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: docker.io/vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          vllm serve \
+            --model openai/gpt-oss-120b \
+            --served-model-name gpt-oss-120b \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --tensor-parallel-size 4 \
+            --gpu-memory-utilization 0.90 \
+            --max-num-seqs 256 \
+            --max-num-batched-tokens 8192 \
+            --max-cudagraph-capture-size 2048 \
+            --stream-interval 20 \
+            --no-enable-prefix-caching
+      env:
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_XET_DISABLE,     value: "1" }
+        - { name: NCCL_SHM_DISABLE,   value: "1" }
+        - { name: NCCL_CUMEM_ENABLE,  value: "0" }
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+        - { name: PYTHONUNBUFFERED,     value: "1" }
+        - { name: VLLM_LOGGING_LEVEL,   value: "INFO" }
+      ports:
+        - { containerPort: 8000, name: http }
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:   { nvidia.com/gpu: "4" }
+        requests: { nvidia.com/gpu: "4" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 64Gi }
+
+  restartPolicy: Never

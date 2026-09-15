@@ -1,0 +1,5 @@
+{"event":"schemaVersion","version":1}
+{"event":"phase_started","ts":"2026-04-29T01:23:45Z","phaseNum":1,"phase":"preflight","totalPhases":8,"context":"admin@cp","startedAt":"2026-04-29T01:23:45Z"}
+{"event":"phase_completed","ts":"2026-04-29T01:23:53Z","phaseNum":1,"phase":"preflight","durationSec":8,"context":"admin@cp"}
+{"event":"phase_started","ts":"2026-04-29T01:30:08Z","phaseNum":6,"phase":"register","totalPhases":8,"context":"admin@gpu1","startedAt":"2026-04-29T01:30:08Z"}
+{"event":"phase_completed","ts":"2026-04-29T01:30:12Z","phaseNum":6,"phase":"register","durationSec":4,"context":"admin@gpu1"}

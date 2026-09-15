@@ -1,0 +1,7 @@
+plugins/vault-plugin-secrets-jwt filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+plugins/vault-plugin-secrets-jwt-linux-amd64 filter=lfs diff=lfs merge=lfs -text
+file/plugins/* filter=lfs diff=lfs merge=lfs -text
+file/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+files/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+files/plugins/vault-plugin-* filter=lfs diff=lfs merge=lfs -text

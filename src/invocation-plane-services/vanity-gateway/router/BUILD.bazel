@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "router",
+    srcs = ["swappable_router.go"],
+    importpath = "ai-api-gateway-service/router",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_go_chi_chi_v5//:chi"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":router",
+    visibility = ["//visibility:public"],
+)

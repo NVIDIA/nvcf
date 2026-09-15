@@ -1,0 +1,10 @@
+/* Fix transparent footer overlapping with sidebar content */
+#fern-footer, footer.bd-footer {
+    background-color: var(--background, var(--bg-color, #ffffff));
+    position: relative;
+    z-index: 10;
+}
+
+[data-theme="dark"] #fern-footer, [data-theme="dark"] footer.bd-footer {
+    background-color: var(--background, var(--bg-color, #111111));
+}

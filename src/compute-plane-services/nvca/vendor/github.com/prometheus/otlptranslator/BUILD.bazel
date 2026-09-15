@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "otlptranslator",
+    srcs = [
+        "constants.go",
+        "doc.go",
+        "label_namer.go",
+        "metric_namer.go",
+        "metric_type.go",
+        "strategy.go",
+        "strconv.go",
+        "unit_namer.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/otlptranslator",
+    importpath = "github.com/prometheus/otlptranslator",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":otlptranslator",
+    visibility = ["//visibility:public"],
+)

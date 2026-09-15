@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+"""Verify every oci.pull pin in a MODULE.bazel is still usable.
+
+Two things rot independently, and this repository has been bitten by both:
+
+1. The digest disappears. Digests are immutable but registries garbage-collect
+   untagged manifests, so a pin dies with no commit touching it. The root module
+   pinned a gcr.io/distroless/static digest that upstream had collected;
+   `bazel build //...` then failed at fetch on any checkout without a warm
+   repository cache, while CI stayed green because it restores that cache.
+
+2. The digest resolves but the index lacks a platform the pin asks for. That is
+   a separate failure and a quieter one: fetching succeeds and analysis fails
+   later with "could not find an image matching the target platform". nvsnap hit
+   exactly this, pulling one architecture while the shared go_oci_image macro
+   emits a target over two.
+
+Checking only (1) would have missed (2) entirely, so both are checked here.
+
+Run as a schedule, not per change: nothing in a pull request causes this to
+start failing.
+
+    check-oci-pins              verify every pin in the repository
+    check-oci-pins --self-test  exercise the parsing and matching logic
+"""
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+SKOPEO = "skopeo"
+
+
+def strip_tag(ref: str) -> str:
+    """Drop a :tag from the final path component.
+
+    A reference carrying both a tag and a digest is invalid and skopeo rejects
+    it, which reads as a dead pin. That mistake produced two separate false
+    positives while investigating this, hence the self-test below. The registry
+    host may itself contain a port, so only the last component is considered.
+    """
+    head, sep, last = ref.rpartition("/")
+    return head + sep + last.split(":", 1)[0]
+
+
+def parse_platform(text: str) -> tuple[str, str, str]:
+    """"linux/arm64/v8" -> ("linux", "arm64", "v8"); variant defaults to ""."""
+    parts = text.strip().split("/")
+    while len(parts) < 3:
+        parts.append("")
+    return parts[0], parts[1], parts[2]
+
+
+def index_platforms(manifest: dict) -> set[tuple[str, str, str]]:
+    """Platforms an index advertises.
+
+    A single-image manifest advertises none: it has no `manifests` list, so a
+    pin naming explicit platforms against it cannot be satisfied.
+    """
+    out: set[tuple[str, str, str]] = set()
+    for entry in manifest.get("manifests", []):
+        p = entry.get("platform") or {}
+        os_ = p.get("os", "")
+        arch = p.get("architecture", "")
+        if not os_ or not arch:
+            continue
+        out.add((os_, arch, p.get("variant", "") or ""))
+    return out
+
+
+def missing_platforms(declared: list[str], manifest: dict) -> list[str]:
+    """Declared platforms absent from the index.
+
+    Matching is exact, including the variant, because rules_oci compares the
+    platform string exactly: "linux/arm64" does not select an index entry
+    published as arm64/v8, and pinning the former against the latter fails at
+    analysis rather than at fetch.
+    """
+    available = index_platforms(manifest)
+    return [d for d in declared if parse_platform(d) not in available]
+
+
+def strip_comments(text: str) -> str:
+    """Remove Starlark line comments, leaving string literals intact.
+
+    Necessary because a comment may quote a platform string while explaining
+    it. function-autoscaler documents why it uses arm64/v8 by naming the wrong
+    value, "linux/arm64", in prose; a naive scan for quoted strings reads that
+    as a declared platform and reports a healthy pin as broken. That false
+    positive is the reason this function and its test exist.
+    """
+    out = []
+    for line in text.splitlines():
+        quote = None
+        cut = len(line)
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if quote:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+            elif ch in "\"'":
+                quote = ch
+            elif ch == "#":
+                cut = i
+                break
+            i += 1
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
+PULL_RE = re.compile(r"oci\.pull\((.*?)\n\)", re.S)
+STR_RE = {k: re.compile(rf'{k}\s*=\s*"([^"]+)"') for k in ("image", "digest")}
+PLATFORMS_RE = re.compile(r"platforms\s*=\s*\[(.*?)\]", re.S)
+
+
+def parse_pins(path: str, text: str) -> list[dict]:
+    pins = []
+    for m in PULL_RE.finditer(text):
+        body = strip_comments(m.group(1))
+        image = STR_RE["image"].search(body)
+        digest = STR_RE["digest"].search(body)
+        if not (image and digest):
+            continue
+        plats: list[str] = []
+        pm = PLATFORMS_RE.search(body)
+        if pm:
+            plats = re.findall(r'"([^"]+)"', pm.group(1))
+        pins.append(
+            {
+                "file": path,
+                "image": image.group(1),
+                "digest": digest.group(1),
+                "platforms": plats,
+            }
+        )
+    return pins
+
+
+# A stalled registry or proxy would otherwise block a call forever and hang the
+# whole scheduled sweep until the CI job timeout kills it, losing every result.
+INSPECT_TIMEOUT_SECONDS = 60
+
+
+def fetch_manifest(ref: str, tries: int = 3):
+    """Return (manifest, None) or (None, error). Retries transient failures.
+
+    Only an explicit "not found" from the registry is authoritative; neither a
+    timeout nor a network error is evidence that an image is gone, so those are
+    retried and then reported as an unresolved check rather than a dead pin.
+    """
+    err = ""
+    for attempt in range(tries):
+        try:
+            proc = subprocess.run(
+                [SKOPEO, "inspect", "--raw", f"docker://{ref}"],
+                capture_output=True,
+                text=True,
+                timeout=INSPECT_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            err = f"timed out after {INSPECT_TIMEOUT_SECONDS}s"
+            if attempt < tries - 1:
+                time.sleep(2)
+            continue
+        if proc.returncode == 0:
+            try:
+                return json.loads(proc.stdout), None
+            except json.JSONDecodeError as exc:
+                return None, f"unparseable manifest: {exc}"
+        err = (proc.stderr or "").strip().splitlines()[-1:] or [""]
+        err = err[0]
+        if any(s in err for s in ("manifest unknown", "not found", "not known")):
+            return None, err
+        if attempt < tries - 1:
+            time.sleep(2)
+    return None, err
+
+
+def self_test() -> int:
+    failures = []
+
+    def eq(label, got, want):
+        if got != want:
+            failures.append(f"{label}: got {got!r}, want {want!r}")
+            print(f"FAIL {label}: got {got!r}, want {want!r}")
+        else:
+            print(f"ok   {label}")
+
+    eq("strip_tag tag", strip_tag("nvcr.io/nvidia/distroless/go:v4.0.8"),
+       "nvcr.io/nvidia/distroless/go")
+    eq("strip_tag none", strip_tag("gcr.io/distroless/static"),
+       "gcr.io/distroless/static")
+    # A registry port must not be mistaken for a tag.
+    eq("strip_tag port", strip_tag("registry.example.com:5000/img"),
+       "registry.example.com:5000/img")
+    eq("strip_tag port+tag", strip_tag("registry.example.com:5000/img:1.2"),
+       "registry.example.com:5000/img")
+
+    both = {
+        "manifests": [
+            {"platform": {"os": "linux", "architecture": "amd64"}},
+            {"platform": {"os": "linux", "architecture": "arm64", "variant": "v8"}},
+        ]
+    }
+    amd_only = {"manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}]}
+    single = {"schemaVersion": 2, "config": {}, "layers": []}
+
+    eq("both platforms present",
+       missing_platforms(["linux/amd64", "linux/arm64/v8"], both), [])
+    # The nvsnap defect: digest resolves, arm64 absent from the pulled set.
+    eq("missing arm64/v8 detected",
+       missing_platforms(["linux/amd64", "linux/arm64/v8"], amd_only),
+       ["linux/arm64/v8"])
+    # Variant is part of the match: rules_oci compares the string exactly.
+    eq("arm64 != arm64/v8",
+       missing_platforms(["linux/arm64"], both), ["linux/arm64"])
+    eq("single-image manifest satisfies nothing",
+       missing_platforms(["linux/amd64"], single), ["linux/amd64"])
+    eq("no platforms declared is vacuously fine",
+       missing_platforms([], amd_only), [])
+
+    parsed = parse_pins("MODULE.bazel", '''
+oci.pull(
+    name = "x",
+    digest = "sha256:abc",
+    image = "gcr.io/distroless/static",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+''')
+    eq("parser finds one pin", len(parsed), 1)
+
+    # Regression: a comment naming a platform must not be read as a
+    # declaration. This exact shape produced a false "missing linux/arm64".
+    commented = parse_pins("MODULE.bazel", '''
+oci.pull(
+    name = "cc",
+    digest = "sha256:abc",
+    image = "nvcr.io/nvidia/distroless/cc",
+    platforms = [
+        "linux/amd64",
+        # arm64/v8, not arm64: rules_oci matches the platform string exactly,
+        # so "linux/arm64" fails the pull outright.
+        "linux/arm64/v8",
+    ],
+)
+''')
+    eq("comment text is not parsed as a platform",
+       commented[0]["platforms"] if commented else None,
+       ["linux/amd64", "linux/arm64/v8"])
+    if parsed:
+        eq("parser reads platforms", parsed[0]["platforms"],
+           ["linux/amd64", "linux/arm64/v8"])
+
+    if failures:
+        print(f"\ncheck-oci-pins: self-test FAILED ({len(failures)})", file=sys.stderr)
+        return 1
+    print("\ncheck-oci-pins: self-test passed")
+    return 0
+
+
+def main() -> int:
+    if "--self-test" in sys.argv[1:]:
+        return self_test()
+
+    # Deliberately after the self-test branch: --self-test exercises pure logic
+    # and must work on a machine without skopeo.
+    if shutil.which(SKOPEO) is None:
+        print(f"error: {SKOPEO} not found; cannot verify pins", file=sys.stderr)
+        return 2
+
+    files = subprocess.run(["git", "ls-files", "*MODULE.bazel"],
+                           capture_output=True, text=True).stdout.split()
+    pins: list[dict] = []
+    for f in files:
+        try:
+            pins.extend(parse_pins(f, open(f).read()))
+        except OSError:
+            continue
+
+    seen = set()
+    unique = []
+    for p in pins:
+        key = (p["image"], p["digest"], tuple(p["platforms"]))
+        if key not in seen:
+            seen.add(key)
+            unique.append(p)
+
+    if not unique:
+        print("error: parsed no oci.pull pins; the parser is probably broken",
+              file=sys.stderr)
+        return 2
+
+    status = 0
+    for p in unique:
+        ref = f"{strip_tag(p['image'])}@{p['digest']}"
+        manifest, err = fetch_manifest(ref)
+        if manifest is None:
+            print(f"DEAD    {p['image']:44} {p['file']}", file=sys.stderr)
+            print(f"        {p['digest']}", file=sys.stderr)
+            print(f"        {err}", file=sys.stderr)
+            status = 1
+            continue
+        missing = missing_platforms(p["platforms"], manifest)
+        if missing:
+            print(f"NOPLAT  {p['image']:44} {p['file']}", file=sys.stderr)
+            print(f"        digest resolves but lacks: {', '.join(missing)}",
+                  file=sys.stderr)
+            have = sorted("/".join(x for x in t if x)
+                          for t in index_platforms(manifest))
+            print(f"        index advertises: {', '.join(have) or 'none'}",
+                  file=sys.stderr)
+            status = 1
+            continue
+        plats = ", ".join(p["platforms"]) if p["platforms"] else "unconstrained"
+        print(f"ok      {p['image']:44} [{plats}]")
+
+    if status:
+        print(
+            "\nerror: one or more pins are unusable.\n"
+            "\n"
+            "A dead digest fails every cold checkout while a warm Bazel\n"
+            "repository cache hides it in CI. A missing platform fetches fine\n"
+            "and fails later at analysis. Repin with:\n"
+            "\n"
+            "    skopeo inspect --raw docker://<image>:<tag> | sha256sum\n",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"\nchecked {len(unique)} pin(s); all resolve with the platforms they declare")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,305 @@
+# AGENTS.md - tests/bdd
+
+Scope: everything under `tests/bdd/`.
+
+This directory is the strict-DSL replacement for the legacy `tests/bdd`
+runner. The whole point is a Gherkin vocabulary that an AI can extend
+without inventing opaque domain helpers. Read `PLAN.md` before touching code.
+
+## The strict-DSL contract
+
+Steps describe what an operator types: copy files, edit YAML, run a
+shell command, assert against exit codes / file contents / JSON
+output. Step handlers in `steps/` are thin wrappers around helpers in
+`dsl/` and around `harness.CommandRunner`. Domain validation lives in
+Gherkin via `When I run command` plus an output assertion, never inside
+a handler.
+
+Use a shared step when a repeated operator action or observable keeps every
+meaningful target, value, context, and timeout visible while hiding only
+command or output-format mechanics. Keep `When I run command` plus an
+assertion as the escape hatch for uncommon or command-specific behavior.
+
+Function lifecycle steps are a narrow command-adapter exception. They store
+only the selected `nvcf-cli` config, pass visible arguments to one CLI command,
+and preserve the real command result. They do not store function identity,
+apply defaults, parse or normalize product values, or enforce product
+preconditions. Their `successfully` wording asserts exit code 0 to keep happy
+paths compact. Use raw command steps for negative and exit-code-specific cases
+so `nvcf-cli` and the NVCF API remain the product-validation boundary.
+
+## Layering
+
+- `harness/` owns suite lifecycle: `Config`, `CommandRunner`, `Ledger`,
+  `CommandCache`, `Suite`. Step handlers depend on these; nothing else
+  does.
+- `dsl/` owns pure helpers: `${VAR}` interpolation, dotted-path YAML
+  upsert and read, YAML subtree match/contain, self-managed secrets
+  rendering, kubectl manifest builders, JSON row matching. Every helper
+  is unit-testable in isolation. No I/O coordination, no Godog dependency.
+- `steps/` owns Godog step handlers and `ScenarioContext`. Each
+  handler is one or two lines plus a delegate to a `dsl` helper or
+  `Suite.Runner`.
+- `godog_test.go` owns the live entry points and the fake-runner
+  wiring tests.
+
+A step handler that does anything beyond argv assembly, ledger
+snapshot, runner invocation, and result capture is a smell. Move the
+logic into `dsl/`.
+
+## Vocabulary rules
+
+- Feature assertions must not hard-code released component versions. Verify
+  artifact identity without the tag, or derive the expected version from the
+  authoritative stack or chart configuration.
+- `${VAR}` interpolation is the only env-var form the DSL recognizes;
+  a bare `$word` is left literal. Implementations must not use
+  `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.
+- Function lifecycle CLI option tables preserve row order, repeated options,
+  empty values, and product-invalid values. Only the `option | value` table
+  structure is validated before the command runs.
+- Gateway API route readiness tables expose each route's kind, name,
+  namespace, and intended Gateway parent plus the shared context and timeout.
+  The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but
+  does not allowlist route kinds or duplicate Gateway API validation.
+- File-mutating steps (`I copy the file`, `I update yaml file`,
+  `I prepare self-managed secrets file`, `I substitute a block`)
+  snapshot the destination through `Suite.Ledger` before the first write.
+  Suite teardown restores every snapshotted path.
+- `Given command has succeeded:` keys on the fully resolved command
+  text. Two scenarios whose pre-interpolation text matches but whose
+  env vars differ must miss the cache. The cache lives in
+  `Suite.Cache`.
+- Bootstrap Givens (`a single-cluster ncp-local cluster is running`,
+  `multi-cluster ncp-local compute clusters are running:`, `Helm is
+  authenticated to OCI registry ...`, `the ... image pull secret exists in
+  namespaces:`) each wrap exactly one Make target or one Helm invocation. The
+  image pull secret Given applies one namespace manifest and one docker-registry
+  secret manifest per row. Caching is idempotent per suite; the underlying
+  bootstrap runs at most once even if multiple scenarios name the Given.
+- The Helm OCI registry authentication Given reads `NGC_API_KEY` from the
+  process environment and passes it only through
+  `CommandRunner.RunWithSensitiveStdin`. The key must never be interpolated
+  into command text, argv, command logs, captured output, or failure messages.
+- Features that bring up a `tools/ncp-local-cluster` topology must
+  include a conflict precheck in their Background before the
+  bootstrap Given, asserting the OTHER topology is absent. Use
+  `I run command "k3d cluster get <conflicting-cluster>"` followed
+  by `the command exit code should be 1` (k3d v5 exits 1 on
+  "not found"). Single-cluster features (CLI and Helmfile) check
+  for `ncp-local-cp`; multi-cluster features check for `ncp-local`.
+  The Gherkin comment above the precheck must call out the exact
+  `make destroy` command an operator runs to remediate. Both
+  single- and multi-cluster control-plane k3d serverlbs claim
+  overlapping host ports, including 8080, 8443, 10081, and NATS on
+  4222. The multi-cluster control plane also claims 10086 for the gRPC
+  worker callback path. Leaving the wrong topology running causes the
+  bootstrap Make target to fail deep inside k3d with a generic port-bind
+  error; the precheck surfaces this immediately.
+- `harness.NewSuite` snapshots `~/.nvcf-cli.nvcf-cli-local.state`
+  through the Ledger so the admin JWT `nvcf-cli init` writes during a
+  live run is restored (or removed) at suite teardown. HOME is
+  intentionally NOT isolated: k3d, kubectl, docker, and helm all
+  resolve their config under `$HOME`, and pointing HOME at an empty
+  per-run directory breaks the bootstrap Givens. Subsequent
+  self-hosted commands read the JWT back from the state file, so the
+  token never appears in argv or per-command logs. Do not introduce
+  step handlers that capture secrets into env vars; relying on the
+  state file keeps the JWT out of `<seq>.cmd` lines.
+- The live runner installs SIGINT and SIGTERM cleanup before scenarios run.
+  Interrupt cleanup cancels the active step and its Unix process group, waits
+  for that step to stop writing, then restores the same file and environment
+  ledgers while preventing later steps from starting. Ledger-backed generated
+  registry credentials must not remain after an interrupted run.
+- Pre-suite destructive cleanup is governed by the single env var
+  `BDD_CLEANUP_MODE`. Valid values: `stack-single`, `stack-multi`,
+  `topology-single`, `topology-multi`, or unset. Unknown values fail
+  the suite at start; the harness never silently downgrades to
+  no-cleanup. The mode maps to one make target in `harness/cleanup.go`
+  via `cleanupCommandFor`; that map is the single source of truth.
+  Both the env-var path and the Make targets in
+  `tools/ncp-local-cluster/Makefile` and
+  `deploy/stacks/self-managed/Makefile` are intentionally maintained
+  so an operator can clean by hand without involving `go test`.
+- Cleanup belongs in `harness/cleanup.go`, never in `steps/`. Do not
+  introduce a `Given the cluster is freshly destroyed` Given or
+  similar; the conflict precheck inside every feature Background is
+  the in-band assertion that cleanup worked.
+- Cleanup runs BEFORE the CLI state-file snapshot in `NewSuite`. The
+  snapshot captures the post-cleanup baseline (typically empty for
+  destructive modes); teardown restores to that baseline. For
+  destructive modes the operator's pre-suite JWT is intentionally
+  not preserved because the cluster it pointed at is gone.
+- Governing rule for cleanup: topology cleanup may delete topology
+  resources, stack cleanup may only delete stack-owned resources
+  and stack artifacts. Topology cleanup is implemented as Make
+  targets in `tools/ncp-local-cluster/Makefile` (`destroy`,
+  `destroy-all-ncp-local`) because k3d cluster lifecycle belongs to
+  the cluster-build tooling. Stack cleanup is implemented as a
+  bash script at `tests/bdd/scripts/destroy-stack.sh` so the
+  BDD-specific allow-lists, namespace lists, and kubectl/helm
+  context plumbing stay co-located with the harness that owns
+  them. Stack-owned releases and namespaces are explicit
+  allow-lists at the top of the script (`STACK_RELEASES_CP`,
+  `STACK_RELEASES_WORKER`, `STACK_NAMESPACES_*`, `STACK_CRS_WORKER`).
+  Do not introduce blanket `helm list`-based uninstall or namespace
+  deletion that catches topology infrastructure (`eg` in
+  `envoy-gateway-system`, the namespace itself, `cert-manager`).
+  Multi-cluster stack cleanup must also apply the worker release and
+  namespace allow-lists on `k3d-ncp-local-cp`: feature Backgrounds
+  create `nvca-operator` (and its pull secret) on the control-plane
+  context, not only on compute clusters. Artifact cleanup must remove
+  Helmfile render trees under each stack `out/` directory and
+  generated values under
+  `deploy/stacks/nvcf-compute-plane/registration/`, not only
+  root-level `out/*.yaml`.
+
+## CLI vs Helmfile install paths
+
+The suite exercises two operator workflows that share a stack but differ in
+how the control plane is installed. Future changes must keep the CLI install
+path independent of authored Helmfile values. They must also preserve the
+exported-profile handoff from a Helmfile control-plane install into compute
+registration.
+
+- CLI path (`single-cluster-up.feature`, `multi-cluster-up.feature`)
+  is profile-driven. `nvcf-cli self-hosted install --control-plane`
+  writes `out/control-plane-profile.yaml` with both endpoint layers
+  (`inCluster` plus `computeReachable`). The follow-up
+  `compute-plane register --control-plane-profile <path>
+  --kube-context <ctx>` picks the right URL block based on the
+  kube-context, probes JWKS, and emits a values file with the right
+  URLs already baked in. The profile is the single source of truth.
+
+- Helmfile control-plane install is values-driven. The operator authors
+  `environments/<env>.yaml`, and `make install` runs Helmfile sync. Before
+  compute registration, export the selected installed environment with
+  `self-hosted --control-plane-stack <path> --env <env> control-plane
+  profile export`. The compute-plane `make register-cluster` target consumes
+  that file through `CONTROL_PLANE_PROFILE` and passes it to `self-hosted
+  compute-plane register`. Run `nvcf-cli init` explicitly before registration.
+  `NVCF_CLI_CONFIG` is optional and only selects the config and state files the
+  registration command reads; the Make target does not run `init`. In a local
+  single-cluster flow, omit both persistent CLI context flags during profile
+  export because the CLI requires either a valid split-cluster pair or neither.
+  Pass `COMPUTE_KUBE_CONTEXT=k3d-ncp-local` to the compute target so registration
+  probes the intended cluster.
+
+For multi-cluster Helmfile the BDD fixture
+`fixtures/self-managed-local-bdd-multi.yaml` carries the same
+service-DNS URL shape as the single-cluster local fixture. In the
+multi-cluster ncp-local topology, those names resolve to alias
+Services in the compute cluster and the alias Endpoints point at the
+control-plane LB. If those hostnames or ports ever change, keep the
+multi fixture's `selfManaged` block, the local stack values, and the CLI
+feature's profile assertion. A follow-up drift-detection check is
+tracked separately (see commit history).
+
+Two recurring failure modes worth remembering when editing either
+multi-cluster feature:
+
+1. Single-cluster URLs in a multi-cluster fixture. In-cluster DNS
+   (`api.sis.svc.cluster.local` etc.) only resolves inside the
+   control-plane k3d cluster. The NVCA agent on a separate compute
+   cluster cannot dial those addresses. Symptom: NVCA agent in
+   `CrashLoopBackOff` with `dial tcp ... connect: connection
+   refused` against an in-cluster hostname.
+
+2. Wrong kubectl context when `make register-cluster` runs. The
+   `self-hosted compute-plane register` command discovers OIDC issuer
+   and JWKS from its selected compute context, then registers that
+   identity with ICMS. If the
+   context is the cp cluster, ICMS records the cp cluster's JWKS
+   for the compute cluster's row. The compute cluster's NVCA agent
+   then 401s against ICMS at runtime ("Signed JWT rejected:
+   ... no matching key(s) found"). Switch the context to the
+   compute context explicitly through `COMPUTE_KUBE_CONTEXT` (or a
+   compute-scoped kubeconfig) before `make register-cluster`, not after.
+
+## Tests
+
+- Every Go file under `tests/bdd/` carries the SPDX header in
+  `.goheader.tmpl`. `golangci-lint` enforces this.
+- Run the non-live tests before pushing:
+
+  ```sh
+  cd tests/bdd
+  go test -short ./...
+  golangci-lint run --config .golangci.yml ./...
+  ```
+
+  `tests/bdd` carries its own `go.mod`, so the lint invocation MUST run
+  from inside `tests/bdd/`. Running `golangci-lint` against
+  `./tests/bdd/...` from the repo root produces a confusing
+  "no go files to analyze" or "directory prefix does not contain main
+  module" error. The `tests/bdd/scripts/lint.sh` wrapper handles the
+  cd internally and works from any cwd:
+
+  ```sh
+  tests/bdd/scripts/lint.sh
+  ```
+
+- Wiring tests in `godog_test.go` exercise feature files against a
+  fake `CommandRunner`. They assert `status == 0` plus one substring
+  check that a destructive command was issued. Do not deep-equality
+  the recorder; consolidating equivalent steps in the future must not
+  break these tests.
+- Live entry points (`TestSingleClusterUp`, `TestMultiClusterUp`,
+  `TestSingleClusterHelmfile`) skip under `-short`. They build the
+  CLI and exercise real `make`/`kubectl`/`helm` against k3d.
+
+## Style
+
+- Plain ASCII only in committed text. No bold, no em dashes, no
+  smart quotes.
+- Lower-case any identifier used only inside its own package. The
+  interface satisfaction Godog enforces is not a reason to export a
+  step handler.
+- Avoid trivial forwarding helpers. Inline anything that is a single
+  expression wrapped in a one-liner.
+- Comments above important exported functions should say what the
+  contract is, not restate the implementation.
+
+## Commit messages
+
+- Conventional Commits. Common scopes: `bdd`, `dsl`, `harness`,
+  `steps`.
+
+## Adding a feature file
+
+1. Read `PLAN.md` and confirm every step in your draft is in the
+   catalog. If something cannot be expressed, prefer raw `When I run
+   command` + an output assertion.
+2. Write the feature file in `features/`.
+3. Seed any handoff artifacts in the matching wiring test inside
+   `godog_test.go`.
+4. Confirm `go test -short ./...` is green.
+
+## Adding a step
+
+Adding a step is deliberate. Add one only for a repeated action or observable
+that keeps meaningful inputs visible and has no hidden workflow branching.
+Do not add opaque composite steps such as `Given the stack is installed`.
+
+1. Add the row to `PLAN.md` first: regex, table/docstring shape, one
+   sentence of behavior.
+2. Implement the handler in the matching `steps/*_steps.go`. Keep it
+   thin.
+3. If the handler needs a pure operation, put it in `dsl/` with a
+   unit test.
+4. Add a positive unit test in `steps/steps_test.go` driving the
+   handler against a fake CommandRunner.
+
+## Live-run output
+
+Every live run writes a fresh directory under `tests/bdd/out/`:
+
+- `out/<run-id>/logs/<seq>.{cmd,stdout,stderr}` for every command the
+  runner executed.
+- `out/<run-id>/originals/` is reserved for an on-disk ledger variant
+  if very large fixtures ever push memory limits.
+- `out/<run-id>/diagnostics/` is reserved for Kubernetes diagnostics
+  collection once the integration with the existing collector lands.
+
+Restore happens automatically at suite teardown; the working tree
+should be clean after a green run.

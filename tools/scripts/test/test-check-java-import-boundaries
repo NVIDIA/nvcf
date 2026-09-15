@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+script="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/ci/check-java-import-boundaries"
+work="$(mktemp -d)"
+trap 'rm -rf "${work}"' EXIT
+
+make_component() {
+  local root="$1"
+  local component="$2"
+  mkdir -p "${root}/src/${component}"
+  printf '{}\n' >"${root}/src/${component}/bazel-java-ci.json"
+}
+
+expect_pass() {
+  local name="$1"
+  local root="$2"
+  if ! output="$(bash "${script}" "${root}" 2>&1)"; then
+    echo "FAIL: ${name}" >&2
+    echo "${output}" >&2
+    exit 1
+  fi
+}
+
+expect_fail() {
+  local name="$1"
+  local root="$2"
+  local expected="$3"
+  if output="$(bash "${script}" "${root}" 2>&1)"; then
+    echo "FAIL: ${name}: check unexpectedly passed" >&2
+    exit 1
+  fi
+  if [[ "${output}" != *"${expected}"* ]]; then
+    echo "FAIL: ${name}: missing expected output: ${expected}" >&2
+    echo "${output}" >&2
+    exit 1
+  fi
+}
+
+clean="${work}/clean"
+make_component "${clean}" "service-a"
+make_component "${clean}" "service-b"
+expect_pass "clean components" "${clean}"
+
+root_pom="${work}/root-pom"
+make_component "${root_pom}" "service-a"
+touch "${root_pom}/src/service-a/pom.xml"
+expect_fail "component root POM" "${root_pom}" \
+  "project POM reintroduced: src/service-a/pom.xml"
+
+nested_pom="${work}/nested-pom"
+make_component "${nested_pom}" "service-a"
+mkdir -p "${nested_pom}/src/service-a/core"
+touch "${nested_pom}/src/service-a/core/pom.xml"
+expect_fail "nested module POM" "${nested_pom}" \
+  "project POM reintroduced: src/service-a/core/pom.xml"
+
+linked_pom="${work}/linked-pom"
+make_component "${linked_pom}" "service-a"
+touch "${linked_pom}/source-pom.xml"
+ln -s "${linked_pom}/source-pom.xml" "${linked_pom}/src/service-a/pom.xml"
+expect_fail "linked project POM" "${linked_pom}" \
+  "project POM reintroduced: src/service-a/pom.xml"
+
+root_state="${work}/root-state"
+make_component "${root_state}" "service-a"
+touch "${root_state}/src/service-a/MODULE.bazel"
+expect_fail "component-owned Bazel state" "${root_state}" \
+  "root-owned Bazel file reintroduced: src/service-a/MODULE.bazel"
+
+echo "Java import boundary tests: PASS"

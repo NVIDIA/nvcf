@@ -1,0 +1,6 @@
+cassandra:
+  global:
+    defaultStorageClass: gp3
+
+  nodeSelector:
+    node-type: cassandra

@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Simple placeholder that uses host-mounted CRIU and cuda-checkpoint
+#
+# Build: docker build -t nvsnap-placeholder:latest -f placeholder/Dockerfile.simple .
+#
+# The placeholder runs restore-entrypoint which:
+# 1. Waits for a trigger file or immediate restore based on env vars
+# 2. Applies rootfs-diff.tar if present
+# 3. Calls CRIU restore (binary mounted from host)
+# 4. Calls cuda-checkpoint restore (binary mounted from host)
+
+ARG BASE_IMAGE=nvidia/cuda:12.4.0-base-ubuntu22.04
+
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /restore-entrypoint ./cmd/restore-entrypoint
+
+# Runtime - minimal image using same base as checkpointed container
+FROM ${BASE_IMAGE}
+
+# Install only runtime essentials
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iproute2 \
+    procps \
+    tar \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /checkpoints /var/run/criu /tmp /var/criu-work
+
+# Copy the restore-entrypoint binary
+COPY --from=builder /restore-entrypoint /restore-entrypoint
+RUN chmod +x /restore-entrypoint
+
+# Environment defaults
+ENV CHECKPOINT_BASE_DIR=/checkpoints \
+    RESTORE_WAIT_TIMEOUT=300 \
+    CRIU_LOG_LEVEL=4 \
+    DEBUG=1
+
+# Entry point handles the restore
+ENTRYPOINT ["/restore-entrypoint"]

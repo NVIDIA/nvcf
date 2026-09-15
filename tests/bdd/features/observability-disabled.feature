@@ -1,0 +1,53 @@
+@observability @disabled @render-only
+Feature: Render local Helmfile stacks with observability disabled
+  As a self-managed NVCF operator,
+  I want to render both local Helmfile stacks with observability disabled,
+  so that I can verify the profile does not add observability resources.
+
+  Background:
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
+      | REPO_ROOT       |
+    # Helmfile pulls OCI charts during rendering. Authenticate before render
+    # without exposing the current API key in command arguments or logs.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
+    # Create the self-managed stack environment used by the control-plane render.
+    And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
+      | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+      | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | observability.profile           | disabled                             |
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-disabled-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
+    # Create the compute-plane stack environment used by the worker render.
+    And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
+      | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+      | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | observability.profile           | disabled                             |
+    # Seed the compute stack's registration handoff without contacting ICMS.
+    # The Make target copies this input to OUTPUT_DIR before Helmfile evaluates it.
+    And I copy the file "tests/bdd/fixtures/ncp-local-register-values.yaml" to "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml"
+
+  Scenario: Disabled profile renders no observability resources
+    When I run command:
+      """
+      make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-observability-disabled OUTPUT_DIR=${REPO_ROOT}/tests/bdd/out/observability-disabled/control-plane
+      """
+    Then the command exit code should be 0
+
+    When I run command:
+      """
+      make -C deploy/stacks/nvcf-compute-plane template CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-disabled OUTPUT_DIR=${REPO_ROOT}/tests/bdd/out/observability-disabled/compute-plane
+      """
+    Then the command exit code should be 0
+
+    Then the rendered manifests in "tests/bdd/out/observability-disabled" should not contain:
+      | text                         |
+      | name: function-autoscaler    |
+      | kind: OpenTelemetryCollector |
+      | kind: ServiceMonitor         |
+      | kind: PodMonitor             |
+      | BYOObservability             |

@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "record",
+    srcs = [
+        "doc.go",
+        "event.go",
+        "events_cache.go",
+        "fake.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/record",
+    importpath = "k8s.io/client-go/tools/record",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/strategicpatch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/internal/events",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/record/util",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/reference",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/flowcontrol",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/clock",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/lru",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":record",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,5 @@
+2026-04-29T01:30:07Z [04/8] apply-cp: starting
+2026-04-29T01:30:12Z [04/8] apply-cp: namespaces 8/8
+2026-04-29T01:30:18Z [04/8] apply-cp: deployments 9/14
+2026-04-29T01:30:24Z [04/8] apply-cp: statefulsets 2/5
+2026-04-29T01:30:31Z [04/8] apply-cp: complete (5m18s)

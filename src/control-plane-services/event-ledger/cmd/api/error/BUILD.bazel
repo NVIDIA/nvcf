@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "error",
+    srcs = ["error.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/error",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/event-ledger/common/core/types",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":error",
+    visibility = ["//visibility:public"],
+)

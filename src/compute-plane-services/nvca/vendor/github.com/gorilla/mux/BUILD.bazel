@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mux",
+    srcs = [
+        "doc.go",
+        "middleware.go",
+        "mux.go",
+        "regexp.go",
+        "route.go",
+        "test_helpers.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/gorilla/mux",
+    importpath = "github.com/gorilla/mux",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mux",
+    visibility = ["//visibility:public"],
+)

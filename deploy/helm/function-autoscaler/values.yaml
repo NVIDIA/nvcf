@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for nvcf-function-autoscaler.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+functionautoscaler:
+  # Namespace to deploy the resources. The OpenBao JWT auth role is bound to
+  # this namespace by default.
+  namespace: nvcf
+
+  nameOverride: ""
+  fullnameOverride: ""
+
+  replicaCount: 1
+
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
+
+  image:
+    registry: "" # must be supplied
+    repository: "" # must be supplied
+    pullPolicy: IfNotPresent
+    tag: ""
+
+  imagePullSecrets: []
+
+  # Service account used by the deployment. The OpenBao JWT auth role is bound
+  # to this account, so it must match vault.role below.
+  serviceAccountName: nvcf-autoscaler-service
+
+  # OpenBao Vault Agent Injector settings for self-hosted secret injection.
+  # The injector renders vault-agent-templates/secrets.json.tmpl to
+  # /vault/secrets/secrets.json, read by the app via SECRETS_PATH.
+  vault:
+    # Disable when a deployment mounts secrets manually or runs without the
+    # Vault Agent Injector webhook.
+    enabled: true
+
+    # JWT auth role. Must be seeded in OpenBao for the self-hosted stack.
+    role: nvcf-autoscaler-service
+    authPath: auth/jwt
+
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+
+  securityContext:
+    capabilities:
+      drop:
+      - ALL
+    runAsUser: 1000
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+
+  # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+  livenessProbe:
+    httpGet:
+      path: /admin/health/liveness
+      port: probe
+    initialDelaySeconds: 30
+  readinessProbe:
+    httpGet:
+      path: /admin/health/readiness
+      port: probe
+    initialDelaySeconds: 30
+
+  # Optional HorizontalPodAutoscaler. The autoscaler typically runs as a
+  # singleton, so this is disabled by default.
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+    # targetMemoryUtilizationPercentage: 80
+
+  ports:
+    - name: http
+      containerPort: 8080
+      protocol: TCP
+    - name: probe
+      containerPort: 8181
+      protocol: TCP
+    - name: metrics
+      containerPort: 41338
+      protocol: TCP
+
+  # Stable service DNS. Override for multiple releases in one namespace.
+  service:
+    name: function-autoscaler
+    ports:
+      - name: http
+        port: 8080
+        targetPort: http
+        protocol: TCP
+      - name: probe
+        port: 8181
+        targetPort: probe
+        protocol: TCP
+      - name: metrics
+        port: 41338
+        targetPort: metrics
+        protocol: TCP
+
+  # Additional volumes on the output Deployment definition.
+  # The projected service account token lets the Vault Agent authenticate to
+  # OpenBao via JWT. Override this list when mounting secrets manually.
+  volumes:
+    - name: token
+      projected:
+        sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: 3600
+            audience: http://openbao-server.vault-system.svc.cluster.local:8200
+  # Additional volumeMounts on the output Deployment definition.
+  volumeMounts:
+    - name: token
+      mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      readOnly: true
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  env:
+    # Use the settings files baked into the autoscaler image. Release values
+    # should override stack-specific endpoints with CONFIG or nested env vars.
+    CONFIG: "/etc/server/config/settings-local.yaml"
+
+    # Read the secrets file rendered by the Vault Agent. Override this value
+    # when mounting secrets manually.
+    SECRETS_PATH: "/vault/secrets/secrets.json"

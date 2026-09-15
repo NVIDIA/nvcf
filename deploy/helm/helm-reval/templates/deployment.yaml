@@ -1,0 +1,116 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "reval.fullname" . }}
+  labels:
+    {{- include "reval.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.reval.autoscaling.enabled }}
+  replicas: {{ .Values.reval.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "reval.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.reval.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "reval.labels" . | nindent 8 }}
+        {{- with .Values.reval.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.reval.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "reval.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.reval.serviceAccount.automount }}
+      {{- with .Values.reval.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.reval.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.reval.image.registry }}/{{ .Values.reval.image.repository }}:{{ .Values.reval.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.reval.image.pullPolicy }}
+          args:
+            - "--config"
+            - "/config/config.yaml"
+            {{- if and .Values.reval.serviceConfig.tracing.enabled (eq .Values.reval.serviceConfig.tracing.provider "lightstep") .Values.reval.serviceConfig.tracing.credsFile.secretName }}
+            - "--config"
+            - "/config/tracing-overlay.yaml"
+            {{- end }}
+          ports:
+            - name: management
+              containerPort: {{ .Values.reval.service.ports.management }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.reval.service.ports.http }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.reval.service.ports.metrics }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.reval.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.reval.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.reval.resources | nindent 12 }}
+          volumeMounts:
+            - name: reval-config
+              mountPath: /config/config.yaml
+              subPath: config.yaml
+            {{- if and .Values.reval.serviceConfig.tracing.enabled (eq .Values.reval.serviceConfig.tracing.provider "lightstep") .Values.reval.serviceConfig.tracing.credsFile.secretName }}
+            - name: lightstep-access-token
+              mountPath: /config/tracing-overlay.yaml
+              subPath: tracing-overlay.yaml
+            {{- end }}
+            {{- with .Values.reval.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: reval-config
+          configMap:
+            name: {{ include "reval.fullname" . }}-config
+        {{- if and .Values.reval.serviceConfig.tracing.enabled (eq .Values.reval.serviceConfig.tracing.provider "lightstep") .Values.reval.serviceConfig.tracing.credsFile.secretName }}
+        - name: lightstep-access-token
+          secret:
+            secretName: {{ .Values.reval.serviceConfig.tracing.credsFile.secretName }}
+        {{- end }}
+      {{- with .Values.reval.volumes }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.reval.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.reval.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.reval.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

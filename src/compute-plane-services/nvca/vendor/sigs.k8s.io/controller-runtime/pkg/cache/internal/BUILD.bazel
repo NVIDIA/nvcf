@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "internal",
+    srcs = [
+        "cache_reader.go",
+        "informers.go",
+        "selector.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/cache/internal",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/cache/internal",
+    visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/cache:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/fields",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/labels",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/wait",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/metadata",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/apiutil",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/field/selector",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/log",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/internal/syncs",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":internal",
+    visibility = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/cache:__subpackages__"],
+)

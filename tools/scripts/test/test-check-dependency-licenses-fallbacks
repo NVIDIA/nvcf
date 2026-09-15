@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHECKER="${SCRIPT_DIR}/../../ci/check-dependency-licenses"
+
+TEMP_DIRS=()
+
+cleanup() {
+    local path
+    for path in "${TEMP_DIRS[@]}"; do
+        rm -rf "${path}"
+    done
+}
+
+make_tempdir() {
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    TEMP_DIRS+=("${tmpdir}")
+    echo "${tmpdir}"
+}
+
+assert_equals() {
+    local expected="$1"
+    local actual="$2"
+    local message="$3"
+
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected: ${expected}" >&2
+        echo "actual:   ${actual}" >&2
+        exit 1
+    fi
+}
+
+assert_empty() {
+    local actual="$1"
+    local message="$2"
+
+    if [[ -n "${actual}" ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "expected empty output" >&2
+        echo "actual: ${actual}" >&2
+        exit 1
+    fi
+}
+
+test_resolve_go_import_license_uses_module_cache_license() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+    local module_dir="${repo_root}/src/example"
+    local cache_dir="${repo_root}/cache/json-patch"
+    mkdir -p "${module_dir}/vendor/github.com/evanphx/json-patch/v5" "${cache_dir}"
+
+    cat > "${module_dir}/vendor/modules.txt" <<'EOF'
+# github.com/evanphx/json-patch v5.9.11+incompatible
+## explicit
+# github.com/evanphx/json-patch/v5 v5.9.11
+## explicit; go 1.18
+github.com/evanphx/json-patch/v5
+github.com/evanphx/json-patch/v5/internal/json
+EOF
+    cat > "${cache_dir}/LICENSE" <<'EOF'
+BSD 3-Clause License
+EOF
+
+    local output
+    output="$(
+        REPO_ROOT="${repo_root}" MODULE_DIR="${module_dir}" CACHE_DIR="${cache_dir}" bash -c '
+            # shellcheck source=/dev/null
+            source "$1"
+            go_mod_download_json() {
+                cat <<EOF
+{
+  "Dir": "${CACHE_DIR}",
+  "Origin": {
+    "URL": "https://github.com/evanphx/json-patch"
+  }
+}
+EOF
+            }
+            resolve_go_import_license "${MODULE_DIR}" "github.com/evanphx/json-patch/v5"
+            printf "%s" "${_RESOLVE_GO_IMPORT_LICENSE_RESULT}"
+        ' bash "${CHECKER}"
+    )"
+
+    assert_equals "BSD-3-Clause" "${output}" "module cache LICENSE should resolve missing vendor license"
+}
+
+test_resolve_go_import_license_falls_back_to_github_license() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+    local module_dir="${repo_root}/src/example"
+    local cache_dir="${repo_root}/cache/volc-sdk-golang"
+    mkdir -p "${module_dir}/vendor/github.com/volcengine/volc-sdk-golang" "${cache_dir}"
+
+    cat > "${module_dir}/vendor/modules.txt" <<'EOF'
+# github.com/volcengine/volc-sdk-golang v1.0.23
+## explicit
+github.com/volcengine/volc-sdk-golang/base
+github.com/volcengine/volc-sdk-golang/service/sts
+EOF
+
+    local output
+    output="$(
+        REPO_ROOT="${repo_root}" MODULE_DIR="${module_dir}" CACHE_DIR="${cache_dir}" bash -c '
+            # shellcheck source=/dev/null
+            source "$1"
+            go_mod_download_json() {
+                cat <<EOF
+{
+  "Dir": "${CACHE_DIR}"
+}
+EOF
+            }
+            github_repo_license_spdx() {
+                _GITHUB_REPO_LICENSE_SPDX_RESULT="Apache-2.0"
+            }
+            resolve_go_import_license "${MODULE_DIR}" "github.com/volcengine/volc-sdk-golang"
+            printf "%s" "${_RESOLVE_GO_IMPORT_LICENSE_RESULT}"
+        ' bash "${CHECKER}"
+    )"
+
+    assert_equals "Apache-2.0" "${output}" "GitHub fallback should resolve missing LICENSE files"
+}
+
+test_github_repo_license_spdx_uses_raw_license_when_api_fails() {
+    local output
+    output="$(
+        bash -c '
+            # shellcheck source=/dev/null
+            source "$1"
+            curl() {
+                if [[ "$*" == *"/license"* ]]; then
+                    return 22
+                fi
+                cat <<EOF
+Apache License
+Version 2.0, January 2004
+EOF
+            }
+            github_repo_license_spdx "volcengine" "volc-sdk-golang"
+            printf "%s" "${_GITHUB_REPO_LICENSE_SPDX_RESULT}"
+        ' bash "${CHECKER}"
+    )"
+
+    assert_equals "Apache-2.0" "${output}" "raw LICENSE fallback should handle GitHub API failures"
+}
+
+test_render_missing_license_violation_skips_allowed_fallbacks() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+    local module_dir="${repo_root}/src/example"
+    mkdir -p "${module_dir}"
+
+    local output
+    output="$(
+        REPO_ROOT="${repo_root}" MODULE_DIR="${module_dir}" bash -c '
+            # shellcheck source=/dev/null
+            source "$1"
+            resolve_go_import_license() {
+                _RESOLVE_GO_IMPORT_LICENSE_RESULT="Apache-2.0"
+            }
+            render_missing_license_violation "${MODULE_DIR}" "Apache-2.0,MIT" "github.com/volcengine/volc-sdk-golang"
+            printf "%s" "${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}"
+        ' bash "${CHECKER}"
+    )"
+
+    assert_empty "${output}" "allowed fallback license should not emit a violation"
+}
+
+test_license_resolution_caches_survive_current_shell_calls() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+    local module_dir="${repo_root}/src/example"
+    local cache_dir="${repo_root}/cache/cachelib"
+    local download_calls_file="${repo_root}/download-calls"
+    local curl_calls_file="${repo_root}/curl-calls"
+    mkdir -p "${module_dir}/vendor/github.com/example/cachelib/pkg1" \
+        "${module_dir}/vendor/github.com/example/cachelib/pkg2" \
+        "${cache_dir}"
+    : > "${download_calls_file}"
+    : > "${curl_calls_file}"
+
+    cat > "${module_dir}/vendor/modules.txt" <<'EOF'
+# github.com/example/cachelib v1.2.3
+## explicit
+github.com/example/cachelib/pkg1
+github.com/example/cachelib/pkg2
+EOF
+
+    local output
+    output="$(
+        REPO_ROOT="${repo_root}" \
+            MODULE_DIR="${module_dir}" \
+            CACHE_DIR="${cache_dir}" \
+            DOWNLOAD_CALLS_FILE="${download_calls_file}" \
+            CURL_CALLS_FILE="${curl_calls_file}" \
+            bash -c '
+            # shellcheck source=/dev/null
+            source "$1"
+            go_mod_download_json() {
+                printf "download\n" >> "${DOWNLOAD_CALLS_FILE}"
+                cat <<EOF
+{
+  "Dir": "${CACHE_DIR}",
+  "URL": "https://github.com/example/cachelib"
+}
+EOF
+            }
+            curl() {
+                printf "curl\n" >> "${CURL_CALLS_FILE}"
+                if [[ "$*" == *"api.github.com/repos/example/cachelib/license"* ]]; then
+                    printf "%s\n" "{\"spdx_id\":\"MIT\"}"
+                    return
+                fi
+                return 22
+            }
+
+            render_missing_license_violation "${MODULE_DIR}" "Apache-2.0" "github.com/example/cachelib/pkg1"
+            printf "first=%s\n" "${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}"
+            render_missing_license_violation "${MODULE_DIR}" "Apache-2.0" "github.com/example/cachelib/pkg2"
+            printf "second=%s\n" "${_RENDER_MISSING_LICENSE_VIOLATION_RESULT}"
+            printf "download_calls=%s\n" "$(wc -l < "${DOWNLOAD_CALLS_FILE}" | tr -d " ")"
+            printf "curl_calls=%s\n" "$(wc -l < "${CURL_CALLS_FILE}" | tr -d " ")"
+            printf "go_cache_entries=%s\n" "${#GO_DOWNLOAD_JSON_CACHE[@]}"
+            printf "github_cache_entries=%s\n" "${#GITHUB_LICENSE_CACHE[@]}"
+            printf "resolved_cache_entries=%s\n" "${#RESOLVED_GO_LICENSE_CACHE[@]}"
+        ' bash "${CHECKER}"
+    )"
+
+    assert_equals \
+"first=[MIT] github.com/example/cachelib/pkg1
+second=[MIT] github.com/example/cachelib/pkg2
+download_calls=1
+curl_calls=1
+go_cache_entries=1
+github_cache_entries=1
+resolved_cache_entries=2" \
+        "${output}" \
+        "license resolution caches should survive render calls in the current shell"
+}
+
+main() {
+    test_resolve_go_import_license_uses_module_cache_license
+    test_resolve_go_import_license_falls_back_to_github_license
+    test_github_repo_license_spdx_uses_raw_license_when_api_fails
+    test_render_missing_license_violation_skips_allowed_fallbacks
+    test_license_resolution_caches_survive_current_shell_calls
+    echo "PASS: test-check-dependency-licenses-fallbacks"
+}
+
+trap cleanup EXIT
+main "$@"

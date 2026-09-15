@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "config",
+    srcs = [
+        "auth_scheme_preference.go",
+        "config.go",
+        "defaultsmode.go",
+        "doc.go",
+        "env_config.go",
+        "generate.go",
+        "go_module_metadata.go",
+        "load_options.go",
+        "local.go",
+        "provider.go",
+        "resolve.go",
+        "resolve_bearer_token.go",
+        "resolve_credentials.go",
+        "shared_config.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/config",
+    importpath = "github.com/aws/aws-sdk-go-v2/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/transport/http",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials/ec2rolecreds",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials/endpointcreds",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials/logincreds",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials/processcreds",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials/ssocreds",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/credentials/stscreds",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/feature/ec2/imds",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/ini",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/shareddefaults",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/signin",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/sso",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/ssooidc",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/service/sts",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/auth/bearer",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/logging",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/middleware",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/private/requestcompression",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//visibility:public"],
+)

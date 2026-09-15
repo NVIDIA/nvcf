@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local AI agent state (per-developer)
+.claude/
+.cursor/
+
+# Build artifacts
+bin/
+dist/
+
+# Temporary files
+*.tmp
+*.log
+
+# Git worktrees
+.worktrees/

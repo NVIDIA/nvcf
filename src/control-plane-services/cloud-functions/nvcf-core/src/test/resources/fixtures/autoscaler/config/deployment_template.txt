@@ -1,0 +1,13 @@
+{
+  "deploymentSpecifications": [
+    {
+      "gpu": "T10",
+      "backend": "GFN",
+      "maxInstances": 8,
+      "minInstances": 7,
+      "instanceType": "g6.full",
+      "maxRequestConcurrency": 9,
+      "autoscalingConfiguration": %s
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+
+project_name: nvca
+
+dist: ./_output/dist
+
+builds:
+- main: ./cmd/discover-gpus
+  id: "discover-gpus"
+  binary: discover-gpus
+  ldflags:
+  - "{{ .Env.NVCF_GO_LD_FLAGS }}"
+  goos:
+  - linux
+  - darwin
+  goarch:
+  - amd64
+  - arm64
+- main: ./cmd/export-cluster-pubkeys
+  id: "export-cluster-pubkeys"
+  binary: export-cluster-pubkeys
+  ldflags:
+  - "{{ .Env.NVCF_GO_LD_FLAGS }}"
+  goos:
+  - linux
+  - darwin
+  goarch:
+  - amd64
+  - arm64
+
+archives:
+- id: "discover-gpus"
+  builds:
+  - discover-gpus
+  format: binary
+  name_template: "{{ .Binary }}_{{- .Os }}_{{ .Arch }}"
+- id: "export-cluster-pubkeys"
+  builds:
+  - export-cluster-pubkeys
+  format: binary
+  name_template: "{{ .Binary }}_{{- .Os }}_{{ .Arch }}"

@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Admin Token Issuer Proxy values for standalone installation
+# Replace <REGISTRY>, <REPOSITORY>, and <DOMAIN> with your settings.
+
+adminIssuerProxy:
+  fullnameOverride: admin-token-issuer-proxy
+  image:
+    registry: "<REGISTRY>"
+    repository: "<REPOSITORY>/admin-token-issuer-proxy"
+
+  # Gateway is disabled during Phase 2 (core services) because the Gateway
+  # resource and CRDs are not yet installed. The gateway route for the admin
+  # endpoint is created in Phase 3 when the Gateway Routes chart is installed.
+  gateway:
+    enabled: false
+
+  # Uncomment for node selectors
+  # nodeSelector:
+  #   nvcf.nvidia.com/workload: control-plane

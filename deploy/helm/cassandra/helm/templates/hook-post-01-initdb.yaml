@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Contains the initialization script and a job to run it as a hook
+
+# The script runs in an image that must contain:
+# - bash
+# - kubectl
+# - jq
+{{- if .Values.cassandra.hooks.initializeCluster.enabled }}
+{{- $fullname := include "cassandra.fullname" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-initialize-cluster
+  namespace: {{ include "cassandra.namespace" . }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  template:
+    {{- with .Values.cassandra.hooks.initializeCluster.podAnnotations }}
+    metadata:
+      annotations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    spec:
+      {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.cassandra.hooks.initializeCluster.schedulingGates }}
+      schedulingGates:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: cassandra-init
+          image: "{{ .Values.cassandra.migrations.image.registry }}/{{ .Values.cassandra.migrations.image.repository }}:{{ .Values.cassandra.migrations.image.tag }}"
+          {{- if .Values.cassandra.migrations.image.pullPolicy }}
+          imagePullPolicy: {{ .Values.cassandra.migrations.image.pullPolicy | title }}
+          {{- end }}
+          command: ["/bin/bash"]
+          args:
+            - -c
+            - /scripts/initdb.sh {{ include "cassandra.namespace" . }} {{ $fullname }}
+          env:
+            - name: CASSANDRA_USER
+              value: {{ .Values.cassandra.dbUser.user | quote }}
+            - name: CASSANDRA_PASSWORD
+              value: {{ .Values.cassandra.dbUser.password | quote }}
+          volumeMounts:
+            - name: init-script
+              readOnly: true
+              mountPath: "/scripts"
+          resources:
+            {{- toYaml .Values.cassandra.hooks.initializeCluster.resources | nindent 12 }}
+      restartPolicy: Never
+      serviceAccountName: {{ $fullname }}-initialize-cluster
+      volumes:
+        - name: init-script
+          configMap:
+            name: cassandra-init-script # static name is intentional
+            defaultMode: 0500
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cassandra-init-script
+  namespace: {{ include "cassandra.namespace" . }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-6"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-failed,hook-succeeded
+data:
+  initdb.sh: |-
+    {{- .Files.Get "scripts/initdb.sh" | nindent 4 }}
+---
+{{- end }}

@@ -1,0 +1,123 @@
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
+load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
+
+package(default_visibility = ["//visibility:public"])
+
+ESS_SERVICE_SRCS = glob(["src/main/java/**/*.java"])
+
+ESS_SERVICE_RESOURCES = glob(["src/main/resources/**"])
+
+ESS_SERVICE_TEST_SRCS = glob(["src/test/java/**/*.java"])
+
+ESS_SERVICE_TEST_RESOURCES = glob(["src/test/resources/**"])
+
+nvcf_java_library(
+    name = "app_classes",
+    srcs = ESS_SERVICE_SRCS,
+    deps = [
+        "//src/control-plane-services/encrypted-secret-store/ess-core:ess_core",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+        "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+        "@nv_third_party_deps//:org_springframework_spring_context",
+    ],
+    javacopts = ["-parameters"],
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-service/src/main/resources",
+    resources = ESS_SERVICE_RESOURCES,
+    runtime_deps = [
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_jarmode_tools",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+spring_boot_app(
+    name = "app",
+    application = ":app_classes",
+    artifact_id = "ess-service",
+    artifact_name = "Encrypted Secret Store OSS",
+    artifact_version = "0.0.1-SNAPSHOT",
+    description = "NVIDIA Encrypted Secret Store OSS executable",
+    group_id = "com.nvidia.ess",
+    main_class = "com.nvidia.ess.EssServiceApplication",
+)
+
+nvcf_java_test(
+    name = "tests",
+    javacopts = ["-parameters"],
+    data = [
+        "//src/control-plane-services/encrypted-secret-store:secrets_json",
+        "//src/control-plane-services/encrypted-secret-store:test_local_env",
+    ],
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-service/src/test/resources",
+    resources = ESS_SERVICE_TEST_RESOURCES,
+    runtime_deps = [
+        "//src/control-plane-services/encrypted-secret-store:local_env_resources",
+    ],
+    size = "large",
+    srcs = ESS_SERVICE_TEST_SRCS,
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    deps = [
+        ":app_classes",
+        "//src/control-plane-services/encrypted-secret-store/ess-core:ess_core",
+        "//src/control-plane-services/encrypted-secret-store/ess-encryption:ess_encryption",
+        "@nv_third_party_deps//:io_projectreactor_reactor_test",
+        "@nv_third_party_deps//:org_slf4j_slf4j_api",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_actuator_autoconfigure",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_testcontainers",
+        "@nv_third_party_deps//:org_springframework_spring_beans",
+        "@nv_third_party_deps//:org_springframework_spring_context",
+        "@nv_third_party_deps//:org_springframework_spring_core",
+        "@nv_third_party_deps//:org_springframework_spring_web",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers",
+        "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+    ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":tests",
+    timeout = "long",
+)
+
+# Multi-arch OCI image, the Bazel equivalent of this service's Dockerfile.
+# jar_path, env and workdir mirror that Dockerfile exactly. The entrypoint comes
+# from the shared macro, which keeps the base's shelless_ulimit shim that
+# oci_image would otherwise silently replace.
+java_oci_image(
+    name = "ess-service-oss-image",
+    jar = ":app",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JAVA_TOOL_OPTIONS": "-XX:+PrintFlagsFinal -XX:InitialRAMPercentage=60 -XX:MaxRAMPercentage=60 -XX:+EnableDynamicAgentLoading",
+    },
+    workdir = "/home/app",
+)
+
+# The shared guard every Java service uses, so the runtime contract cannot drift
+# between services or between the architectures in the index.
+java_image_contract_test(
+    name = "image_contract_test",
+    image = ":ess-service-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JAVA_TOOL_OPTIONS": "-XX:+PrintFlagsFinal -XX:InitialRAMPercentage=60 -XX:MaxRAMPercentage=60 -XX:+EnableDynamicAgentLoading",
+    },
+    workdir = "/home/app",
+)

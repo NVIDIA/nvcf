@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="760" viewBox="0 0 1400 760" role="img" aria-labelledby="title desc">
+  <title id="title">NVCF HTTP multi-cluster invocation path</title>
+  <desc id="desc">Global DNS or an optional custom front door selects a regional HTTP invocation endpoint. Each region has Invocation Service, NATS worker request path, and customer HTTP functions in a GPU cluster group, with NATS cross-cluster chatter between regions.</desc>
+  <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --svg-bg: #f7f9f7;
+        --svg-panel: #ffffff;
+        --svg-panel-muted: #eef3ef;
+        --svg-border: #c8d0d6;
+        --svg-text: #1f2520;
+        --svg-muted: #53605a;
+        --svg-line: #53605a;
+        --nvidia-green: #76b900;
+        --svg-blue: #1565c0;
+        --svg-amber: #f9a825;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --svg-bg: #101512;
+          --svg-panel: #18201b;
+          --svg-panel-muted: #202a24;
+          --svg-border: #50605a;
+          --svg-text: #f3f7f2;
+          --svg-muted: #b9c8b7;
+          --svg-line: #cbd8c9;
+          --nvidia-green: #8bd80f;
+          --svg-blue: #6eb6ff;
+          --svg-amber: #ffd166;
+        }
+      }
+
+      .bg { fill: var(--svg-bg); }
+      .region { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .cluster { fill: var(--svg-panel-muted); stroke: var(--svg-blue); stroke-width: 2; }
+      .service { fill: var(--svg-panel); stroke: var(--nvidia-green); stroke-width: 3; }
+      .panel { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .panel-muted { fill: var(--svg-panel-muted); stroke: var(--svg-border); stroke-width: 2; }
+      .optional { fill: var(--svg-panel); stroke: var(--svg-amber); stroke-width: 2; stroke-dasharray: 8 6; }
+      .title { fill: var(--svg-text); font: 700 26px Arial, sans-serif; }
+      .heading { fill: var(--svg-text); font: 700 20px Arial, sans-serif; }
+      .label { fill: var(--svg-text); font: 700 15px Arial, sans-serif; }
+      .small { fill: var(--svg-muted); font: 13px Arial, sans-serif; }
+      .callout { stroke: var(--svg-panel); stroke-width: 5; paint-order: stroke; stroke-linejoin: round; }
+      .line { stroke: var(--svg-line); stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .line-green { stroke: var(--nvidia-green); stroke-width: 2.4; fill: none; stroke-dasharray: 8 6; marker-start: url(#arrow-green); marker-end: url(#arrow-green); }
+      .arrowhead { fill: var(--svg-line); }
+      .arrowhead-green { fill: var(--nvidia-green); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-green" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1400" height="760" />
+  <text class="title" x="48" y="48">HTTP Multi-Cluster Invocation</text>
+  <text class="small" x="48" y="78">HTTP traffic is routed to a regional Invocation Service, then delivered through the regional NATS worker request path.</text>
+
+  <rect class="optional" x="515" y="105" width="370" height="78" rx="10" />
+  <text class="heading" x="700" y="137" text-anchor="middle">Global DNS / Custom Front Door</text>
+  <text class="small" x="700" y="162" text-anchor="middle">regional selection, TLS, or custom domain handling</text>
+
+  <rect class="region" x="50" y="230" width="610" height="470" rx="12" />
+  <text class="heading" x="355" y="266" text-anchor="middle">Region A</text>
+  <text class="small" x="355" y="289" text-anchor="middle">HTTP invocation services</text>
+
+  <rect class="region" x="740" y="230" width="610" height="470" rx="12" />
+  <text class="heading" x="1045" y="266" text-anchor="middle">Region B</text>
+  <text class="small" x="1045" y="289" text-anchor="middle">HTTP invocation services</text>
+
+  <rect class="panel-muted" x="92" y="330" width="154" height="76" rx="8" />
+  <text class="label" x="169" y="359" text-anchor="middle">Public HTTP</text>
+  <text class="small" x="169" y="382" text-anchor="middle">*.invocation</text>
+
+  <rect class="service" x="276" y="320" width="154" height="96" rx="8" />
+  <text class="label" x="353" y="350" text-anchor="middle">Invocation</text>
+  <text class="label" x="353" y="370" text-anchor="middle">Service</text>
+  <text class="small" x="353" y="393" text-anchor="middle">request encode</text>
+
+  <rect class="service" x="460" y="330" width="154" height="76" rx="8" />
+  <text class="label" x="537" y="360" text-anchor="middle">NATS / Worker</text>
+  <text class="small" x="537" y="383" text-anchor="middle">request path</text>
+
+  <rect class="cluster" x="100" y="500" width="510" height="145" rx="10" />
+  <text class="heading" x="355" y="532" text-anchor="middle">GPU Cluster Group A</text>
+  <rect class="panel" x="150" y="565" width="154" height="56" rx="8" />
+  <text class="label" x="227" y="588" text-anchor="middle">HTTP Function A</text>
+  <text class="small" x="227" y="609" text-anchor="middle">customer workload</text>
+  <rect class="panel" x="406" y="565" width="154" height="56" rx="8" />
+  <text class="label" x="483" y="588" text-anchor="middle">HTTP Function B</text>
+  <text class="small" x="483" y="609" text-anchor="middle">customer workload</text>
+
+  <rect class="panel-muted" x="782" y="330" width="154" height="76" rx="8" />
+  <text class="label" x="859" y="359" text-anchor="middle">Public HTTP</text>
+  <text class="small" x="859" y="382" text-anchor="middle">*.invocation</text>
+
+  <rect class="service" x="966" y="320" width="154" height="96" rx="8" />
+  <text class="label" x="1043" y="350" text-anchor="middle">Invocation</text>
+  <text class="label" x="1043" y="370" text-anchor="middle">Service</text>
+  <text class="small" x="1043" y="393" text-anchor="middle">request encode</text>
+
+  <rect class="service" x="1150" y="330" width="154" height="76" rx="8" />
+  <text class="label" x="1227" y="360" text-anchor="middle">NATS / Worker</text>
+  <text class="small" x="1227" y="383" text-anchor="middle">request path</text>
+
+  <rect class="cluster" x="790" y="500" width="510" height="145" rx="10" />
+  <text class="heading" x="1045" y="532" text-anchor="middle">GPU Cluster Group B</text>
+  <rect class="panel" x="840" y="565" width="154" height="56" rx="8" />
+  <text class="label" x="917" y="588" text-anchor="middle">HTTP Function C</text>
+  <text class="small" x="917" y="609" text-anchor="middle">customer workload</text>
+  <rect class="panel" x="1096" y="565" width="154" height="56" rx="8" />
+  <text class="label" x="1173" y="588" text-anchor="middle">HTTP Function D</text>
+  <text class="small" x="1173" y="609" text-anchor="middle">customer workload</text>
+
+  <path class="line" d="M 700 183 L 700 205 L 169 205 L 169 330" />
+  <path class="line" d="M 700 183 L 700 205 L 859 205 L 859 330" />
+  <line class="line" x1="246" y1="368" x2="276" y2="368" />
+  <line class="line" x1="430" y1="368" x2="460" y2="368" />
+  <path class="line" d="M 537 406 L 537 455 L 227 455 L 227 565" />
+  <path class="line" d="M 537 406 L 537 455 L 483 455 L 483 565" />
+  <line class="line" x1="936" y1="368" x2="966" y2="368" />
+  <line class="line" x1="1120" y1="368" x2="1150" y2="368" />
+  <path class="line" d="M 1227 406 L 1227 455 L 917 455 L 917 565" />
+  <path class="line" d="M 1227 406 L 1227 455 L 1173 455 L 1173 565" />
+  <path class="line-green" d="M 614 383 C 735 452 1025 452 1150 383" />
+  <text class="small callout" x="882" y="438" text-anchor="middle">NATS cross-cluster chatter</text>
+</svg>

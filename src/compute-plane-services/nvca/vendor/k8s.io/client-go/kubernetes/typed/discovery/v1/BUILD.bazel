@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "discovery",
+    srcs = [
+        "discovery_client.go",
+        "doc.go",
+        "endpointslice.go",
+        "generated_expansion.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/discovery/v1",
+    importpath = "k8s.io/client-go/kubernetes/typed/discovery/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/discovery/v1:discovery",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/discovery/v1:discovery",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/gentype",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/scheme",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":discovery",
+    visibility = ["//visibility:public"],
+)
