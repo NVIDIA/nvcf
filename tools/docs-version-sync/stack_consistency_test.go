@@ -190,6 +190,17 @@ func TestPendingPublicationsNeverRenderPrivateRegistryPaths(t *testing.T) {
 		t.Fatalf("checked-in generated docs do not match the catalog: %v", err)
 	}
 
+	publications := catalog.Publications[:0]
+	for _, publication := range catalog.Publications {
+		if publication.Name == "helm-nvca-operator" && publication.Type == ArtifactTypeChart {
+			continue
+		}
+		publications = append(publications, publication)
+	}
+	catalog.Publications = publications
+	catalog.PublicationPending = append(catalog.PublicationPending, "helm-nvca-operator")
+	catalog.reconcilePublicationPending()
+
 	manifest, err := renderManifestArtifactRegistryPaths(catalog)
 	if err != nil {
 		t.Fatal(err)

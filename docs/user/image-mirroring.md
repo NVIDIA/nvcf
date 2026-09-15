@@ -119,7 +119,7 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # Pull the chart
-helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.28.0
+helm pull nvcf/helm-nvca-operator --version 1.28.0
 
 # Prerelease charts require --devel when searching
 helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
@@ -393,7 +393,7 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.28.0
+helm pull nvcf/helm-nvca-operator --version 1.28.0
 # This creates: helm-nvca-operator-1.28.0.tgz
 
 # 3. Login to AWS ECR with Helm
@@ -482,7 +482,7 @@ helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
 helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull "${HELM_NVCA_OPERATOR_REFERENCE:?set HELM_NVCA_OPERATOR_REFERENCE to a published or mirrored helm-nvca-operator reference}" --version 1.28.0
+helm pull nvcf/helm-nvca-operator --version 1.28.0
 # This creates: helm-nvca-operator-1.28.0.tgz
 
 # 3. Login to Volcano Engine CR with Helm
