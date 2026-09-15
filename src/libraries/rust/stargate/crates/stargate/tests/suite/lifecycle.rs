@@ -1178,7 +1178,7 @@ fn make_lifecycle_node(
     let (http_addr, http_listener) = bind_ephemeral();
     let mut config = base_config(id, grpc_addr, http_addr);
     config.model_discovery_listen_addr = model_discovery_addr;
-    config.dns_poll_interval = Duration::from_secs(1);
+    config.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     config.proxy_transport.quic.tunnel_protocol = tunnel_protocol;
     if let Some(authenticator) = authenticator {
         config.authenticator = authenticator;

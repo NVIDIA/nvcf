@@ -60,14 +60,14 @@ pub struct StargateRuntimeConfig {
     pub metrics_listen_addr: Option<SocketAddr>,
     /// Discovery address before hostname rendering; outside Kubernetes this is usually `WatchStargates.stargates[*].advertise_addr`.
     pub advertise_addr: SocketAddr,
-    /// Peer-discovery DNS name; in Kubernetes this must be the headless Service publishing warming and ready peers.
-    pub stargate_discovery_dns_name: String,
+    /// Optional headless Service used to enumerate local Kubernetes Stargate pods.
+    pub kubernetes_pod_discovery_dns_name: Option<String>,
     /// Remote-region recursive watch seeds; pylons register to returned Stargates, not these URLs.
     pub remote_watch_stargate_urls: Vec<String>,
     /// Optional pylon TCP load-balancer address; per-pod `advertise_addr` remains the authority/SNI identity.
     pub grpc_pylon_dial_addr: Option<String>,
-    /// Poll cadence for DNS-based peer discovery.
-    pub dns_poll_interval: Duration,
+    /// Poll cadence for local Kubernetes pod discovery.
+    pub kubernetes_pod_discovery_poll_interval: Duration,
     /// Maximum interval between unchanged `WatchStargates` snapshots.
     pub watch_heartbeat_interval: Duration,
     /// Minimum heartbeat-aware registration idle timeout; zero disables enforcement.
@@ -98,6 +98,10 @@ pub struct WarmupConfig {
     /// Number of consecutive stable nonzero samples required to promote readiness.
     pub stabilization_window: u32,
 }
+
+const DEFAULT_READINESS_WARMUP: Duration = Duration::ZERO;
+const DEFAULT_READINESS_STABILIZATION_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_READINESS_STABILIZATION_WINDOW: u32 = 5;
 
 pub struct ReverseTunnelConfig {
     socket: UdpSocket,
@@ -342,11 +346,14 @@ impl StargateRuntime {
         let service = StargateService::new(StargateServiceConfig {
             stargate_id: self.config.stargate_id.clone(),
             advertise_addr: self.config.advertise_addr,
-            discovery_dns_name: self.config.stargate_discovery_dns_name.clone(),
+            kubernetes_pod_discovery_dns_name: self
+                .config
+                .kubernetes_pod_discovery_dns_name
+                .clone(),
             discovery: self.discovery,
             remote_watch_stargate_urls: self.config.remote_watch_stargate_urls.clone(),
             grpc_pylon_dial_addr: self.config.grpc_pylon_dial_addr.clone(),
-            discovery_poll_interval: self.config.dns_poll_interval,
+            discovery_poll_interval: self.config.kubernetes_pod_discovery_poll_interval,
             watch_heartbeat_interval: self.config.watch_heartbeat_interval,
             tasks: tasks.clone(),
             registration_update_idle_timeout: self.config.registration_update_idle_timeout,
@@ -381,7 +388,10 @@ impl StargateRuntime {
                 http_listen_addr: http_listen_addr.to_string(),
                 metrics_listen_addr: metrics_listen_addr.map(|addr| addr.to_string()),
                 advertise_addr: self.config.advertise_addr.to_string(),
-                stargate_discovery_dns_name: self.config.stargate_discovery_dns_name.clone(),
+                kubernetes_pod_discovery_dns_name: self
+                    .config
+                    .kubernetes_pod_discovery_dns_name
+                    .clone(),
                 tunnel_protocol: self.config.proxy_transport.quic.tunnel_protocol.to_string(),
                 backend_connectivity,
                 direct_quic_connections: self.config.proxy_transport.quic.direct_quic_connections,
@@ -394,13 +404,7 @@ impl StargateRuntime {
             let warmup_config = self.config.warmup.clone();
             let shutdown = tasks.shutdown_signal();
             tasks.task_tracker().spawn(async move {
-                run_warmup_stabilization(
-                    warmup_state,
-                    warmup_config,
-                    ready_token,
-                    shutdown,
-                )
-                .await;
+                run_warmup_stabilization(warmup_state, warmup_config, ready_token, shutdown).await;
             });
         }
 
@@ -429,9 +433,9 @@ impl StargateRuntime {
 impl Default for WarmupConfig {
     fn default() -> Self {
         Self {
-            warmup_duration: Duration::ZERO,
-            sample_interval: Duration::from_secs(1),
-            stabilization_window: 5,
+            warmup_duration: DEFAULT_READINESS_WARMUP,
+            sample_interval: DEFAULT_READINESS_STABILIZATION_SAMPLE_INTERVAL,
+            stabilization_window: DEFAULT_READINESS_STABILIZATION_WINDOW,
         }
     }
 }
@@ -612,10 +616,10 @@ mod tests {
             http_listen_addr: "127.0.0.1:0".parse().unwrap(),
             metrics_listen_addr: None,
             advertise_addr: "127.0.0.1:0".parse().unwrap(),
-            stargate_discovery_dns_name: "localhost".to_string(),
+            kubernetes_pod_discovery_dns_name: None,
             remote_watch_stargate_urls: Vec::new(),
             grpc_pylon_dial_addr: None,
-            dns_poll_interval: Duration::from_secs(60),
+            kubernetes_pod_discovery_poll_interval: Duration::from_secs(60),
             watch_heartbeat_interval: Duration::from_secs(60),
             registration_update_idle_timeout:
                 crate::control_plane::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,

@@ -13,10 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ffi::OsString;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
+use clap::Parser;
+use stargate::config as structured;
 use stargate::registration::{
     DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
 };
@@ -28,7 +34,7 @@ use tracing::{error, info, warn};
 #[path = "main/startup.rs"]
 mod startup;
 
-use startup::runtime_from_args;
+use startup::runtime_from_config;
 
 mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
@@ -41,8 +47,6 @@ const BUILD_VERSION: &str = match option_env!("STARGATE_BUILD_VERSION") {
         None => "unknown",
     },
 };
-const DEFAULT_PROXY_MAX_REPLAY_BODY_BYTES: usize = 64 * 1024 * 1024;
-
 fn parse_nonzero_millis(value: &str) -> std::result::Result<u64, String> {
     let millis = value
         .parse::<u64>()
@@ -81,27 +85,49 @@ fn parse_grpc_pylon_dial_uri(value: &str) -> std::result::Result<String, String>
     })
 }
 
-#[derive(clap::Parser, Debug)]
-#[command(name = "stargate", version = BUILD_VERSION)]
+#[derive(clap::Parser, Clone, Debug)]
+#[command(
+    name = "stargate",
+    version = BUILD_VERSION,
+    after_help = "Legacy CLI and environment configuration is deprecated; use --config-file."
+)]
 struct Args {
+    /// Load all Stargate settings from this TOML file. All legacy configuration flags and environment variables are ignored when present.
+    #[arg(long, value_name = "PATH")]
+    config_file: Option<PathBuf>,
     /// Stable Stargate process or pod identity.
-    #[arg(long, value_name = "ID")]
-    stargate_id: String,
+    #[arg(long, required_unless_present = "config_file", value_name = "ID")]
+    stargate_id: Option<String>,
     /// Local TCP socket for backend-facing WatchStargates and registration.
-    #[arg(long, default_value = "0.0.0.0:50071", value_name = "ADDR")]
-    listen_addr: String,
+    #[arg(
+        long,
+        default_value_t = SocketAddr::from(([0, 0, 0, 0], structured::DEFAULT_GRPC_LISTEN_PORT)),
+        value_name = "ADDR"
+    )]
+    listen_addr: SocketAddr,
     /// Local TCP socket for frontend-facing model discovery (`ListModels`).
-    #[arg(long, default_value = "0.0.0.0:50073", value_name = "ADDR")]
-    model_discovery_listen_addr: String,
+    #[arg(
+        long,
+        default_value_t = SocketAddr::from((
+            [0, 0, 0, 0],
+            structured::DEFAULT_MODEL_DISCOVERY_LISTEN_PORT,
+        )),
+        value_name = "ADDR"
+    )]
+    model_discovery_listen_addr: SocketAddr,
     /// Local HTTP socket for proxy traffic, health probes, and metrics.
-    #[arg(long, default_value = "0.0.0.0:8000", value_name = "ADDR")]
-    http_listen_addr: String,
+    #[arg(
+        long,
+        default_value_t = SocketAddr::from(([0, 0, 0, 0], structured::DEFAULT_HTTP_LISTEN_PORT)),
+        value_name = "ADDR"
+    )]
+    http_listen_addr: SocketAddr,
     /// Self gRPC address published by non-Kubernetes discovery and used as the port source for Kubernetes advertised hostnames.
-    #[arg(long, value_name = "ADDR")]
-    advertise_addr: SocketAddr,
-    /// DNS name used for Stargate peer discovery. In Kubernetes this should be the headless Service so warming and ready peers remain discoverable.
+    #[arg(long, required_unless_present = "config_file", value_name = "ADDR")]
+    advertise_addr: Option<SocketAddr>,
+    /// Kubernetes headless Service DNS name used to enumerate local Stargate pods.
     #[arg(long, value_name = "DNS_NAME")]
-    stargate_discovery_dns_name: String,
+    stargate_discovery_dns_name: Option<String>,
     /// Additional recursive WatchStargates seeds for remote regions. Pylons register only to concrete `stargates` entries returned by watch snapshots. Repeatable.
     #[arg(
         long,
@@ -136,14 +162,27 @@ struct Args {
     /// Enable development-only peer relaying; requires Kubernetes identity and DNS discovery. Production must use `stargate-k8s-router` or a supported load balancer.
     #[arg(long, default_value_t = false)]
     enable_dev_peer_forwarding: bool,
-    /// Interval for refreshing DNS-discovered Stargate peers.
-    #[arg(long, default_value_t = 1000, value_parser = parse_nonzero_millis, value_name = "MS")]
+    /// Interval for refreshing DNS-discovered Kubernetes Stargate pods.
+    #[arg(
+        long,
+        default_value_t = structured::DEFAULT_KUBERNETES_POD_DISCOVERY_POLL_INTERVAL_MS,
+        value_parser = parse_nonzero_millis,
+        value_name = "MS"
+    )]
     dns_poll_ms: u64,
-    /// Maximum resolver cache TTL used by Stargate DNS discovery.
-    #[arg(long, default_value_t = 1000, value_name = "MS")]
+    /// Maximum resolver cache TTL used by Kubernetes Stargate pod discovery.
+    #[arg(
+        long,
+        default_value_t = structured::DEFAULT_KUBERNETES_POD_DISCOVERY_RESOLVER_TTL_MS,
+        value_name = "MS"
+    )]
     dns_resolver_ttl_ms: u64,
     /// Maximum interval between unchanged WatchStargates snapshots.
-    #[arg(long, default_value_t = 5000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::StargateDiscoveryConfig::default().watch_heartbeat.as_millis() as u64,
+        value_name = "MS"
+    )]
     watch_heartbeat_ms: u64,
     /// Minimum idle timeout for heartbeat-aware registration streams; 0 disables all enforcement
     #[arg(
@@ -162,18 +201,30 @@ struct Args {
     )]
     registration_update_max_idle_timeout_ms: u64,
     /// Grace period for shutdown tasks after Stargate starts draining.
-    #[arg(long, default_value_t = 30000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::ProcessLifecycleConfig::default().shutdown_drain_timeout.as_millis() as u64,
+        value_name = "MS"
+    )]
     shutdown_drain_timeout_ms: u64,
     /// Timeout for establishing outbound direct QUIC connections and development-only peer relays.
-    #[arg(long, default_value_t = 2000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::PylonTransportConfig::default().quic_connect_timeout.as_millis() as u64,
+        value_name = "MS"
+    )]
     quic_connect_timeout_ms: u64,
     /// Timeout for each proxied request over an established QUIC tunnel.
-    #[arg(long, default_value_t = 30000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::PylonTransportConfig::default().quic_request_timeout.as_millis() as u64,
+        value_name = "MS"
+    )]
     quic_request_timeout_ms: u64,
     /// Number of direct QUIC connections opened per backend.
     #[arg(
         long,
-        default_value_t = 1,
+        default_value_t = structured::DirectPylonTransportConfig::default().connections.get(),
         env = "STARGATE_DIRECT_QUIC_CONNECTIONS",
         value_parser = parse_nonzero_usize,
         value_name = "N"
@@ -182,7 +233,7 @@ struct Args {
     /// Maximum direct QUIC reconnect attempts on the proxy hot path
     #[arg(
         long,
-        default_value_t = 2,
+        default_value_t = structured::RequestProxyRetryConfig::default().max_connect_retries,
         env = "STARGATE_PROXY_MAX_CONNECT_RETRIES",
         value_name = "N"
     )]
@@ -190,7 +241,7 @@ struct Args {
     /// Maximum retries for explicit retryable upstream responses
     #[arg(
         long,
-        default_value_t = 2,
+        default_value_t = structured::RequestProxyRetryConfig::default().max_request_retries,
         env = "STARGATE_PROXY_MAX_REQUEST_RETRIES",
         value_name = "N"
     )]
@@ -198,7 +249,7 @@ struct Args {
     /// Maximum request body bytes buffered for proxy retry replay
     #[arg(
         long,
-        default_value_t = DEFAULT_PROXY_MAX_REPLAY_BODY_BYTES,
+        default_value_t = structured::RequestProxyRetryConfig::default().max_replay_body_bytes,
         env = "STARGATE_PROXY_MAX_REPLAY_BODY_BYTES",
         value_name = "BYTES"
     )]
@@ -207,14 +258,14 @@ struct Args {
     #[arg(
         long,
         action = clap::ArgAction::Set,
-        default_value_t = true,
+        default_value_t = structured::RequestProxyRetryConfig::default().require_pylon_retry_signal,
         env = "STARGATE_PROXY_REQUIRE_PYLON_RETRY_SIGNAL"
     )]
     proxy_require_pylon_retry_signal: bool,
     /// Request header carrying the retry budget in milliseconds; empty disables budget headers
     #[arg(
         long,
-        default_value = "x-stargate-max-wait-ms",
+        default_value_t = structured::RequestProxyRetryConfig::default().request_budget_header,
         env = "STARGATE_PROXY_RETRY_BUDGET_HEADER",
         value_name = "HEADER"
     )]
@@ -239,7 +290,11 @@ struct Args {
     #[arg(long, default_value = stargate::telemetry::DEFAULT_SERVICE_NAME, value_name = "NAME")]
     otel_service_name: String,
     /// Port for Prometheus metrics HTTP server
-    #[arg(long, default_value_t = 9090, value_name = "PORT")]
+    #[arg(
+        long,
+        default_value_t = structured::MetricsConfig::default().listen_addr.port(),
+        value_name = "PORT"
+    )]
     metrics_port: u16,
     /// Prefix prepended to all Prometheus metric names.
     #[arg(long, default_value = stargate::metrics::DEFAULT_PREFIX, value_name = "PREFIX")]
@@ -254,10 +309,18 @@ struct Args {
     #[arg(long, value_name = "ADDR")]
     reverse_tunnel_pylon_dial_addr: Option<String>,
     /// Timeout waiting for a reverse tunnel connection after registration.
-    #[arg(long, default_value_t = 10000, value_name = "MS")]
+    #[arg(
+        long,
+        default_value_t = structured::DEFAULT_REVERSE_CONNECT_TIMEOUT_MS,
+        value_name = "MS"
+    )]
     reverse_tunnel_connect_timeout_ms: u64,
     /// Tunnel protocol used for proxied request streams; must match pylon.
-    #[arg(long, default_value_t = TunnelTransportProtocol::RawQuic, value_name = "PROTOCOL")]
+    #[arg(
+        long,
+        default_value_t = TunnelTransportProtocol::default(),
+        value_name = "PROTOCOL"
+    )]
     tunnel_protocol: TunnelTransportProtocol,
     /// gRPC endpoint for worker authentication (e.g. http://llm-gateway:50051)
     #[arg(long, value_name = "URL")]
@@ -277,7 +340,7 @@ struct Args {
     /// once backends are detected; the fixed window is the upper bound.
     #[arg(
         long,
-        default_value_t = 0,
+        default_value_t = structured::ProcessLifecycleConfig::default().readiness_warmup.as_millis() as u64,
         env = "STARGATE_READINESS_WARMUP_MS",
         value_name = "MS"
     )]
@@ -286,7 +349,7 @@ struct Args {
     /// Only used when `--readiness-warmup-ms` is nonzero.
     #[arg(
         long,
-        default_value_t = 1000,
+        default_value_t = structured::ProcessLifecycleConfig::default().readiness_stabilization_sample_interval.as_millis() as u64,
         value_parser = parse_nonzero_millis,
         env = "STARGATE_READINESS_STABILIZATION_SAMPLE_INTERVAL_MS",
         value_name = "MS"
@@ -297,7 +360,7 @@ struct Args {
     /// Only used when `--readiness-warmup-ms` is nonzero.
     #[arg(
         long,
-        default_value_t = 5,
+        default_value_t = structured::ProcessLifecycleConfig::default().readiness_stabilization_window,
         value_parser = parse_nonzero_u32,
         env = "STARGATE_READINESS_STABILIZATION_WINDOW",
         value_name = "N"
@@ -305,63 +368,354 @@ struct Args {
     readiness_stabilization_window: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ConfigSource {
+    File(PathBuf),
+    LegacyCli,
+}
+
+fn select_config_from(
+    argv: impl IntoIterator<Item = impl Into<OsString>>,
+) -> Result<(structured::StargateConfig, ConfigSource)> {
+    let argv: Vec<OsString> = argv.into_iter().map(Into::into).collect();
+    if let Some(path) = config_file_from_argv(&argv)? {
+        let config = structured::StargateConfig::from_toml_file(&path)?;
+        return Ok((config, ConfigSource::File(path)));
+    }
+
+    let args = Args::try_parse_from(argv).map_err(anyhow::Error::new)?;
+    Ok((config_from_legacy_args(args)?, ConfigSource::LegacyCli))
+}
+
+fn config_file_from_argv(argv: &[OsString]) -> Result<Option<PathBuf>> {
+    let mut config_file = None;
+    let mut index = 1;
+    while index < argv.len() {
+        if argv[index] == "--" {
+            break;
+        }
+        let path = if argv[index] == "--config-file" {
+            index += 1;
+            Some(
+                argv.get(index)
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from)
+                    .context("--config-file requires a non-empty path")?,
+            )
+        } else {
+            argv[index]
+                .to_str()
+                .and_then(|value| value.strip_prefix("--config-file="))
+                .map(|value| {
+                    ensure!(!value.is_empty(), "--config-file requires a non-empty path");
+                    Ok(PathBuf::from(value))
+                })
+                .transpose()?
+        };
+        if let Some(path) = path {
+            ensure!(
+                config_file.is_none(),
+                "--config-file may only be specified once"
+            );
+            config_file = Some(path);
+        }
+        index += 1;
+    }
+    Ok(config_file)
+}
+
+fn config_from_legacy_args(args: Args) -> Result<structured::StargateConfig> {
+    ensure!(
+        args.config_file.is_none(),
+        "internal error: config-file input reached legacy conversion"
+    );
+    let stargate_id = args
+        .stargate_id
+        .context("--stargate-id is required in legacy CLI mode")?;
+    let advertise_addr = args
+        .advertise_addr
+        .context("--advertise-addr is required in legacy CLI mode")?;
+    ensure!(
+        !(args.disable_dns_discovery && args.enable_dev_peer_forwarding),
+        "--enable-dev-peer-forwarding cannot be combined with --disable-dns-discovery"
+    );
+    ensure!(
+        args.pod_name.is_some() == args.pod_namespace.is_some(),
+        "--pod-name and --pod-namespace must be supplied together"
+    );
+    ensure!(
+        args.allow_insecure_remote_watch_http
+            || !args
+                .remote_stargate_url
+                .iter()
+                .any(|url| url.starts_with("http://")),
+        "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
+    );
+
+    let kubernetes = args
+        .pod_name
+        .zip(args.pod_namespace)
+        .map(
+            |(pod_name, namespace)| structured::KubernetesIdentityConfig {
+                pod_name,
+                namespace,
+            },
+        );
+    let kubernetes_pods = if args.disable_dns_discovery {
+        None
+    } else if kubernetes.is_some() {
+        Some(structured::KubernetesPodDiscoveryConfig {
+            headless_service_dns_name: args
+                .stargate_discovery_dns_name
+                .context(
+                    "--stargate-discovery-dns-name is required when Kubernetes pod identity is configured",
+                )?,
+            poll_interval: Duration::from_millis(args.dns_poll_ms),
+            resolver_ttl: Duration::from_millis(args.dns_resolver_ttl_ms),
+            development_peer_forwarding: args
+                .enable_dev_peer_forwarding
+                .then_some(structured::DevelopmentPeerForwardingConfig {}),
+        })
+    } else {
+        ensure!(
+            !args.enable_dev_peer_forwarding,
+            "--enable-dev-peer-forwarding requires both --pod-name and --pod-namespace"
+        );
+        None
+    };
+
+    let direct_connections = NonZeroUsize::new(args.direct_quic_connections)
+        .context("--direct-quic-connections must be greater than 0")?;
+    let (direct, reverse) = match args.backend_connectivity {
+        BackendConnectivity::Direct => {
+            ensure!(
+                args.reverse_tunnel_listen_addr.is_none(),
+                "--reverse-tunnel-listen-addr requires --backend-connectivity=reverse"
+            );
+            ensure!(
+                args.reverse_tunnel_pylon_dial_addr.is_none(),
+                "--reverse-tunnel-pylon-dial-addr requires --backend-connectivity=reverse"
+            );
+            (
+                Some(structured::DirectPylonTransportConfig {
+                    connections: direct_connections,
+                    trust_bundle_path: args.tls_cert_path.as_deref().map(PathBuf::from),
+                }),
+                None,
+            )
+        }
+        BackendConnectivity::Reverse => {
+            let listen_addr = args
+                .reverse_tunnel_listen_addr
+                .as_deref()
+                .context("--backend-connectivity=reverse requires --reverse-tunnel-listen-addr")?
+                .parse()
+                .context("invalid --reverse-tunnel-listen-addr")?;
+            (
+                None,
+                Some(structured::ReversePylonTransportConfig {
+                    listen_addr,
+                    pylon_dial_addr: args.reverse_tunnel_pylon_dial_addr,
+                    connect_timeout: Duration::from_millis(args.reverse_tunnel_connect_timeout_ms),
+                    certificate_path: args.tls_cert_path.as_deref().map(PathBuf::from),
+                    private_key_path: args.tls_key_path.as_deref().map(PathBuf::from),
+                }),
+            )
+        }
+    };
+
+    let secrets_path = args.secrets_path.as_deref().map(PathBuf::from);
+    let worker_authentication = args.worker_auth_endpoint.map(|endpoint| {
+        let (bearer_token, oauth2) = if let Some(provider_host) = args.oauth2_provider_host {
+            (
+                None,
+                Some(structured::OAuth2Config {
+                    provider_host,
+                    secrets_path: secrets_path.clone().context(
+                        "OAUTH2_PROVIDER_HOST is set but SECRETS_PATH is not; client-credentials worker auth needs the secrets file with the id/secret",
+                    )?,
+                }),
+            )
+        } else {
+            (
+                secrets_path
+                    .clone()
+                    .map(|secrets_path| structured::BearerTokenConfig {
+                        secrets_path,
+                        json_path: args
+                            .secrets_json_path
+                            .as_deref()
+                            .unwrap_or("authToken")
+                            .split('.')
+                            .map(str::to_owned)
+                            .collect(),
+                    }),
+                None,
+            )
+        };
+        Ok::<_, anyhow::Error>(structured::WorkerAuthenticationConfig {
+            endpoint,
+            bearer_token,
+            oauth2,
+        })
+    }).transpose()?;
+
+    let tracing = args
+        .otel_endpoint
+        .map(|endpoint| structured::TracingConfig {
+            endpoint,
+            access_token: secrets_path.map(|secrets_path| structured::TracingAccessTokenConfig {
+                secrets_path,
+                json_path: vec!["tracingAccessToken".to_string()],
+            }),
+        });
+    let request_budget_header = args.proxy_retry_budget_header;
+    let config = structured::StargateConfig {
+        schema_version: structured::SCHEMA_VERSION,
+        stargate_identity: structured::StargateIdentityConfig {
+            id: stargate_id,
+            advertised_hostname_template: args
+                .advertised_hostname_template
+                .unwrap_or_else(|| structured::DEFAULT_ADVERTISED_HOSTNAME_TEMPLATE.to_string()),
+            kubernetes,
+        },
+        stargate_network: structured::StargateNetworkConfig {
+            grpc_listen_addr: args.listen_addr,
+            model_discovery_listen_addr: args.model_discovery_listen_addr,
+            http_listen_addr: args.http_listen_addr,
+            advertise_addr,
+        },
+        process_lifecycle: structured::ProcessLifecycleConfig {
+            readiness_warmup: Duration::from_millis(args.readiness_warmup_ms),
+            readiness_stabilization_sample_interval: Duration::from_millis(
+                args.readiness_stabilization_sample_interval_ms,
+            ),
+            readiness_stabilization_window: args.readiness_stabilization_window,
+            shutdown_drain_timeout: Duration::from_millis(args.shutdown_drain_timeout_ms),
+        },
+        pylon_registration: structured::PylonRegistrationConfig {
+            update_idle_timeout: Duration::from_millis(args.registration_update_idle_timeout_ms),
+            update_max_idle_timeout: Duration::from_millis(
+                args.registration_update_max_idle_timeout_ms,
+            ),
+        },
+        stargate_discovery: structured::StargateDiscoveryConfig {
+            remote_watch_urls: args.remote_stargate_url,
+            allow_insecure_remote_watch_http: args.allow_insecure_remote_watch_http,
+            watch_heartbeat: Duration::from_millis(args.watch_heartbeat_ms),
+            kubernetes_pods,
+        },
+        pylon_transport: structured::PylonTransportConfig {
+            pylon_grpc_dial_uri: args.grpc_pylon_dial_addr,
+            tunnel_protocol: args.tunnel_protocol,
+            quic_connect_timeout: Duration::from_millis(args.quic_connect_timeout_ms),
+            quic_request_timeout: Duration::from_millis(args.quic_request_timeout_ms),
+            direct,
+            reverse,
+            tls: structured::PylonTlsConfig {
+                insecure_skip_verify: args.quic_insecure,
+            },
+        },
+        request_proxy: structured::RequestProxyConfig {
+            retry: structured::RequestProxyRetryConfig {
+                max_connect_retries: args.proxy_max_connect_retries,
+                max_request_retries: args.proxy_max_request_retries,
+                max_replay_body_bytes: args.proxy_max_replay_body_bytes,
+                require_pylon_retry_signal: args.proxy_require_pylon_retry_signal,
+                request_budget_header,
+            },
+            load_balancer: args.lb_config_path.map(|config_path| {
+                structured::LoadBalancerFileConfig {
+                    config_path: config_path.into(),
+                }
+            }),
+        },
+        observability: structured::ObservabilityConfig {
+            service_name: args.otel_service_name,
+            metrics: structured::MetricsConfig {
+                listen_addr: SocketAddr::from(([0, 0, 0, 0], args.metrics_port)),
+                prefix: args.metrics_prefix,
+            },
+            tracing,
+        },
+        worker_authentication,
+    };
+    config.validate()?;
+    Ok(config)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-    run(clap::Parser::parse()).await
+    let (config, source) = match select_config_from(std::env::args_os()) {
+        Ok(selected) => selected,
+        Err(error) => match error.downcast::<clap::Error>() {
+            Ok(error) => error.exit(),
+            Err(error) => return Err(error),
+        },
+    };
+    run(config, source).await
 }
 
 /// Resolves the OTLP tracing access token, read only when tracing is enabled.
 /// Missing/empty key yields `None` (caller warns after the subscriber exists);
 /// an unreadable or malformed secrets file is a hard error.
-async fn resolve_otel_access_token(
-    tracing_enabled: bool,
-    secrets_path: Option<&str>,
+async fn resolve_tracing_access_token(
+    token: Option<&structured::TracingAccessTokenConfig>,
 ) -> Result<Option<String>> {
-    if !tracing_enabled {
-        return Ok(None);
-    }
-    let Some(path) = secrets_path else {
+    let Some(token) = token else {
         return Ok(None);
     };
-    let bytes = tokio::fs::read(path)
-        .await
-        .with_context(|| format!("failed to read secrets file '{path}' for tracingAccessToken"))?;
+    let path = &token.secrets_path;
+    let bytes = tokio::fs::read(path).await.with_context(|| {
+        format!(
+            "failed to read secrets file '{}' for tracing access token",
+            path.display()
+        )
+    })?;
     let secrets: serde_json::Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("secrets file '{path}' is not valid JSON"))?;
-    match secrets.get("tracingAccessToken") {
-        None => Ok(None),
-        Some(value) => {
-            let token = value
-                .as_str()
-                .context("tracingAccessToken in secrets file is not a string")?
-                .trim();
-            if token.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(token.to_owned()))
-            }
-        }
+        .with_context(|| format!("secrets file '{}' is not valid JSON", path.display()))?;
+    let mut value = &secrets;
+    for component in &token.json_path {
+        let Some(next) = value.get(component) else {
+            return Ok(None);
+        };
+        value = next;
+    }
+    let json_path = token.json_path.join(".");
+    let value = value
+        .as_str()
+        .with_context(|| format!("{json_path} in secrets file is not a string"))?
+        .trim();
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value.to_owned()))
     }
 }
 
-async fn run(args: Args) -> Result<()> {
-    let tracing_enabled = args.otel_endpoint.is_some();
+async fn run(config: structured::StargateConfig, source: ConfigSource) -> Result<()> {
+    let tracing = config.observability.tracing.as_ref();
+    let tracing_enabled = tracing.is_some();
     let otel_access_token =
-        resolve_otel_access_token(tracing_enabled, args.secrets_path.as_deref()).await?;
+        resolve_tracing_access_token(tracing.and_then(|tracing| tracing.access_token.as_ref()))
+            .await?;
     let _telemetry_guard = stargate::telemetry::init_telemetry(
-        args.otel_endpoint.as_deref(),
-        &args.otel_service_name,
+        tracing.map(|tracing| tracing.endpoint.as_str()),
+        &config.observability.service_name,
         otel_access_token.as_deref(),
     )?;
     // Warn after init_telemetry so the subscriber captures it.
     if tracing_enabled && otel_access_token.is_none() {
-        warn!("no tracingAccessToken; OTLP trace export is unauthenticated");
+        warn!("no tracing access token; OTLP trace export is unauthenticated");
     }
-    log_startup(&args);
+    if source == ConfigSource::LegacyCli {
+        warn_legacy_configuration();
+    }
+    log_startup(&config, &source);
 
-    let startup = runtime_from_args(args).await?;
+    let startup = runtime_from_config(config).await?;
     let handle = startup.runtime.start().await?;
 
     let shutdown_error = match wait_for_runtime_shutdown_trigger(
@@ -417,11 +771,21 @@ async fn run(args: Args) -> Result<()> {
     }
 }
 
-fn log_startup(args: &Args) {
+fn warn_legacy_configuration() {
+    warn!("CLI and environment-based Stargate configuration is deprecated; use --config-file");
+}
+
+fn log_startup(config: &structured::StargateConfig, source: &ConfigSource) {
+    let (configuration_source, config_file) = match source {
+        ConfigSource::File(path) => ("file", Some(path)),
+        ConfigSource::LegacyCli => ("legacy-cli", None),
+    };
     info!(
         version = BUILD_VERSION,
         commit_short_sha = built_info::GIT_COMMIT_HASH_SHORT.unwrap_or("unknown"),
-        config = ?args,
+        configuration_source,
+        config_file = ?config_file,
+        config = ?config,
         "starting stargate"
     );
 }
@@ -455,8 +819,9 @@ mod tests {
 
     use super::startup::{
         DiscoveryAndForwarding, WorkerAuthStartup, bind_reverse_tunnel_from_args,
-        make_discovery_with_resolver_and_addresses, make_resolver, proxy_retry_config_from_args,
-        proxy_transport_config_from_args, runtime_config_from_args, worker_auth_startup_from_args,
+        make_discovery_with_resolver_and_addresses, proxy_retry_config_from_args,
+        proxy_transport_config_from_args, runtime_config_from_args, runtime_from_args,
+        worker_auth_startup_from_config,
     };
     use super::*;
 
@@ -526,6 +891,85 @@ mod tests {
         );
     }
 
+    fn write_minimal_config() -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().expect("create temp config file");
+        file.write_all(
+            br#"schema_version = 1
+
+[stargate_identity]
+id = "from-file"
+
+[stargate_network]
+advertise_addr = "127.0.0.1:50071"
+"#,
+        )
+        .expect("write config");
+        file.flush().expect("flush config");
+        file
+    }
+
+    #[test]
+    fn config_file_ignores_all_legacy_arguments() {
+        let file = write_minimal_config();
+        let (config, source) = select_config_from([
+            OsString::from("stargate"),
+            OsString::from("--config-file"),
+            file.path().as_os_str().to_owned(),
+            OsString::from("--dns-poll-ms"),
+            OsString::from("0"),
+            OsString::from("--unknown-legacy-option"),
+        ])
+        .expect("config-file mode must not parse legacy arguments");
+
+        assert_eq!(config.stargate_identity.id, "from-file");
+        assert_eq!(source, ConfigSource::File(file.path().to_path_buf()));
+    }
+
+    #[test]
+    fn legacy_arguments_are_used_without_config_file() {
+        let (config, source) = select_config_from([
+            "stargate",
+            "--stargate-id",
+            "from-cli",
+            "--advertise-addr",
+            "127.0.0.1:50071",
+        ])
+        .expect("legacy arguments should normalize");
+
+        assert_eq!(config.stargate_identity.id, "from-cli");
+        assert!(config.stargate_discovery.kubernetes_pods.is_none());
+        assert_eq!(source, ConfigSource::LegacyCli);
+    }
+
+    #[test]
+    fn config_file_error_does_not_fall_back_to_legacy_arguments() {
+        let error = select_config_from([
+            "stargate",
+            "--config-file",
+            "/path/that/does/not/exist.toml",
+            "--stargate-id",
+            "from-cli",
+            "--advertise-addr",
+            "127.0.0.1:50071",
+        ])
+        .expect_err("an unreadable config file must be fatal");
+
+        assert_error_contains(&error, "failed to read config file");
+    }
+
+    #[test]
+    fn legacy_configuration_warning_is_emitted_once() {
+        let (_, logs) = capture_logs(tracing::Level::WARN, warn_legacy_configuration);
+        assert_eq!(
+            logs.matches(
+                "CLI and environment-based Stargate configuration is deprecated; use --config-file"
+            )
+            .count(),
+            1,
+            "expected exactly one deprecation warning: {logs}"
+        );
+    }
+
     fn proxy_transport(args: &Args) -> ProxyTransportConfig {
         proxy_transport_config_from_args(args).expect("proxy transport config should parse")
     }
@@ -579,11 +1023,12 @@ mod tests {
         args: &Args,
         make_resolver: impl FnOnce(Duration) -> Result<hickory_resolver::TokioAsyncResolver>,
     ) -> Result<DiscoveryAndForwarding> {
-        let http_listen_addr = args.http_listen_addr.parse()?;
+        let config = config_from_legacy_args(args.clone())?;
         make_discovery_with_resolver_and_addresses(
-            args,
-            args.advertise_addr,
-            http_listen_addr,
+            &config,
+            args.advertise_addr
+                .context("test arguments should include --advertise-addr")?,
+            args.http_listen_addr,
             make_resolver,
         )
     }
@@ -592,14 +1037,22 @@ mod tests {
         secrets_json_path: Option<&str>,
         oauth2_provider_host: Option<&str>,
     ) -> WorkerAuthStartup {
-        worker_auth_startup_from_args(
-            Some("http://auth.example.test".to_owned()),
-            Some("/var/run/secrets/auth.json".to_owned()),
-            secrets_json_path.map(str::to_owned),
-            oauth2_provider_host.map(str::to_owned),
-        )
-        .expect("worker auth args should be valid")
-        .expect("auth startup should exist")
+        let mut cli = "--worker-auth-endpoint http://auth.example.test \
+                       --secrets-path /var/run/secrets/auth.json"
+            .to_string();
+        if let Some(path) = secrets_json_path {
+            cli.push_str(" --secrets-json-path ");
+            cli.push_str(path);
+        }
+        if let Some(host) = oauth2_provider_host {
+            cli.push_str(" --oauth2-provider-host ");
+            cli.push_str(host);
+        }
+        let config = config_from_legacy_args(parse_args(&cli))
+            .expect("legacy worker auth arguments should normalize");
+        worker_auth_startup_from_config(config.worker_authentication.as_ref())
+            .expect("worker auth args should be valid")
+            .expect("auth startup should exist")
     }
 
     async fn runtime_startup_error(extra: &str) -> anyhow::Error {
@@ -610,19 +1063,23 @@ mod tests {
     }
 
     #[test]
-    fn startup_log_includes_build_identity_and_complete_args() {
+    fn startup_log_includes_build_identity_and_effective_config() {
         let args = parse_args(
             "--proxy-max-connect-retries 7 \
              --worker-auth-endpoint http://worker-auth.example.test:50051 \
              --secrets-path /var/run/secrets/worker-auth.json \
              --secrets-json-path auth.token",
         );
-        let (_, output) = capture_logs(tracing::Level::INFO, || log_startup(&args));
+        let config = config_from_legacy_args(args).expect("legacy config should normalize");
+        let (_, output) = capture_logs(tracing::Level::INFO, || {
+            log_startup(&config, &ConfigSource::LegacyCli)
+        });
         let expected_commit = built_info::GIT_COMMIT_HASH_SHORT.unwrap_or("unknown");
         for expected in [
             format!("version=\"{BUILD_VERSION}\""),
             format!("commit_short_sha=\"{expected_commit}\""),
-            format!("config={args:?}"),
+            "configuration_source=\"legacy-cli\"".to_string(),
+            format!("config={config:?}"),
         ] {
             assert!(output.contains(&expected), "startup log: {output}");
         }
@@ -700,9 +1157,15 @@ mod tests {
 
     #[test]
     fn model_discovery_listen_addr_default_and_override_parse() {
-        assert_eq!(parse_args("").model_discovery_listen_addr, "0.0.0.0:50073");
+        assert_eq!(
+            parse_args("").model_discovery_listen_addr,
+            "0.0.0.0:50073".parse().unwrap()
+        );
         let overridden = parse_args("--model-discovery-listen-addr 127.0.0.1:50173");
-        assert_eq!(overridden.model_discovery_listen_addr, "127.0.0.1:50173");
+        assert_eq!(
+            overridden.model_discovery_listen_addr,
+            "127.0.0.1:50173".parse().unwrap()
+        );
     }
 
     #[test]
@@ -908,6 +1371,8 @@ mod tests {
         let cert = tempfile::NamedTempFile::new().expect("cert file should be creatable");
         let path = cert.path().to_str().expect("cert path should be UTF-8");
         let args = try_parse_argv([
+            "--backend-connectivity",
+            "reverse",
             "--reverse-tunnel-listen-addr",
             "127.0.0.1:0",
             "--tls-cert-path",
@@ -916,13 +1381,16 @@ mod tests {
         .expect("reverse listener arguments should parse");
         let err = proxy_transport_config_from_args(&args)
             .expect_err("reverse listener server TLS still needs a complete PEM pair");
-        assert_error_contains(&err, "--tls-key-path is required with --tls-cert-path");
+        assert_error_contains(
+            &err,
+            "pylon_transport.reverse.certificate_path and private_key_path must be supplied together",
+        );
     }
 
     #[test]
     fn main_binds_reverse_tunnel_config_before_runtime_start() {
         let args = parse_args(
-            "--reverse-tunnel-listen-addr 127.0.0.1:0 \
+            "--backend-connectivity reverse --reverse-tunnel-listen-addr 127.0.0.1:0 \
              --advertised-hostname-template {pod_name}.stargate-headless.{namespace}.svc.cluster.local \
              --pod-name stargate-3 --pod-namespace inference \
              --reverse-tunnel-pylon-dial-addr stargate-quic-lb.inference.svc.cluster.local:443 \
@@ -979,27 +1447,29 @@ mod tests {
 
     #[test]
     fn worker_auth_errors_when_oauth_host_set_without_secrets() {
-        let result = worker_auth_startup_from_args(
-            Some("http://auth.example.test".to_string()),
-            None,
-            None,
-            Some("https://oauth.example.test".to_string()),
-        );
+        let result = config_from_legacy_args(parse_args(
+            "--worker-auth-endpoint http://auth.example.test \
+             --oauth2-provider-host https://oauth.example.test",
+        ));
         assert!(result.is_err());
     }
 
     #[test]
     fn worker_auth_absent_without_endpoint() {
-        let startup = worker_auth_startup_from_args(None, None, None, None)
-            .expect("worker auth args should be valid");
+        let config =
+            config_from_legacy_args(parse_args("")).expect("legacy arguments should normalize");
+        let startup = worker_auth_startup_from_config(config.worker_authentication.as_ref())
+            .expect("worker auth config should be valid");
         assert!(startup.is_none());
     }
 
     #[test]
-    fn self_only_discovery_uses_proxy_http_port() {
-        let args = parse_args("--disable-dns-discovery --http-listen-addr 127.0.0.1:18000");
-        let (discovery, forwarding) = make_discovery_with_resolver(&args, make_resolver)
-            .expect("self-only discovery should build without DNS");
+    fn legacy_non_kubernetes_runtime_is_self_only_without_resolving_dns() {
+        let args = parse_args("--http-listen-addr 127.0.0.1:18000");
+        let (discovery, forwarding) = make_discovery_with_resolver(&args, |_| {
+            panic!("non-Kubernetes discovery must not construct a DNS resolver")
+        })
+        .expect("self-only discovery should build without DNS");
         assert!(forwarding.is_none());
         let initial = discovery.initial_stargates();
         assert_eq!(initial.len(), 1);
@@ -1094,10 +1564,16 @@ mod tests {
         file
     }
 
+    fn tracing_token(path: impl Into<PathBuf>) -> structured::TracingAccessTokenConfig {
+        structured::TracingAccessTokenConfig {
+            secrets_path: path.into(),
+            json_path: vec!["tracingAccessToken".to_string()],
+        }
+    }
+
     #[tokio::test]
     async fn otel_access_token_none_when_tracing_disabled() {
-        let file = write_secrets(r#"{"tracingAccessToken":"tok"}"#);
-        let token = resolve_otel_access_token(false, file.path().to_str())
+        let token = resolve_tracing_access_token(None)
             .await
             .expect("resolve should succeed");
         assert_eq!(token, None);
@@ -1105,7 +1581,7 @@ mod tests {
 
     #[tokio::test]
     async fn otel_access_token_none_when_no_secrets_path() {
-        let token = resolve_otel_access_token(true, None)
+        let token = resolve_tracing_access_token(None)
             .await
             .expect("resolve should succeed");
         assert_eq!(token, None);
@@ -1114,7 +1590,7 @@ mod tests {
     #[tokio::test]
     async fn otel_access_token_reads_and_trims_value() {
         let file = write_secrets(r#"{"nvcfApiToken":"x","tracingAccessToken":"  tok-123  "}"#);
-        let token = resolve_otel_access_token(true, file.path().to_str())
+        let token = resolve_tracing_access_token(Some(&tracing_token(file.path())))
             .await
             .expect("resolve should succeed");
         assert_eq!(token.as_deref(), Some("tok-123"));
@@ -1123,7 +1599,7 @@ mod tests {
     #[tokio::test]
     async fn otel_access_token_absent_key_is_allowed() {
         let file = write_secrets(r#"{"nvcfApiToken":"x"}"#);
-        let token = resolve_otel_access_token(true, file.path().to_str())
+        let token = resolve_tracing_access_token(Some(&tracing_token(file.path())))
             .await
             .expect("missing tracingAccessToken must not error");
         assert_eq!(token, None);
@@ -1132,7 +1608,7 @@ mod tests {
     #[tokio::test]
     async fn otel_access_token_empty_value_is_allowed() {
         let file = write_secrets(r#"{"tracingAccessToken":"   "}"#);
-        let token = resolve_otel_access_token(true, file.path().to_str())
+        let token = resolve_tracing_access_token(Some(&tracing_token(file.path())))
             .await
             .expect("empty tracingAccessToken must not error");
         assert_eq!(token, None);
@@ -1141,7 +1617,7 @@ mod tests {
     #[tokio::test]
     async fn otel_access_token_non_string_value_fails() {
         let file = write_secrets(r#"{"tracingAccessToken":42}"#);
-        let error = resolve_otel_access_token(true, file.path().to_str())
+        let error = resolve_tracing_access_token(Some(&tracing_token(file.path())))
             .await
             .expect_err("non-string tracingAccessToken must fail");
         assert!(error.to_string().contains("not a string"), "{error:#}");
@@ -1150,7 +1626,7 @@ mod tests {
     #[tokio::test]
     async fn otel_access_token_invalid_json_fails() {
         let file = write_secrets("not json");
-        let error = resolve_otel_access_token(true, file.path().to_str())
+        let error = resolve_tracing_access_token(Some(&tracing_token(file.path())))
             .await
             .expect_err("invalid JSON secrets file must fail");
         assert!(error.to_string().contains("not valid JSON"), "{error:#}");
@@ -1158,7 +1634,7 @@ mod tests {
 
     #[tokio::test]
     async fn otel_access_token_unreadable_file_fails() {
-        let error = resolve_otel_access_token(true, Some("/nonexistent/secrets.json"))
+        let error = resolve_tracing_access_token(Some(&tracing_token("/nonexistent/secrets.json")))
             .await
             .expect_err("unreadable secrets file must fail");
         assert!(error.to_string().contains("failed to read"), "{error:#}");

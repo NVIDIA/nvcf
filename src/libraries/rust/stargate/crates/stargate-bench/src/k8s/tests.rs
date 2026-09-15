@@ -692,7 +692,13 @@ fn rendered_manifests_include_tunnel_protocol() {
     config.tunnel_protocol = stargate_protocol::TunnelTransportProtocol::WebTransport;
     let rendered = render_default_test_manifest(&config);
 
-    assert_contains_all(&rendered.stargate, &["- --tunnel-protocol=webtransport"]);
+    assert_contains_all(
+        &rendered.stargate,
+        &[
+            "- --config-file=/config/stargate.toml",
+            "tunnel_protocol = \"webtransport\"",
+        ],
+    );
     assert_contains_all(&rendered.backends, &["- --tunnel-protocol=webtransport"]);
 }
 
