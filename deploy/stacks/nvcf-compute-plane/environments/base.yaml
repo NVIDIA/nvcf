@@ -116,3 +116,10 @@ addons:
   # When enabled, NVCA also gets the DynamoOperatorSupport feature gate.
   dynamoOperator:
     enabled: false
+    nats:
+      image:
+        # Official upstream NATS server image. Override these fields for a
+        # private or disconnected registry.
+        registry: docker.io
+        repository: library/nats
+        tag: 2.10.21-alpine

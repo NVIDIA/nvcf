@@ -60,7 +60,7 @@ include Makefile.dist
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nats-reloader-alignment test-nvca-entrypoints test-nvca-default-ownership test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-register-cluster test-kube-context test-compare-golden test-nats-reloader-alignment test-nats-server-source test-nvca-entrypoints test-nvca-default-ownership test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -190,7 +190,10 @@ test-compare-golden:
 test-nats-reloader-alignment:
 	@tests/nats-reloader-alignment.sh
 
-test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-default-ownership test-compare-golden test-nats-reloader-alignment test-nvca-entrypoints
+test-nats-server-source:
+	@tests/nats-server-source.sh
+
+test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-default-ownership test-compare-golden test-nats-reloader-alignment test-nats-server-source test-nvca-entrypoints
 	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local
@@ -235,6 +238,7 @@ help:
 	@echo "  test-register-cluster       Verify generated profile registration handoff"
 	@echo "  test-kube-context           Verify lifecycle and cleanup context propagation"
 	@echo "  test-nats-reloader-alignment Verify compute-plane and chart-default NATS reloader pins match"
+	@echo "  test-nats-server-source     Verify Dynamo NATS defaults and mirror override wiring"
 	@echo "  test-nvca-entrypoints       Verify rendered NVCA images use available entrypoints"
 	@echo "  test-local         Render the local env and diff against golden testdata"
 	@echo "  generate-golden    Render the local env and update golden testdata"
