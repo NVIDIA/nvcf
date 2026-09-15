@@ -2102,11 +2102,14 @@ selfManaged:
 // assertion expects to see.
 func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	const (
-		eksContext           = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-test"
-		eksClusterName       = "wiring-test"
-		eksRegion            = "us-east-1"
-		wiringGatewayLB      = "wiring-elb.example.invalid"
-		registryLoginCommand = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+		eksContext                     = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-test"
+		eksClusterName                 = "wiring-test"
+		eksRegion                      = "us-east-1"
+		wiringGatewayLB                = "wiring-elb.example.invalid"
+		registryLoginCommand           = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+		envoyGatewayVersionCommand     = "tests/bdd/scripts/read-envoy-gateway-version.sh"
+		fixtureEnvoyGatewayVersion     = "v9.9.9-fixture"
+		envoyGatewayInstallCommandBase = "helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version "
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
@@ -2123,6 +2126,7 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	// wired into the suite.
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		envoyGatewayVersionCommand: {ExitCode: 0, Stdout: fixtureEnvoyGatewayVersion},
 		// @gateway-setup: kubectl get gateway returns the ELB hostname.
 		// The export step captures this into EKS_GATEWAY_ADDR.
 		"kubectl --context " + eksContext + " get gateway nvcf-gateway -n envoy-gateway -o jsonpath={.status.addresses[0].value}": {ExitCode: 0, Stdout: wiringGatewayLB},
@@ -2159,6 +2163,10 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, registryLoginCommand) {
 		t.Fatal("Helm OCI registry login command was never invoked")
 	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs,
+		envoyGatewayInstallCommandBase+fixtureEnvoyGatewayVersion+" --kube-context "+eksContext+" -n envoy-gateway-system --create-namespace --wait --timeout 5m") {
+		t.Fatal("Envoy Gateway install did not use the version exported from authoritative configuration")
+	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV=eks-bdd") {
 		t.Fatal("helmfile install make target was never invoked")
 	}
@@ -2180,13 +2188,15 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 // EKS_GATEWAY_ADDR from the canned gateway stdout.
 func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	const (
-		cpContext            = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-cp"
-		computeContext       = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-compute"
-		computeClusterName   = "wiring-compute"
-		eksRegion            = "us-east-1"
-		wiringGatewayLB      = "wiring-cp-elb.example.invalid"
-		wiringGatewayDomain  = "192-0-2-10.nip.io"
-		registryLoginCommand = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+		cpContext                  = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-cp"
+		computeContext             = "arn:aws:eks:us-east-1:000000000000:cluster/wiring-compute"
+		computeClusterName         = "wiring-compute"
+		eksRegion                  = "us-east-1"
+		wiringGatewayLB            = "wiring-cp-elb.example.invalid"
+		wiringGatewayDomain        = "192-0-2-10.nip.io"
+		registryLoginCommand       = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+		envoyGatewayVersionCommand = "tests/bdd/scripts/read-envoy-gateway-version.sh"
+		fixtureEnvoyGatewayVersion = "v9.9.9-fixture"
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
@@ -2215,6 +2225,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	pullSecretCommand := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context " + computeContext + " -o name"
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		envoyGatewayVersionCommand: {ExitCode: 0, Stdout: fixtureEnvoyGatewayVersion},
 		// @gateway-setup: control-plane gateway address -> EKS_GATEWAY_ADDR.
 		"kubectl --context " + cpContext + " get gateway nvcf-gateway -n envoy-gateway -o jsonpath={.status.addresses[0].value}": {ExitCode: 0, Stdout: wiringGatewayLB},
 		"tests/bdd/scripts/resolve-gateway-domain.sh " + wiringGatewayLB:                                                         {ExitCode: 0, Stdout: wiringGatewayDomain},
@@ -2276,6 +2287,11 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, registryLoginCommand) {
 		t.Fatal("Helm OCI registry login command was never invoked")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs,
+		"helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version "+fixtureEnvoyGatewayVersion+
+			" --kube-context "+cpContext+" -n envoy-gateway-system --create-namespace --wait --timeout 5m") {
+		t.Fatal("Envoy Gateway install did not use the version exported from authoritative configuration")
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV=eks-bdd-multi") {
 		t.Fatal("helmfile install make target was never invoked")

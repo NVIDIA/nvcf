@@ -59,6 +59,40 @@ func TestSelfManagedOpenBaoWebhookDefaultsToIgnore(t *testing.T) {
 	}
 }
 
+func TestEKSFeaturesReadAuthoritativeEnvoyGatewayVersion(t *testing.T) {
+	command := exec.Command("bash", "scripts/read-envoy-gateway-version.sh")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("read authoritative Envoy Gateway version: %v: %s", err, output)
+	}
+	version := strings.TrimSpace(string(output))
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$`).MatchString(version) {
+		t.Fatalf("authoritative Envoy Gateway version %q is invalid", version)
+	}
+
+	for _, featurePath := range []string{
+		"features/single-cluster-eks-helmfile.feature",
+		"features/multi-cluster-eks-helmfile.feature",
+	} {
+		featureBytes, readErr := os.ReadFile(featurePath)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", featurePath, readErr)
+		}
+		feature := string(featureBytes)
+		if regexp.MustCompile(`--version v[0-9]+\.[0-9]+\.[0-9]+`).MatchString(feature) {
+			t.Fatalf("%s duplicates a released Envoy Gateway version", featurePath)
+		}
+		for _, required := range []string{
+			"tests/bdd/scripts/read-envoy-gateway-version.sh",
+			"--version ${ENVOY_GATEWAY_VERSION}",
+		} {
+			if !strings.Contains(feature, required) {
+				t.Fatalf("%s missing authoritative version wiring %q", featurePath, required)
+			}
+		}
+	}
+}
+
 func TestSelfManagedOpenBaoUIAppendRequiresCompatibleNamespaceExpression(t *testing.T) {
 	const templatePath = "../../deploy/stacks/self-managed/global.yaml.gotmpl"
 
