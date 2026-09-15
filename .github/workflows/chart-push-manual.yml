@@ -19,6 +19,18 @@ on:
         description: "Chart root (dir with Chart.yaml), e.g. deploy/helm/llm-api-gateway/llm-api-gateway"
         required: true
         type: string
+      source_sha:
+        description: "Full commit SHA to package; required for declared-version publication"
+        required: false
+        type: string
+      version_mode:
+        description: "Publish a traceable snapshot or the version declared in Chart.yaml"
+        required: true
+        default: snapshot
+        type: choice
+        options:
+          - snapshot
+          - declared
 
 permissions:
   contents: read
@@ -43,18 +55,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_sha || github.sha }}
 
       - name: Validate chart and resolve version
         id: meta
         env:
           CHART_DIR: ${{ github.event.inputs.chart_dir }}
           RUN_NUMBER: ${{ github.run_number }}
-          SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          VERSION_MODE: ${{ github.event.inputs.version_mode }}
         run: |
           set -euo pipefail
           case "$CHART_DIR" in
-            deploy/helm/*) : ;;
-            *) echo "ERROR: chart_dir must be under deploy/helm/ (got '$CHART_DIR')" >&2; exit 1 ;;
+            deploy/helm/*|deploy/stacks/*/charts/*) : ;;
+            *) echo "ERROR: chart_dir must be under deploy/helm/ or deploy/stacks/*/charts/ (got '$CHART_DIR')" >&2; exit 1 ;;
           esac
           if printf '%s' "$CHART_DIR" | grep -q '\.\.'; then
             echo "ERROR: chart_dir must not contain '..'" >&2; exit 1
@@ -62,9 +77,33 @@ jobs:
           if [ ! -f "${CHART_DIR}/Chart.yaml" ]; then
             echo "ERROR: no Chart.yaml at ${CHART_DIR}" >&2; exit 1
           fi
-          # Versions are always machine-derived (never user input) so every
-          # published snapshot chart is deterministic and traceable.
-          v="0.0.0-gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
+          resolved_sha="$(git rev-parse HEAD)"
+          case "$VERSION_MODE" in
+            snapshot)
+              # Snapshot versions remain machine-derived and traceable to the
+              # exact source revision checked out by this job.
+              v="0.0.0-gh.${RUN_NUMBER}-$(printf '%s' "${resolved_sha}" | cut -c1-8)"
+              ;;
+            declared)
+              if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "ERROR: declared version mode requires a full lowercase commit SHA" >&2
+                exit 1
+              fi
+              if [ "$resolved_sha" != "$SOURCE_SHA" ]; then
+                echo "ERROR: checkout resolved to ${resolved_sha}, expected ${SOURCE_SHA}" >&2
+                exit 1
+              fi
+              v="$(helm show chart "$CHART_DIR" | awk '$1 == "version:" { print $2; exit }')"
+              if [ -z "$v" ]; then
+                echo "ERROR: Chart.yaml does not declare a version" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "ERROR: unsupported version_mode '$VERSION_MODE'" >&2
+              exit 1
+              ;;
+          esac
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Package and push chart
