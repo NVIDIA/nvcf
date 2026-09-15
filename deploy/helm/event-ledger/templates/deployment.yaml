@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvcf-event-ledger.fullname" . }}
+  namespace: {{ include "nvcf-event-ledger.namespace" . }}
+  labels:
+    {{- include "nvcf-event-ledger.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.eventLedger.autoscaling.enabled }}
+  replicas: {{ .Values.eventLedger.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "nvcf-event-ledger.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "nvcf-event-ledger.vaultAnnotations" . | nindent 8 }}
+        checksum/config-app: {{ toYaml .Values.eventLedger.config | sha256sum }}
+        checksum/vault-agent-template: {{ .Files.Get "files/secrets.json.tmpl" | sha256sum }}
+        {{- with .Values.eventLedger.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "nvcf-event-ledger.selectorLabels" . | nindent 8 }}
+        {{- with .Values.eventLedger.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.eventLedger.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nvcf-event-ledger.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.eventLedger.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: app-config
+          configMap:
+            name: {{ include "nvcf-event-ledger.fullname" . }}-app-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: {{ include "nvcf-event-ledger.openbaoTokenVolumeName" . }}
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.eventLedger.vault.audience | quote }}
+                  expirationSeconds: 3600
+                  path: {{ include "nvcf-event-ledger.openbaoTokenFileName" . }}
+        {{- with .Values.eventLedger.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+        - name: {{ include "nvcf-event-ledger.fullname" . }}
+          securityContext:
+            {{- toYaml .Values.eventLedger.securityContext | nindent 12 }}
+          image: {{ include "nvcf-event-ledger.image" . | quote }}
+          imagePullPolicy: {{ .Values.eventLedger.image.pullPolicy }}
+          volumeMounts:
+            - name: app-config
+              mountPath: /etc/event-ledger
+              readOnly: true
+            - name: {{ include "nvcf-event-ledger.openbaoTokenVolumeName" . }}
+              mountPath: {{ include "nvcf-event-ledger.openbaoTokenMountPath" . }}
+              readOnly: true
+            {{- with .Values.eventLedger.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            # Point the service at the mounted config file.
+            - name: EVENT_LEDGER_CONFIG
+              value: /etc/event-ledger/config.yaml
+            {{- range $key, $value := .Values.eventLedger.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          ports:
+            {{- range .Values.eventLedger.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .containerPort }}
+              protocol: {{ .protocol }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.eventLedger.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.eventLedger.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.eventLedger.resources | nindent 12 }}
+      {{- with .Values.eventLedger.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.eventLedger.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.eventLedger.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.eventLedger.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.eventLedger.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}

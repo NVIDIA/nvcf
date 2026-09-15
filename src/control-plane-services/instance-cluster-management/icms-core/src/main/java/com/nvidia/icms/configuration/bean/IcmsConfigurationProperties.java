@@ -156,6 +156,13 @@ public class IcmsConfigurationProperties {
 
     private boolean reservationBackupEnabled;
 
+    // Feature flag: serve cluster and cluster-group reads from cluster_by_cluster_id using
+    // storage-attached indexes (SAI) instead of the legacy materialized tables
+    // (clusters_by_account, clusters_by_authorized_accounts, cluster_by_group_id_and_cluster_id,
+    // cluster_group_by_cluster_group_id, cluster_groups_by_account,
+    // cluster_groups_by_authorized_accounts). Writes are unaffected.
+    private boolean clusterByIdReadsEnabled;
+
     private Map<String, List<String>> supportedGpuDetails = new HashMap<>();
     private Map<String, String> gpusToQueueUrlGpuNameMap = new HashMap<>();
 

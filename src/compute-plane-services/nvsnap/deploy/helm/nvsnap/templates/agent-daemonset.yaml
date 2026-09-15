@@ -62,12 +62,12 @@ spec:
             - /criu-bundle/restore-bundle-init.sh
           env:
             - name: NVSNAP_BUNDLE_TOOLS_DST
-              value: {{ printf "%s/nvsnap" (.Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle") | quote }}
+              value: {{ printf "%s/nvsnap" (.Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle") | quote }}
           volumeMounts:
             - name: host-bundle
               # Mount the parent of {tools,lib} so the script can rename
               # siblings under it atomically.
-              mountPath: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle" | quote }}
+              mountPath: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle" | quote }}
           resources:
             requests:
               cpu: 100m
@@ -118,7 +118,7 @@ spec:
             # path further down — the webhook patches kubelet pod
             # specs with paths built off this root, and kubelet runs
             # in host namespace.
-            - --overlay-root={{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/nvsnap/overlays" }}
+            - --overlay-root={{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
             {{- if .Values.webhook.enabled }}
             # In-agent admission webhook. The Service in webhook.yaml
             # load-balances admission requests across agent pods.
@@ -310,7 +310,7 @@ spec:
             # namespace — host path and container path must match
             # exactly or kubelet's hostPath type check fails.
             - name: nvsnap-overlays
-              mountPath: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/nvsnap/overlays" }}
+              mountPath: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
               mountPropagation: Bidirectional
             {{- if .Values.webhook.enabled }}
             - name: webhook-tls
@@ -384,7 +384,7 @@ spec:
         # vs 5.5TB local SSD).
         - name: nvsnap-overlays
           hostPath:
-            path: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/nvsnap/overlays" }}
+            path: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
             type: DirectoryOrCreate
         # nvsnap#184: bundle-staging hostPath. The nvsnap-bundle-stage
         # initContainer writes /nvsnap (tools) + /nvsnap-lib (intercept
@@ -393,7 +393,7 @@ spec:
         # restore_entrypoint.go for the inject patches.
         - name: host-bundle
           hostPath:
-            path: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle" | quote }}
+            path: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle" | quote }}
             type: DirectoryOrCreate
         {{- if .Values.webhook.enabled }}
         - name: webhook-tls

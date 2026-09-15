@@ -16,15 +16,22 @@
 
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
+# shellcheck source=infra/openbao/scripts/semver.sh
+. "$script_dir/semver.sh"
 
 go_bin=${GO:-go}
 plugin_dir=${PLUGIN_DIR:-"$repo_root/files/plugins"}
-required_go_version=${REQUIRED_GO_VERSION:-v1.25.0}
-required_x_net_version=${REQUIRED_X_NET_VERSION:-v0.55.0}
+required_go_version=${REQUIRED_GO_VERSION:-v1.27.0}
+required_x_crypto_version=${REQUIRED_X_CRYPTO_VERSION:-v0.56.0}
+required_x_net_version=${REQUIRED_X_NET_VERSION:-v0.58.0}
+required_x_text_version=${REQUIRED_X_TEXT_VERSION:-v0.41.0}
+required_grpc_version=${REQUIRED_GRPC_VERSION:-v1.83.2}
+required_go_jose_version=${REQUIRED_GO_JOSE_VERSION:-v4.1.4}
 required_vault_api_version=${REQUIRED_VAULT_API_VERSION:-v1.15.0}
 required_vault_sdk_version=${REQUIRED_VAULT_SDK_VERSION:-v0.15.2}
+required_plugincontainer_version=${REQUIRED_PLUGINCONTAINER_VERSION:-v0.5.0}
 
 metadata_files=
 cleanup_metadata_files() {
@@ -32,24 +39,6 @@ cleanup_metadata_files() {
   rm -f $metadata_files
 }
 trap cleanup_metadata_files EXIT
-
-version_ge() {
-  current=${1#v}
-  required=${2#v}
-  awk -v current="$current" -v required="$required" '
-    BEGIN {
-      split(current, a, ".")
-      split(required, b, ".")
-      for (i = 1; i <= 3; i++) {
-        av = a[i] + 0
-        bv = b[i] + 0
-        if (av > bv) exit 0
-        if (av < bv) exit 1
-      }
-      exit 0
-    }
-  '
-}
 
 dep_version() {
   module=$1
@@ -93,7 +82,7 @@ verify_binary() {
 
   toolchain=$(sed -n '1p' "$metadata" | awk -F': ' '{ print $2 }')
   toolchain_version="v${toolchain#go}"
-  if ! version_ge "$toolchain_version" "$required_go_version"; then
+  if ! semver_ge "$toolchain_version" "$required_go_version"; then
     echo "$binary was built with $toolchain; need Go ${required_go_version#v} or newer" >&2
     exit 1
   fi
@@ -130,12 +119,34 @@ verify_binary() {
   actual_hash=$(sha256 "$binary")
   log_hash "$arch" "$actual_hash"
 
+  x_crypto_version=$(dep_version golang.org/x/crypto "$metadata")
   x_net_version=$(dep_version golang.org/x/net "$metadata")
+  x_text_version=$(dep_version golang.org/x/text "$metadata")
+  grpc_version=$(dep_version google.golang.org/grpc "$metadata")
+  go_jose_version=$(dep_version github.com/go-jose/go-jose/v4 "$metadata")
   vault_api_version=$(dep_version github.com/hashicorp/vault/api "$metadata")
   vault_sdk_version=$(dep_version github.com/hashicorp/vault/sdk "$metadata")
+  plugincontainer_version=$(dep_version github.com/hashicorp/go-secure-stdlib/plugincontainer "$metadata")
+  legacy_docker_version=$(dep_version github.com/docker/docker "$metadata")
 
-  if ! version_ge "$x_net_version" "$required_x_net_version"; then
+  if ! semver_ge "$x_crypto_version" "$required_x_crypto_version"; then
+    echo "$binary embeds golang.org/x/crypto $x_crypto_version; need $required_x_crypto_version or newer" >&2
+    exit 1
+  fi
+  if ! semver_ge "$x_net_version" "$required_x_net_version"; then
     echo "$binary embeds golang.org/x/net $x_net_version; need $required_x_net_version or newer" >&2
+    exit 1
+  fi
+  if ! semver_ge "$x_text_version" "$required_x_text_version"; then
+    echo "$binary embeds golang.org/x/text $x_text_version; need $required_x_text_version or newer" >&2
+    exit 1
+  fi
+  if ! semver_ge "$grpc_version" "$required_grpc_version"; then
+    echo "$binary embeds google.golang.org/grpc $grpc_version; need $required_grpc_version or newer" >&2
+    exit 1
+  fi
+  if ! semver_ge "$go_jose_version" "$required_go_jose_version"; then
+    echo "$binary embeds github.com/go-jose/go-jose/v4 $go_jose_version; need $required_go_jose_version or newer" >&2
     exit 1
   fi
   if [ "$vault_api_version" != "$required_vault_api_version" ]; then
@@ -146,12 +157,25 @@ verify_binary() {
     echo "$binary embeds github.com/hashicorp/vault/sdk $vault_sdk_version; expected $required_vault_sdk_version" >&2
     exit 1
   fi
+  if ! semver_ge "$plugincontainer_version" "$required_plugincontainer_version"; then
+    echo "$binary embeds plugincontainer $plugincontainer_version; need $required_plugincontainer_version or newer" >&2
+    exit 1
+  fi
+  if [ -n "$legacy_docker_version" ]; then
+    echo "$binary embeds the legacy github.com/docker/docker module $legacy_docker_version" >&2
+    exit 1
+  fi
 
   echo "verified $binary"
   echo "  go: $toolchain"
+  echo "  x/crypto: $x_crypto_version"
   echo "  x/net: $x_net_version"
+  echo "  x/text: $x_text_version"
+  echo "  grpc: $grpc_version"
+  echo "  go-jose/v4: $go_jose_version"
   echo "  vault/api: $vault_api_version"
   echo "  vault/sdk: $vault_sdk_version"
+  echo "  plugincontainer: $plugincontainer_version"
   echo "  sha256: $actual_hash"
 
   rm -f "$metadata"

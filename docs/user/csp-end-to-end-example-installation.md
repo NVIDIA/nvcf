@@ -31,6 +31,7 @@ Compute-plane commands run from the repository root with `make -C`.
 ```bash
 git clone https://github.com/nvidia/nvcf.git
 ```
+
 </Info>
 
 ## Installation order
@@ -39,7 +40,7 @@ The order matters. Each step produces an input that the next step needs. The
 load balancer address, in particular, must exist before you configure the
 environment file, because it becomes `global.domain` and the NVCA Host headers.
 
-```
+```text
 1. Install the Gateway          -> external load balancer address
 2. Configure the environment    -> environments/<env>.yaml + secrets/<env>-secrets.yaml
 3. Install the control plane    -> control-plane services + HTTPRoutes
@@ -516,11 +517,20 @@ Register, then install:
 ```bash
 kubectl config use-context "${CONTROL_PLANE_CONTEXT}"
 
+"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env "${HELMFILE_ENV}" \
+  control-plane profile export \
+  --cluster-name "${CLUSTER_NAME}" \
+  --region "${CLUSTER_REGION}"
+
+"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" init
+
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME="${CLUSTER_NAME}" \
-  NCA_ID=nvcf-default \
   CLUSTER_REGION="${CLUSTER_REGION}" \
-  ICMS_URL="http://${GATEWAY_ADDR}" \
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  COMPUTE_KUBE_CONTEXT="${CONTROL_PLANE_CONTEXT}" \
   NVCF_CLI="${NVCF_CLI}" \
   NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
 
@@ -571,11 +581,21 @@ Register with the compute context active, then install onto the compute cluster:
 ```bash
 kubectl config use-context "${COMPUTE_CONTEXT}"
 
+"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env "${HELMFILE_ENV}" \
+  --control-plane-context "${CONTROL_PLANE_CONTEXT}" \
+  --compute-plane-context "${COMPUTE_CONTEXT}" \
+  control-plane profile export \
+  --region "${CLUSTER_REGION}"
+
+"${NVCF_CLI}" --config "${NVCF_CLI_CONFIG}" init
+
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME="${CLUSTER_NAME}" \
-  NCA_ID=nvcf-default \
   CLUSTER_REGION="${CLUSTER_REGION}" \
-  ICMS_URL="http://${GATEWAY_ADDR}" \
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  COMPUTE_KUBE_CONTEXT="${COMPUTE_CONTEXT}" \
   KUBECONFIG_FILE="${COMPUTE_KUBECONFIG}" \
   NVCF_CLI="${NVCF_CLI}" \
   NVCF_CLI_CONFIG="${NVCF_CLI_CONFIG}"
@@ -589,10 +609,10 @@ make -C deploy/stacks/nvcf-compute-plane install \
 ```
 
 <Info>
-`make register-cluster` runs `nvcf-cli init` (mints the admin token) and then
-`cluster register`, and writes
-`registration/${CLUSTER_NAME}-register-values.yaml`. `make install` consumes
-that file. If you skip `register-cluster`, `make install` fails with a
+Profile export captures the installed control plane's endpoints and trust.
+Run `nvcf-cli init` explicitly before registration. `make register-cluster`
+writes `registration/${CLUSTER_NAME}-register-values.yaml`, and `make install`
+consumes that file. If you skip registration, installation fails with a
 "Registration values not found" error.
 </Info>
 

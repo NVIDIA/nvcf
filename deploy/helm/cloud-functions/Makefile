@@ -83,6 +83,7 @@ validate: template
 
 test:
 	@echo "Running chart tests..."
+	@./tests/account_bootstrap_image_test.sh
 	@./tests/sidecar_release_artifacts_test.sh
 
 # Publish Chart

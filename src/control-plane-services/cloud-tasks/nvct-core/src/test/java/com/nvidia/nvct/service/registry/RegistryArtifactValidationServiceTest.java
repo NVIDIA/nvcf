@@ -37,7 +37,7 @@ import com.nvidia.boot.registries.service.registry.model.ModelRegistryService;
 import com.nvidia.boot.registries.service.registry.resource.ResourceRegistryService;
 import com.nvidia.nvct.persistence.task.entity.TaskEntity;
 import com.nvidia.nvct.persistence.task.entity.TaskStatus;
-import com.nvidia.nvct.service.account.dto.RegistryCredentialDto;
+import com.nvidia.nvct.service.account.dto.RegistryCredentialDetailsDto;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -353,7 +353,7 @@ class RegistryArtifactValidationServiceTest {
         var service = createService("throw");
         var task = containerTask();
 
-        var cred = Mockito.mock(RegistryCredentialDto.class);
+        var cred = Mockito.mock(RegistryCredentialDetailsDto.class);
         when(registryCredentialService.getContainerRegistryCredentials(any()))
                 .thenReturn(List.of(cred));
         when(registryCredentialService.getRegistryHostname("docker.io/library/nginx:latest"))
@@ -418,7 +418,7 @@ class RegistryArtifactValidationServiceTest {
         var service = createService("throw");
         var task = helmTask();
 
-        var cred = Mockito.mock(RegistryCredentialDto.class);
+        var cred = Mockito.mock(RegistryCredentialDetailsDto.class);
         when(registryCredentialService.getHelmRegistryCredentials(any()))
                 .thenReturn(List.of(cred));
         when(registryCredentialService.getHelmRegistryHostname(

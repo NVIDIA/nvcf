@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "expansion_generated.go",
         "icmsrequest.go",
+        "modelcachebinding.go",
         "storagerequest.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/listers/nvca/v2beta1",

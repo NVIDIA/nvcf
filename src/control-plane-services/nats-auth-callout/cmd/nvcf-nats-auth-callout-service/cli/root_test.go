@@ -18,6 +18,7 @@ limitations under the License.
 package cli
 
 import (
+	"os"
 	"testing"
 )
 
@@ -32,7 +33,6 @@ func TestNewRootCommand(t *testing.T) {
 	if len(cmd.Commands()) == 0 {
 		t.Error("Expected at least one subcommand to be added")
 	}
-	// Check that the subcommand is 'server'
 	found := false
 	for _, c := range cmd.Commands() {
 		if c.Use == "server" {
@@ -41,5 +41,35 @@ func TestNewRootCommand(t *testing.T) {
 	}
 	if !found {
 		t.Error("Expected 'server' subcommand to be present")
+	}
+}
+
+func TestCommandArgsDefaultsToServer(t *testing.T) {
+	old := os.Args
+	os.Args = []string{"nvcf-nats-auth-callout-service"}
+	defer func() { os.Args = old }()
+
+	args := commandArgs()
+	if len(args) != 1 || args[0] != "server" {
+		t.Errorf("expected [\"server\"], got %v", args)
+	}
+
+	cmd, _, err := NewRootCommand().Traverse(args)
+	if err != nil {
+		t.Fatalf("unexpected traversal error: %v", err)
+	}
+	if cmd.Use != "server" {
+		t.Errorf("expected server command, got %q", cmd.Use)
+	}
+}
+
+func TestCommandArgsPassesExplicitArgs(t *testing.T) {
+	old := os.Args
+	os.Args = []string{"nvcf-nats-auth-callout-service", "version"}
+	defer func() { os.Args = old }()
+
+	args := commandArgs()
+	if len(args) != 1 || args[0] != "version" {
+		t.Errorf("expected [\"version\"], got %v", args)
 	}
 }

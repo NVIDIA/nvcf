@@ -592,7 +592,7 @@ class InternalInstanceServiceTest {
     }
 
     @Test
-    void updateInstanceRequestStatus_withByocAndSsaClientIdNotRegistered_throwsException() {
+    void updateInstanceRequestStatus_withByocAndOAuthClientIdNotRegistered_throwsException() {
         InstanceRequestV2Entity instanceRequestEntity1 =
                 getInstanceRequestEntity(
                         SpotInstanceRequestState.OPEN, PENDING_EVALUATION, ResourceProvider.BYOC);

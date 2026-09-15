@@ -39,6 +39,7 @@ go_library(
         "manifests/netpol/allow-ingress-monitoring.yaml",
         "manifests/nvcf.nvidia.io_icmsrequests_crd.yaml",
         "manifests/nvcf.nvidia.io_miniservices_crd.yaml",
+        "manifests/nvcf.nvidia.io_modelcachebindings_crd.yaml",
         "manifests/nvcf.nvidia.io_storagerequests_crd.yaml",
         "manifests/otel_collector_config.yaml",
         "manifests/rbacTemplate.yaml",
@@ -147,10 +148,14 @@ go_test(
         "webhook_miniservice_mutating_test.go",
         "webhooks_cert_test.go",
         "webhooks_certrefresh_test.go",
+        "webhooks_ensure_test.go",
         "webhooks_test.go",
     ],
-    data = glob(["testdata/**"]),
+    data = glob(["testdata/**"]) + [
+        "//src/compute-plane-services/nvca/internal/envtest:crds",
+    ],
     embed = [":reconcile"],
+    env_inherit = ["KUBEBUILDER_ASSETS"],
     embedsrcs = [
         "testdata/netpols.yaml",
         "testdata/netpols_with_ddcs.yaml",
@@ -163,10 +168,13 @@ go_test(
     # failures that GitLab kept reporting as `(cached) PASSED`). Force
     # fresh execution.
     tags = ["external"],
+    rundir = ".",
     deps = [
         "//src/compute-plane-services/nvca/internal/clustervalidator",
+        "//src/compute-plane-services/nvca/internal/envtest",
         "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
         "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
         "//src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake",
         "//src/compute-plane-services/nvca/pkg/client/clientset/versioned/scheme",
         "//src/compute-plane-services/nvca/pkg/client/informers/externalversions",
@@ -214,6 +222,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/restmapper",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/record",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/workqueue",

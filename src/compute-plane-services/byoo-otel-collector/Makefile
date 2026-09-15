@@ -1,7 +1,7 @@
 .PHONY: test docker-build docker-run update-examples update-config-template validate-config
 
 DOCKER_TAG := $(shell whoami)-dev
-OTEL_BUILDER_VERSION ?= v0.157.0
+OTEL_BUILDER_VERSION ?= v0.160.0
 
 # Run tests for every Go module in this subtree. The perf module is a
 # standalone module deliberately kept out of go.work (it carries its own

@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "service",
-    srcs = ["service.go"],
+    srcs = [
+        "service.go",
+        "shutdown.go",
+    ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/service",
     visibility = ["//visibility:public"],
     deps = [
@@ -28,6 +31,7 @@ go_test(
         "main_test.go",
         "service_command_test.go",
         "service_test.go",
+        "shutdown_test.go",
     ],
     embed = [":service"],
     # keep: binds the upstream-hardcoded fixed ports (asset 8001, S3 8002, NVCF

@@ -7,6 +7,7 @@ If you believe you've found a security vulnerability in NvSnap, please **do not*
 **you@example.com**
 
 Include:
+
 - Affected NvSnap component (nvsnap-agent, nvsnap-server, nvsnap-blobstore, libnvsnap, restore-entrypoint, etc.)
 - NvSnap image tag where the vulnerability was observed
 - Steps to reproduce, including a minimal manifest if applicable

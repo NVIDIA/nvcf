@@ -14,13 +14,11 @@
 # limitations under the License.
 
 # Default values for the reval-service chart.
-# Set serviceConfig.auth.enabled=true and serviceConfig.auth.jwkSetUrl before
-# installing; the server refuses to start otherwise.
 reval:
   image:
     registry: ""
     repository: ""
-    tag: "latest"
+    tag: "0.20.2"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -35,7 +33,7 @@ reval:
 
   serviceAccount:
     create: false
-    # automount: false — the reval service does not talk to the Kubernetes API;
+    # automount: false - the reval service does not talk to the Kubernetes API;
     # disabling token mounting removes credential exposure that is not needed.
     automount: false
     annotations: {}
@@ -108,13 +106,14 @@ reval:
       zapConfiguration: "production"
 
     auth:
-      enabled: false
-      jwkSetUrl: ""
-      validateRequiredScopes: ""
-      renderRequiredScopes: ""
+      jwt:
+        enabled: true
+        jwkSetUrl: "http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/reval/jwt/jwks"
+        validateRequiredScopes: ""
+        renderRequiredScopes: ""
       oidc:
-        enabled: false
-        introspectUrl: ""
+        enabled: true
+        introspectUrl: "http://api.sis.svc.cluster.local:8080/v1/nvca/tokens/introspect"
         cacheTtl: "5m"
 
     tracing:

@@ -14,6 +14,8 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
+
+<!-- Release-pipeline touchpoint for #315: validates version-registration on release. -->
 # NVCF GRPC Proxy
 
 A proxy service that facilitates communication between clients and NVIDIA Cloud Functions (NVCF) workers. This service handles HTTP/3 CONNECT endpoints, HTTP/1 CONNECT endpoints, and HTTP/1-2 forwarding for GRPC requests.
@@ -53,6 +55,7 @@ need an `nvcr.io` docker login in the active `DOCKER_CONFIG`.
 ## Overview
 
 The NVCF GRPC Proxy runs the following endpoints:
+
 - HTTP/3 CONNECT endpoint: `http://localhost:10084/v1/proxy`
 - HTTP/1 CONNECT endpoint: `http://localhost:10086/v1/proxy` (configurable)
 - HTTP/1-2 forwarder: `http://localhost:10081`
@@ -75,6 +78,7 @@ GRPC clients typically use one TCP connection per session. The proxy assumes tha
 ### Request Headers
 
 **Standard Headers:**
+
 - `authorization` - Bearer token for authentication (required)
 - `function-id` - Function ID to invoke (required)  
 - `function-version-id` - Optional function version ID
@@ -94,11 +98,13 @@ to browsers. HTTP Header structured values are not used, as browsers cannot send
 headers either.
 
 **Request ID Priority:**
+
 1. `nvcf-reqid` header (for manual client management of sessions)
 2. `Sec-WebSocket-Protocol` header (for browser based WebSocket connections)
 3. `nvcf-request-id` cookie (fallback)
 
 **Response Headers:**
+
 - `nvcf-reqid` - Request ID returned in all responses
 - `Set-Cookie: nvcf-request-id` - Cookie automatically set for session persistence
 

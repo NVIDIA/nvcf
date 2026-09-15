@@ -2,7 +2,7 @@
 
 ## Directory Layout
 
-```
+```bash
 nvcf-self-managed-stack/
 |-- helmfile.d/
 |   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
@@ -129,6 +129,7 @@ From lowest to highest priority:
 `global.yaml.gotmpl` reads from `.Values` (the merged environment + env-specific YAML) and constructs chart-specific values. It only passes through keys it explicitly references:
 
 ### Cassandra
+
 - `cassandra.replicaCount`
 - `cassandra.image.*` (registry, repository)
 - `cassandra.migrations.image.*`
@@ -137,6 +138,7 @@ From lowest to highest priority:
 - `cassandra.global.defaultStorageClass`
 
 ### NATS
+
 - `nats.container.image.*`
 - `nats.reloader.image.*`
 - `nats.natsBox.container.image.*`
@@ -144,6 +146,7 @@ From lowest to highest priority:
 - `nats.podTemplate.merge.spec.nodeSelector` (if enabled)
 
 ### OpenBao
+
 - `openbao.migrations.image.*` and `openbao.migrations.env`
 - `openbao.injector.image.*`
 - `openbao.server.image.*`
@@ -151,6 +154,7 @@ From lowest to highest priority:
 - Node selectors (if enabled)
 
 ### Services (API, SIS, etc.)
+
 - `<service>.image.*` (registry, repository)
 - `<service>.nodeSelector` (if enabled)
 - `<service>.env.*` (observability settings)
@@ -172,8 +176,6 @@ addons:
     enabled: true
     gateway:
       replicaCount: 1
-      auth:
-        grpcInsecure: true
       metrics:
         serviceMonitor:
           enabled: false
@@ -192,11 +194,15 @@ agentConfig:
       stargateQUICInsecure: true
 ```
 
-Use `replicaCount: 1` only for local or single-node test clusters. For shared
-or production clusters, use the required replica count and TLS-capable service
-configuration. `addons.llm.gateway.auth.grpcInsecure` and
-`workload.stargateQUICInsecure` enable plaintext transports. Do not use them in
-production.
+Use `replicaCount: 1` only for local or single-node test clusters. The bundled
+NVCF API currently serves plaintext gRPC on port 9090, so the self-managed stack
+defaults the LLM API Gateway authentication hop to plaintext. Set
+`addons.llm.gateway.auth.grpcInsecure: false` only with a TLS-capable NVCF API.
+
+Worker-to-router transport is separate. For shared or production clusters, use
+the required replica count and the managed TLS configuration. The
+`workload.stargateQUICInsecure` setting enables plaintext worker transport and
+must not be used in production.
 
 The request router uses `power-of-two` when no load-balancer configuration is
 set. Configure other routing methods with the
@@ -208,9 +214,16 @@ repository, set the generated worker sidecar image explicitly:
 
 ```yaml
 api:
-  env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.2.1
+  remoteConfig:
+    configData:
+      nvcf:
+        sidecars:
+          llm-router-client-image: <registry>/<repository>/pylon:0.14.1
 ```
+
+The legacy `api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE` path is deprecated.
+The stack translates it for one compatibility window, but new configurations
+must use the remote-config path. Conflicting values fail rendering.
 
 Render and apply the updated control-plane environment, then refresh every
 registered compute plane using the same handoff used for its installation so
@@ -226,9 +239,11 @@ Use the complete compute-plane install command from
 CLI-profile installation must remain profile-driven; a Helmfile installation
 must remain values-driven.
 
-Existing LLM function pods keep their existing sidecar arguments. Recreate or
-redeploy those functions after the compute-plane refresh. Verify the control
-plane, route, and worker sidecar:
+Existing LLM function versions retain the worker-sidecar image metadata
+captured when the version is created. Replacing pods or redeploying the same
+version does not apply a new Pylon image. After the control-plane update,
+create and deploy a new function version. Verify the control plane, route, and
+worker sidecar:
 
 ```bash
 kubectl get deploy -n nvcf llm-api-gateway

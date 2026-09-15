@@ -16,40 +16,38 @@
  */
 package com.nvidia.icms.service.createInstances;
 
+import static com.nvidia.icms.service.byoc.ClusterTargetingHelper.isClusterHealthyAndCapacityAvailable;
+import static com.nvidia.icms.service.createInstances.RequestInstanceDestination.isReservedOrReservedBackupDestination;
+import static com.nvidia.icms.service.createInstances.RequestInstanceDestination.isReservedOrReservedBackupDestinations;
+import static com.nvidia.icms.util.InstanceServiceUtil.isSetEmptyOrNull;
+import static com.nvidia.icms.util.InstanceServiceUtil.isTargetingEnabled;
+
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.inbound.rest.model.CreateSpotInstancesResponse;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
-import com.nvidia.icms.outbound.sqs.QueueManager;
-import com.nvidia.icms.service.platform.ComputePlatformService;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
 import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
-import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
+import com.nvidia.icms.service.internal.InstanceValidationService;
+import com.nvidia.icms.service.extensions.api.ReservationProcessor;
+import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
 import jakarta.validation.constraints.NotNull;
-import lombok.AllArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
-import org.springframework.stereotype.Service;
-
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-
-import static com.nvidia.icms.service.byoc.ClusterTargetingHelper.isClusterHealthyAndCapacityAvailable;
-import static com.nvidia.icms.util.InstanceServiceUtil.isTargetingEnabled;
-import static com.nvidia.icms.service.createInstances.RequestInstanceDestination.isReservedOrReservedBackupDestination;
-import static com.nvidia.icms.service.createInstances.RequestInstanceDestination.isReservedOrReservedBackupDestinations;
-import static com.nvidia.icms.util.InstanceServiceUtil.isSetEmptyOrNull;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.stereotype.Service;
 
 @Service
 @Slf4j
@@ -60,13 +58,12 @@ public class CreateInstanceService {
     private final InstanceLifecycleService instanceLifecycleService;
     private final ByocValidationService byocValidationService;
     private final IcmsConfigurationProperties icmsConfigurationProperties;
-    private final InstanceValidationService instanceValidationService;
     private final RequestDestinationProvider requestDestinationProvider;
     private final ClusterTargetingHelper clusterTargetingHelper;
-    private final QueueManager queueManager;
     private final TelemetryEventClient telemetryEventClient;
     private final ReservationProcessor reservationProcessor;
     private final ComputePlatformService computePlatformService;
+    private final InstanceValidationService instanceValidationService;
 
     public CreateSpotInstancesResponse processInstanceRequest(
             @NotNull String customer,
@@ -75,7 +72,7 @@ public class CreateInstanceService {
         logIncomingInstanceCreationRequest(instanceRequest);
 
         // Validations for taskId
-        instanceValidationService.validationForNvct(instanceRequest);
+        instanceValidationService.validateTaskWorkload(instanceRequest);
 
         byocValidationService.validateNotEmpty(instanceRequest.getNcaId(), instanceRequest.getGpu());
 
@@ -305,4 +302,6 @@ public class CreateInstanceService {
                     " failed to log incoming instance creation request body, error: {}, exception: ", exception.getMessage(), exception);
         }
     }
+
+
 }

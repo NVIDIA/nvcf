@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "vault",
+    srcs = ["client.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/platform/vault",
+    visibility = ["//src/control-plane-services/admin-token-issuer-proxy:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/models",
+        "@com_github_hashicorp_vault_api//:go_default_library",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":vault",
+    visibility = ["//src/control-plane-services/admin-token-issuer-proxy:__subpackages__"],
+)
+
+go_test(
+    name = "vault_test",
+    srcs = ["client_test.go"],
+    embed = [":vault"],
+    deps = ["//src/control-plane-services/admin-token-issuer-proxy/internal/models"],
+)

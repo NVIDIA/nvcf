@@ -38,14 +38,15 @@ verification details.
 
 ## NVCF UI
 
-NVCF UI is an optional addon that deploys a customer-facing NVCF admin-panel UI. 
+NVCF UI is an optional addon that deploys a customer-facing NVCF admin-panel UI.
 It is available only in stack packages that include the
 NVCF UI addon. Older packages do not contain the `nvcf-ui` release
 or route values.
 
 When the addon is present and enabled, it is deployed as the `nvcf-ui`
 service and exposed through the Gateway API route `nvcf-ui.<domain>` by default.
-See [Gateway Routing](./gateway-routing.md#nvcf-ui-optional) for routing and
+See [Enabling NVCF UI](./nvcf-ui.md) for the enablement steps and
+[Gateway Routing](./gateway-routing.md#nvcf-ui-optional) for routing and
 verification details.
 
 ## Physical Simulation Caches

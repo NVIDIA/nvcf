@@ -29,7 +29,7 @@ No human `git tag` step. Steps 3-5 are automatic once the MR merges.
 Each service has its own version line. The git tag format is the
 repo-relative service path plus `v<X.Y.Z>`:
 
-```
+```text
 <service-path>/v<X.Y.Z>
 ```
 
@@ -489,6 +489,7 @@ from the pipeline's perspective but isn't truly idempotent at the
 registry layer.
 
 This matters when:
+
 - A release-worthy commit gets re-published by accident (the tag
   pipeline re-fires after the default-branch one). The second push
   is a no-op via skip.
@@ -515,7 +516,7 @@ and we accept its outcome silently.
 - `tools/ci/generated-release-jobs.yml`: generated output the
   umbrella `.gitlab-ci.yml` includes; do not hand-edit.
 - `BAZEL.md` at the repo root: Bazel-build-related conventions.
-- `deploy/stacks/self-managed/.gitlab-ci.yml`: the self-managed
-  stack's release flow (helmfile-based bundle, not individual chart
-  push). Different shape from service releases; same semantic-release
-  driver.
+- `deploy/stacks/self-managed/`: the self-managed stack publishes a
+  helmfile-based bundle rather than an individual chart, so its
+  packaging differs from a service release. Its version comes from the
+  same semantic-release driver as every other subproject.

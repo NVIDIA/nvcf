@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+tool="${here}/release-bump-type"
+work="$(mktemp -d)"
+trap 'rm -rf "${work}"' EXIT
+
+fail() { echo "test-release-bump-type: $*" >&2; exit 1; }
+expect() {
+  local want=$1; shift
+  local got
+  got="$("$@")" || fail "$* exited non-zero"
+  [ "$got" = "$want" ] || fail "$*: got '$got', want '$want'"
+}
+
+expect 'feat!' "$tool" for-level major
+expect 'feat'  "$tool" for-level minor
+expect 'fix'   "$tool" for-level patch
+expect 'fix'   "$tool" for-level ''
+if "$tool" for-level huge 2>/dev/null; then fail "unknown level must be rejected"; fi
+
+# Branch scan: the largest type among the bump commits wins.
+git -C "$work" init -q -b main .
+git -C "$work" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m 'chore: seed'
+git -C "$work" checkout -q -b bumps
+cd "$work"
+expect 'fix' "$tool" for-branch main
+git -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m 'fix(charts): bump for src/a/v1.0.1'
+expect 'fix' "$tool" for-branch main
+git -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m 'feat(charts): bump for src/b/v1.1.0'
+expect 'feat' "$tool" for-branch main
+git -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m 'fix(charts): bump for src/c/v1.0.2'
+expect 'feat' "$tool" for-branch main
+git -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m 'feat(charts)!: bump for src/d/v2.0.0'
+expect 'feat!' "$tool" for-branch main
+# A scope-less breaking subject is still breaking.
+git -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m 'fix!: bump for src/e/v3.0.0'
+expect 'feat!' "$tool" for-branch main
+
+echo "test-release-bump-type: all checks passed"

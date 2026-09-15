@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- $metricsEnabled := dig "metrics" "enabled" false .Values.llmRequestRouter }}
+{{- $serviceMonitorEnabled := dig "metrics" "serviceMonitor" "enabled" false .Values.llmRequestRouter }}
+{{- if and (eq (include "llm-request-router.backendRouterEnabled" .) "true") $metricsEnabled $serviceMonitorEnabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}-metrics
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+spec:
+  endpoints:
+    - interval: {{ dig "metrics" "serviceMonitor" "interval" "30s" .Values.llmRequestRouter | quote }}
+      path: /metrics
+      port: health
+  namespaceSelector:
+    matchNames:
+      - {{ include "llm-request-router.namespace" . }}
+  selector:
+    matchLabels:
+      {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 6 }}
+{{- end }}

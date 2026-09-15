@@ -72,7 +72,7 @@ type ModelCacheSpec struct {
 	Encryption  *ModelCacheEncryption `json:"encryption,omitempty"`
 	// Backend selects the storage backend used to populate and expose the
 	// cache. Serialized values emitted by SelectHelmCacheBackend for
-	// ModelCacheRequests: "nvmesh" (NVMesh 3.x, nvcf-sc-30), "sharedfs" (a
+	// ModelCacheRequests: "nvmesh" (the model cache class is provisioned by NVMesh), "sharedfs" (a
 	// shared filesystem class, nvcf-miniservice-sc), or "samba" (NVCA-managed
 	// Samba server on block storage). "ephemeral" and "none" never reach a
 	// StorageRequest (ephemeral is a per-pod webhook fallback; none means

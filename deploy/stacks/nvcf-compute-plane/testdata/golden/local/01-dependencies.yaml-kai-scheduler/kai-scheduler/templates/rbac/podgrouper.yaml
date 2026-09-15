@@ -286,6 +286,7 @@ rules:
   - distributedworkloads
   - inferenceworkloads
   - interactiveworkloads
+  - kartas
   - runaijobs
   - trainingworkloads
   verbs:

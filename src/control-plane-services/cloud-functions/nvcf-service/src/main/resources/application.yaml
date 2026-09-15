@@ -207,9 +207,6 @@ nvcf:
     tracing-key: ${kv.worker-tracing}
     hostname: stg.nvcr.io
     image-pull-secret: ${kv.sidecars.image-pull-secret}
-  aws:
-    access-key-id: ${kv.aws.accessKeyId}
-    secret-access-key: ${kv.aws.secretAccessKey}
   registries:
     recognized:
       container:
@@ -302,8 +299,14 @@ nvcf:
   account:
     max-functions-allowed: 50
     max-tasks-allowed: 50
-  scheduled-tasks:
+  scheduler:
     enabled: true
+    function-deployments:
+      current-region: ${spring.application.region}
+      # Default to the current region for single-region deployments. Multi-region
+      # environments must override this with the same ordered list in every region.
+      regions:
+        - ${spring.application.region}
   icms:
     allocator:
       maximum-target-latency: PT10S

@@ -45,6 +45,11 @@ License: MIT License
 https://github.com/labstack/echo
 
 ------------------------------------------------------------------------
+github.com/maypok86/otter/v2 v2.3.0
+License: Apache License 2.0
+https://github.com/maypok86/otter
+
+------------------------------------------------------------------------
 github.com/nats-io/nats.go v1.49.0
 License: Apache License 2.0
 https://github.com/nats-io/nats.go

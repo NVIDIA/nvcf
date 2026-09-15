@@ -34,6 +34,7 @@ Additionally, persist the dump-time mountpoint list into checkpoint `metadata.js
 so restore can generate matching `ExtMnt` maps (avoid “no mapping for mountpoint”).
 
 Notes:
+
 - Deduplicate mountpoints.
 - Preserve ordering stable (sorted by mountpoint length ascending is safest for restore order, but CRIU consumes `ExtMnt` as a set; we can sort lexicographically).
 
@@ -65,6 +66,7 @@ Keep the existing CLI dump implementation as a **temporary fallback** (config co
 We should pass a root that matches the container filesystem view.
 
 Options:
+
 - If `ContainerInfo.RootFS` is an absolute path and exists, use it.
 - Else, use `/proc/<pid>/root` (or `/host/proc/<pid>/root`) as the Root path.
 
@@ -84,6 +86,7 @@ We can implement A4 after A1/A2 unblock dump.
 ### A5) Deterministic checkpoint cleanup (always)
 
 Before creating a new checkpoint for a given `(namespace, podName)`:
+
 - Delete existing checkpoint directories matching `<pod>-<ns>-*` under the checkpoint root.
 
 This keeps host storage clean and avoids confusion during iteration.
@@ -99,4 +102,3 @@ This keeps host storage clean and avoids confusion during iteration.
 
 - Removing dead custom flags from the CRIU fork itself (can be done after stability).
 - Reworking uvloop shims or io_uring patches (separate tracks).
-

@@ -51,10 +51,10 @@ assert_eq() {
   local message=${3}
 
   if [[ "${got}" != "${want}" ]]; then
-    printf '✗ %s: got %q, want %q\n' "${message}" "${got}" "${want}" >&2
+    printf 'FAIL %s: got %q, want %q\n' "${message}" "${got}" "${want}" >&2
     return 1
   fi
-  printf '✓ %s\n' "${message}"
+  printf 'ok %s\n' "${message}"
 }
 
 assert_pre_delete_cleanup_rbac() {
@@ -90,6 +90,164 @@ assert_pre_delete_cleanup_rbac() {
     "$(yq 'select(.kind == "ClusterRole" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
     "pre-delete cleanup hook RBAC is kept for the running Job"
 }
+
+assert_storage_capability_catalog() (
+  local service_chart="${repo_root}/deployments/nvca-operator"
+  local release_chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
+  local catalog="files/nvcf-storage-capabilities-v1alpha1.yaml"
+  local schema="files/nvcf-storage-capabilities-v1alpha1.schema.json"
+  local template="templates/storage-capabilities-configmap.yaml"
+  local rendered missing_chart schema_python tmpdir invalid_catalog schema_check
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "${tmpdir}"' EXIT
+  missing_chart="${tmpdir}/missing-chart"
+  schema_python="${tmpdir}/venv/bin/python"
+  python3 -m venv --system-site-packages "${tmpdir}/venv"
+  "${schema_python}" -m pip install --disable-pip-version-check --quiet \
+    --requirement "${repo_root}/scripts/requirements-lint.txt"
+  schema_check='import json,sys,yaml,jsonschema; schema=json.load(open(sys.argv[1])); jsonschema.Draft202012Validator.check_schema(schema); jsonschema.Draft202012Validator(schema).validate(yaml.safe_load(open(sys.argv[2])))'
+
+  for relative in "${catalog}" "${schema}" "${template}"; do
+    diff -u "${service_chart}/${relative}" "${release_chart}/${relative}"
+  done
+
+  rendered="${tmpdir}/rendered.yaml"
+  helm template test-release "${service_chart}" --namespace nvca-system \
+    --set "ngcConfig.serviceKey=fakekey" \
+    --show-only "${template}" >"${rendered}"
+  assert_eq "nvcf-storage-capabilities" "$(yq -r ".metadata.name" "${rendered}")" \
+    "storage capability ConfigMap uses the stable name"
+  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
+    "storage capability ConfigMap is owned by the chart release namespace"
+  assert_eq "$(<"${service_chart}/${catalog}")" \
+    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
+    "storage capability ConfigMap embeds the exact catalog payload"
+  "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${service_chart}/${catalog}"
+
+  invalid_catalog="${tmpdir}/invalid-catalog.yaml"
+  for mutation in \
+    'del((.drivers[] | select(.name == "csi.weka.io")).accessModes)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).accessModes = null'; do
+    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null accessModes" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null accessModes"
+
+  for mutation in \
+    'del((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = null'; do
+    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null readerMountOptions"
+
+  yq '(.drivers[] | select(.name == "nvmesh-csi.excelero.com")).readerMountOptions = ["ro", " norecovery", "nouuid"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject readerMountOptions with surrounding whitespace" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects readerMountOptions with surrounding whitespace"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).transitions.regularModelCache = "roxReadOnly"' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a declared transition" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a declared transition, the flow is derived"
+
+  for options in \
+    '["ro", "rw", "norecovery", "nouuid"]' \
+    '["ro", "recovery", "norecovery", "nouuid"]' \
+    '["ro", "norecovery", "uuid", "nouuid"]'; do
+    yq "(.drivers[] | select(.name == \"nvmesh-csi.excelero.com\")).readerMountOptions = ${options}" \
+      "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject conflicting readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects conflicting readerMountOptions"
+
+  yq '((.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
+      ((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = [])' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a ReadOnlyMany reader shape without ro" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a ReadOnlyMany reader shape without a read-only mount"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadOnlyMany"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject ReadOnlyMany with no writer mode" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects ReadOnlyMany with no writer mode"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteMany"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if ! "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}"; then
+    echo "Expected schema to accept a shared claim driver with no reader options" >&2
+    return 1
+  fi
+  echo "PASS: schema accepts a shared claim driver with no reader options"
+
+  yq 'del((.drivers[] | select(.name == "csi.weka.io")).name)' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a driver with no name" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a driver with no name"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).unexpected = true' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject an unknown driver field" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects an unknown driver field"
+
+  helm template test-release "${release_chart}" --namespace nvca-system \
+    --show-only "${template}" >"${rendered}"
+  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
+    "release-chart storage capability ConfigMap is owned by the release namespace"
+  assert_eq "$(<"${service_chart}/${catalog}")" \
+    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
+    "release chart embeds the exact catalog payload"
+
+  mkdir -p "${missing_chart}"
+  cp -a "${service_chart}/." "${missing_chart}/"
+  rm -f "${missing_chart}/${catalog}"
+  if helm template test-release "${missing_chart}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}" 2>&1; then
+    echo "Expected rendering without the storage capability catalog to fail" >&2
+    return 1
+  fi
+  grep -q "required NVCF storage capability catalog" "${rendered}"
+  echo "PASS: storage capability catalog schema, render, payload, and chart parity"
+)
+
+assert_storage_capability_catalog
 
 # The Bazel-built NVCA operator image is distroless, so the rendered workload
 # commands must execute the packaged binaries directly. A /tini wrapper would
@@ -184,7 +342,7 @@ assert_service_oauth_nil_safe() {
     exit 1
   fi
   rm -f "${render_output}"
-  echo "✓ ${label} cluster-dto renders nil-safely without agent.serviceOAuth defaults"
+  echo "ok ${label} cluster-dto renders nil-safely without agent.serviceOAuth defaults"
 }
 
 assert_service_oauth_nil_safe "helm-managed" \
@@ -290,7 +448,7 @@ assert_transport_trust_config() {
     exit 1
   fi
   rm -f "${render_output}"
-  echo "✓ ${label} workload transport trust ConfigMap renders"
+  echo "ok ${label} workload transport trust ConfigMap renders"
 }
 
 assert_transport_trust_config "default" "" "" "" --set "ngcConfig.serviceKey=fakekey"
@@ -335,22 +493,22 @@ helm template test-release "${repo_root}/deployments/nvca-operator" \
   --values "${repo_root}/test/test-network-policies.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap created" || echo "✗ Network policies ConfigMap missing"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap created" || echo "FAIL Network policies ConfigMap missing"
 
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --values "${repo_root}/test/test-custom-annotations.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Custom annotations ConfigMap created" || echo "✗ Custom annotations ConfigMap missing"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Custom annotations ConfigMap created" || echo "FAIL Custom annotations ConfigMap missing"
 
 # Test ConfigMaps are created even without custom values (always created behavior)
 echo "Testing ConfigMaps are always created..."
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Annotations ConfigMap always created" || echo "✗ Annotations ConfigMap not created"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Annotations ConfigMap always created" || echo "FAIL Annotations ConfigMap not created"
 
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap always created" || echo "✗ Network policies ConfigMap not created"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap always created" || echo "FAIL Network policies ConfigMap not created"

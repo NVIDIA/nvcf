@@ -30,11 +30,13 @@ import (
 
 type CheckRequest struct {
 	TargetClusterName string
+	GatewayHTTPURL    string
 	ICMSURL           string
 	ReValURL          string
 	NATSURL           string
 	SISHost           string
 	ReValHost         string
+	NATSHost          string
 	HTTPClient        *http.Client
 	ProbeHTTP         bool
 }
@@ -64,18 +66,22 @@ func (e *CheckError) Error() string {
 
 func Check(ctx context.Context, req CheckRequest) error {
 	var problems []string
-	problems = append(problems, validateHTTPService("controlPlane.endpoints.computeReachable.icmsURL", req.ICMSURL, "controlPlane.hosts.sis", req.SISHost)...)
-	problems = append(problems, validateHTTPService("controlPlane.endpoints.computeReachable.revalURL", req.ReValURL, "controlPlane.hosts.reval", req.ReValHost)...)
-	problems = append(problems, validateNATSServiceShape(req.NATSURL)...)
+	problems = append(problems, validateHTTPService("controlPlane.endpoints.computeReachable.icmsURL", req.ICMSURL, req.GatewayHTTPURL, "controlPlane.hosts.sis", req.SISHost)...)
+	problems = append(problems, validateHTTPService("controlPlane.endpoints.computeReachable.revalURL", req.ReValURL, req.GatewayHTTPURL, "controlPlane.hosts.reval", req.ReValHost)...)
+	problems = append(problems, validateNATSServiceShape(req.NATSURL, req.GatewayHTTPURL, req.NATSHost)...)
 	if len(problems) == 0 && req.ProbeHTTP {
 		client := req.HTTPClient
 		if client == nil {
 			client = &http.Client{Timeout: 10 * time.Second}
 		}
-		if err := probeHTTP(ctx, client, req.ICMSURL, req.SISHost); err != nil {
+		probeClient := *client
+		probeClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		if err := probeHTTP(ctx, &probeClient, req.ICMSURL, "/health", req.SISHost, "controlPlane.hosts.sis"); err != nil {
 			problems = append(problems, fmt.Sprintf("controlPlane.endpoints.computeReachable.icmsURL: %v", err))
 		}
-		if err := probeHTTP(ctx, client, req.ReValURL, req.ReValHost); err != nil {
+		if err := probeHTTP(ctx, &probeClient, req.ReValURL, "/info", req.ReValHost, "controlPlane.hosts.reval"); err != nil {
 			problems = append(problems, fmt.Sprintf("controlPlane.endpoints.computeReachable.revalURL: %v", err))
 		}
 	}
@@ -85,7 +91,7 @@ func Check(ctx context.Context, req CheckRequest) error {
 	return nil
 }
 
-func validateHTTPService(urlField, rawURL, hostField, hostHeader string) []string {
+func validateHTTPService(urlField, rawURL, gatewayHTTPURL, hostField, hostHeader string) []string {
 	var problems []string
 	if strings.TrimSpace(rawURL) == "" {
 		return []string{urlField + ": required"}
@@ -97,13 +103,13 @@ func validateHTTPService(urlField, rawURL, hostField, hostHeader string) []strin
 	if u.Scheme != "http" && u.Scheme != "https" {
 		problems = append(problems, urlField+": scheme must be http or https")
 	}
-	if isGatewayAddress(u.Hostname()) && strings.TrimSpace(hostHeader) == "" {
-		problems = append(problems, fmt.Sprintf("%s: required as Host header when %s uses a gateway address", hostField, urlField))
+	if isGatewayAddress(u.Hostname(), gatewayHTTPURL) && strings.TrimSpace(hostHeader) == "" {
+		problems = append(problems, fmt.Sprintf("%s: required when %s uses a shared gateway address; set %s to the service Host header", hostField, urlField, hostField))
 	}
 	return problems
 }
 
-func validateNATSServiceShape(rawURL string) []string {
+func validateNATSServiceShape(rawURL, gatewayHTTPURL, hostHeader string) []string {
 	if strings.TrimSpace(rawURL) == "" {
 		return []string{"controlPlane.endpoints.computeReachable.natsURL: required"}
 	}
@@ -114,11 +120,20 @@ func validateNATSServiceShape(rawURL string) []string {
 	if u.Scheme != "nats" && u.Scheme != "tls" {
 		return []string{"controlPlane.endpoints.computeReachable.natsURL: scheme must be nats or tls; TCP reachability is not probed"}
 	}
+	if isGatewayAddress(u.Hostname(), gatewayHTTPURL) && strings.TrimSpace(hostHeader) == "" {
+		return []string{"controlPlane.hosts.nats: required when controlPlane.endpoints.computeReachable.natsURL uses a shared gateway address; set controlPlane.hosts.nats to the service Host header"}
+	}
 	return nil
 }
 
-func probeHTTP(ctx context.Context, client *http.Client, rawURL, hostHeader string) error {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+func probeHTTP(ctx context.Context, client *http.Client, rawURL, probePath, hostHeader, hostField string) error {
+	probeURL, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	probeURL.Path = strings.TrimRight(probeURL.Path, "/") + probePath
+	probeURL.RawPath = ""
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -131,18 +146,22 @@ func probeHTTP(ctx context.Context, client *http.Client, rawURL, hostHeader stri
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= http.StatusInternalServerError {
-		return fmt.Errorf("status %d", resp.StatusCode)
+	if (resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices) && resp.StatusCode != http.StatusUnauthorized {
+		return fmt.Errorf("status %d from %s; verify the endpoint routes %s to the service and set %s to the required Host header when using a shared gateway", resp.StatusCode, probePath, probePath, hostField)
 	}
 	return nil
 }
 
-func isGatewayAddress(host string) bool {
+func isGatewayAddress(host, gatewayHTTPURL string) bool {
 	if host == "" {
 		return false
 	}
 	if net.ParseIP(host) != nil {
 		return true
 	}
-	return strings.EqualFold(host, "localhost")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	gateway, err := url.Parse(gatewayHTTPURL)
+	return err == nil && gateway.Hostname() != "" && strings.EqualFold(host, gateway.Hostname())
 }

@@ -18,7 +18,9 @@ package com.nvidia.icms.outbound.cassandra.byoc;
 
 import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
+import java.util.List;
 import org.springframework.data.cassandra.repository.CassandraRepository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -26,5 +28,22 @@ public interface ClusterByIdRepo extends
         CassandraRepository<ClusterEntity, String>,
         IcmsDatabaseRepository<ClusterEntity> {
 
+    /**
+     * Backed by the {@code idx_cluster_by_nca_id} storage-attached index.
+     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
+     */
+    List<ClusterEntity> findAllByNcaId(@Param("ncaId") String ncaId);
+
+    /**
+     * Backed by the {@code idx_cluster_by_cluster_group_id} storage-attached index.
+     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
+     */
+    List<ClusterEntity> findAllByClusterGroupId(@Param("clusterGroupId") String clusterGroupId);
+
+    /**
+     * Backed by the {@code idx_cluster_by_authorized_nca_ids} storage-attached index.
+     * Used only when {@code icms.cluster-by-id-reads-enabled} is on.
+     */
+    List<ClusterEntity> findAllByAuthorizedNcaIdsContains(@Param("ncaId") String ncaId);
 }
 

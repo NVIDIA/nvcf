@@ -2,16 +2,15 @@
 
 This CLI tool turns a structured YAML specification into a human-readable Markdown document.  
 
-
-## Requirement 
+## Requirement
 
 uv
 
-run uv sync to download the dependency 
-```
+run uv sync to download the dependency
+
+```bash
 uv sync
 ```
-
 
 ## Command-Line Usage
 

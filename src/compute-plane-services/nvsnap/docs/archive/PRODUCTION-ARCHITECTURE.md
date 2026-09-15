@@ -7,6 +7,7 @@ What are we actually trying to achieve?
 **Goal**: Save a running GPU container's complete state and restore it later.
 
 **State Components**:
+
 1. **Process State** (CPU registers, memory, file descriptors) → CRIU
 2. **Container State** (namespaces, cgroups, rootfs) → containerd
 3. **GPU State** (CUDA context, GPU memory) → cuda-checkpoint
@@ -17,7 +18,7 @@ What are we actually trying to achieve?
 
 ### Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           nvsnap-agent (Go)                                   │
 │                                                                              │
@@ -143,11 +144,13 @@ func (a *Agent) Restore(ctx context.Context, checkpointDir string) error {
 ### Pros/Cons of Option A
 
 **Pros:**
+
 - Clean Go code, proper libraries
 - Type-safe, testable
 - Production quality
 
 **Cons:**
+
 - Complex - still fighting namespace injection
 - go-criu restore into existing container is tricky
 - Still need to coordinate containerd + CRIU + cuda-checkpoint
@@ -159,24 +162,27 @@ func (a *Agent) Restore(ctx context.Context, checkpointDir string) error {
 ### Key Insight
 
 The reason checkpoint/restore is hard is because we're trying to:
+
 1. Checkpoint a CONTAINER (complex: namespaces, rootfs, cgroups)
 2. Restore into a DIFFERENT container
 
 ### Alternative: Don't checkpoint the container, checkpoint the WORKLOAD
 
 For ML inference workloads like vLLM, the "state" is really:
+
 - Model weights → Already on disk/PVC
 - KV cache → In GPU memory (cuda-checkpoint handles this)
 - Request queue → In process memory
 
 What if we:
+
 1. **Don't** use container-level checkpoint
 2. **Only** checkpoint the process + GPU state
 3. Restore into a fresh container with the same image
 
 ### Simpler Flow
 
-```
+```text
 CHECKPOINT:
 1. Pod running vLLM
 2. cuda-checkpoint --lock (freeze GPU)
@@ -246,7 +252,7 @@ Combine the best of both:
 
 ### Final Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              nvsnap-agent                                     │
 │                                                                              │
@@ -295,21 +301,25 @@ Combine the best of both:
 ## Implementation Plan
 
 ### Phase 1: Core Libraries (2-3 hours)
+
 1. Add containerd client dependency
 2. Add go-criu dependency
 3. Implement container discovery via containerd API
 4. Implement CRIU dump via go-criu
 
 ### Phase 2: Restore Logic (2-3 hours)
+
 1. Implement namespace discovery
 2. Implement CRIU restore with namespace injection
 3. Test with simple container
 
 ### Phase 3: GPU Integration (1-2 hours)
+
 1. Integrate cuda-checkpoint calls
 2. Test with GPU container
 
 ### Phase 4: K8s Integration (1-2 hours)
+
 1. Controller for CRD watching
 2. Pod creation for restore
 3. End-to-end test
@@ -318,7 +328,7 @@ Combine the best of both:
 
 ## Key Files to Create/Modify
 
-```
+```text
 internal/
 ├── containerd/
 │   └── client.go       # containerd Go client wrapper

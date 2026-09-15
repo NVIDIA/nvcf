@@ -19,6 +19,7 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -27,6 +28,7 @@ import (
 	"github.com/cucumber/godog"
 
 	"nvcf-bdd/dsl"
+	"nvcf-bdd/harness"
 )
 
 const (
@@ -38,16 +40,64 @@ const (
 
 var computeClusterRE = regexp.MustCompile(computeClusterNamePattern)
 
-// registerInfraSteps hooks the three infrastructure-bootstrap Givens
-// spelled out in PLAN.md. Each wraps exactly one Make target or one
-// composite of kubectl calls; the bootstrap make commands are cached
-// per suite so a feature with N scenarios re-runs the cluster build
-// at most once.
+// registerInfraSteps hooks the infrastructure-bootstrap Givens spelled out in
+// PLAN.md. Each wraps one named operator action, Make target, or composite of
+// kubectl calls. Idempotent actions are cached per suite.
 func registerInfraSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^a single-cluster ncp-local cluster is running$`, sc.singleClusterIsRunning)
 	ctx.Step(`^multi-cluster ncp-local compute clusters are running:$`, sc.multiClusterComputeRunning)
+	ctx.Step(`^Helm is authenticated to OCI registry "([^"]*)" using the current NGC API key$`, sc.helmIsAuthenticatedToOCIRegistry)
 	ctx.Step(`^the "([^"]*)" image pull secret exists in namespaces:$`, sc.pullSecretInNamespaces)
 	ctx.Step(`^the "([^"]*)" image pull secret exists in namespaces using context "([^"]*)":$`, sc.pullSecretInNamespacesUsingContext)
+}
+
+func (sc *ScenarioContext) helmIsAuthenticatedToOCIRegistry(ctx context.Context, registry string) error {
+	resolvedRegistry := strings.TrimSpace(dsl.Interpolate(registry))
+	command, err := dsl.HelmRegistryLoginCommand(resolvedRegistry)
+	if err != nil {
+		return err
+	}
+	apiKey := os.Getenv("NGC_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("NGC_API_KEY is not set")
+	}
+	if sc.Suite.Cache.Has(command) {
+		sc.LastResult = harness.Result{ExitCode: 0}
+		sc.LastErr = nil
+		sc.LastCommand = command
+		return nil
+	}
+
+	result, runErr := sc.Suite.Runner.RunWithSensitiveStdin(ctx, command, apiKey)
+	result.Stdout = redactValue(result.Stdout, apiKey)
+	result.Stderr = redactValue(result.Stderr, apiKey)
+	sc.LastResult = result
+	sc.LastCommand = command
+	if runErr != nil {
+		safeRunErr := errors.New(redactValue(runErr.Error(), apiKey))
+		sc.LastErr = safeRunErr
+		diagnostic := strings.TrimSpace(result.Stderr)
+		if diagnostic == "" {
+			diagnostic = safeRunErr.Error()
+		}
+		return fmt.Errorf(
+			"authenticate Helm to OCI registry %q: exit code %d: %s",
+			resolvedRegistry,
+			result.ExitCode,
+			diagnostic,
+		)
+	}
+
+	sc.LastErr = nil
+	sc.Suite.Cache.Record(command)
+	return nil
+}
+
+func redactValue(value, sensitive string) string {
+	if sensitive == "" {
+		return value
+	}
+	return strings.ReplaceAll(value, sensitive, "[REDACTED]")
 }
 
 func (sc *ScenarioContext) singleClusterIsRunning(ctx context.Context) error {

@@ -68,7 +68,7 @@ func manifestIsRootfs(m checkpointstore.Manifest) bool {
 
 ### New dispatch in Mutate
 
-```
+```text
 resolve hash
 manifest = Backend.Stat(hash)            // Stat FIRST (currently after L2)
 if manifestIsRootfs(manifest):
@@ -112,8 +112,8 @@ for whisper/Riva.)
 
 Mechanism: extend `PerCapturePVCBackend.Mount` to honor a `SubPath`
 on `VolumeMeta` and emit `readOnly` subpath volumeMounts of the rox
-PVC. `buildPatches` (rootfs + L2 bound) iterates `RootfsExtractPaths`
-+ user-data `Volumes` and calls `L2Backend.Mount` with the subPath set.
+PVC. `buildPatches` (rootfs + L2 bound) iterates `RootfsExtractPaths` -
+user-data `Volumes` and calls `L2Backend.Mount` with the subPath set.
 The rox PVC `Volume` is added once (dedup by name); one `volumeMount`
 with `subPath` per item. No command override; original entrypoint runs.
 

@@ -17,16 +17,63 @@ limitations under the License.
 package invocation
 
 import (
+	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"nvcf-grpc-proxy/proxy/metrics"
 )
+
+func TestNatsErrorReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "expired certificate", err: x509.CertificateInvalidError{Reason: x509.Expired}, want: metrics.NatsErrorReasonCertificateExpired},
+		{name: "verification failure", err: x509.UnknownAuthorityError{}, want: metrics.NatsErrorReasonTLSVerification},
+		{name: "generic tls failure", err: errors.New("remote error: tls: bad certificate"), want: metrics.NatsErrorReasonTLS},
+		{name: "authentication failure", err: nats.ErrAuthorization, want: metrics.NatsErrorReasonAuthentication},
+		{name: "timeout", err: context.DeadlineExceeded, want: metrics.NatsErrorReasonTimeout},
+		{name: "connection failure", err: io.EOF, want: metrics.NatsErrorReasonConnection},
+		{name: "other failure", err: errors.New("unexpected error"), want: metrics.NatsErrorReasonOther},
+		{name: "wrapped error", err: fmt.Errorf("reconnect: %w", nats.ErrAuthExpired), want: metrics.NatsErrorReasonAuthentication},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, natsErrorReason(test.err))
+		})
+	}
+}
+
+func TestRecordNatsDisconnect(t *testing.T) {
+	before := testutil.ToFloat64(metrics.NatsDisconnectCounter)
+	recordNatsDisconnect(io.EOF)
+	assert.Equal(t, before+1, testutil.ToFloat64(metrics.NatsDisconnectCounter))
+}
+
+func TestRecordNatsAsyncError(t *testing.T) {
+	failureCounter := metrics.NatsFailureCounter.WithLabelValues(metrics.NatsErrorReasonTimeout)
+	errorBefore := testutil.ToFloat64(metrics.NatsErrorCounter)
+	failureBefore := testutil.ToFloat64(failureCounter)
+	recordNatsAsyncError(context.DeadlineExceeded)
+	assert.Equal(t, errorBefore+1, testutil.ToFloat64(metrics.NatsErrorCounter))
+	assert.Equal(t, failureBefore+1, testutil.ToFloat64(failureCounter))
+}
 
 func TestNewNkeyAuthOption(t *testing.T) {
 	t.Run("valid nkey seed", func(t *testing.T) {

@@ -38,6 +38,11 @@ OpenAI-style ready endpoint work without extra configuration. The repeatable
 in place as a fallback, and `--upstream-health-wait-ms` bounds how long startup
 retries the probe (default 60000; `0` probes once and exits).
 
+For engines without a stats endpoint, set `pylon --max-engine-concurrency N`
+to provide a positive concurrency fallback for routing and local queue
+admission. Engine-reported limits take precedence. See the
+[runtime stats interface](docs/runtime-stats-interface.md#concurrency-fallback).
+
 Use [docs/README.md](docs/README.md) as the docs entrypoint.
 Use [local quickstart](docs/getting-started/local-quickstart.md) to run the local stack.
 
@@ -68,6 +73,19 @@ development-only CLI option and must not be used in production. Use
 [`stargate-k8s-router`](docs/operations/deployment-shape.md) or a supported
 load-balancer topology for production backend traffic.
 
+## Load balancing
+
+Use `wait-and-widen` with `cache_affinity_wait_ms` to keep requests in their
+cache-affinity group before opening global TTFT buckets. The setting defaults
+to `0`. A positive value works without a request SLO header. Optional
+`cache_affinity_input_tokens_scale` discounts request prefill during affinity
+selection. Global buckets include every candidate, including the affinity
+group, at full prefill cost. Queued work and the expected queue header sent to
+Pylon are not discounted.
+
+See [Load balancer configuration](docs/load-balancer-configuration.md) for
+examples, defaults, routing deadlines, and retry behavior.
+
 ## Read First
 
 | Need | Read |
@@ -90,6 +108,10 @@ load-balancer topology for production backend traffic.
 - `crates/protocol`: tunnel framing
 - `crates/mock-dynamo`: local OpenAI-style backend
 - `crates/stargate-bench`: benchmark runner
+
+The versioned Stargate runtime image also includes
+`/usr/local/bin/stargate-k8s-router`. Kubernetes deployments can run the main
+Stargate process and the backend router from the same immutable image tag.
 
 ## Benchmarks
 

@@ -53,6 +53,13 @@ const (
 // current production.
 const (
 	DefaultCollectorImage = "nvcr.io/nvidia/nvcf-core/byoo-otel-collector:0.153.1"
+
+	// CollectorImageAlt pins an older 0.126.x-line sidecar (log chunking plus
+	// collector health metrics). Pass it via --collector-image to size against
+	// this build instead of the default 0.15x line. The tag and registry may
+	// differ depending on where the image is published.
+	CollectorImageAlt = "nvcr.io/nvidia/nvcf-core/byoo-otel-collector:0.126.31"
+
 	DefaultInferenceImage = "nvcr.io/nvidia/nvcf-perf/stub-inference:latest"
 	DefaultUtilsImage     = "nvcr.io/nvidia/nvcf-core/worker-utils:latest"
 	DefaultInitImage      = "nvcr.io/nvidia/nvcf-core/worker-init:latest"

@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
@@ -120,13 +121,14 @@ const (
 	SrvCertsMountDir           = "/certs/server"
 	CACertsMountDir            = "/certs/ca"
 
-	agentConfigDir                = "/var/run/nvca"
-	agentConfigFile               = "config.yaml"
-	agentConfigFilePath           = agentConfigDir + "/" + agentConfigFile
-	agentConfigConfigMapName      = "agent-config"
-	agentConfigMergeConfigMapName = "agent-config-merge"
-	nvcaOperatorConfigMapName     = "nvca-operator-config"
-	agentConfigVolumeName         = "agent-config"
+	agentConfigDir                   = "/var/run/nvca"
+	agentConfigFile                  = "config.yaml"
+	agentConfigFilePath              = agentConfigDir + "/" + agentConfigFile
+	agentConfigConfigMapName         = "agent-config"
+	agentConfigMergeConfigMapName    = "agent-config-merge"
+	nvcaOperatorConfigMapName        = "nvca-operator-config"
+	agentConfigVolumeName            = "agent-config"
+	legacyFirstClassConfigAnnotation = "nvcf.nvidia.com/legacy-first-class-config"
 
 	// ReVal config.
 	ReValCacheVolumeName = "reval-rendered-helmcharts"
@@ -542,9 +544,9 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
-	webhookCert, err := generateWebhookCerts(nb, bc.now())
+	webhookCert, err := bc.ensureWebhookCert(ctx, nb, bc.now())
 	if err != nil {
-		return fmt.Errorf("failed to create webhookCerts, err: %w", err)
+		return fmt.Errorf("failed to ensure webhookCerts, err: %w", err)
 	}
 
 	if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {
@@ -776,8 +778,11 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			},
 			{
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
-				Resources: []string{"storagerequests", "storagerequests/status"},
-				Verbs:     crudVerbs,
+				Resources: []string{
+					"modelcachebindings", "modelcachebindings/status",
+					"storagerequests", "storagerequests/status",
+				},
+				Verbs: crudVerbs,
 			},
 			{
 				APIGroups: []string{"storage.k8s.io"},
@@ -1441,20 +1446,30 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 	if err != nil {
 		return nvcaconfig.Config{}, false, err
 	}
-	if !foundOperatorCfg {
-		return mergeCfg, foundMergeCfg, nil
-	}
-	if mergeCfg.Workload.TransportTLS != nil {
+	if foundOperatorCfg && mergeCfg.Workload.TransportTLS != nil {
 		return nvcaconfig.Config{}, false,
-			fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName)
+			nvcaoperatorerrors.FatalError(
+				fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName))
 	}
 
-	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
-	if err := mergeCfg.Validate(); err != nil {
+	if foundOperatorCfg {
+		mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	}
+	if err := validateAgentConfigToMerge(mergeCfg); err != nil {
 		return nvcaconfig.Config{}, false,
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
 	}
-	return mergeCfg, true, nil
+	return mergeCfg, foundMergeCfg || foundOperatorCfg, nil
+}
+
+func validateAgentConfigToMerge(cfg nvcaconfig.Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if cfg.Workload.TransportTLS == nil {
+		return nil
+	}
+	return transporttls.ValidateConfig(transporttls.NormalizeConfig(*cfg.Workload.TransportTLS))
 }
 
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
@@ -1477,7 +1492,28 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 		return nvcaconfig.Config{}, false,
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
 	}
+	if bc.shouldWarnForLegacyFirstClassConfig(cm) {
+		log.WithFields(logrus.Fields{
+			"configmapNamespace": cm.Namespace,
+			"configmapName":      cm.Name,
+		}).Warn("ConfigMap contains deprecated agentConfig.mergeConfig settings that now have first-class chart values; migrate to the top-level byoo/utils/storage/worker chart values before the next minor release")
+	}
 	return cfg, true, nil
+}
+
+func (bc *BackendK8sCache) shouldWarnForLegacyFirstClassConfig(cm *corev1.ConfigMap) bool {
+	if cm.Annotations[legacyFirstClassConfigAnnotation] != "true" {
+		return false
+	}
+
+	bc.legacyFirstClassConfigWarningMu.Lock()
+	defer bc.legacyFirstClassConfigWarningMu.Unlock()
+	if bc.legacyFirstClassConfigWarningSeen && bc.legacyFirstClassConfigWarningResourceVersion == cm.ResourceVersion {
+		return false
+	}
+	bc.legacyFirstClassConfigWarningResourceVersion = cm.ResourceVersion
+	bc.legacyFirstClassConfigWarningSeen = true
+	return true
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {
@@ -2170,6 +2206,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 				},
 			},
 		},
+	}
+	// GracefulNoGPU deliberately keeps the agent NotReady while the cluster has
+	// no GPUs. A rolling update would therefore surge a second singleton agent
+	// and retain the old replica indefinitely. Recreate keeps configuration
+	// rollouts single-active while preserving the default rollout behavior for
+	// clusters that do not opt in.
+	if slices.Contains(strings.Split(bc.getNVCAFeatureFlags(nb), ","), featureflag.GracefulNoGPU.Key) {
+		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
 	}
 
 	if nb.Spec.VaultConfig.Enabled {

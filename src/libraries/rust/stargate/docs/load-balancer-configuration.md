@@ -149,9 +149,28 @@ compares every eligible cluster once.
 forwarded health RTT + queue delay + request prefill time
 ```
 
-The queue delay uses the backend's priority-aware queue estimate when present.
-Otherwise it divides queued input tokens by `last_mean_input_tps`. Prefill time
-divides `x-input-tokens` by the same capacity signal.
+Queue delay is zero when the reported engine concurrency limit is positive and
+the active request count is below that limit. Active requests include prefill,
+decode, and pending routing reservations. The new request's own prefill time
+still contributes to TTFT.
+
+At or above the limit, or when the limit is unknown, queue delay uses the
+backend's priority-aware queue estimate when present. Otherwise it divides
+queued input tokens by `last_mean_input_tps`. Prefill time divides
+`x-input-tokens` by the same throughput signal.
+
+Pylon applies the same free-slot rule to local queue admission, excluding the
+incoming request's own reservation. Engine stats pings can advertise a model's
+`max_engine_concurrency`. Pylon's `--max-engine-concurrency N` supplies a fallback
+when the engine has not reported a limit, such as when no stats endpoint exists.
+A positive engine report takes precedence; a zero report restores the fallback.
+Without either source, Pylon advertises zero, meaning unknown. See
+[Runtime stats interface](runtime-stats-interface.md#concurrency-fallback).
+Raw queued-token counts and
+priority work estimates are retained even while effective queue delay is zero,
+so they remain available when pending assignments fill the last slot. This rule
+also applies to the queue component of other Stargate comparators and the
+expected queue header sent to Pylon.
 
 The algorithm groups close TTFT values into buckets. It samples `n`
 candidates from unlocked buckets and chooses the candidate with the lowest
@@ -163,10 +182,48 @@ When `cache_affinity_backend_selection_count` is enabled and the request has
 `x-cache-affinity-key`, a consistent hash ring first limits selection to a
 stable subset. Normal TTFT selection runs within that subset. The seed, routing
 key, model ID, affinity key, cluster ID, and virtual-node index contribute to
-the hash. If the subset has no usable candidate, selection falls back to the
-complete candidate set.
+the hash. Retry exclusions remove failed members from selection without
+replacing them in the affinity group. A cold successor therefore participates
+only in global selection and does not receive the affinity discount.
 
-Minimal configuration:
+`cache_affinity_wait_ms` sets X, the minimum time from request arrival before
+global buckets become eligible. Until X, requests can select only from the
+affinity group. If no affine candidate is usable, the proxy waits and rechecks
+capacity. After X, the first global TTFT bucket opens. Global buckets include
+all candidates, including the original affinity group, at full prefill cost.
+Retry exclusions and queue-admission checks still apply. Later global buckets
+use only elapsed time after X. An available affine candidate remains preferred
+through the initial affinity selection on each routing attempt.
+
+```text
+Each routing attempt
+        |
+        v
+Check affine set A, B -------- selectable ------> dispatch
+        |
+   no selection
+        |
+        +--- elapsed < X ----------------------> wait, then retry from top
+        |
+        +--- elapsed >= X ---> check global set A, B, C, D
+                                      |
+                                      +--- selectable ---> dispatch
+                                      +--- no selection -> retry if budget remains
+```
+
+X defaults to `0`. Neither `x-request-slo-ms` nor `x-max-wait-ms` is required
+for a configured affinity wait. The SLO header controls queue-admission
+interpolation; it does not shorten X. An explicit `x-max-wait-ms` can end the
+routing wait before X, with HTTP `503` if no affine candidate is available.
+
+`cache_affinity_input_tokens_scale` multiplies only the current request's
+prefill input during affinity selection. It defaults to `1.0` and accepts
+values from `0.0` through `1.0`. Global selection uses full prefill cost for
+every candidate, including affine candidates. The scale does not change queued
+work, routing reservations, or the expected queue header sent to Pylon. A scale
+of `0.0` does not make invalid input throughput usable for nonzero request input.
+
+Example with a 200 ms affinity wait and a 10 percent prefill estimate:
 
 ```json
 {
@@ -175,7 +232,9 @@ Minimal configuration:
     "model-a": {
       "algorithm": "wait-and-widen",
       "require_cache_affinity_key": true,
-      "cache_affinity_backend_selection_count": 2
+      "cache_affinity_backend_selection_count": 2,
+      "cache_affinity_wait_ms": 200,
+      "cache_affinity_input_tokens_scale": 0.1
     }
   }
 }
@@ -273,9 +332,14 @@ that algorithm's detailed configuration prevents startup.
 | --- | --- | --- | --- |
 | `cache_affinity_virtual_nodes` | unsigned integer | `150` | Virtual nodes per cluster. `0` is normalized to `1`. |
 | `cache_affinity_backend_selection_count` | unsigned integer | unset | Enables the affinity subset. `0` disables it. Values above the candidate count select all candidates. |
+| `cache_affinity_wait_ms` | unsigned integer | `0` | Minimum elapsed time before global fallback. Global bucket widening starts at this time. |
+| `cache_affinity_input_tokens_scale` | number | `1.0` | Request-prefill multiplier during affinity selection, from `0.0` through `1.0`. Does not discount queued work or global selection. |
 
-These fields are accepted in `pulsar-wait-and-widen` JSON but do not affect its
-selection. Pulsar ranking supplies that algorithm's affinity.
+The virtual-node and backend-selection-count fields are accepted in
+`pulsar-wait-and-widen` JSON but do not affect its selection. Pulsar ranking
+supplies that algorithm's affinity. A non-default
+`cache_affinity_input_tokens_scale` or `cache_affinity_wait_ms` is rejected at
+startup for `pulsar-wait-and-widen`; omitted values and the defaults are accepted.
 
 `wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
 
@@ -307,8 +371,9 @@ bounds, so set the floor less than or equal to the ceiling.
 | `seed` | string | empty | Changes the rendezvous ranking. Keep it stable across replicas. |
 | `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
 
-`pulsar-wait-and-widen` supports the wait-and-widen fields except `comparator`,
-plus `consider_kv_free_tokens`.
+`pulsar-wait-and-widen` supports the shared wait-and-widen fields in the table
+above, plus `consider_kv_free_tokens`. It rejects `comparator` and non-default
+affinity wait or prefill-scale settings.
 
 ## Request algorithm overrides
 
@@ -364,8 +429,8 @@ These proxy headers affect load-balancer behavior:
 | `x-cache-affinity-key` | optional or config-required | Opaque stable prefix or session identity. Blank means absent. |
 | `x-input-tokens` | required `u64` | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
 | `x-priority` | optional `u32`, default `0` | Chooses the nearest published queue estimate at or below this priority. |
-| `x-request-slo-ms` | optional `u64` | Request SLO used to interpolate queue bounds. |
-| `x-max-wait-ms` | optional `u64` | Wait budget for temporarily infeasible routing, capped at 60 seconds. |
+| `x-request-slo-ms` | optional `u64` | Interpolates queue bounds. Does not set or shorten the affinity wait. |
+| `x-max-wait-ms` | optional `u64` | Routing wait limit from request arrival, capped at 60 seconds. Can expire before global buckets open. |
 
 Invalid required or numeric values return HTTP `400`. `x-routing-method` is
 consumed by Stargate and is not forwarded upstream. See the
@@ -376,7 +441,10 @@ contract.
 
 Algorithm fallback is part of load-balancer selection:
 
-- WaitAndWiden later-bucket fallback depends on elapsed request time.
+- WaitAndWiden global fallback starts at X and includes affine candidates at
+  full prefill cost. Later global buckets use elapsed
+  time after X; affine candidates remain preferred. Without an affinity group,
+  later buckets use elapsed request time and the existing explicit retry budget.
 - Pulsar fallback walks the stable ranking after exclusions or optional KV
   filtering.
 - Pulsar wait-and-widen fallback widens ranking bands and runs WaitAndWiden selection
@@ -396,6 +464,12 @@ is configurable with `--metrics-prefix`. See the
 for metric names, labels, and descriptions.
 
 The proxy request span records the effective comparator in `routing.comparator`.
+WaitAndWiden records affinity-phase selections with `rank_depth` 1 and global
+fallback with a higher rank. Selecting an affine backend through global buckets
+counts as fallback; selecting it through the initial affinity phase does not.
+The existing fallback selection series therefore records global escalation;
+deployments that previously saw only primary selections can see new fallback
+counts. Metric names and label sets are unchanged.
 
 ## Validation checklist
 

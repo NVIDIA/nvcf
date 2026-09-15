@@ -34,15 +34,15 @@ drift, generated config drift, and otelconfig validation. Do not add a subtree
 Use the script instead of editing version strings by hand:
 
 ```bash
-./scripts/update-collector-version.sh v0.157.0 v1.63.0
+./scripts/update-collector-version.sh v0.160.0 v1.66.0
 ```
 
 The script updates version references in `otel-collector-build.yaml`,
 `AGENTS.md`, `README.md`, `Makefile`, `Dockerfile`,
 `Dockerfile.nvcf-otel-collector`, `scripts/regenerate-otelcol.sh`, and
 `.gitlab-ci.yml` when that file exists. Run it from the BYOO collector root.
-You can pass versions with or without the `v` prefix (for example, `v0.157.0`
-or `0.157.0`). Pass the optional `v1.x.y` provider version when the stable
+You can pass versions with or without the `v` prefix (for example, `v0.160.0`
+or `0.160.0`). Pass the optional `v1.x.y` provider version when the stable
 collector modules need a matching release. After running, regenerate `otelcol/`
 if needed, review `git diff`, and run the relevant build or validation command.
 
@@ -52,6 +52,13 @@ Commits. The tag records both sources as
 The upstream part comes from `otel-collector-build.yaml`; do not add a `VERSION`
 file or a CI gate that requires one. `RELEASE_SERIES_START` anchors the first
 wrapper release and must remain in the repository.
+
+Commit a collector version bump as `fix(byoo-otel-collector):`, not
+`chore(byoo-otel-collector):`. `chore` commits are not release-worthy (see
+`RELEASE_RULES` in `tools/ci/github-release`), so a `chore` bump only
+synthesizes a compatibility tag anchor and never triggers the image build and
+push. Because the upstream version is embedded directly in the published tag
+and image, every bump must ship a real image, not just update the pin in git.
 
 ## Local Gotchas
 

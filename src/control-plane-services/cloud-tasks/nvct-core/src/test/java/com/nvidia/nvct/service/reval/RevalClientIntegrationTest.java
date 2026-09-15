@@ -23,11 +23,14 @@ import static com.nvidia.nvct.util.TestConstants.TEST_CONTAINER_REGISTRY;
 import static com.nvidia.nvct.util.TestConstants.TEST_DOCKER_CONTAINER_REGISTRY;
 import static com.nvidia.nvct.util.TestConstants.TEST_HELM_REGISTRY;
 import static com.nvidia.nvct.util.TestConstants.TEST_NCA_ID;
+import static com.nvidia.nvct.util.TestConstants.REGISTRY_CRED_SECRETS_BY_ID;
 import static com.nvidia.nvct.util.TestConstants.TEST_NGC_CONTAINER_REGISTRY;
 import static com.nvidia.nvct.util.TestConstants.TEST_NGC_HELM_REGISTRY;
 import static com.nvidia.nvct.util.TestConstants.TEST_TASK_ID_1;
 import static com.nvidia.nvct.util.TestConstants.TEST_TASK_NAME_1;
 import static com.nvidia.nvct.util.TestUtil.createHelmBasedTaskEntity;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -41,6 +44,7 @@ import com.nvidia.nvct.persistence.task.entity.TaskEntity;
 import com.nvidia.nvct.rest.task.dto.GpuSpecificationDto;
 import com.nvidia.nvct.service.account.AccountService;
 import com.nvidia.nvct.service.account.dto.AccountDto;
+import com.nvidia.nvct.service.ess.EssService;
 import com.nvidia.nvct.service.registry.RegistryArtifactValidationService;
 import com.nvidia.nvct.service.registry.RegistryCredentialService;
 import com.nvidia.nvct.service.registry.RegistryTaskMapperService;
@@ -126,9 +130,14 @@ class RevalClientIntegrationTest {
                                           TEST_HELM_REGISTRY);
         RegistryTaskMapperService registryTaskMapperService =
                 new RegistryTaskMapperService(registryMapperService);
+        EssService essService = mock(EssService.class);
+        when(essService.getRegistryCredentialSecret(eq(TEST_NCA_ID), any()))
+                .thenAnswer(invocation -> Optional.ofNullable(
+                        REGISTRY_CRED_SECRETS_BY_ID.get(invocation.getArgument(1))));
         registryCredentialService = new RegistryCredentialService(accountService,
                                                                   registryMapperService,
                                                                   registryTaskMapperService,
+                                                                  essService,
                                                                   jsonMapper,
                                                                   sidecarImagePullSecret,
                                                                   sidecarRegistryHostname);

@@ -67,4 +67,3 @@ defaultQueue:
 
   helm install kai-scheduler oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler -f values.yaml -n kai-scheduler --create-namespace --version v0.14.0
 ```
-

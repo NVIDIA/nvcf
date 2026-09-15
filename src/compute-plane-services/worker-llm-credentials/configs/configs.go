@@ -18,14 +18,15 @@ limitations under the License.
 package configs
 
 type Config struct {
-	NvcfFqdnGrpc      string `mapstructure:"NVCF_FQDN_GRPC"`
-	NvcfWorkerToken   string `mapstructure:"NVCF_WORKER_TOKEN"`
-	FunctionId        string `mapstructure:"FUNCTION_ID"`
-	FunctionVersionId string `mapstructure:"FUNCTION_VERSION_ID"`
-	NcaId             string `mapstructure:"NCA_ID"`
-	InstanceId        string `mapstructure:"INSTANCE_ID"`
-	SharedConfigDir   string `mapstructure:"SHARED_CONFIG_DIR"`
-	WorkerTokenPath   string `mapstructure:"WORKER_TOKEN_PATH"`
+	NvcfFqdnGrpc          string `mapstructure:"NVCF_FQDN_GRPC"`
+	NvcfWorkerToken       string `mapstructure:"NVCF_WORKER_TOKEN"`
+	FunctionId            string `mapstructure:"FUNCTION_ID"`
+	FunctionVersionId     string `mapstructure:"FUNCTION_VERSION_ID"`
+	NcaId                 string `mapstructure:"NCA_ID"`
+	InstanceId            string `mapstructure:"INSTANCE_ID"`
+	SharedConfigDir       string `mapstructure:"SHARED_CONFIG_DIR"`
+	WorkerTokenPath       string `mapstructure:"WORKER_TOKEN_PATH"`
+	ESSAssertionTokenPath string `mapstructure:"ESS_ASSERTION_TOKEN_PATH"`
 }
 
 const DefaultSharedConfigDir = "/config/shared"

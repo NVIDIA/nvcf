@@ -38,6 +38,14 @@ Tasks are one-shot workloads that run to completion and surface progress and res
 
 k6 load testing scripts for NVCF function and NVCT task endpoints are in the [load-tests/](load-tests/) directory.
 
+## Reference Architectures
+
+Reference architectures combine multiple NVCF workload types in one workflow.
+
+| Sample | Description |
+|--------|-------------|
+| [Model Artifact Inventory Pipeline](reference-architectures/function-task-pipeline/) | Client-orchestrated workflow that admits an artifact request, inventories mounted model and dataset files in a task, and returns result metadata to a function. |
+
 ## Building for Multiple Compute Architectures
 
 If both `amd64` and `arm64` support is required, Docker can build multi-platform images:

@@ -97,7 +97,7 @@ spec:
         - /var/run/nats/nats.pid
         - -config
         - /etc/nats-config/nats.conf
-        image: natsio/nats-server-config-reloader:0.16.0
+        image: docker.io/natsio/nats-server-config-reloader:0.24.0
         name: reloader
         volumeMounts:
         - mountPath: /var/run/nats

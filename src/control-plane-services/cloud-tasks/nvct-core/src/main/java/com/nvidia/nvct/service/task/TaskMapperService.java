@@ -17,7 +17,6 @@
 package com.nvidia.nvct.service.task;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.nvidia.nvct.persistence.task.entity.HealthUdt;
 import com.nvidia.nvct.persistence.task.entity.ModelUdt;
 import com.nvidia.nvct.persistence.task.entity.ResourceUdt;
 import com.nvidia.nvct.persistence.task.entity.ResultHandlingStrategy;
@@ -134,7 +133,6 @@ public class TaskMapperService {
         var helmChart = StringUtils.isNotBlank(entity.getHelmChart()) ?
                 URI.create(entity.getHelmChart()) : null;
         var healthInfo = deserializeHealth(entity.getHealth())
-                .or(() -> toHealthDto(entity.getLegacyHealthInfo()))
                 .orElse(null);
         return TaskDto.builder()
                 .id(entity.getTaskId())
@@ -288,19 +286,6 @@ public class TaskMapperService {
             log.error("Failed to deserialize task health: {}", e.getMessage(), e);
             return Optional.empty();
         }
-    }
-
-    public static Optional<HealthDto> toHealthDto(HealthUdt udt) {
-        if (udt == null) {
-            return Optional.empty();
-        }
-
-        return Optional.of(HealthDto.builder()
-                                   .backend(udt.getBackend())
-                                   .gpu(udt.getGpu())
-                                   .instanceType(udt.getInstanceType())
-                                   .error(udt.getError())
-                                   .build());
     }
 
     private static Optional<TelemetriesUdt> toTelemetriesUdt(TelemetriesDto telemetriesDto) {

@@ -18,6 +18,7 @@ stream when available, and OpenAI chunk metadata only as fallback.
 client -> stargate -> QUIC tunnel -> pylon -> runtime
 runtime -> /pylon/v1/stats/stream -> pylon -> registration -> stargate routing
 runtime -> /kv-cache/stats ---------> pylon -> registration -> stargate routing
+CLI concurrency fallback ----------> pylon -> registration -> stargate routing
 ```
 
 The stream reports request counters. `/kv-cache/stats` is optional machine
@@ -55,6 +56,37 @@ Ping:
 ```json
 {"v":1,"type":"ping"}
 ```
+
+An engine can report its maximum concurrent requests for a model in a ping:
+
+```json
+{"v":1,"type":"ping","model":"llama","max_engine_concurrency":25}
+```
+
+`model` is required when `max_engine_concurrency` is present. A positive limit
+overrides the configured fallback for that model. Zero withdraws the engine
+limit and restores the fallback. Omitting the field leaves the current limit
+unchanged. Stream disconnects also retain the last reported limit.
+
+## Concurrency Fallback
+
+For an engine without a stats endpoint, set Pylon's fallback concurrency:
+
+```text
+pylon --upstream-http-base-url=http://127.0.0.1:8090 --model-name=llama --max-engine-concurrency=25
+```
+
+`--max-engine-concurrency N` accepts a positive integer and has no default.
+Pylon uses it for each model until that model reports an engine limit, including
+models discovered after startup. It is available in every stats source mode.
+Pylon publishes the effective limit from the first registration and uses the
+same value for local queue admission. If neither source supplies a limit, Pylon
+publishes zero, meaning unknown.
+
+Set this value to the engine's actual request capacity. It informs queue
+estimates and routing capacity checks; it does not configure the engine's
+scheduler or create a Pylon request semaphore. `--calibration-max-concurrency`
+only controls calibration traffic and does not supply this fallback.
 
 ## Source Modes
 
@@ -94,6 +126,7 @@ Pylon publishes:
 - sticky completed-request input throughput: `last_mean_input_tps`
 - volatile generation throughput: `output_tps` and `max_output_tps`
 - request phase counts and queue sizes
+- effective maximum engine concurrency
 - optional KV capacity/used/free tokens
 - source and capability labels
 

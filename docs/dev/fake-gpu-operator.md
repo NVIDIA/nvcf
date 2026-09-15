@@ -62,7 +62,7 @@ This configures one node pool named `default` with 8 simulated H100 GPUs per nod
 Using array index syntax (`--set 'topology.nodePools[0].gpuCount=8'`) will create a
 YAML array instead of a map and cause the status-updater to fail with:
 
-```
+```text
 yaml: unmarshal errors: cannot unmarshal !!seq into map[string]topology.NodePoolTopology
 ```
 
