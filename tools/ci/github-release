@@ -506,6 +506,82 @@ def only_generated_changes(root, service, generated_paths):
     return True
 
 
+# conventional-changelog-angular's templates/header.hbs, verbatim except that the
+# two `{{version}}` references are `{{currentTag}}`.
+#
+# The heading has the same defect as the released-version comment:
+# semantic-release-monorepo also wraps `generateNotes`, so the `version` that
+# reaches the template is `<package.json name>-v<version>` rather than the tag
+# that was created. release-notes-generator offers no option for the heading text,
+# only `writerOpts` passed through to conventional-changelog-writer, so the
+# template has to be restated here to change it.
+#
+# `currentTag` is `nextRelease.gitTag` (release-notes-generator index.js), which
+# the transform does not touch -- it is already what the compare link beside the
+# heading is built from, which is why that link has always been right while the
+# heading was not.
+#
+# Kept as a verbatim copy so the drift against upstream is exactly two tokens.
+# Re-check it when the preset moves: it is pulled in transitively on a caret
+# range, and a template that silently diverges from the one rendering the rest of
+# the notes is the failure mode to watch for.
+RELEASE_NOTES_HEADER_PARTIAL = """{{#if isPatch~}}
+  ##
+{{~else~}}
+  #
+{{~/if}} {{#if @root.linkCompare~}}
+  [{{currentTag}}](
+  {{~#if @root.repository~}}
+    {{~#if @root.host}}
+      {{~@root.host}}/
+    {{~/if}}
+    {{~#if @root.owner}}
+      {{~@root.owner}}/
+    {{~/if}}
+    {{~@root.repository}}
+  {{~else}}
+    {{~@root.repoUrl}}
+  {{~/if~}}
+  /compare/{{previousTag}}...{{currentTag}})
+{{~else}}
+  {{~currentTag}}
+{{~/if}}
+{{~#if title}} "{{title}}"
+{{~/if}}
+{{~#if date}} ({{date}})
+{{/if}}
+"""
+
+
+def success_comment_template():
+    """Comment body that names the tag semantic-release actually created.
+
+    semantic-release-monorepo wraps the `success` step with a transform that
+    rewrites `nextRelease.version` to `<package.json name>-v<version>`, built from
+    the package name alone and ignoring the `tagFormat` set below. The default
+    comment interpolates that rewritten version, so byoo-otel-collector -- the one
+    service whose tag_format injects an upstream collector version -- advertised
+    `byoo-otel-collector-v0.2.5` for a tag that is really
+    `src/compute-plane-services/byoo-otel-collector/v0.160.0-nv-0.2.5`. Readers
+    went looking for an image tag that does not exist.
+
+    The transform only maps `version`, so `gitTag` still holds the real tag. This
+    mirrors the plugin's default body with that one substitution, and builds the
+    release link from the same value rather than from the `releases` array, which
+    is empty on a dry run.
+    """
+    url = release_url(repo_slug(), "${nextRelease.gitTag}")
+    return (
+        ":tada: This ${issue.pull_request ? 'PR is included' : 'issue has been resolved'} "
+        "in ${nextRelease.gitTag} :tada:\n"
+        "\n"
+        f"The release is available on [GitHub release]({url})\n"
+        "\n"
+        "Your **[semantic-release](https://github.com/semantic-release/semantic-release)** "
+        "bot :package::rocket:"
+    )
+
+
 def write_semantic_release_files(service_dir, service_name, release_tag_format, publish, draft):
     deps = {
         "semantic-release": "17.4.4",
@@ -513,11 +589,19 @@ def write_semantic_release_files(service_dir, service_name, release_tag_format, 
     }
     plugins = [
         ["@semantic-release/commit-analyzer", {"releaseRules": RELEASE_RULES}],
-        "@semantic-release/release-notes-generator",
+        [
+            "@semantic-release/release-notes-generator",
+            {"writerOpts": {"headerPartial": RELEASE_NOTES_HEADER_PARTIAL}},
+        ],
     ]
     if publish:
         deps["@semantic-release/github"] = "7.2.3"
-        plugins.append(["@semantic-release/github", {"draftRelease": draft}])
+        plugins.append(
+            [
+                "@semantic-release/github",
+                {"draftRelease": draft, "successComment": success_comment_template()},
+            ]
+        )
 
     package_json = {
         "name": service_name,
