@@ -311,6 +311,8 @@ certManager:
   # installed outside this stack; that external installation must still
   # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
+  # The ACME solver defaults to quay.io/jetstack/cert-manager-acmesolver.
+  # Set acmesolver.image.repository when the deployment uses a private mirror.
 
 openbao:
   enabled: true

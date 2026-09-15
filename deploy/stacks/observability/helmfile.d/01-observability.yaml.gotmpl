@@ -130,6 +130,12 @@ environments:
 {{- end }}
 
 repositories:
+  - name: open-telemetry
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: victoria-metrics
+    url: https://victoriametrics.github.io/helm-charts
   - name: nvcf
 {{- if $helmSourceURL }}
     url: {{ $helmSourceURL | quote }}
@@ -157,7 +163,7 @@ releases:
 
   {{- if $prometheusOperatorCrdsEnabled }}
   - name: prometheus-operator-crds
-    chart: nvcf/prometheus-operator-crds
+    chart: prometheus-community/prometheus-operator-crds
     version: {{ dig "prometheusOperatorCrds" "version" "31.0.1" .Values | quote }}
     namespace: {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}
     values:
@@ -168,7 +174,7 @@ releases:
 
   {{- if $opentelemetryOperatorEnabled }}
   - name: opentelemetry-operator
-    chart: nvcf/opentelemetry-operator
+    chart: open-telemetry/opentelemetry-operator
     version: {{ dig "opentelemetryOperator" "version" "0.122.0" .Values | quote }}
     namespace: {{ dig "opentelemetryOperator" "namespace" $observabilityNamespace .Values }}
     {{- if $prometheusOperatorCrdsEnabled }}
@@ -201,7 +207,7 @@ releases:
 
   {{- if $victoriaMetricsEnabled }}
   - name: victoria-metrics
-    chart: nvcf/victoria-metrics-single
+    chart: victoria-metrics/victoria-metrics-single
     version: {{ dig "victoriaMetrics" "version" "0.45.0" .Values | quote }}
     namespace: {{ $victoriaMetricsNamespace }}
     {{- if $prometheusOperatorCrdsEnabled }}

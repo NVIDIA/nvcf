@@ -147,6 +147,20 @@ assert_yaml_value() {
   assert_equal "$actual" "$expected" "$description"
 }
 
+assert_release_chart() {
+  local releases_file="$1"
+  local release="$2"
+  local expected_chart="$3"
+  local expected_version="$4"
+  local actual
+
+  actual="$(NVCF_RELEASE_NAME="$release" yq -p=json -r \
+    '.[] | select(.name == strenv(NVCF_RELEASE_NAME)) | .chart + "|" + .version' \
+    "$releases_file")"
+  assert_equal "$actual" "$expected_chart|$expected_version" \
+    "$release upstream chart"
+}
+
 assert_release_needs() {
   local case_name="$1"
   local profile="$2"
@@ -203,6 +217,15 @@ fi
 fixture_profiles="$(awk -F'|' '!/^#/ {print $1}' "$golden_file" | paste -sd, -)"
 assert_equal "$fixture_profiles" "disabled,control,compute,all" \
   "golden profile rows"
+
+upstream_releases="$work_dir/upstream-releases.json"
+profile_release_json all >"$upstream_releases"
+assert_release_chart "$upstream_releases" prometheus-operator-crds \
+  prometheus-community/prometheus-operator-crds 31.0.1
+assert_release_chart "$upstream_releases" opentelemetry-operator \
+  open-telemetry/opentelemetry-operator 0.122.0
+assert_release_chart "$upstream_releases" victoria-metrics \
+  victoria-metrics/victoria-metrics-single 0.45.0
 
 service_monitor_template_count="$(
   find "$stack_dir/charts/nvcf-default-monitors/templates" \

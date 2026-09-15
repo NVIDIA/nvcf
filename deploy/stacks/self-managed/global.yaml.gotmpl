@@ -83,10 +83,9 @@ cassandra:
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
-# `cert-manager` key. `image.repository` is a full-path override that wins
-# over the upstream `imageRegistry`/`imageNamespace`/`name` construction,
-# so each component pulls from the nvcr.io mirror (regsync-configs !140)
-# instead of quay.io/jetstack.
+# `cert-manager` key. The controller components use the nvcr.io mirror. The
+# ACME solver keeps the chart's quay.io/jetstack default unless an operator
+# supplies certManager.acmesolver.image for a private mirror.
 cert-manager:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -101,9 +100,26 @@ cert-manager:
   cainjector:
     image:
       repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-cainjector
+  {{- $acmeSolverRepository := dig "certManager" "acmesolver" "image" "repository" "" .Values }}
+  {{- $acmeSolverTag := dig "certManager" "acmesolver" "image" "tag" "" .Values }}
+  {{- $acmeSolverDigest := dig "certManager" "acmesolver" "image" "digest" "" .Values }}
+  {{- $acmeSolverPullPolicy := dig "certManager" "acmesolver" "image" "pullPolicy" "" .Values }}
+  {{- if or $acmeSolverRepository $acmeSolverTag $acmeSolverDigest $acmeSolverPullPolicy }}
   acmesolver:
     image:
-      repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-acmesolver
+      {{- with $acmeSolverRepository }}
+      repository: {{ . }}
+      {{- end }}
+      {{- with $acmeSolverTag }}
+      tag: {{ . | quote }}
+      {{- end }}
+      {{- with $acmeSolverDigest }}
+      digest: {{ . | quote }}
+      {{- end }}
+      {{- with $acmeSolverPullPolicy }}
+      pullPolicy: {{ . }}
+      {{- end }}
+  {{- end }}
   startupapicheck:
     image:
       repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
