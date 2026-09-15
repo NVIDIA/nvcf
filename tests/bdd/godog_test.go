@@ -1294,7 +1294,6 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"grpcWorker:",
 		"llmWorker:",
 		"enabled: true",
-		"listenerName: worker-tcp",
 	)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
@@ -1330,15 +1329,12 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		{key: "addons.llm.requestRouter.grpcTls.enabled", want: "true"},
 		{key: "addons.llm.requestRouter.grpcTls.mode", want: "certManager"},
 		{key: "addons.llm.requestRouter.grpcTls.secretName", want: "llm-request-router-grpc-tls"},
-		{key: "addons.llm.requestRouter.grpcTls.dnsNames[0]", want: "llm-request-router.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.allowedDomains", want: "cluster.local"},
 		{key: "addons.llm.pki.dnsNames[0]", want: "llm-request-router.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[1]", want: "*.llm-request-router-headless.nvcf.svc.cluster.local"},
 		{key: "ingress.gatewayApi.chartPath", want: "../../../helm/gateway-routes/chart"},
 		{key: "ingress.gatewayApi.routes.llmWorker.enabled", want: "true"},
 		{key: "ingress.gatewayApi.routes.llmWorker.backend.namespace", want: "nvcf"},
-		{key: "ingress.gatewayApi.gateways.llmGrpc.listenerName", want: "llm-grpc"},
-		{key: "ingress.gatewayApi.gateways.llmQuic.listenerName", want: "llm-quic"},
 	} {
 		got, found, err := dsl.ReadYAMLKey(environmentPath, assertion.key)
 		if err != nil {
@@ -1346,6 +1342,19 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		}
 		if !found || got != assertion.want {
 			t.Fatalf("multi-cluster override %s = %q, found = %t; want %q", assertion.key, got, found, assertion.want)
+		}
+	}
+	for _, key := range []string{
+		"addons.llm.requestRouter.grpcTls.dnsNames",
+		"ingress.gatewayApi.gateways.nats.listenerName",
+		"ingress.gatewayApi.gateways.llmGrpc.listenerName",
+		"ingress.gatewayApi.gateways.llmQuic.listenerName",
+		"ingress.gatewayApi.routes.grpcWorker.listenerName",
+	} {
+		if got, found, err := dsl.ReadYAMLKey(environmentPath, key); err != nil {
+			t.Fatalf("read multi-cluster default-owned key %s: %v", key, err)
+		} else if found {
+			t.Fatalf("multi-cluster override %s = %q; want key omitted", key, got)
 		}
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "deploy/stacks/nvcf-compute-plane install") {
@@ -2024,8 +2033,6 @@ addons:
         enabled: true
         mode: certManager
         secretName: llm-request-router-grpc-tls
-        dnsNames:
-          - llm-request-router.nvcf.svc.cluster.local
       backendRouter:
         pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
         pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
@@ -2040,15 +2047,9 @@ grpcproxy:
 ingress:
   gatewayApi:
     chartPath: ../../../helm/gateway-routes/chart
-    gateways:
-      llmGrpc:
-        listenerName: llm-grpc
-      llmQuic:
-        listenerName: llm-quic
     routes:
       grpcWorker:
         enabled: true
-        listenerName: worker-tcp
       llmWorker:
         enabled: true
         backend:

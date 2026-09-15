@@ -20,9 +20,10 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 default_render="$(mktemp)"
 enabled_render="$(mktemp)"
 annotated_render="$(mktemp)"
+overridden_listener_render="$(mktemp)"
 disabled_render="$(mktemp)"
 hostname_conflict_error="$(mktemp)"
-trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render" "$hostname_conflict_error"' EXIT
+trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$overridden_listener_render" "$disabled_render" "$hostname_conflict_error"' EXIT
 
 if ! command -v yq >/dev/null 2>&1; then
   echo "yq is required for render tests" >&2
@@ -219,7 +220,6 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   --set llmRequestRouter.grpcTls.allowInsecureHttp=true \
   --set nvcfGatewayRoutes.gateways.nats.name=nats-gateway \
   --set nvcfGatewayRoutes.gateways.nats.namespace=gateway \
-  --set nvcfGatewayRoutes.gateways.nats.listenerName=nats \
   > "$enabled_render"
 
 assert_resource_count "$enabled_render" HTTPRoute llm-invocation gateway 1
@@ -307,5 +307,23 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   > "$annotated_render"
 
 assert_resource_field "$annotated_render" TCPRoute nats gateway '.metadata.annotations."example.com/nats-route"' true
+
+# The chart owns listener defaults, while every listener remains overridable.
+helm template nvcf-gateway-routes "$repo_root/chart" \
+  --set nvcfGatewayRoutes.routes.grpcWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.grpcWorker.listenerName=custom-worker \
+  --set nvcfGatewayRoutes.routes.nats.enabled=true \
+  --set nvcfGatewayRoutes.gateways.nats.listenerName=custom-nats \
+  --set nvcfGatewayRoutes.routes.llmWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmWorker.backend.namespace=nvcf \
+  --set nvcfGatewayRoutes.gateways.llmGrpc.listenerName=custom-llm-grpc \
+  --set nvcfGatewayRoutes.gateways.llmQuic.listenerName=custom-llm-quic \
+  --set llmRequestRouter.grpcTls.allowInsecureHttp=true \
+  > "$overridden_listener_render"
+
+assert_resource_field "$overridden_listener_render" TCPRoute grpc-worker gateway '.spec.parentRefs[0].sectionName' custom-worker
+assert_resource_field "$overridden_listener_render" TCPRoute nats gateway '.spec.parentRefs[0].sectionName' custom-nats
+assert_resource_field "$overridden_listener_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].sectionName' custom-llm-grpc
+assert_resource_field "$overridden_listener_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].sectionName' custom-llm-quic
 
 echo "Gateway route render checks passed."

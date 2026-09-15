@@ -305,13 +305,34 @@ func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *
 		"grpcWorker:",
 		"llmWorker:",
 		"enabled: true",
-		"listenerName: worker-tcp",
-		"listenerName: llm-grpc",
-		"listenerName: llm-quic",
 	} {
 		if !strings.Contains(fixture, want) {
 			t.Fatalf("multi-cluster stack fixture missing %q", want)
 		}
+	}
+	if strings.Contains(fixture, "listenerName:") {
+		t.Fatal("multi-cluster stack fixture must rely on gateway-routes chart listener defaults")
+	}
+	var values struct {
+		Addons struct {
+			LLM struct {
+				RequestRouter struct {
+					GRPCTLS map[string]any `yaml:"grpcTls"`
+				} `yaml:"requestRouter"`
+			} `yaml:"llm"`
+		} `yaml:"addons"`
+		Ingress struct {
+			GatewayAPI map[string]any `yaml:"gatewayApi"`
+		} `yaml:"ingress"`
+	}
+	if err := yaml.Unmarshal(fixtureBytes, &values); err != nil {
+		t.Fatalf("parse multi-cluster stack fixture: %v", err)
+	}
+	if _, configured := values.Addons.LLM.RequestRouter.GRPCTLS["dnsNames"]; configured {
+		t.Fatal("multi-cluster stack fixture must derive the gRPC TLS DNS name from the advertised endpoint")
+	}
+	if _, configured := values.Ingress.GatewayAPI["enabled"]; configured {
+		t.Fatal("multi-cluster stack fixture must rely on the base environment to enable Gateway API")
 	}
 }
 
@@ -415,8 +436,8 @@ func TestLocalBDDFixturesLeaveSharedDefaultsToTheirStacks(t *testing.T) {
 				if value, exists := nestedYAMLValue(base, "ingress", "gatewayApi", "enabled"); !exists || value != true {
 					t.Errorf("base ingress.gatewayApi.enabled = %v (exists %t), want true", value, exists)
 				}
-				if value, exists := nestedYAMLValue(base, "ingress", "gatewayApi", "gateways", "nats", "listenerName"); !exists || value != "nats" {
-					t.Errorf("base ingress.gatewayApi.gateways.nats.listenerName = %v (exists %t), want nats", value, exists)
+				if value, exists := nestedYAMLValue(base, "ingress", "gatewayApi", "gateways", "nats", "listenerName"); exists {
+					t.Errorf("base owns ingress.gatewayApi.gateways.nats.listenerName = %v; want chart default", value)
 				}
 			}
 		})

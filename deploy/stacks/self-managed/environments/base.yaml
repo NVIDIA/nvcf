@@ -651,7 +651,8 @@ ingress:
         routeAnnotations: {}
       grpcWorker:
         enabled: false
-        listenerName: worker-tcp
+        # listenerName defaults to worker-tcp in the gateway-routes chart.
+        # Set it only when the cluster-owned Gateway uses a different name.
         routeAnnotations: {}
       nats:
         enabled: false
@@ -684,15 +685,15 @@ ingress:
       nats:
         name: "" # must be set by the environment when routes.nats.enabled=true
         namespace: "" # must be set by the environment when routes.nats.enabled=true
-        listenerName: nats
+        # listenerName defaults to nats in the gateway-routes chart.
       llmGrpc:
         name: "" # required when routes.llmWorker.enabled=true
         namespace: "" # required when routes.llmWorker.enabled=true
-        listenerName: llm-grpc
+        # listenerName defaults to llm-grpc in the gateway-routes chart.
       llmQuic:
         name: "" # required when routes.llmWorker.enabled=true
         namespace: "" # required when routes.llmWorker.enabled=true
-        listenerName: llm-quic
+        # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
   # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.

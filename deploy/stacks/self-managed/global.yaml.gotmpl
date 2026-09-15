@@ -349,6 +349,7 @@ natsAuthCalloutService:
 {{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
+{{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
 {{- if hasPrefix "https://" $llmRequestRouterWorkerAuthority }}
 {{- $llmRequestRouterWorkerAuthority = trimPrefix "https://" $llmRequestRouterWorkerAuthority }}
 {{- else if hasPrefix "http://" $llmRequestRouterWorkerAuthority }}
@@ -357,7 +358,6 @@ natsAuthCalloutService:
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- if $llmEnabled }}
 {{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
-{{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
 {{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
 {{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAuthority }}
 {{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAuthority }}
@@ -1033,6 +1033,18 @@ llmApiGateway:
 {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
 {{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
 {{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}
+{{- $grpcTlsMode := dig "addons" "llm" "requestRouter" "grpcTls" "mode" "certManager" .Values }}
+{{- $grpcTlsDNSNames := dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values }}
+{{- /* The advertised HTTPS endpoint is the certificate's primary identity.
+       Operators may add SANs for other regional endpoints; the derived name is
+       prepended once so fixtures do not have to repeat the dial hostname. */}}
+{{- if and $grpcTlsEnabled (eq $grpcTlsMode "certManager") (hasPrefix "https://" $llmRequestRouterWorkerAddress) (regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAuthority) }}
+{{- $llmRequestRouterWorkerHost := regexReplaceAll `:[0-9]{1,5}$` $llmRequestRouterWorkerAuthority "" }}
+{{- $llmRequestRouterIPv4LiteralPattern := `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` }}
+{{- if and (not (regexMatch $llmRequestRouterIPv4LiteralPattern $llmRequestRouterWorkerHost)) (not (has $llmRequestRouterWorkerHost $grpcTlsDNSNames)) }}
+{{- $grpcTlsDNSNames = prepend $grpcTlsDNSNames $llmRequestRouterWorkerHost }}
+{{- end }}
+{{- end }}
 {{- if and $llmEnabled $backendRouterEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
 {{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted" }}
 {{- end }}
@@ -1121,10 +1133,10 @@ llmRequestRouter:
   grpcTls:
     enabled: {{ $grpcTlsEnabled }}
     allowInsecureHttp: {{ $grpcTlsAllowInsecureHttp }}
-    mode: {{ dig "addons" "llm" "requestRouter" "grpcTls" "mode" "certManager" .Values | quote }}
+    mode: {{ $grpcTlsMode | quote }}
     secretName: {{ dig "addons" "llm" "requestRouter" "grpcTls" "secretName" "llm-request-router-grpc-tls" .Values | quote }}
     dnsNames:
-      {{- dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values | toYaml | nindent 6 }}
+      {{- $grpcTlsDNSNames | toYaml | nindent 6 }}
     issuerRef:
       kind: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "kind" "" .Values | default (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) | quote }}
       name: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values | default (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) | quote }}
@@ -1557,17 +1569,26 @@ nvcfGatewayRoutes:
     nats:
       name: {{ required "ingress.gatewayApi.gateways.nats.name is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.name }}
       namespace: {{ required "ingress.gatewayApi.gateways.nats.namespace is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.namespace }}
-      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "nats" "listenerName" "nats" .Values }}
+      {{- $natsGateway := dig "ingress" "gatewayApi" "gateways" "nats" dict .Values }}
+      {{- if hasKey $natsGateway "listenerName" }}
+      listenerName: {{ $natsGateway.listenerName }}
+      {{- end }}
     {{- end }}
     {{- if $llmWorkerRouteEnabled }}
     llmGrpc:
       name: {{ required "ingress.gatewayApi.gateways.llmGrpc.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.name }}
       namespace: {{ required "ingress.gatewayApi.gateways.llmGrpc.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.namespace }}
-      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmGrpc" "listenerName" "llm-grpc" .Values }}
+      {{- $llmGrpcGateway := dig "ingress" "gatewayApi" "gateways" "llmGrpc" dict .Values }}
+      {{- if hasKey $llmGrpcGateway "listenerName" }}
+      listenerName: {{ $llmGrpcGateway.listenerName }}
+      {{- end }}
     llmQuic:
       name: {{ required "ingress.gatewayApi.gateways.llmQuic.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.name }}
       namespace: {{ required "ingress.gatewayApi.gateways.llmQuic.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.namespace }}
-      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmQuic" "listenerName" "llm-quic" .Values }}
+      {{- $llmQuicGateway := dig "ingress" "gatewayApi" "gateways" "llmQuic" dict .Values }}
+      {{- if hasKey $llmQuicGateway "listenerName" }}
+      listenerName: {{ $llmQuicGateway.listenerName }}
+      {{- end }}
     {{- end }}
   routes:
     nvcfApi:
@@ -1654,7 +1675,10 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpcWorker:
       enabled: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "enabled" false .Values }}
-      listenerName: {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "listenerName" "worker-tcp" .Values }}
+      {{- $grpcWorkerRoute := dig "ingress" "gatewayApi" "routes" "grpcWorker" dict .Values }}
+      {{- if hasKey $grpcWorkerRoute "listenerName" }}
+      listenerName: {{ $grpcWorkerRoute.listenerName }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpcWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     nats:
