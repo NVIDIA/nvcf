@@ -719,10 +719,12 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				}
 			}
 			// Every hint is pinned to the context that was actually probed.
-			// In split mode the two callers pass different contexts, so a bare
-			// kubectl command would run against whatever context happens to be
-			// current, and these hints delete namespaces.
-			kctl := "kubectl" + kubectlContextArg(kubeContext)
+			// In split mode the two callers pass different contexts, and with
+			// no context flag the probe followed the current-context at the
+			// time it ran. Either way the name is resolved and written into
+			// the command, because these hints delete namespaces and the
+			// current-context can change between reading this and pasting it.
+			kctl := "kubectl" + kubectlContextArg(effectiveKubeContext(kubeContext))
 			var hints []string
 			if len(terminating) > 0 {
 				// spec.finalizers is writable only through the /finalize
@@ -735,10 +737,16 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 							"jq '.spec.finalizers=[]' | %s replace --raw /api/v1/namespaces/%s/finalize -f -",
 						ns, kctl, ns, kctl, ns))
 				}
-				hints = append(hints,
-					"if it stays Terminating, the deadlock is on objects inside it: "+
-						kctl+" api-resources --verbs=list --namespaced -o name | "+
-						"xargs -n1 "+kctl+" get -n <ns> --show-kind --ignore-not-found")
+				// One command per namespace with the real name substituted. A
+				// `<ns>` placeholder is not pasteable: the shell reads `<` and
+				// `>` as redirection, so the command fails before kubectl runs.
+				for _, ns := range terminating {
+					hints = append(hints, fmt.Sprintf(
+						"if %s stays Terminating, the deadlock is on objects inside it: "+
+							"%s api-resources --verbs=list --namespaced -o name | "+
+							"xargs -n1 %s get -n %s --show-kind --ignore-not-found",
+						ns, kctl, kctl, ns))
+				}
 			}
 			if len(emptyShell) > 0 {
 				hints = append(hints,

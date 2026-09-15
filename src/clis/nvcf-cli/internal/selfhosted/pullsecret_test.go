@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -556,4 +558,68 @@ func TestWriteDockerConfigSecret_RefusesUnmanagedAfterCreateRace(t *testing.T) {
 	require.Error(t, err, "losing the create race to an unmanaged secret must not overwrite it")
 	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
 	assert.False(t, updated, "no Update may be issued against an unmanaged secret")
+}
+
+// The ownership check reads the Secret and then deletes it by name. In that
+// window another actor can delete and recreate it, so the delete has to name
+// the exact object that was vetted rather than whatever holds the name by then.
+func TestWriteDockerConfigSecret_TypeMismatchDeletePinsTheInspectedObject(t *testing.T) {
+	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "nvcr-pull-secret",
+			Namespace:       "default",
+			Labels:          clusterValidatorLabels(),
+			UID:             "uid-1",
+			ResourceVersion: "42",
+		},
+		Type: corev1.SecretTypeOpaque,
+	}
+	client := fake.NewSimpleClientset(existing)
+
+	var opts metav1.DeleteOptions
+	client.PrependReactor("delete", "secrets", func(a ktesting.Action) (bool, runtime.Object, error) {
+		opts = a.(ktesting.DeleteActionImpl).DeleteOptions
+		return false, nil, nil
+	})
+
+	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default",
+		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh))
+
+	require.NotNil(t, opts.Preconditions, "delete must carry preconditions")
+	require.NotNil(t, opts.Preconditions.UID)
+	require.NotNil(t, opts.Preconditions.ResourceVersion)
+	assert.Equal(t, existing.UID, *opts.Preconditions.UID)
+	assert.Equal(t, existing.ResourceVersion, *opts.Preconditions.ResourceVersion)
+}
+
+// A conflict means the object changed after the ownership check, so the run
+// must stop instead of creating over whatever now holds the name.
+func TestWriteDockerConfigSecret_TypeMismatchStopsOnDeleteConflict(t *testing.T) {
+	fresh := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nvcr-pull-secret",
+			Namespace: "default",
+			Labels:    clusterValidatorLabels(),
+			UID:       "uid-1",
+		},
+		Type: corev1.SecretTypeOpaque,
+	})
+	client.PrependReactor("delete", "secrets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(
+			schema.GroupResource{Resource: "secrets"}, "nvcr-pull-secret",
+			errors.New("UID precondition mismatch"))
+	})
+
+	created := false
+	client.PrependReactor("create", "secrets", func(ktesting.Action) (bool, runtime.Object, error) {
+		created = true
+		return false, nil, nil
+	})
+
+	err := writeDockerConfigSecret(context.Background(), client, "default",
+		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh)
+	require.Error(t, err, "a changed object must abort the replace")
+	assert.False(t, created, "must not create over an object that was never vetted")
 }

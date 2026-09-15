@@ -366,14 +366,14 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 	if l, err := client.RbacV1().ClusterRoleBindings().List(ctx, opts); err == nil {
 		for i := range l.Items {
 			if o := &l.Items[i]; reclaimable(o) {
-				_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, o.Name, metav1.DeleteOptions{})
+				_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, o.Name, deleteExactly(o))
 			}
 		}
 	}
 	if l, err := client.RbacV1().ClusterRoles().List(ctx, opts); err == nil {
 		for i := range l.Items {
 			if o := &l.Items[i]; reclaimable(o) {
-				_ = client.RbacV1().ClusterRoles().Delete(ctx, o.Name, metav1.DeleteOptions{})
+				_ = client.RbacV1().ClusterRoles().Delete(ctx, o.Name, deleteExactly(o))
 			}
 		}
 	}
@@ -381,7 +381,7 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 	if l, err := sa.List(ctx, opts); err == nil {
 		for i := range l.Items {
 			if o := &l.Items[i]; reclaimable(o) {
-				_ = sa.Delete(ctx, o.Name, metav1.DeleteOptions{})
+				_ = sa.Delete(ctx, o.Name, deleteExactly(o))
 			}
 		}
 	}
@@ -395,16 +395,16 @@ func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface,
 	// a colliding name would otherwise vanish with no diagnostic at all.
 	if crb, err := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{}); err == nil &&
 		hasValidatorManagedLabels(crb.Labels) {
-		_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
+		_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, name, deleteExactly(crb))
 	}
 	if cr, err := client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{}); err == nil &&
 		hasValidatorManagedLabels(cr.Labels) {
-		_ = client.RbacV1().ClusterRoles().Delete(ctx, name, metav1.DeleteOptions{})
+		_ = client.RbacV1().ClusterRoles().Delete(ctx, name, deleteExactly(cr))
 	}
 	sa := client.CoreV1().ServiceAccounts(clusterValidatorNamespace)
 	if acct, err := sa.Get(ctx, name, metav1.GetOptions{}); err == nil &&
 		hasValidatorManagedLabels(acct.Labels) {
-		_ = sa.Delete(ctx, name, metav1.DeleteOptions{})
+		_ = sa.Delete(ctx, name, deleteExactly(acct))
 	}
 }
 
@@ -426,7 +426,9 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 		if !strings.HasPrefix(l.Items[i].Name, clusterValidatorName) {
 			continue
 		}
-		_ = jobs.Delete(ctx, l.Items[i].Name, metav1.DeleteOptions{PropagationPolicy: &propagation})
+		opts := deleteExactly(&l.Items[i])
+		opts.PropagationPolicy = &propagation
+		_ = jobs.Delete(ctx, l.Items[i].Name, opts)
 	}
 }
 
@@ -450,7 +452,7 @@ func sweepManagedPullSecrets(ctx context.Context, client kubernetes.Interface, r
 		if !strings.HasPrefix(l.Items[i].Name, validatorPullSecretName) {
 			continue
 		}
-		_ = secrets.Delete(ctx, l.Items[i].Name, metav1.DeleteOptions{})
+		_ = secrets.Delete(ctx, l.Items[i].Name, deleteExactly(&l.Items[i]))
 	}
 }
 

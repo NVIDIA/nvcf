@@ -32,6 +32,19 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// deleteExactly pins a delete to the object that was inspected. The ownership
+// guards read an object and then delete it by name, and in that window another
+// actor can relabel it, or delete and recreate it under the same name. Without
+// preconditions the delete lands on whatever holds the name by then; with them
+// the apiserver rejects it as a conflict instead.
+func deleteExactly(o metav1.Object) metav1.DeleteOptions {
+	uid := o.GetUID()
+	rv := o.GetResourceVersion()
+	return metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv},
+	}
+}
+
 const (
 	// Project-specific name so the auto-created / mirrored pull secret
 	// can never collide with the conventional `nvcr-pull-secret` that
@@ -284,7 +297,11 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 			fmt.Sprintf("type=%s", current.Type)); err != nil {
 			return err
 		}
-		if err := secrets.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		// A conflict means the object changed between the ownership check and
+		// this delete, so the thing now holding the name was never vetted.
+		// Stop rather than fall through to Create, which would otherwise
+		// silently adopt or overwrite it.
+		if err := secrets.Delete(ctx, name, deleteExactly(current)); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete incompatible secret type %s: %w", current.Type, err)
 		}
 	case !apierrors.IsNotFound(err):

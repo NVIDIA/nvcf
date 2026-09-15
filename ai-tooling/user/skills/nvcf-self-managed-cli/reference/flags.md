@@ -53,7 +53,7 @@ after the run, so the kubeconfig context needs permission to manage those.
 | `--cluster-validator-pull-secret NAME` | docker-registry Secret in `default` used to pull the validator image. When empty, the CLI looks for one in the NVCF namespaces and falls back to minting one from `NGC_API_KEY` | auto-detect |
 | `--skip-cluster-validation` | Skip the in-cluster validator probe entirely. Env: `NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION` | `false` |
 | `--no-cleanup` | Keep the validator Job (and its RBAC) after the run for debugging. The next run still sweeps prior Jobs | `false` |
-| `--show-logs` | Print the validator transcript to stderr after the check events. Useful when piping `--json` to a script that also wants the transcript | `false` |
+| `--show-logs` | Print the validator transcript to stderr after the check events. The transcript is not JSON, and `--json` also writes to stderr, so leave this off when a parser is reading the stream | `false` |
 
 ## `up`-specific
 

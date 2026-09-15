@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -334,4 +335,52 @@ func TestEnumerateRegistries_NonNGCImageRegistryIsNotCritical(t *testing.T) {
 		}
 	}
 	t.Fatal("mirror.company.internal not enumerated")
+}
+
+// With no validator image and no stack values file, nothing names a registry
+// and the run would report on quay.io alone, leaving the operator's NGC
+// credentials unchecked in what is the default configuration.
+func TestEnumerateRegistries_FallsBackToNGCWhenNothingNamesARegistry(t *testing.T) {
+	got := EnumerateRegistries("", "", nil)
+
+	var ngc *RegistryEntry
+	for i := range got {
+		if got[i].Registry == "nvcr.io" {
+			ngc = &got[i]
+		}
+	}
+	require.NotNil(t, ngc, "nvcr.io must be probed when no source names a registry")
+	assert.False(t, ngc.Critical,
+		"a guessed registry must not hard-fail the run; this category has no opt-out flag")
+}
+
+// A mirrored install has no reason to reach nvcr.io, and probing it there adds
+// a failing round trip for the sites least able to make it.
+func TestEnumerateRegistries_NoNGCFallbackForAMirroredStack(t *testing.T) {
+	dir := t.TempDir()
+	values := filepath.Join(dir, "base.yaml")
+	require.NoError(t, os.WriteFile(values,
+		[]byte("global:\n  image:\n    registry: harbor.example.com\n"), 0o600))
+
+	got := EnumerateRegistries("", values, nil)
+	for _, e := range got {
+		assert.NotEqual(t, "nvcr.io", e.Registry,
+			"a stack that named its own registry must not be probed against NGC")
+	}
+}
+
+// The fallback must not shadow or duplicate an NGC registry a source named,
+// which carries a repo hint and is critical.
+func TestEnumerateRegistries_FallbackDoesNotDuplicateNamedNGC(t *testing.T) {
+	got := EnumerateRegistries("nvcr.io/nvidia/nvcf-byoc/cluster-validator:1.0.0", "", nil)
+
+	n := 0
+	for _, e := range got {
+		if e.Registry == "nvcr.io" {
+			n++
+			assert.True(t, e.Critical, "an NGC registry named by the image stays critical")
+			assert.Equal(t, "nvidia/nvcf-byoc/cluster-validator", e.RepoHint)
+		}
+	}
+	assert.Equal(t, 1, n, "nvcr.io must appear exactly once")
 }

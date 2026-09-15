@@ -171,7 +171,18 @@ func TestProbeStaleNamespaces_MixedNamespaces(t *testing.T) {
 
 // -- staleNamespaceCheck binaryCheckSpec --
 
+// pinCurrentKubeContext keeps hint assertions independent of the developer's
+// kubeconfig: without it, a machine with a current-context makes every hint
+// carry a --context flag the test did not ask for.
+func pinCurrentKubeContext(t *testing.T, name string) {
+	t.Helper()
+	prev := currentKubeContextNameFn
+	currentKubeContextNameFn = func() string { return name }
+	t.Cleanup(func() { currentKubeContextNameFn = prev })
+}
+
 func TestStaleNamespaceCheck_ProberErrorDegradestoWarning(t *testing.T) {
+	pinCurrentKubeContext(t, "")
 	// A prober that cannot contact the cluster must not fail the overall check
 	// at error severity - it would produce false failures on transient network
 	// issues or misconfigured kubeconfigs.
@@ -186,6 +197,7 @@ func TestStaleNamespaceCheck_ProberErrorDegradestoWarning(t *testing.T) {
 }
 
 func TestStaleNamespaceCheck_StaleIsError(t *testing.T) {
+	pinCurrentKubeContext(t, "")
 	// A successfully detected stale namespace must fail at error severity so
 	// anyFailed trips the non-zero exit code.
 	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
@@ -201,6 +213,7 @@ func TestStaleNamespaceCheck_StaleIsError(t *testing.T) {
 }
 
 func TestStaleNamespaceCheck_CleanPasses(t *testing.T) {
+	pinCurrentKubeContext(t, "")
 	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
 		return nil, nil
 	}
@@ -209,6 +222,7 @@ func TestStaleNamespaceCheck_CleanPasses(t *testing.T) {
 }
 
 func TestStaleNamespaceCheck_MessageNamesAllStaleNamespaces(t *testing.T) {
+	pinCurrentKubeContext(t, "")
 	// The remediation command must name every stale namespace so the operator
 	// can copy-paste it without having to cross-reference the check output.
 	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
@@ -281,6 +295,7 @@ func TestControlPlaneNamespaceList_ExcludesRuntimeOwnedNamespaces(t *testing.T) 
 // kubectl command in a hint runs against whatever context is current, and
 // these hints delete namespaces.
 func TestStaleNamespaceCheck_HintsPinTheProbedContext(t *testing.T) {
+	pinCurrentKubeContext(t, "")
 	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
 		return []StaleNamespace{
 			{Name: "nvcf", Reason: "stuck Terminating"},
@@ -299,10 +314,53 @@ func TestStaleNamespaceCheck_HintsPinTheProbedContext(t *testing.T) {
 }
 
 func TestStaleNamespaceCheck_HintsQuoteTheContext(t *testing.T) {
+	pinCurrentKubeContext(t, "")
 	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
 		return []StaleNamespace{{Name: "nvcf", Reason: "no Helm release"}}, nil
 	}
 	r := staleNamespaceCheck(prober, "my ctx", []string{"nvcf"}).Run(context.Background())
 	assert.Contains(t, r.Message, "--context 'my ctx' delete namespace nvcf",
 		"a context name with a space must be quoted so the pasted command does not split it")
+}
+
+// TestStaleNamespaceCheck_HintsSubstituteTheNamespace guards against a bare
+// `<ns>` placeholder in a pasteable command: the shell reads `<` and `>` as
+// redirection, so the command fails before kubectl runs.
+func TestStaleNamespaceCheck_HintsSubstituteTheNamespace(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{
+			{Name: "nvcf", Reason: "stuck Terminating"},
+			{Name: "sis", Reason: "stuck Terminating"},
+		}, nil
+	}
+	r := staleNamespaceCheck(prober, "", []string{"nvcf", "sis"}).Run(context.Background())
+
+	assert.NotContains(t, r.Message, "<ns>",
+		"a shell-redirection placeholder must not appear in a copy-pasteable command")
+	assert.Contains(t, r.Message, "xargs -n1 kubectl get -n nvcf ")
+	assert.Contains(t, r.Message, "xargs -n1 kubectl get -n sis ")
+}
+
+// TestStaleNamespaceCheck_HintsNameTheCurrentContext covers the single-cluster
+// path. The probe followed the current-context, so the hint has to name it:
+// the operator can switch context between reading this and pasting it, and
+// these commands delete namespaces.
+func TestStaleNamespaceCheck_HintsNameTheCurrentContext(t *testing.T) {
+	pinCurrentKubeContext(t, "k3d-local")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "nvcf", Reason: "no Helm release"}}, nil
+	}
+	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
+	assert.Contains(t, r.Message, "kubectl --context k3d-local delete namespace nvcf")
+}
+
+// An unreadable kubeconfig must not break the hint; it degrades to no flag.
+func TestStaleNamespaceCheck_HintsOmitUnknownContext(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{{Name: "nvcf", Reason: "no Helm release"}}, nil
+	}
+	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
+	assert.Contains(t, r.Message, "kubectl delete namespace nvcf")
 }

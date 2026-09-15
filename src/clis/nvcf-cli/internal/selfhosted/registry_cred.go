@@ -37,6 +37,11 @@ const (
 	// contacted when the stack is not rewriting cert-manager images to
 	// global.image.registry, which global.yaml.gotmpl does for all five of them.
 	certManagerRegistry = "quay.io"
+
+	// ngcRegistry is the default global.image.registry in the stack's
+	// environments/base.yaml, and the fallback when no source named a
+	// registry. See the tail of EnumerateRegistries.
+	ngcRegistry = "nvcr.io"
 )
 
 // RegistryCredentialChecker probes whether credentials are present and valid
@@ -252,7 +257,9 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	// Critical follows the same rule as every other source rather than being
 	// forced true: an air-gapped install that side-loaded the image never
 	// contacts this registry at pull time (ImagePullPolicy is IfNotPresent).
+	imageNamedRegistry := false
 	if reg, repo, _, ok := parseImageRef(imageRef); ok && reg != "" {
+		imageNamedRegistry = true
 		add(reg, repo, isNGCRegistry(reg))
 	}
 
@@ -293,6 +300,24 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 			reg = "[" + host + "]" // bare IPv6 literal on the default port
 		}
 		add(reg, "", false)
+	}
+
+	// Fallback for "no source named a registry at all": no validator image is
+	// configured and no stack values file resolved. That is the default
+	// configuration rather than an edge case, and without this the run reports
+	// on quay.io alone while the operator's NGC credentials go unchecked.
+	// environments/base.yaml sets global.image.registry to nvcr.io, so it is
+	// the right guess when there is nothing else to go on.
+	//
+	// Deliberately not triggered when the image or the stack named a non-NGC
+	// registry: that is a mirrored install, which has no reason to reach
+	// nvcr.io, and probing it there would add a failing round trip for the
+	// sites least able to make it.
+	//
+	// Non-critical, unlike an NGC registry a source actually named. A guess
+	// must not hard-fail the run, and this category has no opt-out flag.
+	if !imageNamedRegistry && stackRegistry == "" {
+		add(ngcRegistry, "", false)
 	}
 
 	return out
