@@ -1857,5 +1857,94 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertEqual(self.publish_and_capture_comments("3.4.0-rc.1"), [])
 
 
+class SuccessCommentTest(unittest.TestCase):
+    """The comment semantic-release posts must name the tag it actually created.
+
+    semantic-release-monorepo wraps the `success` step with a transform that
+    rewrites `nextRelease.version` to `<package.json name>-v<version>`, ignoring
+    the `tagFormat` configured here. byoo-otel-collector is the one service whose
+    tag_format injects an upstream prefix, so the default comment advertises
+    `byoo-otel-collector-v0.2.5` for a tag that is really
+    `.../v0.160.0-nv-0.2.5`. The transform leaves `nextRelease.gitTag` alone.
+    """
+
+    TAG_FORMAT = "src/compute-plane-services/byoo-otel-collector/v0.160.0-nv-${version}"
+
+    def setUp(self):
+        self.github_release = load_github_release()
+
+    def github_plugin_options(self):
+        service_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, service_dir, ignore_errors=True)
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "NVIDIA/nvcf"}):
+            self.github_release.write_semantic_release_files(
+                service_dir,
+                "byoo-otel-collector",
+                self.TAG_FORMAT,
+                publish=True,
+                draft=False,
+            )
+        config = json.loads((service_dir / ".releaserc.json").read_text())
+        for plugin in config["plugins"]:
+            if isinstance(plugin, list) and plugin[0] == "@semantic-release/github":
+                return plugin[1]
+        self.fail("@semantic-release/github is not configured")
+
+    def test_success_comment_names_the_published_git_tag(self):
+        self.assertIn("${nextRelease.gitTag}", self.github_plugin_options()["successComment"])
+
+    def test_success_comment_does_not_name_the_rewritten_version(self):
+        self.assertNotIn("${nextRelease.version}", self.github_plugin_options()["successComment"])
+
+    def test_success_comment_links_the_release_it_announces(self):
+        self.assertIn(
+            "https://github.com/NVIDIA/nvcf/releases/tag/${nextRelease.gitTag}",
+            self.github_plugin_options()["successComment"],
+        )
+
+    def release_notes_writer_opts(self):
+        service_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, service_dir, ignore_errors=True)
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "NVIDIA/nvcf"}):
+            self.github_release.write_semantic_release_files(
+                service_dir,
+                "byoo-otel-collector",
+                self.TAG_FORMAT,
+                publish=True,
+                draft=False,
+            )
+        config = json.loads((service_dir / ".releaserc.json").read_text())
+        for plugin in config["plugins"]:
+            if isinstance(plugin, list) and plugin[0] == "@semantic-release/release-notes-generator":
+                return plugin[1]["writerOpts"]
+        self.fail("@semantic-release/release-notes-generator has no writerOpts")
+
+    def test_release_notes_heading_names_the_published_git_tag(self):
+        self.assertIn("{{currentTag}}", self.release_notes_writer_opts()["headerPartial"])
+
+    def test_release_notes_heading_does_not_name_the_rewritten_version(self):
+        # `version` is what semantic-release-monorepo rewrites, and the upstream
+        # template references it twice: once linked, once bare as `{{~version}}`
+        # with a whitespace-control tilde. Checking only `{{version}}` would miss
+        # the second and leave the unlinked heading still wrong.
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        for token in ("{{version}}", "{{~version}}"):
+            self.assertNotIn(token, partial)
+
+    def test_release_notes_heading_still_links_the_compare_range(self):
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        self.assertIn("/compare/{{previousTag}}...{{currentTag}}", partial)
+
+    def test_success_comment_wording_matches_the_kind_of_thing_it_is_posted_on(self):
+        # Pins both arms and their order. Asserting only that `issue.pull_request`
+        # appears would still pass with the arms swapped, which would tell every
+        # reader the opposite of the truth. Rendering the template for real needs
+        # a Lodash engine, and this suite runs on python3 alone.
+        self.assertIn(
+            "${issue.pull_request ? 'PR is included' : 'issue has been resolved'}",
+            self.github_plugin_options()["successComment"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
