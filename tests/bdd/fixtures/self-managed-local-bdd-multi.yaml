@@ -26,8 +26,6 @@ global:
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   workerEndpoints:
-    essServiceURL: http://ess-api.ess.svc.cluster.local:8080
-    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
     # This DNS name is local to each cluster. On the compute cluster, the
     # ncp-local alias Service forwards it to the control-plane load balancer.
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
@@ -77,11 +75,8 @@ addons:
     requestRouter:
       # Validate authority/SNI demultiplexing across three concrete Stargates.
       chartPath: ../../../helm/llm-request-router/llm-request-router
-      replicaCount: 3
       grpcTls:
         enabled: true
-        mode: certManager
-        secretName: llm-request-router-grpc-tls
         dnsNames:
           - llm-request-router.nvcf.svc.cluster.local
       backendRouter:
@@ -89,17 +84,6 @@ addons:
         # through the identically named alias Service in the compute cluster.
         pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
         pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
-      metrics:
-        serviceMonitor:
-          enabled: false
-    pki:
-      enabled: true
-      allowedDomains: cluster.local
-      # The compute-reachable dial address is deliberately decoupled from the
-      # gRPC authority and QUIC SNI. Pylon preserves the per-Stargate identity.
-      dnsNames:
-        - llm-request-router.nvcf.svc.cluster.local
-        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
 
 grpcproxy:
   workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086

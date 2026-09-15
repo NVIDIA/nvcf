@@ -1058,17 +1058,24 @@ llmApiGateway:
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
-  replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  {{- $requestRouterValues := dig "addons" "llm" "requestRouter" dict .Values }}
+  {{- if hasKey $requestRouterValues "replicaCount" }}
+  replicaCount: {{ index $requestRouterValues "replicaCount" }}
+  {{- end }}
+  {{- with dig "addons" "llm" "requestRouter" "workload" dict .Values }}
   workload:
-    kind: {{ dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values | quote }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- with dig "addons" "llm" "requestRouter" "discovery" dict .Values }}
   discovery:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
+  {{- with dig "addons" "llm" "requestRouter" "readiness" dict .Values }}
   readiness:
-    warmupMs: {{ dig "addons" "llm" "requestRouter" "readiness" "warmupMs" 60000 .Values }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -1094,7 +1101,10 @@ llmRequestRouter:
   */}}
   backendRouter:
     enabled: {{ $backendRouterEnabled }}
-    replicaCount: {{ dig "addons" "llm" "requestRouter" "backendRouter" "replicaCount" 2 .Values }}
+    {{- $backendRouterValues := dig "addons" "llm" "requestRouter" "backendRouter" dict .Values }}
+    {{- if hasKey $backendRouterValues "replicaCount" }}
+    replicaCount: {{ index $backendRouterValues "replicaCount" }}
+    {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/stargate

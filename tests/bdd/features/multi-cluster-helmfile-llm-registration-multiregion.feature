@@ -18,11 +18,12 @@ Feature: Register an LLM worker securely with routers in two local regions
         | global.imagePullSecrets[0].name                                  | nvcr-pull-secret                                                                       |
         | global.helm.sources.repository                                   | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                                  |
         | global.image.repository                                          | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                                  |
-        | global.workerEndpoints.llmRequestRouterAddress                   | https://llm-request-router.nvcf.svc.cluster.local:50071                                |
-        | addons.llm.requestRouter.workload.kind                            | Deployment                                                                             |
         | addons.llm.requestRouter.discovery.remoteWatchUrls[0]             | https://region-b-watch.nvcf.svc.cluster.local:50071                                    |
         | addons.llm.requestRouter.grpcTls.dnsNames[1]                      | region-b-watch.nvcf.svc.cluster.local                                                  |
-        | addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress       | https://llm-request-router.nvcf.svc.cluster.local:50071                                |
+        # Updating a YAML list replaces the inherited list, so retain the two
+        # stack identities before adding the Region B identities.
+        | addons.llm.pki.dnsNames[0]                                        | llm-request-router.nvcf.svc.cluster.local                                               |
+        | addons.llm.pki.dnsNames[1]                                        | *.llm-request-router-headless.nvcf.svc.cluster.local                                    |
         | addons.llm.pki.dnsNames[2]                                        | region-b-watch.nvcf.svc.cluster.local                                                  |
         | addons.llm.pki.dnsNames[3]                                        | *.llm-request-router-region-b-headless.nvcf.svc.cluster.local                          |
       And I prepare Helmfile environment "local-bdd-registration-multiregion" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:

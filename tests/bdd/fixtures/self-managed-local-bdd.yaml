@@ -22,10 +22,6 @@ global:
   image:
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
-  workerEndpoints:
-    essServiceURL: http://ess-api.ess.svc.cluster.local:8080
-    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
-
 # Local BDD does not install the optional observability stack.
 observability:
   profile: disabled
@@ -81,19 +77,6 @@ addons:
           enabled: false
     requestRouter:
       replicaCount: 1
-      metrics:
-        serviceMonitor:
-          enabled: false
-      loadBalancer:
-        config: |
-          {
-            "default": "power-of-two",
-            "request_algorithms": {
-              "power-of-two": "power-of-two",
-              "round-robin": "round-robin",
-              "random": "random"
-            }
-          }
   vanityGateway:
     enabled: true
     replicaCount: 1

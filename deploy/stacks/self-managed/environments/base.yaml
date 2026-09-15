@@ -361,25 +361,22 @@ addons:
   llm:
     enabled: false
     requestRouter:
-      replicaCount: 3
+      # replicaCount defaults to the request-router chart value. Set it here
+      # only when the stack needs a different topology.
+      # replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
-      readiness:
-        warmupMs: 60000
-      workload:
-        # Deployment matches managed NVCF. Existing installations can pin
-        # StatefulSet and migrate workload kinds in a controlled maintenance
-        # window; Kubernetes cannot mutate one workload kind into the other.
-        kind: Deployment
-
-      discovery:
-        disableDnsDiscovery: false
-        # Maximum interval between unchanged local and remote Watch snapshots.
-        watchHeartbeatMs: 5000
-        # Recursive Watch endpoints require an explicit HTTPS URI. Plaintext
-        # HTTP is available only through the development-only opt-in below.
-        remoteWatchUrls: []
-        allowInsecureRemoteWatchHttp: false
+      # The chart owns readiness, workload, and discovery defaults. Override
+      # only the fields that differ for this stack environment.
+      # readiness:
+      #   warmupMs: 60000
+      # workload:
+      #   kind: StatefulSet
+      # discovery:
+      #   disableDnsDiscovery: true
+      #   watchHeartbeatMs: 5000
+      #   remoteWatchUrls: []
+      #   allowInsecureRemoteWatchHttp: false
 
       # Authority and SNI aware backend router. A worker holds one registration
       # stream and one reverse QUIC tunnel per router replica, and each must
@@ -396,7 +393,8 @@ addons:
       # inference traffic, so it sits in the data path and terminates QUIC TLS.
       backendRouter:
         # enabled: defaults to addons.llm.enabled
-        replicaCount: 2
+        # replicaCount defaults to the request-router chart value.
+        # replicaCount: 2
         # Addresses workers dial to reach the router. Both default to the
         # backend-router Service in-cluster, which is correct when workers run
         # alongside the control plane. Set both to externally reachable

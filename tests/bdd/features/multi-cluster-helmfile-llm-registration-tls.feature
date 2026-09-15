@@ -16,9 +16,7 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
       | global.imagePullSecrets[0].name                          | nvcr-pull-secret                                                            |
       | global.helm.sources.repository                           | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                       |
       | global.image.repository                                  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                       |
-      | global.workerEndpoints.llmRequestRouterAddress           | https://llm-request-router.nvcf.svc.cluster.local:50071                       |
       | addons.llm.requestRouter.workload.kind                    | StatefulSet                                                                 |
-      | addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress | https://llm-request-router.nvcf.svc.cluster.local:50071                     |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-tls-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Conflict precheck: the single-cluster topology owns the same host
     # ports. Run make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local

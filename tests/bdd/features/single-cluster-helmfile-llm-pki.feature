@@ -20,12 +20,13 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | REPO_ROOT       |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
+      And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
       And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-pki.yaml"
       # PKI render requirements: dnsNames must cover the router's
       # advertised hostname (a single replica advertises its plain
       # service DNS name), allowedDomains constrains the OpenBao
-      # signing role, and the provisioning hook needs the
-      # nvcf-openbao-migrations tag (no default propagates from env).
+      # signing role. The provisioning hook image tag comes from the
+      # stack's authoritative OpenBao migration fallback.
       And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-pki.yaml" with keys:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                         |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                     |
@@ -34,7 +35,6 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | addons.llm.pki.enabled                         | true                                                                      |
         | addons.llm.pki.dnsNames[0]                     | llm-request-router.nvcf.svc.cluster.local                                |
         | addons.llm.pki.allowedDomains                  | nvcf.svc.cluster.local                                                    |
-        | addons.llm.pki.image.tag                       | 0.19.1                                                                    |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml" with keys:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -73,7 +73,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | llm-request-router.nvcf.svc.cluster.local          |
         | name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS              |
         | value: "nvcf.svc.cluster.local"                   |
-        | nvcf-openbao-migrations:0.19.1                     |
+        | nvcf-openbao-migrations:                            |
       # A colocated worker uses the in-cluster h2c Service directly. The
       # dedicated HTTPS identity and route belong only to an explicitly
       # enabled remote-worker ingress.

@@ -275,9 +275,7 @@ func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *
 		"chartPath: ../../../helm/gateway-routes/chart",
 		"chartPath: ../../../helm/llm-request-router/llm-request-router",
 		"pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
-		"secretName: llm-request-router-grpc-tls",
 		"pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072",
-		"*.llm-request-router-headless.nvcf.svc.cluster.local",
 		"grpcWorker:",
 		"llmWorker:",
 		"enabled: true",
@@ -393,6 +391,64 @@ func TestLocalBDDFixturesLeaveSharedDefaultsToTheirStacks(t *testing.T) {
 				}
 				if value, exists := nestedYAMLValue(base, "ingress", "gatewayApi", "gateways", "nats", "listenerName"); !exists || value != "nats" {
 					t.Errorf("base ingress.gatewayApi.gateways.nats.listenerName = %v (exists %t), want nats", value, exists)
+				}
+			}
+		})
+	}
+}
+
+func TestSelfManagedLocalBDDFixturesDeferRequestRouterDefaults(t *testing.T) {
+	for _, fixturePath := range []string{
+		"fixtures/self-managed-local-bdd.yaml",
+		"fixtures/self-managed-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixtureBytes, err := os.ReadFile(fixturePath)
+			if err != nil {
+				t.Fatalf("read self-managed fixture %s: %v", fixturePath, err)
+			}
+			var fixture struct {
+				Global struct {
+					WorkerEndpoints map[string]any `yaml:"workerEndpoints"`
+				} `yaml:"global"`
+				Addons struct {
+					LLM struct {
+						RequestRouter struct {
+							ReplicaCount *int           `yaml:"replicaCount"`
+							Workload     map[string]any `yaml:"workload"`
+							LoadBalancer map[string]any `yaml:"loadBalancer"`
+							GRPCTLS      struct {
+								Mode       string `yaml:"mode"`
+								SecretName string `yaml:"secretName"`
+							} `yaml:"grpcTls"`
+						} `yaml:"requestRouter"`
+						PKI map[string]any `yaml:"pki"`
+					} `yaml:"llm"`
+				} `yaml:"addons"`
+			}
+			if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+				t.Fatalf("parse self-managed fixture %s: %v", fixturePath, err)
+			}
+
+			router := fixture.Addons.LLM.RequestRouter
+			if strings.HasSuffix(fixturePath, "-multi.yaml") && router.ReplicaCount != nil {
+				t.Fatalf("%s overrides chart replicaCount with %d", fixturePath, *router.ReplicaCount)
+			}
+			if len(router.Workload) != 0 {
+				t.Fatalf("%s overrides the chart workload defaults: %#v", fixturePath, router.Workload)
+			}
+			if len(router.LoadBalancer) != 0 {
+				t.Fatalf("%s narrows Stargate's built-in load-balancer defaults: %#v", fixturePath, router.LoadBalancer)
+			}
+			if router.GRPCTLS.Mode != "" || router.GRPCTLS.SecretName != "" {
+				t.Fatalf("%s repeats stack gRPC TLS defaults", fixturePath)
+			}
+			if len(fixture.Addons.LLM.PKI) != 0 {
+				t.Fatalf("%s repeats the stack's managed PKI defaults: %#v", fixturePath, fixture.Addons.LLM.PKI)
+			}
+			for _, key := range []string{"essServiceURL", "invocationServiceURL"} {
+				if _, exists := fixture.Global.WorkerEndpoints[key]; exists {
+					t.Fatalf("%s repeats the stack default for global.workerEndpoints.%s", fixturePath, key)
 				}
 			}
 		})

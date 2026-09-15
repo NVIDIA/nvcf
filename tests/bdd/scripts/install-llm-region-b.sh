@@ -34,8 +34,6 @@ printf '%s' "${values_json}" | jq --arg watch_host "${region_b_watch_host}" '
       | .certificate.enabled = false
       | .tls.mode = "existingSecret"
       | .tls.secretName = "stargate-quic-tls"
-      | .image.pullPolicy = "IfNotPresent"
-      | .backendRouter.image.pullPolicy = "IfNotPresent"
     )
   }
 ' | helm --kube-context "${control_context}" upgrade --install "${region_b_release}" "${chart}" \

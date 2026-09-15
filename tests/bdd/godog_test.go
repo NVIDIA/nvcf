@@ -1291,7 +1291,6 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"chartPath: ../../../helm/gateway-routes/chart",
 		"chartPath: ../../../helm/llm-request-router/llm-request-router",
 		"llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
-		"secretName: llm-request-router-grpc-tls",
 		"grpcWorker:",
 		"llmWorker:",
 		"enabled: true",
@@ -1985,7 +1984,7 @@ env:
     value: "true"
   - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
     value: "nvcf.svc.cluster.local"
-image: nvcr.io/test-org/test-team/nvcf-openbao-migrations:0.19.1
+image: nvcr.io/test-org/test-team/nvcf-openbao-migrations:fixture-tag
 `
 	filePath := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out", "01-pki", "templates", "pki.yaml")
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
