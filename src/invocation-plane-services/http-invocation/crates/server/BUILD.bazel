@@ -160,6 +160,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -194,6 +195,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -227,6 +229,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -260,6 +263,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -293,6 +297,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -326,6 +331,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -359,6 +365,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -392,6 +399,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -425,6 +433,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -458,6 +467,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -491,6 +501,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -524,6 +535,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -557,6 +569,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
