@@ -21,14 +21,17 @@ import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
+import static io.cloudevents.jackson.JsonFormat.CONTENT_TYPE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
+import io.cloudevents.core.provider.EventFormatProvider;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -84,26 +87,29 @@ class EventLedgerClientTest {
 
         await().untilAsserted(() -> assertThat(server.getAllServeEvents()).hasSize(1));
         var request = server.getAllServeEvents().getFirst().getRequest();
-        var payload = new JsonMapper().readTree(request.getBody());
+        var cloudEvent = EventFormatProvider.getInstance()
+                .resolveFormat(CONTENT_TYPE)
+                .deserialize(request.getBody());
         assertThat(request.getHeader("Content-Type"))
                 .isEqualTo(EventLedgerClient.CLOUD_EVENTS_CONTENT_TYPE);
-        assertThat(payload.get("specversion").asText()).isEqualTo("1.0");
-        assertThat(payload.get("id").asText()).isNotBlank();
-        assertThat(payload.get("source").asText()).isEqualTo("cloud-functions");
-        assertThat(payload.get("type").asText()).isEqualTo(eventName);
-        assertThat(payload.get("time").asText()).isEqualTo(persistedAt.toString());
-        assertThat(payload.get("namespace").asText()).isEqualTo("account-1");
-        assertThat(payload.get("deploymentId").asText())
-                .isEqualTo(deploymentId.toString());
-        assertThat(payload.get("data").get("functionId").asText())
-                .isEqualTo(functionId.toString());
-        assertThat(payload.get("data").get("functionVersionId").asText())
+        assertThat(cloudEvent.getSpecVersion().toString()).isEqualTo("1.0");
+        assertThat(cloudEvent.getId()).isNotBlank();
+        assertThat(cloudEvent.getSource().toString())
+                .isEqualTo(EventLedgerClient.CLOUD_EVENT_SOURCE);
+        assertThat(cloudEvent.getType()).isEqualTo(eventName);
+        assertThat(cloudEvent.getTime()).isEqualTo(persistedAt.atOffset(ZoneOffset.UTC));
+        assertThat(cloudEvent.getExtension("namespace")).isEqualTo(functionVersionId.toString());
+        assertThat(cloudEvent.getExtension("functionid")).isEqualTo(functionId.toString());
+        assertThat(cloudEvent.getExtension("functionversionid"))
                 .isEqualTo(functionVersionId.toString());
-        assertThat(payload.get("data").get("deploymentId").asText())
-                .isEqualTo(deploymentId.toString());
-        assertThat(payload.get("data").get("previousStatus").asText())
+        assertThat(cloudEvent.getExtension("deploymentid")).isEqualTo(deploymentId.toString());
+        assertThat(cloudEvent.getExtension("ncaid")).isEqualTo("account-1");
+        assertThat(cloudEvent.getExtension("eventtype"))
+                .isEqualTo(EventLedgerClient.CLOUD_EVENT_TYPE);
+        var data = new JsonMapper().readTree(cloudEvent.getData().toBytes());
+        assertThat(data.get("previousStatus").asText())
                 .isEqualTo(previousStatus.toString());
-        assertThat(payload.get("data").get("currentStatus").asText())
+        assertThat(data.get("currentStatus").asText())
                 .isEqualTo(status.toString());
     }
 

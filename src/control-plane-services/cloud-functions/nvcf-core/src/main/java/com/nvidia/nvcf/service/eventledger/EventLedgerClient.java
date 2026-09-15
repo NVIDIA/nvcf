@@ -16,13 +16,22 @@
  */
 package com.nvidia.nvcf.service.eventledger;
 
+import static io.cloudevents.jackson.JsonFormat.CONTENT_TYPE;
+
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.util.NvcfOAuth2ClientUtils;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.format.EventFormat;
+import io.cloudevents.core.provider.EventFormatProvider;
 import io.micrometer.context.ContextSnapshot;
 import io.micrometer.context.ContextSnapshotFactory;
 import jakarta.annotation.PreDestroy;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -46,7 +55,9 @@ public class EventLedgerClient {
 
     static final String CLIENT_REGISTRATION_ID = "event-ledger";
     static final String CLOUD_EVENTS_PATH = "/v3/ledger/cloudevents";
-    static final String CLOUD_EVENTS_CONTENT_TYPE = "application/cloudevents+json";
+    static final String CLOUD_EVENTS_CONTENT_TYPE = CONTENT_TYPE;
+    static final String CLOUD_EVENT_SOURCE = "nvidia-spot";
+    static final String CLOUD_EVENT_TYPE = "nvcf-api";
 
     private static final String MESG_UNKNOWN_FUNCTION_STATUS =
             "Event Ledger unknown function status: {}, skip publishing.";
@@ -73,6 +84,7 @@ public class EventLedgerClient {
     private final WebClient webClient;
     private final JsonMapper jsonMapper;
     private final ExecutorService executor;
+    private final EventFormat eventFormat;
 
     private record FunctionStatusTransition(
             UUID functionId,
@@ -121,6 +133,7 @@ public class EventLedgerClient {
         this.webClient = webClient;
         this.jsonMapper = jsonMapper;
         this.executor = executor;
+        this.eventFormat = EventFormatProvider.getInstance().resolveFormat(CONTENT_TYPE);
     }
 
     public void publish(
@@ -166,25 +179,10 @@ public class EventLedgerClient {
     private void send(
             String ncaId, FunctionStatusTransition transition, String eventName) {
         try {
-            var payload = Map.of(
-                    "specversion", "1.0",
-                    "id", UUID.randomUUID().toString(),
-                    "source", "cloud-functions",
-                    "type", eventName,
-                    "time", transition.persistedAt().toString(),
-                    "namespace", ncaId,
-                    "deploymentId", transition.deploymentId().toString(),
-                    "data", Map.of(
-                            "functionId", transition.functionId().toString(),
-                            "functionVersionId", transition.functionVersionId().toString(),
-                            "deploymentId", transition.deploymentId().toString(),
-                            "previousStatus", transition.previousStatus().toString(),
-                            "currentStatus", transition.currentStatus().toString()));
-
             webClient.post()
                     .uri(CLOUD_EVENTS_PATH)
                     .contentType(MediaType.parseMediaType(CLOUD_EVENTS_CONTENT_TYPE))
-                    .bodyValue(jsonMapper.writeValueAsBytes(payload))
+                    .bodyValue(eventFormat.serialize(buildCloudEvent(ncaId, transition, eventName)))
                     .retrieve()
                     .toBodilessEntity()
                     .block(timeout);
@@ -193,6 +191,26 @@ public class EventLedgerClient {
                      ncaId, transition.functionId(), transition.functionVersionId(),
                      transition.deploymentId(), transition.currentStatus(), ex);
         }
+    }
+
+    private CloudEvent buildCloudEvent(
+            String ncaId, FunctionStatusTransition transition, String eventName) throws Exception {
+        var details = Map.of(
+                "previousStatus", transition.previousStatus().toString(),
+                "currentStatus", transition.currentStatus().toString());
+        return CloudEventBuilder.v1()
+                .withId(UUID.randomUUID().toString())
+                .withSource(URI.create(CLOUD_EVENT_SOURCE))
+                .withTime(transition.persistedAt().atOffset(ZoneOffset.UTC))
+                .withType(eventName)
+                .withExtension("namespace", transition.functionVersionId().toString())
+                .withExtension("functionid", transition.functionId().toString())
+                .withExtension("functionversionid", transition.functionVersionId().toString())
+                .withExtension("deploymentid", transition.deploymentId().toString())
+                .withExtension("ncaid", ncaId)
+                .withExtension("eventtype", CLOUD_EVENT_TYPE)
+                .withData(jsonMapper.writeValueAsString(details).getBytes(StandardCharsets.UTF_8))
+                .build();
     }
 
     private static WebClient authenticatedWebClient(
