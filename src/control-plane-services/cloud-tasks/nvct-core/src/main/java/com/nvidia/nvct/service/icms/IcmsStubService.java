@@ -381,4 +381,49 @@ public interface IcmsStubService {
             @RequestParam("IncludeTerminated") boolean includeTerminated,
             @RequestParam("UseConciseName") boolean useConciseName,
             @RequestParam("ExpiredAckedInstances") boolean expiredAckedInstances);
+
+    @Value
+    @Jacksonized
+    @Builder
+    class WorkerTokenIntrospectRequest {
+        @JsonProperty("token")
+        String token;
+    }
+
+    @Value
+    @Jacksonized
+    @Builder
+    class WorkerTokenIntrospectResult {
+        boolean active;
+        @Nullable String sub;
+        @Nullable String aud;
+        @Nullable String iss;
+        @JsonProperty("instance_id")
+        @Nullable String instanceId;
+        @JsonProperty("worker_id")
+        @Nullable String workerId;
+        @JsonProperty("token_type")
+        @Nullable String tokenType;
+        /** RFC 7662 Section 2.2: epoch-seconds at which the token expires. Null when unknown. */
+        @Nullable Long exp;
+        @JsonProperty("client_id")
+        @Nullable String clientId;
+        @JsonProperty("request_id")
+        @Nullable String requestId;
+        @JsonProperty("function_id")
+        @Nullable String functionId;
+        @JsonProperty("function_version_id")
+        @Nullable String functionVersionId;
+        @JsonProperty("task_id")
+        @Nullable String taskId;
+        @JsonProperty("nca_id")
+        @Nullable String ncaId;
+        @Nullable String error;
+    }
+
+    @PostExchange(value = "/v1/icms/workers/tokens/introspect",
+                  accept = "application/json",
+                  contentType = "application/json")
+    WorkerTokenIntrospectResult introspectWorkerToken(
+            @org.springframework.web.bind.annotation.RequestBody WorkerTokenIntrospectRequest request);
 }
