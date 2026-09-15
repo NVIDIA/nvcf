@@ -12,19 +12,14 @@
 # does not resolve, which is the intended failure mode.
 
 global:
-  nodeSelectors:
-    enabled: false
-
   storageClass: local-path
   storageSize: 2Gi
 
   helm:
     sources:
-      registry: "nvcr.io"
       repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
 
   image:
-    registry: nvcr.io
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   workerEndpoints:
@@ -108,7 +103,6 @@ addons:
 # Expects Cluster Operator to provision Gateway resource
 ingress:
   gatewayApi:
-    enabled: true
     controllerNamespace: envoy-gateway-system
     gateways:
       shared:
@@ -120,7 +114,6 @@ ingress:
       nats:
         name: shared-gw
         namespace: envoy-gateway-system
-        listenerName: nats
     routes:
       nats:
         enabled: true

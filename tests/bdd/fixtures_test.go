@@ -270,6 +270,154 @@ func TestSelfManagedLocalBDDMultiFixtureUsesStackDefaultForNVCFGRPC(t *testing.T
 	}
 }
 
+func TestLocalBDDFixturesLeaveSharedDefaultsToTheirStacks(t *testing.T) {
+	tests := []struct {
+		name        string
+		fixturePath string
+		basePath    string
+		selfManaged bool
+		single      bool
+	}{
+		{
+			name:        "self-managed-single",
+			fixturePath: "fixtures/self-managed-local-bdd.yaml",
+			basePath:    "../../deploy/stacks/self-managed/environments/base.yaml",
+			selfManaged: true,
+			single:      true,
+		},
+		{
+			name:        "self-managed-multi",
+			fixturePath: "fixtures/self-managed-local-bdd-multi.yaml",
+			basePath:    "../../deploy/stacks/self-managed/environments/base.yaml",
+			selfManaged: true,
+		},
+		{
+			name:        "compute-plane-single",
+			fixturePath: "fixtures/nvcf-compute-plane-local-bdd.yaml",
+			basePath:    "../../deploy/stacks/nvcf-compute-plane/environments/base.yaml",
+		},
+		{
+			name:        "compute-plane-multi",
+			fixturePath: "fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+			basePath:    "../../deploy/stacks/nvcf-compute-plane/environments/base.yaml",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := loadYAMLMap(t, test.fixturePath)
+			base := loadYAMLMap(t, test.basePath)
+
+			for _, path := range [][]string{
+				{"global", "helm", "sources", "registry"},
+				{"global", "image", "registry"},
+			} {
+				if value, exists := nestedYAMLValue(fixture, path...); exists {
+					t.Errorf("fixture owns %s = %v; want stack default", strings.Join(path, "."), value)
+				}
+				if value, exists := nestedYAMLValue(base, path...); !exists || value != "nvcr.io" {
+					t.Errorf("base %s = %v (exists %t), want nvcr.io", strings.Join(path, "."), value, exists)
+				}
+			}
+			for _, path := range [][]string{
+				{"global", "helm", "sources", "repository"},
+				{"global", "image", "repository"},
+			} {
+				if value, exists := nestedYAMLValue(fixture, path...); !exists || value != "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM" {
+					t.Errorf("fixture %s = %v (exists %t), want local substitution placeholder", strings.Join(path, "."), value, exists)
+				}
+			}
+
+			if value, exists := nestedYAMLValue(fixture, "observability", "profile"); !exists || value != "disabled" {
+				t.Errorf("fixture observability.profile = %v (exists %t), want disabled", value, exists)
+			}
+
+			if test.selfManaged {
+				if value, exists := nestedYAMLValue(fixture, "global", "nodeSelectors", "enabled"); exists {
+					t.Errorf("fixture owns global.nodeSelectors.enabled = %v; want stack default", value)
+				}
+				if value, exists := nestedYAMLValue(base, "global", "nodeSelectors", "enabled"); !exists || value != false {
+					t.Errorf("base global.nodeSelectors.enabled = %v (exists %t), want false", value, exists)
+				}
+			}
+
+			if test.single {
+				for _, path := range [][]string{
+					{"ingress", "gatewayApi", "enabled"},
+					{"ingress", "gatewayApi", "gateways", "nats", "listenerName"},
+				} {
+					if value, exists := nestedYAMLValue(fixture, path...); exists {
+						t.Errorf("fixture owns %s = %v; want stack default", strings.Join(path, "."), value)
+					}
+				}
+				if value, exists := nestedYAMLValue(base, "ingress", "gatewayApi", "enabled"); !exists || value != true {
+					t.Errorf("base ingress.gatewayApi.enabled = %v (exists %t), want true", value, exists)
+				}
+				if value, exists := nestedYAMLValue(base, "ingress", "gatewayApi", "gateways", "nats", "listenerName"); !exists || value != "nats" {
+					t.Errorf("base ingress.gatewayApi.gateways.nats.listenerName = %v (exists %t), want nats", value, exists)
+				}
+			}
+		})
+	}
+}
+
+func TestLocalBDDFeaturesDoNotRepeatDisabledObservabilityProfile(t *testing.T) {
+	featurePaths, err := filepath.Glob("features/*.feature")
+	if err != nil {
+		t.Fatalf("list BDD feature files: %v", err)
+	}
+	duplicate := regexp.MustCompile(`(?m)^\s*\|\s*observability\.profile\s*\|\s*disabled\s*\|`)
+	for _, featurePath := range featurePaths {
+		feature, err := os.ReadFile(featurePath)
+		if err != nil {
+			t.Fatalf("read feature %s: %v", featurePath, err)
+		}
+		usesLocalFixture := false
+		for _, fixtureName := range []string{
+			"self-managed-local-bdd.yaml",
+			"self-managed-local-bdd-multi.yaml",
+			"nvcf-compute-plane-local-bdd.yaml",
+			"nvcf-compute-plane-local-bdd-multi.yaml",
+		} {
+			if bytes.Contains(feature, []byte(fixtureName)) {
+				usesLocalFixture = true
+				break
+			}
+		}
+		if usesLocalFixture && duplicate.Match(feature) {
+			t.Errorf("%s repeats observability.profile=disabled already owned by its local BDD fixture", featurePath)
+		}
+	}
+}
+
+func loadYAMLMap(t *testing.T, path string) map[string]any {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read YAML %s: %v", path, err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(body, &values); err != nil {
+		t.Fatalf("parse YAML %s: %v", path, err)
+	}
+	return values
+}
+
+func nestedYAMLValue(values map[string]any, path ...string) (any, bool) {
+	var current any = values
+	for _, key := range path {
+		mapping, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = mapping[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
 func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 	for _, path := range []string{
 		"../../examples/task-samples/task-simple-sample/Dockerfile",

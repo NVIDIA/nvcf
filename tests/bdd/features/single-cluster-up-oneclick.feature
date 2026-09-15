@@ -37,12 +37,10 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
-        | observability.profile                         | disabled                                                           |
       And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       # The control-plane stack also requires an operator-authored local
       # secrets file. Author it from the tracked template; the Ledger gives
       # it the same restore-or-remove behavior as the environment files.

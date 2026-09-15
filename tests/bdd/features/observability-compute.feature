@@ -24,7 +24,6 @@ Feature: Install local Helmfile observability with the compute profile
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | addons.llm.enabled              | false                                |
-      | observability.profile           | disabled                             |
     # Configure the shared observability stack for compute-plane monitors.
     And I prepare Helmfile environment "local-bdd-observability-compute" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |

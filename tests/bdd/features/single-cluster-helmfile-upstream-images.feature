@@ -24,7 +24,6 @@ Feature: Install a local single-cluster stack with upstream supporting images
       | global.imagePullSecrets[0].name       | nvcr-pull-secret                     |
       | global.helm.sources.repository        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-      | observability.profile                 | disabled                             |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     And a single-cluster ncp-local cluster is running
     And the "nvcr-pull-secret" image pull secret exists in namespaces:

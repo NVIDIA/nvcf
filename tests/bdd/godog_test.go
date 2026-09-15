@@ -1833,6 +1833,8 @@ func seedHelmfileLocalBDDFixture(t *testing.T, repoRoot string) {
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+observability:
+  profile: disabled
 addons:
   llm:
     enabled: true
@@ -1934,6 +1936,8 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
+observability:
+  profile: disabled
 addons:
   llm:
     enabled: true
@@ -1985,6 +1989,8 @@ func seedComputePlaneLocalBDDFixture(t *testing.T, repoRoot string) {
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
+observability:
+  profile: disabled
 agentConfig:
   mergeConfig: |
     cluster:
@@ -2005,6 +2011,8 @@ func seedComputePlaneLocalBDDMultiFixture(t *testing.T, repoRoot string) {
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
+observability:
+  profile: disabled
 agentConfig:
   mergeConfig: |
     cluster:

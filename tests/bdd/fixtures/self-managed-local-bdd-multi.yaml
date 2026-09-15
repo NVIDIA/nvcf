@@ -10,9 +10,6 @@
 # Services in the compute cluster, and the alias Endpoints point at
 # the control-plane load balancer.
 global:
-  nodeSelectors:
-    enabled: false
-
   storageClass: local-path
   storageSize: 2Gi
 
@@ -23,11 +20,9 @@ global:
   # the rationale.
   helm:
     sources:
-      registry: "nvcr.io"
       repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
 
   image:
-    registry: nvcr.io
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   workerEndpoints:

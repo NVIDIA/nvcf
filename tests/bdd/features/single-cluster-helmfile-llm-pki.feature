@@ -35,13 +35,11 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | addons.llm.pki.dnsNames[0]                     | llm-request-router.nvcf.svc.cluster.local                                |
         | addons.llm.pki.allowedDomains                  | nvcf.svc.cluster.local                                                    |
         | addons.llm.pki.image.tag                       | 0.19.1                                                                    |
-        | observability.profile                          | disabled                                                                  |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml" with keys:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-pki-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
       # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker

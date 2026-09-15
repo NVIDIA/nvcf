@@ -430,9 +430,9 @@ releases:
           namespaceRestriction:
             enabled: false
         nats:
-          # Keep the bundled Dynamo NATS reloader aligned with the
-          # self-managed control-plane NATS release. The release inventory
-          # merger rejects different versions of the same image.
+          # Keep the bundled Dynamo NATS reloader aligned with the NVCF NATS
+          # chart default. The release inventory merger rejects different
+          # versions of the same image.
           reloader:
             image:
               registry: docker.io

@@ -29,12 +29,10 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-        | observability.profile                          | disabled                                                            |
       And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: single-cluster ncp-local's k3d serverlb
       # claims 0.0.0.0:8080/8443/10081, and ncp-local-cp also

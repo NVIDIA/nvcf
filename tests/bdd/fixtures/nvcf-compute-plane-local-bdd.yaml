@@ -17,11 +17,9 @@ global:
 
   helm:
     sources:
-      registry: "nvcr.io"
       repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
 
   image:
-    registry: nvcr.io
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   nvcaOperator:
