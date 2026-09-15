@@ -257,40 +257,6 @@ func TestRunClusterValidator_RBACIdempotent(t *testing.T) {
 	assert.True(t, res.Passed)
 }
 
-// Regression guard: a ClusterRole left over from an older CLI version must
-// be refreshed with the current rule set instead of silently kept stale.
-func TestRunClusterValidator_RBACRefreshesClusterRoleRules(t *testing.T) {
-	oldRules := []rbacv1.PolicyRule{
-		{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get"}},
-	}
-	// Labelled as a prior CLI run would have left it: only a ClusterRole we own
-	// may have its rules rewritten.
-	client := fake.NewSimpleClientset(&rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: clusterValidatorName, Labels: clusterValidatorLabels()},
-		Rules:      oldRules,
-	})
-
-	var jobName atomic.Value
-	jobName.Store("")
-	client.PrependReactor("create", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
-		jobName.Store(action.(ktesting.CreateAction).GetObject().(*batchv1.Job).Name)
-		return false, nil, nil
-	})
-	client.PrependReactor("get", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
-		return jobSucceededReactor(jobName.Load().(string))(action)
-	})
-	client.PrependReactor("list", "pods", podListReactor(""))
-
-	// noCleanup=true so the ClusterRole is not swept before we inspect it.
-	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", true, "", nil)
-	require.NoError(t, res.Err)
-
-	got, err := client.RbacV1().ClusterRoles().Get(context.Background(), clusterValidatorName, metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Greater(t, len(got.Rules), len(oldRules),
-		"ClusterRole rules must be refreshed to the current set on each run, not kept stale")
-}
-
 // TestEnsureClusterValidatorRBAC_WritableResources verifies that the
 // bootstrapped ClusterRole grants the write verbs required by enforcement
 // checks (namespace/pod create+delete), probe log reading (pods/log get),
@@ -300,9 +266,10 @@ func TestEnsureClusterValidatorRBAC_WritableResources(t *testing.T) {
 	ctx := context.Background()
 
 	const role = clusterValidatorControlPlaneRole
-	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role))
+	const runID = "testrunid"
+	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role, runID))
 
-	cr, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorRBACName(role), metav1.GetOptions{})
+	cr, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorRBACName(role, runID), metav1.GetOptions{})
 	require.NoError(t, err)
 
 	type check struct {
@@ -511,7 +478,7 @@ func TestRunClusterValidator_ContextCanceled(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", false)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false)
 
 	assert.Equal(t, "test-job", job.Name)
 	assert.Equal(t, clusterValidatorNamespace, job.Namespace)
@@ -528,8 +495,8 @@ func TestBuildClusterValidatorJobShape(t *testing.T) {
 		"IfNotPresent so locally-imported images (k3d image import, kind load) are picked up without a registry pull")
 	assert.Equal(t, corev1.RestartPolicyNever, job.Spec.Template.Spec.RestartPolicy,
 		"validator is a one-shot command, not a long-running service")
-	assert.Equal(t, clusterValidatorName, job.Spec.Template.Spec.ServiceAccountName,
-		"pod must run under the CLI-bootstrapped SA, not the namespace default")
+	assert.Equal(t, clusterValidatorRBACName("", "runid"), job.Spec.Template.Spec.ServiceAccountName,
+		"pod must run under this run's bootstrapped SA, not the namespace default")
 
 	labels := job.Labels
 	assert.Equal(t, clusterValidatorAppLabel, labels["app.kubernetes.io/name"])
@@ -548,7 +515,7 @@ func TestBuildClusterValidatorJobShape(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape_ValidatorRoleInEnv(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", clusterValidatorControlPlaneRole, false)
+	job := buildClusterValidatorJob("test-job", "img:1", "", clusterValidatorControlPlaneRole, "runid", false)
 	env := map[string]string{}
 	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
 		env[e.Name] = e.Value
@@ -558,19 +525,19 @@ func TestBuildClusterValidatorJobShape_ValidatorRoleInEnv(t *testing.T) {
 }
 
 func TestBuildClusterValidatorJobShape_WithPullSecret(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", "", false)
+	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", "", "runid", false)
 	require.Len(t, job.Spec.Template.Spec.ImagePullSecrets, 1)
 	assert.Equal(t, "nvcr-pull-secret", job.Spec.Template.Spec.ImagePullSecrets[0].Name)
 }
 
 func TestBuildClusterValidatorJobShape_NoPullSecret(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", false)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", false)
 	assert.Empty(t, job.Spec.Template.Spec.ImagePullSecrets,
 		"empty pull-secret arg must not produce an empty-name ImagePullSecrets entry")
 }
 
 func TestBuildClusterValidatorJobShape_NoCleanup(t *testing.T) {
-	job := buildClusterValidatorJob("test-job", "img:1", "", "", true)
+	job := buildClusterValidatorJob("test-job", "img:1", "", "", "runid", true)
 	assert.Nil(t, job.Spec.TTLSecondsAfterFinished,
 		"--no-cleanup must omit TTLSecondsAfterFinished so the Job persists for debugging")
 }
@@ -670,8 +637,13 @@ func TestParseRegistryHostPort(t *testing.T) {
 		// IPv6: net.SplitHostPort handles bracketed literals correctly.
 		{"[::1]:5000", "::1", 5000},
 		{"[2001:db8::1]:443", "2001:db8::1", 443},
-		// Trailing colon with no digit → default to 443.
-		{"nvcr.io:", "nvcr.io", 443},
+		// An explicit but unusable port is a typo, not a request for 443:
+		// probing a different endpoint than configured reports a result for
+		// something the operator never asked about.
+		{"nvcr.io:", "", 0},
+		{"nvcr.io:abc", "", 0},
+		{"nvcr.io:0", "", 0},
+		{"nvcr.io:70000", "", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -697,64 +669,6 @@ func alreadyExistsReactor(resource, name string) ktesting.ReactionFunc {
 	}
 }
 
-// ModeSplit runs both validators concurrently, and the two kubecontexts can
-// resolve to the same cluster. With one shared RBAC name the first run to
-// finish deletes the ServiceAccount, ClusterRole and binding out from under the
-// other run's pod, which then fails every API call with "forbidden".
-func TestClusterValidatorRBAC_IsScopedPerRole(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	ctx := context.Background()
-
-	cpName := clusterValidatorRBACName(clusterValidatorControlPlaneRole)
-	gpuName := clusterValidatorRBACName("compute-plane")
-	require.NotEqual(t, cpName, gpuName, "each role needs its own RBAC identity")
-
-	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, clusterValidatorControlPlaneRole))
-	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, "compute-plane"))
-
-	// Sweeping one role must leave the other's RBAC intact.
-	sweepClusterValidatorRBAC(ctx, client, clusterValidatorControlPlaneRole)
-
-	_, err := client.RbacV1().ClusterRoles().Get(ctx, cpName, metav1.GetOptions{})
-	assert.True(t, apierrors.IsNotFound(err), "the swept role's ClusterRole must be gone")
-
-	_, err = client.RbacV1().ClusterRoles().Get(ctx, gpuName, metav1.GetOptions{})
-	assert.NoError(t, err, "the other role's ClusterRole must survive")
-
-	_, err = client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Get(ctx, gpuName, metav1.GetOptions{})
-	assert.NoError(t, err, "the other role's ServiceAccount must survive")
-}
-
-// A ClusterRole is a cluster-scoped privilege object. An operator-owned one with
-// a colliding name must not have its rules rewritten, and the sweep must not
-// delete it.
-func TestClusterValidatorRBAC_RefusesUnmanagedClusterRole(t *testing.T) {
-	ctx := context.Background()
-	const role = clusterValidatorControlPlaneRole
-	name := clusterValidatorRBACName(role)
-
-	operatorRules := []rbacv1.PolicyRule{
-		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}},
-	}
-	client := fake.NewSimpleClientset(&rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"owner": "operator"}},
-		Rules:      operatorRules,
-	})
-
-	err := ensureClusterValidatorRBAC(ctx, client, role)
-	require.Error(t, err, "an unmanaged ClusterRole must not be rewritten")
-	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
-
-	got, getErr := client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{})
-	require.NoError(t, getErr)
-	assert.Equal(t, operatorRules, got.Rules, "the operator's rules must be untouched")
-
-	// The sweep must leave it alone too, even though it matches by name.
-	sweepClusterValidatorRBAC(ctx, client, role)
-	_, getErr = client.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{})
-	assert.NoError(t, getErr, "the sweep must not delete a ClusterRole it does not own")
-}
-
 // The same invariant for the network-check ConfigMap.
 func TestEnsureClusterValidatorConfig_RefusesUnmanagedConfigMap(t *testing.T) {
 	ctx := context.Background()
@@ -778,77 +692,91 @@ func TestEnsureClusterValidatorConfig_RefusesUnmanagedConfigMap(t *testing.T) {
 		"the operator's ConfigMap content must be untouched")
 }
 
-// An attacker who can create a ServiceAccount in the probe namespace could
-// pre-create one under the generated name. Blindly tolerating AlreadyExists
-// would then bind that account to the validator ClusterRole, handing whoever
-// controls it cluster-wide create/delete on namespaces, pods and daemonsets.
-func TestClusterValidatorRBAC_RefusesUnmanagedServiceAccount(t *testing.T) {
+// The managed labels are three public constants, so a label check alone cannot
+// establish ownership: anyone able to create a ServiceAccount in the probe
+// namespace could stamp them. Safety comes from the name being unguessable, so
+// there is no predictable object to pre-create and get bound to the validator's
+// cluster-wide permissions.
+func TestClusterValidatorRBACName_IsUnpredictableAndPerRun(t *testing.T) {
+	a, err := newValidatorRunID()
+	require.NoError(t, err)
+	b, err := newValidatorRunID()
+	require.NoError(t, err)
+
+	assert.NotEqual(t, a, b, "each run must get a distinct identity")
+	assert.NotEmpty(t, a)
+
+	const role = clusterValidatorControlPlaneRole
+	assert.NotEqual(t, clusterValidatorRBACName(role, a), clusterValidatorRBACName(role, b),
+		"RBAC names must differ per run")
+	assert.NotEqual(t, clusterValidatorRBACName(role, a), clusterValidatorRBACName("compute-plane", a),
+		"RBAC names must differ per role within a run")
+}
+
+// Nothing pre-existing is adopted: creation is unconditional, so a squatted
+// object surfaces as an error rather than being bound to our ClusterRole.
+func TestEnsureClusterValidatorRBAC_DoesNotAdoptExistingObjects(t *testing.T) {
 	ctx := context.Background()
 	const role = clusterValidatorControlPlaneRole
-	name := clusterValidatorRBACName(role)
+	const runID = "collide"
+	name := clusterValidatorRBACName(role, runID)
 
+	// Forged managed labels: a label check alone would have adopted this.
 	client := fake.NewSimpleClientset(&corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: clusterValidatorNamespace,
-			Labels: map[string]string{"owner": "someone-else"},
+			Name: name, Namespace: clusterValidatorNamespace, Labels: clusterValidatorLabels(),
 		},
 	})
 
-	err := ensureClusterValidatorRBAC(ctx, client, role)
-	require.Error(t, err, "an unowned ServiceAccount must not be adopted")
-	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
+	err := ensureClusterValidatorRBAC(ctx, client, role, runID)
+	require.Error(t, err, "a pre-existing object must not be adopted, forged labels or not")
 
 	_, bindErr := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(bindErr),
-		"no ClusterRoleBinding may be created for a ServiceAccount we do not own")
+		"no binding may be created when the ServiceAccount was not created by this run")
 }
 
-// A pre-existing ClusterRoleBinding under our name may bind subjects we never
-// intended, or point at a different role. It must not be silently reused.
-func TestClusterValidatorRBAC_RefusesUnmanagedClusterRoleBinding(t *testing.T) {
+// Random names cannot self-heal by being reused next run, so leftovers from a
+// killed run are reclaimed by age. A fresh one must survive: it may belong to a
+// run happening right now.
+func TestSweepOrphanClusterValidatorRBAC_AgeScoped(t *testing.T) {
 	ctx := context.Background()
-	const role = clusterValidatorControlPlaneRole
-	name := clusterValidatorRBACName(role)
-
-	client := fake.NewSimpleClientset(&rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"owner": "someone-else"}},
-		Subjects: []rbacv1.Subject{{
-			Kind: rbacv1.ServiceAccountKind, Name: "attacker-sa", Namespace: "default",
-		}},
-		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-admin"},
-	})
-
-	err := ensureClusterValidatorRBAC(ctx, client, role)
-	require.Error(t, err, "an unowned ClusterRoleBinding must not be reused")
-	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
-
-	got, getErr := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
-	require.NoError(t, getErr)
-	assert.Equal(t, "attacker-sa", got.Subjects[0].Name, "the existing binding must be left untouched")
-}
-
-// A binding we own but from an older CLI can point at a stale RoleRef, which is
-// immutable, so it has to be replaced rather than updated.
-func TestClusterValidatorRBAC_ReplacesOwnedBindingWithStaleRoleRef(t *testing.T) {
-	ctx := context.Background()
-	const role = clusterValidatorControlPlaneRole
-	name := clusterValidatorRBACName(role)
+	old := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	now := metav1.NewTime(time.Now())
 
 	client := fake.NewSimpleClientset(
-		&rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: clusterValidatorLabels()},
-			Subjects: []rbacv1.Subject{{
-				Kind: rbacv1.ServiceAccountKind, Name: "old-name", Namespace: clusterValidatorNamespace,
-			}},
-			RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "old-role"},
-		},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: "stale", Labels: clusterValidatorLabels(), CreationTimestamp: old,
+		}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: "fresh", Labels: clusterValidatorLabels(), CreationTimestamp: now,
+		}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: "theirs", Labels: map[string]string{"owner": "operator"}, CreationTimestamp: old,
+		}},
 	)
 
-	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role))
+	sweepOrphanClusterValidatorRBAC(ctx, client, orphanValidatorRBACTTL)
 
-	got, err := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, name, got.RoleRef.Name, "the stale RoleRef must be replaced with the current one")
-	require.Len(t, got.Subjects, 1)
-	assert.Equal(t, name, got.Subjects[0].Name, "the subject must be the current ServiceAccount")
+	_, err := client.RbacV1().ClusterRoles().Get(ctx, "stale", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "a leftover past the TTL must be reclaimed")
+
+	_, err = client.RbacV1().ClusterRoles().Get(ctx, "fresh", metav1.GetOptions{})
+	assert.NoError(t, err, "a recent one may belong to a concurrent run")
+
+	_, err = client.RbacV1().ClusterRoles().Get(ctx, "theirs", metav1.GetOptions{})
+	assert.NoError(t, err, "an unlabelled ClusterRole is not ours to delete")
+}
+
+// An explicit but unparseable port is a typo. Silently probing 443 would report
+// a result for an endpoint the operator never configured.
+func TestParseRegistryHostPort_RejectsMalformedExplicitPort(t *testing.T) {
+	for _, in := range []string{"registry.example:abc", "registry.example:0", "registry.example:99999", "registry.example:"} {
+		host, port := parseRegistryHostPort(in)
+		assert.Empty(t, host, "%q must be rejected, not defaulted", in)
+		assert.Zero(t, port, "%q must not fall back to a port", in)
+	}
+	host, port := parseRegistryHostPort("registry.example")
+	assert.Equal(t, "registry.example", host, "no explicit port keeps the default")
+	assert.Equal(t, 443, port)
 }
