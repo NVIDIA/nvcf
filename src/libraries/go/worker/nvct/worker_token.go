@@ -40,6 +40,11 @@ const (
 
 // Schedule a periodical token refresher.
 func (c *Client) StartWorkerTokenRefresher(ctx context.Context, enableJitter bool) {
+	if c.delegatedToken {
+		// The mounted JWT is rotated by the kubelet; NVCT issues no replacement token.
+		zap.L().Info("mounted JWT in use; worker token refresher disabled")
+		return
+	}
 	token.StartTokenRefresher(
 		ctx,
 		"worker token",
@@ -64,7 +69,7 @@ func (c *Client) getWorkerToken(ctx context.Context) (token.Token, error) {
 		var err error
 		resp, err = c.Client.RefreshToken(ctx, &pb.RefreshTokenRequest{
 			TaskId: c.taskId,
-		}, auth.GrpcTokenFromSource(c.NvctTokenProvider))
+		}, auth.GrpcTokenFromSource(c.NvctTokenProvider, c.delegatedToken))
 		return err
 	}, backoff.WithContext(backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 10), ctx))
 

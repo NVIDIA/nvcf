@@ -56,7 +56,7 @@ func (c *Client) getAssertionToken(ctx context.Context) (token.Token, error) {
 		resp, err = c.Client.RequestSecretCredentials(ctx, &pb.SecretCredentialsRequest{
 			FunctionId:        c.functionId,
 			FunctionVersionId: c.functionVersionId,
-		}, auth.GrpcTokenFromSource(c.NvcfTokenProvider))
+		}, auth.GrpcTokenFromSource(c.NvcfTokenProvider, c.delegatedToken))
 		if err != nil {
 			return err
 		}
