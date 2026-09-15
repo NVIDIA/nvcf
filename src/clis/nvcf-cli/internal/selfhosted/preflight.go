@@ -352,11 +352,12 @@ func buildCategories(cfg PreflightConfig, role Role, rc RoleConfig) []categorySp
 	}
 
 	// Registry credential check runs from the operator's machine — no cluster
-	// contact needed. Gated on role != RoleComputePlane so the category is
-	// emitted at most once per invocation: in ModeSingle RunPreflightForRole
-	// is called for RoleControlPlane then RoleComputePlane sequentially; the
-	// gate ensures no duplicate check_started/check_completed events.
-	if role != RoleComputePlane && len(cfg.Registries) > 0 && cfg.RegistryChecker != nil {
+	// contact needed. RunPreflightForRole is called once per role, so the
+	// caller clears Registries on every role but one to avoid duplicate
+	// check_started/check_completed events. Deduplicating on the role here
+	// instead would drop the check entirely when the control plane does not
+	// run, which is the case for a compute-plane-only invocation.
+	if len(cfg.Registries) > 0 && cfg.RegistryChecker != nil {
 		out = append(out, buildRegistryCredentialCategory(cfg))
 	}
 

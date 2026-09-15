@@ -563,3 +563,116 @@ func parseJSONLLines(t *testing.T, s string) []map[string]any {
 	}
 	return out
 }
+
+// TestPlaneIsVisited covers the dispatch predicates, which are broader than
+// the targeting predicates: --pre in ModeSplit visits both clusters for the
+// shared pre-install checks without targeting either role. Gating the split
+// dispatch on the targeting predicates alone would make --pre a no-op there.
+func TestPlaneIsVisited(t *testing.T) {
+	t.Cleanup(func() {
+		checkPre = false
+		checkControlPlane = false
+		checkComputePlane = false
+		checkAll = false
+	})
+
+	tests := []struct {
+		name          string
+		pre, cp, gpu  bool
+		all           bool
+		mode          kubectx.Mode
+		wantCP        bool
+		wantComputeGP bool
+	}{
+		{"--pre split visits both", true, false, false, false, kubectx.ModeSplit, true, true},
+		{"--pre single visits both", true, false, false, false, kubectx.ModeSingle, true, true},
+		{"--control-plane split skips compute", false, true, false, false, kubectx.ModeSplit, true, false},
+		{"--compute-plane split skips control", false, false, true, false, kubectx.ModeSplit, false, true},
+		{"--all split visits both", false, false, false, true, kubectx.ModeSplit, true, true},
+		{"--control-plane single skips compute", false, true, false, false, kubectx.ModeSingle, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkPre, checkControlPlane, checkComputePlane, checkAll = tt.pre, tt.cp, tt.gpu, tt.all
+			assert.Equal(t, tt.wantCP, controlPlaneIsVisited(tt.mode))
+			assert.Equal(t, tt.wantComputeGP, computePlaneIsVisited(tt.mode))
+		})
+	}
+}
+
+// TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster is the regression
+// guard for the dispatch gating: in ModeSplit with only --control-plane, the
+// compute cluster must not be contacted at all, so no compute-plane-cluster
+// category is emitted.
+func TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkControlPlane = false
+		selfHostedControlPlaneContext = ""
+		selfHostedComputePlaneContext = ""
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane",
+		"--control-plane-context", "cp-ctx", "--compute-plane-context", "gpu-ctx",
+		"--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "control-plane-cluster")
+	assert.NotContains(t, categories, "compute-plane-cluster",
+		"--control-plane in split mode must not probe the compute cluster")
+}
+
+// TestCheck_HostLocalChecksRunOnce guards against the host-local categories
+// being emitted once per role. Local tool versions and registry credentials
+// are checked on the operator's machine, so running them for both roles
+// repeats the same check IDs in --json and double-counts them in the totals.
+func TestCheck_HostLocalChecksRunOnce(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkAll = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	counts := map[string]int{}
+	for _, l := range lines {
+		if l["event"] != "check_completed" {
+			continue
+		}
+		if id, ok := l["id"].(string); ok && strings.HasPrefix(id, "local-host-tools-") {
+			counts[id]++
+		}
+	}
+	require.NotEmpty(t, counts, "expected local-host-tools checks in the stream")
+	for id, n := range counts {
+		assert.Equal(t, 1, n, "check %s emitted %d times", id, n)
+	}
+}

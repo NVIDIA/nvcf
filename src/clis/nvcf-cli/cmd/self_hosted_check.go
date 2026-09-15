@@ -392,6 +392,32 @@ func controlPlaneIsTargeted(mode kubectx.Mode) bool {
 	return checkControlPlane || checkAll || (checkPre && mode == kubectx.ModeSingle)
 }
 
+// The *IsVisited pair reports whether a cluster should be contacted at all,
+// which is broader than whether its role-specific check set runs. --pre in
+// ModeSplit visits both clusters for the shared pre-install checks (stale
+// namespaces) without targeting either role, so the targeting predicates alone
+// cannot gate the dispatch. In ModeSingle --pre already targets both roles and
+// these are equivalent to their *IsTargeted counterparts.
+func computePlaneIsVisited(mode kubectx.Mode) bool {
+	return computePlaneIsTargeted(mode) || checkPre
+}
+
+func controlPlaneIsVisited(mode kubectx.Mode) bool {
+	return controlPlaneIsTargeted(mode) || checkPre
+}
+
+// withoutHostLocalChecks returns a copy of cfg with the inputs for the checks
+// that run on the operator's machine cleared: local tool versions and registry
+// credentials. Neither contacts a cluster, so exactly one role invocation must
+// carry them. Without this both roles emit the same check IDs, which
+// double-counts them in the pass/fail totals and repeats them in --json.
+func withoutHostLocalChecks(cfg selfhosted.PreflightConfig) selfhosted.PreflightConfig {
+	cfg.Tools = nil
+	cfg.Registries = nil
+	cfg.RegistryChecker = nil
+	return cfg
+}
+
 // maybeShowClusterValidatorLogs prints the cleaned cluster-validator transcript
 // to the given writer when --show-logs is set, framed by markers so operators
 // can find it in mixed CLI output. Silent no-op when:
@@ -504,43 +530,61 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		cpClusterValidator = newClusterValidatorForSelfHosted()
 	}
 
+	// Local tool versions and registry credentials are checked on the
+	// operator's machine, so they belong to one invocation only. The control
+	// plane carries them when it runs; otherwise the compute plane does, so
+	// neither is silently dropped by a compute-plane-only invocation.
+	runControlPlane := controlPlaneIsVisited(mode)
+	runComputePlane := computePlaneIsVisited(mode)
+	cpCfg, gpuCfg := cfg, cfg
+	if runControlPlane {
+		gpuCfg = withoutHostLocalChecks(cfg)
+	}
+
 	switch mode {
 	case kubectx.ModeSplit:
 		// Run both roles in parallel; each gets its own kubeconfig context.
+		// Each dispatch is gated: with only one role selected the other
+		// cluster is never contacted, so its stale-namespace probe cannot
+		// report a failure the operator did not ask about.
 		var (
 			cpResults  []selfhosted.CheckResult
 			gpuResults []selfhosted.CheckResult
 		)
 		eg, egCtx := errgroup.WithContext(ctx)
-		eg.Go(func() error {
-			rc := selfhosted.RoleConfig{
-				KubeContext:                selfHostedControlPlaneContext,
-				ClusterValidator:           cpClusterValidator,
-				ClusterValidatorImage:      clusterValidatorImage,
-				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-				ClusterValidatorRegistries: registries,
-				StaleNamespaceProber:       staleNSProber,
-				StackDir:                   localStackDir(selfHostedControlPlaneStack),
-			}
-			cpResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleControlPlane, rc, sink)
-			return nil
-		})
-		eg.Go(func() error {
-			rc := selfhosted.RoleConfig{
-				KubeContext:                selfHostedComputePlaneContext,
-				SISURL:                     icmsURL,
-				InotifyProber:              inotifyProber,
-				ClusterValidator:           clusterValidator,
-				ClusterValidatorImage:      clusterValidatorImage,
-				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
-				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
-				StaleNamespaceProber:       staleNSProber,
-				StackDir:                   localStackDir(selfHostedComputePlaneStack),
-			}
-			gpuResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleComputePlane, rc, sink)
-			return nil
-		})
+		if runControlPlane {
+			eg.Go(func() error {
+				rc := selfhosted.RoleConfig{
+					KubeContext:                selfHostedControlPlaneContext,
+					ClusterValidator:           cpClusterValidator,
+					ClusterValidatorImage:      clusterValidatorImage,
+					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
+					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+					ClusterValidatorRegistries: registries,
+					StaleNamespaceProber:       staleNSProber,
+					StackDir:                   localStackDir(selfHostedControlPlaneStack),
+				}
+				cpResults = selfhosted.RunPreflightForRole(egCtx, cpCfg, selfhosted.RoleControlPlane, rc, sink)
+				return nil
+			})
+		}
+		if runComputePlane {
+			eg.Go(func() error {
+				rc := selfhosted.RoleConfig{
+					KubeContext:                selfHostedComputePlaneContext,
+					SISURL:                     icmsURL,
+					InotifyProber:              inotifyProber,
+					ClusterValidator:           clusterValidator,
+					ClusterValidatorImage:      clusterValidatorImage,
+					ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
+					ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+					StaleNamespaceProber:       staleNSProber,
+					StackDir:                   localStackDir(selfHostedComputePlaneStack),
+				}
+				gpuResults = selfhosted.RunPreflightForRole(egCtx, gpuCfg, selfhosted.RoleComputePlane, rc, sink)
+				return nil
+			})
+		}
 		_ = eg.Wait()
 		return append(cpResults, gpuResults...)
 
@@ -553,13 +597,13 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		// second exec-credential-plugin prompt.
 		staleForControlPlane := staleNSProber
 		staleForComputePlane := staleNSProber
-		if controlPlaneIsTargeted(mode) {
+		if runControlPlane {
 			staleForComputePlane = nil
 		} else {
 			staleForControlPlane = nil
 		}
 
-		if controlPlaneIsTargeted(mode) {
+		if runControlPlane {
 			cpRC := selfhosted.RoleConfig{
 				SISURL:                     icmsURL,
 				ClusterValidator:           cpClusterValidator,
@@ -571,9 +615,9 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				StackDir:                   localStackDir(selfHostedControlPlaneStack),
 			}
 			results = append(results,
-				selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleControlPlane, cpRC, sink)...)
+				selfhosted.RunPreflightForRole(ctx, cpCfg, selfhosted.RoleControlPlane, cpRC, sink)...)
 		}
-		if computePlaneIsTargeted(mode) {
+		if runComputePlane {
 			gpuRC := selfhosted.RoleConfig{
 				SISURL:                     icmsURL,
 				InotifyProber:              inotifyProber,
@@ -585,7 +629,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				StackDir:                   localStackDir(selfHostedComputePlaneStack),
 			}
 			results = append(results,
-				selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
+				selfhosted.RunPreflightForRole(ctx, gpuCfg, selfhosted.RoleComputePlane, gpuRC, sink)...)
 		}
 		return results
 	}
