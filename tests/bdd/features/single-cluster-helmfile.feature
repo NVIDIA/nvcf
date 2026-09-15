@@ -156,6 +156,33 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
 
+  Rule: Helmfile-installed local NVCF can run a Helm task
+
+    # This scenario intentionally has no Background. It depends on the
+    # earlier control-plane install and NVCA registration scenario in
+    # this feature run, and is not a standalone tag target.
+    @nvct-task-api @helm-task
+    Scenario: Operator sees a Helm task without resource limits fail
+      Given environment variable "SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES" is set
+
+      When I run command:
+        """
+        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=${SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES} NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh
+        """
+      Then the command should fail
+      And the command output should contain "ERRORED"
+
+    @nvct-task-api @helm-task
+    Scenario: Operator launches an NVCT Helm task and waits for it to complete
+      Given environment variable "SAMPLE_HELM_TASK_CHART" is set
+
+      When I run command:
+        """
+        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=${SAMPLE_HELM_TASK_CHART} NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh
+        """
+      Then the command exit code should be 0
+      And the command output should contain "COMPLETED"
+
   Rule: Helmfile-installed local NVCF can run a sample function
 
     # This scenario intentionally has no Background. It depends on the
@@ -219,6 +246,25 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # Remove the deployment: the local sizing cannot hold every
       # scenario's deployment at once.
       And I successfully undeploy the function selected by NVCF CLI
+
+    @function-lifecycle @helm-function
+    Scenario: Operator sees a Helm function without resource limits fail
+      Given environment variable "SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES" is set
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-helm-function-missing-resources --helm-chart ${SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
+        """
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --backend ncp-local --gpu H100 --instance-type NCP.GPU.H100_1x --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
+        """
+      Then the command should fail
+      And the command output should contain "function deployment failed with status:"
+
+      When I successfully undeploy the function selected by NVCF CLI
 
     @function-lifecycle @helm-function
     Scenario: Operator creates, deploys, and invokes a Helm chart function

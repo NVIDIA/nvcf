@@ -440,12 +440,24 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		" --request-body '{\"message\":\"bdd-vanity-echo\",\"repeats\":1}'"
 	const helmInvokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
 		" function invoke --request-body '{\"message\":\"bdd-helm-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5"
+	const helmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local" +
+		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test.tgz" +
+		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh"
+	const invalidHelmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local" +
+		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test-missing-resources.tgz" +
+		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh"
+	const invalidHelmFunctionDeployCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" function deploy create --backend ncp-local --gpu H100 --instance-type NCP.GPU.H100_1x" +
+		" --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
-	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test-0.1.0.tgz")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test.tgz")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES", "https://charts.example.test/inference-test-missing-resources.tgz")
+	t.Setenv("SAMPLE_HELM_TASK_CHART", "https://charts.example.test/task-helmchart-test.tgz")
+	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	runner := newFakeRunner(map[string]harness.Result{
@@ -469,6 +481,18 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		helmInvokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-helm-echo\"}\n",
+		},
+		helmTaskSmokeCommand: {
+			ExitCode: 0,
+			Stdout:   "Task bdd-nvct-helm-task-smoke status: COMPLETED\n",
+		},
+		invalidHelmTaskSmokeCommand: {
+			ExitCode: 1,
+			Stdout:   "Task bdd-nvct-helm-task-missing-resources status: ERRORED\n",
+		},
+		invalidHelmFunctionDeployCommand: {
+			ExitCode: 1,
+			Stderr:   "deployment failed: function deployment failed with status: ERROR\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage" +
@@ -572,13 +596,28 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-helm-function",
-		"--helm-chart https://charts.example.test/inference-test-0.1.0.tgz",
+		"--helm-chart https://charts.example.test/inference-test.tgz",
 		"--helm-chart-service entrypoint",
 		"--inference-url /echo --inference-port 8000") {
 		t.Fatal("Helm sample function was not created through the chart-rendering path")
 	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-helm-function-missing-resources",
+		"--helm-chart https://charts.example.test/inference-test-missing-resources.tgz",
+		"--helm-chart-service entrypoint") {
+		t.Fatal("Helm function resource enforcement did not exercise the chart without resources")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmFunctionDeployCommand) {
+		t.Fatal("Helm function deployment without resources did not fail on the local cluster")
+	}
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmInvokeCommand) {
 		t.Fatal("Helm sample function was not invoked")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmTaskSmokeCommand) {
+		t.Fatal("NVCT Helm task API smoke script was not invoked on the local cluster")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmTaskSmokeCommand) {
+		t.Fatal("NVCT Helm task API smoke script did not exercise missing resource limits on the local cluster")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-openai-compatible-sample",
@@ -593,7 +632,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 4)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 5)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
@@ -1140,10 +1179,22 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
-	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test-0.1.0.tgz")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART", "https://charts.example.test/inference-test.tgz")
+	t.Setenv("SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES", "https://charts.example.test/inference-test-missing-resources.tgz")
+	t.Setenv("SAMPLE_HELM_TASK_CHART", "https://charts.example.test/task-helmchart-test.tgz")
+	t.Setenv("SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES", "https://charts.example.test/task-helmchart-test-missing-resources.tgz")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	const taskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh"
+	const helmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1" +
+		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test.tgz" +
+		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-smoke tests/bdd/scripts/run-nvct-task-smoke.sh"
+	const invalidHelmTaskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x NVCT_BDD_TASK_BACKEND=ncp-local-compute-1" +
+		" NVCT_BDD_TASK_MODE=helm NVCT_BDD_TASK_HELM_CHART=https://charts.example.test/task-helmchart-test-missing-resources.tgz" +
+		" NVCT_BDD_TASK_NAME=bdd-nvct-helm-task-missing-resources tests/bdd/scripts/run-nvct-task-smoke.sh"
+	const invalidHelmFunctionDeployCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" function deploy create --backend ncp-local-compute-1 --gpu H100 --instance-type NCP.GPU.H100_1x" +
+		" --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":        {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
@@ -1216,6 +1267,18 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		taskSmokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
+		},
+		helmTaskSmokeCommand: {
+			ExitCode: 0,
+			Stdout:   "Task bdd-nvct-helm-task-smoke status: COMPLETED\n",
+		},
+		invalidHelmTaskSmokeCommand: {
+			ExitCode: 1,
+			Stdout:   "Task bdd-nvct-helm-task-missing-resources status: ERRORED\n",
+		},
+		invalidHelmFunctionDeployCommand: {
+			ExitCode: 1,
+			Stderr:   "deployment failed: function deployment failed with status: ERROR\n",
 		},
 		// Conflict precheck: feature asserts the conflicting
 		// single-cluster is absent.
@@ -1316,10 +1379,19 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-multi-helm-function",
-		"--helm-chart https://charts.example.test/inference-test-0.1.0.tgz",
+		"--helm-chart https://charts.example.test/inference-test.tgz",
 		"--helm-chart-service entrypoint",
 		"--inference-url /echo --inference-port 8000") {
 		t.Fatal("multi-cluster Helm sample function was not created through the chart-rendering path")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-multi-helm-function-missing-resources",
+		"--helm-chart https://charts.example.test/inference-test-missing-resources.tgz",
+		"--helm-chart-service entrypoint") {
+		t.Fatal("multi-cluster Helm function resource enforcement did not exercise the chart without resources")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmFunctionDeployCommand) {
+		t.Fatal("Helm function deployment without resources did not fail on the local compute cluster")
 	}
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, multiHelmInvokeCommand) {
 		t.Fatal("multi-cluster Helm sample function was not invoked")
@@ -1345,8 +1417,8 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			cleanupCount++
 		}
 	}
-	if cleanupCount != 4 {
-		t.Fatalf("function deployment cleanup commands = %d, want 4", cleanupCount)
+	if cleanupCount != 5 {
+		t.Fatalf("function deployment cleanup commands = %d, want 5", cleanupCount)
 	}
 	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
 		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
@@ -1354,7 +1426,13 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
 		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 4)
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, helmTaskSmokeCommand) {
+		t.Fatal("NVCT Helm task API smoke script was not invoked on the local compute cluster")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, invalidHelmTaskSmokeCommand) {
+		t.Fatal("NVCT Helm task API smoke script did not exercise missing resource limits on the local compute cluster")
+	}
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 5)
 }
 
 // TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps

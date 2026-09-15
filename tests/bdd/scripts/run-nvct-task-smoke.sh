@@ -36,14 +36,29 @@ API_KEYS_OWNER_ID="${NVCT_BDD_API_KEYS_OWNER_ID:-svc@nvct-api.local}"
 TASKS_URL="${NVCT_BDD_TASKS_URL:-http://tasks.localhost:8080/v1/nvct/tasks}"
 TASKS_HOST="${NVCT_BDD_TASKS_HOST:-tasks.localhost}"
 TASK_NAME="${NVCT_BDD_TASK_NAME:-bdd-nvct-task-smoke}"
-if [[ -n "${NVCT_BDD_TASK_IMAGE:-}" ]]; then
-  TASK_IMAGE="$NVCT_BDD_TASK_IMAGE"
-else
-  : "${SAMPLE_NGC_ORG:?SAMPLE_NGC_ORG must be set when NVCT_BDD_TASK_IMAGE is unset}"
-  : "${SAMPLE_NGC_TEAM:?SAMPLE_NGC_TEAM must be set when NVCT_BDD_TASK_IMAGE is unset}"
-  TASK_IMAGE_TAG="${NVCT_BDD_TASK_IMAGE_TAG:-local}"
-  TASK_IMAGE="nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/task-simple-sample:${TASK_IMAGE_TAG}"
-fi
+TASK_MODE="${NVCT_BDD_TASK_MODE:-container}"
+TASK_IMAGE=""
+TASK_HELM_CHART=""
+case "$TASK_MODE" in
+  container)
+    if [[ -n "${NVCT_BDD_TASK_IMAGE:-}" ]]; then
+      TASK_IMAGE="$NVCT_BDD_TASK_IMAGE"
+    else
+      : "${SAMPLE_NGC_ORG:?SAMPLE_NGC_ORG must be set when NVCT_BDD_TASK_IMAGE is unset}"
+      : "${SAMPLE_NGC_TEAM:?SAMPLE_NGC_TEAM must be set when NVCT_BDD_TASK_IMAGE is unset}"
+      TASK_IMAGE_TAG="${NVCT_BDD_TASK_IMAGE_TAG:-local}"
+      TASK_IMAGE="nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/task-simple-sample:${TASK_IMAGE_TAG}"
+    fi
+    ;;
+  helm)
+    : "${NVCT_BDD_TASK_HELM_CHART:?NVCT_BDD_TASK_HELM_CHART must be set in helm mode}"
+    TASK_HELM_CHART="$NVCT_BDD_TASK_HELM_CHART"
+    ;;
+  *)
+    echo "NVCT_BDD_TASK_MODE must be container or helm" >&2
+    exit 64
+    ;;
+esac
 TASK_GPU="${NVCT_BDD_TASK_GPU:-H100}"
 : "${NVCT_BDD_TASK_INSTANCE_TYPE:?NVCT_BDD_TASK_INSTANCE_TYPE must be set}"
 TASK_INSTANCE_TYPE="$NVCT_BDD_TASK_INSTANCE_TYPE"
@@ -139,7 +154,9 @@ fi
 
 jq -n \
   --arg name "$TASK_NAME" \
+  --arg mode "$TASK_MODE" \
   --arg image "$TASK_IMAGE" \
+  --arg helmChart "$TASK_HELM_CHART" \
   --arg gpu "$TASK_GPU" \
   --arg instanceType "$TASK_INSTANCE_TYPE" \
   --arg backend "$TASK_BACKEND" \
@@ -147,15 +164,8 @@ jq -n \
   --arg delayMinutes "$TASK_DELAY_MINUTES" \
   --arg fileSizeBytes "$TASK_FILE_SIZE_BYTES" \
   --arg includeMetadata "$TASK_INCLUDE_METADATA" \
-  '{
+  '({
     name: $name,
-    containerImage: $image,
-    containerEnvironment: [
-      {key: "NUM_OF_RESULTS", value: $numResults},
-      {key: "DELAY_BETWEEN_RESULTS_IN_MINUTES", value: $delayMinutes},
-      {key: "FILE_SIZE_BYTES", value: $fileSizeBytes},
-      {key: "INCLUDE_METADATA", value: $includeMetadata}
-    ],
     gpuSpecification: {
       gpu: $gpu,
       instanceType: $instanceType,
@@ -165,7 +175,19 @@ jq -n \
     maxRuntimeDuration: "PT10M",
     maxQueuedDuration: "PT10M",
     terminationGracePeriodDuration: "PT1M"
-  }' > "$request_body"
+  } + if $mode == "helm" then
+    {helmChart: $helmChart}
+  else
+    {
+      containerImage: $image,
+      containerEnvironment: [
+        {key: "NUM_OF_RESULTS", value: $numResults},
+        {key: "DELAY_BETWEEN_RESULTS_IN_MINUTES", value: $delayMinutes},
+        {key: "FILE_SIZE_BYTES", value: $fileSizeBytes},
+        {key: "INCLUDE_METADATA", value: $includeMetadata}
+      ]
+    }
+  end)' > "$request_body"
 
 if ! http_code="$(curl -sS -o "$create_response" -w "%{http_code}" \
   -X POST "$TASKS_URL" \
