@@ -228,18 +228,25 @@ impl QuicHttpProxy {
     }
 }
 
-pub(super) fn parse_quic_addr(target_url: &str) -> Result<SocketAddr> {
-    let parsed_url = Url::parse(target_url).context("invalid quic target url")?;
+pub(crate) fn parse_quic_addr(target_url: &str) -> Result<SocketAddr> {
+    let parsed_url = Url::parse(target_url).context("inference_server_url must be a valid URL")?;
     ensure!(
         parsed_url.scheme() == "quic",
-        "target url is not quic scheme"
+        "inference_server_url scheme must be quic"
     );
     let port = parsed_url
         .port_or_known_default()
-        .ok_or_else(|| anyhow!("missing port in quic url"))?;
-    let ip = parsed_url
-        .host_str()
-        .and_then(|h| h.parse().ok())
-        .ok_or_else(|| anyhow!("quic inference_server_url host must be an IP address"))?;
+        .context("inference_server_url must include port")?;
+    let ip = match parsed_url
+        .host()
+        .context("inference_server_url must include host")?
+    {
+        url::Host::Ipv4(ip) => ip.into(),
+        url::Host::Ipv6(ip) => ip.into(),
+        // Non-special URL schemes represent IPv4 literals as domain hosts.
+        url::Host::Domain(host) => host
+            .parse()
+            .context("inference_server_url host must be an IP address")?,
+    };
     Ok(SocketAddr::new(ip, port))
 }

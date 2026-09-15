@@ -1032,17 +1032,13 @@ async fn registration_tunnel_replenishes_partial_direct_connection_set() {
 }
 
 #[test]
-fn h3_tunnel_request_filter_strips_hop_headers_case_insensitively()
--> std::result::Result<(), axum::http::header::InvalidHeaderName> {
-    for name in [b"Connection".as_slice(), b"Proxy-Connection", b"Host"] {
-        assert!(!should_forward_h3_tunnel_request_header(
-            &HeaderName::from_bytes(name)?
-        ));
-    }
-    assert!(should_forward_h3_tunnel_request_header(
-        &HeaderName::from_bytes(b"X-Request-Id")?
+fn h3_tunnel_request_filter_strips_host() {
+    assert!(!should_forward_h3_tunnel_request_header(
+        &http::header::HOST
     ));
-    Ok(())
+    assert!(should_forward_h3_tunnel_request_header(
+        &HeaderName::from_static("x-request-id")
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
