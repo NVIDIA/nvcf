@@ -1688,6 +1688,8 @@ func TestGatewayConfigValidatePromptCacheKeyHeaders(t *testing.T) {
 	}{
 		{name: "empty name", headers: []string{""}, want: "cannot contain empty header names"},
 		{name: "invalid name", headers: []string{"Bad Header"}, want: "invalid HTTP field name"},
+		{name: "authorization", headers: []string{"Authorization"}, want: "cannot contain authentication header"},
+		{name: "proxy authorization case insensitive", headers: []string{"pRoXy-AuThOrIzAtIoN"}, want: "cannot contain authentication header"},
 		{name: "case insensitive duplicate", headers: []string{"X-Session-ID", "x-session-id"}, want: "duplicate header names"},
 	}
 	for _, tc := range tests {

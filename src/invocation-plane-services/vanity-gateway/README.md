@@ -199,7 +199,7 @@ v2config:
 | `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
 | `shadows[].samplingMethod` | No | Admission method or ordered method list for this target. All endpoints support `random` and `perBearerKey`. Chat Completions and Responses also support `promptCacheKey` and `firstMessageHash`. Defaults to `random`. |
 | `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the primary request context is canceled. Defaults to `false`. |
-| `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions and Responses. Omitted defaults to `x-multi-turn-session-id`; `[]` disables header lookup. |
+| `promptCacheKeyHeaders` | No | Route-level ordered request headers checked by `promptCacheKey` after the body for legacy and per-target shadows. Only supported for Chat Completions and Responses. Omitted defaults to `x-multi-turn-session-id`; `[]` disables header lookup. `Authorization` and `Proxy-Authorization` are rejected. |
 | `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
 | `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
 | `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
@@ -267,8 +267,9 @@ body or header value makes the final admission decision. A valid rejection does
 not try another source or method. Only the resolved value is hashed, so the same
 value has the same bucket across the body, different header names, Chat
 Completions, and Responses. Header names must be valid HTTP field names and
-cannot repeat case-insensitively. Set `promptCacheKeyHeaders: []` to disable
-header lookup.
+cannot repeat case-insensitively. `Authorization` and `Proxy-Authorization` are
+rejected case-insensitively so credentials cannot be used as prompt cache keys.
+Set `promptCacheKeyHeaders: []` to disable header lookup.
 
 The `firstMessageHash` method hashes a versioned, endpoint-specific canonical
 JSON envelope. It preserves roles, full content values, array order, and content

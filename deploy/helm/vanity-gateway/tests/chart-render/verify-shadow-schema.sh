@@ -231,7 +231,7 @@ for section in completions embeddings imageGenerations; do
   assert_rejected "promptCacheKeyHeaders" "promptCacheKeyHeaders is rejected in ${section}"
 done
 
-for headers in 'null' '[""]' '["bad header"]' '["x-session-id", "x-session-id"]'; do
+for headers in 'null' '[""]' '["bad header"]' '["x-session-id", "x-session-id"]' '["Authorization"]' '["pRoXy-AuThOrIzAtIoN"]'; do
   write_values chatCompletions "            promptCacheKeyHeaders: ${headers}"
   assert_rejected "promptCacheKeyHeaders" "invalid promptCacheKeyHeaders ${headers} are rejected"
 done

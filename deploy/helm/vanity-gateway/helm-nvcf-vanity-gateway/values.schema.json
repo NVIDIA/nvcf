@@ -566,7 +566,10 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+        "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+        "not": {
+          "pattern": "^(?i)(authorization|proxy-authorization)$"
+        }
       }
     },
     "shadowTarget": {

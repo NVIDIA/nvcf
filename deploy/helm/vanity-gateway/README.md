@@ -193,7 +193,9 @@ order. This route-level header list applies to both shadow forms. It defaults to
 `x-multi-turn-session-id`; set it to `[]` to disable header lookup. A header is
 usable only when it has exactly one nonempty value after trimming. Only the
 value is hashed, so equal values receive equal buckets across body and header
-sources and across both endpoints.
+sources and across both endpoints. `Authorization` and `Proxy-Authorization`
+are rejected case-insensitively so credentials cannot be used as prompt cache
+keys.
 
 `firstMessageHash` uses a versioned, endpoint-specific canonical JSON envelope.
 For Chat Completions it hashes leading `system` and `developer` messages and the

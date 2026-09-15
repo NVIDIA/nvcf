@@ -734,6 +734,9 @@ func validatePromptCacheKeyHeaders(location string, sectionName string, headers 
 			return fmt.Errorf("%s: promptCacheKeyHeaders header %q has invalid HTTP field name", location, name)
 		}
 		lowerName := strings.ToLower(name)
+		if lowerName == "authorization" || lowerName == "proxy-authorization" {
+			return fmt.Errorf("%s: promptCacheKeyHeaders cannot contain authentication header %q", location, name)
+		}
 		if existingName, ok := seenNames[lowerName]; ok {
 			return fmt.Errorf("%s: promptCacheKeyHeaders cannot contain duplicate header names %q and %q", location, existingName, name)
 		}
