@@ -384,7 +384,7 @@ class Campaign:
                 if peer["region"] != region["region"]:
                     command.extend(["--peer-region", peer["region"]])
             commands.append(command)
-        deadline = time.monotonic() + 180
+        deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             for command in commands:
                 result = self.command(command, timeout=360, check=False)

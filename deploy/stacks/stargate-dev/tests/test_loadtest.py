@@ -288,6 +288,62 @@ class CanonicalSuiteTests(unittest.TestCase):
             self.assertEqual(arguments[arguments.index("--peer-region") + 1], peer)
         sleep.assert_called_once_with(5)
 
+    def test_regional_health_can_recover_after_three_minutes(self) -> None:
+        campaign = object.__new__(LOADTEST.Campaign)
+        campaign.regions = [{"region": "us-west-2"}, {"region": "us-east-1"}]
+        now = 0.0
+
+        def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        def command(arguments, **kwargs):
+            if now < 200:
+                return CompletedProcess(arguments, 1, "seven active backends")
+            return CompletedProcess(arguments, 0, "eight active backends")
+
+        with (
+            mock.patch.object(LOADTEST.time, "monotonic", side_effect=lambda: now),
+            mock.patch.object(LOADTEST.time, "sleep", side_effect=sleep),
+            mock.patch.object(campaign, "command", side_effect=command) as checks,
+        ):
+            campaign.verify_region()
+
+        self.assertEqual(now, 200)
+        self.assertEqual(
+            {
+                call.args[0][call.args[0].index("--region") + 1]
+                for call in checks.call_args_list[-2:]
+            },
+            {"us-west-2", "us-east-1"},
+        )
+
+    def test_regional_health_stops_retrying_when_membership_stays_incomplete(
+        self,
+    ) -> None:
+        campaign = object.__new__(LOADTEST.Campaign)
+        campaign.regions = [{"region": "us-west-2"}, {"region": "us-east-1"}]
+        now = 0.0
+
+        def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        with (
+            mock.patch.object(LOADTEST.time, "monotonic", side_effect=lambda: now),
+            mock.patch.object(LOADTEST.time, "sleep", side_effect=sleep),
+            mock.patch.object(
+                campaign,
+                "command",
+                return_value=CompletedProcess([], 1, "seven active backends"),
+            ),
+            self.assertRaisesRegex(LOADTEST.LoadTestError, "seven active backends"),
+        ):
+            campaign.verify_region()
+
+        self.assertGreaterEqual(now, 200)
+        self.assertLessEqual(now, 300)
+
     def test_cache_reset_restarts_stargate_after_backends(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             campaign = object.__new__(LOADTEST.Campaign)
