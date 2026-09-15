@@ -136,6 +136,7 @@ func TestAgentApis(t *testing.T) {
 	// regression that drops the AddInfoRoute() call here is caught.
 	infoResp, err := http.Get("http://" + ag.NVCASvcAddress + "/info")
 	require.NoError(t, err)
+	defer infoResp.Body.Close()
 	infoBody, err := io.ReadAll(infoResp.Body)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, infoResp.StatusCode, string(infoBody))
