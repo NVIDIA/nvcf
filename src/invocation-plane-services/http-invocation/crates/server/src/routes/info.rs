@@ -15,6 +15,8 @@
 
 use axum::Json;
 
+/// Build metadata. Version and commit are stamped by the version_env template
+/// in crates/server/BUILD.bazel on --stamp builds.
 pub async fn get_info() -> Json<nvcf_info::InfoResponse> {
     Json(nvcf_info::info_response!("nvcf-invocation-service"))
 }

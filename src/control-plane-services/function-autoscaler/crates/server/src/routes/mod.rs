@@ -169,9 +169,8 @@ mod tests {
         assert!(!info.commit.is_empty());
     }
 
-    // Exercises the real router (as both the probe server and the main app
-    // build it via health_router) rather than calling get_info() directly, so
-    // a regression that drops or misregisters the /info route is caught.
+    // Requests /info through the router health_router builds, not the
+    // handler in isolation.
     #[tokio::test]
     async fn info_route_returns_200_on_get_and_405_on_post() {
         let health = Arc::new(Health::new());

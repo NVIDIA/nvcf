@@ -101,8 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start the probe server immediately so liveness probes respond while waiting for dependencies.
     // Liveness always returns 200; readiness returns 503 until Cassandra/TimeseriesDb are healthy.
     const PROBE_PORT: u16 = 8181;
-    // /info is also served here, not just on the main app below, so build
-    // metadata stays readable while the service is still waiting on Cassandra.
+    // /info is served here too, so build metadata stays readable while the
+    // service is still waiting on Cassandra.
     let health_app = routes::health_router(health.clone());
     let probe_addr = SocketAddr::from(([0, 0, 0, 0], PROBE_PORT));
     let probe_listener = tokio::net::TcpListener::bind(probe_addr).await?;
