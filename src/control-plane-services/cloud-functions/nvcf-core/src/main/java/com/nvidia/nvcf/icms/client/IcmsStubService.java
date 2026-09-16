@@ -85,6 +85,7 @@ public interface IcmsStubService {
                           required = false) Long cacheSize,
             @RequestParam("LaunchSpecification.DeploymentId") UUID deploymentId,
             @RequestParam("LaunchSpecification.GpuSpecificationId") UUID gpuSpecificationId,
+            @RequestParam("LaunchSpecification.MaxRequestConcurrency") int maxRequestConcurrency,
             @RequestParam("FunctionDetails.FunctionId") UUID functionId,
             @RequestParam("FunctionDetails.FunctionVersionId") UUID functionVersionId,
             @RequestParam("FunctionDetails.OwnerNcaId") String ownerNcaId,

@@ -57,6 +57,16 @@ func healthPathArgs(args []string) []string {
 	return healthPaths
 }
 
+func maxEngineConcurrencyArgs(args []string) []string {
+	var maxEngineConcurrency []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--max-engine-concurrency=") {
+			maxEngineConcurrency = append(maxEngineConcurrency, arg)
+		}
+	}
+	return maxEngineConcurrency
+}
+
 // TestNewLLMRouterClientContainer verifies Pylon configuration and validation.
 func TestNewLLMRouterClientContainer(t *testing.T) {
 	type spec struct {
@@ -72,11 +82,14 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 
 	cases := []spec{
 		{
-			name: "container mode with env-set LLM request router address injects legacy stargate env",
-			ls:   &LaunchSpecification{},
+			name: "deployment concurrency overrides legacy environment value",
+			ls: &LaunchSpecification{
+				MaxRequestConcurrency: 64,
+			},
 			allEnvSet: map[string]string{
 				"LLM_REQUEST_ROUTER_ADDRESS": "llm-router.example.com:443",
 				"INFERENCE_PORT":             "8080",
+				maxRequestConcurrencyEnv:     "11",
 			},
 			tcfg:       TranslateConfig{},
 			instanceID: "inst-123",
@@ -94,6 +107,7 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				assert.Equal(t, "llm-router.example.com:443", envMap["STARGATE_ADDRESS"])
 				assert.Contains(t, c.Args, "--inference-server-id=inst-123")
 				assert.Contains(t, c.Args, "--auth-token-file=/var/run/llm/worker-token")
+				assert.Equal(t, []string{"--max-engine-concurrency=64"}, maxEngineConcurrencyArgs(c.Args))
 				assertCanonicalPylonBootstrapArgs(t, c.Args)
 				assert.NotContains(t, c.Args, "--quic-insecure")
 			},
@@ -129,18 +143,20 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 			},
 		},
 		{
-			name: "helm mode without namespace uses service name",
+			name: "legacy environment value is used when deployment field is absent",
 			ls:   &LaunchSpecification{},
 			allEnvSet: map[string]string{
 				"STARGATE_ADDRESS":                  "stargate.example.com:443",
 				"INFERENCE_PORT":                    "8080",
 				"HELM_CHART_INFERENCE_SERVICE_NAME": "my-inference-svc",
+				maxRequestConcurrencyEnv:            "32",
 			},
 			tcfg:       TranslateConfig{},
 			instanceID: "inst-789",
 			isHelm:     true,
 			validate: func(t *testing.T, c corev1.Container) {
 				assert.Contains(t, c.Args, "--upstream-http-base-url=http://my-inference-svc:8080")
+				assert.Equal(t, []string{"--max-engine-concurrency=32"}, maxEngineConcurrencyArgs(c.Args))
 			},
 		},
 		{
@@ -229,6 +245,7 @@ func TestNewLLMRouterClientContainer(t *testing.T) {
 				for _, arg := range c.Args {
 					assert.NotContains(t, arg, "--model-name=")
 				}
+				assert.Empty(t, maxEngineConcurrencyArgs(c.Args))
 			},
 		},
 		{
