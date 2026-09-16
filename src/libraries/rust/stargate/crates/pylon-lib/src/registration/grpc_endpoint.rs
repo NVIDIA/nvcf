@@ -324,50 +324,27 @@ macro_rules! log_stargate_grpc_target {
     }};
 }
 
-#[derive(Default)]
-pub(super) struct RegistrationFailureLog {
-    certificate_failure: Option<StargateGrpcCertificateFailure>,
-    last_error: Option<(&'static str, String)>,
-}
-
-impl RegistrationFailureLog {
-    pub(super) fn recovered(&mut self) {
-        *self = Self::default();
-    }
-
-    pub(super) fn report(
-        &mut self,
-        target: &StargateGrpcEndpoint,
-        operation: &'static str,
-        error: &(dyn Error + 'static),
-    ) {
-        if classify_stargate_grpc_certificate_failure(error).is_some() {
-            self.certificate_failure = log_stargate_grpc_certificate_failure(
-                target,
-                operation,
-                error,
-                self.certificate_failure,
-            );
-            return;
-        }
-        let detail = grpc_error_chain(error);
-        if self
-            .last_error
-            .as_ref()
-            .is_some_and(|(previous_operation, previous)| {
-                *previous_operation == operation && previous == &detail
-            })
-        {
-            return;
-        }
-        log_stargate_grpc_target!(
-            WARN, target, operation,
-            [error = %detail,],
-            "Stargate gRPC operation failed",
-            "Stargate gRPC operation failed"
+pub(super) fn log_stargate_grpc_failure(
+    target: &StargateGrpcEndpoint,
+    operation: &'static str,
+    error: &(dyn Error + 'static),
+    last_certificate_failure: &mut Option<StargateGrpcCertificateFailure>,
+) {
+    if classify_stargate_grpc_certificate_failure(error).is_some() {
+        *last_certificate_failure = log_stargate_grpc_certificate_failure(
+            target,
+            operation,
+            error,
+            *last_certificate_failure,
         );
-        self.last_error = Some((operation, detail));
+        return;
     }
+    log_stargate_grpc_target!(
+        WARN, target, operation,
+        [error = %grpc_error_chain(error),],
+        "Stargate gRPC operation failed",
+        "Stargate gRPC operation failed"
+    );
 }
 
 fn grpc_error_chain(mut error: &(dyn Error + 'static)) -> String {

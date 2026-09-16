@@ -29,7 +29,7 @@ use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, Infere
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
 use super::grpc_endpoint::{
-    RegistrationFailureLog, StargateGrpcEndpoint, connect_stargate_grpc_channel,
+    StargateGrpcEndpoint, connect_stargate_grpc_channel, log_stargate_grpc_failure,
 };
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
@@ -45,7 +45,7 @@ pub(super) async fn run_router_registration_stream(
     stop: CancellationToken,
 ) {
     let router_addr = router_endpoint.authority_addr().to_string();
-    let mut failure_log = RegistrationFailureLog::default();
+    let mut last_certificate_failure = None;
 
     loop {
         let connection = tokio::select! {
@@ -60,10 +60,11 @@ pub(super) async fn run_router_registration_stream(
         let (mut ack_stream, update_tx) = match connection {
             Ok(connection) => connection,
             Err(error) => {
-                failure_log.report(
+                log_stargate_grpc_failure(
                     &router_endpoint,
                     "register_inference_server",
                     error.as_ref(),
+                    &mut last_certificate_failure,
                 );
                 if stop
                     .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
@@ -158,16 +159,17 @@ pub(super) async fn run_router_registration_stream(
                 maybe_ack = ack_stream.message() => {
                     let ack = match maybe_ack {
                         Ok(Some(ack)) => {
-                            failure_log.recovered();
+                            last_certificate_failure = None;
                             ack
                         }
                         Ok(None) => {
-                            failure_log.report(&router_endpoint, "register_inference_server_stream",
-                                &std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "registration response stream ended"));
+                            log_stargate_grpc_failure(&router_endpoint, "register_inference_server_stream",
+                                &std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "registration response stream ended"),
+                                &mut last_certificate_failure);
                             break false;
                         }
                         Err(error) => {
-                            failure_log.report(&router_endpoint, "register_inference_server_stream", &error);
+                            log_stargate_grpc_failure(&router_endpoint, "register_inference_server_stream", &error, &mut last_certificate_failure);
                             break false;
                         }
                     };
