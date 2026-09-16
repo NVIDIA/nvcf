@@ -519,6 +519,9 @@ func TestCatalogArtifactsFromResolvedInventoryPreservesPublicUpstreamRepositorie
 			{Type: "container-image", Name: "upstream-ngc-image", Repository: "nvcr.io/nvidia/example/upstream-ngc-image", Version: "2.3.4", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
 			{Type: "helm-chart", Name: "upstream-oci-chart", Repository: "oci://ghcr.io/example/charts", Version: "3.4.5", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
 			{Type: "helm-chart", Name: "upstream-http-chart", Repository: "https://helm.ngc.nvidia.com/nvidia/example", Version: "4.5.6", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "opentelemetry-operator", Repository: "https://open-telemetry.github.io/opentelemetry-helm-charts", Version: "0.122.0", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "prometheus-operator-crds", Repository: "https://prometheus-community.github.io/helm-charts", Version: "31.0.1", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "victoria-metrics-single", Repository: "https://victoriametrics.github.io/helm-charts", Version: "0.45.0", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
 			{Type: "container-image", Name: "nvcf-image", Repository: "nvcr.io/nvidia/nvcf/nvcf-image", Version: "5.6.7", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
 			{Type: "helm-chart", Name: "nvcf-chart", Repository: "https://helm.ngc.nvidia.com/nvidia/nvcf", Version: "6.7.8", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
 			{Type: "container-image", Name: "private-image", Repository: "registry.example.com/private-image", Version: "7.8.9", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
@@ -545,6 +548,9 @@ func TestCatalogArtifactsFromResolvedInventoryPreservesPublicUpstreamRepositorie
 		"upstream-ngc-image":         {repository: "nvcr.io/nvidia/example/upstream-ngc-image", distribution: "nvcr.io/nvidia/example/upstream-ngc-image:2.3.4"},
 		"upstream-oci-chart":         {repository: "oci://ghcr.io/example/charts", distribution: "oci://ghcr.io/example/charts/upstream-oci-chart:3.4.5"},
 		"upstream-http-chart":        {repository: "https://helm.ngc.nvidia.com/nvidia/example", distribution: "https://helm.ngc.nvidia.com/nvidia/example/upstream-http-chart:4.5.6"},
+		"opentelemetry-operator":     {repository: "https://open-telemetry.github.io/opentelemetry-helm-charts", distribution: "https://open-telemetry.github.io/opentelemetry-helm-charts/opentelemetry-operator:0.122.0"},
+		"prometheus-operator-crds":   {repository: "https://prometheus-community.github.io/helm-charts", distribution: "https://prometheus-community.github.io/helm-charts/prometheus-operator-crds:31.0.1"},
+		"victoria-metrics-single":    {repository: "https://victoriametrics.github.io/helm-charts", distribution: "https://victoriametrics.github.io/helm-charts/victoria-metrics-single:0.45.0"},
 	}
 	for name, want := range upstream {
 		artifact, found := catalog.findArtifact(name)

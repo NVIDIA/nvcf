@@ -435,6 +435,8 @@ func isPublicCatalogRegistry(registry Registry) bool {
 	switch host {
 	case "nvcr.io", "https://helm.ngc.nvidia.com":
 		return namespace == "nvidia" || strings.HasPrefix(namespace, "nvidia/")
+	case "https://open-telemetry.github.io", "https://prometheus-community.github.io", "https://victoriametrics.github.io":
+		return true
 	case "docker.io", "ghcr.io", "quay.io", "registry.k8s.io":
 		return true
 	default:
