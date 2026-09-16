@@ -67,7 +67,7 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	documentationVersion := "dev"
 	if qualificationVersion != "" {
 		status = ReleaseSetQualified
-		documentationVersion = strings.TrimPrefix(qualificationVersion, "v")
+		documentationVersion = qualificationVersion
 	}
 	releaseSet, err := releaseSetFromInventories(inventories, documentationVersion, status)
 	if err != nil {

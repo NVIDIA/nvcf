@@ -938,10 +938,10 @@ func TestValidateTargetRejectsNonMainTargets(t *testing.T) {
 	}
 }
 
-func TestRunRejectsPrereleaseQualificationVersion(t *testing.T) {
-	err := run([]string{"--update-catalog", "--qualification-version", "v1.2.3-rc.1"})
-	if err == nil || !strings.Contains(err.Error(), "must be a stable semantic version") {
-		t.Fatalf("run error = %v, want prerelease qualification rejection", err)
+func TestRunRejectsInvalidReleaseSetQualificationVersion(t *testing.T) {
+	err := run([]string{"--update-catalog", "--qualification-version", "1.2.3"})
+	if err == nil || !strings.Contains(err.Error(), "must use "+releaseSetVersionFormat) {
+		t.Fatalf("run error = %v, want release-set version format rejection", err)
 	}
 }
 

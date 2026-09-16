@@ -42,7 +42,7 @@ func run(args []string) error {
 	stackVersion := flags.String("stack-version", "", "self-managed stack version to fetch or inventory")
 	computeStackVersion := flags.String("compute-stack-version", "", "compute-plane stack version to fetch")
 	observabilityStackVersion := flags.String("observability-stack-version", "", "observability stack version to fetch")
-	qualificationVersion := flags.String("qualification-version", "", "documentation version for an exact QA-qualified three-stack release set")
+	qualificationVersion := flags.String("qualification-version", "", "documentation version for an exact QA-qualified three-stack release set (cp-X.Y.Z-compute-X.Y.Z-obs-X.Y.Z)")
 	inventoryOutput := flags.String("generate-stack-inventory", "", "write a resolved stack inventory to this path")
 	inventoryConfig := flags.String("inventory-config", "", "release inventory config path; defaults to the stack checkout")
 	allowUnavailableSourceCharts := flags.Bool("allow-unavailable-source-charts", false, "use published charts when configured source paths are unavailable in a historical tag")
@@ -115,8 +115,8 @@ func run(args []string) error {
 		if !*updateCatalog {
 			return fmt.Errorf("--qualification-version requires --update-catalog")
 		}
-		if !validStableStackVersion(strings.TrimPrefix(*qualificationVersion, "v")) {
-			return fmt.Errorf("--qualification-version must be a stable semantic version")
+		if _, _, _, ok := parseReleaseSetDocumentationVersion(*qualificationVersion); !ok {
+			return fmt.Errorf("--qualification-version must use %s", releaseSetVersionFormat)
 		}
 		if *stackVersion == "" || *computeStackVersion == "" || *observabilityStackVersion == "" {
 			return fmt.Errorf("--qualification-version requires exact control-plane, compute-plane, and observability stack versions")

@@ -31,14 +31,16 @@ const (
 	controlStackResourceName       = "nvcf-self-managed-stack"
 	computeStackResourceName       = "nvcf-compute-plane-stack"
 	observabilityStackResourceName = "nvcf-observability-stack"
+	releaseSetVersionFormat        = "cp-X.Y.Z-compute-X.Y.Z-obs-X.Y.Z"
 	defaultStackRegistry           = "public-resources"
 	defaultImageRegistry           = "public-images"
 	defaultChartRegistry           = "public-helm"
 )
 
 var (
-	fullLowercaseCommitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	lowercaseSHA256DigestRe  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	fullLowercaseCommitSHARe         = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	lowercaseSHA256DigestRe          = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	releaseSetDocumentationVersionRe = regexp.MustCompile(`^cp-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-compute-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-obs-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$`)
 )
 
 type ArtifactType string
@@ -471,8 +473,15 @@ func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
 	if releaseSet.Status == ReleaseSetDevelopment && releaseSet.DocumentationVersion != "dev" {
 		return fmt.Errorf("development release_set documentation_version must be dev")
 	}
-	if releaseSet.Status == ReleaseSetQualified && !validStableStackVersion(strings.TrimPrefix(releaseSet.DocumentationVersion, "v")) {
-		return fmt.Errorf("qualified release_set documentation_version must be a stable semantic version")
+	if releaseSet.Status == ReleaseSetQualified {
+		_, _, _, ok := parseReleaseSetDocumentationVersion(releaseSet.DocumentationVersion)
+		if !ok {
+			return fmt.Errorf("qualified release_set documentation_version must use %s", releaseSetVersionFormat)
+		}
+		expected := releaseSetDocumentationVersion(releaseSet.Stacks)
+		if releaseSet.DocumentationVersion != expected {
+			return fmt.Errorf("qualified release_set documentation_version must be %s", expected)
+		}
 	}
 	for _, stack := range []struct {
 		name     string
@@ -501,6 +510,23 @@ func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
 		}
 	}
 	return nil
+}
+
+func parseReleaseSetDocumentationVersion(version string) (string, string, string, bool) {
+	match := releaseSetDocumentationVersionRe.FindStringSubmatch(version)
+	if match == nil {
+		return "", "", "", false
+	}
+	return match[1], match[2], match[3], true
+}
+
+func releaseSetDocumentationVersion(stacks ReleaseSetStacks) string {
+	return fmt.Sprintf(
+		"cp-%s-compute-%s-obs-%s",
+		stacks.ControlPlane.Version,
+		stacks.ComputePlane.Version,
+		stacks.Observability.Version,
+	)
 }
 
 func validateManifestMetadata(metadata ManifestMetadata) error {

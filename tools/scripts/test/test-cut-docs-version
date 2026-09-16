@@ -40,7 +40,7 @@ EOF
 
 cat > "${workdir}/docs/version-catalog/main.yaml" <<'EOF'
 release_set:
-  documentation_version: 0.6.0
+  documentation_version: cp-1.2.3-compute-1.1.0-obs-1.0.4
   status: qualified
   stacks:
     control-plane:
@@ -51,37 +51,37 @@ release_set:
       version: 1.0.4
 EOF
 
-"${workdir}/tools/scripts/cut-docs-version.sh" v0.6.0 > "${workdir}/output.txt"
+"${workdir}/tools/scripts/cut-docs-version.sh" cp-1.2.3-compute-1.1.0-obs-1.0.4 > "${workdir}/output.txt"
 
-if ! grep -q 'source: "/nvcf/v0.6.0/index.html"' "${workdir}/fern/docs.yml"; then
+if ! grep -q 'source: "/nvcf/cp-1.2.3-compute-1.1.0-obs-1.0.4/index.html"' "${workdir}/fern/docs.yml"; then
   echo "expected generated docs.yml to include the new version index redirect"
   cat "${workdir}/fern/docs.yml"
   exit 1
 fi
 
-if ! grep -q 'destination: "/nvcf/v0.6.0/"' "${workdir}/fern/docs.yml"; then
+if ! grep -q 'destination: "/nvcf/cp-1.2.3-compute-1.1.0-obs-1.0.4/"' "${workdir}/fern/docs.yml"; then
   echo "expected generated docs.yml to redirect the new version index to the version root"
   cat "${workdir}/fern/docs.yml"
   exit 1
 fi
 
-if ! grep -q 'Latest (0.6.0; CP 1.2.3, Compute 1.1.0, Obs 1.0.4)' "${workdir}/fern/docs.yml"; then
+if ! grep -q 'Latest (cp-1.2.3-compute-1.1.0-obs-1.0.4; CP 1.2.3, Compute 1.1.0, Obs 1.0.4)' "${workdir}/fern/docs.yml"; then
   echo "expected generated docs.yml to identify all three qualified stack versions"
   cat "${workdir}/fern/docs.yml"
   exit 1
 fi
 
-if ! cmp -s "${workdir}/docs/version-catalog/main.yaml" "${workdir}/docs/version-catalog/v0.6.0.yaml"; then
+if ! cmp -s "${workdir}/docs/version-catalog/main.yaml" "${workdir}/docs/version-catalog/cp-1.2.3-compute-1.1.0-obs-1.0.4.yaml"; then
   echo "expected an immutable catalog snapshot for the docs version"
   exit 1
 fi
 
 sed -i.bak 's/status: qualified/status: development/' "${workdir}/docs/version-catalog/main.yaml"
-if "${workdir}/tools/scripts/cut-docs-version.sh" v0.7.0 > "${workdir}/invalid-output.txt" 2>&1; then
+if "${workdir}/tools/scripts/cut-docs-version.sh" cp-1.2.4-compute-1.1.0-obs-1.0.4 > "${workdir}/invalid-output.txt" 2>&1; then
   echo "expected an unqualified release set to be rejected"
   exit 1
 fi
-if [[ -e "${workdir}/docs/v0.7.0" || -e "${workdir}/fern/versions/v0.7.0.yml" || -e "${workdir}/docs/version-catalog/v0.7.0.yaml" ]]; then
+if [[ -e "${workdir}/docs/cp-1.2.4-compute-1.1.0-obs-1.0.4" || -e "${workdir}/fern/versions/cp-1.2.4-compute-1.1.0-obs-1.0.4.yml" || -e "${workdir}/docs/version-catalog/cp-1.2.4-compute-1.1.0-obs-1.0.4.yaml" ]]; then
   echo "unqualified release set created a partial documentation snapshot"
   exit 1
 fi

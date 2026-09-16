@@ -109,17 +109,19 @@ run the catalog update with all three exact versions:
 go run -C tools/docs-version-sync . \
   --target main \
   --update-catalog \
-  --qualification-version X.Y.Z \
+  --qualification-version cp-A.B.C-compute-D.E.F-obs-G.H.I \
   --stack-version A.B.C \
   --compute-stack-version D.E.F \
   --observability-stack-version G.H.I
 go run -C tools/docs-version-sync . --target main
-./tools/scripts/cut-docs-version.sh vX.Y.Z
+./tools/scripts/cut-docs-version.sh cp-A.B.C-compute-D.E.F-obs-G.H.I
 ```
 
 The qualification command does not select latest versions. The docs snapshot
 fails unless the catalog is qualified and its documentation version matches the
-requested version. The version dropdown identifies all three stack versions.
+requested version. The documentation version identifies all three stack
+versions in `cp-X.Y.Z-compute-X.Y.Z-obs-X.Y.Z` format. The version dropdown
+also labels each stack version.
 
 ## Add an artifact to the stack inventory
 
