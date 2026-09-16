@@ -125,8 +125,18 @@ silently disable HA.
 ### Stateless control-plane services
 
 Active-active Deployments with no leader election: `nvcf-api`,
-`invocation-service`, `grpc-proxy`, `admin-token-issuer-proxy`, and
-`llm-api-gateway` (when the LLM addon is enabled).
+`admin-token-issuer-proxy`, and `llm-api-gateway` (when the LLM addon is
+enabled).
+
+> **Note — `invocation-service` and `grpc-proxy` are deferred.** These two are
+> stateless too, but their multi-replica scaling is intentionally **held at a
+> single replica for now**, pending Envoy support in the self-hosted stack.
+> Worker callbacks are host-bound to the specific pod that accepted the request
+> (per-pod pod-IP / DNS addressing), which is safe in a single cluster; the
+> Envoy dependency is for the cross-cluster case. Until then they keep hostname
+> anti-affinity and zone spread (no-ops at one replica) and get **no HA PDB**
+> (a `minAvailable: 1` PDB on a singleton would block node drains). See the
+> #987/#989 review.
 
 Under HA each of these gets:
 
@@ -253,8 +263,10 @@ kubectl -n vault-system get pods -o wide
 Confirm the stateless Deployments scaled and spread:
 
 ```bash
-kubectl -n nvcf get deploy nvcf-api invocation-service -o wide
+kubectl -n nvcf get deploy nvcf-api admin-token-issuer-proxy -o wide
 kubectl -n nvcf get pods -o wide -l app.kubernetes.io/instance=nvcf-api
+# invocation-service and grpc-proxy stay at 1 replica for now (deferred until Envoy)
+kubectl -n nvcf get deploy invocation-service grpc-proxy -o wide
 ```
 
 Confirm the JetStream RF took effect (streams report `Replicas: 2`):
@@ -279,9 +291,12 @@ let it schedule while you rebalance.
 
 With HA enabled and capacity in at least two AZs:
 
-- **Single node loss:** Stateless and hot-path Deployments keep serving from
-  their surviving replica; the scheduler recreates the lost pod on another node
-  (and the PDB prevents drains from removing the last one). Quorum services
+- **Single node loss:** Multi-replica stateless and hot-path Deployments keep
+  serving from their surviving replica; the scheduler recreates the lost pod on
+  another node (and the PDB prevents drains from removing the last one).
+  `invocation-service` and `grpc-proxy` (single replica until Envoy) are briefly
+  unavailable while the scheduler restarts the pod on another node. Quorum
+  services
   (Cassandra RF=3/`LOCAL_QUORUM`, NATS RF=2, OpenBao 3-node Raft) retain quorum
   with 2 of 3 members and continue serving reads and writes.
 - **Single AZ loss:** With replicas spread across AZs, the control plane stays

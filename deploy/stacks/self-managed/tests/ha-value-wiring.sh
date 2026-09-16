@@ -168,6 +168,31 @@ render_chart_values llm-api-gateway "$work_dir/llmgw-on.yaml" "$core" --state-va
 awk '/^llmApiGateway:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/llmgw-on.yaml" | grep -q "preferredDuringSchedulingIgnoredDuringExecution:" ||
   fail "llm-api-gateway: expected preferred anti-affinity when highAvailability.mode=ha-preferred"
 
+# invocation-service + grpc-proxy: multi-replica scaling is deferred until
+# Envoy support lands (worker-callback host binding; see #987/#989 review).
+# Even under HA they must stay single-replica and get no PDB (a minAvailable:1
+# PDB on a singleton blocks node drains). Anti-affinity/zone-spread may still
+# render but are no-ops at one replica.
+render_chart_values invocation-service "$work_dir/invocation-on.yaml" "$core" ||
+  fail "render invocation-service (ha-preferred)"
+if awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-on.yaml" | grep -qE "replicaCount:[[:space:]]*[2-9]"; then
+  fail "invocation-service: must stay single-replica under HA (deferred until Envoy)"
+fi
+# The chart's own PDB knob may render (enabled: false); the HA PDB (enabled:
+# true / minAvailable on a singleton) must NOT.
+if awk '/^invocation:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/invocation-on.yaml" | grep -A3 "podDisruptionBudget:" | grep -q "enabled: true"; then
+  fail "invocation-service: HA PDB must not be enabled while single-replica (deferred until Envoy)"
+fi
+
+render_chart_values grpc-proxy "$work_dir/grpcproxy-on.yaml" "$core" ||
+  fail "render grpc-proxy (ha-preferred)"
+if awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-on.yaml" | grep -qE "replicaCount:[[:space:]]*[2-9]"; then
+  fail "grpc-proxy: must stay single-replica under HA (deferred until Envoy)"
+fi
+if awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-on.yaml" | grep -A3 "podDisruptionBudget:" | grep -q "enabled: true"; then
+  fail "grpc-proxy: HA PDB must not be enabled while single-replica (deferred until Envoy)"
+fi
+
 echo "== highAvailability tier-2 zone topology spread (opt-in) =="
 write_env <<'EOF'
 highAvailability:
