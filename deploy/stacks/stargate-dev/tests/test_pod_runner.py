@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from pod_runner import LAUNCH, WAIT, PodRunner
+from pod_runner import CANCEL, LAUNCH, WAIT, PodRunner
 
 
 class PodRunnerTests(unittest.TestCase):
@@ -30,6 +30,7 @@ class PodRunnerTests(unittest.TestCase):
                 "directory": str(directory),
                 "marker": "spark-test-owned-marker",
                 "podIdentity": ["pod-id", ["container-id"]],
+                "protocolVersion": 2,
             },
         )
 
@@ -176,6 +177,127 @@ class PodRunnerTests(unittest.TestCase):
             finally:
                 os.killpg(unrelated.pid, signal.SIGTERM)
                 unrelated.wait(timeout=5)
+
+    def test_cancellation_prevents_a_delayed_workload_from_starting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = self.runner(root)
+            runner.state["directory"] = str(root / "not-created-yet")
+            output = root / "started"
+            with (
+                mock.patch.object(runner, "exec", side_effect=self.local_exec),
+                mock.patch.object(
+                    runner, "pod_identity", return_value=("pod-id", ["container-id"])
+                ),
+            ):
+                runner.cancel()
+                result = self.local_exec(
+                    "bash",
+                    "-c",
+                    WAIT,
+                    runner.state["marker"],
+                    runner.state["directory"],
+                    sys.executable,
+                    "-c",
+                    "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()",
+                    str(output),
+                )
+            self.assertEqual(result.returncode, 143)
+            self.assertFalse(output.exists())
+            self.assertEqual(runner.state["phase"], "cancelled")
+
+    def test_failed_launch_without_pid_can_be_reconciled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(Path(directory))
+            clock = [0.0]
+            launches = 0
+
+            def execute(*command, token=None):
+                nonlocal launches
+                if command[:3] == ("bash", "-c", LAUNCH):
+                    launches += 1
+                    return subprocess.CompletedProcess(
+                        command, 1, b"", b"launch transport unavailable"
+                    )
+                return self.local_exec(*command, token=token)
+
+            def missing_exit_status():
+                clock[0] += 31
+                return None
+
+            with (
+                mock.patch.object(runner, "exec", side_effect=execute),
+                mock.patch.object(runner, "exit_code", side_effect=missing_exit_status),
+                mock.patch.object(
+                    runner, "pod_identity", return_value=("pod-id", ["container-id"])
+                ),
+                mock.patch("pod_runner.time.monotonic", side_effect=lambda: clock[0]),
+            ):
+                with self.assertRaisesRegex(ValueError, "without an exit-status file"):
+                    runner.run("unused", ["true"], 60)
+            self.assertEqual(launches, 1)
+            self.assertEqual(runner.state["phase"], "cancelled")
+
+    def test_workload_cannot_start_if_its_pid_cannot_be_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = self.runner(root)
+            (Path(runner.state["directory"]) / "spark.pid.tmp").mkdir()
+            output = root / "started"
+            result = self.local_exec(
+                "bash",
+                "-c",
+                WAIT,
+                runner.state["marker"],
+                runner.state["directory"],
+                sys.executable,
+                "-c",
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()",
+                str(output),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
+
+    def test_failed_cancellation_fence_does_not_confirm_a_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(Path(directory))
+            with (
+                mock.patch.object(
+                    runner,
+                    "exec",
+                    return_value=subprocess.CompletedProcess(
+                        ["bash", "-c", CANCEL],
+                        1,
+                        b"",
+                        b"cannot write cancellation marker",
+                    ),
+                ),
+                mock.patch.object(
+                    runner, "pod_identity", return_value=("pod-id", ["container-id"])
+                ),
+                mock.patch("pod_runner.time.sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Cannot confirm"):
+                    runner.cancel()
+            self.assertEqual(runner.state["phase"], "cancel-unconfirmed")
+
+    def test_legacy_unstarted_launch_still_requires_reconciliation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(Path(directory))
+            runner.state.pop("protocolVersion")
+            with (
+                mock.patch.object(runner, "exec") as execute,
+                mock.patch.object(runner, "process_id", return_value=None),
+                mock.patch.object(runner, "read_file", return_value=None),
+                mock.patch.object(
+                    runner, "pod_identity", return_value=("pod-id", ["container-id"])
+                ),
+                mock.patch("pod_runner.time.sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Cannot confirm"):
+                    runner.cancel()
+                execute.assert_not_called()
+            self.assertEqual(runner.state["phase"], "cancel-unconfirmed")
 
 
 if __name__ == "__main__":

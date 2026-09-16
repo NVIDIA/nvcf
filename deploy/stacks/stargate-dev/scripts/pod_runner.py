@@ -13,7 +13,8 @@ from pathlib import Path
 
 # Keep shell use to process-launch/status primitives; orchestration stays in Python.
 LAUNCH = 'IFS= read -r OPENAI_API_KEY || exit 1; export OPENAI_API_KEY; run_dir=$1; shift; nohup setsid bash -c "$@" > "$run_dir/spark.log" 2>&1 < /dev/null &'
-WAIT = 'run_dir=$1; shift; printf "%s\\n" "$$" > "$run_dir/spark.pid.tmp"; mv "$run_dir/spark.pid.tmp" "$run_dir/spark.pid"; "$@"; run_status=$?; printf "%s\\n" "$run_status" > "$run_dir/spark.exit.tmp"; mv "$run_dir/spark.exit.tmp" "$run_dir/spark.exit"; exit "$run_status"'
+WAIT = 'run_dir=$1; shift; exec 9>"$run_dir/spark.lock" || exit 1; flock -x -w 5 9 || exit 1; if test -e "$run_dir/spark.cancelled"; then exit 143; fi; printf "%s\\n" "$$" > "$run_dir/spark.pid.tmp" && mv "$run_dir/spark.pid.tmp" "$run_dir/spark.pid" || exit 1; flock -u 9; exec 9>&-; "$@"; run_status=$?; printf "%s\\n" "$run_status" > "$run_dir/spark.exit.tmp"; mv "$run_dir/spark.exit.tmp" "$run_dir/spark.exit"; exit "$run_status"'
+CANCEL = 'run_dir=$1; mkdir -p "$run_dir" || exit 1; exec 9>"$run_dir/spark.lock" || exit 1; flock -x -w 5 9 || exit 1; : > "$run_dir/spark.cancelled"'
 STOP = 'if tr "\\0" "\\n" < "/proc/$1/cmdline" | grep -Fxq -- "$2"; then kill -TERM -- "-$1"; fi'
 
 
@@ -135,10 +136,23 @@ class PodRunner:
                         reason="original Spark container no longer exists",
                     )
                     return
+                fenced = self.state.get("protocolVersion", 1) == 2
+                if fenced:
+                    # Serialize cancellation with PID publication so a delayed
+                    # launcher cannot start work after cancellation is confirmed.
+                    result = self.exec(
+                        "bash", "-c", CANCEL, "--", self.state["directory"]
+                    )
+                    if result.returncode:
+                        raise RuntimeError(
+                            result.stderr.decode(errors="replace").strip()
+                            or "Cannot prevent a delayed Spark launch"
+                        )
                 pid = self.process_id()
                 if pid is None:
                     if (
-                        self.read_file(f"{self.state['directory']}/spark.pid")
+                        fenced
+                        or self.read_file(f"{self.state['directory']}/spark.pid")
                         is not None
                         or self.exit_code() is not None
                     ):
@@ -166,7 +180,12 @@ class PodRunner:
         identity = self.pod_identity()
         if identity is None:
             raise RuntimeError("Spark Pod is not running")
-        self.save(phase="starting", podIdentity=list(identity), command=command)
+        self.save(
+            phase="starting",
+            protocolVersion=2,
+            podIdentity=list(identity),
+            command=command,
+        )
         created = self.exec("mkdir", "-p", self.state["directory"])
         if created.returncode:
             raise RuntimeError(created.stderr.decode(errors="replace").strip())
@@ -191,12 +210,17 @@ class PodRunner:
                     token=token + "\n",
                 )
                 acknowledged = launched.returncode == 0
-            except (OSError, subprocess.SubprocessError):
+                launch_error = launched.stderr.decode(errors="replace").strip()
+                if not launch_error:
+                    launch_error = f"exit status {launched.returncode}"
+            except (OSError, subprocess.SubprocessError) as error:
                 acknowledged = False
+                launch_error = str(error)
             if not acknowledged:
                 # A lost acknowledgement does not prove the launch failed. Never launch twice.
                 print(
-                    "Launch acknowledgement unavailable; checking the existing run",
+                    "Launch acknowledgement unavailable; checking the existing run: "
+                    + launch_error.replace(token, "[REDACTED]"),
                     file=sys.stderr,
                 )
             self.save(phase="running")
