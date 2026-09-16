@@ -38,9 +38,12 @@ highAvailability.mode:
 Requires ≥3 schedulable nodes unless mode is none. Nested keys under
 stateless/hotPath/nats/openbao/cassandra override those defaults.
 
-stateless — nvcf-api, invocation, grpc-proxy, admin-token-issuer-proxy, and
-  llm-api-gateway (LLM addon): replicaCount, hostname anti-affinity, zone
-  topology spread, PDB.
+stateless — nvcf-api, admin-token-issuer-proxy, and llm-api-gateway (LLM
+  addon): replicaCount, hostname anti-affinity, zone topology spread, PDB.
+  NOTE: invocation-service and grpc-proxy remain single-replica for now
+  (anti-affinity/zone-spread still applied but no-ops at 1 replica, no PDB).
+  Their multi-replica scaling is deferred until Envoy support lands in the
+  self-hosted stack (worker-callback host binding; see #987/#989 review).
 hotPath   — rateLimiter, nats-auth-callout: 2 replicas + anti-affinity +
   zone topology spread + PDB.
 tier2     — Cassandra, NATS, OpenBao: quorum sizing (3) + PDB + hostname pod
@@ -835,7 +838,11 @@ invocation:
   {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  {{- /* HA replica scaling for invocation-service is deferred until Envoy
+         support lands in the self-hosted stack (worker-callback host binding,
+         see #987/#989 review). Pin to a single replica for now; the
+         anti-affinity / zone-spread below are no-ops at one replica. */}}
+  replicaCount: 1
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -870,16 +877,12 @@ invocation:
     baggageAttributeAllowlist:
     {{- toYaml . | nindent 6 }}
   {{- end }}
-  {{- if $haEnabled }}
-  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
-  podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- else }}
+  {{- /* No HA PodDisruptionBudget while invocation-service runs a single
+         replica (deferred until Envoy). A minAvailable:1 PDB on a singleton
+         would block node drains. */}}
   {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
-  {{- end }}
   {{- end }}
 
 nvctApi:
@@ -929,7 +932,11 @@ nvctApi:
 grpcproxy:
   fullnameOverride: grpc-proxy
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  {{- /* HA replica scaling for grpc-proxy is deferred until Envoy support
+         lands in the self-hosted stack (worker-callback host binding, see
+         #987/#989 review). Pin to a single replica for now; the anti-affinity
+         / zone-spread below are no-ops at one replica. */}}
+  replicaCount: 1
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -978,16 +985,12 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
-  {{- if $haEnabled }}
-  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
-  podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- else }}
+  {{- /* No HA PodDisruptionBudget while grpc-proxy runs a single replica
+         (deferred until Envoy). A minAvailable:1 PDB on a singleton would
+         block node drains. */}}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
-  {{- end }}
   {{- end }}
 
 rateLimiter:
