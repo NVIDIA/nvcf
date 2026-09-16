@@ -28,8 +28,9 @@ import (
 )
 
 // maxEventMessageLen bounds recorded event messages so a verbose or multi-line
-// condition message can't bloat the Event object stored in etcd.
-const maxEventMessageLen = 256
+// condition message can't bloat the Event object stored in etcd. Matches the
+// +kubebuilder:validation:MaxLength=1024 already enforced on metav1.Condition.Message.
+const maxEventMessageLen = 1024
 
 // recordEvent emits a Kubernetes event on ms. It is a no-op if the reconciler has
 // no event recorder configured, so callers don't need to guard against a nil recorder.
