@@ -130,11 +130,15 @@ rust_test(
 # Integration tests under tests/ are separate crates, so each needs its own
 # target; the crate-based target above only covers unit tests. They start NATS
 # and LocalStack through testcontainers, hence the tags: Docker runs outside
-# the sandbox and needs the bind-mounted config on a real host path, the
-# containers need the network, and testcontainers picks ports dynamically so
-# parallel runs collide. deps needs both normal and normal_dev because an
-# integration test is its own compilation unit and does not inherit the
-# library's dependencies.
+# the sandbox and needs the bind-mounted config on a real host path
+# (no-sandbox), the containers need the network (requires-network), and
+# testcontainers picks ports dynamically so parallel runs collide (exclusive).
+# requires-docker routes the target to the docker-host CI lane instead of the
+# Docker-less build-container lane (see .github/workflows/bazel.yml). external
+# stops Bazel reusing a cached result, so a run that never actually started
+# Docker can't be reported as a pass. deps needs both normal and normal_dev
+# because an integration test is its own compilation unit and does not
+# inherit the library's dependencies.
 rust_test(
     name = "test_health",
     srcs = [
@@ -160,6 +164,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -194,6 +199,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -227,6 +233,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -260,6 +267,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -293,6 +301,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -326,6 +335,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -359,6 +369,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -392,6 +403,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -425,6 +437,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -458,6 +471,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -491,6 +505,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -524,6 +539,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
@@ -557,6 +573,7 @@ rust_test(
     rustc_env = {"CARGO_PKG_NAME": "nvcf-invocation-service"},
     tags = [
         "exclusive",
+        "external",
         "no-sandbox",
         "requires-docker",
         "requires-network",
