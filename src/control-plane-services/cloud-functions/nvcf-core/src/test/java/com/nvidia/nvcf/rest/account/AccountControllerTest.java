@@ -205,7 +205,6 @@ class AccountControllerTest {
                                                              List.of(SCOPE_ACCOUNT_SETUP), 100),
                              8, // With JWT, the response will contain info about all accounts.
                              OK),
-                // Read-only list_accounts scope grants list access with JWT.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_LIST_ACCOUNTS), 100),
                              8,
@@ -222,7 +221,6 @@ class AccountControllerTest {
                              },
                              1,  // With apikey, the response will only contain info about TEST_NCA_ID.
                              OK),
-                // Read-only list_accounts scope grants list access with an API key.
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                              List.of(),
@@ -329,7 +327,6 @@ class AccountControllerTest {
                              TEST_AUTHORIZED_NCA_ID_5,
                              null,
                              OK),
-                // Read-only list_accounts scope grants detail read with JWT.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_LIST_ACCOUNTS), 100),
                              TEST_NCA_ID,
@@ -348,7 +345,6 @@ class AccountControllerTest {
                              TEST_NCA_ID,
                              Set.of(TEST_CLIENT_ID),
                              OK),
-                // Read-only list_accounts scope grants detail read with an API key.
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                              List.of(),
@@ -602,7 +598,6 @@ class AccountControllerTest {
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_REGISTER_FUNCTION), 100),
                              TEST_CLIENT_3, FORBIDDEN),
-                // Read-only list_accounts scope must not allow client association.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_LIST_ACCOUNTS), 100),
                              TEST_CLIENT_3, FORBIDDEN),
@@ -619,7 +614,6 @@ class AccountControllerTest {
                              TEST_CLIENT_3, OK));
         var apiKeyCases = Stream.of(
                 Arguments.of("nvapi-stg-key", TEST_NCA_ID, FORBIDDEN),
-                // Read-only list_accounts scope must not allow client association via API key.
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                              List.of(),
@@ -745,7 +739,6 @@ class AccountControllerTest {
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_REGISTER_FUNCTION), 100),
                              TEST_CLIENT_ID, FORBIDDEN),
-                // Read-only list_accounts scope must not allow client disassociation.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_LIST_ACCOUNTS), 100),
                              TEST_CLIENT_ID, FORBIDDEN),
@@ -758,7 +751,6 @@ class AccountControllerTest {
                              TEST_CLIENT_ID, OK));
         var apiKeyCases = Stream.of(
                 Arguments.of("nvapi-stg-key", TEST_NCA_ID, FORBIDDEN),
-                // Read-only list_accounts scope must not allow disassociation via API key.
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                              List.of(),
@@ -874,13 +866,11 @@ class AccountControllerTest {
                              ncaId,
                              clientIds,
                              FORBIDDEN),
-                // Read-only list_accounts scope must not allow account deletion.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_LIST_ACCOUNTS), 100),
                              ncaId,
                              clientIds,
                              FORBIDDEN),
-                // Read-only list_accounts scope must not allow deletion via API key.
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(ncaId, TEST_OWNER_ID,
                                              List.of(),

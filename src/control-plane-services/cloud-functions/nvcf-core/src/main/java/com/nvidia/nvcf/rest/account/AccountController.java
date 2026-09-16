@@ -29,7 +29,6 @@ import com.nvidia.nvcf.rest.account.dto.PatchAccountRequest;
 import com.nvidia.nvcf.service.account.AccountService;
 import com.nvidia.nvcf.util.NvcfUtils;
 import io.micrometer.tracing.Tracer;
-import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -230,7 +229,6 @@ public class AccountController {
         accountFacade.deleteCloudAccount(ncaId, request, authentication);
     }
 
-    @Hidden  // No need to expose this endpoint in OpenAPI specs.
     @GetMapping(value = "{ncaId}")
     @Operation(
             summary = "Get NVIDIA Cloud Account details",
