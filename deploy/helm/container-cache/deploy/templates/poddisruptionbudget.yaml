@@ -12,7 +12,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-{{- if gt (int $.Values.replicaCount) 1 }}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $pdbMinAvailable := .Values.podDisruptionBudget.minAvailable | toString }}
+{{- $pdbMaxUnavailable := .Values.podDisruptionBudget.maxUnavailable | toString }}
+{{- if and (ne $pdbMinAvailable "") (ne $pdbMaxUnavailable "") }}
+{{- fail "podDisruptionBudget: set only one of minAvailable or maxUnavailable" }}
+{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -22,7 +27,13 @@ metadata:
     app: {{ $.Release.Name }}
     {{- include "nvcf-container-cache.labels" . | nindent 4 }}
 spec:
+  {{- if ne $pdbMinAvailable "" }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- else if ne $pdbMaxUnavailable "" }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
   minAvailable: 50%
+  {{- end }}
   selector:
     matchLabels:
       app: nvcf-proxy-cache
