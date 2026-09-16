@@ -30,6 +30,12 @@ metricsBackend:
     clientPrivateKeyPath: ""
 
 prometheusOperatorCrds:
+  # Override this source when the chart is mirrored. For OCI, use the registry
+  # path without an oci:// prefix and set oci to true. Authenticated HTTPS
+  # repositories can also set username and password in environment values.
+  chartRepository:
+    url: https://prometheus-community.github.io/helm-charts
+    oci: false
   version: "31.0.1"
   values:
     crds:
@@ -55,6 +61,9 @@ prometheusOperatorCrds:
         enabled: false
 
 opentelemetryOperator:
+  chartRepository:
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+    oci: false
   version: "0.122.0"
   admissionWebhooks:
     certManager:
@@ -103,6 +112,9 @@ collector:
             - prometheusremotewrite
 
 victoriaMetrics:
+  chartRepository:
+    url: https://victoriametrics.github.io/helm-charts
+    oci: false
   version: "0.45.0"
   server:
     retentionPeriod: "1"

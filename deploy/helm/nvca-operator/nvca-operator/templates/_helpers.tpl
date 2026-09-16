@@ -376,7 +376,7 @@ Get the BYOO OTel collector image when its tag is configured.
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.157.0-nv-0.2.1" -}}
+{{- $imageTag := "0.160.0-nv-0.2.5" -}}
 {{- if hasKey $byooOtelCollector "imageTag" -}}
 {{- $imageTag = $byooOtelCollector.imageTag -}}
 {{- end -}}

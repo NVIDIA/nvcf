@@ -147,6 +147,19 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
+Dynamo's bundled NATS server defaults to
+`docker.io/library/nats:2.10.21-alpine`. Redirect it to a private mirror with:
+
+```yaml
+addons:
+  dynamoOperator:
+    nats:
+      image:
+        registry: nvcr.io
+        repository: YOUR_ORG/YOUR_TEAM/nats
+        tag: 2.10.21-alpine
+```
+
 `addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
 resources from `topologyAwareScheduling.topologies` when KAI is enabled.
 When Grove is also enabled, the same toggle sets Grove

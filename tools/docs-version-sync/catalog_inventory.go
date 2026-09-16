@@ -67,7 +67,7 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	documentationVersion := "dev"
 	if qualificationVersion != "" {
 		status = ReleaseSetQualified
-		documentationVersion = strings.TrimPrefix(qualificationVersion, "v")
+		documentationVersion = qualificationVersion
 	}
 	releaseSet, err := releaseSetFromInventories(inventories, documentationVersion, status)
 	if err != nil {
@@ -283,13 +283,14 @@ func catalogArtifactsFromResolvedStackInventory(inventory resolvedStackInventory
 		}
 		sort.Strings(owningStacks)
 		artifacts = append(artifacts, Artifact{
-			Name:        resolved.Name,
-			Type:        artifactType,
-			Registry:    publicRegistryForArtifactType(artifactType),
-			Version:     resolved.Version,
-			Digest:      resolved.Digest,
-			Stacks:      owningStacks,
-			Requirement: requirement,
+			Name:               resolved.Name,
+			Type:               artifactType,
+			Registry:           publicRegistryForArtifactType(artifactType),
+			UpstreamRepository: publicUpstreamRepository(resolved.Repository, artifactType),
+			Version:            resolved.Version,
+			Digest:             resolved.Digest,
+			Stacks:             owningStacks,
+			Requirement:        requirement,
 		})
 	}
 	preserveCatalogArtifactIdentity(artifacts, base)
@@ -409,14 +410,14 @@ func resolvedInventoryManifestPlanes(inventory resolvedStackInventory) map[Manif
 // retainCurrentPublications keeps exact public availability records for the
 // versions represented by the refreshed catalog.
 func retainCurrentPublications(catalog *Catalog) {
-	current := make(map[string]struct{}, len(catalog.Artifacts)+len(catalog.SupplementalArtifacts)+1)
+	current := make(map[string]bool, len(catalog.Artifacts)+len(catalog.SupplementalArtifacts)+1)
 	for _, artifact := range append(append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...), catalog.SupplementalArtifacts...) {
-		current[publicationIdentityKey(artifact.Name, artifact.Type, artifact.Version)] = struct{}{}
+		current[publicationIdentityKey(artifact.Name, artifact.Type, artifact.Version)] = artifact.UpstreamRepository == ""
 	}
 
 	publications := catalog.Publications[:0]
 	for _, publication := range catalog.Publications {
-		if _, ok := current[publicationIdentityKey(publication.Name, publication.Type, publication.Version)]; !ok {
+		if retain, ok := current[publicationIdentityKey(publication.Name, publication.Type, publication.Version)]; !ok || !retain {
 			continue
 		}
 		registry, ok := catalog.Registries[publication.Registry]
@@ -434,11 +435,90 @@ func isPublicCatalogRegistry(registry Registry) bool {
 	switch host {
 	case "nvcr.io", "https://helm.ngc.nvidia.com":
 		return namespace == "nvidia" || strings.HasPrefix(namespace, "nvidia/")
+	case "https://open-telemetry.github.io", "https://prometheus-community.github.io", "https://victoriametrics.github.io":
+		return true
 	case "docker.io", "ghcr.io", "quay.io", "registry.k8s.io":
 		return true
 	default:
 		return false
 	}
+}
+
+func publicUpstreamRepository(repository string, artifactType ArtifactType) string {
+	repository = canonicalPublicRepository(repository, artifactType)
+	if _, ok := publicUpstreamRegistry(repository, artifactType); !ok || isNVCFPublicationRepository(repository) {
+		return ""
+	}
+	return repository
+}
+
+func canonicalPublicRepository(repository string, artifactType ArtifactType) string {
+	if artifactType != ArtifactTypeImage || strings.Contains(repository, "://") {
+		return repository
+	}
+	host, _, found := strings.Cut(repository, "/")
+	if found && !strings.ContainsAny(host, ".:") && host != "localhost" {
+		return "docker.io/" + repository
+	}
+	return repository
+}
+
+func publicUpstreamRegistry(repository string, artifactType ArtifactType) (Registry, bool) {
+	if repository == "" || repository != strings.TrimSpace(repository) || strings.HasSuffix(repository, "/") ||
+		strings.ContainsAny(repository, "@?# \t\r\n") {
+		return Registry{}, false
+	}
+	value := repository
+	hostPrefix := ""
+	switch artifactType {
+	case ArtifactTypeImage:
+		if strings.Contains(value, "://") {
+			return Registry{}, false
+		}
+	case ArtifactTypeChart:
+		switch {
+		case strings.HasPrefix(value, "oci://"):
+			value = strings.TrimPrefix(value, "oci://")
+		case strings.HasPrefix(value, "https://"):
+			value = strings.TrimPrefix(value, "https://")
+			hostPrefix = "https://"
+		default:
+			return Registry{}, false
+		}
+	default:
+		return Registry{}, false
+	}
+	host, namespace, found := strings.Cut(value, "/")
+	if !found || host == "" || namespace == "" || strings.Contains(namespace, "//") ||
+		(artifactType == ArtifactTypeImage && strings.Contains(namespace, ":")) {
+		return Registry{}, false
+	}
+	registry := Registry{Host: hostPrefix + host, Namespace: namespace}
+	return registry, isPublicCatalogRegistry(registry)
+}
+
+func isNVCFPublicationRepository(repository string) bool {
+	value := strings.TrimSuffix(repository, "/")
+	value = strings.TrimPrefix(value, "oci://")
+	return value == "nvcr.io/nvidia/nvcf" || strings.HasPrefix(value, "nvcr.io/nvidia/nvcf/") ||
+		value == "https://helm.ngc.nvidia.com/nvidia/nvcf" || strings.HasPrefix(value, "https://helm.ngc.nvidia.com/nvidia/nvcf/")
+}
+
+func upstreamArtifactPath(artifact Artifact) string {
+	repository := strings.TrimSuffix(artifact.UpstreamRepository, "/")
+	reference := repository
+	if artifact.Type == ArtifactTypeChart {
+		name := artifact.RepositoryName
+		if name == "" {
+			name = artifact.Name
+		}
+		reference += "/" + name
+	}
+	reference += ":" + artifact.Version
+	if artifact.Digest != "" {
+		reference += "@" + artifact.Digest
+	}
+	return reference
 }
 
 func assignCatalogArtifactIDs(artifacts []Artifact) {

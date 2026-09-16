@@ -45,7 +45,7 @@ spec:
               fieldPath: metadata.name
         - name: SERVER_NAME
           value: $(POD_NAME)
-        image: nats:2.10.21-alpine
+        image: docker.io/library/nats:2.10.21-alpine
         lifecycle:
           preStop:
             exec:

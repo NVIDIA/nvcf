@@ -41,7 +41,7 @@ func TestReleaseSetRecordsAllThreeImmutableSources(t *testing.T) {
 			Commit:  strings.Repeat(string(rune('a'+index)), 40),
 		}}
 	}
-	releaseSet, err := releaseSetFromInventories(inventories, "1.4.0", ReleaseSetQualified)
+	releaseSet, err := releaseSetFromInventories(inventories, "cp-1.0.0-compute-1.1.0-obs-1.2.0", ReleaseSetQualified)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +52,11 @@ func TestReleaseSetRecordsAllThreeImmutableSources(t *testing.T) {
 		releaseSet.Stacks.ComputePlane.InventoryAsset != stackInventorySpecs[1].AssetName ||
 		releaseSet.Stacks.Observability.InventoryAsset != stackInventorySpecs[2].AssetName {
 		t.Fatalf("release set assets = %#v", releaseSet.Stacks)
+	}
+
+	releaseSet.DocumentationVersion = "cp-1.0.1-compute-1.1.0-obs-1.2.0"
+	if err := validateReleaseSet(releaseSet); err == nil || !strings.Contains(err.Error(), "must be cp-1.0.0-compute-1.1.0-obs-1.2.0") {
+		t.Fatalf("validateReleaseSet error = %v, want stack version mismatch", err)
 	}
 }
 

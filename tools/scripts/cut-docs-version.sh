@@ -9,12 +9,12 @@ set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
   echo "Usage: $0 <version>" >&2
-  echo "Example: $0 v0.6.0" >&2
+  echo "Example: $0 cp-0.20.6-compute-0.4.4-obs-0.2.2" >&2
   exit 1
 fi
 
 VERSION="$1"
-DISPLAY="${VERSION#v}"
+DISPLAY="$VERSION"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 docs_src="$root/docs/user"
@@ -62,7 +62,7 @@ def stack_version(name):
 
 if release_set_value("status") != "qualified":
     raise SystemExit("release_set must be qualified before cutting versioned docs")
-if release_set_value("documentation_version").lstrip("v") != display:
+if release_set_value("documentation_version") != display:
     raise SystemExit("release_set documentation_version does not match requested docs version")
 control_version = stack_version("control-plane")
 compute_version = stack_version("compute-plane")
