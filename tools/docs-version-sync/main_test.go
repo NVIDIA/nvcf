@@ -732,10 +732,11 @@ func TestSyncInlineImageMirroringUsesTraditionalUpstreamHelmChart(t *testing.T) 
 	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
 		Artifact{
 			Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry,
+			RepositoryName:     "opentelemetry-operator",
 			UpstreamRepository: "https://open-telemetry.github.io/opentelemetry-helm-charts", Version: "1.12.7",
 		},
 	)
-	content := "helm pull oci://nvcr.io/nvidia/nvcf/helm-nvca-operator --version 1.12.6\n" +
+	content := "helm pull --repo https://open-telemetry.github.io/opentelemetry-helm-charts opentelemetry-operator --version 1.12.6\n" +
 		"# This creates: helm-nvca-operator-1.12.6.tgz\n" +
 		"helm push helm-nvca-operator-1.12.6.tgz oci://example.test/repo\n"
 
@@ -746,7 +747,7 @@ func TestSyncInlineImageMirroringUsesTraditionalUpstreamHelmChart(t *testing.T) 
 	if !changed {
 		t.Fatal("SyncInlineVersions reported no change")
 	}
-	want := "helm pull --repo https://open-telemetry.github.io/opentelemetry-helm-charts helm-nvca-operator --version 1.12.7"
+	want := "helm pull --repo https://open-telemetry.github.io/opentelemetry-helm-charts opentelemetry-operator --version 1.12.7"
 	if !strings.Contains(got, want) {
 		t.Fatalf("updated content missing %q:\n%s", want, got)
 	}

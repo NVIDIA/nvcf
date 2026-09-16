@@ -45,7 +45,11 @@ func syncImageMirroring(content string, catalog *Catalog) (string, bool, error) 
 	updated := content
 	var total int
 	var count int
-	updated, count = replaceNVCAOperatorChartPull(updated, pullReference, chart.Version)
+	chartName := chart.RepositoryName
+	if chartName == "" {
+		chartName = chart.Name
+	}
+	updated, count = replaceNVCAOperatorChartPull(updated, pullReference, chartName, chart.Version)
 	total += count
 	updated, count = replaceNVCAOperatorChartArchiveComments(updated, chart.Version)
 	total += count
@@ -91,8 +95,13 @@ func replaceVersionTable(content, chartName, version string) (string, int) {
 	return re.ReplaceAllString(content, "${1}`"+version+"`${2}"), count
 }
 
-func replaceNVCAOperatorChartPull(content, pullReference, version string) (string, int) {
-	re := regexp.MustCompile(`(?:(?:oci://[^\s]+/|[a-z0-9-]+/)(?:helm-nvca-operator|nvca-operator)|--repo https://[^\s]+ (?:helm-nvca-operator|nvca-operator)|"\$\{HELM_NVCA_OPERATOR_REFERENCE:\?[^}]+\}") --version [^\s]+`)
+func replaceNVCAOperatorChartPull(content, pullReference, chartName, version string) (string, int) {
+	chartNamePattern := `helm-nvca-operator|nvca-operator`
+	if chartName != "helm-nvca-operator" && chartName != "nvca-operator" {
+		chartNamePattern += "|" + regexp.QuoteMeta(chartName)
+	}
+	pattern := `(?:(?:oci://[^\s]+/|[a-z0-9-]+/)(?:%s)|--repo https://[^\s]+ (?:%s)|"\$\{HELM_NVCA_OPERATOR_REFERENCE:\?[^}]+\}") --version [^\s]+`
+	re := regexp.MustCompile(fmt.Sprintf(pattern, chartNamePattern, chartNamePattern))
 	count := len(re.FindAllStringIndex(content, -1))
 	replacement := pullReference + " --version " + version
 	return re.ReplaceAllString(content, replacement), count
