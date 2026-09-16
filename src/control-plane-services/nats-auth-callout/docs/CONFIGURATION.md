@@ -56,6 +56,7 @@ go run ./cmd/nvcf-nats-auth-callout-service config show
 ## Configuration Options
 
 The service supports configuration through multiple sources (in order of precedence):
+
 1. **CLI Flags**: `--port 8080 --service-name my-service --config config.yaml --secrets-file secrets.json`
 2. **Environment Variables**: `NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=8080 NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NAME=my-service NVCF_NATS_AUTH_CALLOUT_SERVICE_SECRETS_FILE_PATH=secrets.json`
 3. **Config File**: `--config /path/to/config.yaml`
@@ -118,11 +119,13 @@ The service requires two NKey seeds for operation:
    - Generated using `nsc generate --account` or `nsc generate --operator`
 
 **Security Note**: NKey seeds are sensitive credentials and should be:
+
 - Stored securely (e.g., in Kubernetes secrets, Vault, or environment variables)
 - Never committed to version control
 - Rotated regularly
 
 **Example Configuration:**
+
 ```bash
 # Using environment variables (recommended for production)
 export NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED="SUA..."
@@ -172,6 +175,7 @@ Metrics are **disabled by default** and must be explicitly enabled. The service 
 ### Enabling Metrics
 
 **Via Configuration File:**
+
 ```yaml
 # config.yaml
 metrics:
@@ -180,11 +184,13 @@ metrics:
 ```
 
 **Via Environment Variable:**
+
 ```bash
 NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED=true make dev
 ```
 
 **Via Command Line (with environment variable):**
+
 ```bash
 NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED=true ./nvcf-nats-auth-callout-service server --port 8080
 ```
@@ -207,6 +213,7 @@ curl http://your-service-host:8080/metrics
 ### Available Metrics
 
 The service exposes standard Go runtime metrics plus custom application metrics:
+
 - **HTTP Request Duration**: Request processing time by endpoint
 - **HTTP Request Count**: Number of requests by endpoint and status
 - **Go Runtime Metrics**: Memory, GC, goroutines, etc.
@@ -282,6 +289,7 @@ NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=9090 NVCF_NATS_AUTH_CALLOUT_SERVICE_S
 You can create custom configuration files and specify them with the `--config` flag or `NVCF_NATS_AUTH_CALLOUT_SERVICE_CONFIG_PATH` environment variable. You can also use separate secrets files with the `--secrets-file` flag or `NVCF_NATS_AUTH_CALLOUT_SERVICE_SECRETS_FILE_PATH` environment variable for sensitive configuration data:
 
 **my-config.yaml**:
+
 ```yaml
 server:
   port: "9090"
@@ -308,6 +316,7 @@ tracing:
 ```
 
 **my-secrets.json**:
+
 ```json
 {
   "service": {
@@ -323,6 +332,7 @@ tracing:
 ```
 
 Then run:
+
 ```bash
 # Using CLI flags
 ./nvcf-nats-auth-callout-service server --config my-config.yaml
@@ -342,6 +352,7 @@ NVCF_NATS_AUTH_CALLOUT_SERVICE_SECRETS_FILE_PATH=other-secrets.json ./nvcf-nats-
 ## Configuration Precedence Examples
 
 ### Example 1: Command line overrides everything
+
 ```bash
 # Config file has port: "8080"
 # Environment variable: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=9090
@@ -352,6 +363,7 @@ NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=9090 ./nvcf-nats-auth-callout-service
 ```
 
 ### Example 2: Environment variables override config file
+
 ```bash
 # Config file has port: "8080"
 # Environment variable: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=9090
@@ -361,6 +373,7 @@ NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVER_PORT=9090 ./nvcf-nats-auth-callout-service
 ```
 
 ### Example 3: Custom config file overrides embedded defaults
+
 ```bash
 # Embedded defaults: port "8080"
 # Custom config file: port "9090"
@@ -429,6 +442,7 @@ NVCF_NATS_AUTH_CALLOUT_SERVICE_LOGGING_FIELDS_ENVIRONMENT=production NVCF_NATS_A
 When using DevSpace for development, you can:
 
 1. **Override via environment variables in devspace.yaml:**
+
    ```yaml
    dev:
      nvcf-nats-auth-callout-service:
@@ -450,6 +464,7 @@ When using DevSpace for development, you can:
    ```
 
 2. **Use port forwarding:**
+
    ```yaml
    dev:
      ports:
@@ -462,21 +477,25 @@ When using DevSpace for development, you can:
 ## Troubleshooting Configuration
 
 1. **Check what configuration is being used:**
+
    ```bash
    ./nvcf-nats-auth-callout-service config debug
    ```
 
 2. **Validate your configuration:**
+
    ```bash
    ./nvcf-nats-auth-callout-service config validate
    ```
 
 3. **Check version information:**
+
    ```bash
    ./nvcf-nats-auth-callout-service version
    ```
 
 4. **Check if metrics are enabled:**
+
    ```bash
    ./nvcf-nats-auth-callout-service config show | grep metrics
    ```
@@ -516,13 +535,17 @@ For production deployments:
 1. **Use environment variables for sensitive or environment-specific values**
 2. **Use custom config files for static configuration overrides**
 3. **Enable metrics for monitoring:**
+
    ```bash
    NVCF_NATS_AUTH_CALLOUT_SERVICE_METRICS_ENABLED=true ./nvcf-nats-auth-callout-service server
    ```
+
 4. **Validate configuration before deployment:**
+
    ```bash
    ./nvcf-nats-auth-callout-service config validate
    ```
+
 5. **The binary includes embedded defaults** - No need to distribute config files with the binary
 6. **Version information is automatically included in logs** - No need to configure version fields
 
@@ -543,6 +566,7 @@ Tracing is **disabled by default** and configured through the standard configura
 ### Enabling Tracing
 
 **Via Configuration File:**
+
 ```yaml
 # config.yaml
 tracing:
@@ -554,12 +578,14 @@ tracing:
 ```
 
 **Via Environment Variables:**
+
 ```bash
 # Enable tracing manually
 NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_ENABLED=true NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_PROVIDER=otel make dev
 ```
 
 **In Development with DevSpace:**
+
 ```bash
 # Start with tracing profile in DevSpace
 devspace dev -p tracing
@@ -618,6 +644,7 @@ These are automatically injected in Kubernetes deployments via the Downward API.
 #### Environment Variables
 
 **OpenTelemetry Provider:**
+
 ```bash
 # Enable OpenTelemetry tracing with Jaeger
 export NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_ENABLED=true
@@ -631,6 +658,7 @@ export NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_OTEL_ENVIRONMENT=production
 ```
 
 **Lightstep Provider:**
+
 ```bash
 # Enable Lightstep tracing
 export NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_ENABLED=true
@@ -645,6 +673,7 @@ export NVCF_NATS_AUTH_CALLOUT_SERVICE_TRACING_LIGHTSTEP_SAMPLING__RATIO=0.1
 #### Configuration File
 
 **OpenTelemetry Provider:**
+
 ```yaml
 tracing:
   enabled: true
@@ -667,6 +696,7 @@ tracing:
 ```
 
 **Lightstep Provider:**
+
 ```yaml
 tracing:
   enabled: true
@@ -685,17 +715,20 @@ tracing:
 ```
 
 #### Command Line Flags
+
 Tracing follows OpenTelemetry standards and should only be configured via environment variables and config files. CLI flags are not provided for tracing configuration.
 
 ### Supported Backends
 
 **OpenTelemetry Provider** supports any OpenTelemetry-compatible backend:
+
 - **Jaeger**: Use HTTP endpoint `http://jaeger:14268/api/traces`
 - **Tempo**: Use HTTP endpoint `http://tempo:4318/v1/traces`  
 - **OTLP Collectors**: Use appropriate HTTP or gRPC endpoints
 - **Cloud Providers**: Use provider-specific OTLP endpoints with authentication
 
 **Lightstep Provider** provides native integration:
+
 - **Lightstep SaaS**: Production-ready cloud observability platform
 - **Lightstep Microsatellites**: On-premises deployments
 - **Custom Lightstep Endpoints**: Self-hosted Lightstep instances
@@ -879,10 +912,12 @@ tracing:
 #### Secret Structure
 
 **OpenTelemetry Secret Keys:**
+
 - `authorization`: Authorization header value
 - `x-api-key`: X-API-Key header value
 
 **Lightstep Secret Keys:**
+
 - `access-token`: Lightstep access token
 
 #### Validation Rules

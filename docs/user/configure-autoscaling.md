@@ -11,7 +11,7 @@ All requests require an `NVCF_TOKEN` (JWT) with the `deploy_function` scope.
 
 ## Scope of Autoscaling
 
-The function autoscaler operates per function version. It produces a single desired instance count for a given `(functionId, versionId)` pair; the GPU specification ID and deployment ID are not part of its decision. The `PATCH /v2/nvcf/deployments/.../gpu-specifications/{gpuSpecificationId}` endpoint is per-spec on the wire, but the resulting scaling decision applies at the function-version level. If a deployment has more than one GPU specification, set the autoscaling policy consistently across its specs.
+The function autoscaler operates per function version. It produces a single desired instance count for a given `(functionId, versionId)` pair; the GPU specification ID and deployment ID are not part of its decision. The `PATCH /v2/nvcf/deployments/.../gpu-specifications/{gpuSpecificationId}` endpoint is per-spec on the wire, but the resulting scaling decision applies at the function-version level. If a deployment has more than one GPU specification, set the autoscaling policy consistently across its specs. If the control plane returns conflicting custom policies for the specs, the autoscaler logs a warning and uses the platform defaults for that function version.
 
 ## Set Scaling Bounds at Deploy Time
 
@@ -35,6 +35,21 @@ Constraints:
 
 - `minInstances` must be `>= 0`. Setting `minInstances: 0` allows the function to scale to zero when idle. The scale-to-zero idle timeout is set on the platform and is not configurable per function.
 - `maxInstances` must be `> 0` and `>= minInstances`.
+
+The platform default scale-to-zero idle timeout is 1,800 seconds. Self-managed
+operators can override application settings in their environment file. For
+example, set the platform-wide idle timeout to five minutes:
+
+```yaml
+functionAutoscaler:
+  env:
+    SCALING__SCALE_TO_ZERO_IDLE_TIMEOUT_SECONDS: "300"
+```
+
+Environment variable names use `__` between nested settings keys. The timeout
+is evaluated from the last observed invocation; metric scraping and the
+autoscaler reconciliation loop can add a short delay before an instance is
+removed.
 
 With no other configuration, the deployment uses the platform's default scaling policy. The platform adds and removes instances within the `[minInstances, maxInstances]` bounds based on observed utilization.
 
@@ -67,7 +82,7 @@ The body must include at least one of `minInstances`, `maxInstances`, `autoscali
 
 ## Customize the Autoscaling Policy
 
-By default, every deployment uses the platform's autoscaling policy. To override it with per-function scale-up and scale-down behavior, send an `autoscalingConfiguration` block on the `PATCH` request.
+By default, the self-hosted function autoscaler checks for a per-function custom policy. When no custom policy exists, or the policy cannot be fetched, it uses the platform defaults. To set per-function scale-up and scale-down behavior, send an `autoscalingConfiguration` block on the `PATCH` request.
 
 ```bash
 curl -s -X PATCH "https://${GATEWAY_ADDR}/v2/nvcf/deployments/${DEPLOYMENT_ID}/gpu-specifications/${GPU_SPEC_ID}" \
@@ -145,7 +160,7 @@ curl -s -X PATCH "https://${GATEWAY_ADDR}/v2/nvcf/deployments/${DEPLOYMENT_ID}/g
   }'
 ```
 
-The GPU spec uses the platform's autoscaling policy on the next scaling cycle.
+The function version uses the platform's autoscaling policy after the policy cache refreshes. The default cache lifetime is five minutes.
 
 ## See Also
 

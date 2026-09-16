@@ -36,9 +36,6 @@ helm template nvcf-api "${chart_dir}" \
   --values "${chart_dir}/values.yaml" \
   --set-string api.image.registry=example.com \
   --set-string api.image.repository=foo/bar/strap \
-  --set-string api.accountBootstrap.image.registry=example.com \
-  --set-string api.accountBootstrap.image.repository=foo/bar/alpine-k8s \
-  --set-string api.accountBootstrap.image.tag=0.0.0 \
   --set-string "api.env.NVCF_SIDECARS_HOSTNAME=${hostname}" \
   --set-string "api.env.NVCF_SIDECARS_REPOSITORY=${repository}" \
   --show-only templates/configmap-remote-config.yaml \
@@ -48,12 +45,12 @@ helm template nvcf-api "${chart_dir}" \
 # concrete, placeholder-free release-artifact-*-image annotation resolved from
 # NVCF_SIDECARS_HOSTNAME / NVCF_SIDECARS_REPOSITORY.
 expected_annotations=(
-  "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:1.0.9\""
-  "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:1.0.4\""
-  "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.109.4\""
-  "release-artifact-ess-agent-container-image: \"${hostname}/${repository}/ess-agent:1.3.1\""
-  "release-artifact-llm-credential-manager-image: \"${hostname}/${repository}/nvcf-worker-llm-credentials-oss:1.0.4\""
-  "release-artifact-llm-router-client-image: \"${hostname}/${repository}/pylon:0.10.0\""
+  "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:1.2.1\""
+  "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:1.2.3\""
+  "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.110.0\""
+  "release-artifact-ess-agent-container-image: \"${hostname}/${repository}/ess-agent:1.4.1\""
+  "release-artifact-llm-credential-manager-image: \"${hostname}/${repository}/nvcf-worker-llm-credentials-oss:1.1.2\""
+  "release-artifact-llm-router-client-image: \"${hostname}/${repository}/pylon:0.15.1\""
 )
 
 for annotation in "${expected_annotations[@]}"; do
@@ -88,9 +85,6 @@ helm template nvcf-api "${chart_dir}" \
   --values "${chart_dir}/values.yaml" \
   --set-string api.image.registry=example.com \
   --set-string api.image.repository=foo/bar/strap \
-  --set-string api.accountBootstrap.image.registry=example.com \
-  --set-string api.accountBootstrap.image.repository=foo/bar/alpine-k8s \
-  --set-string api.accountBootstrap.image.tag=0.0.0 \
   --show-only templates/configmap-remote-config.yaml \
   > "${manifest_without_sidecar_env}"
 

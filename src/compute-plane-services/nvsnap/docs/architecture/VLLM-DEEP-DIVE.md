@@ -34,7 +34,7 @@ This document provides an in-depth analysis of checkpointing vLLM workloads. vLL
 
 vLLM can run in several configurations:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        vLLM DEPLOYMENT MODES                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -112,7 +112,7 @@ vLLM can run in several configurations:
 
 ### Internal Components
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        vLLM INTERNAL COMPONENTS                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -180,7 +180,7 @@ vLLM can run in several configurations:
 
 ### What State Must Be Captured?
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        STATE INVENTORY                                       │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -274,7 +274,7 @@ vLLM can run in several configurations:
 
 ### Why NCCL Is The Hardest Part
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        THE NCCL PROBLEM                                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -337,7 +337,7 @@ vLLM can run in several configurations:
 
 ### Our NCCL Strategy
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        NCCL CHECKPOINT STRATEGY                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -554,7 +554,7 @@ static void reinitialize_communicators() {
 
 ### Complete Checkpoint Flow for vLLM
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        vLLM CHECKPOINT FLOW                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -702,7 +702,7 @@ static void reinitialize_communicators() {
 
 ### Complete Restore Flow for vLLM
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        vLLM RESTORE FLOW                                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -855,7 +855,7 @@ static void reinitialize_communicators() {
 
 ### Approach 1: External Checkpoint API (Ideal but blocked)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  NVIDIA cudaCheckpoint() API                                     │
 │                                                                  │
@@ -874,7 +874,7 @@ static void reinitialize_communicators() {
 
 ### Approach 2: QEMU/KVM GPU Passthrough
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  VM-Level Checkpoint                                             │
 │                                                                  │
@@ -896,7 +896,7 @@ static void reinitialize_communicators() {
 
 ### Approach 3: CUDA MPS (Multi-Process Service)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  CUDA MPS for centralized GPU access                            │
 │                                                                  │
@@ -915,7 +915,7 @@ static void reinitialize_communicators() {
 
 ### Approach 4: Application-Level (Violates constraint!)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  Modify vLLM to support checkpointing                           │
 │                                                                  │
@@ -931,7 +931,7 @@ static void reinitialize_communicators() {
 
 ### Our Approach: Hybrid System-Level
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  NVSNAP HYBRID APPROACH                                           │
 │                                                                  │
@@ -957,7 +957,7 @@ static void reinitialize_communicators() {
 
 ### Phase 4 Breakdown (vLLM Focus)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        PHASE 4: vLLM IMPLEMENTATION                          │
 │                             (Weeks 29-40)                                    │
@@ -1056,7 +1056,7 @@ static void reinitialize_communicators() {
 
 ### Contingency Plans
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  CONTINGENCY: NCCL Reinitialization Fails                       │
 │                                                                  │

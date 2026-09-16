@@ -108,6 +108,9 @@ func TestLedgerRestorePreservesMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte("y\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
 	if err := ledger.RestoreAll(); err != nil {
 		t.Fatalf("restore: %v", err)
 	}

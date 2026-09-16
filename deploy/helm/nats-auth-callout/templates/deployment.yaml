@@ -66,6 +66,10 @@ spec:
             - "server"
             - "--config"
             - "/etc/config/config.yaml"
+            {{- if .Values.servicePluginConfigSecret.enabled }}
+            - "--secrets-file"
+            - {{ .Values.servicePluginConfigSecret.mountPath | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -145,6 +149,12 @@ spec:
             - name: config-volume
               mountPath: /etc/config
               readOnly: true
+            {{- if .Values.servicePluginConfigSecret.enabled }}
+            - name: plugin-config
+              mountPath: {{ .Values.servicePluginConfigSecret.mountPath | quote }}
+              subPath: {{ .Values.servicePluginConfigSecret.key | quote }}
+              readOnly: true
+            {{- end }}
 
           {{- if .Values.healthChecks.livenessProbe.enabled }}
           livenessProbe:
@@ -191,3 +201,11 @@ spec:
         - name: config-volume
           configMap:
             name: {{ include "app.fullname" . }}-config
+        {{- if .Values.servicePluginConfigSecret.enabled }}
+        - name: plugin-config
+          secret:
+            secretName: {{ .Values.servicePluginConfigSecret.name | quote }}
+            items:
+              - key: {{ .Values.servicePluginConfigSecret.key | quote }}
+                path: {{ .Values.servicePluginConfigSecret.key | quote }}
+        {{- end }}

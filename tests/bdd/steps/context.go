@@ -45,10 +45,11 @@ import (
 // for the same resolved text hits the cache instead of rerunning a destructive
 // command.
 type ScenarioContext struct {
-	Suite       *harness.Suite
-	LastResult  harness.Result
-	LastErr     error
-	LastCommand string
+	Suite         *harness.Suite
+	LastResult    harness.Result
+	LastErr       error
+	LastCommand   string
+	NVCFCLIConfig string
 }
 
 // NewScenarioContext wraps suite in a fresh per-scenario state. The
@@ -65,6 +66,7 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		sc.LastResult = harness.Result{}
 		sc.LastErr = nil
 		sc.LastCommand = ""
+		sc.NVCFCLIConfig = ""
 		return c, nil
 	})
 	// Godog's default pretty formatter buffers the scenario block until
@@ -77,6 +79,8 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	})
 	registerFileSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
+	registerNVCFCLISteps(ctx, sc)
+	registerRegistrationSteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)
 	registerInfraSteps(ctx, sc)
 }

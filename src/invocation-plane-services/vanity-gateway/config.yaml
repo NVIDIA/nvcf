@@ -12,8 +12,9 @@ v2config:
         functionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
         functionVersionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
         tooManyRequestsMessage: "Check out this model at a partner!"
-        shadowModelName: private/facebook/opt-125m-shadow
-        shadowPercentage: 100
+        shadows:
+          - modelName: private/facebook/opt-125m-shadow
+            percentage: 100
       private/facebook/opt-125m-shadow:
         modelName: private/facebook/opt-125m-shadow
         functionID: shadow-func-0001
@@ -22,9 +23,10 @@ v2config:
         modelName: private/test/cancel-on-disconnect
         functionID: cancel-primary-func
         functionVersionID: cancel-primary-ver
-        shadowModelName: private/test/cancel-on-disconnect-shadow
-        shadowPercentage: 100
-        shadowCancelOnClientDisconnect: true
+        shadows:
+          - modelName: private/test/cancel-on-disconnect-shadow
+            percentage: 100
+            cancelOnClientDisconnect: true
       private/test/cancel-on-disconnect-shadow:
         modelName: private/test/cancel-on-disconnect-shadow
         functionID: cancel-shadow-func

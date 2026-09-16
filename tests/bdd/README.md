@@ -9,7 +9,7 @@ in `AGENTS.md`.
 
 ## Directory layout
 
-```
+```text
 features/   Gherkin feature files: single-cluster CLI, multi-cluster CLI,
             single/multi-cluster Helmfile (k3d), and single/multi-cluster
             EKS Helmfile (non-local).
@@ -46,7 +46,12 @@ go test -short ./...
 
 Live runs build nvcf-cli, bring up a real k3d cluster, and exercise the
 feature end to end. They require an NGC API key and sample registry
-coordinates.
+coordinates. The single-cluster and multi-cluster Helmfile runs also require
+public task and function chart references. `SAMPLE_HELM_TASK_CHART` and
+`SAMPLE_HELM_FUNCTION_CHART` must declare CPU and memory resources. Their
+`_WITHOUT_RESOURCES` counterparts must omit them. The function charts must
+expose an `entrypoint` Service on port 8000, answer `/health`, and echo the
+request message from `/echo`.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -67,9 +72,12 @@ go test -run '^TestSingleClusterUpOneClick$' -timeout 30m -v
 # Multi-cluster CLI feature
 go test -run '^TestMultiClusterUp$' -timeout 60m -v
 
-# Single-cluster Helmfile feature (requires NGC_API_KEY, SAMPLE_NGC_ORG,
-# SAMPLE_NGC_TEAM)
+# Single-cluster Helmfile feature (also requires public function and task charts)
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_HELM_FUNCTION_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Focused single-cluster Helmfile feature for the documented public Docker Hub
@@ -83,9 +91,13 @@ BDD_CLEANUP_MODE=topology-multi \
 
 # Multi-cluster Helmfile feature: control-plane install on
 # k3d-ncp-local-cp followed by compute-plane register-cluster + install
-# on k3d-ncp-local-compute-1. Same secrets as the single-cluster
+# on k3d-ncp-local-compute-1. Same secrets and charts as the single-cluster
 # Helmfile feature.
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_HELM_FUNCTION_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
 ```
 
@@ -206,8 +218,8 @@ the suite immediately.
 | Mode | What it destroys | Command equivalent |
 |------|------------------|--------------------|
 | unset (default) | Nothing | (no cleanup) |
-| `stack-single` | Stack-owned helm releases + namespaces on `k3d-ncp-local`; `out/*.yaml` artifacts | `tests/bdd/scripts/destroy-stack.sh single` |
-| `stack-multi` | Stack-owned releases on every `ncp-local-compute-*` then `ncp-local-cp`; `out/*.yaml` artifacts | `tests/bdd/scripts/destroy-stack.sh multi` |
+| `stack-single` | Stack-owned helm releases + namespaces on `k3d-ncp-local`; stack `out/` handoff yaml, Helmfile render trees, and compute registration values | `tests/bdd/scripts/destroy-stack.sh single` |
+| `stack-multi` | Stack-owned releases and namespaces on every `ncp-local-compute-*` then `ncp-local-cp` (including worker namespaces such as `nvca-operator` created on the control-plane cluster); same generated artifacts | `tests/bdd/scripts/destroy-stack.sh multi` |
 | `topology-single` | The `ncp-local` k3d cluster (and everything in it) | `make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local` |
 | `topology-multi` | Every `ncp-local*` k3d cluster on the host | `make -C tools/ncp-local-cluster destroy-all-ncp-local` |
 
@@ -246,9 +258,13 @@ Governing rule:
   `envoy-gateway-system` installed by
   `tools/ncp-local-cluster/scripts/setup-gateway-api.sh`,
   `cert-manager`, the local fake GPU operator) are intentionally
-  off-limits and survive every stack cleanup. `out/*.yaml` handoff
-  files are removed so later `file ... should exist` assertions
-  cannot pass against stale artifacts.
+  off-limits and survive every stack cleanup. Generated stack
+  artifacts are removed so later `file ... should exist` assertions
+  cannot pass against stale files: root-level `out/*.yaml` handoff
+  files, Helmfile `--output-dir` render trees under each stack
+  `out/` directory, and compute registration values under
+  `deploy/stacks/nvcf-compute-plane/registration/`. Ad-hoc non-yaml
+  notes at the `out/` root are left in place.
 - For the nonlocal (EKS) cleanup script
   `tests/bdd/scripts/destroy-nonlocal-stack.sh`, the gateway
   ownership boundary is different: the EKS Helmfile feature

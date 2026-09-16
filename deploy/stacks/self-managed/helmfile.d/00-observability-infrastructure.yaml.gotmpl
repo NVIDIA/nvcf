@@ -16,6 +16,10 @@ helmfiles:
   - path: ../../observability/helmfile.d/01-observability.yaml.gotmpl
     selectorsInherited: true
     values:
+      - nvcfInternal:
+          # This parent has already loaded HELMFILE_ENV and forwards the
+          # resolved observability values below.
+          observabilityEnvironmentLoaded: true
       - global:
           {{- toYaml (dig "global" (dict) .Values) | nindent 10 }}
       - observability:

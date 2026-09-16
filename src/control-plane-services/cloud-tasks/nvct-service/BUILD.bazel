@@ -71,6 +71,7 @@ nvcf_java_test(
         "@nv_third_party_deps//:org_springframework_spring_webmvc",
         "@nv_third_party_deps//:org_testcontainers_testcontainers",
         "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
     ],
     data = [
         "//src/control-plane-services/cloud-tasks:integration_local_env",

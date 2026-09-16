@@ -683,7 +683,7 @@ func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClu
 		Stdout:          r.helmfileStdout,
 		Stderr:          r.helmfileStderr,
 		Ctx:             r.ctx,
-		ExtraEnv:        registration.computePlaneEnv(),
+		ExtraEnv:        registration.computePlaneEnv(filepath.Join(stackPath, "out")),
 	})
 	stopWatcher(cancelWatcher, watcherDone)
 	if err != nil {
@@ -1064,7 +1064,7 @@ func (r *selfHostedUpRun) emitFinalFailure() {
 	})
 }
 
-func (r upClusterRegistration) computePlaneEnv() []string {
+func (r upClusterRegistration) computePlaneEnv(outputDir string) []string {
 	return []string{
 		"CLUSTER_NAME=" + upClusterName,
 		"CLUSTER_ID=" + r.ClusterID,
@@ -1072,6 +1072,9 @@ func (r upClusterRegistration) computePlaneEnv() []string {
 		"IDENTITY_SOURCE=" + r.IdentitySource,
 		"NCA_ID=" + r.NCAID,
 		"CLUSTER_REGION=" + r.Region,
+		// The compute-plane Helmfile reads its registration handoff from
+		// $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml.
+		"OUTPUT_DIR=" + outputDir,
 	}
 }
 
@@ -1509,9 +1512,9 @@ func kubectxFor(phaseNum int) string {
 // `printRegistrationOutput` (cmd/cluster_registration.go, fixed in `ff9aaf7`):
 // top-level `clusterID`/`clusterGroupID`/`ncaID` with the mixed-case "ID" suffix
 // to match the nvca-operator chart's `## @param` annotations in
-// `nvca-operator/values.yaml`. `selfManaged.identitySource` and endpoint
-// values stay nested because they scope self-managed-only chart inputs alongside
-// the chart's other `selfManaged:` keys (`nvcaVersion`, `region`, etc.).
+// `nvca-operator/values.yaml`. Region and endpoint values stay nested because
+// the chart consumes them from `selfManaged:`. identitySource is retained there
+// as CLI lifecycle metadata for teardown even though the chart ignores it.
 //
 // The pre-`ff9aaf7` shape (nested `selfManaged.clusterId`, lowercase-d) left
 // the chart's `.Values.clusterID` empty → cluster-dto.yaml rendered with empty
@@ -1537,8 +1540,7 @@ func writeRegisterValuesYAML(req registerValuesWriteRequest) error {
 		ClusterID:      req.ClusterID,
 		ClusterGroupID: req.ClusterGroupID,
 		NcaID:          req.NCAID,
-		Region:         req.Region,
-		SelfManaged:    newSelfManagedValuesFromEndpoints(req.IdentitySource, req.Endpoints),
+		SelfManaged:    newSelfManagedValuesFromEndpoints(req.IdentitySource, req.Region, req.Endpoints),
 	}
 	body, err := yaml.Marshal(vals)
 	if err != nil {

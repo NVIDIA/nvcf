@@ -8,11 +8,13 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).with_name("github-release")
@@ -28,6 +30,24 @@ def load_github_release():
 
 def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+class SubprocessShim:
+    """Stands in for the module's `subprocess`, intercepting only `gh` calls.
+
+    Every other attribute, `run` included, falls through to the real module so the
+    git plumbing under test keeps working.
+    """
+
+    def __init__(self, fake_run):
+        self._fake_run = fake_run
+
+    def __getattr__(self, name):
+        return getattr(subprocess, name)
+
+    @property
+    def run(self):
+        return self._fake_run
 
 
 @contextlib.contextmanager
@@ -49,17 +69,9 @@ class GithubReleaseTest(unittest.TestCase):
         git(root, "config", "user.email", "test@example.com")
         git(root, "config", "user.name", "Test User")
 
-    def write_service_version(self, root, version):
-        service_dir = root / "src/compute-plane-services/byoo-otel-collector"
-        service_dir.mkdir(parents=True, exist_ok=True)
-        (service_dir / "VERSION").write_text(f"{version}\n")
-        (service_dir / "otel-collector-build.yaml").write_text(f"version: v{version}\n")
-        (service_dir / "README.md").write_text("test\n")
-
-    def write_nvca_version(self, root, version):
+    def seed_nvca_service(self, root):
         service_dir = root / "src/compute-plane-services/nvca"
         service_dir.mkdir(parents=True, exist_ok=True)
-        (service_dir / "VERSION").write_text(f"{version}\n")
         (service_dir / "README.md").write_text("test\n")
 
     def commit_all(self, root, message):
@@ -461,55 +473,6 @@ class GithubReleaseTest(unittest.TestCase):
         )
         return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
 
-    def test_version_file_release_skips_existing_current_tag_on_previous_commit(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.init_repo(root)
-            self.write_service_version(root, "0.153.6")
-            self.commit_all(root, "release byoo")
-            git(root, "tag", "src/compute-plane-services/byoo-otel-collector/v0.153.6")
-            (root / "src/compute-plane-services/byoo-otel-collector" / "README.md").write_text("later change\n")
-            self.commit_all(root, "later byoo change")
-
-            service = {
-                "id": "byoo-otel-collector",
-                "path": "src/compute-plane-services/byoo-otel-collector",
-                "service_name": "byoo-otel-collector",
-                "legacy_tag_prefix": "byoo-otel-collector-v",
-                "version_file": "VERSION",
-                "version_major_minor_source_file": "otel-collector-build.yaml",
-            }
-
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                self.github_release.publish_version_file_release(root, service, dry_run=True, draft=False)
-
-            self.assertIn("src/compute-plane-services/byoo-otel-collector/v0.153.6 already exists", output.getvalue())
-            self.assertIn("skipping", output.getvalue())
-
-    def test_version_file_release_skips_existing_legacy_tag(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.init_repo(root)
-            self.write_service_version(root, "0.153.6")
-            self.commit_all(root, "release byoo")
-            git(root, "tag", "byoo-otel-collector-v0.153.6")
-
-            service = {
-                "id": "byoo-otel-collector",
-                "path": "src/compute-plane-services/byoo-otel-collector",
-                "service_name": "byoo-otel-collector",
-                "legacy_tag_prefix": "byoo-otel-collector-v",
-                "version_file": "VERSION",
-            }
-
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                self.github_release.publish_version_file_release(root, service, dry_run=True, draft=False)
-
-            self.assertIn("byoo-otel-collector-v0.153.6 already exists", output.getvalue())
-            self.assertIn("skipping", output.getvalue())
-
     def _make_service_repo(self, root):
         self.init_repo(root)
         (root / "README.md").write_text("root\n")
@@ -537,6 +500,119 @@ class GithubReleaseTest(unittest.TestCase):
             with chdir(root), contextlib.redirect_stdout(io.StringIO()):
                 self.github_release.synthesize_initial_version_anchor(root, service)
             self.assertIn("deploy/helm/encrypted-secret-store/v0.0.0", self._tags(root))
+
+    def _make_prerelease_service_repo(self, root):
+        """A service whose only tags are prereleases, like nvca before the migration."""
+        self.init_repo(root)
+        (root / "README.md").write_text("root\n")
+        self.commit_all(root, "chore: init")
+        service_dir = root / "src/compute-plane-services/nvca"
+        service_dir.mkdir(parents=True, exist_ok=True)
+        (service_dir / "README.md").write_text("nvca\n")
+        self.commit_all(root, "feat(nvca): import service")
+
+    NVCA_FLOOR_SERVICE = {
+        "id": "nvca",
+        "path": "src/compute-plane-services/nvca",
+        "service_name": "nvca",
+        "initial_version": "3.3.0",
+    }
+
+    def test_floor_applies_when_only_prerelease_tags_exist(self):
+        # The migration case: hundreds of -dev.N tags used to suppress the floor
+        # entirely, so semantic-release saw no baseline and restarted the line.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.1")
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("more\n")
+            self.commit_all(root, "fix(nvca): later change")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.2")
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            self.assertIn("src/compute-plane-services/nvca/v3.3.0", self._tags(root))
+
+    def test_floor_applies_when_the_stable_line_is_not_reachable(self):
+        # nvca's 3.2 line lives on a maintenance branch cut with a synthetic root,
+        # so it is not an ancestor of the default branch and is not a baseline.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            main_branch = self.github_release.run(
+                ["git", "branch", "--show-current"], cwd=root, capture=True
+            ).strip()
+
+            git(root, "switch", "-c", "release-nvca-3.2")
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("on the train\n")
+            self.commit_all(root, "fix(nvca): patch on the release train")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.2.17")
+            git(root, "switch", main_branch)
+
+            # Checked before synthesis: afterwards the floor tag itself is a
+            # reachable stable tag and would be reported as the baseline.
+            self.assertEqual(self.github_release.release_baseline_version(root, self.NVCA_FLOOR_SERVICE), "")
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            self.assertIn("src/compute-plane-services/nvca/v3.3.0", self._tags(root))
+            # The floor must land in HEAD's history. Anchoring it on the
+            # maintenance-branch tag would put it outside the history
+            # semantic-release walks, so the floor would be ignored entirely.
+            self.assertTrue(
+                self.github_release.tag_is_reachable(root, "src/compute-plane-services/nvca/v3.3.0"),
+                "the synthesized floor anchor must be reachable from HEAD",
+            )
+
+    def test_floor_is_ignored_once_a_reachable_stable_tag_catches_up(self):
+        # The floor is a floor, not an override: a real release at or above it wins.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            git(root, "tag", "src/compute-plane-services/nvca/v3.4.0")
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            self.assertEqual(
+                self.github_release.release_baseline_version(root, self.NVCA_FLOOR_SERVICE), "3.4.0"
+            )
+            self.assertNotIn("src/compute-plane-services/nvca/v3.3.0", self._tags(root))
+
+    def test_floor_anchor_lands_on_the_newest_tag_not_the_start_of_history(self):
+        # Anchoring at the start of the subtree would hand semantic-release every
+        # commit the service ever had, so one historical `feat!` could force a major.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.1")
+            newest = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("after\n")
+            self.commit_all(root, "fix(nvca): after the last dev tag")
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            anchored = self.github_release.tag_sha(root, "src/compute-plane-services/nvca/v3.3.0")
+            self.assertEqual(anchored, newest)
+
+    def test_the_migrated_services_all_resolve_a_floor_above_their_baseline(self):
+        # Guards the cutover itself: if any of the four stopped needing its floor,
+        # its first automatic release would silently restart or regress the line.
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        by_id = {s["id"]: s for s in metadata["services"]}
+        for service_id, floor in (
+            ("nvca", "3.3.0"),
+            ("nvcf-compute-plane-stack", "0.2.0"),
+            ("nvcf-self-managed-stack", "0.8.0"),
+            ("nvcf-observability-stack", "0.0.0"),
+        ):
+            with self.subTest(service=service_id):
+                self.assertEqual(self.github_release.initial_floor_version(by_id[service_id]), floor)
 
     def test_initial_version_anchor_honors_metadata(self):
         service = {
@@ -737,9 +813,10 @@ class GithubReleaseTest(unittest.TestCase):
             service["tag_format"],
             "src/compute-plane-services/byoo-otel-collector/v${upstream_version}-nv-${version}",
         )
+        upstream_version = self.github_release.tag_upstream_version(service, root)
         self.assertEqual(
             self.github_release.tag_for_version(service, "0.1.0", root),
-            "src/compute-plane-services/byoo-otel-collector/v0.157.0-nv-0.1.0",
+            f"src/compute-plane-services/byoo-otel-collector/v{upstream_version}-nv-0.1.0",
         )
 
     def test_cloud_tasks_chart_continues_its_published_lineage(self):
@@ -764,137 +841,41 @@ class GithubReleaseTest(unittest.TestCase):
             "deploy/helm/cloud-tasks/v1.4.4",
         )
 
-    def test_nvca_branch_cut_uses_path_scoped_release_branch(self):
-        service = {
-            "id": "nvca",
-            "path": "src/compute-plane-services/nvca",
-            "service_name": "nvca",
-            "legacy_tag_prefix": "nvca-v",
-            "version_file": "VERSION",
-            "dev_prerelease": True,
-        }
-
-        self.assertEqual(
-            self.github_release.service_release_branch(service, "3.1.0"),
-            "release-src/compute-plane-services/nvca/v3.1",
+    def test_reval_chart_continues_its_published_lineage(self):
+        metadata = json.loads(
+            SCRIPT_PATH.with_name("github-release-subprojects.json").read_text()
         )
+        service = next(s for s in metadata["services"] if s["id"] == "reval-helm")
+
+        self.assertEqual(service["path"], "deploy/helm/helm-reval")
+        self.assertEqual(service["service_name"], "helm-reval")
+        self.assertEqual(service["initial_version"], "1.3.8")
+        self.assertEqual(service["deploys"], ["helm-reval"])
         self.assertEqual(
-            self.github_release.service_version_bump_branch(service, "3.1.0"),
-            "release-bump/nvca/v3.1-to-v3.2",
+            self.github_release.tag_for_version(service, service["initial_version"]),
+            "deploy/helm/helm-reval/v1.3.8",
         )
-        self.assertEqual(self.github_release.next_release_train_version("3.1.0"), "3.2.0")
 
-    def test_linear_release_branch_base_preserves_the_selected_tree(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.init_repo(root)
-            self.write_nvca_version(root, "3.2.0")
-            self.commit_all(root, "seed nvca")
-            main_branch = self.github_release.run(
-                ["git", "branch", "--show-current"], cwd=root, capture=True
-            ).strip()
-
-            git(root, "switch", "-c", "merged-change")
-            (root / "merged.txt").write_text("merged change\n")
-            self.commit_all(root, "fix: merged change")
-
-            git(root, "switch", main_branch)
-            (root / "main.txt").write_text("main change\n")
-            self.commit_all(root, "fix: main change")
-            git(root, "merge", "--no-ff", "merged-change", "-m", "Merge merged-change")
-            (root / "src/compute-plane-services/nvca" / "README.md").write_text("release head\n")
-            self.commit_all(root, "fix(nvca): prepare release")
-
-            base_sha = self.github_release.run(
-                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
-            ).strip()
-            release_base = self.github_release.linear_release_branch_base(root, base_sha)
-
-            self.assertNotEqual(release_base, base_sha)
-            self.assertEqual(
-                self.github_release.commit_tree(root, release_base),
-                self.github_release.commit_tree(root, base_sha),
-            )
-            self.assertEqual(
-                self.github_release.run(
-                    ["git", "rev-list", "--merges", release_base], cwd=root, capture=True
-                ).strip(),
-                "",
-            )
-
-            git(root, "switch", "-c", "release-bump/nvca/v3.2-to-v3.3", release_base)
-            (root / "src/compute-plane-services/nvca" / "VERSION").write_text("3.3.0\n")
-            self.commit_all(root, "chore(nvca): advance release train to v3.3.0")
-            bump_head = self.github_release.run(
-                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
-            ).strip()
-
-            self.assertEqual(
-                self.github_release.run(
-                    ["git", "rev-parse", f"{bump_head}^"], cwd=root, capture=True
-                ).strip(),
-                release_base,
-            )
-            self.assertEqual(
-                self.github_release.run(
-                    ["git", "diff", "--name-only", base_sha, bump_head], cwd=root, capture=True
-                ).strip(),
-                "src/compute-plane-services/nvca/VERSION",
-            )
-            self.assertEqual(
-                self.github_release.run(
-                    ["git", "diff", "--name-only", f"{release_base}...{bump_head}"], cwd=root, capture=True
-                ).strip(),
-                "src/compute-plane-services/nvca/VERSION",
-            )
-            self.assertEqual(
-                self.github_release.run(
-                    ["git", "rev-list", "--merges", bump_head], cwd=root, capture=True
-                ).strip(),
-                "",
-            )
-
-    def test_linear_release_branch_base_keeps_a_linear_base(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.init_repo(root)
-            self.write_nvca_version(root, "3.2.0")
-            self.commit_all(root, "seed nvca")
-            base_sha = self.github_release.run(
-                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
-            ).strip()
-
-            self.assertEqual(self.github_release.linear_release_branch_base(root, base_sha), base_sha)
-
-    def test_dev_prerelease_metadata_supports_branch_cut(self):
+    def test_http_invocation_chart_uses_its_published_lineage(self):
         root = SCRIPT_PATH.parents[2]
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
-        services = [service for service in metadata["services"] if service.get("dev_prerelease")]
-        self.assertGreater(len(services), 0)
+        service = next(s for s in metadata["services"] if s["id"] == "http-invocation-helm")
 
-        for service in services:
-            with self.subTest(service=service["id"]):
-                self.assertTrue(service.get("version_file"))
-                version = self.github_release.validate_version_file(root, service)
-                self.assertNotIn("-", version)
-                self.assertTrue(self.github_release.service_release_branch(service, version).startswith("release-"))
-                self.assertTrue(self.github_release.service_version_bump_branch(service, version).startswith("release-bump/"))
+        self.assertEqual(service["path"], "deploy/helm/http-invocation")
+        self.assertEqual(service["service_name"], "helm-nvcf-invocation-service")
+        self.assertEqual(service["deploys"], ["http-invocation"])
+        self.assertEqual(
+            self.github_release.tag_for_version(service, "1.5.6", root),
+            "deploy/helm/http-invocation/v1.5.6",
+        )
 
-    def test_release_branch_push_only_processes_matching_dev_prerelease_service(self):
+    def test_only_the_default_branch_releases(self):
         nvca = {
             "id": "nvca",
             "path": "src/compute-plane-services/nvca",
             "service_name": "nvca",
             "legacy_tag_prefix": "nvca-v",
-            "version_file": "VERSION",
-            "dev_prerelease": True,
-        }
-        compute_stack = {
-            "id": "nvcf-compute-plane-stack",
-            "path": "deploy/stacks/nvcf-compute-plane",
-            "service_name": "nvcf-compute-plane-stack",
-            "version_file": "VERSION",
-            "dev_prerelease": True,
+            "initial_version": "3.3.0",
         }
         grpc_proxy = {
             "id": "grpc-proxy",
@@ -902,81 +883,1067 @@ class GithubReleaseTest(unittest.TestCase):
             "service_name": "nvcf-grpc-proxy",
             "legacy_tag_prefix": "nvcf-grpc-proxy-v",
         }
-        branch = "release-src/compute-plane-services/nvca/v3.1"
+        release_branch = "release-src/compute-plane-services/nvca/v3.1"
 
-        self.assertTrue(self.github_release.should_process_auto_service(nvca, "", branch, "main"))
-        self.assertFalse(self.github_release.should_process_auto_service(compute_stack, "", branch, "main"))
-        self.assertFalse(self.github_release.should_process_auto_service(grpc_proxy, "", branch, "main"))
-        self.assertTrue(self.github_release.should_process_auto_service(grpc_proxy, "", "main", "main"))
-        self.assertFalse(self.github_release.should_process_auto_service(nvca, "grpc-proxy", branch, "main"))
+        # Maintenance branches still build and test, but no longer release:
+        # a tag on one of them is cut by hand.
+        for service in (nvca, grpc_proxy):
+            with self.subTest(service=service["id"]):
+                self.assertTrue(self.github_release.should_process_auto_service(service, "", "main", "main"))
+                self.assertFalse(
+                    self.github_release.should_process_auto_service(service, "", release_branch, "main")
+                )
 
-    def test_branch_cut_dry_run_reports_release_branch_and_bump_pr(self):
+        # The service filter still scopes a run to one service.
+        self.assertFalse(self.github_release.should_process_auto_service(nvca, "grpc-proxy", "main", "main"))
+        self.assertTrue(self.github_release.should_process_auto_service(grpc_proxy, "grpc-proxy", "main", "main"))
+
+    # Image sources that live beside a chart of the same name. Each pair
+    # releases independently: the chart from deploy/helm/<name>, the image
+    # from infra/<name>. The image tag prefix is what the internal publishing
+    # configuration dispatches on, so it is pinned here.
+    INFRA_IMAGE_SOURCES = (
+        ("openbao-image", "infra/openbao", "openbao", "deploy/helm/openbao"),
+        ("cassandra-image", "infra/cassandra", "cassandra", "deploy/helm/cassandra"),
+    )
+
+    def test_infra_image_sources_release_independently_of_their_charts(self):
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        by_id = {service["id"]: service for service in metadata["services"]}
+        self.assertEqual(len(by_id), len(metadata["services"]), "service ids must be unique")
+
+        for image_id, image_path, chart_id, chart_path in self.INFRA_IMAGE_SOURCES:
+            with self.subTest(image=image_id):
+                image, chart = by_id[image_id], by_id[chart_id]
+                self.assertEqual(image["path"], image_path)
+                self.assertEqual(chart["path"], chart_path)
+                self.assertNotEqual(image["service_name"], chart["service_name"])
+                # Default tag format from the path: this exact prefix is what
+                # the internal image lane is configured to dispatch on.
+                self.assertEqual(self.github_release.tag_prefix(image, root), f"{image_path}/v")
+                self.assertEqual(self.github_release.tag_prefix(chart, root), f"{chart_path}/v")
+
+    def test_release_worthy_infra_commit_touches_the_image_stream_only(self):
+        # A fix under infra/openbao must release infra/openbao/v* and leave the
+        # deploy/helm/openbao stream untouched, and the reverse.
+        image = {"id": "openbao-image", "path": "infra/openbao", "service_name": "nvcf-openbao"}
+        chart = {"id": "openbao", "path": "deploy/helm/openbao", "service_name": "helm-nvcf-openbao-server"}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.init_repo(root)
-            self.write_nvca_version(root, "3.1.0")
-            metadata = {
-                "version": 1,
-                "services": [
-                    {
-                        "id": "nvca",
-                        "path": "src/compute-plane-services/nvca",
-                        "service_name": "nvca",
-                        "legacy_tag_prefix": "nvca-v",
-                        "version_file": "VERSION",
-                        "dev_prerelease": True,
-                    }
-                ],
-            }
-            metadata_path = root / "metadata.json"
-            metadata_path.write_text(json.dumps(metadata))
-            self.commit_all(root, "seed nvca")
+            for path in (image["path"], chart["path"]):
+                (root / path).mkdir(parents=True)
+                (root / path / "README.md").write_text(f"{path}\n")
+            self.commit_all(root, "seed openbao chart and image")
+            git(root, "tag", "infra/openbao/v1.3.1")
+            git(root, "tag", "deploy/helm/openbao/v0.32.2")
 
-            args = types.SimpleNamespace(
-                metadata=str(metadata_path),
-                service="nvca",
-                ref="HEAD",
-                target_branch="main",
-                dry_run=True,
+            (root / image["path"] / "README.md").write_text("fix(openbao): bump grpc\n")
+            self.commit_all(root, "fix(openbao): bump grpc")
+
+            self.assertTrue(self.github_release.releases_a_version("fix(openbao): bump grpc"))
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(self.github_release.only_generated_changes(root, image, []))
+                self.assertTrue(self.github_release.only_generated_changes(root, chart, []))
+                self.assertEqual(
+                    self.github_release.latest_service_tag(image, root), "infra/openbao/v1.3.1"
+                )
+
+    def test_no_service_uses_the_retired_version_file_model(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        for service in metadata["services"]:
+            with self.subTest(service=service["id"]):
+                self.assertNotIn("version_file", service)
+                self.assertNotIn("dev_prerelease", service)
+
+    def test_migrated_services_declare_their_version_floor(self):
+        # nvca and the three stacks moved off the VERSION file onto
+        # semantic-release. Their stable lines resume from these floors, which
+        # are anchored on the GitHub commit graph at cutover.
+        expected = {
+            "nvca": "3.3.0",
+            "nvcf-compute-plane-stack": "0.2.0",
+            "nvcf-self-managed-stack": "0.8.0",
+            "nvcf-observability-stack": "0.0.0",
+        }
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        by_id = {service["id"]: service for service in metadata["services"]}
+
+        for service_id, floor in expected.items():
+            with self.subTest(service=service_id):
+                service = by_id[service_id]
+                self.assertEqual(service.get("initial_version"), floor)
+                # The VERSION file these floors came from is gone; nothing may
+                # reintroduce it, or the service would silently stop releasing.
+                self.assertFalse((root / service["path"] / "VERSION").exists())
+
+    NVCA_SERVICE = {
+        "id": "nvca",
+        "path": "src/compute-plane-services/nvca",
+        "service_name": "nvca",
+        "legacy_tag_prefix": "nvca-v",
+        "initial_version": "3.3.0",
+    }
+
+    def stub_gh_comments(self, pull_requests, failing=()):
+        """Route `gh pr comment` to a recorder and stub the two API lookups.
+
+        Returns the list that collects (pull request number, comment body).
+        """
+        real_run = subprocess.run
+        posted = []
+
+        def fake_run(args, *rest, **kwargs):
+            if list(args[:3]) == ["gh", "pr", "comment"]:
+                number = args[3]
+                body = args[args.index("--body") + 1]
+                if number in failing:
+                    return subprocess.CompletedProcess(args, 1, stdout="pull request is locked")
+                posted.append((number, body))
+                return subprocess.CompletedProcess(args, 0, stdout="")
+            return real_run(args, *rest, **kwargs)
+
+        self.github_release.subprocess = SubprocessShim(fake_run)
+        self.github_release.repo_slug = lambda: "NVIDIA/nvcf"
+        self.github_release.pull_requests_for_commit = lambda slug, sha: pull_requests.get(sha, [])
+        return posted
+
+    def nvca_repo_with_tag(self, root, version="3.2.0"):
+        """Seed an nvca repo whose HEAD carries the service tag for `version`."""
+        self.init_repo(root)
+        self.seed_nvca_service(root)
+        self.commit_all(root, "seed nvca")
+        git(root, "tag", f"src/compute-plane-services/nvca/v{version}")
+
+    def commit_backport(self, root, message):
+        (root / "src/compute-plane-services/nvca/README.md").write_text(f"{message}\n")
+        self.commit_all(root, message)
+        return self.github_release.run(["git", "rev-parse", "HEAD"], cwd=root, capture=True).strip()
+
+    def test_ancestor_service_tag_ignores_a_higher_tag_off_the_branch(self):
+        # A release branch must bound its range by what it actually contains. The
+        # highest-sorting tag can be a main-line tag the branch never had.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root, "3.2.0")
+            self.commit_backport(root, "feat(nvca): main only")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.0")
+            git(root, "checkout", "-b", "release-src/compute-plane-services/nvca/v3.2", "HEAD~1")
+            self.commit_backport(root, "fix(nvca): backport")
+
+            self.assertEqual(
+                self.github_release.ancestor_service_tag(root, self.NVCA_SERVICE),
+                "src/compute-plane-services/nvca/v3.2.0",
             )
+            self.assertEqual(
+                self.github_release.latest_service_tag(self.NVCA_SERVICE, root),
+                "src/compute-plane-services/nvca/v3.3.0-dev.0",
+                "the version sort would have bounded the range with an unreachable tag",
+            )
+
+    def test_ancestor_service_tag_prefers_the_closest_of_several_prefixes(self):
+        # Services carry legacy prefixes alongside the current one, and the newest
+        # release can sit on either. Taking the first prefix to match would reach
+        # past a closer tag and re-resolve commits an earlier release covered.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root, "3.2.0")
+            self.commit_backport(root, "fix(nvca): released under the legacy prefix")
+            git(root, "tag", "nvca-v3.2.1")
+            self.commit_backport(root, "fix(nvca): not yet released")
+
+            self.assertEqual(
+                self.github_release.ancestor_service_tag(root, self.NVCA_SERVICE), "nvca-v3.2.1"
+            )
+            self.assertEqual(
+                self.github_release.tag_prefixes(self.NVCA_SERVICE, root),
+                ["src/compute-plane-services/nvca/v", "nvca-v"],
+                "the current prefix is checked first, so a closer legacy tag must still win",
+            )
+
+    def test_released_commits_covers_every_merge_since_the_previous_tag(self):
+        # The concurrency group cancels queued runs, so one tag can carry several
+        # merges. All of them have to be resolved, not just HEAD.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root)
+            first = self.commit_backport(root, "fix(nvca): first backport (#1249)")
+            second = self.commit_backport(root, "fix(nvca): second backport (#1250)")
+
+            commits = self.github_release.released_commits(root, "src/compute-plane-services/nvca/v3.2.0")
+            self.assertEqual(commits, [second, first])
+
+    def test_released_commits_without_a_previous_tag_resolves_only_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.seed_nvca_service(root)
+            self.commit_all(root, "seed nvca")
+            head = self.commit_backport(root, "fix(nvca): first ever release")
+
+            self.assertEqual(self.github_release.released_commits(root, ""), [head])
+
+    def test_released_commits_reports_a_truncated_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root)
+            self.github_release.MAX_RELEASE_COMMENT_COMMITS = 2
+            for index in range(4):
+                self.commit_backport(root, f"fix(nvca): backport {index}")
+
             output = io.StringIO()
-            with chdir(root), contextlib.redirect_stdout(output):
-                self.github_release.branch_cut(args)
+            with contextlib.redirect_stdout(output):
+                commits = self.github_release.released_commits(root, "src/compute-plane-services/nvca/v3.2.0")
 
-            text = output.getvalue()
-            self.assertIn("release-src/compute-plane-services/nvca/v3.1", text)
-            self.assertIn("release-bump/nvca/v3.1-to-v3.2", text)
-            self.assertIn("src/compute-plane-services/nvca/VERSION=3.1.0->3.2.0", text)
+            self.assertEqual(len(commits), 2)
+            self.assertIn("only the newest 2 are resolved", output.getvalue())
 
-    def test_branch_cut_requires_dev_prerelease_service(self):
+    def test_comment_release_posts_once_per_pull_request(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.init_repo(root)
-            self.write_nvca_version(root, "3.1.0")
-            metadata = {
-                "version": 1,
-                "services": [
-                    {
-                        "id": "nvca",
-                        "path": "src/compute-plane-services/nvca",
-                        "service_name": "nvca",
-                        "version_file": "VERSION",
-                    }
-                ],
-            }
-            metadata_path = root / "metadata.json"
-            metadata_path.write_text(json.dumps(metadata))
-            self.commit_all(root, "seed nvca")
+            self.nvca_repo_with_tag(root)
+            first = self.commit_backport(root, "fix(nvca): first backport")
+            second = self.commit_backport(root, "fix(nvca): second backport")
+            # The same PR can own more than one commit in the range.
+            posted = self.stub_gh_comments({first: ["1249"], second: ["1250", "1249"]})
 
-            args = types.SimpleNamespace(
-                metadata=str(metadata_path),
-                service="nvca",
-                ref="HEAD",
-                target_branch="main",
-                dry_run=True,
+            with contextlib.redirect_stdout(io.StringIO()):
+                commented = self.github_release.comment_release_on_pull_requests(
+                    root,
+                    self.NVCA_SERVICE,
+                    "src/compute-plane-services/nvca/v3.2.1",
+                    "3.2.1",
+                    "src/compute-plane-services/nvca/v3.2.0",
+                )
+
+            self.assertEqual(commented, ["1250", "1249"])
+            self.assertEqual([number for number, _body in posted], ["1250", "1249"])
+            body = posted[0][1]
+            self.assertIn("This PR is included in version 3.2.1.", body)
+            self.assertIn(
+                "https://github.com/NVIDIA/nvcf/releases/tag/src/compute-plane-services/nvca/v3.2.1",
+                body,
             )
-            with chdir(root), self.assertRaisesRegex(SystemExit, "branch-cut requires release.dev_prerelease"):
-                self.github_release.branch_cut(args)
+
+    def test_comment_release_survives_a_failed_comment(self):
+        # The tag, the push, and the GitHub release already succeeded. A comment
+        # that cannot be posted must not turn a shipped release into a failure.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root)
+            first = self.commit_backport(root, "fix(nvca): first backport")
+            posted = self.stub_gh_comments({first: ["1249", "1250"]}, failing=("1249",))
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                commented = self.github_release.comment_release_on_pull_requests(
+                    root,
+                    self.NVCA_SERVICE,
+                    "src/compute-plane-services/nvca/v3.2.1",
+                    "3.2.1",
+                    "src/compute-plane-services/nvca/v3.2.0",
+                )
+
+            self.assertEqual(commented, ["1250"])
+            self.assertEqual([number for number, _body in posted], ["1250"])
+            self.assertIn("could not comment", output.getvalue())
+
+    def test_create_release_reports_whether_it_created_the_release(self):
+        existing = {"seen": False}
+
+        def fake_run(args, *rest, **kwargs):
+            if list(args[:3]) == ["gh", "release", "view"]:
+                return subprocess.CompletedProcess(args, 0 if existing["seen"] else 1)
+            raise AssertionError(f"unexpected call: {args}")
+
+        self.github_release.subprocess = SubprocessShim(fake_run)
+        self.github_release.run = lambda *a, **k: ""
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(self.github_release.create_release("t", "t", "n", draft=False, dry_run=False))
+            existing["seen"] = True
+            self.assertFalse(self.github_release.create_release("t", "t", "n", draft=False, dry_run=False))
+            self.assertFalse(self.github_release.create_release("t", "t", "n", draft=False, dry_run=True))
+
+    def stack_release_metadata(self, asset_name="inventory.json"):
+        return {
+            "version": 1,
+            "services": [
+                {
+                    "id": "nvcf-self-managed-stack",
+                    "path": "deploy/stacks/self-managed",
+                    "service_name": "nvcf-self-managed-stack",
+                    "tag_format": "deploy/stacks/self-managed/v${version}",
+                    "resolved_inventory_asset": asset_name,
+                }
+            ],
+        }
+
+    def test_release_metadata_publishes_one_inventory_per_stack(self):
+        metadata_path = SCRIPT_PATH.with_name("github-release-subprojects.json")
+        metadata = json.loads(metadata_path.read_text())
+        expected = {
+            "deploy/stacks/self-managed/v1.2.3": "nvcf-self-managed-stack-inventory.json",
+            "deploy/stacks/nvcf-compute-plane/v1.2.3": "nvcf-compute-plane-stack-inventory.json",
+            "deploy/stacks/observability/v1.2.3": "nvcf-observability-stack-inventory.json",
+        }
+        for tag, asset_name in expected.items():
+            with self.subTest(tag=tag):
+                service = self.github_release.release_asset_service(metadata, tag, SCRIPT_PATH.parents[2])
+                self.assertIsNotNone(service)
+                self.assertEqual(service["resolved_inventory_asset"], asset_name)
+
+    def chart_release_metadata(self):
+        """Return minimal release metadata for the chart publication tests."""
+        return {
+            "version": 1,
+            "services": [
+                {
+                    "id": "nats-auth-callout-helm",
+                    "path": "deploy/helm/nats-auth-callout",
+                    "service_name": "helm-nvcf-nats-auth-callout-service",
+                }
+            ],
+        }
+
+    def test_chart_release_tag_resolves_registered_publisher(self):
+        """Chart tags must resolve exactly one registered Helm publisher."""
+        service = self.github_release.release_chart_service(
+            self.chart_release_metadata(),
+            "deploy/helm/nats-auth-callout/v1.2.0",
+            Path("."),
+        )
+        self.assertEqual(service["id"], "nats-auth-callout-helm")
+        self.assertIsNone(
+            self.github_release.release_chart_service(
+                self.chart_release_metadata(),
+                "src/control-plane-services/nats-auth-callout/v0.8.3",
+                Path("."),
+            )
+        )
+        with self.assertRaisesRegex(SystemExit, "no matching service"):
+            self.github_release.release_chart_service(
+                self.chart_release_metadata(),
+                "deploy/helm/unregistered/v1.0.0",
+                Path("."),
+            )
+
+    def test_chart_release_directory_ignores_vendored_dependency(self):
+        """Chart discovery must not treat a vendored dependency as the owning chart."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chart_dir = root / "deploy/helm/nats-auth-callout"
+            dependency = chart_dir / "charts/dependency"
+            dependency.mkdir(parents=True)
+            (chart_dir / "Chart.yaml").write_text(
+                "name: helm-nvcf-nats-auth-callout-service\n"
+            )
+            (dependency / "Chart.yaml").write_text("name: dependency\n")
+
+            self.assertEqual(
+                self.github_release.release_chart_directory(
+                    root, self.chart_release_metadata()["services"][0]
+                ),
+                chart_dir,
+            )
+
+    def test_registered_chart_release_metadata_matches_chart_sources(self):
+        """Every registered Helm publisher must resolve to a valid source chart."""
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(
+            SCRIPT_PATH.with_name("github-release-subprojects.json").read_text()
+        )
+        charts = [
+            service
+            for service in metadata["services"]
+            if service["path"].startswith("deploy/helm/")
+        ]
+        self.assertGreater(len(charts), 0)
+        for service in charts:
+            with self.subTest(service=service["id"]):
+                self.assertTrue(
+                    self.github_release.release_chart_directory(root, service).is_dir()
+                )
+
+    def test_chart_release_refuses_metadata_name_mismatch(self):
+        """Publishing must reject chart names that disagree with release metadata."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chart_dir = root / "deploy/helm/nats-auth-callout"
+            chart_dir.mkdir(parents=True)
+            (chart_dir / "Chart.yaml").write_text("name: another-chart\n")
+
+            with self.assertRaisesRegex(SystemExit, "does not match"):
+                self.github_release.release_chart_directory(
+                    root, self.chart_release_metadata()["services"][0]
+                )
+
+    def test_chart_dependencies_require_lock_file(self):
+        """Dependency-bearing charts must pin resolution with a lock file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chart_dir = root / "chart"
+            chart_dir.mkdir()
+            (chart_dir / "Chart.yaml").write_text(
+                "name: example\n"
+                "dependencies:\n"
+                "  - name: dependency\n"
+                "    version: 1.0.0\n"
+                "    repository: https://example.invalid/charts\n"
+            )
+
+            with self.assertRaisesRegex(SystemExit, "dependencies require Chart.lock"):
+                self.github_release.package_release_chart(
+                    chart_dir, "1.2.0", root / "output"
+                )
+
+    def test_indented_chart_dependencies_require_lock_file(self):
+        """An indented dependencies key must still activate the lock-file guard."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chart_dir = root / "chart"
+            chart_dir.mkdir()
+            (chart_dir / "Chart.yaml").write_text(
+                "  name: example\n"
+                "  dependencies:\n"
+                "    - name: dependency\n"
+                "      version: 1.0.0\n"
+                "      repository: https://example.invalid/charts\n"
+            )
+
+            with self.assertRaisesRegex(SystemExit, "dependencies require Chart.lock"):
+                self.github_release.package_release_chart(
+                    chart_dir, "1.2.0", root / "output"
+                )
+
+    def test_chart_is_published_before_github_release(self):
+        """The immutable chart must exist before its GitHub release becomes visible."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/helm/nats-auth-callout/v1.2.0"
+        calls = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: self.chart_release_metadata()
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.publish_release_chart = (
+            lambda _root, service, version, dry_run: calls.append(
+                ("chart", service["id"], version, dry_run)
+            )
+        )
+        self.github_release.create_release = (
+            lambda *_args, **_kwargs: calls.append(("release",))
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.tag_release(
+                types.SimpleNamespace(tag=tag, metadata="metadata.json")
+            )
+
+        self.assertEqual(
+            calls,
+            [("chart", "nats-auth-callout-helm", "1.2.0", False), ("release",)],
+        )
+
+    def test_chart_publish_failure_prevents_github_release(self):
+        """A chart publication failure must prevent the GitHub release event."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: self.chart_release_metadata()
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.publish_release_chart = lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("push failed")
+        )
+        released = []
+        self.github_release.create_release = lambda *_args, **_kwargs: released.append(True)
+
+        with self.assertRaisesRegex(RuntimeError, "push failed"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.tag_release(
+                    types.SimpleNamespace(
+                        tag="deploy/helm/nats-auth-callout/v1.2.0",
+                        metadata="metadata.json",
+                    )
+                )
+        self.assertEqual(released, [])
+
+    def test_missing_chart_is_pushed_with_exact_tag_version(self):
+        """A missing chart must be pushed with the version encoded in its tag."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chart_dir = root / "chart"
+            chart_dir.mkdir()
+            package = root / "chart-1.2.0.tgz"
+            package.write_bytes(b"package")
+            calls = []
+            self.github_release.release_chart_directory = lambda *_args: chart_dir
+            self.github_release.helm_registry_settings = lambda: (
+                "nvcr.io/example/ncp-dev",
+                "secret",
+            )
+            self.github_release.package_release_chart = lambda *_args: package
+            self.github_release.helm_registry_login = (
+                lambda registry, _key: calls.append(("login", registry))
+            )
+            self.github_release.pull_release_chart = (
+                lambda *_args: (1, "manifest unknown: not found", [])
+            )
+            self.github_release.run = lambda args, **_kwargs: calls.append(tuple(args))
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_release_chart(
+                    root, self.chart_release_metadata()["services"][0], "1.2.0", False
+                )
+
+            self.assertIn(("login", "nvcr.io/example/ncp-dev"), calls)
+            self.assertIn(
+                ("helm", "push", str(package), "oci://nvcr.io/example/ncp-dev"),
+                calls,
+            )
+
+    def test_chart_publish_uses_replayed_tag_source(self):
+        """Manual replay must package chart content from the selected tag worktree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "current"
+            replay_root = Path(tmp) / "tagged"
+            chart_dir = replay_root / "deploy/helm/nats-auth-callout"
+            chart_dir.mkdir(parents=True)
+            selected_roots = []
+
+            def select_chart(selected_root, _service):
+                """Record the source root chosen by the publisher."""
+                selected_roots.append(selected_root)
+                return chart_dir
+
+            self.github_release.release_chart_directory = select_chart
+            with mock.patch.dict(
+                os.environ,
+                {"NVCF_RELEASE_SOURCE_ROOT": str(replay_root)},
+            ), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_release_chart(
+                    root,
+                    self.chart_release_metadata()["services"][0],
+                    "1.2.0",
+                    True,
+                )
+
+            self.assertEqual(selected_roots, [replay_root])
+
+    def test_only_registry_missing_signals_allow_a_chart_push(self):
+        """Only explicit missing-artifact responses may permit a chart push."""
+        self.assertTrue(self.github_release.missing_helm_chart_output("manifest unknown"))
+        self.assertTrue(self.github_release.missing_helm_chart_output("status code: 404"))
+        self.assertFalse(
+            self.github_release.missing_helm_chart_output("credentials file not found")
+        )
+
+    def test_existing_chart_is_only_accepted_when_content_matches(self):
+        """An existing immutable version is reusable only when its content matches."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chart_dir = root / "chart"
+            chart_dir.mkdir()
+            local = root / "local.tgz"
+            remote = root / "remote.tgz"
+            local.write_bytes(b"local")
+            remote.write_bytes(b"remote")
+            self.github_release.release_chart_directory = lambda *_args: chart_dir
+            self.github_release.helm_registry_settings = lambda: ("nvcr.io/example", "secret")
+            self.github_release.package_release_chart = lambda *_args: local
+            self.github_release.helm_registry_login = lambda *_args: None
+            self.github_release.pull_release_chart = lambda *_args: (0, "", [remote])
+            self.github_release.helm_archive_signature = lambda package: package.name
+
+            with self.assertRaisesRegex(SystemExit, "different content"):
+                self.github_release.publish_release_chart(
+                    root, self.chart_release_metadata()["services"][0], "1.2.0", False
+                )
+
+            self.github_release.helm_archive_signature = lambda _package: "same"
+            calls = []
+            self.github_release.run = lambda args, **_kwargs: calls.append(args)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_release_chart(
+                    root, self.chart_release_metadata()["services"][0], "1.2.0", False
+                )
+            self.assertEqual(calls, [])
+
+    def test_registry_error_does_not_get_mistaken_for_missing_chart(self):
+        """Registry failures must not be treated as proof that a chart is absent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chart_dir = root / "chart"
+            chart_dir.mkdir()
+            package = root / "local.tgz"
+            package.write_bytes(b"local")
+            self.github_release.release_chart_directory = lambda *_args: chart_dir
+            self.github_release.helm_registry_settings = lambda: ("nvcr.io/example", "secret")
+            self.github_release.package_release_chart = lambda *_args: package
+            self.github_release.helm_registry_login = lambda *_args: None
+            self.github_release.pull_release_chart = lambda *_args: (
+                1,
+                "unauthorized: authentication required",
+                [],
+            )
+
+            with self.assertRaisesRegex(SystemExit, "could not determine"):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.github_release.publish_release_chart(
+                        root,
+                        self.chart_release_metadata()["services"][0],
+                        "1.2.0",
+                        False,
+                    )
+
+    def test_publish_release_makes_the_exact_draft_public(self):
+        calls = []
+        self.github_release.run = lambda args, **_kwargs: calls.append(args)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.publish_release(
+                "deploy/stacks/self-managed/v1.2.3", dry_run=False
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "gh",
+                    "release",
+                    "edit",
+                    "deploy/stacks/self-managed/v1.2.3",
+                    "--draft=false",
+                ]
+            ],
+        )
+
+    def test_stack_tag_generates_inventory_before_release_and_uploads_after(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        commit = "a" * 40
+        metadata = self.stack_release_metadata("nvcf-self-managed-stack-inventory.json")
+        calls = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: metadata
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.tag_sha = lambda *_args: commit
+        self.github_release.generate_resolved_stack_inventory = (
+            lambda _root, _tag, _version, _commit, path: calls.append(("generate", Path(path).name))
+        )
+        self.github_release.create_release = (
+            lambda _tag, _title, _notes, draft, dry_run: calls.append(("release", draft, dry_run)) or True
+        )
+        self.github_release.publish_resolved_stack_inventory = (
+            lambda _tag, path: calls.append(("upload", Path(path).name))
+        )
+        self.github_release.publish_release = (
+            lambda _tag, dry_run: calls.append(("publish", dry_run))
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
+
+        self.assertEqual(
+            calls,
+            [
+                ("generate", "nvcf-self-managed-stack-inventory.json"),
+                ("release", True, False),
+                ("upload", "nvcf-self-managed-stack-inventory.json"),
+                ("publish", False),
+            ],
+        )
+
+    def test_stack_tag_preserves_explicit_draft_after_inventory_upload(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        calls = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: self.stack_release_metadata()
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.bool_env = lambda *_args: True
+        self.github_release.tag_sha = lambda *_args: "a" * 40
+        self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
+        self.github_release.create_release = (
+            lambda _tag, _title, _notes, draft, dry_run: calls.append(("release", draft, dry_run)) or True
+        )
+        self.github_release.publish_resolved_stack_inventory = lambda *_args: calls.append("upload")
+        self.github_release.publish_release = lambda *_args: calls.append("publish")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
+
+        self.assertEqual(calls, ["generate", ("release", True, False), "upload"])
+
+    def test_stack_inventory_generation_failure_prevents_partial_release(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        metadata = self.stack_release_metadata()
+        released = []
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: metadata
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.tag_sha = lambda *_args: "b" * 40
+        self.github_release.generate_resolved_stack_inventory = lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("render failed")
+        )
+        self.github_release.create_release = lambda *_args, **_kwargs: released.append(True)
+
+        with self.assertRaisesRegex(RuntimeError, "render failed"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.tag_release(types.SimpleNamespace(tag=tag, metadata="metadata.json"))
+        self.assertEqual(released, [])
+
+    def test_stack_inventory_upload_failure_is_not_suppressed(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(root))
+        tag = "deploy/stacks/self-managed/v1.2.3"
+        metadata = self.stack_release_metadata()
+        self.github_release.repo_root = lambda: root
+        self.github_release.load_metadata = lambda *_args: metadata
+        self.github_release.github_release_mode = lambda: (True, False)
+        self.github_release.tag_sha = lambda *_args: "c" * 40
+        for created in (False, True):
+            with self.subTest(created=created):
+                calls = []
+                self.github_release.generate_resolved_stack_inventory = lambda *_args: calls.append("generate")
+
+                def create(*_args, **_kwargs):
+                    calls.append("release")
+                    return created
+
+                self.github_release.create_release = create
+                self.github_release.publish_resolved_stack_inventory = lambda *_args: (
+                    _ for _ in ()
+                ).throw(RuntimeError("upload failed"))
+                self.github_release.delete_release_after_inventory_failure = lambda *_args: calls.append(
+                    "delete"
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "upload failed"):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.github_release.tag_release(
+                            types.SimpleNamespace(tag=tag, metadata="metadata.json")
+                        )
+                expected = ["generate", "release"]
+                if created:
+                    expected.append("delete")
+                self.assertEqual(calls, expected)
+
+    def test_resolved_stack_inventory_identity_must_match_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inventory.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "source": {
+                            "version": "1.2.3",
+                            "tag": "deploy/stacks/self-managed/v1.2.3",
+                            "commit": "d" * 40,
+                        },
+                        "releases": [{}],
+                        "artifacts": [{}],
+                    }
+                )
+            )
+            self.github_release.validate_resolved_stack_inventory(
+                path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "d" * 40
+            )
+            with self.assertRaisesRegex(SystemExit, "inventory source"):
+                self.github_release.validate_resolved_stack_inventory(
+                    path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "e" * 40
+                )
+
+    def test_existing_release_inventory_is_left_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "inventory.json"
+            asset.write_text("same\n")
+
+            def fake_run(args, **_kwargs):
+                if args[:3] == ["gh", "release", "view"]:
+                    return "inventory.json\n"
+                raise AssertionError(f"unexpected call: {args}")
+
+            self.github_release.run = fake_run
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+
+    def test_missing_release_inventory_is_uploaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "inventory.json"
+            asset.write_text("inventory\n")
+            calls = []
+
+            def fake_run(args, **_kwargs):
+                calls.append(args)
+                if args[:3] == ["gh", "release", "view"]:
+                    return ""
+                if args[:3] == ["gh", "release", "upload"]:
+                    return ""
+                raise AssertionError(f"unexpected call: {args}")
+
+            self.github_release.run = fake_run
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
+
+            self.assertEqual(
+                calls,
+                [
+                    [
+                        "gh",
+                        "release",
+                        "view",
+                        "stack/v1.2.3",
+                        "--json",
+                        "assets",
+                        "--jq",
+                        ".assets[].name",
+                    ],
+                    ["gh", "release", "upload", "stack/v1.2.3", str(asset)],
+                ],
+            )
+
+    def test_incomplete_release_cleanup_uses_exact_tag(self):
+        calls = []
+        self.github_release.run = lambda args, **_kwargs: calls.append(args)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(
+                self.github_release.delete_release_after_inventory_failure(
+                    "deploy/stacks/self-managed/v1.2.3"
+                )
+            )
+        self.assertEqual(
+            calls,
+            [["gh", "release", "delete", "deploy/stacks/self-managed/v1.2.3", "--yes"]],
+        )
+
+    def test_stack_tag_workflow_installs_pinned_inventory_tools(self):
+        """The release workflow must install pinned tools for each artifact type."""
+        workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
+        workflow_env = workflow.split("\njobs:\n", 1)[0]
+        self.assertIn("actions/setup-go@v5", workflow)
+        for pin in (
+            'HELM_VERSION: "3.21.4"',
+            'HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"',
+            'HELMFILE_VERSION: "1.1.9"',
+            'HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"',
+        ):
+            self.assertIn(pin, workflow_env)
+            self.assertEqual(workflow.count(pin), 1)
+        self.assertIn(
+            "NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}",
+            workflow,
+        )
+        self.assertEqual(workflow.count("Install inventory rendering tools"), 1)
+        self.assertIn("Install Helm release tool", workflow)
+        self.assertIn("Install Helmfile inventory tool", workflow)
+        self.assertIn("inputs.release_tag || github.ref_name", workflow)
+        self.assertIn("Prepare existing chart tag for replay", workflow)
+        self.assertIn("NVCF_RELEASE_SOURCE_ROOT=", workflow)
+        self.assertIn("HELM_REGISTRY_CONFIG: ${{ runner.temp }}/helm-registry-config.json", workflow)
+        self.assertIn('release_tag must be a deploy/helm/*/v* tag', workflow)
+        self.assertLess(
+            workflow.index("Install Helm release tool"),
+            workflow.index("Validate tag and create release notes"),
+        )
+
+    def test_stack_inventory_preflight_renders_without_release_publication(self):
+        workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
+        self.assertIn("inventory_tag:", workflow)
+        self.assertIn("name: stack inventory preflight", workflow)
+        self.assertIn("inputs.inventory_tag != ''", workflow)
+        self.assertIn('token: ${{ github.token }}', workflow)
+        self.assertIn("Render tagged inventory without publishing", workflow)
+        self.assertIn("--generate-stack-inventory", workflow)
+        self.assertIn("deploy/stacks/nvcf-compute-plane/v*", workflow)
+        self.assertIn("deploy/stacks/observability/v*", workflow)
+        preflight = workflow.index("inventory-preflight:")
+        tag_release = workflow.index("tag-release-notes:")
+        preflight_workflow = workflow[preflight:tag_release]
+        self.assertIn("--inventory-config", preflight_workflow)
+        self.assertIn("grep -q '^states:'", preflight_workflow)
+        self.assertIn("predates its per-stack inventory states", preflight_workflow)
+        self.assertIn("--allow-unavailable-source-charts", preflight_workflow)
+        self.assertIn("actions/upload-artifact@v4", preflight_workflow)
+        self.assertIn("if-no-files-found: error", preflight_workflow)
+        self.assertNotIn("github-release tag", preflight_workflow)
+
+    def test_release_replay_requires_an_exact_tag_ref(self):
+        """A tag-shaped branch must not satisfy manual replay validation."""
+        workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
+        tag_check = 'git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"'
+        exact_checkout = '"refs/tags/${RELEASE_TAG}"'
+        replay_step = workflow.split("- name: Prepare existing chart tag for replay", 1)[1]
+        replay_step = replay_step.split("- uses: actions/setup-go@v5", 1)[0]
+
+        self.assertIn(tag_check, replay_step)
+        self.assertGreaterEqual(replay_step.count(exact_checkout), 2)
+        self.assertLess(replay_step.index(tag_check), replay_step.rindex(exact_checkout))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            release_tag = "deploy/helm/example/v1.2.3"
+            self.init_repo(root)
+            git(root, "commit", "--allow-empty", "-m", "seed")
+            git(root, "branch", release_tag)
+            verify_tag = [
+                "git",
+                "show-ref",
+                "--verify",
+                "--quiet",
+                f"refs/tags/{release_tag}",
+            ]
+
+            branch_only = subprocess.run(verify_tag, cwd=root, check=False)
+            self.assertNotEqual(branch_only.returncode, 0)
+            git(root, "tag", release_tag)
+            tagged = subprocess.run(verify_tag, cwd=root, check=False)
+            self.assertEqual(tagged.returncode, 0)
+
+    def publish_and_capture_comments(self, version):
+        """Publish a tag for `version` from a release branch, recording any comments.
+
+        The repo is shaped like the real thing: a release branch holding the 3.2.x
+        line, with a higher dev tag on the default branch that this branch never
+        contained.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            remote = Path(tmp) / "remote.git"
+            root.mkdir()
+            subprocess.run(
+                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.nvca_repo_with_tag(root)
+            git(root, "remote", "add", "origin", str(remote))
+            git(root, "push", "origin", "HEAD")
+            self.commit_backport(root, "feat(nvca): default branch only")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.0")
+            git(root, "checkout", "-b", "release-src/compute-plane-services/nvca/v3.2", "HEAD~1")
+            self.commit_backport(root, "fix(nvca): backport")
+
+            comments = []
+            self.github_release.create_release = lambda *a, **k: True
+            self.github_release.comment_release_on_pull_requests = (
+                lambda root, service, tag, version, since_tag: comments.append((tag, version, since_tag))
+            )
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_tag_for_version(
+                    root, self.NVCA_SERVICE, version, dry_run=False, draft=False, reason="test"
+                )
+            return comments
+
+    def test_publish_tag_comments_on_a_stable_release(self):
+        comments = self.publish_and_capture_comments("3.2.1")
+        self.assertEqual(
+            comments,
+            [("src/compute-plane-services/nvca/v3.2.1", "3.2.1", "src/compute-plane-services/nvca/v3.2.0")],
+            "the range must be bounded by the newest tag on this branch, not the highest tag overall",
+        )
+
+    def test_publish_tag_stays_quiet_for_a_prerelease(self):
+        # A prerelease is an internal checkpoint, not something to announce on
+        # a pull request. Nothing publishes one automatically now that the
+        # dev-prerelease model is retired, but a hand-cut rc still reaches
+        # publish_tag_for_version through the release-candidate path.
+        self.assertEqual(self.publish_and_capture_comments("3.4.0-rc.1"), [])
+
+
+class SuccessCommentTest(unittest.TestCase):
+    """The comment semantic-release posts must name the tag it actually created.
+
+    semantic-release-monorepo wraps the `success` step with a transform that
+    rewrites `nextRelease.version` to `<package.json name>-v<version>`, ignoring
+    the `tagFormat` configured here. byoo-otel-collector is the one service whose
+    tag_format injects an upstream prefix, so the default comment advertises
+    `byoo-otel-collector-v0.2.5` for a tag that is really
+    `.../v0.160.0-nv-0.2.5`. The transform leaves `nextRelease.gitTag` alone.
+    """
+
+    TAG_FORMAT = "src/compute-plane-services/byoo-otel-collector/v0.160.0-nv-${version}"
+
+    def setUp(self):
+        self.github_release = load_github_release()
+
+    def github_plugin_options(self):
+        service_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, service_dir, ignore_errors=True)
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "NVIDIA/nvcf"}):
+            self.github_release.write_semantic_release_files(
+                service_dir,
+                "byoo-otel-collector",
+                self.TAG_FORMAT,
+                publish=True,
+                draft=False,
+            )
+        config = json.loads((service_dir / ".releaserc.json").read_text())
+        for plugin in config["plugins"]:
+            if isinstance(plugin, list) and plugin[0] == "@semantic-release/github":
+                return plugin[1]
+        self.fail("@semantic-release/github is not configured")
+
+    def test_success_comment_names_the_published_git_tag(self):
+        self.assertIn("${nextRelease.gitTag}", self.github_plugin_options()["successComment"])
+
+    def test_success_comment_does_not_name_the_rewritten_version(self):
+        self.assertNotIn("${nextRelease.version}", self.github_plugin_options()["successComment"])
+
+    def test_success_comment_links_the_release_it_announces(self):
+        self.assertIn(
+            "https://github.com/NVIDIA/nvcf/releases/tag/${nextRelease.gitTag}",
+            self.github_plugin_options()["successComment"],
+        )
+
+    def release_notes_writer_opts(self):
+        service_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, service_dir, ignore_errors=True)
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "NVIDIA/nvcf"}):
+            self.github_release.write_semantic_release_files(
+                service_dir,
+                "byoo-otel-collector",
+                self.TAG_FORMAT,
+                publish=True,
+                draft=False,
+            )
+        config = json.loads((service_dir / ".releaserc.json").read_text())
+        for plugin in config["plugins"]:
+            if isinstance(plugin, list) and plugin[0] == "@semantic-release/release-notes-generator":
+                return plugin[1]["writerOpts"]
+        self.fail("@semantic-release/release-notes-generator has no writerOpts")
+
+    def test_release_notes_heading_names_the_published_git_tag(self):
+        self.assertIn("{{currentTag}}", self.release_notes_writer_opts()["headerPartial"])
+
+    def test_release_notes_heading_does_not_name_the_rewritten_version(self):
+        # `version` is what semantic-release-monorepo rewrites, and the upstream
+        # template references it twice: once linked, once bare as `{{~version}}`
+        # with a whitespace-control tilde. Checking only `{{version}}` would miss
+        # the second and leave the unlinked heading still wrong.
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        for token in ("{{version}}", "{{~version}}"):
+            self.assertNotIn(token, partial)
+
+    def test_release_notes_heading_still_links_the_compare_range(self):
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        self.assertIn("/compare/{{previousTag}}...{{currentTag}}", partial)
+
+    def test_success_comment_wording_matches_the_kind_of_thing_it_is_posted_on(self):
+        # Pins both arms and their order. Asserting only that `issue.pull_request`
+        # appears would still pass with the arms swapped, which would tell every
+        # reader the opposite of the truth. Rendering the template for real needs
+        # a Lodash engine, and this suite runs on python3 alone.
+        self.assertIn(
+            "${issue.pull_request ? 'PR is included' : 'issue has been resolved'}",
+            self.github_plugin_options()["successComment"],
+        )
 
 
 if __name__ == "__main__":

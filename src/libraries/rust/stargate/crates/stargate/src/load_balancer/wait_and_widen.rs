@@ -25,7 +25,7 @@ use rand::Rng;
 
 use super::{
     ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
-    LoadBalancerRequest, Ttft, ttft,
+    LoadBalancerDecision, LoadBalancerRequest, Ttft, ttft,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 use cache_affinity::CacheAffinitySelector;
@@ -56,6 +56,8 @@ pub(super) struct WaitAndWidenConfig {
     pub(super) seed: Option<String>,
     pub(super) cache_affinity_virtual_nodes: usize,
     pub(super) cache_affinity_backend_selection_count: Option<usize>,
+    pub(super) cache_affinity_input_tokens_scale: f64,
+    pub(super) cache_affinity_wait: Duration,
     queue_slo: Option<RangeInclusive<Duration>>,
     pub(super) ttft_bucket_size: Duration,
     pub(super) next_bucket_unlock_factor: f64,
@@ -66,12 +68,14 @@ pub(super) struct WaitAndWidenConfig {
 }
 
 impl WaitAndWidenConfig {
-    pub(super) fn from_algorithm_config(config: &LoadBalancerAlgorithmConfig) -> Self {
+    pub(super) fn from_algorithm_config(
+        config: &LoadBalancerAlgorithmConfig,
+    ) -> anyhow::Result<Self> {
         let comparator = config.comparator();
         let config = config
             .wait_and_widen_settings()
             .expect("wait_and_widen settings should match load-balancer algorithm");
-        Self {
+        Ok(Self {
             comparator,
             seed: config.seed.clone(),
             // Zero virtual nodes would make affinity routing degenerate; keep the historical minimum.
@@ -79,6 +83,10 @@ impl WaitAndWidenConfig {
             cache_affinity_backend_selection_count: config
                 .cache_affinity_backend_selection_count
                 .filter(|count| *count > 0),
+            cache_affinity_input_tokens_scale: config
+                .validated_cache_affinity_input_tokens_scale()
+                .map_err(anyhow::Error::msg)?,
+            cache_affinity_wait: Duration::from_millis(config.cache_affinity_wait_ms.unwrap_or(0)),
             queue_slo: config
                 .max_queue_time_floor_ms
                 .zip(config.max_queue_time_ceil_ms)
@@ -92,7 +100,7 @@ impl WaitAndWidenConfig {
             max_queued: config.max_queued.unwrap_or(0),
             ignore_queue_time: config.ignore_queue_time.unwrap_or(false),
             ignore_input_processing_time: config.ignore_input_processing_time.unwrap_or(false),
-        }
+        })
     }
 
     pub(super) fn max_queue_time(&self, request: &LoadBalancerRequest<'_>) -> Option<Duration> {
@@ -133,11 +141,7 @@ impl WaitAndWidenConfig {
     ) -> Ordering {
         match self.comparator {
             None => compare_least_queue_time(candidate_a, ttft_a, candidate_b, ttft_b),
-            Some(ClusterComparator::Ttft)
-                if !self.ignore_queue_time && !self.ignore_input_processing_time =>
-            {
-                ttft_a.ttft_ms.total_cmp(&ttft_b.ttft_ms)
-            }
+            Some(ClusterComparator::Ttft) => ttft_a.comparator_ms.total_cmp(&ttft_b.comparator_ms),
             Some(ClusterComparator::QueueTime) => ttft_a.queue_ms.total_cmp(&ttft_b.queue_ms),
             Some(comparator) => comparator.compare(request, candidate_a, candidate_b),
         }
@@ -152,25 +156,89 @@ impl LoadBalancer for WaitAndWidenLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
-        if let Some(affinity_indices) =
-            self.cache_affinity
-                .candidate_indices(&self.config, request, candidates)
-            && let Some(choice) =
-                self.choose_from_candidate_indices(request, candidates, affinity_indices.as_slice())
-        {
-            return Some(choice);
-        }
+        self.decide(request, candidates).selected()
+    }
 
-        if candidates.is_empty() {
-            return None;
-        }
-        let config = &self.config;
-        fast_path::choose_from_single_bucket(config, request, candidates)
-            .or_else(|| self.choose_from_candidate_iter(request, candidates.iter(), candidates))
+    fn decide(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+    ) -> LoadBalancerDecision {
+        self.decide_at(request, candidates, request.received_at.elapsed())
     }
 }
 
 impl WaitAndWidenLoadBalancer {
+    pub(super) fn decide_at(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+        elapsed: Duration,
+    ) -> LoadBalancerDecision {
+        if let Some(affinity_indices) =
+            self.cache_affinity
+                .candidate_indices(&self.config, request, candidates)
+        {
+            // Every attempt checks affinity first, even after the hold expires.
+            // Affinity uses the same TTFT buckets, admission and comparator as
+            // global routing. A busy ring primary must not bypass those rules.
+            let affinity_bucket_wait = match self.decide_from_candidate_indices(
+                request,
+                candidates,
+                &affinity_indices,
+                self.config.cache_affinity_input_tokens_scale,
+                elapsed,
+            ) {
+                LoadBalancerDecision::Selected(choice) => {
+                    return LoadBalancerDecision::Selected(choice);
+                }
+                LoadBalancerDecision::Wait(delay) => Some(delay),
+                LoadBalancerDecision::Unavailable => None,
+            };
+            if elapsed < self.config.cache_affinity_wait {
+                let remaining = self.config.cache_affinity_wait - elapsed;
+                return LoadBalancerDecision::Wait(
+                    affinity_bucket_wait.map_or(remaining, |delay| delay.min(remaining)),
+                );
+            }
+
+            // Global routing includes the affinity group at full prefill cost.
+            // Bucket zero opens at X; subsequent buckets use time since X.
+            return match self.decide_from_candidate_iter(
+                request,
+                candidates.iter(),
+                candidates,
+                1.0,
+                elapsed.saturating_sub(self.config.cache_affinity_wait),
+            ) {
+                LoadBalancerDecision::Selected(mut choice) => {
+                    choice.rank_depth = affinity_indices.len() + 1;
+                    LoadBalancerDecision::Selected(choice)
+                }
+                LoadBalancerDecision::Wait(delay) => LoadBalancerDecision::Wait(
+                    affinity_bucket_wait.map_or(delay, |affine_delay| affine_delay.min(delay)),
+                ),
+                LoadBalancerDecision::Unavailable => affinity_bucket_wait.map_or(
+                    LoadBalancerDecision::Unavailable,
+                    LoadBalancerDecision::Wait,
+                ),
+            };
+        }
+
+        if candidates.is_empty() {
+            return LoadBalancerDecision::Unavailable;
+        }
+        if let Some(choice) =
+            fast_path::choose_from_single_bucket(&self.config, request, candidates)
+        {
+            return LoadBalancerDecision::Selected(choice);
+        }
+        // Non-affinity requests keep the existing explicit routing-retry policy.
+        self.decide_from_candidate_iter(request, candidates.iter(), candidates, 1.0, elapsed)
+            .selected()
+            .into()
+    }
+
     pub(super) fn new(config: WaitAndWidenConfig) -> Self {
         Self {
             config,
@@ -187,36 +255,44 @@ impl WaitAndWidenLoadBalancer {
         self.cache_affinity.cached_key_bytes()
     }
 
-    pub(super) fn choose_from_candidate_indices(
+    pub(super) fn decide_from_candidate_indices(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         candidate_indices: &[usize],
-    ) -> Option<LoadBalancerCandidateChoice> {
+        input_tokens_scale: f64,
+        elapsed: Duration,
+    ) -> LoadBalancerDecision {
         if candidate_indices.is_empty() {
-            return None;
+            return LoadBalancerDecision::Unavailable;
         }
-        if let Some(choice) =
-            self.choose_from_two_ready_affinity_candidates(request, candidates, candidate_indices)
-        {
-            return Some(choice);
+        if let Some(choice) = self.choose_from_two_ready_candidates(
+            request,
+            candidates,
+            candidate_indices,
+            input_tokens_scale,
+        ) {
+            return LoadBalancerDecision::Selected(choice);
         }
 
         // Cache-affinity selection stores indices into the current candidate
         // slice. Routing over references avoids cloning snapshots into a
         // temporary Vec for every affinity hit.
-        self.choose_from_candidate_iter(
+        self.decide_from_candidate_iter(
             request,
             candidate_indices.iter().map(|index| &candidates[*index]),
             candidates,
+            input_tokens_scale,
+            elapsed,
         )
     }
 
-    fn choose_from_two_ready_affinity_candidates(
+    fn choose_from_two_ready_candidates(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         candidate_indices: &[usize],
+        input_tokens_scale: f64,
     ) -> Option<LoadBalancerCandidateChoice> {
         let &[index_a, index_b] = candidate_indices else {
             return None;
@@ -238,6 +314,7 @@ impl WaitAndWidenLoadBalancer {
             ttft(
                 candidate,
                 request.input_tokens,
+                input_tokens_scale,
                 request.priority,
                 self.config.ignore_queue_time,
                 self.config.ignore_input_processing_time,
@@ -276,44 +353,48 @@ impl WaitAndWidenLoadBalancer {
         ))
     }
 
-    fn choose_from_candidate_iter<'a>(
+    fn decide_from_candidate_iter<'a>(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: impl ExactSizeIterator<Item = &'a RoutedClusterSnapshot>,
         candidate_index_source: &[RoutedClusterSnapshot],
-    ) -> Option<LoadBalancerCandidateChoice> {
+        input_tokens_scale: f64,
+        elapsed: Duration,
+    ) -> LoadBalancerDecision {
         // TTFT determines bucket eligibility and unlock timing. The configured
         // comparator is applied after the unlocked candidates are sampled.
         let mut ttfts = CandidateTtftAccumulator::new(&self.config, request, candidates.len());
         if let RequestExclusions::One(excluded_cluster_id) = RequestExclusions::from(request) {
             for candidate in candidates {
                 if candidate.cluster_id != excluded_cluster_id {
-                    ttfts.push_ttft(candidate);
+                    ttfts.push_ttft(candidate, input_tokens_scale);
                 }
             }
         } else if request.has_excluded_clusters() || ttfts.filters_by_queue_slo() {
             for candidate in candidates {
                 if !request.excludes_cluster(&candidate.cluster_id) {
-                    ttfts.push_ttft(candidate);
+                    ttfts.push_ttft(candidate, input_tokens_scale);
                 }
             }
         } else {
             for candidate in candidates {
-                ttfts.push_ttft(candidate);
+                ttfts.push_ttft(candidate, input_tokens_scale);
             }
         }
 
         if ttfts.is_empty() || !ttfts.has_finite_fastest_ttft() {
-            return None;
+            return LoadBalancerDecision::Unavailable;
         }
 
         let bucket_size_ms = self.config.ttft_bucket_size.as_secs_f64() * 1000.0;
         if ttfts.all_in_first_bucket(bucket_size_ms) {
-            return self.choose_from_unlocked_candidates(
-                request,
-                ttfts.into_ttfts(),
-                candidate_index_source,
-            );
+            return self
+                .choose_from_unlocked_candidates(
+                    request,
+                    ttfts.into_ttfts(),
+                    candidate_index_source,
+                )
+                .into();
         }
 
         let mut ttfts = ttfts.into_ttfts();
@@ -324,11 +405,12 @@ impl WaitAndWidenLoadBalancer {
                 .then_with(|| candidate_a.cluster_id.cmp(&candidate_b.cluster_id))
         });
 
-        let mut slept_for_ms = request.received_at.elapsed().as_secs_f64() * 1000.0;
+        let mut slept_for_ms = elapsed.as_secs_f64() * 1000.0;
         let mut prev_bucket_start_ttft = None;
         let mut unlocked_count = 0;
+        let mut next_wait = None;
 
-        for (_, ttft) in &ttfts {
+        for (index, (_, ttft)) in ttfts.iter().enumerate() {
             if !ttft.ttft_ms.is_finite() {
                 break;
             }
@@ -338,6 +420,14 @@ impl WaitAndWidenLoadBalancer {
             if gap_ms > bucket_size_ms {
                 let sleep_for_at_least_ms = gap_ms * self.config.next_bucket_unlock_factor;
                 if slept_for_ms < sleep_for_at_least_ms {
+                    if ttfts[index..].iter().any(|(candidate, ttft)| {
+                        ttft.ttft_ms.is_finite() && has_capacity(candidate, self.config.max_queued)
+                    }) {
+                        next_wait = Duration::try_from_secs_f64(
+                            (sleep_for_at_least_ms - slept_for_ms) / 1000.0,
+                        )
+                        .ok();
+                    }
                     break;
                 }
                 slept_for_ms -= sleep_for_at_least_ms;
@@ -349,6 +439,15 @@ impl WaitAndWidenLoadBalancer {
 
         ttfts.truncate(unlocked_count);
         self.choose_from_unlocked_candidates(request, ttfts, candidate_index_source)
+            .map_or_else(
+                || {
+                    next_wait.map_or(
+                        LoadBalancerDecision::Unavailable,
+                        LoadBalancerDecision::Wait,
+                    )
+                },
+                LoadBalancerDecision::Selected,
+            )
     }
 
     fn choose_from_unlocked_candidates(

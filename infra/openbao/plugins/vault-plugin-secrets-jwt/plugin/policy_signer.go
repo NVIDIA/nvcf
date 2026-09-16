@@ -22,9 +22,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/go-jose/go-jose/v4"
 	"github.com/hashicorp/vault/sdk/helper/errutil"
 	"github.com/hashicorp/vault/sdk/helper/keysutil"
-	"gopkg.in/square/go-jose.v2"
 	"strings"
 )
 
@@ -81,7 +81,10 @@ func (ps *PolicySigner) Sign(payload []byte) (*jose.JSONWebSignature, error) {
 		return nil, err
 	}
 
-	return jose.ParseSigned(bytes.NewBuffer(encodedSignature).String())
+	return jose.ParseSigned(
+		bytes.NewBuffer(encodedSignature).String(),
+		[]jose.SignatureAlgorithm{ps.SignatureAlgorithm},
+	)
 }
 
 func (ps *PolicySigner) sign(input []byte) ([]byte, error) {

@@ -27,6 +27,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -42,6 +43,7 @@ import (
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -113,6 +115,12 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 		return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 	}
 
+	// A shared claim (ReadWriteMany selection) and a running shared writer are
+	// used by every request for the handle; the claim is reclaimed by the
+	// reference sweep and the writer only once it has finished.
+	if regularModelCacheKeepsSharedClaim(req) {
+		return c.cleanupSharedClaimRequestArtifacts(ctx, initJob, rwPVC.Name)
+	}
 	// cleanup InitJob & its pods, this will clear the rw-pvc also
 	backgroundDeletion := metav1.DeletePropagationBackground
 	err = c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).Delete(ctx, initJob.Name, metav1.DeleteOptions{
@@ -175,8 +183,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			if (err != nil && errors.IsNotFound(err)) || (pvObjList != nil && len(pvObjList.Items) == 0) {
 				err = c.SetupInitCacheJobBlockDevice(ctx, rwPVC, initJob, req)
 				if err != nil {
-					c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-						string(types.EventCategoryModelCaching), "failed caching setup, resort to non-caching")
+					c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+						string(types.EventCategoryModelCaching), "failed caching setup, resort to non-caching", nil)
 					log.WithError(err).Error("failed SetupInitCacheJobBlockDevice, model caching will be disabled")
 					return ModelCachingFailed, ""
 				}
@@ -191,8 +199,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 					if err != nil {
 						log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
 					}
-					c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-						string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching")
+					c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+						string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching", nil)
 					metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
 					mc = ModelCachingFailed
 				}
@@ -206,8 +214,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			if err != nil {
 				log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
 			}
-			c.bk8s.eventRecorder.Eventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryModelCaching), "%v failed, resort to non-caching", initJob.Name)
+			c.bk8s.EmitICMSEventf(req, v1.EventTypeWarning,
+				string(types.EventCategoryModelCaching), "%v failed, resort to non-caching", nil, initJob.Name)
 			reason := c.getInitCacheJobFailureReason(ctx, initJob)
 			metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason, string(types.HelmCacheBackendNVMesh))
 			return ModelCachingFailed, ""
@@ -220,8 +228,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 				if err != nil {
 					log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
 				}
-				c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-					string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching")
+				c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+					string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching", nil)
 				metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
 				metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCSetupFailed, string(types.HelmCacheBackendNVMesh))
 				mc = ModelCachingFailed
@@ -246,8 +254,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			// TODO: Perform Deeper Cleanup on reconciliation
 			log.WithError(err).Errorf("failed to cleanup ModelCaching resources, needs manual cleanup")
 		}
-		c.bk8s.eventRecorder.Eventf(req, v1.EventTypeWarning,
-			string(types.EventCategoryModelCaching), "%v bind failed, resort to non-caching", roPVCName)
+		c.bk8s.EmitICMSEventf(req, v1.EventTypeWarning,
+			string(types.EventCategoryModelCaching), "%v bind failed, resort to non-caching", nil, roPVCName)
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventPVCModelCachingError)...).Inc()
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
 		metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed, string(types.HelmCacheBackendNVMesh))
@@ -579,6 +587,41 @@ func (c K8sComputeBackend) waitForVolumeDetach(ctx context.Context, volumeName s
    1. Name -> $LaunchSpecification.CacheHandle-ro-pvc
    2. /spec/accessModes -> ReadOnlyMany
 */
+// readerMountOptionsForRequest returns the mount options for the read-only PV
+// that serves req. A durable request carries the catalog's readerMountOptions in
+// its persisted selection; those are required and the configured options are
+// appended except where they would negate one. Requests without a durable
+// selection keep the configured options unchanged, as before.
+func (c K8sComputeBackend) readerMountOptionsForRequest(ctx context.Context, req *nvcav2beta1.ICMSRequest) []string {
+	configured := c.bk8s.csiVolumeMountOptions
+	if req == nil {
+		return configured
+	}
+	raw := req.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return configured
+	}
+	log := core.GetLogger(ctx)
+	selection, err := nvcastorage.ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		log.WithError(err).Warnf("ignoring invalid model cache selection on %v/%v for reader mount options",
+			req.Namespace, req.Name)
+		return configured
+	}
+	if selection.Mode != nvcastorage.ModelCacheSelectionDurable {
+		return configured
+	}
+	merged, dropped := nvcastorage.MergeReaderMountOptions(selection.RequiredMountOptions, configured)
+	if len(dropped) != 0 {
+		log.WithFields(logrus.Fields{
+			"request":  req.Namespace + "/" + req.Name,
+			"ignored":  nvcastorage.RedactMountOptionValues(dropped),
+			"required": nvcastorage.RedactMountOptionValues(selection.RequiredMountOptions),
+		}).Info("ignoring configured cache mount options that conflict with the required ones")
+	}
+	return merged
+}
+
 func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 	rwPVC *v1.PersistentVolumeClaim, initJobName string, req *nvcav2beta1.ICMSRequest, mf mutateFunc) (ROPVCSetupPhase, error) {
 	log := core.GetLogger(ctx)
@@ -695,7 +738,7 @@ func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 			// set the new PVCRef
 			pvObj.Spec.ClaimRef = &newPVCRef
 			pvObj.Spec.AccessModes = ROAccessMode
-			pvObj.Spec.MountOptions = c.bk8s.csiVolumeMountOptions
+			pvObj.Spec.MountOptions = c.readerMountOptionsForRequest(ctx, req)
 
 			_, updateErr := c.clients.K8s.CoreV1().PersistentVolumes().Update(ctx, pvObj, metav1.UpdateOptions{})
 			return updateErr

@@ -6,7 +6,10 @@ This directory contains the Helm chart for deploying the NVCF API service on Kub
 
 The chart packages the NVCF API deployment together with a post-install account bootstrap hook.
 
-The default chart values do not set the required image registries and repositories for the API or the account bootstrap job. They must be supplied through an additional values file at install time, and access to those images must be arranged separately.
+The default chart values do not set the required image registry and repository
+for the API. Supply them through an additional values file at install time.
+The account bootstrap job defaults to the public
+`docker.io/alpine/k8s:1.37.0` image and can be redirected to a mirror.
 
 Example:
 
@@ -18,9 +21,9 @@ api:
     tag: <appVersion>
   accountBootstrap:
     image:
-      registry: <your-registry>
-      repository: <your-org>/nvcf-account-bootstrap
-      tag: <version>
+      registry: <your-mirror-registry>
+      repository: <your-org>/alpine-k8s
+      tag: "1.37.0"
 ```
 
 ## Prerequisites
@@ -77,7 +80,7 @@ The default chart configuration lives in `nvcf-api/values.yaml`.
 Important settings to review before deployment:
 
 - `api.image.*` for the API container image
-- `api.accountBootstrap.image.*` for the post-install bootstrap job image
+- `api.accountBootstrap.image.*` to override the public post-install bootstrap job image
 - `api.imagePullSecrets` for private registry access
 - `api.replicaCount`, resource requests, and HPA settings for your environment
 - `api.accountBootstrap.accountName`, `api.accountBootstrap.adminClientId`, and `api.accountBootstrap.registryCredentials` for initial account configuration. Use `registryCredentials: []` to create the account without system-provisioned registry credentials.
@@ -122,4 +125,5 @@ Key points to be noted:
 
 ## Notes
 
-- If you publish or mirror the required images into another registry, set the image registry, repository, tag, and pull secret values explicitly in your override file.
+- If you mirror an image into another registry, set its registry, repository,
+  tag, and pull secret values explicitly in your override file.

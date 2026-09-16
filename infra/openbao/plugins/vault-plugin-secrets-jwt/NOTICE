@@ -42,6 +42,8 @@ changes were made to the original work:
    github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt so the
    module resolves inside this repository. The friendlyid-go requirement was
    removed. Go, Vault, and security-sensitive dependency versions were updated.
+   plugincontainer was updated to v0.5.0 so the plugin uses the split Moby API
+   and client modules instead of the legacy github.com/docker/docker module.
 
 7. plugin/config.go: the unsupported-signature-algorithm error is returned
    rather than discarded. It previously reported success, so the key was never
@@ -59,6 +61,13 @@ changes were made to the original work:
    GitHub Actions workflows, goreleaser configuration, the upstream Dockerfile,
    install script, Makefile and linter configuration. Source, tests, and
    license material were retained in full.
+
+11. plugin/backend.go, plugin/config.go, plugin/path_config.go,
+    plugin/path_config_test.go, plugin/path_jwks.go, plugin/path_jwks_test.go,
+    plugin/path_sign.go, plugin/path_sign_test.go, plugin/policy_signer.go, and
+    test/jwtverify/jwtverify.go: JSON Web Signature and JWT handling was
+    migrated from square/go-jose v2 to go-jose v4. Parser calls now explicitly
+    restrict accepted signature algorithms to the configured supported set.
 
 Files carrying an NVIDIA copyright header are NVIDIA-authored. Every
 upstream-originated file retains the upstream Outfox, Inc. header. AGENTS.md

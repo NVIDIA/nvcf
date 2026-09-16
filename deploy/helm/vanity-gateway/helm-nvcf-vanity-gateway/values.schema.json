@@ -110,6 +110,10 @@
             "nvcfApiEndpoint": {
               "$ref": "#/definitions/nonEmptyString"
             },
+            "llmGatewayEndpoint": {
+              "type": "string",
+              "pattern": "^$|^https?://[^/]+/?$"
+            },
             "otelExporterOtlpEndpoint": {
               "type": "string"
             },
@@ -142,10 +146,6 @@
                   "$ref": "#/definitions/vanityRoutes"
                 }
               },
-              "required": [
-                "openai",
-                "vanity"
-              ],
               "additionalProperties": true
             }
           },
@@ -189,7 +189,122 @@
         "config",
         "mappingConfig"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mappingConfig": {
+                "properties": {
+                  "v2config": {
+                    "properties": {
+                      "openai": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "chatCompletions": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "chatCompletions"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "responses": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "responses"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "embeddings": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "embeddings"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "openai"
+                    ]
+                  }
+                },
+                "required": [
+                  "v2config"
+                ]
+              }
+            },
+            "required": [
+              "mappingConfig"
+            ]
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "properties": {
+                  "llmGatewayEndpoint": {
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "llmGatewayEndpoint"
+                ]
+              }
+            },
+            "required": [
+              "config"
+            ]
+          }
+        }
+      ]
     }
   },
   "definitions": {
@@ -204,25 +319,25 @@
           "$ref": "#/definitions/nonEmptyString"
         },
         "chatCompletions": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "completions": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         },
         "embeddings": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "responses": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "imageGenerations": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         },
         "imageEdits": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAIMultipartEndpointRoutes"
         },
         "imageVariations": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAIMultipartEndpointRoutes"
         }
       },
       "additionalProperties": {
@@ -233,6 +348,12 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/openAIModelRoute"
+      }
+    },
+    "openAIMultipartEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAIMultipartModelRoute"
       }
     },
     "openAIModelRoute": {
@@ -278,13 +399,97 @@
         },
         "shadowCancelOnClientDisconnect": {
           "type": "boolean"
+        },
+        "functionType": {
+          "enum": [
+            "LLM"
+          ]
         }
       },
       "required": [
         "modelName",
         "functionID"
       ],
+      "$comment": "The gateway reads the shadows key and the legacy shadow keys in any letter case, so the shadows rules use (?i) patterns. That flag is Go regexp syntax, which Helm uses; ECMA-262 validators do not accept it. The legacy keys keep the exact-name checks above so their behavior is unchanged.",
+      "patternProperties": {
+        "^(?i)shadows$": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadowTarget"
+          }
+        }
+      },
+      "if": {
+        "$comment": "True when at least one key is spelled shadows in any case.",
+        "not": {
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?i)shadows$"
+            }
+          }
+        }
+      },
+      "then": {
+        "$comment": "A route uses shadows or the legacy shadow keys, never both, in any spelling.",
+        "propertyNames": {
+          "not": {
+            "pattern": "^(?i)shadow(modelname|modelnames|percentage|samplingmethod|cancelonclientdisconnect)$"
+          }
+        }
+      },
       "additionalProperties": true
+    },
+    "openAIMultipartModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAINonLLMModelRoute"
+        },
+        {
+          "type": "object",
+          "$comment": "Shadow replay rewrites JSON bodies, so the gateway rejects shadows on multipart image routes. An empty list is accepted, as in the gateway.",
+          "patternProperties": {
+            "^(?i)shadows$": {
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+    "shadowSamplingMethod": {
+      "type": "string",
+      "enum": [
+        "",
+        "random",
+        "perBearerKey"
+      ]
+    },
+    "shadowTarget": {
+      "type": "object",
+      "$comment": "Entry keys match in any letter case, as in the gateway. The not/propertyNames pair requires a modelName key in some spelling, since required is exact-match.",
+      "patternProperties": {
+        "^(?i)modelname$": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "^(?i)percentage$": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "^(?i)samplingmethod$": {
+          "$ref": "#/definitions/shadowSamplingMethod"
+        },
+        "^(?i)cancelonclientdisconnect$": {
+          "type": "boolean"
+        }
+      },
+      "not": {
+        "propertyNames": {
+          "not": {
+            "pattern": "^(?i)modelname$"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "vanityRoutes": {
       "type": "object",
@@ -341,6 +546,91 @@
         "functionID"
       ],
       "additionalProperties": true
+    },
+    "openAILLMModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAIModelRoute"
+        },
+        {
+          "if": {
+            "properties": {
+              "functionType": {
+                "const": "LLM"
+              }
+            },
+            "required": [
+              "functionType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "usePexec": {
+                "enum": [
+                  false
+                ]
+              },
+              "outgoingPathOverride": {
+                "enum": [
+                  ""
+                ]
+              },
+              "sessionTimeout": {
+                "enum": [
+                  0
+                ]
+              },
+              "customHeaders": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "X-Priority"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "x-priority"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "X-priority"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "openAILLMEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAILLMModelRoute"
+      }
+    },
+    "openAINonLLMModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAIModelRoute"
+        },
+        {
+          "not": {
+            "required": [
+              "functionType"
+            ]
+          }
+        }
+      ]
+    },
+    "openAINonLLMEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAINonLLMModelRoute"
+      }
     }
   },
   "additionalProperties": true

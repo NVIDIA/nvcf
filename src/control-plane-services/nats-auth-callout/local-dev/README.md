@@ -31,6 +31,7 @@ devspace nv-core kind create
 ```
 
 This will give you an interactive prompt - select the **basic cluster no gpu** option. These configurations are pre-configured for:
+
 - Ingress to work correctly with kind
 - Proper node configuration for development
 
@@ -53,64 +54,83 @@ The nvcf-nats-auth-callout-service service supports multiple deployment profiles
 ### Development Mode Commands
 
 **Basic Development**:
+
 ```bash
 devspace dev
 ```
+
 Starts development environment with basic functionality (no observability).
 
 **Development with Tracing**:
+
 ```bash
 devspace dev -p tracing
 ```
+
 Enables OpenTelemetry tracing with OTLP collector integration.
 
 **Development with Metrics**:
+
 ```bash
 devspace dev -p metrics
 ```
+
 Enables Prometheus metrics collection and ServiceMonitor resources.
 
 **Development with Full Observability**:
+
 ```bash
 devspace dev -p obs
 ```
+
 Enables both tracing and metrics for complete observability stack.
 
 **Development with Debian Base Image**:
+
 ```bash
 devspace dev -p debian
 ```
+
 Uses Debian-based development container instead of Alpine (can be combined with other profiles).
 
 ### Production Deployment Commands
 
 **Basic Production Deployment**:
+
 ```bash
 devspace deploy
 ```
+
 Deploys using production images (no observability).
 
 **Production Images with Tracing**:
+
 ```bash
 devspace deploy -p tracing
 ```
+
 Production image deployment with OpenTelemetry tracing enabled.
 
 **Production Images with Metrics**:
+
 ```bash
 devspace deploy -p metrics
 ```
+
 Production image deployment with Prometheus metrics collection enabled.
 
 **Production Images with Full Observability**:
+
 ```bash
 devspace deploy -p obs
 ```
+
 Production image deployment with both tracing and metrics enabled.
 
 ## Profile Details
 
 ### Tracing Profile (`-p tracing`)
+
 - Enables OpenTelemetry tracing in the nvcf-nats-auth-callout-service service
 - Configures OTLP HTTP endpoint: `opentelemetry-collector.observability:4318`
 - Uses insecure connection for development environments
@@ -118,7 +138,8 @@ Production image deployment with both tracing and metrics enabled.
 
 🔍 **[View Tracing Profile Architecture Diagram](docs/tracing-profile.md)**
 
-### Metrics Profile (`-p metrics`) 
+### Metrics Profile (`-p metrics`)
+
 - Enables Prometheus metrics endpoint on the nvcf-nats-auth-callout-service service
 - Creates ServiceMonitor resources for Prometheus scraping
 - Enables metrics collection for the nvcf-nats-auth-callout-service service
@@ -127,6 +148,7 @@ Production image deployment with both tracing and metrics enabled.
 📈 **[View Metrics Profile Architecture Diagram](docs/metrics-profile.md)**
 
 ### Observability Profile (`-p obs`)
+
 - Combines both tracing and metrics profiles
 - Provides complete observability stack integration
 - Recommended for monitoring and development debugging
@@ -135,6 +157,7 @@ Production image deployment with both tracing and metrics enabled.
 📊 **[View Observability Profile Architecture Diagram](docs/obs-profile.md)**
 
 ### Debian Profile (`-p debian`)
+
 - Changes the development image from Alpine Linux to Debian
 - **Size**: Debian images are larger (~300MB+) compared to Alpine (~50MB), but provide better compatibility
 - **C Library**: Uses glibc instead of musl, offering better compatibility with certain Go packages and C dependencies
@@ -181,6 +204,7 @@ The development container provides several make targets optimized for developmen
 ### Proxied Host Commands
 
 The following commands are proxied to your host machine when run from the container:
+
 - `devspace` - DevSpace CLI commands
 - `kubectl` - Kubernetes CLI commands
 - `helm` - Helm CLI commands
@@ -209,17 +233,20 @@ The service is designed as a stateless microservice with minimal external depend
 Each profile deploys different combinations of infrastructure:
 
 **Basic Profile** (no flags):
+
 - NGINX ingress controller in `managed` namespace
 - nvcf-nats-auth-callout-service service deployment with basic HTTP API
 
 🏗️ **[View Basic Profile Architecture Diagram](docs/basic-profile.md)**
 
 **Tracing Profile** (`-p tracing`):
+
 - All basic profile components, plus:
 - OpenTelemetry Collector in `observability` namespace
 - Tempo distributed tracing in `observability` namespace
 
 **Metrics Profile** (`-p metrics`):
+
 - All basic profile components, plus:
 - Prometheus server (StatefulSet) in `observability` namespace
 - Grafana dashboard in `observability` namespace
@@ -228,6 +255,7 @@ Each profile deploys different combinations of infrastructure:
 - ServiceMonitors for automatic metrics collection
 
 **Observability Profile** (`-p obs`):
+
 - All components from basic, tracing, and metrics profiles
 - Complete observability stack with both metrics and tracing integration
 
@@ -336,6 +364,7 @@ http://localhost:8083/swagger/index.html
 ## File Synchronization
 
 DevSpace automatically syncs your local project directory with the container, enabling:
+
 - Real-time code changes
 - Local development experience
 - Automatic hot reloading with Air
@@ -343,12 +372,14 @@ DevSpace automatically syncs your local project directory with the container, en
 ## SSH Access
 
 Development containers include SSH access for IDE integration:
+
 - SSH is enabled by default in dev mode
 - Allows remote debugging and development
 
 ## Proxy Commands
 
 The following commands are available in the development container:
+
 - `devspace`
 - `kubectl`
 - `helm`
@@ -392,12 +423,14 @@ The following commands are available in the development container:
 ### Profile-Specific Troubleshooting
 
 **Observability Issues**:
+
 - For tracing issues, verify OpenTelemetry Collector and Tempo are running in the `observability` namespace
 - For metrics issues, check Prometheus operator and ServiceMonitor resources
 - Use `kubectl get servicemonitor -n nvcf-nats-auth-callout-service` to verify ServiceMonitor creation
 - Check observability infrastructure status: `kubectl get pods -n observability`
 
 **Service Access Issues**:
+
 - Verify ingress is working: `kubectl get ingress -n nvcf-nats-auth-callout-service`
 - Check service status: `kubectl get svc -n nvcf-nats-auth-callout-service`
 - Test direct pod access: `kubectl port-forward <pod-name> 8080:8080 -n nvcf-nats-auth-callout-service`
@@ -459,48 +492,62 @@ buildArgs:
 ### Common Development Scenarios
 
 **Basic Development (No Observability)**:
+
 ```bash
 devspace dev
 # Then run: make dev
 ```
+
 Use this for general development with hot reloading when you don't need tracing or metrics.
 
 **Debugging Performance Issues**:
+
 ```bash
 devspace dev -p obs
 ```
+
 Use full observability to trace requests and monitor performance metrics.
 
 **Testing Tracing Integration**:
+
 ```bash
 devspace dev -p tracing
 ```
+
 Use when developing or testing OpenTelemetry tracing features.
 
 **Metrics Development**:
+
 ```bash
 devspace dev -p metrics
 ```
+
 Use when working on Prometheus metrics or monitoring dashboards.
 
 **Development with Custom Environment**:
+
 ```bash
 devspace dev -p debian,obs
 ```
+
 Combine profiles for Debian-based development with full observability.
 
 ### Production Deployment Scenarios
 
 **Staging Environment with Full Observability**:
+
 ```bash
 devspace deploy -p obs
 ```
+
 Deploy production images to staging with complete monitoring stack.
 
 **Production Images with Selective Monitoring**:
+
 ```bash
 devspace deploy -p metrics
 ```
+
 Deploy production images with metrics only (if tracing is handled separately).
 
 ## Testing Your Service
@@ -545,7 +592,7 @@ make test-coverage  # Run tests with coverage
 
 - [DevSpace Documentation](https://devspace.sh/docs)
 - [Kubernetes Documentation](https://kubernetes.io/docs/)
-- [Helm Documentation](https://helm.sh/docs/) 
+- [Helm Documentation](https://helm.sh/docs/)
 - [Configuration Guide](../docs/CONFIGURATION.md)
 - [OpenTelemetry Documentation](https://opentelemetry.io/docs/)
-- [Prometheus Documentation](https://prometheus.io/docs/) 
+- [Prometheus Documentation](https://prometheus.io/docs/)

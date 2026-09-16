@@ -557,9 +557,10 @@ func (a *Agent) Start(ctx context.Context) error {
 		core.WithRequestMetrics(a.metricsName),
 		core.WithHandlerTimeout(5*time.Second))...)
 
-	// Provides /healthz, /version, /metrics
+	// Provides /healthz, /version, /info, /metrics
 	server.AddHealthRoute(ctx)
 	server.AddVersionRoute(ctx)
+	server.AddInfoRoute(ctx)
 	server.AddMetricsRoute(ctx)
 
 	_, err = server.Start(ctx)
@@ -634,8 +635,9 @@ func (a *Agent) Start(ctx context.Context) error {
 func (a *Agent) dispatchReconcileCluster(ctx context.Context) {
 	log := core.GetLogger(ctx)
 
-	if a.ClusterSource != nvcaoptypes.ClusterSourceHelmManaged {
-		log.Debug("cluster source is not helm managed, skipping reconcile")
+	if a.ClusterSource != nvcaoptypes.ClusterSourceHelmManaged &&
+		a.ClusterSource != nvcaoptypes.ClusterSourceSelfHosted {
+		log.Debug("cluster source is not ConfigMap managed, skipping reconcile")
 		return
 	}
 

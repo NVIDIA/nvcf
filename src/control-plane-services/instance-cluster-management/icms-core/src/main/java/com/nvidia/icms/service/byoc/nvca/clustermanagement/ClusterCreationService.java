@@ -215,9 +215,9 @@ public class ClusterCreationService {
     }
 
     public static void validateAuthorizedNcaIdsForExternalCluster(@Nullable Set<String> actual,
-                                                                  @Nullable String ssaClientId) {
+                                                                  @Nullable String oAuthClientId) {
         // External clusters can not be publicly accessible and authorized ncaId can not have * in it
-        if (StringUtils.isEmpty(ssaClientId)) {
+        if (StringUtils.isEmpty(oAuthClientId)) {
             if (actual != null && actual.contains("*")) {
                 String errorMsg = "External clusters can not be publicly accessible";
                 log.error(errorMsg);

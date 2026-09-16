@@ -15,6 +15,7 @@
 spring:
   application:
     env: ncp
+    region: ncp
 
 nv-boot:
   reloadable-properties:

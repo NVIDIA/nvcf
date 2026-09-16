@@ -202,7 +202,7 @@ helmManaged:
   ## Image overrides (advanced, usually auto-calculated)
   imageCredHelper:
     imageRepository: ""
-    imageTag: 0.10.2
+    imageTag: 0.11.1
   otelCollector:
     imageRepository: ""
     imageTag: 0.143.2
@@ -222,7 +222,7 @@ selfManaged:
   ## Image overrides (advanced, usually auto-calculated)
   imageCredHelper:
     imageRepository: ""
-    imageTag: 0.10.2
+    imageTag: 0.11.1
   otelCollector:
     imageRepository: ""
     imageTag: 0.143.2

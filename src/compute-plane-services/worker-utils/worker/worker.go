@@ -402,7 +402,7 @@ func (w *NVCFWorker) Run(withHttpServer bool) error {
 		go func() {
 			// health server + framework config
 			err := w.server.Run()
-			if err != nil && w.shutdownCtx.Err() == nil {
+			if w.isFatalServerError(err) {
 				err = types.NewInternalError(err)
 				utils.ExitReason(err)
 				zap.S().Panic(err)
@@ -602,11 +602,7 @@ func (w *NVCFWorker) workSession(ctx context.Context) error {
 
 			err := pool.Submit(func() {
 				defer utils.Close(work.Close)
-				err := w.handleWorkRequest(ctx, work)
-				if err != nil {
-					// failure for a single request, keep trying to consume other requests
-					zap.L().Error("failed to handle request", zap.Error(err), zap.String("req id", work.RequestData.RequestId))
-				}
+				logWorkRequestResult(w.handleWorkRequest(ctx, work), work.RequestData.RequestId)
 			})
 			// failure to submit to the pool is a catastrophic error and should never happen
 			// unless the pool is misconfigured. this should be dead code.

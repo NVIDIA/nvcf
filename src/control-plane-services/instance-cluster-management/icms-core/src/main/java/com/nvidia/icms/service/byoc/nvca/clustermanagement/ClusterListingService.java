@@ -321,7 +321,6 @@ public class ClusterListingService {
                 .customAttributes(customAttributes)
                 .gpus(toGpuRequestSchemas(NvcaConverter.getGpusV5(clusterEntity)))
                 .nvcaVersion(clusterEntity.getNvcaVersion())
-                .ssaClientId(clusterEntity.getAuthClientId())
                 .oAuthClientId(clusterEntity.getAuthClientId())
                 .clusterId(clusterEntity.getClusterId())
                 .status(clusterEntity.getClusterStatus().toString())

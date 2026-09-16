@@ -24,12 +24,12 @@ The chart values are organized into three layers:
    the NGC UI. Includes cloud provider, region, cluster group, NVCA version, feature gates,
    cluster attributes, and manual GPU config.
 
-
 **The key field is `ngcConfig.clusterSource`:**
 
 - `"ngc-managed"` (default) — The operator fetches cluster configuration from the NGC
   control plane. The `helmManaged` and `selfManaged` sections are ignored.
 - `"helm-managed"` — The operator reads backend configuration from `helmManaged.*` values.
+
 ```yaml
 
  # --- Shared parameters (all modes) ---

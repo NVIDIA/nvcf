@@ -20,7 +20,8 @@ GitLab runners).
 any individual test runs).
 
 **Symptom:**
-```
+
+```text
 panic: Error making API request | URL: POST http://127.0.0.1:<port>/v1/sys/mounts/pki
        | Code: 403 | Detail: permission denied
 ```
@@ -35,6 +36,7 @@ interferes, causing all authenticated API calls to return 403.
 When set, `dependency.TestMain` exits 0 immediately.
 
 **To re-enable:**
+
 1. Build and push the CI image from `nv_releases/docker/Dockerfile.ci`.
 2. Wire that image in `tools/ci/subproject-validations.yaml` (ess-agent checks).
 3. Ensure the CI runner grants `IPC_LOCK` or set `VAULT_DISABLE_MLOCK=true`.
@@ -58,18 +60,21 @@ When set, `dependency.TestMain` exits 0 immediately.
 ## 3. Root package and `manager` — consul integration tests (#2)
 
 **Tests affected:**
+
 - `TestCLI_Run/once`, `TestCLI_Run/reload`, `TestCLI_Run/once_from_env`
   (root package, `cli_test.go`)
 - `TestRunner_Start/single_dependency` and other consul-dependent subtests
   (`manager/runner_test.go`)
 
 **Symptom (root):**
-```
+
+```text
 cli_test.go: timeout: "ESS Agent instance id: …\nESS Agent init(mode): false\n"
 ```
 
 **Symptom (manager):**
-```
+
+```text
 panic: test timed out after 30m0s
     running tests: TestRunner_Start/single_dependency (3m0s)
 ```
@@ -81,6 +86,7 @@ The `manager` package's `Runner.init()` sleeps waiting for a response
 that never arrives, consuming the entire 30-minute `go test` timeout.
 
 **Skip mechanism:**
+
 - Root package: `SKIP_INTEGRATION_TESTS` env var in `main_test.go`
   exits `TestMain` early; individual `TestCLI_Run` subtests also call
   `t.Skip`.
@@ -99,7 +105,8 @@ require a privileged runner or the custom CI image). Remove the
 **Tests affected:** `TestSyslogFilter` in `logging/syslog_test.go`.
 
 **Symptom:**
-```
+
+```text
 syslog_test.go: err: Unix syslog delivery error
 ```
 
@@ -120,7 +127,8 @@ that this test only runs locally / on full VMs.
 (upstream HashiCorp consul-template).
 
 **Symptom:**
-```
+
+```text
 ==================
 WARNING: DATA RACE
 ...
@@ -136,7 +144,7 @@ Goroutine N (running) created at:
 ...
     testing.go:1617: race detected during execution of test
 --- FAIL: TestReload_noSignal (0.15s)
-FAIL	github.com/hashicorp/consul-template/child	1.168s
+FAIL github.com/hashicorp/consul-template/child 1.168s
 ```
 
 **Root cause:** The test uses `defer c.Stop()` and a 10ms `killTimeout`,
@@ -145,6 +153,7 @@ waits for the killed shell process and the test's own teardown calling
 `Stop` again. The race is in vendored upstream code
 (`child/child.go:275/297/456`) and triggers intermittently under
 `go test -race`. Confirmed flake history:
+
 - `main` pipeline 48613751 (sha `cb95a2c`)
 - MR !3 pipeline 50230314 (sha `b64c1c3`)
 

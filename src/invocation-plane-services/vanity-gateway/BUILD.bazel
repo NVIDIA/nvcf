@@ -109,6 +109,7 @@ go_test(
         "@com_github_goccy_go_json//:go-json",
         "@com_github_magiconair_properties//assert",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
+        "@com_github_stretchr_testify//require",
         "@in_gopkg_yaml_v3//:yaml_v3",
         "@io_k8s_sigs_controller_runtime//:controller-runtime",
         "@org_golang_x_net//http2",

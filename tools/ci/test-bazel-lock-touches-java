@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for tools/ci/bazel-lock-touches-java.
+#
+# The two answers are not symmetric. A wrong "true" costs runner minutes. A
+# wrong "false" skips every Java row for a change that did affect Java, so a
+# break reaches main and is found by whoever hits it next. Every case that
+# cannot be positively recognised is therefore pinned to "true", and those
+# cases outnumber the others here on purpose.
+set -euo pipefail
+
+script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bazel-lock-touches-java"
+
+repo="$(mktemp -d)"
+trap 'rm -rf "${repo}"' EXIT
+cd "${repo}"
+git init -q .
+git config user.email t@example.com
+git config user.name t
+
+fail=0
+
+# Commit a lock and return the resulting revision.
+commit_lock() {
+    printf '%s' "$1" > MODULE.bazel.lock
+    git add MODULE.bazel.lock
+    git commit -qm "$2"
+    git rev-parse HEAD
+}
+
+check() {
+    local desc="$1" want="$2" base="$3" head="$4"
+    local got
+    got="$(python3 "${script}" "${base}" "${head}" 2>/dev/null || echo "CRASH")"
+    if [ "${got}" = "${want}" ]; then
+        printf 'ok   %s\n' "${desc}"
+    else
+        printf 'FAIL %s: want %s, got %s\n' "${desc}" "${want}" "${got}"
+        fail=1
+    fi
+}
+
+RUST_A='{"lockFileVersion":26,"registryFileHashes":{"a":"1"},"selectedYankedVersions":{},"moduleExtensions":{"@@rules_rust+//crate_universe:extension.bzl%crate":{"v":1},"@@rules_oci+//oci:extensions.bzl%oci":{"v":1}},"facts":{"f":1}}'
+RUST_B='{"lockFileVersion":26,"registryFileHashes":{"a":"1"},"selectedYankedVersions":{},"moduleExtensions":{"@@rules_rust+//crate_universe:extension.bzl%crate":{"v":2},"@@rules_oci+//oci:extensions.bzl%oci":{"v":1}},"facts":{"f":1}}'
+
+base=$(commit_lock "${RUST_A}" base)
+
+# The case this exists for: a Rust-only crate repin.
+head=$(commit_lock "${RUST_B}" "rust repin")
+check "rust crate_universe repin only" false "${base}" "${head}"
+
+# An identical lock is trivially irrelevant. Commit an unrelated file so the
+# revision advances while the lock does not; committing the same lock content
+# is a git no-op and would leave the ref empty rather than test anything.
+echo unrelated > other.txt
+git add other.txt
+git commit -qm "unrelated change"
+same=$(git rev-parse HEAD)
+check "lock unchanged across commits" false "${head}" "${same}"
+
+# Every fixture below is RUST_B plus exactly one mutation, so each must be
+# compared against RUST_B. Chaining them against the previous fixture would
+# also revert the previous mutation, and a case could then pass on that
+# reversion rather than on the condition it names.
+baseline="${same}"
+
+# Anything that is not a recognised Rust extension must schedule Java.
+OCI=$(python3 -c "
+import json,sys
+d=json.loads('''${RUST_B}''')
+d['moduleExtensions']['@@rules_oci+//oci:extensions.bzl%oci']={'v':9}
+print(json.dumps(d))")
+h=$(commit_lock "${OCI}" "oci extension changed")
+check "unrecognised extension changed" true "${baseline}" "${h}"
+
+# A registry hash change can move a Java module version.
+REG=$(python3 -c "
+import json
+d=json.loads('''${RUST_B}''')
+d['registryFileHashes']['b']='2'
+print(json.dumps(d))")
+h2=$(commit_lock "${REG}" "registry hash changed")
+check "registryFileHashes changed" true "${baseline}" "${h2}"
+
+# A lock format bump affects everything.
+VER=$(python3 -c "
+import json
+d=json.loads('''${RUST_B}''')
+d['lockFileVersion']=27
+print(json.dumps(d))")
+h3=$(commit_lock "${VER}" "lock version bump")
+check "lockFileVersion changed" true "${baseline}" "${h3}"
+
+# A new top-level section must fail closed, not be ignored.
+NEW=$(python3 -c "
+import json
+d=json.loads('''${RUST_B}''')
+d['somethingBazelAddedLater']={'x':1}
+print(json.dumps(d))")
+h4=$(commit_lock "${NEW}" "new top-level section")
+check "unknown top-level section" true "${baseline}" "${h4}"
+
+# yanked versions can change which module version resolves.
+YNK=$(python3 -c "
+import json
+d=json.loads('''${RUST_B}''')
+d['selectedYankedVersions']={'m':'1.0'}
+print(json.dumps(d))")
+h5=$(commit_lock "${YNK}" "yanked versions changed")
+check "selectedYankedVersions changed" true "${baseline}" "${h5}"
+
+# Malformed or missing input must never read as "no Java change".
+printf 'not json' > MODULE.bazel.lock
+git add MODULE.bazel.lock && git commit -qm "corrupt lock"
+bad=$(git rev-parse HEAD)
+check "unparseable lock" true "${baseline}" "${bad}"
+check "nonexistent revision" true "${baseline}" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+check "empty head revision" true "${baseline}" ""
+
+# check() always passes two arguments, so the argv-length branch needs its own
+# invocation with a single one. Without this the "missing argument" case was
+# really testing an unreadable revision.
+argv_got="$(python3 "${script}" "${baseline}" 2>/dev/null || echo CRASH)"
+if [ "${argv_got}" = "true" ]; then
+    printf 'ok   %s\n' "too few arguments"
+else
+    printf 'FAIL %s: want true, got %s\n' "too few arguments" "${argv_got}"
+    fail=1
+fi
+
+# Valid JSON that is not an object must fail closed rather than raise.
+for bad_json in '[]' 'null' '"a string"' '42'; do
+    printf '%s' "${bad_json}" > MODULE.bazel.lock
+    git add MODULE.bazel.lock
+    git commit -qm "lock is ${bad_json}"
+    nb=$(git rev-parse HEAD)
+    check "lock is ${bad_json}, not an object" true "${baseline}" "${nb}"
+done
+
+# A non-object moduleExtensions must fail closed too.
+printf '%s' '{"lockFileVersion":26,"registryFileHashes":{"a":"1"},"selectedYankedVersions":{},"moduleExtensions":[],"facts":{"f":1}}' > MODULE.bazel.lock
+git add MODULE.bazel.lock && git commit -qm "moduleExtensions is a list"
+mex=$(git rev-parse HEAD)
+check "moduleExtensions is not an object" true "${baseline}" "${mex}"
+
+# The real thing: NVIDIA/nvcf#777, base fcf08b63 vs head 96831eae. Fixtures are
+# the parsed section digests rather than the 5 MB locks, but the shape is what
+# the tool actually compares. Verified against the real files: the only
+# difference is the crate_universe extension.
+PR777_BASE='{"lockFileVersion":26,"registryFileHashes":{"h":"same"},"selectedYankedVersions":{},"moduleExtensions":{"@@rules_rust+//crate_universe:extension.bzl%crate":{"crates":"before"},"@@rules_python+//python/uv:uv.bzl%uv":{"v":1}},"facts":{"f":1}}'
+PR777_HEAD='{"lockFileVersion":26,"registryFileHashes":{"h":"same"},"selectedYankedVersions":{},"moduleExtensions":{"@@rules_rust+//crate_universe:extension.bzl%crate":{"crates":"after"},"@@rules_python+//python/uv:uv.bzl%uv":{"v":1}},"facts":{"f":1}}'
+pb=$(commit_lock "${PR777_BASE}" "pr777 base")
+ph=$(commit_lock "${PR777_HEAD}" "pr777 head")
+check "NVIDIA/nvcf#777 shape" false "${pb}" "${ph}"
+
+if [ "${fail}" -ne 0 ]; then
+    echo "bazel-lock-touches-java: FAILED" >&2
+    exit 1
+fi
+echo "bazel-lock-touches-java: all checks passed"

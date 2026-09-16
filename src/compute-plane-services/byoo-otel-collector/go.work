@@ -10,7 +10,7 @@
 // `go_deps.from_file(go_work = "//:go.work")` in MODULE.bazel and
 // unifies the external dep graph across both modules.
 
-go 1.25.6
+go 1.26.0
 
 use (
 	.

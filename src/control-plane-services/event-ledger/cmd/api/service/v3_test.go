@@ -72,12 +72,16 @@ type mockDBHandlerV3 struct {
 	getStatsCalls            int
 	getFilteredStatsCalls    int
 	storedStatsEvents        []data_access.EventV3UpsertRecord
+	upsertEventCalls         int
+	bulkUpsertEventsCalls    int
+	bulkUpsertStatsCalls     int
 	bulkUpsertEventsErr      error
 	bulkUpsertStatsErr       error
 }
 
 // V3 methods
 func (m *mockDBHandlerV3) UpsertEventV3(ctx context.Context, namespace, eventContext, eventName, source string, details json.RawMessage, timestamp time.Time) error {
+	m.upsertEventCalls++
 	m.storedEvents = append(m.storedEvents, struct {
 		namespace string
 		context   string
@@ -100,6 +104,7 @@ func (m *mockDBHandlerV3) UpsertFilteredStatsV3(ctx context.Context, namespace, 
 }
 
 func (m *mockDBHandlerV3) BulkUpsertEventsV3(ctx context.Context, events []data_access.EventV3UpsertRecord) error {
+	m.bulkUpsertEventsCalls++
 	if m.bulkUpsertEventsErr != nil {
 		return m.bulkUpsertEventsErr
 	}
@@ -117,6 +122,7 @@ func (m *mockDBHandlerV3) BulkUpsertEventsV3(ctx context.Context, events []data_
 }
 
 func (m *mockDBHandlerV3) BulkUpsertStatsV3(ctx context.Context, events []data_access.EventV3UpsertRecord) error {
+	m.bulkUpsertStatsCalls++
 	if m.bulkUpsertStatsErr != nil {
 		return m.bulkUpsertStatsErr
 	}
@@ -243,6 +249,36 @@ func createOTLPLogRecord(eventName, namespace, source, instanceID string, extraA
 		Body:           &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: "Test event"}},
 		Attributes:     attrs,
 	}
+}
+
+func makeCloudEvent(t *testing.T, id, eventType, instanceID string, timestamp time.Time) *cloudevents.Event {
+	t.Helper()
+	event := cloudevents.NewEvent()
+	event.SetSpecVersion(cloudevents.VersionV1)
+	event.SetID(id)
+	event.SetType(eventType)
+	event.SetSource("/test")
+	event.SetTime(timestamp)
+	event.SetExtension("namespace", "test-namespace")
+	event.SetExtension("instanceId", instanceID)
+	require.NoError(t, event.SetData(cloudevents.ApplicationJSON, map[string]string{"status": "ok"}))
+	return &event
+}
+
+func TestEventContextToCanonical_DotSeparatedInstanceID(t *testing.T) {
+	instanceID := "00000000-0000-4000-8000-000000000001.synthetic-instance"
+
+	canonical, err := eventContextToCanonical(ContextV3{InstanceID: instanceID})
+
+	require.NoError(t, err)
+	assert.Equal(t, "instance_id="+instanceID, canonical)
+}
+
+func TestEventContextToCanonical_DotsRemainInvalidForOtherContextFields(t *testing.T) {
+	_, err := eventContextToCanonical(ContextV3{DeploymentID: "deployment.invalid"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid deployment_id")
 }
 
 // Test that namespace is required
@@ -603,6 +639,92 @@ func TestExtractK8sEvent(t *testing.T) {
 	assert.Equal(t, "extra_value", attrs["extra_field"])
 }
 
+// TestEventContextToCanonical_Ordering verifies the canonical string uses the
+// fixed field order and omits empty fields.
+func TestEventContextToCanonical_Ordering(t *testing.T) {
+	tests := []struct {
+		name   string
+		ctx    ContextV3
+		expect string
+	}{
+		{
+			name:   "pod shape omits empty resource_id",
+			ctx:    ContextV3{ClusterID: "clus-1", DeploymentID: "dep-1", InstanceID: "inst-1"},
+			expect: "cluster_id=clus-1,deployment_id=dep-1,instance_id=inst-1",
+		},
+		{
+			name:   "resource_id participates and sorts last",
+			ctx:    ContextV3{ClusterID: "clus-1", ResourceID: "icms-1"},
+			expect: "cluster_id=clus-1,resource_id=icms-1",
+		},
+		{
+			name:   "resource_id alone",
+			ctx:    ContextV3{ResourceID: "icms-1"},
+			expect: "resource_id=icms-1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := eventContextToCanonical(tc.ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expect, got)
+		})
+	}
+}
+
+// TestExtractK8sEvent_ResourceID verifies that resource_id participates in the
+// canonical context so resources without other unique fields stay distinct.
+func TestExtractK8sEvent_ResourceID(t *testing.T) {
+	lr := createOTLPLogRecord("instance.creation", "tenant-123", "nvca", "", map[string]string{
+		"cluster_id":  "clus-1",
+		"resource_id": "icms-abc",
+	})
+
+	event, err := extractK8sEvent(lr)
+	require.NoError(t, err)
+
+	// resource_id participates in the context (sorted last), keeping the row unique.
+	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-abc", event.Context)
+}
+
+// TestExtractK8sEvent_DistinctResourceIDsDoNotCollide verifies two resources with
+// the same non-resource context but different resource_id produce distinct contexts.
+func TestExtractK8sEvent_DistinctResourceIDsDoNotCollide(t *testing.T) {
+	makeCtx := func(resourceID string) string {
+		lr := createOTLPLogRecord("instance.creation", "tenant-123", "nvca", "", map[string]string{
+			"cluster_id":  "clus-1",
+			"resource_id": resourceID,
+		})
+		event, err := extractK8sEvent(lr)
+		require.NoError(t, err)
+		return event.Context
+	}
+
+	assert.NotEqual(t, makeCtx("icms-1"), makeCtx("icms-2"))
+}
+
+// TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails verifies that a Pod event
+// carrying an unmapped attribute (e.g. icms_request_id) keeps it in details and
+// excludes it from the context.
+func TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails(t *testing.T) {
+	lr := createOTLPLogRecord("pod.ready", "tenant-123", "kubernetes", "pod-1", map[string]string{
+		"cluster_id":      "clus-1",
+		"icms_request_id": "icms-xyz",
+	})
+
+	event, err := extractK8sEvent(lr)
+	require.NoError(t, err)
+
+	// Pod context stays the original shape and excludes the unmapped attribute.
+	assert.Equal(t, "cluster_id=clus-1,instance_id=pod-1", event.Context)
+	assert.NotContains(t, event.Context, "icms_request_id")
+
+	var details map[string]any
+	require.NoError(t, json.Unmarshal(event.DetailsJSON, &details))
+	attrs := details["attributes"].(map[string]any)
+	assert.Equal(t, "icms-xyz", attrs["icms_request_id"])
+}
+
 // Test extractCloudEvent validates source is required
 func TestExtractCloudEvent_SourceRequired(t *testing.T) {
 	ce := cloudevents.NewEvent()
@@ -640,6 +762,22 @@ func TestExtractCloudEvent_IdRequired(t *testing.T) {
 	_, err := extractCloudEvent(&ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: id")
+}
+
+// TestExtractCloudEvent_ResourceID verifies the resourceId extension maps into
+// the canonical context, mirroring OTLP ingestion so rows stay queryable.
+func TestExtractCloudEvent_ResourceID(t *testing.T) {
+	ce := cloudevents.NewEvent()
+	ce.SetID("test-id")
+	ce.SetType("test.event")
+	ce.SetSource("/test")
+	ce.SetExtension("namespace", "tenant-1")
+	ce.SetExtension("clusterId", "clus-1")
+	ce.SetExtension("resourceId", "icms-1")
+
+	event, err := extractCloudEvent(&ce)
+	require.NoError(t, err)
+	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-1", event.Context)
 }
 
 // ======================
@@ -703,6 +841,71 @@ func TestPostCloudEventV3_BatchMissingSpecversion(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "specversion")
+}
+
+func TestPostCloudEventV3_BatchRejectsNullEvent(t *testing.T) {
+	w, _ := executeCloudEventsRequest(t, []byte(`[null]`), "application/cloudevents-batch+json")
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "CloudEvent must not be null")
+}
+
+func TestProcessCloudEvents_UsesBulkPersistence(t *testing.T) {
+	mockDB := &mockDBHandlerV3{}
+	server := newServerWithMock(t, mockDB)
+	ctx := makeStoreCtx(server)
+	now := time.Now()
+
+	result := server.processCloudEvents(ctx, []*cloudevents.Event{
+		makeCloudEvent(t, "event-1", "pod.ready", "00000000-0000-4000-8000-000000000001.synthetic-instance", now),
+		makeCloudEvent(t, "event-2", "pod.pending", "pod-2", now),
+	})
+
+	assert.Equal(t, 2, result.SuccessCount)
+	assert.Equal(t, 0, result.FailureCount)
+	assert.Equal(t, 0, mockDB.upsertEventCalls, "per-event LWT path must not be used")
+	assert.Equal(t, 1, mockDB.bulkUpsertEventsCalls)
+	assert.Equal(t, 1, mockDB.bulkUpsertStatsCalls)
+	require.Len(t, mockDB.storedEvents, 2)
+	contexts := []string{mockDB.storedEvents[0].context, mockDB.storedEvents[1].context}
+	assert.Contains(t, contexts,
+		"instance_id=00000000-0000-4000-8000-000000000001.synthetic-instance",
+	)
+}
+
+func TestProcessCloudEvents_DeduplicatesStorageWithoutChangingResultCounts(t *testing.T) {
+	mockDB := &mockDBHandlerV3{}
+	server := newServerWithMock(t, mockDB)
+	ctx := makeStoreCtx(server)
+	latestTimestamp := time.Now()
+
+	result := server.processCloudEvents(ctx, []*cloudevents.Event{
+		makeCloudEvent(t, "event-1", "pod.ready", "pod-1", latestTimestamp.Add(-time.Minute)),
+		makeCloudEvent(t, "event-2", "pod.ready", "pod-1", latestTimestamp),
+	})
+
+	assert.Equal(t, 2, result.SuccessCount)
+	assert.Equal(t, 0, result.FailureCount)
+	assert.Len(t, result.ProcessedEvents, 2)
+	require.Len(t, mockDB.storedEvents, 1)
+	assert.Equal(t, latestTimestamp, mockDB.storedEvents[0].timestamp)
+}
+
+func TestProcessCloudEvents_StatsFailureCountsAcceptedEvents(t *testing.T) {
+	mockDB := &mockDBHandlerV3{bulkUpsertStatsErr: fmt.Errorf("stats unavailable")}
+	server := newServerWithMock(t, mockDB)
+	ctx := makeStoreCtx(server)
+	latestTimestamp := time.Now()
+
+	result := server.processCloudEvents(ctx, []*cloudevents.Event{
+		makeCloudEvent(t, "event-1", "pod.ready", "pod-1", latestTimestamp.Add(-time.Minute)),
+		makeCloudEvent(t, "event-2", "pod.ready", "pod-1", latestTimestamp),
+	})
+
+	assert.Equal(t, 0, result.SuccessCount)
+	assert.Equal(t, 2, result.FailureCount)
+	assert.ErrorContains(t, result.LastError, "stats unavailable")
+	require.Len(t, mockDB.storedEvents, 1)
 }
 
 // Test GetStatsV3 success
@@ -932,6 +1135,66 @@ func TestGetEventsV3_Success(t *testing.T) {
 	assert.NotZero(t, response.Events[0].Timestamp)
 	assert.NotZero(t, response.Events[0].CreatedAt)
 	assert.NotZero(t, response.Events[0].UpdatedAt)
+}
+
+// TestGetEventsV3_AttributeFilter verifies the optional generic attribute filter
+// narrows the result to events whose details attribute matches, reusing the
+// existing EventsV3Response type (no resource-specific model or namespace scan).
+func TestGetEventsV3_AttributeFilter(t *testing.T) {
+	logger := testutils.InitTestLogger(t)
+	server := NewServer(
+		Connections{DbHandlerV2: &mockDBHandlerV3{}},
+		logger, nil, "test", &config.HTTPClientConfig{}, config.PaginationConfig{}, config.StatsConfig{},
+	)
+
+	newReq := func(query string) *http.Request {
+		req := httptest.NewRequest("GET", "/v3/ledger/namespace/test-namespace/events"+query, nil)
+		ctx := req.Context()
+		ctx = context.WithValue(ctx, logging.LoggerKey, logging.NewTraceLogger(ctx, logger))
+		req = req.WithContext(ctx)
+		return mux.SetURLVars(req, map[string]string{"namespace": "test-namespace"})
+	}
+
+	// pod-1 has two events: "ready" (key2=value2) and "pending" (key1=value1).
+	// Filtering by key2=value2 returns only the "ready" event.
+	w := httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2&attribute_value=value2"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var filtered EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &filtered))
+	require.Len(t, filtered.Events, 1)
+	assert.Equal(t, "ready", filtered.Events[0].EventName)
+	assert.Equal(t, "value2", filtered.Events[0].Details.Attributes["key2"])
+
+	// A non-matching value excludes all events.
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2&attribute_value=nope"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var none EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &none))
+	assert.Empty(t, none.Events)
+
+	// Omitting the filter returns both events (filter disabled).
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1"))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var all EventsV3Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &all))
+	assert.Len(t, all.Events, 2)
+
+	// attribute_key and attribute_value must be provided together. Supplying
+	// only one is rejected so a value-only request cannot silently disable the
+	// filter and return every event.
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_value=value2"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	w = httptest.NewRecorder()
+	server.GetEventsV3(w, newReq("?instance_id=pod-1&attribute_key=key2"))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // Test GetEventsV3 with empty result

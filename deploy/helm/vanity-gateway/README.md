@@ -81,6 +81,8 @@ Important settings to review before deployment:
 - `vanityGateway.replicaCount`, resource requests, and limits for your
   environment
 - `vanityGateway.config.nvcfApiEndpoint` for the invocation endpoint
+- `vanityGateway.config.llmGatewayEndpoint` for the LLM Gateway endpoint, used
+  only by models that set `functionType: LLM`
 - `vanityGateway.config.otelExporterOtlpEndpoint` for trace export, empty by
   default
 - `vanityGateway.mappingConfig.v2config` for the OpenAI and vanity route tables
@@ -107,14 +109,68 @@ or the pod is killed mid-drain.
 
 - `openai`: per-endpoint model routes, keyed by endpoint (`chatCompletions`,
   `completions`, `embeddings`, `responses`, and the image endpoints). Each route
-  requires `modelName` and `functionID`, and supports shadow-traffic fields such
-  as `shadowModelName`, `shadowPercentage`, and
-  `shadowCancelOnClientDisconnect`.
+  requires `modelName` and `functionID`.
 - `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
   path requires `path` and `functionID`.
 
-Both sections are empty by default. `vanityGateway.config.shadowMaxConcurrent`
-bounds concurrent shadow requests across all routes.
+Both sections are empty by default.
+`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
+across all routes.
+
+An `openai` model may set `functionType: LLM` to be served by the LLM Gateway
+instead of the invocation service, supported in `chatCompletions`, `responses`,
+and `embeddings`. Callers still send the public `modelName`; the gateway
+rewrites the request model to `functionID/modelName` before forwarding.
+
+The values schema enforces what the gateway checks at startup, so a values file
+that would fail the container fails the render instead:
+
+- `functionType` is rejected outside those three endpoints
+- `usePexec`, `outgoingPathOverride`, and `sessionTimeout` are rejected on such
+  a model, since the LLM Gateway ignores them. An explicit `false`, `""`, or `0`
+  is accepted, because that is what an absent key produces
+- an `X-Priority` entry in `customHeaders` is rejected, since the LLM Gateway
+  answers `400 Bad Request` for any request carrying it
+- `vanityGateway.config.llmGatewayEndpoint` must be set, and must be an `http`
+  or `https` origin with no path
+
+Shadow traffic is supported. Each shadow target is resolved from the same model
+table and routed by its own `functionType`, so a shadow of an LLM model reaches
+the LLM Gateway, and an LLM model may shadow a model served by the invocation
+service.
+
+`mappingConfig` is rendered into a ConfigMap, which is not a secret store. Do
+not put credentials in `customHeaders` on any route. Caller `Authorization`
+headers are forwarded to the upstream untouched, so a static credential is not
+needed for authenticated routes.
+
+An `openai` route may mirror traffic to other routes in the same endpoint with
+`shadows`, one entry per target:
+
+```yaml
+primary:
+  modelName: example/primary
+  functionID: primary-function-id
+  shadows:
+    - modelName: private/example/shadow-a
+      percentage: 10                  # 1-100, default 100
+      samplingMethod: perBearerKey    # random (default) or perBearerKey
+      cancelOnClientDisconnect: true  # default false
+    - modelName: private/example/shadow-b
+shadow-a:
+  modelName: private/example/shadow-a
+  functionID: shadow-a-function-id
+shadow-b:
+  modelName: private/example/shadow-b
+  functionID: shadow-b-function-id
+```
+
+- a route with both legacy form and new form is rejected
+- an entry needs `modelName`; unknown entry keys are rejected
+
+The legacy route-level fields `shadowModelName`, `shadowModelNames`,
+`shadowPercentage`, `shadowSamplingMethod`, and `shadowCancelOnClientDisconnect`
+keep working unchanged; they apply one policy to every target on the route.
 
 ## Notes
 

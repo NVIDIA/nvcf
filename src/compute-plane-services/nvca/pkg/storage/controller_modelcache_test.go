@@ -27,7 +27,24 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
+
+// TestNewModelCacheInitNamespace_HasUnboundDNSLabel asserts that the namespace
+// carries the workload-instance-type label so the nvcf-unbound Kyverno policy
+// (add-unbound-dns) injects the cluster's nvcf-unbound nameserver into pods.
+// Without it the model-cache writer job falls back to the kube-dns ClusterIP,
+// which is unreachable on clusters running node-local-dns with hostNetwork=true.
+func TestNewModelCacheInitNamespace_HasUnboundDNSLabel(t *testing.T) {
+	ns := NewModelCacheInitNamespace()
+	assert.Equal(t, ModelCacheInitNamespace, ns.Name)
+	assert.Equal(t,
+		types.WorkloadInstanceTypeValueMiniService,
+		ns.Labels[types.WorkloadInstanceTypeLabel],
+		"workload-instance-type label must be present so add-unbound-dns injects nvcf-unbound nameservers",
+	)
+}
 
 func TestEnsureCacheMountOptionsConfigMap(t *testing.T) {
 	ctx := context.Background()

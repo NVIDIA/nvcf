@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
@@ -34,8 +33,6 @@ import (
 	"go.uber.org/zap"
 
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
-
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
 )
 
 // Policy context keys - using the contextKey type already defined in jwt.go
@@ -53,6 +50,7 @@ const (
 // PolicyAuthzResponse holds the response from Policy authorization
 type PolicyAuthzResponse struct {
 	Allow      bool     `json:"allow"`
+	Allowed    bool     `json:"allowed"`
 	StatusCode int      `json:"statusCode"`
 	Reasons    []string `json:"reasons"`
 	ActorID    string   `json:"actorId"`
@@ -185,8 +183,7 @@ func mergePolicyClaims(jwtClaims map[string]interface{}, authResponse PolicyAuth
 	return claims
 }
 
-// NewPolicyMiddleware creates a new Policy middleware
-func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, jwtPubKeySetURL string, jwtTokenExpiration time.Duration, jwkCache *jwk.Cache, httpConfig *config.HTTPClientConfig, logger *otelzap.Logger) mux.MiddlewareFunc {
+func newPolicyMiddleware(policyClient policy.Authorizer, serviceName string, logger *otelzap.Logger) mux.MiddlewareFunc {
 	if policyClient == nil {
 		if logger != nil {
 			logger.Error("policy client is nil - denying requests")
@@ -196,19 +193,6 @@ func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, jwt
 				http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 			})
 		}
-	}
-
-	// Initialize JWT parser if URL is provided
-	var jwtMiddleware mux.MiddlewareFunc
-	if jwtPubKeySetURL != "" {
-		jwtOpts := NewJWTParserOptions(
-			jwtPubKeySetURL,
-			nil, // Use default signing method
-			jwtTokenExpiration,
-			httpConfig,
-		)
-		jwtMiddleware = NewParseJWTMiddleware(jwtOpts, jwkCache)
-		logger.Info("jwt middleware initialized successfully")
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -238,44 +222,16 @@ func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, jwt
 				"service": serviceName,
 			}
 
-			// Try to parse as JWT if parser is available
 			var jwtClaims map[string]interface{}
-
-			if jwtMiddleware != nil && token != "" && isJWTShapedToken(token) {
-				// Create a handler that will capture the JWT claims
-				claimsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					claims, ok := r.Context().Value(claimsContextKey).(jwt.MapClaims)
-					if ok {
-						jwtClaims = map[string]interface{}(claims)
-						logger.InfoContext(traceCtx, "policy: jwt token parsed successfully")
-
-						// Add JWT specific fields to auth context
-						if subj, ok := claims["sub"].(string); ok {
-							setAuthContextField(authCtx, subjectField, subj)
-						}
-						if scopes, ok := claims["scopes"].([]interface{}); ok && len(scopes) > 0 {
-							authCtx["scopes"] = scopes
-						}
-					}
-				})
-
-				// Apply JWT middleware to process the token
-				jwtChain := jwtMiddleware(claimsHandler)
-
-				// Create a fake ResponseWriter that doesn't actually write
-				dummyWriter := &dummyResponseWriter{header: make(http.Header)}
-
-				// Copy the request to avoid modifying the original
-				reqCopy := r.Clone(traceCtx)
-				jwtChain.ServeHTTP(dummyWriter, reqCopy)
-
-				if jwtClaims == nil {
-					logger.WarnContext(traceCtx, "policy: jwt-shaped token failed validation")
-					http.Error(w, "Unauthorized", http.StatusUnauthorized)
-					return
+			if claims, ok := r.Context().Value(claimsContextKey).(jwt.MapClaims); ok {
+				jwtClaims = map[string]interface{}(claims)
+				if subj, ok := claims["sub"].(string); ok {
+					setAuthContextField(authCtx, subjectField, subj)
 				}
-			} else if token != "" {
-				logger.InfoContext(traceCtx, "policy: token appears to be an api key, not a jwt")
+				if scopes, ok := claims["scopes"].([]interface{}); ok && len(scopes) > 0 {
+					authCtx["scopes"] = scopes
+				}
+			} else {
 				setAuthContextField(authCtx, apiKeyField, token)
 			}
 
@@ -344,8 +300,8 @@ func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, jwt
 				zap.Int("reason_count", len(authResponse.Reasons)),
 			)
 
-			// 8. Check if allowed
-			if !authResponse.Allow {
+			// Upstream evaluators disagree on the verdict field name.
+			if !authResponse.Allow && !authResponse.Allowed {
 				statusCode := authResponse.StatusCode
 				if statusCode == 0 {
 					statusCode = http.StatusUnauthorized
@@ -367,7 +323,7 @@ func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, jwt
 			// 9. Authorization succeeded - enrich context with user info
 			logger.InfoContext(traceCtx, "policy: authorization successful")
 
-			var requestCtx = r.Context()
+			var requestCtx = markPDPAuthorized(r.Context())
 			// Create enriched context
 			if authResponse.ActorID != "" {
 				requestCtx = context.WithValue(requestCtx, policyActorIDContextKey, authResponse.ActorID)
@@ -397,20 +353,69 @@ func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, jwt
 	}
 }
 
-// dummyResponseWriter is a no-op ResponseWriter used to capture JWT claims
-// without actually writing anything to the client
-type dummyResponseWriter struct {
-	header http.Header
+const pdpAuthorizedContextKey contextKey = "pdp_authorized"
+
+func markPDPAuthorized(ctx context.Context) context.Context {
+	return context.WithValue(ctx, pdpAuthorizedContextKey, true)
 }
 
-func (d *dummyResponseWriter) Header() http.Header {
-	return d.header
+func isPDPAuthorized(ctx context.Context) bool {
+	authorized, ok := ctx.Value(pdpAuthorizedContextKey).(bool)
+	return ok && authorized
 }
 
-func (d *dummyResponseWriter) Write([]byte) (int, error) {
-	return 0, nil
+func bearerToken(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(authHeader, "Bearer ")
 }
 
-func (d *dummyResponseWriter) WriteHeader(statusCode int) {
-	// Do nothing
+func chainMiddleware(first, second mux.MiddlewareFunc) mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return first(second(next))
+	}
+}
+
+// NewAuthMiddleware dispatches each request to one of two authorization paths
+// based on whether the bearer token is JWT-shaped.
+//
+// A JWT is always verified locally against jwtOpts first. In self-managed
+// deployments that is the entire check: the caller's per-route scope
+// requirement then decides access, and the token never reaches policyClient.
+// In managed deployments, the verified JWT is additionally sent to
+// policyClient for an allow/deny decision.
+//
+// Anything else is treated as an opaque API key and sent to policyClient
+// directly. policyClient's evaluation contract only accepts an API key, which
+// is why a JWT cannot be routed through it in self-managed deployments.
+func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, selfManaged bool, logger *otelzap.Logger) mux.MiddlewareFunc {
+	apiKeyAuth := newPolicyMiddleware(policyClient, serviceName, logger)
+
+	var jwtVerify mux.MiddlewareFunc
+	if jwtOpts != nil {
+		jwtVerify = NewParseJWTMiddleware(*jwtOpts, jwkCache)
+	}
+	if jwtVerify == nil {
+		return apiKeyAuth
+	}
+
+	jwtAuth := jwtVerify
+	if !selfManaged {
+		jwtAuth = chainMiddleware(jwtVerify, apiKeyAuth)
+	}
+
+	return func(next http.Handler) http.Handler {
+		jwtChain := jwtAuth(next)
+		apiKeyChain := apiKeyAuth(next)
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isJWTShapedToken(bearerToken(r)) {
+				jwtChain.ServeHTTP(w, r)
+				return
+			}
+			apiKeyChain.ServeHTTP(w, r)
+		})
+	}
 }

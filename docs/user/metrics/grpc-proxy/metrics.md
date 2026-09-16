@@ -13,6 +13,8 @@ The metric families below cover client connection health, the NATS pipe to worke
 | nvcf_grpc_proxy_service_nats_out_bytes                   | Gauge       | grpc:10083/metrics | Bytes sent to the NATS connection                                                                      | bytes                   |                                | namespace="nvcf"                                     |
 | nvcf_grpc_proxy_service_nats_out_msgs                    | Gauge       | grpc:10083/metrics | Messages sent to the NATS connection                                                                   |                         |                                | namespace="nvcf"                                     |
 | nvcf_grpc_proxy_service_nats_error_total                 | Counter     | grpc:10083/metrics | Errors observed on the NATS connection                                                                 |                         |                                | namespace="nvcf"                                     |
+| nvcf_grpc_proxy_service_nats_failure_total               | Counter     | grpc:10083/metrics | NATS failures classified by cause                                                                      |                         | reason                         | namespace="nvcf"                                     |
+| nvcf_grpc_proxy_service_nats_disconnect_total            | Counter     | grpc:10083/metrics | NATS disconnect events                                                                                 |                         |                                | namespace="nvcf"                                     |
 | nvcf_grpc_proxy_service_nats_reconnect_total             | Counter     | grpc:10083/metrics | NATS reconnect attempts                                                                                |                         |                                | namespace="nvcf"                                     |
 | nvcf_grpc_proxy_service_nats_reconnects                  | Gauge       | grpc:10083/metrics | Current reconnect attempt count                                                                        |                         |                                | namespace="nvcf"                                     |
 | nvcf_grpc_proxy_service_nats_lame_duck_total             | Counter     | grpc:10083/metrics | NATS lame-duck messages observed                                                                       |                         |                                | namespace="nvcf"                                     |
@@ -24,10 +26,29 @@ The metric families below cover client connection health, the NATS pipe to worke
 
 ## Notes
 
-- `nvcf_grpc_proxy_service_session_init_seconds_bucket` is the SLI for **gRPC** inference function health. HTTP inference functions invoked through the regular HTTP invocation gateway bypass the gRPC proxy entirely and do not register session-init samples here.
-- The `nvcf_grpc_proxy_service_nats_*` family is a useful proxy signal for "is the gRPC proxy → NATS pipe healthy" (in/out bytes and message deltas) and "are NATS upstreams stable" (reconnect and error counters).
+- `nvcf_grpc_proxy_service_session_init_seconds_bucket` is the SLI for gRPC inference function health. HTTP inference functions invoked through the regular HTTP invocation gateway bypass the gRPC proxy entirely and do not register session-init samples here.
+- The `nvcf_grpc_proxy_service_nats_*` family is a useful proxy signal for "is the gRPC proxy -> NATS pipe healthy" (in/out bytes and message deltas) and "are NATS upstreams stable" (reconnect and error counters).
 - Per-RPC outcomes (success vs. error per call) are covered by the OpenTelemetry `rpc_client_*` family; aggregate proxy-side errors are covered by `nvcf_grpc_proxy_service_nats_error_total`.
+- The NATS failure `reason` values are `certificate_expired`, `tls_verification`, `tls`, `authentication`, `timeout`, `connection`, and `other`.
 - Standard Go runtime metrics (`go_*`) and process metrics (`process_*`) are also exposed on the same endpoint and follow upstream conventions.
+
+## Alert queries
+
+Alert on disconnect churn independently from successful reconnects:
+
+```promql
+sum(increase(nvcf_grpc_proxy_service_nats_disconnect_total[5m])) > 0
+```
+
+Group NATS errors by their bounded reason label:
+
+```promql
+sum by (reason) (increase(nvcf_grpc_proxy_service_nats_failure_total[5m])) > 0
+```
+
+Use `reason="certificate_expired"` for certificate expiry alerts. Use
+`reason=~"tls_verification|tls"` for other TLS failures and
+`reason="authentication"` for NATS credential failures.
 
 ## Reproducing locally
 

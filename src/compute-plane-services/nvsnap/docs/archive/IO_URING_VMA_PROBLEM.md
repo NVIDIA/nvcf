@@ -10,9 +10,11 @@ CRIU cannot correctly restore multiple io_uring instances when they share the sa
 ## The Problem
 
 ### What We're Trying to Do
+
 Checkpoint and restore a Python application using `uvloop` (which uses `libuv`, which uses `io_uring`).
 
 ### The Crash
+
 After restore, the application crashes with `SIGSEGV` because io_uring fd 5's memory mappings are missing (restored with `sq_addr=0x0`).
 
 ### Root Cause Analysis
@@ -20,10 +22,11 @@ After restore, the application crashes with `SIGSEGV` because io_uring fd 5's me
 #### 1. libuv Creates Two io_urings
 
 libuv creates two separate io_uring instances:
+
 - **fd 4**: Main "accept" ring (SQPOLL enabled, larger queue)
 - **fd 5**: Control "ctl" ring (no SQPOLL, smaller queue)
 
-```
+```text
 === fd 4 ===
 SqThread:    2862274   (SQPOLL thread running)
 SqThreadCpu: 6
@@ -36,7 +39,8 @@ SqThreadCpu: -1
 #### 2. Both io_urings Share the Same Inode
 
 Linux kernel uses a single `anon_inode:[io_uring]` for ALL io_uring instances:
-```
+
+```text
 fd 4 -> anon_inode:[io_uring] (ino=15288)
 fd 5 -> anon_inode:[io_uring] (ino=15288)  <- SAME INODE!
 ```
@@ -44,6 +48,7 @@ fd 5 -> anon_inode:[io_uring] (ino=15288)  <- SAME INODE!
 #### 3. CRIU Groups VMAs by Inode
 
 CRIU's `dump_io_uring()` uses inode to group VMAs:
+
 ```c
 entry = find_entry_by_ino(mme, nr, vma->vm_iouring_ino);
 ```
@@ -53,13 +58,15 @@ Since both io_urings have the same inode, ALL VMAs get assigned to the first ent
 #### 4. fd 5 Gets No VMAs
 
 Result in dump:
-```
+
+```text
 io_uring fd 4: SQ=64 CQ=128 n_vmas=4  <- gets ALL 4 VMAs
 (fd 5 is never even created as an entry)
 ```
 
 Result in restore:
-```
+
+```text
 io_uring restore [1/2]: fd=4 sq_addr=0x7fbcce5db000  <- correct
 io_uring restore [2/2]: fd=5 sq_addr=0x0             <- BROKEN!
 ```
@@ -71,10 +78,12 @@ When libuv tries to use fd 5's `ctl` ring, it accesses the NULL mapped memory an
 ## What We've Tried
 
 ### Attempt 1: Size-Based Matching
+
 **Idea**: Match VMAs to fds by comparing SQE VMA size to expected size from fdinfo.
 
 **Problem**: The kernel doesn't expose `SqMask`, `SqSize`, `CqSize` in `/proc/pid/fdinfo/FD` (at least on this kernel version). We only see:
-```
+
+```text
 SqThread: ...
 SqThreadCpu: ...
 UserFiles: 0
@@ -85,6 +94,7 @@ PollList:
 Without the queue sizes, we can't predict expected VMA sizes.
 
 ### Attempt 2: Order-Based Matching  
+
 **Idea**: Match SQE VMAs to fds in the order they appear.
 
 **Problem**: This assumes VMAs appear in fd order, which is not guaranteed by the kernel.
@@ -92,7 +102,8 @@ Without the queue sizes, we can't predict expected VMA sizes.
 ## Actual VMA Data
 
 From the checkpoint dump:
-```
+
+```text
 VMA 1: addr=0x7fbcce57b000 size=16384 pgoff=0x10000000 (SQEs)   <- 256 entries
 VMA 2: addr=0x7fbcce5db000 size=12288 pgoff=0x0 (SQ/CQ ring)
 VMA 3: addr=0x7fbcce5de000 size=4096  pgoff=0x10000000 (SQEs)   <- 64 entries
@@ -100,10 +111,12 @@ VMA 4: addr=0x7fbccee62000 size=4096  pgoff=0x0 (SQ/CQ ring)
 ```
 
 Two SQE VMAs with different sizes:
+
 - 16384 bytes = 256 * 64 = 256 SQ entries
 - 4096 bytes = 64 * 64 = 64 SQ entries
 
 Two ring VMAs:
+
 - 12288 bytes (larger ring)
 - 4096 bytes (smaller ring)
 
@@ -112,6 +125,7 @@ Two ring VMAs:
 **We have 4 VMAs and 2 fds, all sharing the same inode.**
 
 We need to determine:
+
 - Which 2 VMAs belong to fd 4?
 - Which 2 VMAs belong to fd 5?
 
@@ -131,34 +145,46 @@ There's no kernel interface to query "which VMAs belong to this io_uring fd".
 ## Potential Solutions
 
 ### Option A: Kernel Enhancement (Not Practical)
+
 Ask kernel to expose more info in fdinfo or provide an ioctl to list VMAs per io_uring.
+
 - **Pros**: Clean solution
 - **Cons**: Requires kernel changes, long timeline
 
 ### Option B: Memory Content Analysis
+
 Read io_uring ring header from VMA memory to find unique identifiers.
+
 - Each io_uring has unique `sq_ring` structure at the start
 - Could hash/fingerprint the content
 - **Pros**: Works without kernel changes
 - **Cons**: Complex, fragile, assumes ring structures are unique
 
 ### Option C: Heuristic Matching (Current Attempts)
+
 Use size, order, or other heuristics to guess which VMAs go together.
+
 - **Pros**: Doesn't need kernel changes
 - **Cons**: Brittle, may fail with different configurations
 
 ### Option D: Application-Level Solution
+
 Have the application re-create io_urings after restore instead of CRIU restoring them.
+
 - **Pros**: Works around the kernel limitation
 - **Cons**: Requires application cooperation
 
 ### Option E: Single io_uring Configuration
+
 Configure libuv to use only one io_uring (if possible).
+
 - **Pros**: Avoids the multi-io_uring problem
 - **Cons**: May not be possible, reduces functionality
 
 ### Option F: Track io_uring Creation
+
 Use LD_PRELOAD to intercept `io_uring_setup()` syscalls and track which VMAs get created for each fd.
+
 - **Pros**: Accurate tracking from the start
 - **Cons**: Only works for checkpoints created after tracking is in place
 
@@ -167,6 +193,7 @@ Use LD_PRELOAD to intercept `io_uring_setup()` syscalls and track which VMAs get
 **The io_uring SQ_RING mmap contains a `ring_mask` field at a known offset!**
 
 From `/usr/include/linux/io_uring.h`:
+
 ```c
 struct io_sqring_offsets {
     __u32 head;
@@ -188,7 +215,9 @@ This means we **cannot** reliably read `ring_mask` in practice.
 ## Research Findings
 
 ### Upstream CRIU Status
+
 **Upstream CRIU has NO io_uring support whatsoever.**
+
 - No `io_uring.c` file
 - No references to io_uring anywhere
 - Our fork's 1506-line `io_uring.c` is entirely custom
@@ -215,6 +244,7 @@ This means we must design the solution from first principles.
 ### Fallback for Same-Size io_urings
 
 If two io_urings have identical queue sizes:
+
 - They will have identical SQE VMA sizes
 - They will have identical ring VMA sizes
 - **Use VMA address ordering** as tiebreaker
@@ -261,6 +291,7 @@ CRIU uses `process_vm_readv()` syscall to read target process memory during dump
 This is already used in `page-xfer.c` for pre-dump optimization.
 
 **Reading ring_mask**:
+
 ```c
 uint32_t ring_mask;
 struct iovec local = { .iov_base = &ring_mask, .iov_len = sizeof(ring_mask) };
@@ -274,6 +305,7 @@ process_vm_readv(pid, &local, 1, &remote, 1, 0);
 ### Phase 1: Two-Pass VMA Processing
 
 **Pass 1: Identify ring VMAs and read their queue sizes**
+
 ```c
 for each VMA where pgoff == IORING_OFF_SQ_RING:
     ring_mask = read_u32_from_process(pid, vma->start + 8)
@@ -282,6 +314,7 @@ for each VMA where pgoff == IORING_OFF_SQ_RING:
 ```
 
 **Pass 2: Match SQE VMAs to ring VMAs**
+
 ```c
 for each VMA where pgoff == IORING_OFF_SQES:
     sqe_entries = vma_size / 64  // sizeof(io_uring_sqe) = 64

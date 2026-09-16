@@ -103,6 +103,40 @@ func TestMaintenanceModeFeatureFlags(t *testing.T) {
 	assert.Equal(t, CordonAndDrainMaintenance, flag)
 }
 
+func TestHelmModelCachingFeatureFlag(t *testing.T) {
+	// parseFlags mutates package globals. Restore them via Cleanup so state
+	// cannot leak into other tests even if an assertion aborts this one.
+	origCaching, origHelm := CachingSupport.enabled, HelmModelCaching.enabled
+	t.Cleanup(func() {
+		CachingSupport.enabled, HelmModelCaching.enabled = origCaching, origHelm
+	})
+
+	// Helm model caching must be opted into. Enabled() prefers the override, so
+	// clear it to assert the declared default is what an unset flag reports.
+	HelmModelCaching.enabled = nil
+	require.NotNil(t, HelmModelCaching.defaultValue)
+	assert.False(t, *HelmModelCaching.defaultValue, "HelmModelCaching must default to off")
+	assert.False(t, HelmModelCaching.Enabled(), "the declared default must reach Enabled()")
+
+	_ = parseFlags(fmt.Sprintf("+%s", HelmModelCaching.Key))
+	assert.True(t, HelmModelCaching.Enabled())
+
+	_ = parseFlags(fmt.Sprintf("-%s", HelmModelCaching.Key))
+	assert.False(t, HelmModelCaching.Enabled())
+
+	// CachingSupport is the parent gate, but it must not imply the Helm
+	// sub-gate. Clear the child override first, so this covers an unset child
+	// rather than one explicitly disabled just above.
+	HelmModelCaching.enabled = nil
+	_ = parseFlags(fmt.Sprintf("+%s", CachingSupport.Key))
+	assert.True(t, CachingSupport.Enabled())
+	assert.False(t, HelmModelCaching.Enabled())
+
+	flag, err := Get(HelmModelCaching.Key)
+	require.NoError(t, err)
+	assert.Equal(t, HelmModelCaching, flag)
+}
+
 func TestHelmAllowCPUNodesFeatureFlag(t *testing.T) {
 	// Reset flags to defaults
 	_ = parseFlags("-HelmAllowCPUNodes,-HelmResourceConstraints")
@@ -170,4 +204,8 @@ func TestHelmAllowCPUNodes_MutualExclusion(t *testing.T) {
 
 	// Reset for other tests
 	_ = parseFlags("-HelmAllowCPUNodes,+HelmResourceConstraints")
+}
+
+func TestModelCacheEncryptionDefaultOff(t *testing.T) {
+	assert.False(t, ModelCacheEncryption.Enabled())
 }

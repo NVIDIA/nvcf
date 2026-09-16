@@ -15,6 +15,10 @@
 spring:
   application:
     env: test
+    # bazel test does not --stamp, so git.properties (and therefore
+    # BootCoreEnvironmentPostProcessor's git-derived fallback) is unavailable;
+    # set a static value here to satisfy ValidateEnvironmentPostProcessor.
+    version: 0.0.1-test
 
 nv-boot:
   reloadable-properties:

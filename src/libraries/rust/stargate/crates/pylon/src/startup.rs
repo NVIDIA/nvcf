@@ -39,7 +39,7 @@ use stargate_runtime::wait_for_termination_signal;
 use tokio::task::JoinError;
 use tracing::{error, info, warn};
 
-use super::Args;
+use super::{Args, OutputTokenCalibrationMode};
 
 type TaskExit = std::result::Result<(), JoinError>;
 
@@ -110,11 +110,14 @@ pub(crate) struct PylonStartupPlan {
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
+    force_chat_completions_include_usage: bool,
+    output_token_calibration: OutputTokenCalibrationMode,
     health_paths: UpstreamHealthPaths,
     startup_health_wait: Duration,
     metrics_addr: SocketAddr,
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
+    tls_reload_interval: Duration,
 }
 
 enum BackendTunnelStartup {
@@ -164,11 +167,14 @@ impl PylonStartupPlan {
                 canary_max_generation_threshold: args.canary_max_generation_threshold,
             },
             request_quality_monitor: request_quality_monitor_config_from_args(args),
+            force_chat_completions_include_usage: args.force_chat_completions_include_usage,
+            output_token_calibration: args.output_token_calibration,
             health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
             startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
+            tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
         })
     }
 
@@ -330,6 +336,7 @@ fn engine_stats_exit_is_expected(mode: Option<EngineStatsStreamMode>, result: &T
 }
 
 async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<RunningPylon> {
+    let grpc_tls_ca_cert_pem = load_grpc_tls_ca_cert(args)?;
     let metrics = PylonMetrics::new()?;
     metrics.observe_target_info(
         env!("CARGO_PKG_VERSION"),
@@ -346,6 +353,16 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         stats_config.observation_channel_capacity,
         Some(metrics.clone()),
     );
+    let runtime_state = if plan.output_token_calibration == OutputTokenCalibrationMode::SinglePylon
+    {
+        info!(
+            cluster_id = %plan.cluster_id,
+            "enabling output-token calibration under the single-Pylon deployment assertion"
+        );
+        runtime_state.with_single_pylon_output_token_calibration()
+    } else {
+        runtime_state
+    };
     let (engine_stats_stream, stats_update_rx) = start_engine_stats_runtime(
         args,
         plan,
@@ -360,8 +377,38 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         stats_update_rx,
         runtime_state.clone(),
     );
-    let tls_cert_pem = args.tls_cert_path.as_ref().map(std::fs::read).transpose()?;
-    let tls_key_pem = args.tls_key_path.as_ref().map(std::fs::read).transpose()?;
+    // The direct tunnel serves an identity, so it loads through a reloader. Other
+    // modes only read the certificate as a trust bundle, which does not reload yet.
+    let server_identity_reloader = if plan.direct_tunnel_listen_addr().is_some() {
+        match (&args.tls_cert_path, &args.tls_key_path) {
+            (Some(cert_path), Some(key_path)) => Some(
+                stargate_tls::ServerIdentityReloader::load(cert_path.into(), key_path.into())
+                    .context("load initial Pylon TLS server identity")?,
+            ),
+            (None, None) => None,
+            (Some(_), None) => anyhow::bail!("--tls-key-path is required with --tls-cert-path"),
+            (None, Some(_)) => anyhow::bail!("--tls-cert-path is required with --tls-key-path"),
+        }
+    } else {
+        None
+    };
+    // Take the served pair from the reloader that validated and owns it. Two
+    // independent reads could straddle a rotation, which would leave the
+    // reloader treating the served identity as already current and never
+    // installing the replacement.
+    let (tls_cert_pem, tls_key_pem) = match server_identity_reloader
+        .as_ref()
+        .map(stargate_tls::ServerIdentityReloader::current_identity)
+    {
+        Some(stargate_tls::ServerTlsIdentity::Provided { cert_pem, key_pem }) => {
+            (Some(cert_pem.clone()), Some(key_pem.clone()))
+        }
+        // Other modes read the certificate only as an outbound trust bundle.
+        Some(stargate_tls::ServerTlsIdentity::SelfSigned) | None => (
+            args.tls_cert_path.as_ref().map(std::fs::read).transpose()?,
+            None,
+        ),
+    };
     let forwarding =
         tunnel_forwarding_config_from_plan(plan, runtime_state.clone(), metrics.clone());
     let tunnel = start_direct_tunnel_from_plan(
@@ -370,6 +417,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         &forwarding,
         tls_cert_pem.as_deref(),
         tls_key_pem,
+        server_identity_reloader,
     )
     .await?;
     if matches!(
@@ -392,7 +440,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         },
         runtime_state.clone(),
         &stats_collector,
-        Some(metrics),
+        Some(metrics.clone()),
     )
     .await
     .context("pylon initial model initialization failed")?;
@@ -404,6 +452,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         forwarding,
         registration_inference_server_url.clone(),
         tls_cert_pem,
+        grpc_tls_ca_cert_pem,
     );
     let mut registration_client = InferenceServerRegistrationClient::default();
     registration_client.start(registration_config)?;
@@ -449,12 +498,14 @@ async fn start_direct_tunnel_from_plan(
     forwarding: &TunnelForwardingConfig,
     tls_cert_pem: Option<&[u8]>,
     tls_key_pem: Option<Vec<u8>>,
+    server_identity_reloader: Option<stargate_tls::ServerIdentityReloader>,
 ) -> Result<Option<QuicHttpTunnelHandle>> {
-    let Some(tunnel_config) =
+    let Some(mut tunnel_config) =
         direct_tunnel_config(args, plan, forwarding, tls_cert_pem, tls_key_pem)
     else {
         return Ok(None);
     };
+    tunnel_config.server_identity_reloader = server_identity_reloader;
     let tunnel = start_quic_http_tunnel(tunnel_config).await?;
     info!(addr = %tunnel.listen_addr(), url = %format!("quic://{}", tunnel.listen_addr()), "QUIC tunnel listening");
     Ok(Some(tunnel))
@@ -481,6 +532,8 @@ fn direct_tunnel_config(
         forwarding: forwarding.clone(),
         tls_cert_pem: tls_cert_pem.map(Vec::from),
         tls_key_pem,
+        server_identity_reloader: None,
+        tls_reload_interval: plan.tls_reload_interval,
         tunnel_protocol: args.tunnel_protocol,
     })
 }
@@ -491,6 +544,7 @@ fn registration_config_from_plan(
     forwarding: TunnelForwardingConfig,
     inference_server_url: String,
     tls_cert_pem: Option<Vec<u8>>,
+    grpc_tls_ca_cert_pem: Option<Vec<u8>>,
 ) -> InferenceServerRegistrationConfig {
     InferenceServerRegistrationConfig {
         seeds: vec![args.stargate_address.clone()],
@@ -500,11 +554,47 @@ fn registration_config_from_plan(
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
+        grpc_tls_ca_cert_pem,
         quic_insecure: args.quic_insecure,
         tunnel_protocol: args.tunnel_protocol,
         forwarding,
         auth_token_provider: plan.auth_token_provider.clone(),
     }
+}
+
+fn load_grpc_tls_ca_cert(args: &Args) -> Result<Option<Vec<u8>>> {
+    // Reverse QUIC always uses tls_cert_path as its trust anchor. Reuse that
+    // bundle for gRPC only when the registration seed explicitly uses HTTPS;
+    // treating it as a gRPC CA for an HTTP seed prevents Pylon from connecting.
+    let reuse_reverse_quic_trust =
+        matches!(args.backend_connectivity, BackendConnectivity::Reverse)
+            && args.stargate_address.trim().starts_with("https://");
+    args.grpc_tls_ca_cert_path
+        .as_ref()
+        .or_else(|| {
+            reuse_reverse_quic_trust
+                .then_some(args.tls_cert_path.as_ref())
+                .flatten()
+        })
+        .map(|path| {
+            let pem = std::fs::read(path)
+                .with_context(|| format!("load gRPC TLS CA certificate from {path}"))?;
+            let certificates = rustls_pemfile::certs(&mut pem.as_slice())
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("parse gRPC TLS CA certificate from {path}"))?;
+            let mut root_store = rustls::RootCertStore::empty();
+            let (valid, invalid) = root_store.add_parsable_certificates(certificates);
+            ensure!(
+                valid > 0,
+                "gRPC TLS CA certificate file {path} contains no valid certificates"
+            );
+            ensure!(
+                invalid == 0,
+                "gRPC TLS CA certificate file {path} contains {invalid} invalid certificate(s)"
+            );
+            Ok(pem)
+        })
+        .transpose()
 }
 
 fn tunnel_forwarding_config_from_plan(
@@ -513,6 +603,7 @@ fn tunnel_forwarding_config_from_plan(
     metrics: Arc<PylonMetrics>,
 ) -> TunnelForwardingConfig {
     TunnelForwardingConfig {
+        force_chat_completions_include_usage: plan.force_chat_completions_include_usage,
         runtime_state,
         request_quality_monitor: plan.request_quality_monitor.clone(),
         metrics: Some(metrics),
@@ -531,6 +622,7 @@ pub(crate) fn stats_collector_config_from_args(
 ) -> StatsCollectorConfig {
     StatsCollectorConfig {
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
+        fallback_max_engine_concurrency: args.max_engine_concurrency,
         // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
         // real upstreams usually do not, so polling is explicit.
         kv_cache_stats_url: args.kv_cache_stats_path.as_deref().map(|path| {
@@ -598,10 +690,6 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
             .is_none_or(|input_tps| input_tps.is_finite() && input_tps > 0.0),
         "initial input TPS must be finite and positive"
     );
-    ensure!(
-        !args.benchmark_pin_input_tps || args.initial_input_tps.is_some(),
-        "--benchmark-pin-input-tps requires --initial-input-tps"
-    );
     if args.do_calibration {
         ensure!(
             args.calibration_requests > 0,
@@ -617,10 +705,7 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     }
 
     Ok(match args.initial_input_tps {
-        Some(input_tps) => ModelInitialization::ConfiguredInputTps {
-            input_tps,
-            pin: args.benchmark_pin_input_tps,
-        },
+        Some(input_tps) => ModelInitialization::ConfiguredInputTps { input_tps },
         None => ModelInitialization::Uncalibrated,
     })
 }
@@ -968,6 +1053,43 @@ mod tests {
         tunnel_forwarding_config_from_plan(plan, PylonRuntimeState::default(), metrics)
     }
 
+    #[test]
+    fn exact_chat_usage_cli_is_disabled_by_default_and_accepts_opt_in() {
+        let (_, default_plan) = startup(&[]);
+        assert!(!default_plan.force_chat_completions_include_usage);
+        assert!(!test_forwarding(&default_plan).force_chat_completions_include_usage);
+
+        let (_, enabled_plan) = startup(&["--force-chat-completions-include-usage"]);
+        assert!(enabled_plan.force_chat_completions_include_usage);
+        assert!(test_forwarding(&enabled_plan).force_chat_completions_include_usage);
+    }
+
+    #[test]
+    fn output_token_calibration_defaults_off_and_accepts_single_pylon() {
+        let (_, default_plan) = startup(&[]);
+        assert_eq!(
+            default_plan.output_token_calibration,
+            OutputTokenCalibrationMode::Off
+        );
+
+        let (_, enabled_plan) = startup(&["--output-token-calibration", "single-pylon"]);
+        assert_eq!(
+            enabled_plan.output_token_calibration,
+            OutputTokenCalibrationMode::SinglePylon
+        );
+
+        let (_, reverse_plan) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--output-token-calibration",
+            "single-pylon",
+        ]);
+        assert_eq!(
+            reverse_plan.output_token_calibration,
+            OutputTokenCalibrationMode::SinglePylon
+        );
+    }
+
     fn test_observation() -> RequestObservation {
         RequestObservation {
             endpoint: RequestObservationEndpoint::ChatCompletions,
@@ -1016,10 +1138,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::new()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1113,7 +1232,7 @@ mod tests {
     async fn reverse_mode_direct_tunnel_startup_returns_no_tunnel_without_binding() {
         let (args, plan) = startup(&["--backend-connectivity", "reverse"]);
         let forwarding = test_forwarding(&plan);
-        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None)
+        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None, None)
             .await
             .expect("reverse mode should not start a direct tunnel");
 
@@ -1125,7 +1244,7 @@ mod tests {
     async fn direct_mode_direct_tunnel_startup_binds_and_reports_quic_url() {
         let (args, plan) = startup(&["--quic-listen-addr", "127.0.0.1:0"]);
         let forwarding = test_forwarding(&plan);
-        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None)
+        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None, None)
             .await
             .expect("direct mode should bind a direct tunnel")
             .expect("direct mode should return the tunnel handle");
@@ -1258,6 +1377,7 @@ mod tests {
             forwarding,
             "quic://127.0.0.1:4567".to_string(),
             None,
+            None,
         );
 
         assert_eq!(config.seeds, ["http://stargate:50071"]);
@@ -1310,6 +1430,7 @@ mod tests {
             forwarding,
             "http://127.0.0.1:8090".to_string(),
             Some(b"trusted reverse cert".to_vec()),
+            Some(b"trusted grpc CA".to_vec()),
         );
 
         assert_eq!(config.seeds, ["http://stargate:50071"]);
@@ -1322,6 +1443,10 @@ mod tests {
             config.tls_cert_pem.as_deref(),
             Some(&b"trusted reverse cert"[..])
         );
+        assert_eq!(
+            config.grpc_tls_ca_cert_pem.as_deref(),
+            Some(&b"trusted grpc CA"[..])
+        );
         assert!(config.quic_insecure);
         assert_eq!(config.tunnel_protocol, TunnelTransportProtocol::Http3);
         assert!(Arc::ptr_eq(
@@ -1332,6 +1457,203 @@ mod tests {
             config.auth_token_provider.as_deref(),
             Some(AuthTokenProvider::Static(token)) if token == "token-from-cli"
         ));
+    }
+
+    #[test]
+    fn grpc_tls_ca_bundle_loads_once_from_the_configured_path() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("grpc-ca.pem");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem()
+            .into_bytes();
+        std::fs::write(&path, &pem).expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        assert_eq!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("configured gRPC CA should load")
+                .as_deref(),
+            Some(pem.as_slice())
+        );
+    }
+
+    #[test]
+    fn reverse_mode_reuses_quic_trust_for_https_when_grpc_override_is_unset() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("shared-ca.pem");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem()
+            .into_bytes();
+        std::fs::write(&path, &pem).expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--stargate-address",
+            "https://stargate.example.test:50071",
+            "--tls-cert-path",
+            &path,
+        ]);
+
+        assert_eq!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("reverse-mode shared CA should load")
+                .as_deref(),
+            Some(pem.as_slice())
+        );
+    }
+
+    #[test]
+    fn reverse_mode_does_not_reuse_quic_trust_for_plaintext_grpc() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("quic-ca.pem");
+        std::fs::write(&path, b"not a gRPC CA bundle").expect("QUIC trust should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--stargate-address",
+            "http://stargate.example.test:50071",
+            "--tls-cert-path",
+            &path,
+        ]);
+
+        assert!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("plaintext gRPC should not load the QUIC trust bundle")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn grpc_ca_override_takes_precedence_over_reverse_quic_trust() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let shared_path = root.path().join("shared-ca.pem");
+        let override_path = root.path().join("grpc-ca.pem");
+        let ca_pem = |common_name: &str| {
+            let mut params = rcgen::CertificateParams::default();
+            params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+            params
+                .distinguished_name
+                .push(rcgen::DnType::CommonName, common_name);
+            let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+            params
+                .self_signed(&key)
+                .expect("test CA certificate should generate")
+                .pem()
+                .into_bytes()
+        };
+        let shared_pem = ca_pem("shared-ca");
+        let override_pem = ca_pem("grpc-ca");
+        std::fs::write(&shared_path, shared_pem).expect("shared CA should write");
+        std::fs::write(&override_path, &override_pem).expect("gRPC CA should write");
+        let shared_path = shared_path.to_string_lossy().into_owned();
+        let override_path = override_path.to_string_lossy().into_owned();
+        let (args, _) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--tls-cert-path",
+            &shared_path,
+            "--grpc-tls-ca-cert-path",
+            &override_path,
+        ]);
+
+        assert_eq!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("gRPC CA override should load")
+                .as_deref(),
+            Some(override_pem.as_slice())
+        );
+    }
+
+    #[test]
+    fn direct_mode_server_identity_is_not_loaded_as_grpc_trust() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let cert_path = root.path().join("server.pem");
+        std::fs::write(&cert_path, b"not a CA bundle").expect("server identity should write");
+        let cert_path = cert_path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--tls-cert-path", &cert_path]);
+
+        assert!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("direct-mode server identity should be ignored for gRPC trust")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_rejects_empty_and_malformed_bundles() {
+        for (name, pem) in [
+            ("empty", &b""[..]),
+            (
+                "malformed",
+                &b"-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----\n"[..],
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("test directory should create");
+            let path = root.path().join(format!("{name}-grpc-ca.pem"));
+            std::fs::write(&path, pem).expect("test CA should write");
+            let path = path.to_string_lossy().into_owned();
+            let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+            let error = load_grpc_tls_ca_cert(&args).expect_err("invalid gRPC CA should fail");
+            let message = format!("{error:#}");
+
+            assert!(message.contains("contains no valid certificates"));
+            assert!(message.contains(&path));
+        }
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_rejects_partially_malformed_bundle() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("partially-malformed-grpc-ca.pem");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let mut pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem()
+            .into_bytes();
+        pem.extend_from_slice(
+            b"-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----\n",
+        );
+        std::fs::write(&path, pem).expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        let error = load_grpc_tls_ca_cert(&args)
+            .expect_err("a bundle with an ignored certificate should fail");
+        assert!(
+            error.to_string().contains("invalid certificate"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_identifies_the_configured_path() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("missing-grpc-ca.pem");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        let error = load_grpc_tls_ca_cert(&args).expect_err("missing gRPC CA should fail");
+        let message = format!("{error:#}");
+
+        assert!(message.contains("load gRPC TLS CA certificate"));
+        assert!(message.contains(&path));
     }
 
     #[test]
@@ -1373,10 +1695,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: plan.upstream.clone(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1_000.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1_000.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1393,7 +1712,7 @@ mod tests {
         let mut observation = test_observation();
         observation.input_tokens = 1000;
 
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
         let stats = receive_queued_model_stats(&runtime_state, "model-a").await;
 
         assert_eq!(stats.queue_size, 1);
@@ -1737,6 +2056,42 @@ mod tests {
         runtime.shutdown().await;
         upstream.shutdown().await;
         control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn concurrency_fallback_is_in_the_first_registration_without_a_stats_endpoint() {
+        let upstream = TestUpstream::spawn(false).await;
+        for mode in [EngineStatsStreamMode::Off, EngineStatsStreamMode::Auto] {
+            let mut control_plane = TestControlPlane::spawn().await;
+            let mut args = runtime_args(
+                &upstream.base_url,
+                control_plane.addr,
+                &["model-a", "model-b"],
+                &["--max-engine-concurrency", "25"],
+            );
+            args.engine_stats_stream = mode;
+            let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+            let runtime = start_pylon_runtime(&args, &plan)
+                .await
+                .expect("pylon startup should succeed without engine stats");
+
+            let registration = control_plane.first_registration().await;
+            for model_id in ["model-a", "model-b"] {
+                assert_eq!(
+                    registration.models[model_id]
+                        .stats
+                        .as_ref()
+                        .expect("first registration should contain stats")
+                        .max_engine_concurrency,
+                    25,
+                    "{model_id} should advertise the fallback in {mode} mode"
+                );
+            }
+            runtime.shutdown().await;
+            control_plane.shutdown().await;
+        }
+        assert_eq!(upstream.calibration_requests.load(Ordering::SeqCst), 0);
+        upstream.shutdown().await;
     }
 
     #[test]

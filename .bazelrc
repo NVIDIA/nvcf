@@ -63,9 +63,15 @@ try-import %workspace%/tools/bazel/internal.bazelrc
 # silently reintroduce the multi-thousand-action C++ protobuf compile.
 common --incompatible_enable_proto_toolchain_resolution
 
-# Stamping for OCI image tags. Default off; CI opts in with --stamp.
+# Stamping for OCI image tags. On by default so every build path (CI,
+# manual GitHub dispatch, local `bazel run //<svc>:push`) embeds a real
+# STABLE_VERSION/STABLE_GIT_COMMIT via tools/workspace_status.sh instead of
+# silently falling back to an empty/"unknown" value. workspace_status.sh
+# already resolves to "mr-<sha>" when NVCF_VERSION is unset, so this is safe
+# for dev builds; only CI's real release path sets NVCF_VERSION for a proper
+# semver stamp.
 build --workspace_status_command=./tools/workspace_status.sh
-build --nostamp
+build --stamp
 
 # Java baseline: Java 25 for the whole monorepo (nv-boot-parent and the Java
 # control-plane services). local_jdk is the approved runtime. The pinned
@@ -105,7 +111,6 @@ build --@rules_go//go/config:pure
 
 # ---- CI profile ----
 build:ci --jobs=32
-build:ci --stamp
 
 # ---- Remote cache profile ----
 # Two configs:

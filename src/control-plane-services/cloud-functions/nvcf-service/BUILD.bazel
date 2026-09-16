@@ -74,6 +74,7 @@ nvcf_java_test(
         "@nv_third_party_deps//:org_testcontainers_testcontainers_cassandra",
         "@nv_third_party_deps//:org_slf4j_slf4j_api",
         "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
     ],
     data = [
         "//src/control-plane-services/cloud-functions:integration_local_env",
