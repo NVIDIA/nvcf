@@ -147,9 +147,9 @@ Documentation: `dev` (development)
 
 | Stack | Version | Source tag |
 | --- | --- | --- |
-| Control plane | `0.20.3` | `deploy/stacks/self-managed/v0.20.3` |
-| Compute plane | `0.4.2` | `deploy/stacks/nvcf-compute-plane/v0.4.2` |
-| Observability | `0.2.1` | `deploy/stacks/observability/v0.2.1` |
+| Control plane | `0.20.4` | `deploy/stacks/self-managed/v0.20.4` |
+| Compute plane | `0.4.3` | `deploy/stacks/nvcf-compute-plane/v0.4.3` |
+| Observability | `0.2.2` | `deploy/stacks/observability/v0.2.2` |
 
 ### Control plane Helm charts
 
@@ -188,7 +188,7 @@ Documentation: `dev` (development)
 | --- | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.1.2` | `self-managed` | Required | Proxies admin token requests for stack services. | `nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.1.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/admin-token-issuer-proxy) |
 | `cassandra` | `5.0.9-nv-2.0.5` | `self-managed` | Required | Stores NVCF account, function, cluster, and service state. | `nvcr.io/nvidia/nvcf/cassandra:5.0.9-nv-2.0.5` | [Upstream](https://github.com/apache/cassandra) |
-| `cert-manager-acmesolver` | `v1.20.2` | `self-managed` | Optional | Serves temporary ACME HTTP-01 domain-validation challenges. | `Publication pending` | [Upstream](https://github.com/cert-manager/cert-manager) |
+| `cert-manager-acmesolver` | `v1.20.2` | `self-managed` | Optional | Serves temporary ACME HTTP-01 domain-validation challenges. | `quay.io/jetstack/cert-manager-acmesolver:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-cainjector` | `v1.20.2` | `self-managed` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-controller` | `v1.20.2` | `self-managed` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | `self-managed` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
@@ -247,14 +247,14 @@ Documentation: `dev` (development)
 | `k8s-device-plugin` | `supported` | Independent | Required | Advertises NVIDIA GPU resources to Kubernetes. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/k8s/containers/device-plugin` | [Upstream](https://github.com/NVIDIA/k8s-device-plugin) |
 | `kubernetes-operator` | `1.4.2` | `compute-plane` | Optional | Reconciles NVIDIA Dynamo workloads on Kubernetes. | `nvcr.io/nvidia/ai-dynamo/kubernetes-operator:1.4.2` | [Upstream](https://github.com/ai-dynamo/dynamo) |
 | `modelexpress-server` | `supported` | Independent | Optional | Serves model weights to Dynamo workers over NIXL RDMA transports. | `https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/containers/modelexpress-server` | [Upstream](https://github.com/ai-dynamo/modelexpress) |
-| `nats` | `2.10.21-alpine` | `compute-plane` | Optional | Provides messaging for the optional NVIDIA Dynamo operator. | `Publication pending` | [Upstream](https://github.com/nats-io/nats-server) |
+| `nats` | `2.10.21-alpine` | `compute-plane` | Optional | Provides messaging for the optional NVIDIA Dynamo operator. | `docker.io/library/nats:2.10.21-alpine` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nvca` | `3.8.0` | `compute-plane` | Required | Registers GPU clusters and orchestrates deployments in-cluster. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/nvca) |
 | `nvca-operator` | `3.8.0` | `compute-plane` | Required | Reconciles NVCA resources and compute-plane configuration. | `Publication pending` |  |
 | `nvcf-container-cache` | `v1.1.36` | `compute-plane` | Optional | Caches container image layers on GPU cluster nodes. | `nvcr.io/nvidia/nvcf/nvcf-container-cache:v1.1.36` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/container-cache) |
 | `nvcf-image-credential-helper` | `0.11.1` | `compute-plane` | Required | Resolves container image credentials for function workloads. | `nvcr.io/nvidia/nvcf/nvcf-image-credential-helper:0.11.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/image-credential-helper) |
 | `nvcf-proxy-tls-certs` | `v1.2.10` | `compute-plane` | Optional | Configures TLS trust for the optional container cache proxy. | `nvcr.io/nvidia/nvcf/nvcf-proxy-tls-certs:v1.2.10` |  |
 | `operator` | `v0.17.1` | `compute-plane` | Optional | Reconciles KAI Scheduler resources. | `ghcr.io/kai-scheduler/kai-scheduler/operator:v0.17.1` | [Upstream](https://github.com/NVIDIA/KAI-Scheduler) |
-| `pylon` | `0.18.0` | `compute-plane` | Optional | Connects LLM worker pods to the LLM request router. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `pylon` | `0.18.0` | `compute-plane` | Optional | Connects LLM worker pods to the LLM request router. | `nvcr.io/nvidia/nvcf/pylon:0.18.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 
 ### Observability Helm charts
 
@@ -262,9 +262,9 @@ Documentation: `dev` (development)
 | --- | --- | --- | --- | --- | --- | --- |
 | `nvcf-default-monitors` | `0.2.0` | `observability` | Required | Deploys the default service and pod monitors for NVCF. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-default-monitors) |
 | `nvcf-otel-collector` | `0.2.0` | `observability` | Required | Configures the OpenTelemetry Collector used by NVCF. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability/charts/nvcf-otel-collector) |
-| `opentelemetry-operator` | `0.122.0` | `observability` | Required | Deploys the OpenTelemetry Operator. | `Publication pending` | [Upstream](https://github.com/open-telemetry/opentelemetry-operator) |
-| `prometheus-operator-crds` | `31.0.1` | `observability` | Required | Installs the Prometheus Operator custom resource definitions. | `Publication pending` | [Upstream](https://github.com/prometheus-community/helm-charts) |
-| `victoria-metrics-single` | `0.45.0` | `observability` | Required | Deploys the default metrics storage backend. | `Publication pending` | [Upstream](https://github.com/VictoriaMetrics/helm-charts) |
+| `opentelemetry-operator` | `0.122.0` | `observability` | Required | Deploys the OpenTelemetry Operator. | `https://open-telemetry.github.io/opentelemetry-helm-charts/opentelemetry-operator:0.122.0` | [Upstream](https://github.com/open-telemetry/opentelemetry-operator) |
+| `prometheus-operator-crds` | `31.0.1` | `observability` | Required | Installs the Prometheus Operator custom resource definitions. | `https://prometheus-community.github.io/helm-charts/prometheus-operator-crds:31.0.1` | [Upstream](https://github.com/prometheus-community/helm-charts) |
+| `victoria-metrics-single` | `0.45.0` | `observability` | Required | Deploys the default metrics storage backend. | `https://victoriametrics.github.io/helm-charts/victoria-metrics-single:0.45.0` | [Upstream](https://github.com/VictoriaMetrics/helm-charts) |
 
 ### Observability services and images
 
@@ -298,8 +298,8 @@ These Early Access artifacts have known CVE impact. Use only the QA-qualified ve
 | Artifact | Version | Stack | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
 | `nvcf-cli` | `1.16.2` | Independent | Manages functions, deployments, and clusters from the command line. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
-| `nvcf-compute-plane-stack` | `0.4.2` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
-| `nvcf-observability-stack` | `0.2.1` | `observability` | Provides the Helmfile bundle for standalone observability deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability) |
-| `nvcf-self-managed-stack` | `0.20.3` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
+| `nvcf-compute-plane-stack` | `0.4.3` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
+| `nvcf-observability-stack` | `0.2.2` | `observability` | Provides the Helmfile bundle for standalone observability deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability) |
+| `nvcf-self-managed-stack` | `0.20.4` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 
 {/*docs-version-sync:END manifest-artifact-registry-paths*/}

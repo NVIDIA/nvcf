@@ -163,6 +163,10 @@ publications:
     type: image
     version: 0.18.0
     registry: public-images
+  - name: pylon
+    type: image
+    version: 0.18.0
+    registry: public-images
   - name: helm-admin-token-issuer-proxy
     type: chart
     version: 1.5.3
@@ -259,13 +263,11 @@ version_overrides:
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:
-  - cert-manager-acmesolver
   - helm-nvcf-api
   - helm-nvcf-nats
   - helm-nvcf-nats-auth-callout-service
   - icms-service-oss
   - llm-api-gateway
-  - nats
   - nvca
   - nvca-operator
   - nvcf-ai-api-gateway-service
@@ -280,10 +282,6 @@ publication_pending:
   - nvcf-otel-collector
   - nvcf-ratelimiter
   - nvcf-self-managed-stack
-  - opentelemetry-operator-chart
-  - prometheus-operator-crds
-  - pylon
-  - victoria-metrics-single
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -879,26 +877,26 @@ release_set:
   status: development
   stacks:
     control-plane:
-      version: 0.20.3
-      source_tag: deploy/stacks/self-managed/v0.20.3
-      source_commit: f0f76183d44122e2f96c249685cab06d1c0e1dea
+      version: 0.20.4
+      source_tag: deploy/stacks/self-managed/v0.20.4
+      source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
       inventory_asset: nvcf-self-managed-stack-inventory.json
     compute-plane:
-      version: 0.4.2
-      source_tag: deploy/stacks/nvcf-compute-plane/v0.4.2
-      source_commit: 9d00c0334fe1e1b702e7278898c98b2d0feb07d3
+      version: 0.4.3
+      source_tag: deploy/stacks/nvcf-compute-plane/v0.4.3
+      source_commit: 26bab276251cbce23a3fea1b9434617276382afe
       inventory_asset: nvcf-compute-plane-stack-inventory.json
     observability:
-      version: 0.2.1
-      source_tag: deploy/stacks/observability/v0.2.1
-      source_commit: 19db0740c925221f5178df42ece7c0f7833e7eaf
+      version: 0.2.2
+      source_tag: deploy/stacks/observability/v0.2.2
+      source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
       inventory_asset: nvcf-observability-stack-inventory.json
 stack:
   name: nvcf-self-managed-stack
-  version: 0.20.3
+  version: 0.20.4
   registry: public-resources
-  source_tag: deploy/stacks/self-managed/v0.20.3
-  source_commit: f0f76183d44122e2f96c249685cab06d1c0e1dea
+  source_tag: deploy/stacks/self-managed/v0.20.4
+  source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
   pin_sources:
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
@@ -947,6 +945,14 @@ artifacts:
     stacks:
       - self-managed
     requirement: required
+  - name: nats
+    type: image
+    registry: public-images
+    upstream_repository: docker.io/library/nats
+    version: 2.10.21-alpine
+    stacks:
+      - compute-plane
+    requirement: optional
   - name: nats-server-config-reloader
     type: image
     registry: public-images
@@ -1005,13 +1011,6 @@ artifacts:
     stacks:
       - observability
     requirement: required
-  - name: nats
-    type: image
-    registry: public-images
-    version: 2.10.21-alpine
-    stacks:
-      - compute-plane
-    requirement: optional
   - name: kubernetes-operator
     type: image
     registry: public-images
@@ -1034,13 +1033,6 @@ artifacts:
     stacks:
       - self-managed
     requirement: required
-  - name: cert-manager-acmesolver
-    type: image
-    registry: public-images
-    version: v1.20.2
-    stacks:
-      - self-managed
-    requirement: optional
   - name: cert-manager-cainjector
     type: image
     registry: public-images
@@ -1279,6 +1271,14 @@ artifacts:
     stacks:
       - self-managed
     requirement: optional
+  - name: cert-manager-acmesolver
+    type: image
+    registry: public-images
+    upstream_repository: quay.io/jetstack/cert-manager-acmesolver
+    version: v1.20.2
+    stacks:
+      - self-managed
+    requirement: optional
   - name: victoria-metrics
     type: image
     registry: public-images
@@ -1286,6 +1286,13 @@ artifacts:
     version: v1.150.0
     stacks:
       - observability
+    requirement: required
+  - name: nvcf-cluster-topology
+    type: chart
+    registry: public-helm
+    version: 0.1.0
+    stacks:
+      - compute-plane
     requirement: required
   - name: nvcf-default-monitors
     type: chart
@@ -1300,13 +1307,6 @@ artifacts:
     version: 0.2.0
     stacks:
       - observability
-    requirement: required
-  - name: nvcf-cluster-topology
-    type: chart
-    registry: public-helm
-    version: 0.1.0
-    stacks:
-      - compute-plane
     requirement: required
   - name: dynamo-platform
     type: chart
@@ -1495,6 +1495,7 @@ artifacts:
     name: opentelemetry-operator
     type: chart
     registry: public-helm
+    upstream_repository: https://open-telemetry.github.io/opentelemetry-helm-charts
     version: 0.122.0
     stacks:
       - observability
@@ -1502,6 +1503,7 @@ artifacts:
   - name: prometheus-operator-crds
     type: chart
     registry: public-helm
+    upstream_repository: https://prometheus-community.github.io/helm-charts
     version: 31.0.1
     stacks:
       - observability
@@ -1509,6 +1511,7 @@ artifacts:
   - name: victoria-metrics-single
     type: chart
     registry: public-helm
+    upstream_repository: https://victoriametrics.github.io/helm-charts
     version: 0.45.0
     stacks:
       - observability
@@ -1541,13 +1544,13 @@ supplemental_artifacts:
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
-    version: 0.4.2
+    version: 0.4.3
     stacks:
       - compute-plane
   - name: nvcf-observability-stack
     type: resource
     registry: public-resources
-    version: 0.2.1
+    version: 0.2.2
     stacks:
       - observability
   - name: nvcf-observability-reference-stack
