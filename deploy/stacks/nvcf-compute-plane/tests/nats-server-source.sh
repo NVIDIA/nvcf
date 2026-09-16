@@ -17,16 +17,42 @@ if [[ "$expected_image" != "docker.io/library/nats:2.10.21-alpine" ]]; then
   exit 1
 fi
 
-for field in registry repository tag; do
-  if ! grep -Fq "$field: {{ dig \"$field\"" "$compute_state"; then
-    printf 'ERROR: Dynamo NATS %s is not wired from the environment values.\n' "$field" >&2
-    exit 1
-  fi
-done
-
 if ! grep -Fq "image: $expected_image" "$golden_state"; then
   printf 'ERROR: compute-plane golden render does not use %s.\n' "$expected_image" >&2
   exit 1
 fi
 
-printf 'nats-server-source: OK (%s)\n' "$expected_image"
+render_dir="$(mktemp -d "${TMPDIR:-/tmp}/nvcf-nats-server-source.XXXXXX")"
+trap 'rm -rf "$render_dir"' EXIT
+
+override_registry="mirror.example.invalid"
+override_repository="team/nats"
+override_tag="review-test"
+override_image="$override_registry/$override_repository:$override_tag"
+render_log="$render_dir/helmfile.log"
+
+if ! HELMFILE_ENV=base \
+  CLUSTER_NAME=nats-server-source-test \
+  NCA_ID=nats-server-source-test \
+  OUTPUT_DIR="$render_dir" \
+  helmfile \
+    --file "$compute_state" \
+    --environment default \
+    --state-values-set "addons.dynamoOperator.enabled=true,addons.dynamoOperator.nats.image.registry=$override_registry,addons.dynamoOperator.nats.image.repository=$override_repository,addons.dynamoOperator.nats.image.tag=$override_tag" \
+    --selector name=dynamo-operator \
+    template \
+    --output-dir "$render_dir" \
+    --output-dir-template '{{ .OutputDir }}/{{ .Release.Name }}' \
+    >"$render_log" 2>&1; then
+  sed -n '1,240p' "$render_log" >&2
+  exit 1
+fi
+
+override_state="$render_dir/dynamo-operator/dynamo-platform/charts/nats/templates/stateful-set.yaml"
+if ! grep -Fq "image: $override_image" "$override_state"; then
+  printf 'ERROR: rendered Dynamo NATS override does not use %s.\n' "$override_image" >&2
+  exit 1
+fi
+
+printf 'nats-server-source: OK (default %s, override %s)\n' \
+  "$expected_image" "$override_image"
