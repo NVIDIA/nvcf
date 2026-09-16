@@ -107,10 +107,6 @@ publications:
     type: image
     version: 0.17.6
     registry: public-images
-  - name: nvcf-grpc-proxy
-    type: image
-    version: 1.33.4
-    registry: public-images
   - name: nvcf-image-credential-helper
     type: image
     version: 0.11.1
@@ -177,6 +173,11 @@ publications:
     version: 1.28.0
     registry: public-helm
     chart_format: http
+  - name: helm-nvcf-api
+    type: chart
+    version: 1.27.1
+    registry: public-helm
+    chart_format: http
   - name: helm-nvcf-api-keys
     type: chart
     version: 1.8.0
@@ -192,16 +193,6 @@ publications:
     version: 1.8.2
     registry: public-helm
     chart_format: http
-  - name: helm-nvcf-function-autoscaler
-    type: chart
-    version: 0.5.0
-    registry: public-helm
-    chart_format: http
-  - name: helm-nvcf-grpc-proxy
-    type: chart
-    version: 1.7.3
-    registry: public-helm
-    chart_format: http
   - name: helm-nvcf-invocation-service
     type: chart
     version: 1.6.1
@@ -212,9 +203,14 @@ publications:
     version: 1.4.3
     registry: public-helm
     chart_format: http
-  - name: helm-nvcf-llm-request-router
+  - name: helm-nvcf-nats
     type: chart
-    version: 1.14.0
+    version: 0.8.4
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-nats-auth-callout-service
+    type: chart
+    version: 1.2.1
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-notary-service
@@ -252,20 +248,15 @@ publications:
     version: 1.4.1
     registry: public-helm
     chart_format: http
-  - name: nvcf-gateway-routes
-    type: chart
-    version: 1.18.1
-    registry: public-helm
-    chart_format: http
 version_overrides:
   - name: nvcf-cli
     type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:
-  - helm-nvcf-api
-  - helm-nvcf-nats
-  - helm-nvcf-nats-auth-callout-service
+  - helm-nvcf-function-autoscaler
+  - helm-nvcf-grpc-proxy
+  - helm-nvcf-llm-request-router
   - icms-service-oss
   - llm-api-gateway
   - nvca
@@ -277,6 +268,8 @@ publication_pending:
   - nvcf-default-monitors
   - nvcf-ess
   - nvcf-function-autoscaler
+  - nvcf-gateway-routes
+  - nvcf-grpc-proxy
   - nvcf-notary
   - nvcf-observability-stack
   - nvcf-otel-collector
@@ -877,9 +870,9 @@ release_set:
   status: development
   stacks:
     control-plane:
-      version: 0.20.4
-      source_tag: deploy/stacks/self-managed/v0.20.4
-      source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
+      version: 0.20.5
+      source_tag: deploy/stacks/self-managed/v0.20.5
+      source_commit: faf2fa052c37ef77f25dfddb15925bff6010b659
       inventory_asset: nvcf-self-managed-stack-inventory.json
     compute-plane:
       version: 0.4.3
@@ -893,14 +886,14 @@ release_set:
       inventory_asset: nvcf-observability-stack-inventory.json
 stack:
   name: nvcf-self-managed-stack
-  version: 0.20.4
+  version: 0.20.5
   registry: public-resources
-  source_tag: deploy/stacks/self-managed/v0.20.4
-  source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
+  source_tag: deploy/stacks/self-managed/v0.20.5
+  source_commit: faf2fa052c37ef77f25dfddb15925bff6010b659
   pin_sources:
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
-  pin_source_digest: sha256:2b6258f0d8a4bf5cf03bdb7d03f51e8ddc3af90df804016a281781b706b3250d
+  pin_source_digest: sha256:a4df697e4b90bb69901f3c34e3fa827d121e9a095e2841f17e227b31fed67593
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
@@ -1141,14 +1134,14 @@ artifacts:
   - name: nvcf-function-autoscaler
     type: image
     registry: public-images
-    version: 1.21.6
+    version: 1.21.7
     stacks:
       - self-managed
     requirement: required
   - name: nvcf-grpc-proxy
     type: image
     registry: public-images
-    version: 1.33.4
+    version: 1.33.5
     stacks:
       - self-managed
     requirement: required
@@ -1368,14 +1361,14 @@ artifacts:
   - name: helm-nvcf-function-autoscaler
     type: chart
     registry: public-helm
-    version: 0.5.0
+    version: 0.5.1
     stacks:
       - self-managed
     requirement: required
   - name: helm-nvcf-grpc-proxy
     type: chart
     registry: public-helm
-    version: 1.7.3
+    version: 1.7.4
     stacks:
       - self-managed
     requirement: required
@@ -1396,7 +1389,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: public-helm
-    version: 1.14.0
+    version: 1.14.1
     stacks:
       - self-managed
     requirement: optional
@@ -1487,7 +1480,7 @@ artifacts:
   - name: nvcf-gateway-routes
     type: chart
     registry: public-helm
-    version: 1.18.1
+    version: 1.18.2
     stacks:
       - self-managed
     requirement: required

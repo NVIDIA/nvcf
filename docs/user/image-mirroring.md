@@ -195,12 +195,12 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 
 ```bash
 # Set stack versions
-export STACK_VERSION="0.20.4"
+export STACK_VERSION="0.20.5"
 export COMPUTE_STACK_VERSION="0.4.3"
 export OBSERVABILITY_STACK_VERSION="0.2.2"
 
 # Download a specific control-plane stack version
-# Publication pending: nvcf-self-managed-stack 0.20.4 is not yet available for download.
+# Publication pending: nvcf-self-managed-stack 0.20.5 is not yet available for download.
 
 # Download a specific compute-plane stack version
 # Publication pending: nvcf-compute-plane-stack 0.4.3 is not yet available for download.
@@ -226,7 +226,7 @@ and its listed artifact versions are QA-qualified together.
 {/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-self-managed-stack 0.20.4 is not yet available for download.
+# Publication pending: nvcf-self-managed-stack 0.20.5 is not yet available for download.
 ```
 
 {/*docs-version-sync:END image-mirroring-stack-snippet*/}
