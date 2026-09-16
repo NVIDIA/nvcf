@@ -47,6 +47,17 @@ templates:
 
 releases:
 
+  # NOTE: every release below depends on cassandra-system/cassandra, and
+  # nats-auth-callout-service depends on nats-system/nats, both defined in
+  # 01-dependencies.yaml.gotmpl. Those edges are already enforced by the
+  # 01-dependencies -> 02-core stage boundary (helmfile.d/*.yaml.gotmpl files
+  # run sequentially under the pinned helmfile v1.1.x), so they are
+  # intentionally not repeated as needs: entries here. Only edges between
+  # releases within this same file are listed explicitly. The same applies to
+  # function-autoscaler in 03-observability.yaml.gotmpl, which depends on
+  # cassandra-system/cassandra and nvcf/api via the 02-core -> 03-observability
+  # stage boundary.
+
   # --- NVCF Services ---
   - name: api-keys
     version: 1.8.0
@@ -55,26 +66,52 @@ releases:
       - template: service
 
   - name: sis
-    version: 2.3.0
+    version: 2.4.0
     namespace: sis
     inherit:
       - template: service
     condition: icms.enabled
 
   - name: api
-    version: 1.27.0
+    version: 1.27.1
     namespace: nvcf
     inherit:
       - template: service
     needs:
+      # Required deployment order: API Keys, ICMS/SIS, Notary, and Helm ReVal
+      # must be up before Cloud Functions (this release), which registers an
+      # OAuth client and base URL with each at startup. Cassandra and NATS
+      # prerequisites are already enforced by the stage boundary between
+      # 01-dependencies.yaml.gotmpl and this file, so they are not repeated
+      # here.
+      - api-keys/api-keys
+      {{- if dig "icms" "enabled" true .Values }}
+      - sis/sis
+      {{- end }}
       # not needed to start, but needed for bootstrapping account which is done with a script in the api helm chart
       - ess/ess-api
+      - nvcf/notary-service
+      - nvcf/reval
 
   - name: nvct-api
     version: 1.6.0
     namespace: nvcf
     inherit:
       - template: service
+    needs:
+      # Required deployment order: Cloud Tasks (this release) registers an
+      # OAuth client and base URL with API Keys, ICMS/SIS, ESS, Notary, and
+      # Helm ReVal, and separately depends on Cloud Functions per the Cloud
+      # Functions -> Cloud Tasks edge. Cassandra prerequisite is already
+      # enforced by the 01-dependencies stage boundary.
+      - api-keys/api-keys
+      {{- if dig "icms" "enabled" true .Values }}
+      - sis/sis
+      {{- end }}
+      - ess/ess-api
+      - nvcf/notary-service
+      - nvcf/reval
+      - nvcf/api
 
   - name: invocation-service
     version: 1.6.1
@@ -85,7 +122,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.7.3
+    version: 1.7.4
     namespace: nvcf
     inherit:
       - template: service
@@ -118,7 +155,7 @@ releases:
 
   - name: admin-issuer-proxy
     chart: nvcf/helm-admin-token-issuer-proxy
-    version: 1.5.2
+    version: 1.5.3
     namespace: api-keys
     values:
       - ../global.yaml.gotmpl
@@ -150,7 +187,7 @@ releases:
 
   - name: reval
     chart: nvcf/helm-reval
-    version: 1.4.0
+    version: 1.4.1
     namespace: nvcf
     values:
       - ../global.yaml.gotmpl
@@ -159,10 +196,31 @@ releases:
 
   - name: nats-auth-callout-service
     chart: nvcf/helm-nvcf-nats-auth-callout-service
-    version: 1.2.0
+    version: 1.2.1
     namespace: nats-system
     values:
       - ../global.yaml.gotmpl
+      - image:
+          repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
+      - serviceConfig:
+          service:
+            nats_url: "nats://nats.nats-system.svc.cluster.local:4222"
+      - servicePluginConfigSecret:
+          enabled: true
+          name: nats-nkeys
+          key: auth-callout-plugin.yaml
+          mountPath: /etc/plugin-config/plugin.yaml
+      - extraEnvs:
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED
+            valueFrom:
+              secretKeyRef:
+                name: {{ dig "nats" "authCallout" "secretName" "nats-auth-callout-nkeys" .Values | quote }}
+                key: nkey_seed
+          - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SIGNATURE
+            valueFrom:
+              secretKeyRef:
+                name: {{ dig "nats" "authCallout" "secretName" "nats-auth-callout-nkeys" .Values | quote }}
+                key: nkey_signature
       {{- if .Values.global.imagePullSecrets }}
       - imagePullSecrets:
           {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
@@ -174,7 +232,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.13.3
+    version: 1.14.1
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -223,7 +281,7 @@ releases:
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.18.1
+    version: 1.18.2
     {{- end }}
     needs:
       - nvcf/notary-service

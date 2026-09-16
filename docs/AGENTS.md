@@ -76,20 +76,21 @@ NVIDIA Cloud Functions glyphs inside green icon boxes must stay white in both mo
 Before finishing SVG changes, render light and dark previews for every changed SVG and compare them together for consistent background tone, panel contrast, connector contrast, text readability, and accent brightness.
 
 Use `--update-catalog` only when synchronizing artifact versions and registry
-paths from the latest stable GitHub stack release. Presentation-only changes to
+paths from the latest stable releases of all three stacks. Presentation-only changes to
 `manifest.entries` use the regeneration command above.
 
-To synchronize the catalog and generated blocks from the latest stable GitHub
-stack release:
+To synchronize the development catalog and generated blocks from the latest
+stable releases of all three stacks:
 
 ```bash
 go run -C tools/docs-version-sync . --target main --update-catalog
 ./tools/ci/check-doc-version-sync
 ```
 
-The first command reads the inventory attached to the latest stable GitHub
-stack release and writes updates. The second command is an offline consistency
-check. CI runs the offline check before this separate current-release check:
+The first command reads the inventories attached to the latest stable GitHub
+stack releases and writes a development release set. The second command is an
+offline consistency check. CI runs the offline check before this separate
+current-release check:
 
 ```bash
 ./tools/ci/check-doc-version-current-release
@@ -100,6 +101,12 @@ exact public locations in `publications` and mark unavailable versions in
 `publication_pending`. Identify publication records by `name`, `type`, and
 `version` so charts, images, and resources with the same name remain distinct.
 Version overrides also require `name` and `type`.
+
+After QA qualifies an exact three-stack combination, use
+`--qualification-version` with all three explicit stack version flags. Generate
+the docs, then run `tools/scripts/cut-docs-version.sh`. The versioned catalog
+snapshot and Fern dropdown record the docs version and all three stack
+versions.
 
 Generated blocks are marked with comments such as:
 

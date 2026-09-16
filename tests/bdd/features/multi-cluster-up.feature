@@ -32,7 +32,7 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
       # both split stacks: deploy/stacks/<stack>/environments/local.yaml.
       # Neither file is tracked, so author both from the BDD multi-cluster
       # fixtures (they carry the alias-service URL shape the split
-      # topology needs). observability.profile is disabled because this
+      # topology needs). The fixtures disable observability because this
       # workflow runs 'helmfile apply', whose diff phase validates
       # rendered manifests against the live cluster (--dry-run=server);
       # on a fresh cluster the ServiceMonitor CRDs do not exist yet and
@@ -42,12 +42,10 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       # Conflict precheck: single-cluster ncp-local's k3d serverlb
       # claims 0.0.0.0:8080/8443/10081, and ncp-local-cp also
       # needs NATS on 4222 plus the worker callback port 10086.
@@ -158,8 +156,8 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
         """
         clusterName: ncp-local-compute-1
         ncaID: nvcf-default
-        region: us-west-1
         selfManaged:
+          region: us-west-1
           icmsServiceURL: http://sis.localhost:8080
           revalServiceURL: http://reval.localhost:8080
           natsURL: nats://nats.localhost:4222

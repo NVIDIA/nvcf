@@ -167,9 +167,10 @@ helmDefaults:
 {{-     end }}
 {{-   end }}
 {{-   $validationPolicy = set $validationPolicy "allowedExtraKubernetesTypes" $allowedTypes }}
-{{- /* ReVal only accepts "Default" or "Unrestricted"; an unset name is rejected. */}}
+{{- /* Preserve the self-managed chart default when the stack extends the
+       string-valued mergeConfig with extra Kubernetes types. */}}
 {{-   if not (dig "name" "" $validationPolicy) }}
-{{-     $validationPolicy = set $validationPolicy "name" "Default" }}
+{{-     $validationPolicy = set $validationPolicy "name" "Unrestricted" }}
 {{-   end }}
 {{-   $cluster := set (dig "cluster" dict $agentMergeConfig) "validationPolicy" $validationPolicy }}
 {{-   $agentMergeConfig = set $agentMergeConfig "cluster" $cluster }}
@@ -178,10 +179,11 @@ helmDefaults:
 releases:
 
   - name: nvca-operator
-    # The chart appVersion owns the operator image version. Compute-plane base
-    # values own the NVCA application version used by this stack.
+    # Compute-plane base values pin the operator image and NVCA application
+    # versions. The chart appVersion remains the operator image fallback when
+    # no imageTag override is set.
     chart: nvcf/helm-nvca-operator
-    version: 1.24.0
+    version: 1.28.0
     namespace: nvca-operator
     values:
       - ../global.yaml.gotmpl
@@ -223,9 +225,8 @@ releases:
         ngcConfig:
           clusterSource: self-managed
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}
-        ncaId: {{ requiredEnv "NCA_ID" }}
+        ncaID: {{ requiredEnv "NCA_ID" }}
         selfManaged:
-          identitySource: psat
           {{- with dig "nvcaVersion" "" $selfManaged }}
           nvcaVersion: {{ . | quote }}
           {{- end }}

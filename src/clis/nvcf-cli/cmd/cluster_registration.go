@@ -552,21 +552,21 @@ func registeredClusterIDs(resp *client.RegisterClusterResponse) (clusterGroupID,
 // Schema matches the nvca-operator chart's expected keys. clusterID,
 // clusterGroupID, and ncaID live at the top level with the mixed-case "ID"
 // suffix to match the `## @param` annotations in
-// `deployments/nvca-operator/values.yaml` (e.g. `## @param clusterID`).
-// `selfManaged.identitySource` stays nested because it scopes a self-managed-
-// only knob (PSAT vs SPIRE) and the chart's `selfManaged:` block already
-// houses other self-managed-specific fields like `nvcaVersion`.
+// `deployments/nvca-operator/values.yaml` (e.g. `## @param clusterID`). Region
+// lives under selfManaged because that is the value the self-managed backend
+// template consumes. identitySource is lifecycle metadata used by CLI teardown;
+// the chart deliberately ignores it.
 type helmValues struct {
 	ClusterName    string            `yaml:"clusterName,omitempty"`
 	ClusterID      string            `yaml:"clusterID"`
 	ClusterGroupID string            `yaml:"clusterGroupID"`
 	NcaID          string            `yaml:"ncaID"`
-	Region         string            `yaml:"region"`
 	SelfManaged    selfManagedValues `yaml:"selfManaged"`
 }
 
 type selfManagedValues struct {
 	IdentitySource                 string `yaml:"identitySource"`
+	Region                         string `yaml:"region"`
 	ICMSServiceURL                 string `yaml:"icmsServiceURL,omitempty"`
 	ICMSServiceHostHeaderOverride  string `yaml:"icmsServiceHostHeaderOverride,omitempty"`
 	ReValServiceURL                string `yaml:"revalServiceURL,omitempty"`
@@ -596,8 +596,7 @@ func printRegistrationOutput(name, clusterGroupID, clusterID, ncaID, region, iss
 		ClusterID:      clusterID,
 		ClusterGroupID: clusterGroupID,
 		NcaID:          ncaID,
-		Region:         region,
-		SelfManaged:    newSelfManagedValues(identitySource, icmsURL, natsURL),
+		SelfManaged:    newSelfManagedValues(identitySource, region, icmsURL, natsURL),
 	}
 
 	out, err := yaml.Marshal(vals)
@@ -608,17 +607,18 @@ func printRegistrationOutput(name, clusterGroupID, clusterID, ncaID, region, iss
 	fmt.Print(string(out))
 }
 
-func newSelfManagedValues(identitySource, icmsServiceURL, natsURL string) selfManagedValues {
-	return newSelfManagedValuesFromEndpoints(identitySource, registerEndpointValues{
+func newSelfManagedValues(identitySource, region, icmsServiceURL, natsURL string) selfManagedValues {
+	return newSelfManagedValuesFromEndpoints(identitySource, region, registerEndpointValues{
 		ICMSServiceURL:  icmsServiceURL,
 		ReValServiceURL: deriveSiblingHTTPServiceURL(icmsServiceURL, "reval"),
 		NATSURL:         natsURL,
 	})
 }
 
-func newSelfManagedValuesFromEndpoints(identitySource string, endpoints registerEndpointValues) selfManagedValues {
+func newSelfManagedValuesFromEndpoints(identitySource, region string, endpoints registerEndpointValues) selfManagedValues {
 	return selfManagedValues{
 		IdentitySource:                 identitySource,
+		Region:                         region,
 		ICMSServiceURL:                 endpoints.ICMSServiceURL,
 		ICMSServiceHostHeaderOverride:  endpoints.ICMSServiceHostHeaderOverride,
 		ReValServiceURL:                endpoints.ReValServiceURL,

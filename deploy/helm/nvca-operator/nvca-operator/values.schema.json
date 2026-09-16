@@ -53,7 +53,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.157.0-nv-0.2.1"
+                    "default": "0.160.0-nv-0.2.5"
                 },
                 "resources": {
                     "type": "object",
@@ -680,7 +680,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "BYOO OpenTelemetry Collector image tag.",
-                            "default": "0.157.0-nv-0.2.1"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 },
@@ -986,7 +986,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.157.0-nv-0.2.1"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 }
@@ -1021,6 +1021,11 @@
                     "default": [],
                     "items": {}
                 },
+                "region": {
+                    "type": "string",
+                    "description": "Region reported for a self-managed cluster.",
+                    "default": "us-west-1"
+                },
                 "imageCredHelper": {
                     "type": "object",
                     "properties": {
@@ -1052,7 +1057,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.157.0-nv-0.2.1"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 },

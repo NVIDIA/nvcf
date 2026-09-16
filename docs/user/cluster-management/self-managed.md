@@ -207,13 +207,16 @@ identity and endpoints:
 clusterID: <uuid>
 clusterGroupID: <uuid>
 ncaID: <nca-id>
-region: <region>
 selfManaged:
+  region: <region>
   identitySource: psat
   icmsServiceURL: "http://<GATEWAY_ADDR>"
   revalServiceURL: "http://<GATEWAY_ADDR>"
   natsURL: "nats://<GATEWAY_ADDR>:4222"
 ```
+
+`selfManaged.identitySource` is retained for CLI teardown and is not consumed
+by the NVCA Operator chart.
 
 The `template`, `install`, and `apply` targets copy this file into `out/` before
 running Helmfile.
@@ -222,7 +225,7 @@ running Helmfile.
 
 | Chart | `helm-nvca-operator` |
 | --- | --- |
-| Version | `1.24.0` |
+| Version | `1.28.0` |
 | Namespace | `nvca-operator` |
 | Depends on | All control-plane services and gateway must be running |
 

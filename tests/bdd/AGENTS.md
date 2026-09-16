@@ -58,6 +58,10 @@ logic into `dsl/`.
 - Function lifecycle CLI option tables preserve row order, repeated options,
   empty values, and product-invalid values. Only the `option | value` table
   structure is validated before the command runs.
+- The Helm function lifecycle uses `SAMPLE_HELM_FUNCTION_CHART`. The chart
+  must be publicly reachable by ReVal, expose an `entrypoint` Service on port
+  8000, answer `/health`, and echo the request message from `/echo`. Keep the
+  chart reference outside the feature so release versions are not hard-coded.
 - Gateway API route readiness tables expose each route's kind, name,
   namespace, and intended Gateway parent plus the shared context and timeout.
   The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but

@@ -63,7 +63,7 @@ releases:
 
   # --- Observability Services ---
   - name: state-metrics
-    version: 1.0.2
+    version: 1.0.6
     namespace: nvcf
     condition: stateMetrics.enabled # From global.yaml.gotmpl or env overrides
     inherit:
@@ -73,7 +73,7 @@ releases:
 
   {{- if $functionAutoscalerEnabled }}
   - name: function-autoscaler
-    version: 0.4.0
+    version: 0.5.2
     namespace: nvcf
     inherit:
       - template: functionAutoscaler

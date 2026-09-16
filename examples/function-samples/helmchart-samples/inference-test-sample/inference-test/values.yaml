@@ -22,6 +22,14 @@ image:
 
 inferencePort: 8000
 
+resources:
+  limits:
+    cpu: 500m
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
 # When true, render nvcf-workload-config so NVCA uses worker container readiness
 # for instance health instead of all chart objects. See docs/user/helm-functions.md.
 statusByWorkerReadiness: false

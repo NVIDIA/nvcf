@@ -3,8 +3,3 @@ api:
   image:
     registry: example.com
     repository: foo/bar/baz
-  accountBootstrap:
-    image:
-      registry: example.com
-      repository: foo/bar/bop
-      tag: "0.0.0"

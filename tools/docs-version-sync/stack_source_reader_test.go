@@ -168,7 +168,7 @@ func TestValidateStackSourceReleaseRejectsInvalidIdentity(t *testing.T) {
 		{
 			name:    "non-canonical tag",
 			mutate:  func(release *stackSourceRelease) { release.Tag = "v1.2.3" },
-			wantErr: "stack source tag must be " + stackTagPrefix + "1.2.3",
+			wantErr: "does not match a released stack",
 		},
 		{
 			name:    "malformed commit",

@@ -45,22 +45,6 @@ var effectiveStackPins = []effectiveStackPin{
 		path:         "deploy/stacks/self-managed/global.yaml.gotmpl",
 		pattern:      `pylon:([0-9][^"\s]*)`,
 	},
-	{
-		artifact:             "helm-nvca-operator",
-		artifactType:         ArtifactTypeChart,
-		path:                 "deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl",
-		blockPattern:         `(?m)^  - name: nvca-operator[ \t]*$`,
-		blockBoundaryPattern: `(?m)^  -[ \t]+`,
-		pattern:              `(?m)^    version:[ \t]*"?([^"\s]+)"?[ \t]*$`,
-	},
-	{
-		artifact:             "nvca",
-		artifactType:         ArtifactTypeImage,
-		path:                 "deploy/stacks/nvcf-compute-plane/environments/base.yaml",
-		blockPattern:         `(?m)^  nvcaOperator:[ \t]*$`,
-		blockBoundaryPattern: `(?m)^  [A-Za-z0-9_-]+:[ \t]*`,
-		pattern:              `(?m)^      nvcaVersion:[ \t]*"([^"]+)"[ \t]*$`,
-	},
 }
 
 func extractEffectiveStackPins(sources map[string][]byte, pins []effectiveStackPin) (map[string]string, error) {
@@ -142,7 +126,34 @@ func pinSourceDigest(sources map[string][]byte, pins []effectiveStackPin) (strin
 
 // validateStackSourceSnapshot verifies the catalog against its immutable stack release inputs.
 func validateStackSourceSnapshot(repoRoot string, catalog *Catalog) error {
-	return validateStackSourceSnapshotWithPins(repoRoot, catalog, effectiveStackPins)
+	pins, err := effectiveStackPinsForSources(catalog.Stack.PinSources)
+	if err != nil {
+		return err
+	}
+	return validateStackSourceSnapshotWithPins(repoRoot, catalog, pins)
+}
+
+func effectiveStackPinsForSources(sourcePaths []string) ([]effectiveStackPin, error) {
+	known := append([]effectiveStackPin(nil), effectiveStackPins...)
+	knownPaths := make(map[string]struct{}, len(known))
+	for _, pin := range known {
+		knownPaths[pin.path] = struct{}{}
+	}
+	selectedPaths := make(map[string]struct{}, len(sourcePaths))
+	for _, sourcePath := range sourcePaths {
+		_, ok := knownPaths[sourcePath]
+		if !ok {
+			return nil, fmt.Errorf("stack source snapshot declares unsupported pin source %s", sourcePath)
+		}
+		selectedPaths[sourcePath] = struct{}{}
+	}
+	pins := make([]effectiveStackPin, 0, len(known))
+	for _, pin := range known {
+		if _, selected := selectedPaths[pin.path]; selected {
+			pins = append(pins, pin)
+		}
+	}
+	return pins, nil
 }
 
 // validateStackSourceSnapshotWithPins verifies catalog artifacts with a supplied pin definition set.

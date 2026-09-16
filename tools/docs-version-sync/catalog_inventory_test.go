@@ -63,10 +63,115 @@ func TestUpdateCatalogFromGitHubUsesSelectedReleaseInventory(t *testing.T) {
 	}
 	for _, name := range []string{computeStackResourceName, observabilityStackResourceName} {
 		artifact, ok := catalog.findArtifact(name)
-		if !ok || artifact.Version != release.Version {
-			t.Fatalf("%s = %#v, want release version %s", name, artifact, release.Version)
+		if !ok || artifact.Version != "0.5.0" {
+			t.Fatalf("%s = %#v, want independently owned version 0.5.0", name, artifact)
 		}
 	}
+}
+
+func TestUpdateCatalogFromGitHubInventoriesMergesThreeStackAssets(t *testing.T) {
+	repo := initTestGitRepo(t)
+	selfRelease := commitTestStackSource(t, repo, "1.2.3", testCatalogPinSources())
+	releases := map[string]stackSourceRelease{
+		selfManagedStackKey: selfRelease,
+		computePlaneStackKey: {
+			Version: "2.3.4", Tag: stackInventorySpecs[1].TagPrefix + "2.3.4", Commit: selfRelease.Commit,
+		},
+		observabilityStackKey: {
+			Version: "3.4.5", Tag: stackInventorySpecs[2].TagPrefix + "3.4.5", Commit: selfRelease.Commit,
+		},
+	}
+	for _, key := range []string{computePlaneStackKey, observabilityStackKey} {
+		if _, err := gitOutput(repo, "tag", releases[key].Tag, releases[key].Commit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	full := testCatalogResolvedInventory(t, selfRelease)
+	inventories := map[string]resolvedStackInventory{
+		selfManagedStackKey:   filterResolvedInventoryByPlane(t, full, releases[selfManagedStackKey], "control-plane"),
+		computePlaneStackKey:  filterResolvedInventoryByPlane(t, full, releases[computePlaneStackKey], "compute-plane"),
+		observabilityStackKey: filterResolvedInventoryByPlane(t, full, releases[observabilityStackKey], "observability"),
+	}
+	raw := make(map[string][]byte, len(inventories))
+	for key, inventory := range inventories {
+		var err error
+		raw[key], err = marshalResolvedStackInventory(inventory)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, spec := range stackInventorySpecs {
+			release := releases[spec.Key]
+			switch r.URL.Path {
+			case "/repos/NVIDIA/nvcf/git/ref/tags/" + release.Tag:
+				_, _ = fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"type":"commit","sha":"%s"}}`, release.Tag, release.Commit)
+				return
+			case "/repos/NVIDIA/nvcf/releases/tags/" + release.Tag:
+				_, _ = fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q}]}`, release.Tag, spec.AssetName, server.URL+"/inventory/"+spec.Key)
+				return
+			case "/inventory/" + spec.Key:
+				_, _ = w.Write(raw[spec.Key])
+				return
+			}
+		}
+		http.Error(w, "unexpected path "+r.URL.Path, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	t.Setenv("DOC_VERSION_SYNC_GITHUB_API_URL", server.URL)
+	t.Setenv("DOC_VERSION_SYNC_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	catalog, err := updateCatalogFromGitHubInventories(repo, map[string]string{
+		selfManagedStackKey:   releases[selfManagedStackKey].Version,
+		computePlaneStackKey:  releases[computePlaneStackKey].Version,
+		observabilityStackKey: releases[observabilityStackKey].Version,
+	}, "", testCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalog.Stack.Version != "1.2.3" {
+		t.Fatalf("self-managed stack version = %s, want 1.2.3", catalog.Stack.Version)
+	}
+	if catalog.ReleaseSet.Status != ReleaseSetDevelopment || catalog.ReleaseSet.DocumentationVersion != "dev" {
+		t.Fatalf("release set = %#v, want development docs", catalog.ReleaseSet)
+	}
+	if catalog.ReleaseSet.Stacks.ControlPlane.Version != "1.2.3" ||
+		catalog.ReleaseSet.Stacks.ComputePlane.Version != "2.3.4" ||
+		catalog.ReleaseSet.Stacks.Observability.Version != "3.4.5" {
+		t.Fatalf("release set stack versions = %#v", catalog.ReleaseSet.Stacks)
+	}
+	for name, want := range map[string]string{
+		computeStackResourceName:       "2.3.4",
+		observabilityStackResourceName: "3.4.5",
+	} {
+		artifact, found := catalog.findArtifactByNameAndType(name, ArtifactTypeResource)
+		if !found || artifact.Version != want {
+			t.Fatalf("%s = %#v, want version %s", name, artifact, want)
+		}
+	}
+}
+
+func filterResolvedInventoryByPlane(t *testing.T, source resolvedStackInventory, release stackSourceRelease, plane string) resolvedStackInventory {
+	t.Helper()
+	filtered := resolvedStackInventory{SchemaVersion: resolvedStackInventorySchemaVersion, Source: release}
+	for _, candidate := range source.Releases {
+		if candidate.Plane == plane {
+			filtered.Releases = append(filtered.Releases, candidate)
+		}
+	}
+	for _, artifact := range source.Artifacts {
+		if len(artifact.Sources) == 1 && artifact.Sources[0].Plane == plane {
+			filtered.Artifacts = append(filtered.Artifacts, artifact)
+		}
+	}
+	if err := validateResolvedStackInventory(filtered); err != nil {
+		t.Fatalf("filtered %s inventory is invalid: %v", plane, err)
+	}
+	return filtered
 }
 
 func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependent(t *testing.T) {
@@ -93,7 +198,7 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 		{Name: "nvca", Type: ArtifactTypeChart, Version: "6.7.8", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
 		{Name: "pylon", Type: ArtifactTypeImage, Version: "3.4.5", Registry: "private-images"},
 		{Name: "independent-chart", Type: ArtifactTypeChart, Version: "2.3.4", Registry: "public-helm", ChartFormat: ChartFormatHTTP},
-		{Name: computeStackResourceName, Type: ArtifactTypeResource, Version: source.Version, Registry: "public-resources"},
+		{Name: computeStackResourceName, Type: ArtifactTypeResource, Version: "0.5.0", Registry: "public-resources"},
 	}
 
 	catalog, err := buildCatalogFromResolvedStackInventory(inventory, snapshot, base)
@@ -169,8 +274,8 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 		t.Fatal("compute stack has an exact publication but is marked pending")
 	}
 	observability, ok := catalog.findArtifact(observabilityStackResourceName)
-	if !ok || observability.Version != source.Version {
-		t.Fatalf("observability stack = %#v, want release version %s", observability, source.Version)
+	if !ok || observability.Version != "0.5.0" {
+		t.Fatalf("observability stack = %#v, want independently owned version 0.5.0", observability)
 	}
 	if !catalog.publicationIsPending(observability) {
 		t.Fatal("observability stack without an exact publication is not marked pending")
@@ -178,6 +283,96 @@ func TestBuildCatalogFromResolvedInventoryKeepsPublicationAvailabilityIndependen
 	if catalog.Stack.PinSourceDigest == "" || strings.Join(catalog.Stack.PinSources, ",") != strings.Join(effectiveStackPinSourcePaths(effectiveStackPins), ",") {
 		t.Fatalf("stack pin metadata = %#v", catalog.Stack)
 	}
+}
+
+func TestRetainIndependentManifestArtifactsUsesInventoryPlaneOwnership(t *testing.T) {
+	newCatalog := func() *Catalog {
+		return &Catalog{
+			Registries: map[string]Registry{
+				defaultStackRegistry: {},
+				defaultImageRegistry: {},
+				defaultChartRegistry: {},
+			},
+			SupplementalArtifacts: []Artifact{
+				{Name: "stale-control", Type: ArtifactTypeImage, Registry: "old", Version: "1.0.0"},
+				{Name: "independent-compute", Type: ArtifactTypeImage, Registry: "old", Version: "2.0.0"},
+				{Name: "stale-observability", Type: ArtifactTypeImage, Registry: "old", Version: "2.5.0"},
+				{Name: "unclassified", Type: ArtifactTypeImage, Registry: "old", Version: "3.0.0"},
+				{Name: "independent-resource", Type: ArtifactTypeResource, Registry: "old", Version: "4.0.0"},
+			},
+			Manifest: ManifestMetadata{Entries: []ManifestEntry{
+				{ArtifactID: "stale-control", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Control artifact."},
+				{ArtifactID: "independent-compute", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Compute artifact."},
+				{ArtifactID: "stale-observability", Plane: ManifestPlaneObservability, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Observability artifact."},
+				{ArtifactID: "independent-resource", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Independent resource."},
+			}},
+		}
+	}
+
+	t.Run("legacy control and observability inventory", func(t *testing.T) {
+		catalog := newCatalog()
+		base := newCatalog()
+		base.Artifacts = append([]Artifact(nil), base.SupplementalArtifacts...)
+		base.SupplementalArtifacts = nil
+		inventory := resolvedStackInventory{Releases: []resolvedInventoryRelease{
+			{Plane: "control-plane", Name: "api"},
+			{Plane: "observability", Name: "collector"},
+		}}
+		retainIndependentManifestArtifacts(catalog, inventory, base)
+
+		if _, found := catalog.findArtifact("stale-control"); found {
+			t.Fatal("control artifact absent from its owning inventory was retained")
+		}
+		compute, found := catalog.findArtifact("independent-compute")
+		if !found || compute.Registry != defaultImageRegistry {
+			t.Fatalf("independent compute artifact = %#v, want retained with public image registry", compute)
+		}
+		if _, found := catalog.findArtifact("unclassified"); found {
+			t.Fatal("unclassified artifact was retained")
+		}
+		resource, found := catalog.findArtifact("independent-resource")
+		if !found || resource.Registry != defaultStackRegistry {
+			t.Fatalf("independent resource = %#v, want retained with public resource registry", resource)
+		}
+	})
+
+	t.Run("observability-only inventory", func(t *testing.T) {
+		catalog := newCatalog()
+		base := newCatalog()
+		base.Artifacts = append([]Artifact(nil), base.SupplementalArtifacts...)
+		base.SupplementalArtifacts = nil
+		inventory := resolvedStackInventory{Releases: []resolvedInventoryRelease{
+			{Plane: "observability", Name: "collector"},
+		}}
+		retainIndependentManifestArtifacts(catalog, inventory, base)
+
+		if _, found := catalog.findArtifact("stale-observability"); found {
+			t.Fatal("observability artifact absent from its owning inventory was retained")
+		}
+		if control, found := catalog.findArtifact("stale-control"); !found || control.Registry != defaultImageRegistry {
+			t.Fatalf("independent control artifact = %#v, want retained with public image registry", control)
+		}
+	})
+
+	t.Run("legacy aggregate inventory", func(t *testing.T) {
+		catalog := newCatalog()
+		base := newCatalog()
+		base.Artifacts = append([]Artifact(nil), base.SupplementalArtifacts...)
+		base.SupplementalArtifacts = nil
+		inventory := resolvedStackInventory{Releases: []resolvedInventoryRelease{
+			{Plane: "control-plane", Name: "api"},
+			{Plane: "compute-plane", Name: "nvca"},
+			{Plane: "observability", Name: "collector"},
+		}}
+		retainIndependentManifestArtifacts(catalog, inventory, base)
+
+		if _, found := catalog.findArtifact("independent-compute"); found {
+			t.Fatal("compute artifact absent from a legacy aggregate inventory was retained")
+		}
+		if _, found := catalog.findArtifact("independent-resource"); !found {
+			t.Fatal("independent resource was not retained")
+		}
+	})
 }
 
 func TestStackResourceVersionUpdateIgnoresSameNameImage(t *testing.T) {
@@ -315,6 +510,156 @@ func TestCatalogArtifactsFromResolvedInventoryPreservesTypedIDs(t *testing.T) {
 	}
 }
 
+func TestCatalogArtifactsFromResolvedInventoryPreservesPublicUpstreamRepositories(t *testing.T) {
+	inventory := resolvedStackInventory{
+		Releases: []resolvedInventoryRelease{{Plane: "compute-plane", Name: "dependencies", Required: true}},
+		Artifacts: []resolvedInventoryArtifact{
+			{Type: "container-image", Name: "upstream-image", Repository: "docker.io/example/upstream-image", Version: "1.2.3", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "upstream-docker-short-name", Repository: "example/upstream-docker-short-name", Version: "1.2.4", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "upstream-ngc-image", Repository: "nvcr.io/nvidia/example/upstream-ngc-image", Version: "2.3.4", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "upstream-oci-chart", Repository: "oci://ghcr.io/example/charts", Version: "3.4.5", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "upstream-http-chart", Repository: "https://helm.ngc.nvidia.com/nvidia/example", Version: "4.5.6", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "opentelemetry-operator", Repository: "https://open-telemetry.github.io/opentelemetry-helm-charts", Version: "0.122.0", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "prometheus-operator-crds", Repository: "https://prometheus-community.github.io/helm-charts", Version: "31.0.1", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "victoria-metrics-single", Repository: "https://victoriametrics.github.io/helm-charts", Version: "0.45.0", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "nvcf-image", Repository: "nvcr.io/nvidia/nvcf/nvcf-image", Version: "5.6.7", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "helm-chart", Name: "nvcf-chart", Repository: "https://helm.ngc.nvidia.com/nvidia/nvcf", Version: "6.7.8", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "private-image", Repository: "registry.example.com/private-image", Version: "7.8.9", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+			{Type: "container-image", Name: "unqualified-image", Repository: "unqualified-image", Version: "8.9.0", Sources: []resolvedArtifactSource{{Plane: "compute-plane", Release: "dependencies"}}},
+		},
+	}
+
+	artifacts, err := catalogArtifactsFromResolvedStackInventory(inventory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := newCatalogFromArtifacts("1.0.0", artifacts)
+	for _, artifact := range artifacts {
+		catalog.PublicationPending = append(catalog.PublicationPending, artifact.catalogKey())
+	}
+	catalog.reconcilePublicationPending()
+
+	upstream := map[string]struct {
+		repository   string
+		distribution string
+	}{
+		"upstream-image":             {repository: "docker.io/example/upstream-image", distribution: "docker.io/example/upstream-image:1.2.3"},
+		"upstream-docker-short-name": {repository: "docker.io/example/upstream-docker-short-name", distribution: "docker.io/example/upstream-docker-short-name:1.2.4"},
+		"upstream-ngc-image":         {repository: "nvcr.io/nvidia/example/upstream-ngc-image", distribution: "nvcr.io/nvidia/example/upstream-ngc-image:2.3.4"},
+		"upstream-oci-chart":         {repository: "oci://ghcr.io/example/charts", distribution: "oci://ghcr.io/example/charts/upstream-oci-chart:3.4.5"},
+		"upstream-http-chart":        {repository: "https://helm.ngc.nvidia.com/nvidia/example", distribution: "https://helm.ngc.nvidia.com/nvidia/example/upstream-http-chart:4.5.6"},
+		"opentelemetry-operator":     {repository: "https://open-telemetry.github.io/opentelemetry-helm-charts", distribution: "https://open-telemetry.github.io/opentelemetry-helm-charts/opentelemetry-operator:0.122.0"},
+		"prometheus-operator-crds":   {repository: "https://prometheus-community.github.io/helm-charts", distribution: "https://prometheus-community.github.io/helm-charts/prometheus-operator-crds:31.0.1"},
+		"victoria-metrics-single":    {repository: "https://victoriametrics.github.io/helm-charts", distribution: "https://victoriametrics.github.io/helm-charts/victoria-metrics-single:0.45.0"},
+	}
+	for name, want := range upstream {
+		artifact, found := catalog.findArtifact(name)
+		if !found {
+			t.Fatalf("catalog is missing %s", name)
+		}
+		if artifact.UpstreamRepository != want.repository {
+			t.Fatalf("%s upstream repository = %q, want %q", name, artifact.UpstreamRepository, want.repository)
+		}
+		if catalog.publicationIsPending(artifact) {
+			t.Fatalf("%s is publication pending", name)
+		}
+		distribution, err := catalog.artifactDistribution(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if distribution != want.distribution {
+			t.Fatalf("%s distribution = %q, want %q", name, distribution, want.distribution)
+		}
+	}
+	for _, name := range []string{"nvcf-image", "nvcf-chart", "private-image", "unqualified-image"} {
+		artifact, found := catalog.findArtifact(name)
+		if !found {
+			t.Fatalf("catalog is missing %s", name)
+		}
+		if artifact.UpstreamRepository != "" {
+			t.Fatalf("%s upstream repository = %q, want empty", name, artifact.UpstreamRepository)
+		}
+		if !catalog.publicationIsPending(artifact) {
+			t.Fatalf("%s is not publication pending", name)
+		}
+	}
+	if err := ValidateCatalog(catalog); err != nil {
+		t.Fatalf("catalog with public upstream repositories is invalid: %v", err)
+	}
+}
+
+func TestRetainCurrentPublicationsDropsArtifactsWiredUpstream(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Artifacts = []Artifact{
+		{Name: "upstream-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry, UpstreamRepository: "docker.io/example/upstream-image", Version: "1.2.3"},
+		{Name: "nvcf-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry, Version: "2.3.4"},
+	}
+	catalog.Publications = []Publication{
+		{Name: "upstream-image", Type: ArtifactTypeImage, Version: "1.2.3", Registry: defaultImageRegistry},
+		{Name: "nvcf-image", Type: ArtifactTypeImage, Version: "2.3.4", Registry: defaultImageRegistry},
+	}
+
+	retainCurrentPublications(catalog)
+
+	if len(catalog.Publications) != 1 || catalog.Publications[0].Name != "nvcf-image" {
+		t.Fatalf("retained publications = %#v, want only nvcf-image", catalog.Publications)
+	}
+}
+
+func TestValidateCatalogRejectsUnsupportedUpstreamRepository(t *testing.T) {
+	for _, repository := range []string{
+		"registry.example.com/private-image",
+		"docker.io/library/nats:latest",
+	} {
+		t.Run(repository, func(t *testing.T) {
+			catalog := testCatalog()
+			catalog.Artifacts = []Artifact{{
+				Name: "private-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry,
+				UpstreamRepository: repository, Version: "1.2.3",
+			}}
+
+			err := ValidateCatalog(catalog)
+			if err == nil || !strings.Contains(err.Error(), "unsupported public upstream repository") {
+				t.Fatalf("ValidateCatalog error = %v, want unsupported upstream repository rejection", err)
+			}
+		})
+	}
+}
+
+func TestChartPullReferenceUsesUpstreamRepositoryFormat(t *testing.T) {
+	catalog := testCatalog()
+	for _, test := range []struct {
+		name       string
+		repository string
+		want       string
+	}{
+		{
+			name:       "HTTP",
+			repository: "https://open-telemetry.github.io/opentelemetry-helm-charts",
+			want:       "--repo https://open-telemetry.github.io/opentelemetry-helm-charts opentelemetry-operator",
+		},
+		{
+			name:       "OCI",
+			repository: "oci://ghcr.io/example/charts",
+			want:       "oci://ghcr.io/example/charts/opentelemetry-operator",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			artifact := Artifact{
+				Name: "opentelemetry-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry,
+				UpstreamRepository: test.repository, Version: "0.122.0",
+			}
+			got, err := catalog.chartPullReference(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("chartPullReference() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func testCatalogResolvedInventory(t *testing.T, source stackSourceRelease) resolvedStackInventory {
 	t.Helper()
 	releases := []resolvedInventoryRelease{
@@ -343,10 +688,8 @@ func testCatalogResolvedInventory(t *testing.T, source stackSourceRelease) resol
 
 func testCatalogPinSources() map[string]string {
 	return map[string]string{
-		"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl":       "  - name: llm-request-router\n    version: 1.2.3\n  - name: ingress\n    version: 2.3.4\n",
-		"deploy/stacks/self-managed/global.yaml.gotmpl":                   "image: nvcr.io/nvidia/nvcf/pylon:3.4.5\n",
-		"deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl": "  - name: nvca-operator\n    version: 4.5.6\n",
-		"deploy/stacks/nvcf-compute-plane/environments/base.yaml":         "  nvcaOperator:\n    selfManaged:\n      nvcaVersion: \"6.7.8\"\n",
+		"deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl": "  - name: llm-request-router\n    version: 1.2.3\n  - name: ingress\n    version: 2.3.4\n",
+		"deploy/stacks/self-managed/global.yaml.gotmpl":             "image: nvcr.io/nvidia/nvcf/pylon:3.4.5\n",
 	}
 }
 

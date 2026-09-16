@@ -25,8 +25,9 @@ go_binary(
     visibility = ["//visibility:public"],
     # Mirrors ldflags.
     x_defs = {
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvca-operator",
         MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
-        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
         MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
     },
 )

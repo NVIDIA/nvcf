@@ -31,13 +31,13 @@ func TestRenderManifestArtifactRegistryPaths(t *testing.T) {
 	}
 
 	wantLines := []string{
-		"| Artifact | Version | Required | Description | Distribution | Source code |",
-		"| `llm-api-gateway` | `0.3.0` | Optional |",
-		"| `llm-request-router` | `0.2.0` | Optional |",
-		"| `nvcf-self-managed-stack` | `0.5.0` |",
-		"| `nvcf-compute-plane-stack` | `0.5.0` |",
-		"| `nvcf-observability-stack` | `0.5.0` |",
-		"| `nvcf-cli` | `0.0.30` |",
+		"| Artifact | Version | Stack | Required | Description | Distribution | Source code |",
+		"| `llm-api-gateway` | `0.3.0` | `self-managed` | Optional |",
+		"| `llm-request-router` | `0.2.0` | `self-managed` | Optional |",
+		"| `nvcf-self-managed-stack` | `0.5.0` | `self-managed` |",
+		"| `nvcf-compute-plane-stack` | `0.5.0` | `compute-plane` |",
+		"| `nvcf-observability-stack` | `0.5.0` | `observability` |",
+		"| `nvcf-cli` | `0.0.30` | Independent |",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(got, want) {
@@ -73,22 +73,22 @@ func TestRenderManifestHandlesNewNVCAAndNVCTImageAndHelmArtifacts(t *testing.T) 
 
 	computeServices := sectionBetween(t, got, "### Compute plane services and images", "### EA-only CVE-impacted artifacts")
 	for _, want := range []string{
-		"| `nvca` | `3.0.0-rc.13` | Required |",
-		"| `nvca-operator` | `3.0.0-rc.13` | Required |",
+		"| `nvca` | `3.0.0-rc.13` | `compute-plane` | Required |",
+		"| `nvca-operator` | `3.0.0-rc.13` | `compute-plane` | Required |",
 	} {
 		if !strings.Contains(computeServices, want) {
 			t.Fatalf("compute services section missing %q:\n%s", want, computeServices)
 		}
 	}
 	computeCharts := sectionBetween(t, got, "### Compute plane Helm charts", "### Compute plane services and images")
-	if !strings.Contains(computeCharts, "| `helm-nvca-operator` | `1.11.1` | Required |") {
+	if !strings.Contains(computeCharts, "| `helm-nvca-operator` | `1.11.1` | `compute-plane` | Required |") {
 		t.Fatalf("compute charts section missing NVCA chart:\n%s", computeCharts)
 	}
 
 	controlPlane := sectionBetween(t, got, "### Control plane Helm charts", "### Compute plane Helm charts")
 	for _, want := range []string{
-		"| `nvct-service-oss` | `1.2.11` | Required |",
-		"| `helm-nvcf-nvct-api` | `1.4.2` | Required |",
+		"| `nvct-service-oss` | `1.2.11` | `self-managed` | Required |",
+		"| `helm-nvcf-nvct-api` | `1.4.2` | `self-managed` | Required |",
 	} {
 		if !strings.Contains(controlPlane, want) {
 			t.Fatalf("control plane section missing %q:\n%s", want, controlPlane)
@@ -727,6 +727,40 @@ func TestSyncInlineImageMirroringUsesTraditionalPublicHelmChart(t *testing.T) {
 	}
 }
 
+func TestSyncInlineImageMirroringUsesTraditionalUpstreamHelmChart(t *testing.T) {
+	catalog := testCatalog()
+	catalog.SupplementalArtifacts = append(catalog.SupplementalArtifacts,
+		Artifact{
+			Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry,
+			RepositoryName:     "opentelemetry-operator",
+			UpstreamRepository: "https://open-telemetry.github.io/opentelemetry-helm-charts", Version: "1.12.7",
+		},
+	)
+	content := "helm pull --repo https://open-telemetry.github.io/opentelemetry-helm-charts opentelemetry-operator --version 1.12.6\n" +
+		"# This creates: helm-nvca-operator-1.12.6.tgz\n" +
+		"helm push helm-nvca-operator-1.12.6.tgz oci://example.test/repo\n"
+
+	got, changed, err := SyncInlineVersions("docs/user/image-mirroring.md", content, catalog)
+	if err != nil {
+		t.Fatalf("SyncInlineVersions failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("SyncInlineVersions reported no change")
+	}
+	want := "helm pull --repo https://open-telemetry.github.io/opentelemetry-helm-charts opentelemetry-operator --version 1.12.7"
+	if !strings.Contains(got, want) {
+		t.Fatalf("updated content missing %q:\n%s", want, got)
+	}
+
+	gotAgain, changedAgain, err := SyncInlineVersions("docs/user/image-mirroring.md", got, catalog)
+	if err != nil {
+		t.Fatalf("second SyncInlineVersions failed: %v", err)
+	}
+	if changedAgain || gotAgain != got {
+		t.Fatalf("second sync changed content:\n%s", gotAgain)
+	}
+}
+
 func TestSyncDocsCheckModeDetectsDiff(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "docs/user/manifest.md"), `before
@@ -901,6 +935,23 @@ func TestValidateTargetRejectsNonMainTargets(t *testing.T) {
 	}
 	if err := ValidateTarget("main"); err != nil {
 		t.Fatalf("ValidateTarget rejected main: %v", err)
+	}
+}
+
+func TestRunRejectsInvalidReleaseSetQualificationVersion(t *testing.T) {
+	err := run([]string{"--update-catalog", "--qualification-version", "1.2.3"})
+	if err == nil || !strings.Contains(err.Error(), "must use "+releaseSetVersionFormat) {
+		t.Fatalf("run error = %v, want release-set version format rejection", err)
+	}
+}
+
+func TestValidateCatalogRejectsPartiallyPopulatedReleaseSet(t *testing.T) {
+	catalog := testCatalog()
+	catalog.ReleaseSet.Status = ReleaseSetDevelopment
+
+	err := ValidateCatalog(catalog)
+	if err == nil || !strings.Contains(err.Error(), "documentation_version must be non-empty") {
+		t.Fatalf("ValidateCatalog error = %v, want partial release_set rejection", err)
 	}
 }
 

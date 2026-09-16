@@ -51,6 +51,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain Kubernetes resource "([^"/]+)/([^"]+)"$`, sc.renderedManifestsShouldContainKubernetesResource)
+	ctx.Step(`^the rendered workloads in "([^"]*)" should have valid container images$`, sc.renderedWorkloadsShouldHaveValidContainerImages)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
 	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
@@ -288,6 +289,12 @@ func (sc *ScenarioContext) renderedManifestsShouldContainKubernetesResource(path
 		sc.resolvePath(dsl.Interpolate(path)),
 		dsl.KubernetesResource{Kind: kind, Name: name},
 	)
+}
+
+// renderedWorkloadsShouldHaveValidContainerImages delegates manifest parsing
+// while the step handler resolves the repository-relative path.
+func (sc *ScenarioContext) renderedWorkloadsShouldHaveValidContainerImages(path string) error {
+	return dsl.RenderedWorkloadImagesAreValid(sc.resolvePath(dsl.Interpolate(path)))
 }
 
 func (sc *ScenarioContext) renderedManifestsUnderMatchingDirectoriesShouldContain(path, pattern string, table *godog.Table) error {

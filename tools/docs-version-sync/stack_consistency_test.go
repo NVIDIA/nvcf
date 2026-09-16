@@ -75,14 +75,6 @@ func TestExtractEffectiveStackPinsRejectsMissingVersionInTargetBlock(t *testing.
     version: 9.9.9
 	`,
 		},
-		{
-			artifact: "nvca",
-			body: `  nvcaOperator:
-    imageTag: "3.2.19"
-  unrelated:
-      nvcaVersion: "9.9.9"
-`,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.artifact, func(t *testing.T) {
@@ -112,16 +104,6 @@ func TestExtractEffectiveStackPinsRejectsDuplicateVersionsInTargetBlock(t *testi
   - name: unrelated
     version: 9.9.9
 	`,
-		},
-		{
-			artifact: "nvca",
-			body: `  nvcaOperator:
-    nvca:
-      nvcaVersion: "3.2.19"
-      nvcaVersion: "3.2.20"
-  unrelated:
-    enabled: true
-`,
 		},
 	}
 	for _, test := range tests {
@@ -207,6 +189,17 @@ func TestPendingPublicationsNeverRenderPrivateRegistryPaths(t *testing.T) {
 	if err := SyncDocs(root, catalog, true); err != nil {
 		t.Fatalf("checked-in generated docs do not match the catalog: %v", err)
 	}
+
+	publications := catalog.Publications[:0]
+	for _, publication := range catalog.Publications {
+		if publication.Name == "helm-nvca-operator" && publication.Type == ArtifactTypeChart {
+			continue
+		}
+		publications = append(publications, publication)
+	}
+	catalog.Publications = publications
+	catalog.PublicationPending = append(catalog.PublicationPending, "helm-nvca-operator")
+	catalog.reconcilePublicationPending()
 
 	manifest, err := renderManifestArtifactRegistryPaths(catalog)
 	if err != nil {

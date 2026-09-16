@@ -39,7 +39,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.157.0-nv-0.2.1
+  imageTag: 0.160.0-nv-0.2.5
   resources:
     limits:
       cpu: 1000m
@@ -305,7 +305,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.157.0-nv-0.2.1"
+    imageTag: "0.160.0-nv-0.2.5"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -424,7 +424,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.157.0-nv-0.2.1
+    imageTag: 0.160.0-nv-0.2.5
 
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
@@ -438,6 +438,8 @@ selfManaged:
   gpuManualInstanceConfigB64: ""
   ## @param selfManaged.clusterAttributes (Optional) List of attributes for the cluster. Defaults to an empty array.
   clusterAttributes: []
+  ## @param selfManaged.region Region reported for a self-managed cluster.
+  region: us-west-1
   ## @param selfManaged.imageCredHelper.imageRepository (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param selfManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:
@@ -449,7 +451,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.157.0-nv-0.2.1
+    imageTag: 0.160.0-nv-0.2.5
   ## @param selfManaged.icmsServiceURL URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".
   icmsServiceURL: ""
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.

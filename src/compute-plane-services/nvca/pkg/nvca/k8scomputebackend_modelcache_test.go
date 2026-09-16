@@ -19,6 +19,7 @@ package nvca
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -380,4 +382,82 @@ func TestGetInitCacheJobFailureReason_JobNotFound(t *testing.T) {
 
 	reason := bc.k8sArtifactHelper.(K8sComputeBackend).getInitCacheJobFailureReason(ctx, nonExistentJob)
 	assert.Equal(t, "job_not_found", reason)
+}
+
+func TestReaderMountOptionsForRequest(t *testing.T) {
+	durable := func(t *testing.T, mountOptions []string) string {
+		t.Helper()
+		raw, err := (&nvcastorage.PersistedModelCacheStorageSelection{
+			Version:              nvcastorage.ModelCacheStorageSelectionVersion,
+			Workflow:             nvcastorage.ModelCacheWorkflowRegular,
+			Mode:                 nvcastorage.ModelCacheSelectionDurable,
+			StorageClassName:     nvcastorage.DefaultModelCacheStorageClassName,
+			StorageClassUID:      "uid-1",
+			StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+			ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+			Provider:             nvcastorage.ModelCacheProviderNVMesh,
+			Provisioner:          nvcastorage.NVMeshStorageClassProvisioner,
+			Transition:           nvcastorage.ModelCacheTransitionROXReadOnly,
+			RequiredAccessModes:  []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
+			RequiredMountOptions: mountOptions,
+		}).Marshal()
+		require.NoError(t, err)
+		return raw
+	}
+	ephemeral := func(t *testing.T) string {
+		t.Helper()
+		raw, err := (&nvcastorage.PersistedModelCacheStorageSelection{
+			Version:  nvcastorage.ModelCacheStorageSelectionVersion,
+			Workflow: nvcastorage.ModelCacheWorkflowHelm,
+			Mode:     nvcastorage.ModelCacheSelectionEphemeral,
+		}).Marshal()
+		require.NoError(t, err)
+		return raw
+	}
+
+	tests := []struct {
+		name       string
+		annotation string
+		configured []string
+		want       []string
+	}{
+		{
+			name:       "no selection keeps the configured options",
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+		{
+			name:       "durable selection supplies the required options",
+			annotation: durable(t, []string{"ro", "norecovery", "nouuid"}),
+			want:       []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name:       "configured extras follow the selection and cannot negate it",
+			annotation: durable(t, []string{"ro", "nouuid"}),
+			configured: []string{"rw", "uuid", "noatime"},
+			want:       []string{"ro", "nouuid", "noatime"},
+		},
+		{
+			name:       "ephemeral selection keeps the configured options",
+			annotation: ephemeral(t),
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+		{
+			name:       "invalid selection keeps the configured options",
+			annotation: "{",
+			configured: []string{"noatime"},
+			want:       []string{"noatime"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := K8sComputeBackend{bk8s: &BackendK8sCache{csiVolumeMountOptions: tt.configured}}
+			req := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "ns"}}
+			if tt.annotation != "" {
+				req.Annotations = map[string]string{nvcastorage.ModelCacheStorageSelectionAnnotationKey: tt.annotation}
+			}
+			assert.Equal(t, tt.want, c.readerMountOptionsForRequest(newTestContext(), req))
+		})
+	}
 }

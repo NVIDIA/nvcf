@@ -1082,6 +1082,8 @@ func (a *Agent) Start(ctx context.Context) error {
 	health.HTTPAddReadinessRoute(server.Router, a.readinessCheckGetter)
 	// Provides /version
 	server.AddVersionRoute(ctx)
+	// Provides /info
+	server.AddInfoRoute(ctx)
 	// Provides /metrics
 	nvcametrics.AddMetricsRoute(server.Router, log, nvcametrics.FromContext(ctx).GetDefaultLabelPairs(), "nvca")
 	// Provides /livez
@@ -1174,6 +1176,9 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithInfraOverheadGetter(infraOverheadGetter).
 		WithSecretMirrorConfig(a.SecretMirrorSourceNamespace, a.SecretMirrorLabelSelector).
 		WithEnvOverrides(a.FunctionEnvOverrides, a.TaskEnvOverrides).
+		WithNotFoundInstanceStatusReporter(func(ctx context.Context, reqID, instanceID string) error {
+			return a.handleNotFoundInstanceStatusSyncAction(ctx, reqID, instanceID, ICMSInstanceReconcileTerminateAndUpdate)
+		}).
 		Start(ctx)
 	if err != nil {
 		log.WithError(err).Error("Failed to configure the Backend K8s Cache")

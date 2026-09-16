@@ -1181,6 +1181,20 @@ class GithubReleaseTest(unittest.TestCase):
             ],
         }
 
+    def test_release_metadata_publishes_one_inventory_per_stack(self):
+        metadata_path = SCRIPT_PATH.with_name("github-release-subprojects.json")
+        metadata = json.loads(metadata_path.read_text())
+        expected = {
+            "deploy/stacks/self-managed/v1.2.3": "nvcf-self-managed-stack-inventory.json",
+            "deploy/stacks/nvcf-compute-plane/v1.2.3": "nvcf-compute-plane-stack-inventory.json",
+            "deploy/stacks/observability/v1.2.3": "nvcf-observability-stack-inventory.json",
+        }
+        for tag, asset_name in expected.items():
+            with self.subTest(tag=tag):
+                service = self.github_release.release_asset_service(metadata, tag, SCRIPT_PATH.parents[2])
+                self.assertIsNotNone(service)
+                self.assertEqual(service["resolved_inventory_asset"], asset_name)
+
     def chart_release_metadata(self):
         """Return minimal release metadata for the chart publication tests."""
         return {
@@ -1645,7 +1659,7 @@ class GithubReleaseTest(unittest.TestCase):
                     path, "deploy/stacks/self-managed/v1.2.3", "1.2.3", "e" * 40
                 )
 
-    def test_existing_release_inventory_must_be_byte_identical(self):
+    def test_existing_release_inventory_is_left_unchanged(self):
         with tempfile.TemporaryDirectory() as tmp:
             asset = Path(tmp) / "inventory.json"
             asset.write_text("same\n")
@@ -1653,27 +1667,10 @@ class GithubReleaseTest(unittest.TestCase):
             def fake_run(args, **_kwargs):
                 if args[:3] == ["gh", "release", "view"]:
                     return "inventory.json\n"
-                if args[:3] == ["gh", "release", "download"]:
-                    destination = Path(args[args.index("--dir") + 1]) / "inventory.json"
-                    destination.write_text("same\n")
-                    return ""
                 raise AssertionError(f"unexpected call: {args}")
 
             self.github_release.run = fake_run
             with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
-
-            def fake_different_run(args, **_kwargs):
-                if args[:3] == ["gh", "release", "view"]:
-                    return "inventory.json\n"
-                if args[:3] == ["gh", "release", "download"]:
-                    destination = Path(args[args.index("--dir") + 1]) / "inventory.json"
-                    destination.write_text("different\n")
-                    return ""
-                raise AssertionError(f"unexpected call: {args}")
-
-            self.github_release.run = fake_different_run
-            with self.assertRaisesRegex(SystemExit, "refusing to replace"):
                 self.github_release.publish_resolved_stack_inventory("stack/v1.2.3", asset)
 
     def test_missing_release_inventory_is_uploaded(self):
@@ -1758,19 +1755,23 @@ class GithubReleaseTest(unittest.TestCase):
     def test_stack_inventory_preflight_renders_without_release_publication(self):
         workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
         self.assertIn("inventory_tag:", workflow)
-        self.assertIn("name: self-managed inventory preflight", workflow)
+        self.assertIn("name: stack inventory preflight", workflow)
         self.assertIn("inputs.inventory_tag != ''", workflow)
         self.assertIn('token: ${{ github.token }}', workflow)
         self.assertIn("Render tagged inventory without publishing", workflow)
         self.assertIn("--generate-stack-inventory", workflow)
-        self.assertIn(
-            '--inventory-config "${GITHUB_WORKSPACE}/deploy/stacks/self-managed/release-inventory.yaml"',
-            workflow,
-        )
+        self.assertIn("deploy/stacks/nvcf-compute-plane/v*", workflow)
+        self.assertIn("deploy/stacks/observability/v*", workflow)
         preflight = workflow.index("inventory-preflight:")
         tag_release = workflow.index("tag-release-notes:")
-        self.assertNotIn("github-release tag", workflow[preflight:tag_release])
-        self.assertNotIn("upload-artifact", workflow[preflight:tag_release])
+        preflight_workflow = workflow[preflight:tag_release]
+        self.assertIn("--inventory-config", preflight_workflow)
+        self.assertIn("grep -q '^states:'", preflight_workflow)
+        self.assertIn("predates its per-stack inventory states", preflight_workflow)
+        self.assertIn("--allow-unavailable-source-charts", preflight_workflow)
+        self.assertIn("actions/upload-artifact@v4", preflight_workflow)
+        self.assertIn("if-no-files-found: error", preflight_workflow)
+        self.assertNotIn("github-release tag", preflight_workflow)
 
     def test_release_replay_requires_an_exact_tag_ref(self):
         """A tag-shaped branch must not satisfy manual replay validation."""
@@ -1854,6 +1855,95 @@ class GithubReleaseTest(unittest.TestCase):
         # dev-prerelease model is retired, but a hand-cut rc still reaches
         # publish_tag_for_version through the release-candidate path.
         self.assertEqual(self.publish_and_capture_comments("3.4.0-rc.1"), [])
+
+
+class SuccessCommentTest(unittest.TestCase):
+    """The comment semantic-release posts must name the tag it actually created.
+
+    semantic-release-monorepo wraps the `success` step with a transform that
+    rewrites `nextRelease.version` to `<package.json name>-v<version>`, ignoring
+    the `tagFormat` configured here. byoo-otel-collector is the one service whose
+    tag_format injects an upstream prefix, so the default comment advertises
+    `byoo-otel-collector-v0.2.5` for a tag that is really
+    `.../v0.160.0-nv-0.2.5`. The transform leaves `nextRelease.gitTag` alone.
+    """
+
+    TAG_FORMAT = "src/compute-plane-services/byoo-otel-collector/v0.160.0-nv-${version}"
+
+    def setUp(self):
+        self.github_release = load_github_release()
+
+    def github_plugin_options(self):
+        service_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, service_dir, ignore_errors=True)
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "NVIDIA/nvcf"}):
+            self.github_release.write_semantic_release_files(
+                service_dir,
+                "byoo-otel-collector",
+                self.TAG_FORMAT,
+                publish=True,
+                draft=False,
+            )
+        config = json.loads((service_dir / ".releaserc.json").read_text())
+        for plugin in config["plugins"]:
+            if isinstance(plugin, list) and plugin[0] == "@semantic-release/github":
+                return plugin[1]
+        self.fail("@semantic-release/github is not configured")
+
+    def test_success_comment_names_the_published_git_tag(self):
+        self.assertIn("${nextRelease.gitTag}", self.github_plugin_options()["successComment"])
+
+    def test_success_comment_does_not_name_the_rewritten_version(self):
+        self.assertNotIn("${nextRelease.version}", self.github_plugin_options()["successComment"])
+
+    def test_success_comment_links_the_release_it_announces(self):
+        self.assertIn(
+            "https://github.com/NVIDIA/nvcf/releases/tag/${nextRelease.gitTag}",
+            self.github_plugin_options()["successComment"],
+        )
+
+    def release_notes_writer_opts(self):
+        service_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, service_dir, ignore_errors=True)
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "NVIDIA/nvcf"}):
+            self.github_release.write_semantic_release_files(
+                service_dir,
+                "byoo-otel-collector",
+                self.TAG_FORMAT,
+                publish=True,
+                draft=False,
+            )
+        config = json.loads((service_dir / ".releaserc.json").read_text())
+        for plugin in config["plugins"]:
+            if isinstance(plugin, list) and plugin[0] == "@semantic-release/release-notes-generator":
+                return plugin[1]["writerOpts"]
+        self.fail("@semantic-release/release-notes-generator has no writerOpts")
+
+    def test_release_notes_heading_names_the_published_git_tag(self):
+        self.assertIn("{{currentTag}}", self.release_notes_writer_opts()["headerPartial"])
+
+    def test_release_notes_heading_does_not_name_the_rewritten_version(self):
+        # `version` is what semantic-release-monorepo rewrites, and the upstream
+        # template references it twice: once linked, once bare as `{{~version}}`
+        # with a whitespace-control tilde. Checking only `{{version}}` would miss
+        # the second and leave the unlinked heading still wrong.
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        for token in ("{{version}}", "{{~version}}"):
+            self.assertNotIn(token, partial)
+
+    def test_release_notes_heading_still_links_the_compare_range(self):
+        partial = self.release_notes_writer_opts()["headerPartial"]
+        self.assertIn("/compare/{{previousTag}}...{{currentTag}}", partial)
+
+    def test_success_comment_wording_matches_the_kind_of_thing_it_is_posted_on(self):
+        # Pins both arms and their order. Asserting only that `issue.pull_request`
+        # appears would still pass with the arms swapped, which would tell every
+        # reader the opposite of the truth. Rendering the template for real needs
+        # a Lodash engine, and this suite runs on python3 alone.
+        self.assertIn(
+            "${issue.pull_request ? 'PR is included' : 'issue has been resolved'}",
+            self.github_plugin_options()["successComment"],
+        )
 
 
 if __name__ == "__main__":

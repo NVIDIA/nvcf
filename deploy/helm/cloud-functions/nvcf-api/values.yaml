@@ -44,9 +44,9 @@ api:
     # Set false to skip the account-bootstrap hook (runs on post-install and post-upgrade; e.g. when accounts are provisioned via the API).
     enabled: true
     image:
-      registry: ""
-      repository: ""
-      tag: ""
+      registry: docker.io
+      repository: alpine/k8s
+      tag: "1.37.0"
       pullPolicy: IfNotPresent
 
     # Readiness probe tuning for bootstrap script

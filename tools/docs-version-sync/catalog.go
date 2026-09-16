@@ -31,14 +31,16 @@ const (
 	controlStackResourceName       = "nvcf-self-managed-stack"
 	computeStackResourceName       = "nvcf-compute-plane-stack"
 	observabilityStackResourceName = "nvcf-observability-stack"
+	releaseSetVersionFormat        = "cp-X.Y.Z-compute-X.Y.Z-obs-X.Y.Z"
 	defaultStackRegistry           = "public-resources"
 	defaultImageRegistry           = "public-images"
 	defaultChartRegistry           = "public-helm"
 )
 
 var (
-	fullLowercaseCommitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	lowercaseSHA256DigestRe  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	fullLowercaseCommitSHARe         = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	lowercaseSHA256DigestRe          = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	releaseSetDocumentationVersionRe = regexp.MustCompile(`^cp-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-compute-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-obs-((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$`)
 )
 
 type ArtifactType string
@@ -54,9 +56,10 @@ type ManifestKind string
 type ManifestRequirement string
 
 const (
-	ManifestPlaneControl ManifestPlane = "control"
-	ManifestPlaneCompute ManifestPlane = "compute"
-	ManifestPlaneShared  ManifestPlane = "shared"
+	ManifestPlaneControl       ManifestPlane = "control"
+	ManifestPlaneCompute       ManifestPlane = "compute"
+	ManifestPlaneObservability ManifestPlane = "observability"
+	ManifestPlaneShared        ManifestPlane = "shared"
 
 	ManifestKindChart        ManifestKind = "chart"
 	ManifestKindServiceImage ManifestKind = "service-image"
@@ -92,11 +95,39 @@ type Catalog struct {
 	VersionOverrides      []VersionOverride   `yaml:"version_overrides,omitempty"`
 	PublicationPending    []string            `yaml:"publication_pending,omitempty"`
 	Manifest              ManifestMetadata    `yaml:"manifest,omitempty"`
+	ReleaseSet            ReleaseSetMetadata  `yaml:"release_set,omitempty"`
 	Stack                 StackMetadata       `yaml:"stack"`
 	Denylist              []DenylistEntry     `yaml:"denylist,omitempty"`
 	Artifacts             []Artifact          `yaml:"artifacts"`
 	SupplementalArtifacts []Artifact          `yaml:"supplemental_artifacts"`
 	Outputs               []OutputFile        `yaml:"outputs"`
+}
+
+type ReleaseSetStatus string
+
+const (
+	ReleaseSetDevelopment ReleaseSetStatus = "development"
+	ReleaseSetQualified   ReleaseSetStatus = "qualified"
+)
+
+// ReleaseSetMetadata identifies the three stack releases represented by the catalog.
+type ReleaseSetMetadata struct {
+	DocumentationVersion string           `yaml:"documentation_version"`
+	Status               ReleaseSetStatus `yaml:"status"`
+	Stacks               ReleaseSetStacks `yaml:"stacks"`
+}
+
+type ReleaseSetStacks struct {
+	ControlPlane  StackReleaseMetadata `yaml:"control-plane"`
+	ComputePlane  StackReleaseMetadata `yaml:"compute-plane"`
+	Observability StackReleaseMetadata `yaml:"observability"`
+}
+
+type StackReleaseMetadata struct {
+	Version        string `yaml:"version"`
+	SourceTag      string `yaml:"source_tag"`
+	SourceCommit   string `yaml:"source_commit"`
+	InventoryAsset string `yaml:"inventory_asset"`
 }
 
 type Registry struct {
@@ -150,13 +181,16 @@ var defaultDenylist = []DenylistEntry{
 
 // Artifact identifies one versioned chart, image, or downloadable resource in the catalog.
 type Artifact struct {
-	ID             string       `yaml:"id,omitempty"`
-	Name           string       `yaml:"name"`
-	Type           ArtifactType `yaml:"type"`
-	Registry       string       `yaml:"registry"`
-	RepositoryName string       `yaml:"repository_name,omitempty"`
-	Version        string       `yaml:"version"`
-	Digest         string       `yaml:"digest,omitempty"`
+	ID                 string              `yaml:"id,omitempty"`
+	Name               string              `yaml:"name"`
+	Type               ArtifactType        `yaml:"type"`
+	Registry           string              `yaml:"registry"`
+	RepositoryName     string              `yaml:"repository_name,omitempty"`
+	UpstreamRepository string              `yaml:"upstream_repository,omitempty"`
+	Version            string              `yaml:"version"`
+	Digest             string              `yaml:"digest,omitempty"`
+	Stacks             []string            `yaml:"stacks,omitempty"`
+	Requirement        ManifestRequirement `yaml:"requirement,omitempty"`
 }
 
 type OutputFile struct {
@@ -320,6 +354,11 @@ func ValidateCatalog(catalog *Catalog) error {
 		}
 		seenPending[name] = struct{}{}
 	}
+	if catalog.ReleaseSet != (ReleaseSetMetadata{}) {
+		if err := validateReleaseSet(catalog.ReleaseSet); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(catalog.Stack.Name) == "" {
 		return fmt.Errorf("stack name cannot be empty")
 	}
@@ -369,6 +408,11 @@ func ValidateCatalog(catalog *Catalog) error {
 		if err := catalog.validateArtifact(artifact); err != nil {
 			return err
 		}
+		if artifact.UpstreamRepository != "" {
+			if _, published := catalog.publicationFor(artifact); published {
+				return fmt.Errorf("artifact %s:%s cannot have both an upstream repository and a publication", artifact.Name, artifact.Version)
+			}
+		}
 		key := artifact.catalogKey()
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("duplicate artifact id %s", key)
@@ -395,6 +439,9 @@ func ValidateCatalog(catalog *Catalog) error {
 		if _, published := catalog.publicationFor(artifact); published {
 			return fmt.Errorf("artifact %s:%s cannot be both published and publication_pending", artifact.Name, artifact.Version)
 		}
+		if artifact.UpstreamRepository != "" {
+			return fmt.Errorf("artifact %s:%s cannot have both an upstream repository and publication_pending", artifact.Name, artifact.Version)
+		}
 	}
 	if err := validateManifestMetadata(catalog.Manifest); err != nil {
 		return err
@@ -416,6 +463,72 @@ func ValidateCatalog(catalog *Catalog) error {
 	return nil
 }
 
+func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
+	if releaseSet.DocumentationVersion == "" || releaseSet.DocumentationVersion != strings.TrimSpace(releaseSet.DocumentationVersion) {
+		return fmt.Errorf("release_set documentation_version must be non-empty and trimmed")
+	}
+	if releaseSet.Status != ReleaseSetDevelopment && releaseSet.Status != ReleaseSetQualified {
+		return fmt.Errorf("release_set status must be development or qualified")
+	}
+	if releaseSet.Status == ReleaseSetDevelopment && releaseSet.DocumentationVersion != "dev" {
+		return fmt.Errorf("development release_set documentation_version must be dev")
+	}
+	if releaseSet.Status == ReleaseSetQualified {
+		_, _, _, ok := parseReleaseSetDocumentationVersion(releaseSet.DocumentationVersion)
+		if !ok {
+			return fmt.Errorf("qualified release_set documentation_version must use %s", releaseSetVersionFormat)
+		}
+		expected := releaseSetDocumentationVersion(releaseSet.Stacks)
+		if releaseSet.DocumentationVersion != expected {
+			return fmt.Errorf("qualified release_set documentation_version must be %s", expected)
+		}
+	}
+	for _, stack := range []struct {
+		name     string
+		metadata StackReleaseMetadata
+		key      string
+	}{
+		{name: "control-plane", metadata: releaseSet.Stacks.ControlPlane, key: selfManagedStackKey},
+		{name: "compute-plane", metadata: releaseSet.Stacks.ComputePlane, key: computePlaneStackKey},
+		{name: "observability", metadata: releaseSet.Stacks.Observability, key: observabilityStackKey},
+	} {
+		spec, err := stackInventorySpecByKey(stack.key)
+		if err != nil {
+			return err
+		}
+		if !validStackVersion(stack.metadata.Version) {
+			return fmt.Errorf("release_set %s version must be semantic version", stack.name)
+		}
+		if stack.metadata.SourceTag != spec.TagPrefix+stack.metadata.Version {
+			return fmt.Errorf("release_set %s source_tag must be %s%s", stack.name, spec.TagPrefix, stack.metadata.Version)
+		}
+		if !fullLowercaseCommitSHARe.MatchString(stack.metadata.SourceCommit) {
+			return fmt.Errorf("release_set %s source_commit must be a full lowercase commit SHA", stack.name)
+		}
+		if stack.metadata.InventoryAsset != spec.AssetName {
+			return fmt.Errorf("release_set %s inventory_asset must be %s", stack.name, spec.AssetName)
+		}
+	}
+	return nil
+}
+
+func parseReleaseSetDocumentationVersion(version string) (string, string, string, bool) {
+	match := releaseSetDocumentationVersionRe.FindStringSubmatch(version)
+	if match == nil {
+		return "", "", "", false
+	}
+	return match[1], match[2], match[3], true
+}
+
+func releaseSetDocumentationVersion(stacks ReleaseSetStacks) string {
+	return fmt.Sprintf(
+		"cp-%s-compute-%s-obs-%s",
+		stacks.ControlPlane.Version,
+		stacks.ComputePlane.Version,
+		stacks.Observability.Version,
+	)
+}
+
 func validateManifestMetadata(metadata ManifestMetadata) error {
 	seen := map[string]struct{}{}
 	// Changing the EA-CVE allowlist requires an explicit documentation decision.
@@ -429,7 +542,7 @@ func validateManifestMetadata(metadata ManifestMetadata) error {
 			identifier = entry.Name
 		}
 		switch entry.Plane {
-		case ManifestPlaneControl, ManifestPlaneCompute, ManifestPlaneShared:
+		case ManifestPlaneControl, ManifestPlaneCompute, ManifestPlaneObservability, ManifestPlaneShared:
 		default:
 			return fmt.Errorf("manifest entry %q has unsupported plane %q", identifier, entry.Plane)
 		}
@@ -447,7 +560,7 @@ func validateManifestMetadata(metadata ManifestMetadata) error {
 			}
 		} else {
 			switch entry.Requirement {
-			case ManifestRequired, ManifestOptional:
+			case "", ManifestRequired, ManifestOptional:
 			default:
 				return fmt.Errorf("manifest entry %q has unsupported requirement %q", identifier, entry.Requirement)
 			}
@@ -512,6 +625,24 @@ func (catalog *Catalog) validateArtifact(artifact Artifact) error {
 			return fmt.Errorf("artifact %s has invalid digest %q", artifact.Name, artifact.Digest)
 		}
 	}
+	if artifact.UpstreamRepository != "" {
+		if publicUpstreamRepository(artifact.UpstreamRepository, artifact.Type) != artifact.UpstreamRepository {
+			return fmt.Errorf("artifact %s has unsupported public upstream repository %q", artifact.Name, artifact.UpstreamRepository)
+		}
+	}
+	if artifact.Requirement != "" && artifact.Requirement != ManifestRequired && artifact.Requirement != ManifestOptional {
+		return fmt.Errorf("artifact %s has unsupported requirement %q", artifact.Name, artifact.Requirement)
+	}
+	seenStacks := map[string]struct{}{}
+	for _, stack := range artifact.Stacks {
+		if stack != selfManagedStackKey && stack != computePlaneStackKey && stack != observabilityStackKey {
+			return fmt.Errorf("artifact %s has unknown owning stack %q", artifact.Name, stack)
+		}
+		if _, exists := seenStacks[stack]; exists {
+			return fmt.Errorf("artifact %s has duplicate owning stack %s", artifact.Name, stack)
+		}
+		seenStacks[stack] = struct{}{}
+	}
 	if _, ok := catalog.Registries[artifact.Registry]; !ok {
 		return fmt.Errorf("artifact %s registry %q is not defined", artifact.Name, artifact.Registry)
 	}
@@ -552,9 +683,13 @@ func (catalog *Catalog) DenylistMap() map[string]DenylistEntry {
 }
 
 func (catalog *Catalog) artifactPath(artifact Artifact) (string, error) {
+	if artifact.UpstreamRepository != "" {
+		return upstreamArtifactPath(artifact), nil
+	}
 	registryName := artifact.Registry
 	version := artifact.Version
-	if publication, ok := catalog.publicationFor(artifact); ok {
+	publication, published := catalog.publicationFor(artifact)
+	if published {
 		registryName = publication.Registry
 		if publication.PublishedVersion != "" {
 			version = publication.PublishedVersion
@@ -600,6 +735,20 @@ func (catalog *Catalog) chartPullReference(artifact Artifact) (string, error) {
 			name = artifact.Name
 		}
 		return registry.RepositoryAlias + "/" + name, nil
+	}
+	if !published && strings.HasPrefix(artifact.UpstreamRepository, "oci://") {
+		name := artifact.RepositoryName
+		if name == "" {
+			name = artifact.Name
+		}
+		return strings.TrimSuffix(artifact.UpstreamRepository, "/") + "/" + name, nil
+	}
+	if !published && strings.HasPrefix(artifact.UpstreamRepository, "https://") {
+		name := artifact.RepositoryName
+		if name == "" {
+			name = artifact.Name
+		}
+		return "--repo " + strings.TrimSuffix(artifact.UpstreamRepository, "/") + " " + name, nil
 	}
 	path, err := catalog.artifactPath(artifact)
 	if err != nil {
@@ -745,7 +894,7 @@ func (catalog *Catalog) markAllUnpublishedAsPending() {
 	artifacts := append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...)
 	artifacts = append(artifacts, catalog.SupplementalArtifacts...)
 	for _, artifact := range artifacts {
-		if _, published := catalog.publicationFor(artifact); !published {
+		if _, published := catalog.publicationFor(artifact); !published && artifact.UpstreamRepository == "" {
 			catalog.PublicationPending = append(catalog.PublicationPending, artifact.catalogKey())
 		}
 	}
@@ -761,7 +910,7 @@ func (catalog *Catalog) reconcilePublicationPending() {
 			if marker != artifact.catalogKey() && marker != artifact.Name {
 				continue
 			}
-			if _, published := catalog.publicationFor(artifact); !published {
+			if _, published := catalog.publicationFor(artifact); !published && artifact.UpstreamRepository == "" {
 				pending[artifact.catalogKey()] = struct{}{}
 			}
 		}

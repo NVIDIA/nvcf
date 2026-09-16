@@ -32,7 +32,11 @@ import (
 
 var modelInvocationRetryInterval = time.Second
 
+var vanityInvocationRetryInterval = time.Second
+
 var selectedFunctionPollInterval = 5 * time.Second
+
+const vanityRouteNotFoundError = "Error: failed to invoke function: API error 404: 404 page not found"
 
 func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I use NVCF CLI config "([^"]*)"$`, sc.iUseNVCFCLIConfig)
@@ -179,8 +183,7 @@ func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
 	timeout string,
 	doc *godog.DocString,
 ) error {
-	return sc.runNVCFCLI(
-		ctx,
+	args := []string{
 		"function",
 		"invoke",
 		"--vanity-host",
@@ -191,7 +194,55 @@ func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
 		timeout,
 		"--request-body",
 		doc.Content,
-	)
+	}
+	retryFor, retryTimeoutErr := time.ParseDuration(timeout + "s")
+	deadline := time.Now().Add(retryFor)
+	retryCtx := ctx
+	if retryTimeoutErr == nil && retryFor > 0 {
+		var cancel context.CancelFunc
+		retryCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+
+	for {
+		err := sc.runNVCFCLI(retryCtx, args...)
+		if err == nil {
+			return nil
+		}
+		if retryTimeoutErr != nil || retryFor <= 0 ||
+			!isTransientVanityRouteNotFound(sc.LastResult.Stderr) {
+			return err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		timer := time.NewTimer(min(vanityInvocationRetryInterval, remaining))
+		select {
+		case <-retryCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		case <-timer.C:
+		}
+		if time.Until(deadline) <= 0 {
+			return err
+		}
+		if retryCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+	}
+}
+
+func isTransientVanityRouteNotFound(stderr string) bool {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	return len(lines) > 0 && lines[len(lines)-1] == vanityRouteNotFoundError
 }
 
 func (sc *ScenarioContext) iSuccessfullyUndeploySelectedFunction(ctx context.Context) error {

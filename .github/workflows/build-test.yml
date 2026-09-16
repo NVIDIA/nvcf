@@ -121,6 +121,11 @@ jobs:
           NVCA_OTEL_COLLECTOR_IMAGE_TAG="$(yq '.otelCollector.imageTag' nvca-operator/values.yaml)" \
             make check-vendor-chart
 
+      - name: Test NVCA default ownership
+        run: |
+          make -C deploy/helm/nvca-operator test-default-ownership
+          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
+
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
 
@@ -132,6 +137,9 @@ jobs:
 
       - name: Test OpenBao plugin catalog refresh hook
         run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
+
+      - name: Test ReVal authorization configuration
+        run: bash deploy/helm/helm-reval/tests/auth-config.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
