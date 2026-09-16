@@ -91,7 +91,7 @@ import org.springframework.web.bind.annotation.RestController;
                 Defines Account Management endpoints. Write endpoints can only be invoked by
                  NVIDIA Super Admins and require a bearer token in HTTP Authorization header with
                  'account_setup' scope. Read endpoints also accept the read-only
-                 'accounts_listing' scope so reporting consumers can enumerate accounts without
+                 'list_accounts' scope so reporting consumers can enumerate accounts without
                  write or delete privileges.
                 """
 )
@@ -104,7 +104,7 @@ public class AccountController {
             """;
     private static final String READ_AUTH_DESCRIPTION = """
             Requires a bearer token in the HTTP Authorization header with 'account_setup' or the
-             read-only 'accounts_listing' scope. Read-only consumers should use 'accounts_listing'
+             read-only 'list_accounts' scope. Read-only consumers should use 'list_accounts'
              so they can enumerate accounts without holding write or delete privileges.
             """;
 
@@ -139,7 +139,7 @@ public class AccountController {
             description = READ_AUTH_DESCRIPTION
     )
     @PreAuthorize("hasAnyAuthority('account_setup', 'apikey:account_setup', "
-            + "'accounts_listing', 'apikey:accounts_listing')")
+            + "'list_accounts', 'apikey:list_accounts')")
     public ListAccountResponse getCloudAccounts(Authentication authentication) {
         return accountFacade.getCloudAccounts(authentication);
     }
@@ -238,7 +238,7 @@ public class AccountController {
                     + READ_AUTH_DESCRIPTION
     )
     @PreAuthorize("hasAnyAuthority('account_setup', 'apikey:account_setup', "
-            + "'accounts_listing', 'apikey:accounts_listing')")
+            + "'list_accounts', 'apikey:list_accounts')")
     public AccountDetailsResponse getCloudAccountDetails(
             @Parameter(description = NCA_ID_DESCRIPTION, required = true)
             @PathVariable String ncaId,
