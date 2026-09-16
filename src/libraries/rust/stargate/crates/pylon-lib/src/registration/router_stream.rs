@@ -29,7 +29,8 @@ use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, Infere
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
 use super::grpc_endpoint::{
-    StargateGrpcEndpoint, connect_stargate_grpc_channel, log_stargate_grpc_failure,
+    StargateGrpcEndpoint, connect_stargate_grpc_channel, grpc_error_chain,
+    log_stargate_grpc_certificate_failure,
 };
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
@@ -60,11 +61,19 @@ pub(super) async fn run_router_registration_stream(
         let (mut ack_stream, update_tx) = match connection {
             Ok(connection) => connection,
             Err(error) => {
-                log_stargate_grpc_failure(
+                last_certificate_failure = log_stargate_grpc_certificate_failure(
                     &router_endpoint,
                     "register_inference_server",
                     error.as_ref(),
-                    &mut last_certificate_failure,
+                    last_certificate_failure,
+                );
+                tracing::warn!(
+                    transport = "grpc",
+                    operation = "register_inference_server",
+                    endpoint = %router_endpoint,
+                    cluster_id = %config.cluster_id,
+                    error = %grpc_error_chain(error.as_ref()),
+                    "Stargate gRPC operation failed"
                 );
                 if stop
                     .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
@@ -163,13 +172,24 @@ pub(super) async fn run_router_registration_stream(
                             ack
                         }
                         Ok(None) => {
-                            log_stargate_grpc_failure(&router_endpoint, "register_inference_server_stream",
-                                &std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "registration response stream ended"),
-                                &mut last_certificate_failure);
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                "Stargate registration response stream ended"
+                            );
                             break false;
                         }
                         Err(error) => {
-                            log_stargate_grpc_failure(&router_endpoint, "register_inference_server_stream", &error, &mut last_certificate_failure);
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                error = %grpc_error_chain(&error),
+                                "Stargate gRPC operation failed"
+                            );
                             break false;
                         }
                     };
