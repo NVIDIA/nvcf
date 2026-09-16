@@ -187,6 +187,10 @@ publications:
     type: image
     version: 0.5.0
     registry: public-images
+  - name: nvcf-function-autoscaler
+    type: image
+    version: 1.21.8
+    registry: public-images
   - name: nvcf-grpc-proxy
     type: image
     version: 1.33.5
@@ -227,6 +231,11 @@ publications:
   - name: helm-nvcf-ess-api
     type: chart
     version: 1.8.2
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-function-autoscaler
+    type: chart
+    version: 0.5.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-invocation-service
@@ -314,16 +323,17 @@ publications:
     version: 0.2.0
     registry: public-helm
     chart_format: http
+  - name: nvcf-cli
+    type: resource
+    version: 1.16.2
+    registry: public-resources
 version_overrides:
   - name: nvcf-cli
     type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:
-  - helm-nvcf-function-autoscaler
-  - nvcf-cli
   - nvcf-compute-plane-stack
-  - nvcf-function-autoscaler
   - nvcf-observability-stack
   - nvcf-self-managed-stack
 manifest:

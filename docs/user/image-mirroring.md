@@ -304,10 +304,25 @@ Use the CLI version shown in the artifact manifest for this stack release.
 {/*docs-version-sync:BEGIN image-mirroring-cli-snippet*/}
 
 ```bash
-# Publication pending: nvcf-cli 1.16.2 is not yet available for download.
+# Set the version
+export VERSION="1.16.2"
+
+# Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)
+export PLATFORM="linux-amd64"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-cli:${VERSION}"
+
+tar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz
+mv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli
+chmod +x nvcf-cli/nvcf-cli
 ```
 
-Package contents and extraction instructions will be available after publication or mirroring.
+The extracted directory contains:
+
+- `nvcf-cli` - The CLI binary
+- `.nvcf-cli.yaml.template` - Configuration template
+- `examples/` - Sample configuration files for different environments
+- `USAGE-GUIDE.md` - Detailed usage documentation
 
 {/*docs-version-sync:END image-mirroring-cli-snippet*/}
 
