@@ -176,3 +176,24 @@ func TestGet_NewKey_SubMillisecondPeriod_TTLRoundedUp(t *testing.T) {
 		t.Fatalf("expected a TTL option even for a sub-millisecond period, got %d options - a positive period must never be silently treated as unbounded", got)
 	}
 }
+
+// TestExpirationFromTTLMillis_TreatsValueAsAbsoluteEpoch is the regression
+// test for CodeRabbit's "Use result.TTL() as an absolute expiry" comment on
+// PR #1942. olric.GetResponse.TTL() returns an absolute Unix-millisecond
+// timestamp of when a key expires (confirmed against Olric's own internal
+// atomic-increment code, which does time.UnixMilli(ttl) on the same value).
+// The code previously treated that value as a millisecond *duration* and
+// added it to time.Now(), which would push the computed expiration tens of
+// thousands of years into the future instead of returning the key's real
+// remaining lifetime.
+func TestExpirationFromTTLMillis_TreatsValueAsAbsoluteEpoch(t *testing.T) {
+	want := time.Now().Add(30 * time.Second)
+	ttlMillis := want.UnixMilli()
+
+	got := expirationFromTTLMillis(ttlMillis)
+
+	diff := got.Sub(want)
+	if diff < -time.Millisecond || diff > time.Millisecond {
+		t.Fatalf("expected expiration ~%v, got %v (diff %v) - result.TTL() is an absolute epoch-ms timestamp, not a millisecond duration from now", want, got, diff)
+	}
+}

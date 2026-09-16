@@ -144,10 +144,23 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 	}
 
 	if result.TTL() > 0 {
-		expiration = now.Add(time.Duration(result.TTL()) * time.Millisecond)
+		expiration = expirationFromTTLMillis(result.TTL())
 	}
 	span.SetAttributes(attribute.String("expiration", expiration.String()))
 	return common.GetContextFromState(now, rate, expiration, int64(value)), nil
+}
+
+// expirationFromTTLMillis converts the absolute Unix-millisecond expiry that
+// olric.GetResponse.TTL() returns into a time.Time. GetResponse.TTL() reports
+// an absolute epoch-millisecond timestamp of when the key expires - not a
+// duration remaining - matching how Olric's own internal atomic-increment
+// code treats the same value (time.UnixMilli(ttl) in olric-data/olric's
+// internal/dmap package). Treating it as a millisecond count and adding it
+// to time.Now(), as this code previously did, produced an expiration tens
+// of thousands of years in the future instead of the key's real remaining
+// lifetime.
+func expirationFromTTLMillis(ttlMillis int64) time.Time {
+	return time.UnixMilli(ttlMillis)
 }
 
 // newKeyPutOptions returns the Olric put options used whenever a key is
