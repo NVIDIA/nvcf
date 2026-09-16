@@ -327,8 +327,10 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 
 		// Pod spec mutations must only be applied on creation events.
 		if isCreate {
-			// NVLink DRA mutations for claims/scheduling.
-			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
+			// NVLink DRA mutations for claims/scheduling. Skipped when the function has opted
+			// out via DisableNVLinkComputeDomain, since it does not need cross-node NVLink.
+			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) &&
+				!meta.WorkloadConfig.IsFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain) {
 				w.mutateNVLinkDRA(obj.GetNamespace(), t)
 			}
 

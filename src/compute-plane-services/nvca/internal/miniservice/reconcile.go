@@ -629,6 +629,9 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
 		return reconcile.Result{}, err
 	}
+	// Carry the decoded workload config through to the admission webhook via the miniservice
+	// metadata ConfigMap, so it can read workload-level feature flags at Pod admission time.
+	metaInput.WorkloadConfig = workloadConfig
 	// Update the resources status in the MiniService status.
 	updateResourcesStatus(ms, resources)
 	// ReVal may render filtered workload pull secrets, which should be used if possible.
@@ -845,7 +848,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 
 	infraObjs = append(infraObjs, utilsPod)
 
-	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
+	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) &&
+		!workloadConfig.IsFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain) {
 		infraObjs = append(infraObjs, nvcfdra.NewSingleChannelComputeDomain())
 	}
 

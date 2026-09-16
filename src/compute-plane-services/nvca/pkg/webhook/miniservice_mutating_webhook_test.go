@@ -39,6 +39,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
@@ -1450,4 +1451,88 @@ func volumeMountKeys(vms []corev1.VolumeMount) []string {
 		keys[i] = vm.Name + "@" + vm.MountPath
 	}
 	return keys
+}
+
+func TestMiniserviceOperatorWebhook_NVLinkComputeDomain_DisableViaWorkloadConfig(t *testing.T) {
+	ctx := core.WithDefaultLogger(context.Background())
+
+	newGPUPod := func() *corev1.Pod {
+		return &corev1.Pod{
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "gpu-pod",
+				Namespace: testNamespace,
+				Labels:    miniserviceNameLabels(),
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name:  "app",
+					Image: "app:latest",
+					Resources: corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1")},
+					},
+				}},
+			},
+		}
+	}
+
+	baseMeta := nvcatypes.MiniserviceMetadata{
+		MessageAction: common.FunctionCreationAction,
+		Labels: map[string]string{
+			nvcatypes.FunctionIDKey:        testFunctionID,
+			nvcatypes.FunctionVersionIDKey: testVersionID,
+			nvcatypes.MiniserviceNameLabel: testInstanceID,
+		},
+	}
+
+	handleCreate := func(t *testing.T, wh *miniserviceMutatingWebhook) *corev1.Pod {
+		pod := newGPUPod()
+		raw, _ := json.Marshal(pod)
+		req := admission.Request{}
+		req.Namespace = testNamespace
+		req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+		req.Operation = admissionv1.Create
+		req.Object = runtime.RawExtension{Raw: raw}
+
+		resp := wh.Handle(ctx, req)
+		require.True(t, resp.Allowed, "expected create Allowed, got: %v", resp.Result)
+
+		mutated := applyPatches(t, raw, resp.Patches)
+		var got corev1.Pod
+		require.NoError(t, json.Unmarshal(mutated, &got))
+		return &got
+	}
+
+	t.Run("default: claim attached and NVLink affinity applied", func(t *testing.T) {
+		cm := createConfigMapFromMeta(t, testNamespace, baseMeta)
+		wh := makeWebhook(t, cm)
+		wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
+
+		got := handleCreate(t, wh)
+
+		require.Len(t, got.Spec.ResourceClaims, 1)
+		require.Len(t, got.Spec.Containers[0].Resources.Claims, 1)
+		require.NotNil(t, got.Spec.Affinity)
+		require.NotNil(t, got.Spec.Affinity.PodAffinity)
+		assert.NotEmpty(t, got.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
+	})
+
+	t.Run("DisableNVLinkComputeDomain: no claim and no NVLink affinity", func(t *testing.T) {
+		meta := baseMeta
+		meta.WorkloadConfig = &v1alpha1.WorkloadConfig{
+			FeatureFlags: map[string]bool{featureflag.DisableNVLinkComputeDomain: true},
+		}
+		cm := createConfigMapFromMeta(t, testNamespace, meta)
+		wh := makeWebhook(t, cm)
+		wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
+
+		got := handleCreate(t, wh)
+
+		assert.Empty(t, got.Spec.ResourceClaims)
+		assert.Empty(t, got.Spec.Containers[0].Resources.Claims)
+		if got.Spec.Affinity != nil && got.Spec.Affinity.PodAffinity != nil {
+			assert.Empty(t, got.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
+			assert.Empty(t, got.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
+		}
+	})
 }

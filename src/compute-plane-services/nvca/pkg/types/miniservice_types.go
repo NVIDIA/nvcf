@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -70,6 +71,11 @@ type MiniserviceMetadata struct {
 	// injected into the ephemeral model-cache-init container by the webhook.
 	// Set only when the ephemeral model-cache backend is selected.
 	ModelCacheInitEnv map[string]string `json:"modelCacheInitEnv,omitempty"`
+
+	// WorkloadConfig is the decoded nvcf-workload-config for this MiniService, carried through
+	// so the admission webhook can read workload-level feature flags (e.g.
+	// featureflag.DisableNVLinkComputeDomain) without new plumbing for each new flag.
+	WorkloadConfig *v1alpha1.WorkloadConfig `json:"workloadConfig,omitempty"`
 }
 
 // ToConfigMapData serializes m into ConfigMap-compatible flat string data.

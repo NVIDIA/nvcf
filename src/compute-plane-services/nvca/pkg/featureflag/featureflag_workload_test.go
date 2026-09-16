@@ -78,6 +78,13 @@ func TestDecodeWorkloadConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "DisableNVLinkComputeDomain flag enabled",
+			cm:   workloadConfigCM("featureFlags:\n  " + DisableNVLinkComputeDomain + ": true\n"),
+			want: &v1alpha1.WorkloadConfig{
+				FeatureFlags: map[string]bool{DisableNVLinkComputeDomain: true},
+			},
+		},
+		{
 			name: "unknown feature flag is dropped",
 			cm:   workloadConfigCM("featureFlags:\n  " + StatusByWorkerReadiness + ": true\n  SomeUnknownFlag: true\n"),
 			want: &v1alpha1.WorkloadConfig{
