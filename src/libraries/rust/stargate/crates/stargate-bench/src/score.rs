@@ -183,7 +183,7 @@ pub fn summarize_with_topology(
 struct SummaryAccumulator {
     successes: usize,
     successful_output_tokens: u64,
-    unmeasured_successes: usize,
+    missing_successful_output_usage: bool,
     share_totals: [u64; 3],
     run_window_ms: Option<(u64, u64)>,
     ttft: Vec<u64>,
@@ -201,7 +201,7 @@ struct GroupAccumulator {
     input_tokens: u64,
     output_tokens: u64,
     observed_output_tokens: u64,
-    missing_output_usage: usize,
+    missing_output_usage: bool,
     successful_output_tokens: u64,
     ttlt: Vec<u64>,
     observed_cache: usize,
@@ -233,7 +233,7 @@ impl SummaryAccumulator {
         if result.ok {
             self.successes += 1;
             self.successful_output_tokens += result.observed_output_tokens.unwrap_or_default();
-            self.unmeasured_successes += usize::from(result.observed_output_tokens.is_none());
+            self.missing_successful_output_usage |= result.observed_output_tokens.is_none();
         } else {
             let failure = (
                 result.status_code,
@@ -283,7 +283,7 @@ impl SummaryAccumulator {
             group_shares(&self.backends, self.share_totals);
         let (cluster_request_shares, cluster_input_token_shares, mut cluster_output_token_shares) =
             group_shares(&self.clusters, self.share_totals);
-        if self.unmeasured_successes > 0 {
+        if self.missing_successful_output_usage {
             backend_output_token_shares.clear();
             cluster_output_token_shares.clear();
         }
@@ -303,7 +303,7 @@ impl SummaryAccumulator {
             request_count,
             success_rate: ratio(self.successes, request_count).unwrap_or_default(),
             successful_requests_per_second: per_second(self.successes as u64, total_length_ms),
-            successful_output_tokens_per_second: (self.unmeasured_successes == 0)
+            successful_output_tokens_per_second: (!self.missing_successful_output_usage)
                 .then(|| per_second(self.successful_output_tokens, total_length_ms))
                 .flatten(),
             avg_ttft_ms: average(&self.ttft),
@@ -374,7 +374,7 @@ impl GroupAccumulator {
         self.input_tokens += result.input_tokens;
         self.output_tokens += result.output_tokens;
         self.observed_output_tokens += result.observed_output_tokens.unwrap_or_default();
-        self.missing_output_usage += usize::from(result.observed_output_tokens.is_none());
+        self.missing_output_usage |= result.observed_output_tokens.is_none();
         if result.ok {
             self.successful_output_tokens += result.observed_output_tokens.unwrap_or_default();
         }
@@ -392,7 +392,7 @@ impl GroupAccumulator {
             success_count: self.success_count,
             input_tokens: self.input_tokens,
             output_tokens: self.output_tokens,
-            observed_output_tokens: (self.missing_output_usage == 0)
+            observed_output_tokens: (!self.missing_output_usage)
                 .then_some(self.observed_output_tokens),
             avg_ttlt_ms: average(&self.ttlt),
             p95_ttlt_ms: percentile(&self.ttlt, 0.95),
