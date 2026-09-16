@@ -125,6 +125,8 @@ render_chart_values nats-auth-callout-service "$work_dir/natsauth-on.yaml" "$cor
   fail "render nats-auth-callout (ha-preferred)"
 awk '/^natsAuthCalloutService:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/natsauth-on.yaml" | grep -E "replicaCount:[[:space:]]*2" >/dev/null ||
   fail "nats-auth-callout: expected replicaCount 2 when highAvailability.mode=ha-preferred"
+awk '/^natsAuthCalloutService:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/natsauth-on.yaml" | grep -A2 "podDisruptionBudget:" | grep -q "enabled: true" ||
+  fail "nats-auth-callout: expected HA PodDisruptionBudget when highAvailability.mode=ha-preferred"
 
 # llm-api-gateway (#987): stateless anti-affinity when the LLM addon is on.
 render_chart_values llm-api-gateway "$work_dir/llmgw-on.yaml" "$core" --state-values-set addons.llm.enabled=true ||

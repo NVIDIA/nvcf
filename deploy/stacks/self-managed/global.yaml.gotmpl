@@ -465,6 +465,17 @@ natsAuthCalloutService:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
+  {{- if $haEnabled }}
+  {{- with dig "highAvailability" "hotPath" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else }}
+  {{- with dig "natsAuthCalloutService" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
 
 {{- $workerEndpoints := dig "global" "workerEndpoints" dict .Values }}
 {{- /* Worker sidecar registry host/repository, shared by the NVCF and NVCT env

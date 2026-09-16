@@ -743,6 +743,9 @@ grpcproxy:
 # for single-node installs.
 # =============================================================================
 highAvailability:
+  # Default "none" keeps single-node installs on today's chart defaults.
+  # Multi-node deployments should run "ha-preferred"; making that the default
+  # is a follow-up (see #986/#989).
   mode: none
 
   # Stateless control-plane Deployments: nvcf-api, admin-token-issuer-proxy,
