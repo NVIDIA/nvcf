@@ -19,6 +19,7 @@ package mscontroller
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -69,7 +70,11 @@ func (r *Reconciler) emitConditionEvents(ms *v1alpha1.MiniService, oldConditions
 func sanitizeEventMessage(msg string) string {
 	msg = strings.Join(strings.Fields(msg), " ")
 	if len(msg) > maxEventMessageLen {
-		msg = msg[:maxEventMessageLen-3] + "..."
+		cut := maxEventMessageLen - 3
+		for cut > 0 && !utf8.RuneStart(msg[cut]) {
+			cut--
+		}
+		msg = msg[:cut] + "..."
 	}
 	return msg
 }

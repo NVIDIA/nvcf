@@ -20,6 +20,7 @@ package mscontroller
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -174,5 +175,14 @@ func TestSanitizeEventMessage(t *testing.T) {
 		got := sanitizeEventMessage(msg)
 		assert.LessOrEqual(t, len(got), maxEventMessageLen)
 		assert.True(t, strings.HasSuffix(got, "..."))
+	})
+
+	t.Run("truncates without splitting a multi-byte rune", func(t *testing.T) {
+		// "e" is a 3-byte rune (U+00e9 encoded as UTF-8 wouldn't apply here, use a
+		// genuine multi-byte character so the naive byte cut lands mid-rune).
+		msg := strings.Repeat("a", maxEventMessageLen-4) + "中文" // two 3-byte CJK runes
+		got := sanitizeEventMessage(msg)
+		assert.True(t, utf8.ValidString(got))
+		assert.LessOrEqual(t, len(got), maxEventMessageLen)
 	})
 }
