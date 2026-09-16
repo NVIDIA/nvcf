@@ -288,8 +288,8 @@ pub(super) fn log_stargate_grpc_certificate_failure(
 }
 
 macro_rules! log_stargate_grpc_target {
-    ($target:expr, $operation:expr, [$($extra:tt)*], $message:literal, $error_message:literal) => {{
-        if !tracing::enabled!(tracing::Level::DEBUG) {
+    ($level:ident, $target:expr, $operation:expr, [$($extra:tt)*], $message:literal, $error_message:literal) => {{
+        if !tracing::enabled!(tracing::Level::$level) {
             return;
         }
         let dial_endpoint = $target.dial_endpoint();
@@ -299,7 +299,7 @@ macro_rules! log_stargate_grpc_target {
             stargate_grpc_debug_target(&dial_endpoint),
             stargate_grpc_debug_target(&authority_endpoint),
         ) {
-            (Ok(dial), Ok(authority)) => tracing::debug!(
+            (Ok(dial), Ok(authority)) => tracing::event!(tracing::Level::$level,
                 transport = "grpc",
                 operation = $operation,
                 http_version = "h2",
@@ -313,7 +313,7 @@ macro_rules! log_stargate_grpc_target {
                 $($extra)*
                 $message
             ),
-            (Err(_), _) | (_, Err(_)) => tracing::debug!(
+            (Err(_), _) | (_, Err(_)) => tracing::event!(tracing::Level::$level,
                 transport = "grpc",
                 operation = $operation,
                 override_authority,
@@ -324,12 +324,71 @@ macro_rules! log_stargate_grpc_target {
     }};
 }
 
+pub(super) fn log_stargate_grpc_failure(
+    target: &StargateGrpcEndpoint,
+    operation: &'static str,
+    error: &(dyn Error + 'static),
+    last_certificate_failure: &mut Option<StargateGrpcCertificateFailure>,
+) {
+    if classify_stargate_grpc_certificate_failure(error).is_some() {
+        *last_certificate_failure = log_stargate_grpc_certificate_failure(
+            target,
+            operation,
+            error,
+            *last_certificate_failure,
+        );
+        return;
+    }
+    log_stargate_grpc_target!(
+        WARN, target, operation,
+        [error = %grpc_error_chain(error),],
+        "Stargate gRPC operation failed",
+        "Stargate gRPC operation failed"
+    );
+}
+
+fn grpc_error_chain(mut error: &(dyn Error + 'static)) -> String {
+    let mut causes = Vec::new();
+    loop {
+        // Parser diagnostics can include input excerpts from token files.
+        let detail = if let Some(error) = error.downcast_ref::<sonic_rs::Error>() {
+            format!(
+                "invalid JSON at line {} column {}",
+                error.line(),
+                error.column()
+            )
+        } else if let Some(status) = error.downcast_ref::<tonic::Status>() {
+            // Metadata and binary details are not needed to diagnose the RPC.
+            format!("gRPC {:?}: {}", status.code(), status.message())
+        } else if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            // Token-issuer URLs can contain credentials or sensitive queries.
+            // Keep the failure category and its sources without displaying the URL.
+            if error.is_timeout() {
+                "HTTP request timed out".into()
+            } else if error.is_connect() {
+                "HTTP connection failed".into()
+            } else {
+                "HTTP request failed".into()
+            }
+        } else {
+            error.to_string()
+        };
+        if causes.last() != Some(&detail) {
+            causes.push(detail);
+        }
+        let Some(source) = error.source() else { break };
+        error = source;
+    }
+    causes.join(": ")
+}
+
 pub(super) fn log_stargate_grpc_connect_attempt(
     target: &StargateGrpcEndpoint,
     operation: &'static str,
     connect_mode: &'static str,
 ) {
     log_stargate_grpc_target!(
+        DEBUG,
         target,
         operation,
         [connect_mode,],
@@ -340,6 +399,7 @@ pub(super) fn log_stargate_grpc_connect_attempt(
 
 fn log_stargate_grpc_channel_connected(target: &StargateGrpcEndpoint, operation: &'static str) {
     log_stargate_grpc_target!(
+        DEBUG,
         target,
         operation,
         [],

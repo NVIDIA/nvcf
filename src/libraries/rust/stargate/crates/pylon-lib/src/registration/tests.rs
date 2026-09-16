@@ -759,19 +759,24 @@ fn grpc_certificate_failure_log_stays_suppressed_across_unclassified_errors() {
     let certificate_error = typed_tls_io_error(rustls::CertificateError::UnknownIssuer);
     let transport_error = std::io::Error::other("ordinary transport failure");
 
-    let mut last_failure =
-        log_stargate_grpc_certificate_failure(&target, "watch_stargates", &certificate_error, None);
-    last_failure = log_stargate_grpc_certificate_failure(
-        &target,
-        "watch_stargates",
-        &transport_error,
-        last_failure,
-    );
-    let _ = log_stargate_grpc_certificate_failure(
+    let mut last_failure = None;
+    super::grpc_endpoint::log_stargate_grpc_failure(
         &target,
         "watch_stargates",
         &certificate_error,
-        last_failure,
+        &mut last_failure,
+    );
+    super::grpc_endpoint::log_stargate_grpc_failure(
+        &target,
+        "watch_stargates",
+        &transport_error,
+        &mut last_failure,
+    );
+    super::grpc_endpoint::log_stargate_grpc_failure(
+        &target,
+        "watch_stargates",
+        &certificate_error,
+        &mut last_failure,
     );
 
     assert_eq!(
@@ -779,6 +784,7 @@ fn grpc_certificate_failure_log_stays_suppressed_across_unclassified_errors() {
         1,
         "an unclassified retry error must not start a new certificate-failure episode"
     );
+    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 1);
 }
 
 #[test]
@@ -1481,4 +1487,123 @@ async fn stop_watched_endpoint_signals_and_awaits_task() {
     stop_watched_endpoint(endpoint).await;
 
     exited_rx.await.expect("watched endpoint task should exit");
+}
+
+#[test]
+fn repeated_registration_failures_each_emit_a_warning_with_their_cause() {
+    let target = grpc_endpoint("router.example.test:50071");
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let mut last_certificate_failure = None;
+    let error = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "connection refused",
+    ))
+    .context("open registration channel");
+    for _ in 0..3 {
+        super::grpc_endpoint::log_stargate_grpc_failure(
+            &target,
+            "register_inference_server",
+            error.as_ref(),
+            &mut last_certificate_failure,
+        );
+    }
+    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 3);
+    let status = tonic::Status::unauthenticated("authentication failed");
+    super::grpc_endpoint::log_stargate_grpc_failure(
+        &target,
+        "register_inference_server",
+        &status,
+        &mut last_certificate_failure,
+    );
+    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 4);
+    let details: Vec<_> = subscriber
+        .events()
+        .into_iter()
+        .filter_map(|event| event.fields.get("error").cloned())
+        .collect();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("open registration channel")
+                && detail.contains("connection refused"))
+    );
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("Unauthenticated"))
+    );
+}
+
+#[tokio::test]
+async fn registration_token_errors_do_not_expose_secret_file_excerpts() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let provider = stargate_auth::AuthTokenProvider::JsonFile {
+        path: file.path().to_owned(),
+        key: vec!["missing".into()],
+    };
+    for contents in [
+        r#"{"secret":"do-not-log-this-secret"}"#,
+        r#"{"secret":"do-not-log-this-secret","missing":invalid}"#,
+    ] {
+        std::fs::write(file.path(), contents).unwrap();
+        let error = provider.resolve_token().await.unwrap_err();
+        let detail = recorded_registration_error(error.as_ref());
+        assert!(detail.contains("failed to extract key"));
+        assert!(!detail.contains("do-not-log-this-secret"));
+    }
+}
+
+#[tokio::test]
+async fn registration_token_errors_preserve_io_causes() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = stargate_auth::AuthTokenProvider::File(directory.path().join("missing-token"));
+    let error = provider.resolve_token().await.unwrap_err();
+    let cause = error.downcast_ref::<std::io::Error>().unwrap();
+    assert_eq!(cause.kind(), std::io::ErrorKind::NotFound);
+    let detail = recorded_registration_error(error.as_ref());
+    assert!(detail.contains("failed to read"));
+    assert!(detail.contains(&cause.to_string()));
+}
+
+#[tokio::test]
+async fn registration_http_errors_keep_transport_causes_without_sensitive_urls() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    // An HTTP peer that closes before responding produces a local client error.
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        drop(socket);
+    });
+    let error = reqwest::Client::new()
+        .get(format!(
+            "http://test:private-password@{address}/token?key=private-query"
+        ))
+        .send()
+        .await
+        .unwrap_err();
+    server.await.unwrap();
+    let detail = recorded_registration_error(&error);
+    assert!(detail.starts_with("HTTP "), "{detail}");
+    assert!(detail.contains(&std::error::Error::source(&error).unwrap().to_string()));
+    assert!(!detail.contains("private-password"));
+    assert!(!detail.contains("private-query"));
+}
+
+fn recorded_registration_error(error: &(dyn std::error::Error + 'static)) -> String {
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _guard = tracing::dispatcher::set_default(&dispatch);
+    super::grpc_endpoint::log_stargate_grpc_failure(
+        &grpc_endpoint("router.example.test:50071"),
+        "register_inference_server",
+        error,
+        &mut None,
+    );
+    subscriber
+        .events()
+        .into_iter()
+        .find_map(|event| event.fields.get("error").cloned())
+        .unwrap()
 }
