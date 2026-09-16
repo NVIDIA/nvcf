@@ -20,6 +20,7 @@ import static com.nvidia.nvcf.IntegrationTestConfiguration.MOCK_OAUTH2_TOKEN_SER
 import static com.nvidia.nvcf.util.MockApiKeysServer.setResponse;
 import static com.nvidia.nvcf.util.NvcfConstants.ADMIN_SCOPE_MANAGE_TELEMETRIES;
 import static com.nvidia.nvcf.util.NvcfConstants.SCOPE_REGISTER_FUNCTION;
+import static com.nvidia.nvcf.util.TestConstants.SCOPE_LIST_ACCOUNTS;
 import static com.nvidia.nvcf.util.TestConstants.SCOPE_ACCOUNT_SETUP;
 import static com.nvidia.nvcf.util.TestConstants.TEST_ACCOUNT_NAME;
 import static com.nvidia.nvcf.util.TestConstants.TEST_ADMIN_SUBJECT;
@@ -203,6 +204,11 @@ class AccountControllerTest {
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_ACCOUNT_SETUP), 100),
                              8, // With JWT, the response will contain info about all accounts.
+                             OK),
+                // Read-only list_accounts scope grants list access with JWT.
+                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
+                                                             List.of(SCOPE_LIST_ACCOUNTS), 100),
+                             8,
                              OK)
         );
         var apiKeyCases = Stream.of(
@@ -215,6 +221,15 @@ class AccountControllerTest {
                                  return "nvapi-stg-some-key";
                              },
                              1,  // With apikey, the response will only contain info about TEST_NCA_ID.
+                             OK),
+                // Read-only list_accounts scope grants list access with an API key.
+                Arguments.of((Supplier<String>) () -> {
+                                 setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                                             List.of(),
+                                             List.of(SCOPE_LIST_ACCOUNTS));
+                                 return "nvapi-stg-some-key";
+                             },
+                             1,
                              OK),
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse("non-existent-account", TEST_OWNER_ID,
@@ -313,6 +328,12 @@ class AccountControllerTest {
                                                              List.of(SCOPE_ACCOUNT_SETUP), 100),
                              TEST_AUTHORIZED_NCA_ID_5,
                              null,
+                             OK),
+                // Read-only list_accounts scope grants detail read with JWT.
+                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
+                                                             List.of(SCOPE_LIST_ACCOUNTS), 100),
+                             TEST_NCA_ID,
+                             Set.of(TEST_CLIENT_ID),
                              OK)
         );
         var apiKeyCases = Stream.of(
@@ -322,6 +343,16 @@ class AccountControllerTest {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID,
                                              List.of(),
                                              List.of(SCOPE_ACCOUNT_SETUP));
+                                 return "nvapi-stg-some-key";
+                             },
+                             TEST_NCA_ID,
+                             Set.of(TEST_CLIENT_ID),
+                             OK),
+                // Read-only list_accounts scope grants detail read with an API key.
+                Arguments.of((Supplier<String>) () -> {
+                                 setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                                             List.of(),
+                                             List.of(SCOPE_LIST_ACCOUNTS));
                                  return "nvapi-stg-some-key";
                              },
                              TEST_NCA_ID,
@@ -571,6 +602,10 @@ class AccountControllerTest {
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_REGISTER_FUNCTION), 100),
                              TEST_CLIENT_3, FORBIDDEN),
+                // Read-only list_accounts scope must not allow client association.
+                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
+                                                             List.of(SCOPE_LIST_ACCOUNTS), 100),
+                             TEST_CLIENT_3, FORBIDDEN),
                 // Associate Client JWT that is already associated with the account.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_ACCOUNT_SETUP), 100),
@@ -584,6 +619,15 @@ class AccountControllerTest {
                              TEST_CLIENT_3, OK));
         var apiKeyCases = Stream.of(
                 Arguments.of("nvapi-stg-key", TEST_NCA_ID, FORBIDDEN),
+                // Read-only list_accounts scope must not allow client association via API key.
+                Arguments.of((Supplier<String>) () -> {
+                                 setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                                             List.of(),
+                                             List.of(SCOPE_LIST_ACCOUNTS));
+                                 return "nvapi-stg-some-key";
+                             },
+                             TEST_CLIENT_3,
+                             FORBIDDEN),
                 // Valid scope and NCA ID -- should succeed
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID,
@@ -701,6 +745,10 @@ class AccountControllerTest {
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_REGISTER_FUNCTION), 100),
                              TEST_CLIENT_ID, FORBIDDEN),
+                // Read-only list_accounts scope must not allow client disassociation.
+                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
+                                                             List.of(SCOPE_LIST_ACCOUNTS), 100),
+                             TEST_CLIENT_ID, FORBIDDEN),
                 // Disassociate OAuth2 Client that is not registered with the account.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_ACCOUNT_SETUP), 100),
@@ -710,6 +758,15 @@ class AccountControllerTest {
                              TEST_CLIENT_ID, OK));
         var apiKeyCases = Stream.of(
                 Arguments.of("nvapi-stg-key", TEST_NCA_ID, FORBIDDEN),
+                // Read-only list_accounts scope must not allow disassociation via API key.
+                Arguments.of((Supplier<String>) () -> {
+                                 setResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                                             List.of(),
+                                             List.of(SCOPE_LIST_ACCOUNTS));
+                                 return "nvapi-stg-some-key";
+                             },
+                             TEST_CLIENT_ID,
+                             FORBIDDEN),
                 // Valid scope and NCA ID -- should succeed
                 Arguments.of((Supplier<String>) () -> {
                                  setResponse(TEST_NCA_ID, TEST_OWNER_ID,
@@ -814,6 +871,22 @@ class AccountControllerTest {
                              FORBIDDEN),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
                                                              List.of(SCOPE_REGISTER_FUNCTION), 100),
+                             ncaId,
+                             clientIds,
+                             FORBIDDEN),
+                // Read-only list_accounts scope must not allow account deletion.
+                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
+                                                             List.of(SCOPE_LIST_ACCOUNTS), 100),
+                             ncaId,
+                             clientIds,
+                             FORBIDDEN),
+                // Read-only list_accounts scope must not allow deletion via API key.
+                Arguments.of((Supplier<String>) () -> {
+                                 setResponse(ncaId, TEST_OWNER_ID,
+                                             List.of(),
+                                             List.of(SCOPE_LIST_ACCOUNTS));
+                                 return "nvapi-stg-some-key";
+                             },
                              ncaId,
                              clientIds,
                              FORBIDDEN),
