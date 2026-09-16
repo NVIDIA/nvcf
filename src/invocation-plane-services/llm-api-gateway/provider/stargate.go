@@ -357,6 +357,8 @@ func (p *StargateProvider) Proxy(
 	// inbound request must never reach Stargate, even when no priority
 	// resolves for this request.
 	outbound.Header.Del(headerPriority)
+	// X-Routing-Method is gateway-owned: a cloned client value must never reach the router.
+	outbound.Header.Del(headerRoutingMethod)
 
 	if reqCtx != nil {
 		if reqCtx.RequestID != "" {
@@ -456,6 +458,11 @@ func routingTokenEstimate(request *NormalizedRequest) int {
 	return max(0, request.InputTokens)
 }
 
+type routerErrorResponse struct {
+	Error string `json:"error"`
+	Code  string `json:"code"`
+}
+
 func checkHTTPError(resp *http.Response) error {
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 		return nil
@@ -467,6 +474,11 @@ func checkHTTPError(resp *http.Response) error {
 	var errorResponse models.ErrorResponse
 	if err := json.Unmarshal(body, &errorResponse); err == nil && errorResponse.Error.Message != "" {
 		message = errorResponse.Error.Message
+	} else {
+		var routerError routerErrorResponse
+		if err := json.Unmarshal(body, &routerError); err == nil && routerError.Error != "" {
+			message = routerError.Error
+		}
 	}
 	if message == "" {
 		message = http.StatusText(resp.StatusCode)
