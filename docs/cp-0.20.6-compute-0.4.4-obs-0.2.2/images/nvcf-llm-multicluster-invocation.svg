@@ -1,0 +1,149 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">NVCF LLM multi-cluster invocation path</title>
+  <desc id="desc">Global DNS or an optional custom front door selects a regional public LLM/HTTP endpoint. Each region has LLM API Gateway, LLM Request Router, NATS usage sync, and LLM worker gateways in GPU cluster groups, with NATS usage chatter and request-router paths to worker gateways in other clusters.</desc>
+  <defs>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --svg-bg: #f7f9f7;
+        --svg-panel: #ffffff;
+        --svg-panel-muted: #eef3ef;
+        --svg-border: #c8d0d6;
+        --svg-text: #1f2520;
+        --svg-muted: #53605a;
+        --svg-line: #53605a;
+        --nvidia-green: #76b900;
+        --svg-blue: #1565c0;
+        --svg-amber: #f9a825;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --svg-bg: #101512;
+          --svg-panel: #18201b;
+          --svg-panel-muted: #202a24;
+          --svg-border: #50605a;
+          --svg-text: #f3f7f2;
+          --svg-muted: #b9c8b7;
+          --svg-line: #cbd8c9;
+          --nvidia-green: #8bd80f;
+          --svg-blue: #6eb6ff;
+          --svg-amber: #ffd166;
+        }
+      }
+
+      .bg { fill: var(--svg-bg); }
+      .region { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .cluster { fill: var(--svg-panel-muted); stroke: var(--svg-blue); stroke-width: 2; }
+      .service { fill: var(--svg-panel); stroke: var(--nvidia-green); stroke-width: 3; }
+      .panel { fill: var(--svg-panel); stroke: var(--svg-border); stroke-width: 2; }
+      .panel-muted { fill: var(--svg-panel-muted); stroke: var(--svg-border); stroke-width: 2; }
+      .optional { fill: var(--svg-panel); stroke: var(--svg-amber); stroke-width: 2; stroke-dasharray: 8 6; }
+      .title { fill: var(--svg-text); font: 700 26px Arial, sans-serif; }
+      .heading { fill: var(--svg-text); font: 700 20px Arial, sans-serif; }
+      .label { fill: var(--svg-text); font: 700 15px Arial, sans-serif; }
+      .label-tight { fill: var(--svg-text); font: 700 14px Arial, sans-serif; }
+      .small { fill: var(--svg-muted); font: 13px Arial, sans-serif; }
+      .callout { stroke: var(--svg-panel); stroke-width: 5; paint-order: stroke; stroke-linejoin: round; }
+      .line { stroke: var(--svg-line); stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .line-muted { stroke: var(--svg-muted); stroke-width: 2.2; fill: none; stroke-dasharray: 7 5; marker-end: url(#arrow-muted); }
+      .line-green { stroke: var(--nvidia-green); stroke-width: 2.4; fill: none; stroke-dasharray: 8 6; marker-start: url(#arrow-green); marker-end: url(#arrow-green); }
+      .arrowhead { fill: var(--svg-line); }
+      .arrowhead-muted { fill: var(--svg-muted); }
+      .arrowhead-green { fill: var(--nvidia-green); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-muted" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="arrowhead-green" d="M 0 0 L 10 5 L 0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1400" height="900" />
+  <text class="title" x="48" y="48">LLM Multi-Cluster Invocation</text>
+  <text class="small" x="48" y="78">LLM traffic uses the OpenAI-compatible gateway path and worker gateway tunnels to regional model services.</text>
+
+  <rect class="optional" x="480" y="105" width="440" height="78" rx="10" />
+  <text class="heading" x="700" y="137" text-anchor="middle">Global DNS / Optional Custom Front Door</text>
+  <text class="small" x="700" y="162" text-anchor="middle">regional selection for llm.invocation.&lt;domain&gt;</text>
+
+  <rect class="region" x="50" y="230" width="610" height="610" rx="12" />
+  <text class="heading" x="355" y="266" text-anchor="middle">Region A</text>
+  <text class="small" x="355" y="289" text-anchor="middle">LLM invocation services</text>
+
+  <rect class="region" x="740" y="230" width="610" height="610" rx="12" />
+  <text class="heading" x="1045" y="266" text-anchor="middle">Region B</text>
+  <text class="small" x="1045" y="289" text-anchor="middle">LLM invocation services</text>
+
+  <rect class="panel-muted" x="92" y="325" width="154" height="76" rx="8" />
+  <text class="label-tight" x="169" y="354" text-anchor="middle">Public LLM/HTTP</text>
+  <text class="small" x="169" y="377" text-anchor="middle">llm.invocation</text>
+
+  <rect class="service" x="276" y="315" width="154" height="96" rx="8" />
+  <text class="label" x="353" y="345" text-anchor="middle">LLM API</text>
+  <text class="label" x="353" y="365" text-anchor="middle">Gateway</text>
+  <text class="small" x="353" y="389" text-anchor="middle">auth and validation</text>
+
+  <rect class="service" x="460" y="315" width="154" height="96" rx="8" />
+  <text class="label" x="537" y="345" text-anchor="middle">LLM Request</text>
+  <text class="label" x="537" y="365" text-anchor="middle">Router</text>
+  <text class="small" x="537" y="389" text-anchor="middle">Stargate peer</text>
+
+  <rect class="panel-muted" x="276" y="460" width="154" height="68" rx="8" />
+  <text class="label" x="353" y="487" text-anchor="middle">NATS Usage</text>
+  <text class="small" x="353" y="510" text-anchor="middle">gateway state sync</text>
+
+  <rect class="cluster" x="100" y="620" width="510" height="145" rx="10" />
+  <text class="heading" x="355" y="652" text-anchor="middle">GPU Cluster Group A</text>
+  <rect class="panel" x="140" y="700" width="190" height="36" rx="6" />
+  <text class="small" x="235" y="723" text-anchor="middle">Worker Gateway + Model A</text>
+  <rect class="panel" x="380" y="700" width="190" height="36" rx="6" />
+  <text class="small" x="475" y="723" text-anchor="middle">Worker Gateway + Model B</text>
+
+  <rect class="panel-muted" x="782" y="325" width="154" height="76" rx="8" />
+  <text class="label-tight" x="859" y="354" text-anchor="middle">Public LLM/HTTP</text>
+  <text class="small" x="859" y="377" text-anchor="middle">llm.invocation</text>
+
+  <rect class="service" x="966" y="315" width="154" height="96" rx="8" />
+  <text class="label" x="1043" y="345" text-anchor="middle">LLM API</text>
+  <text class="label" x="1043" y="365" text-anchor="middle">Gateway</text>
+  <text class="small" x="1043" y="389" text-anchor="middle">auth and validation</text>
+
+  <rect class="service" x="1150" y="315" width="154" height="96" rx="8" />
+  <text class="label" x="1227" y="345" text-anchor="middle">LLM Request</text>
+  <text class="label" x="1227" y="365" text-anchor="middle">Router</text>
+  <text class="small" x="1227" y="389" text-anchor="middle">Stargate peer</text>
+
+  <rect class="panel-muted" x="966" y="460" width="154" height="68" rx="8" />
+  <text class="label" x="1043" y="487" text-anchor="middle">NATS Usage</text>
+  <text class="small" x="1043" y="510" text-anchor="middle">gateway state sync</text>
+
+  <rect class="cluster" x="790" y="620" width="510" height="145" rx="10" />
+  <text class="heading" x="1045" y="652" text-anchor="middle">GPU Cluster Group B</text>
+  <rect class="panel" x="830" y="700" width="190" height="36" rx="6" />
+  <text class="small" x="925" y="723" text-anchor="middle">Worker Gateway + Model C</text>
+  <rect class="panel" x="1070" y="700" width="190" height="36" rx="6" />
+  <text class="small" x="1165" y="723" text-anchor="middle">Worker Gateway + Model D</text>
+
+  <path class="line" d="M 700 183 L 700 205 L 169 205 L 169 325" />
+  <path class="line" d="M 700 183 L 700 205 L 859 205 L 859 325" />
+  <line class="line" x1="246" y1="363" x2="276" y2="363" />
+  <line class="line" x1="430" y1="363" x2="460" y2="363" />
+  <path class="line-muted" d="M 353 411 L 353 460" />
+  <path class="line" d="M 537 411 L 537 585 L 235 585 L 235 700" />
+  <path class="line" d="M 537 411 L 537 585 L 475 585 L 475 700" />
+  <line class="line" x1="936" y1="363" x2="966" y2="363" />
+  <line class="line" x1="1120" y1="363" x2="1150" y2="363" />
+  <path class="line-muted" d="M 1043 411 L 1043 460" />
+  <path class="line" d="M 1227 411 L 1227 585 L 925 585 L 925 700" />
+  <path class="line" d="M 1227 411 L 1227 585 L 1165 585 L 1165 700" />
+  <path class="line-green" d="M 430 494 C 610 545 790 545 966 494" />
+  <text class="small callout" x="698" y="570" text-anchor="middle">NATS cross-cluster usage chatter</text>
+  <path class="line" d="M 614 398 C 650 520 650 625 635 675 L 900 675 L 900 700" />
+  <path class="line" d="M 1150 398 C 1220 520 1220 625 1185 690 L 450 690 L 450 700" />
+  <text class="small callout" x="700" y="650" text-anchor="middle">remote worker gateway paths</text>
+</svg>

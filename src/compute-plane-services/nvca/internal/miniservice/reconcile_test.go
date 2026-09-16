@@ -278,7 +278,7 @@ func TestReconcile_Function(t *testing.T) {
 		Decoder:               serializer.NewCodecFactory(testScheme).UniversalDeserializer(),
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
-		eventRecorder:         record.NewFakeRecorder(10),
+		eventRecorder:         record.NewFakeRecorder(256),
 		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
@@ -1336,7 +1336,7 @@ func TestReconcile_Function_SaveRevisionHistoryFails(t *testing.T) {
 		Decoder:               serializer.NewCodecFactory(testScheme).UniversalDeserializer(),
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
-		eventRecorder:         record.NewFakeRecorder(10),
+		eventRecorder:         record.NewFakeRecorder(256),
 		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
@@ -1847,7 +1847,7 @@ func testReconcileNVLinkOptimizedHelper(t *testing.T, helmObjs []client.Object, 
 		Decoder:               serializer.NewCodecFactory(testScheme).UniversalDeserializer(),
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
-		eventRecorder:         record.NewFakeRecorder(10),
+		eventRecorder:         record.NewFakeRecorder(256),
 		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
@@ -2222,7 +2222,7 @@ func TestReconcile_Task(t *testing.T) {
 		Decoder:               serializer.NewCodecFactory(testScheme).UniversalDeserializer(),
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
-		eventRecorder:         record.NewFakeRecorder(10),
+		eventRecorder:         record.NewFakeRecorder(256),
 		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
@@ -2993,6 +2993,7 @@ func TestReconcile_TaskStatus(t *testing.T) {
 	regITCache := icms.NewRegistrationInstanceTypeCache()
 	regITCache.Put(nvcatypes.BackendGPUs(nfClient.BackendGPUs).ToRegistration(false, corev1.ResourceList{}))
 
+	fakeRecorder := record.NewFakeRecorder(256)
 	r := &Reconciler{
 		ControllerOptions: ControllerOptions{
 			SystemNamespace:      "nvca-system",
@@ -3019,7 +3020,7 @@ func TestReconcile_TaskStatus(t *testing.T) {
 		Decoder:               serializer.NewCodecFactory(testScheme).UniversalDeserializer(),
 		NFClient:              nfClient,
 		tracer:                otel.NewTracer(),
-		eventRecorder:         record.NewFakeRecorder(10),
+		eventRecorder:         fakeRecorder,
 		chartCache:            chartcache.New(t.TempDir()),
 		regITCache:            regITCache,
 		now:                   time.Now,
@@ -3588,6 +3589,11 @@ rules:
 			},
 		}, ms.Status.Conditions)
 	}
+	// The ObjectsHealthy condition flipped to False without a phase change (phase stayed
+	// Running), but a Warning event should still be recorded so this is visible via
+	// `kubectl describe`.
+	assert.Contains(t, drainEvents(t, fakeRecorder),
+		"Warning ObjectsFailedWithinBackoffTimeout batch/v1.Job foo: BackoffLimitExceeded v1.Pod job-pod: SomeContainersNotReadyReason")
 
 	// Sleep to allow backoff timeout to elapse (configured to 1ms in test)
 	time.Sleep(5 * time.Millisecond)
