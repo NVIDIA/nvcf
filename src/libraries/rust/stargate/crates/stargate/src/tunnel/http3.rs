@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
-use axum::http::HeaderName;
 use futures::future;
 use quinn::Connection;
 use stargate_protocol::common::end_to_end_headers;
@@ -85,7 +84,7 @@ impl Http3ConnectionHandle {
             .body(())
             .context("build h3 request")?;
         for (name, value) in end_to_end_headers(&request.headers) {
-            if should_forward_h3_tunnel_request_header(name) {
+            if name != "host" {
                 h3_request.headers_mut().append(name, value.clone());
             }
         }
@@ -131,10 +130,6 @@ pub(super) async fn build_h3_client_connection(
             task: driver_task,
         }),
     })
-}
-
-pub(super) fn should_forward_h3_tunnel_request_header(name: &HeaderName) -> bool {
-    name != "host"
 }
 
 pub(super) fn h3_error<E>(error: E) -> anyhow::Error

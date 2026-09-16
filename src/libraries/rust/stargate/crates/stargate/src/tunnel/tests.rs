@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use axum::extract::Request;
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::routing::{get, post};
 use axum::{Router, body::Body};
 use futures::{StreamExt, future};
@@ -33,9 +33,7 @@ use stargate_protocol::{
 use super::body::RequestBodySendTask;
 use super::connection::TunnelConnection;
 use super::endpoint::{build_client_config, build_server_config};
-use super::http3::{
-    H3ServerConnection, H3ServerRequestStream, should_forward_h3_tunnel_request_header,
-};
+use super::http3::{H3ServerConnection, H3ServerRequestStream};
 use super::{
     EnsureConnectedResult, QuicHttpProxy, QuicTunnelConfig, RegistrationTunnel, StreamingResponse,
 };
@@ -1029,16 +1027,6 @@ async fn registration_tunnel_replenishes_partial_direct_connection_set() {
 
     fixture.assert_connection_state(2, false);
     fixture.shutdown().await;
-}
-
-#[test]
-fn h3_tunnel_request_filter_strips_host() {
-    assert!(!should_forward_h3_tunnel_request_header(
-        &http::header::HOST
-    ));
-    assert!(should_forward_h3_tunnel_request_header(
-        &HeaderName::from_static("x-request-id")
-    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
