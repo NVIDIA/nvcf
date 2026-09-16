@@ -179,15 +179,16 @@ var defaultDenylist = []DenylistEntry{
 
 // Artifact identifies one versioned chart, image, or downloadable resource in the catalog.
 type Artifact struct {
-	ID             string              `yaml:"id,omitempty"`
-	Name           string              `yaml:"name"`
-	Type           ArtifactType        `yaml:"type"`
-	Registry       string              `yaml:"registry"`
-	RepositoryName string              `yaml:"repository_name,omitempty"`
-	Version        string              `yaml:"version"`
-	Digest         string              `yaml:"digest,omitempty"`
-	Stacks         []string            `yaml:"stacks,omitempty"`
-	Requirement    ManifestRequirement `yaml:"requirement,omitempty"`
+	ID                 string              `yaml:"id,omitempty"`
+	Name               string              `yaml:"name"`
+	Type               ArtifactType        `yaml:"type"`
+	Registry           string              `yaml:"registry"`
+	RepositoryName     string              `yaml:"repository_name,omitempty"`
+	UpstreamRepository string              `yaml:"upstream_repository,omitempty"`
+	Version            string              `yaml:"version"`
+	Digest             string              `yaml:"digest,omitempty"`
+	Stacks             []string            `yaml:"stacks,omitempty"`
+	Requirement        ManifestRequirement `yaml:"requirement,omitempty"`
 }
 
 type OutputFile struct {
@@ -405,6 +406,11 @@ func ValidateCatalog(catalog *Catalog) error {
 		if err := catalog.validateArtifact(artifact); err != nil {
 			return err
 		}
+		if artifact.UpstreamRepository != "" {
+			if _, published := catalog.publicationFor(artifact); published {
+				return fmt.Errorf("artifact %s:%s cannot have both an upstream repository and a publication", artifact.Name, artifact.Version)
+			}
+		}
 		key := artifact.catalogKey()
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("duplicate artifact id %s", key)
@@ -430,6 +436,9 @@ func ValidateCatalog(catalog *Catalog) error {
 		}
 		if _, published := catalog.publicationFor(artifact); published {
 			return fmt.Errorf("artifact %s:%s cannot be both published and publication_pending", artifact.Name, artifact.Version)
+		}
+		if artifact.UpstreamRepository != "" {
+			return fmt.Errorf("artifact %s:%s cannot have both an upstream repository and publication_pending", artifact.Name, artifact.Version)
 		}
 	}
 	if err := validateManifestMetadata(catalog.Manifest); err != nil {
@@ -590,6 +599,11 @@ func (catalog *Catalog) validateArtifact(artifact Artifact) error {
 			return fmt.Errorf("artifact %s has invalid digest %q", artifact.Name, artifact.Digest)
 		}
 	}
+	if artifact.UpstreamRepository != "" {
+		if publicUpstreamRepository(artifact.UpstreamRepository, artifact.Type) != artifact.UpstreamRepository {
+			return fmt.Errorf("artifact %s has unsupported public upstream repository %q", artifact.Name, artifact.UpstreamRepository)
+		}
+	}
 	if artifact.Requirement != "" && artifact.Requirement != ManifestRequired && artifact.Requirement != ManifestOptional {
 		return fmt.Errorf("artifact %s has unsupported requirement %q", artifact.Name, artifact.Requirement)
 	}
@@ -643,9 +657,13 @@ func (catalog *Catalog) DenylistMap() map[string]DenylistEntry {
 }
 
 func (catalog *Catalog) artifactPath(artifact Artifact) (string, error) {
+	if artifact.UpstreamRepository != "" {
+		return upstreamArtifactPath(artifact), nil
+	}
 	registryName := artifact.Registry
 	version := artifact.Version
-	if publication, ok := catalog.publicationFor(artifact); ok {
+	publication, published := catalog.publicationFor(artifact)
+	if published {
 		registryName = publication.Registry
 		if publication.PublishedVersion != "" {
 			version = publication.PublishedVersion
@@ -691,6 +709,13 @@ func (catalog *Catalog) chartPullReference(artifact Artifact) (string, error) {
 			name = artifact.Name
 		}
 		return registry.RepositoryAlias + "/" + name, nil
+	}
+	if !published && strings.HasPrefix(artifact.UpstreamRepository, "oci://") {
+		name := artifact.RepositoryName
+		if name == "" {
+			name = artifact.Name
+		}
+		return strings.TrimSuffix(artifact.UpstreamRepository, "/") + "/" + name, nil
 	}
 	path, err := catalog.artifactPath(artifact)
 	if err != nil {
@@ -836,7 +861,7 @@ func (catalog *Catalog) markAllUnpublishedAsPending() {
 	artifacts := append([]Artifact{catalog.stackArtifact()}, catalog.Artifacts...)
 	artifacts = append(artifacts, catalog.SupplementalArtifacts...)
 	for _, artifact := range artifacts {
-		if _, published := catalog.publicationFor(artifact); !published {
+		if _, published := catalog.publicationFor(artifact); !published && artifact.UpstreamRepository == "" {
 			catalog.PublicationPending = append(catalog.PublicationPending, artifact.catalogKey())
 		}
 	}
@@ -852,7 +877,7 @@ func (catalog *Catalog) reconcilePublicationPending() {
 			if marker != artifact.catalogKey() && marker != artifact.Name {
 				continue
 			}
-			if _, published := catalog.publicationFor(artifact); !published {
+			if _, published := catalog.publicationFor(artifact); !published && artifact.UpstreamRepository == "" {
 				pending[artifact.catalogKey()] = struct{}{}
 			}
 		}
