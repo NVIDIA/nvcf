@@ -167,6 +167,14 @@ publications:
     type: image
     version: 0.7.2
     registry: public-images
+  - name: nvca-operator
+    type: image
+    version: 3.10.0
+    registry: public-images
+  - name: nvca
+    type: image
+    version: 3.10.0
+    registry: public-images
   - name: llm-api-gateway
     type: image
     version: 0.14.2
@@ -178,10 +186,6 @@ publications:
   - name: nvcf-ess
     type: image
     version: 0.5.0
-    registry: public-images
-  - name: nvcf-function-autoscaler
-    type: image
-    version: 1.21.7
     registry: public-images
   - name: nvcf-grpc-proxy
     type: image
@@ -280,11 +284,6 @@ publications:
     version: 1.4.1
     registry: public-helm
     chart_format: http
-  - name: helm-nvcf-function-autoscaler
-    type: chart
-    version: 0.5.1
-    registry: public-helm
-    chart_format: http
   - name: helm-nvcf-grpc-proxy
     type: chart
     version: 1.7.4
@@ -321,10 +320,10 @@ version_overrides:
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:
-  - nvca
-  - nvca-operator
+  - helm-nvcf-function-autoscaler
   - nvcf-cli
   - nvcf-compute-plane-stack
+  - nvcf-function-autoscaler
   - nvcf-observability-stack
   - nvcf-self-managed-stack
 manifest:
@@ -922,14 +921,14 @@ release_set:
   status: development
   stacks:
     control-plane:
-      version: 0.20.5
-      source_tag: deploy/stacks/self-managed/v0.20.5
-      source_commit: faf2fa052c37ef77f25dfddb15925bff6010b659
+      version: 0.20.6
+      source_tag: deploy/stacks/self-managed/v0.20.6
+      source_commit: 98c440f90a9df76b82be84791a574732b712bce9
       inventory_asset: nvcf-self-managed-stack-inventory.json
     compute-plane:
-      version: 0.4.3
-      source_tag: deploy/stacks/nvcf-compute-plane/v0.4.3
-      source_commit: 26bab276251cbce23a3fea1b9434617276382afe
+      version: 0.4.4
+      source_tag: deploy/stacks/nvcf-compute-plane/v0.4.4
+      source_commit: 63ac4456d3422508f2ff4b219c7dff8fba1c21c0
       inventory_asset: nvcf-compute-plane-stack-inventory.json
     observability:
       version: 0.2.2
@@ -938,10 +937,10 @@ release_set:
       inventory_asset: nvcf-observability-stack-inventory.json
 stack:
   name: nvcf-self-managed-stack
-  version: 0.20.5
+  version: 0.20.6
   registry: public-resources
-  source_tag: deploy/stacks/self-managed/v0.20.5
-  source_commit: faf2fa052c37ef77f25dfddb15925bff6010b659
+  source_tag: deploy/stacks/self-managed/v0.20.6
+  source_commit: 98c440f90a9df76b82be84791a574732b712bce9
   pin_sources:
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
@@ -1144,14 +1143,14 @@ artifacts:
   - name: nvca-operator
     type: image
     registry: public-images
-    version: 3.8.0
+    version: 3.10.0
     stacks:
       - compute-plane
     requirement: required
   - name: nvca
     type: image
     registry: public-images
-    version: 3.8.0
+    version: 3.10.0
     stacks:
       - compute-plane
     requirement: required
@@ -1186,7 +1185,7 @@ artifacts:
   - name: nvcf-function-autoscaler
     type: image
     registry: public-images
-    version: 1.21.7
+    version: 1.21.8
     stacks:
       - self-managed
     requirement: required
@@ -1413,7 +1412,7 @@ artifacts:
   - name: helm-nvcf-function-autoscaler
     type: chart
     registry: public-helm
-    version: 0.5.1
+    version: 0.5.2
     stacks:
       - self-managed
     requirement: required
@@ -1589,7 +1588,7 @@ supplemental_artifacts:
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
-    version: 0.4.3
+    version: 0.4.4
     stacks:
       - compute-plane
   - name: nvcf-observability-stack
