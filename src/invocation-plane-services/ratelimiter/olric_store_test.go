@@ -150,5 +150,29 @@ func TestGet_ExpiredKey_ResetGetsTTLOnSameWrite(t *testing.T) {
 }
 
 func (f *fakeDMap) CompareAndSwap(context.Context, string, []byte, interface{}, ...olric.PutOption) (bool, *olric.GetResponse, error) {
-panic("not implemented")
+	panic("not implemented")
+}
+
+// TestGet_NewKey_SubMillisecondPeriod_TTLRoundedUp covers a direct Store.Get
+// caller supplying a period below Olric's one-millisecond PX precision.
+// Before this fix, newKeyPutOptions treated any period under 1ms as
+// unbounded and wrote no TTL at all - reopening the immortal-key gap from
+// #1571 for non-configured (programmatic) callers. Configured rates
+// (parseRates) only ever produce S/M/H/D-granularity periods, so this case
+// cannot occur from config today, but Store.Get itself accepts any
+// limiter.Rate.
+func TestGet_NewKey_SubMillisecondPeriod_TTLRoundedUp(t *testing.T) {
+	f := &fakeDMap{getErr: olric.ErrKeyNotFound}
+	store := &Store{Prefix: "test", dmap: f}
+
+	if _, err := store.Get(context.Background(), "user-1", limiter.Rate{Period: 500 * time.Microsecond, Limit: 10}); err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+
+	if len(f.putCalls) != 1 {
+		t.Fatalf("expected exactly 1 Put call, got %d", len(f.putCalls))
+	}
+	if got := f.putCalls[0].numOptions; got != 1 {
+		t.Fatalf("expected a TTL option even for a sub-millisecond period, got %d options - a positive period must never be silently treated as unbounded", got)
+	}
 }
