@@ -63,13 +63,25 @@ public class MockApiKeysServer {
             List<Resource> resources,
             List<String> scopes,
             boolean allowed) {
+        setApiKeyValidationResponse(ncaId, ownerId, resources, scopes, allowed, null);
+    }
+
+    @SneakyThrows
+    public static void setApiKeyValidationResponse(
+            String ncaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed,
+            ApiKeyValidationResult.RateLimitAttributes rateLimit) {
         var response = new ApiKeyValidationResponse("nvcf", "apikey.allow",
                                                        new ApiKeyValidationResult(allowed,
                                                               ncaId,
                                                               ownerId,
                                                               new ApiKeyValidationResult.Policy(resources,
                                                                                          scopes,
-                                                                                         "nv-cloud-functions")
+                                                                                         "nv-cloud-functions"),
+                                                              rateLimit
                                           ));
         byte[] responseBytes = OBJECT_MAPPER.writeValueAsBytes(response);
         mockApiKeysServer.stubFor(

@@ -48,7 +48,11 @@ class LlmConfigValidatorTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"100000-S", "10-M", "5-H", "1-D", "2-W", "10-M,5-S", "10-M, 5-S"})
+    @ValueSource(strings = {
+        "100000-S", "10-M", "5-H", "1-D", "2-W", "3-MO", "10-M,5-S", "10-M, 5-S", "3-MO,10-M",
+        // Minute and Month must not be confused with each other in either order.
+        "1-M,2-MO", "1-MO,2-M", "1-M,2-H,3-D,4-W,5-MO"
+    })
     void validTokenRateLimitsAccepted(String tokenRateLimit) {
         assertThatCode(() -> LlmConfigValidator.validateTokenRateLimit(MODEL, tokenRateLimit))
                 .doesNotThrowAnyException();
@@ -72,8 +76,9 @@ class LlmConfigValidatorTest {
         "abc-S",     // non-numeric value
         "10-",       // missing unit
         "-S",        // missing value
-        "10-SS",     // multi-char unit
+        "10-SS",     // multi-char unit that isn't MO
         "10-M,5-M",  // duplicate unit
+        "10-MO,5-MO", // duplicate MO unit
         "10-M,",     // trailing empty fragment
         "10-M,bad"   // one bad fragment
     })

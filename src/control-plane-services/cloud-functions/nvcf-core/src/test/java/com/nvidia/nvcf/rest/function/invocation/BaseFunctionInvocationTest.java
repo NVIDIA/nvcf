@@ -70,6 +70,7 @@ import com.nvidia.nvcf.service.function.FunctionMapperService;
 import com.nvidia.nvcf.service.token.GrpcTokenService;
 import com.nvidia.nvcf.util.MockApiKeysServer;
 import com.nvidia.nvcf.util.MockEssServer;
+import com.nvidia.nvcf.util.MockSsaServer;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
@@ -157,6 +158,9 @@ public class BaseFunctionInvocationTest {
     @Value("${nvcf.api-keys.base-url}")
     private String apiKeysBaseUrl;
 
+    @Value("${nvcf.ssa.base-url}")
+    private String ssaBaseUrl;
+
     @Value("${nvcf.request.timeout}")
     protected Duration defaultWaitDuration;
 
@@ -178,6 +182,7 @@ public class BaseFunctionInvocationTest {
 
         MockEssServer.start(essBaseUrl);
         MockApiKeysServer.start(apiKeysBaseUrl);
+        MockSsaServer.start(ssaBaseUrl);
         MockCasServer.start(authnBaseUrl, casBaseUrl);
         MockNgcContainerRegistryServer.start(ngcContainerRegistryUrl);
 
@@ -190,6 +195,7 @@ public class BaseFunctionInvocationTest {
         testAccountService.cleanupAccountsClientsAndRegistries();
         MockEssServer.stop();
         MockApiKeysServer.stop();
+        MockSsaServer.stop();
         MockCasServer.stop();
         MockNgcContainerRegistryServer.stop();
         log.info("{}: Completed running tests", this.getClass().getSimpleName());

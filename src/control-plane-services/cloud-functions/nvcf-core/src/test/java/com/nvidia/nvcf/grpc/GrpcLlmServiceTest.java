@@ -46,7 +46,9 @@ import com.nvidia.nvcf.proto.llm_gateway.LlmGatewayGrpc;
 import com.nvidia.nvcf.rest.function.invocation.BaseFunctionInvocationTest;
 import com.nvidia.nvcf.rest.function.management.dto.LlmInvocationConfigDto;
 import com.nvidia.nvcf.rest.function.management.dto.PriorityDto;
+import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.RateLimitAttributes;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.Resource;
+import com.nvidia.nvcf.util.MockSsaServer;
 import com.nvidia.nvcf.util.TestUtil;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.Metadata;
@@ -202,6 +204,77 @@ class GrpcLlmServiceTest extends BaseFunctionInvocationTest {
         assertThat(modelSpec.hasTokenRateLimit()).isFalse();
         assertThat(modelSpec.hasTokenizer()).isFalse();
         assertThat(modelSpec.hasRoutingMethod()).isFalse();
+    }
+
+    @Test
+    void authLlmInvocation_accountRateLimitFromApiKeyAuth() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        setApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true,
+                    new RateLimitAttributes("5000-M", "1000-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("5000-M");
+        assertThat(response.hasAccountOutputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("1000-M");
+    }
+
+    @Test
+    void authLlmInvocation_noAccountRateLimitWhenApiKeyAuthCarriesNone() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        setApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID,
+                    List.of(new Resource("account-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION), true, null);
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = "nvapi-stg-some-key";
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isFalse();
+        assertThat(response.hasAccountOutputTokenRateLimit()).isFalse();
+    }
+
+    @Test
+    void authLlmInvocation_accountRateLimitFromSsaJwtAuth() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        MockSsaServer.setTieredRateLimitResponse(new RateLimitAttributes("5000-M", "1000-M"));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountInputTokenRateLimit()).isEqualTo("5000-M");
+        assertThat(response.hasAccountOutputTokenRateLimit()).isTrue();
+        assertThat(response.getAccountOutputTokenRateLimit()).isEqualTo("1000-M");
+    }
+
+    @Test
+    void authLlmInvocation_noAccountRateLimitWhenSsaJwtAuthCarriesNone() {
+        setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+        setFunctionType(TEST_FUNCTION_ID, TEST_VERSION_ID_1, FunctionType.LLM);
+        saveFunctionModel(TEST_VERSION_ID_1, "meta/llama-3.1-70b-instruct", List.of(), null);
+        MockSsaServer.setTieredRateLimitResponse(new RateLimitAttributes(null, null));
+        var serviceToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt("llm:check_invocation");
+        var clientToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_INVOKE_FUNCTION), 100);
+
+        var response = callLlmAuth(serviceToken, clientToken, TEST_FUNCTION_ID);
+
+        assertThat(response.hasAccountInputTokenRateLimit()).isFalse();
+        assertThat(response.hasAccountOutputTokenRateLimit()).isFalse();
     }
 
     // ---------------------------------------------------------------------------

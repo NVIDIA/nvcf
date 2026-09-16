@@ -48,7 +48,8 @@ import org.springframework.util.StringUtils;
 public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
                               @JsonProperty("ncaId") String ncaId,
                               @JsonProperty("ownerId") String ownerId,
-                              @JsonProperty("policy") Policy policy) {
+                              @JsonProperty("policy") Policy policy,
+                              @JsonProperty("rateLimit") @Nullable RateLimitAttributes rateLimit) {
 
     public static final String FUNCTION_ACCESS_ATTRIBUTE = "function_access";
     public static final String POLICY_RESULT_ATTRIBUTE = "policy_result";
@@ -58,10 +59,20 @@ public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
             String ncaId,
             String ownerId,
             Policy policy) {
+        this(allowed, ncaId, ownerId, policy, null);
+    }
+
+    public ApiKeyValidationResult(
+            boolean allowed,
+            String ncaId,
+            String ownerId,
+            Policy policy,
+            @Nullable RateLimitAttributes rateLimit) {
         this.allowed = allowed;
         this.ncaId = ncaId;
         this.ownerId = ownerId;
         this.policy = policy;
+        this.rateLimit = rateLimit;
     }
 
     public record Resource(@JsonProperty("type") String type, @JsonProperty("id") String id) {
@@ -72,6 +83,18 @@ public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
             @JsonProperty("resources") @JsonSetter(nulls = Nulls.AS_EMPTY) List<Resource> resources,
             @JsonProperty("scopes") @JsonSetter(nulls = Nulls.AS_EMPTY) List<String> scopes,
             @JsonProperty("product") String product) {
+
+    }
+
+    /**
+     * Account-scoped rate limit, resolved from the ncaId and attached to the SAK/apikey
+     * evaluation result (not stored or computed by NVCF). Absent when none applies. Fields
+     * use the same "&lt;value&gt;-&lt;unit&gt;" format as the gateway's own tokenRateLimit,
+     * not a raw quota number. UAM contract pending; this is a mocked shape in NVCF API for now.
+     */
+    public record RateLimitAttributes(
+            @JsonProperty("inputTokenRateLimit") @Nullable String inputTokenRateLimit,
+            @JsonProperty("outputTokenRateLimit") @Nullable String outputTokenRateLimit) {
 
     }
 

@@ -76,4 +76,14 @@ public class StaticClientAuthConfiguration {
 
         private String token;
     }
+
+    @Data
+    @RefreshScope
+    @Configuration
+    @ConditionalOnProperty("nvcf.ssa.static.token")
+    @ConfigurationProperties("nvcf.ssa.static")
+    public static class StaticClientSsaProperties {
+
+        private String token;
+    }
 }
