@@ -759,19 +759,24 @@ fn grpc_certificate_failure_log_stays_suppressed_across_unclassified_errors() {
     let certificate_error = typed_tls_io_error(rustls::CertificateError::UnknownIssuer);
     let transport_error = std::io::Error::other("ordinary transport failure");
 
-    let mut last_failure =
-        log_stargate_grpc_certificate_failure(&target, "watch_stargates", &certificate_error, None);
-    last_failure = log_stargate_grpc_certificate_failure(
-        &target,
-        "watch_stargates",
-        &transport_error,
-        last_failure,
-    );
-    let _ = log_stargate_grpc_certificate_failure(
+    let mut last_failure = None;
+    super::grpc_endpoint::log_stargate_grpc_failure(
         &target,
         "watch_stargates",
         &certificate_error,
-        last_failure,
+        &mut last_failure,
+    );
+    super::grpc_endpoint::log_stargate_grpc_failure(
+        &target,
+        "watch_stargates",
+        &transport_error,
+        &mut last_failure,
+    );
+    super::grpc_endpoint::log_stargate_grpc_failure(
+        &target,
+        "watch_stargates",
+        &certificate_error,
+        &mut last_failure,
     );
 
     assert_eq!(
@@ -779,6 +784,7 @@ fn grpc_certificate_failure_log_stays_suppressed_across_unclassified_errors() {
         1,
         "an unclassified retry error must not start a new certificate-failure episode"
     );
+    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 1);
 }
 
 #[test]
@@ -1484,25 +1490,34 @@ async fn stop_watched_endpoint_signals_and_awaits_task() {
 }
 
 #[test]
-fn registration_failures_keep_causes_and_suppress_repeated_errors_until_recovery() {
+fn repeated_registration_failures_each_emit_a_warning_with_their_cause() {
     let target = grpc_endpoint("router.example.test:50071");
     let subscriber = RecordingTracingSubscriber::default();
     let dispatch = tracing::Dispatch::new(subscriber.clone());
     let _default_guard = tracing::dispatcher::set_default(&dispatch);
-    let mut log = super::grpc_endpoint::RegistrationFailureLog::default();
+    let mut last_certificate_failure = None;
     let error = anyhow::Error::new(std::io::Error::new(
         std::io::ErrorKind::ConnectionRefused,
         "connection refused",
     ))
     .context("open registration channel");
-    log.report(&target, "register_inference_server", error.as_ref());
-    log.report(&target, "register_inference_server", error.as_ref());
-    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 1);
-    log.recovered();
-    log.report(&target, "register_inference_server", error.as_ref());
-    let status = tonic::Status::unauthenticated("authentication failed");
-    log.report(&target, "register_inference_server", &status);
+    for _ in 0..3 {
+        super::grpc_endpoint::log_stargate_grpc_failure(
+            &target,
+            "register_inference_server",
+            error.as_ref(),
+            &mut last_certificate_failure,
+        );
+    }
     assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 3);
+    let status = tonic::Status::unauthenticated("authentication failed");
+    super::grpc_endpoint::log_stargate_grpc_failure(
+        &target,
+        "register_inference_server",
+        &status,
+        &mut last_certificate_failure,
+    );
+    assert_eq!(subscriber.event_count("Stargate gRPC operation failed"), 4);
     let details: Vec<_> = subscriber
         .events()
         .into_iter()
@@ -1580,10 +1595,11 @@ fn recorded_registration_error(error: &(dyn std::error::Error + 'static)) -> Str
     let subscriber = RecordingTracingSubscriber::default();
     let dispatch = tracing::Dispatch::new(subscriber.clone());
     let _guard = tracing::dispatcher::set_default(&dispatch);
-    super::grpc_endpoint::RegistrationFailureLog::default().report(
+    super::grpc_endpoint::log_stargate_grpc_failure(
         &grpc_endpoint("router.example.test:50071"),
         "register_inference_server",
         error,
+        &mut None,
     );
     subscriber
         .events()

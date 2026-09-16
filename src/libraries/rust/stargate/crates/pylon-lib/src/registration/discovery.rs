@@ -28,7 +28,7 @@ use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 use tracing::warn;
 
 use super::grpc_endpoint::{
-    RegistrationFailureLog, StargateGrpcEndpoint, log_stargate_grpc_connect_attempt,
+    StargateGrpcEndpoint, log_stargate_grpc_connect_attempt, log_stargate_grpc_failure,
 };
 use super::topology::{RegistrationRouterTopology, publish_registration_router_topology};
 
@@ -159,7 +159,7 @@ async fn watch_stargate_endpoint(
 ) {
     let target = StargateGrpcEndpoint::new(watch_url.clone(), "")
         .expect("normalized watch URL should be non-empty");
-    let mut failure_log = RegistrationFailureLog::default();
+    let mut last_certificate_failure = None;
     loop {
         if stop.is_cancelled() {
             return;
@@ -176,7 +176,7 @@ async fn watch_stargate_endpoint(
                                 Some(response.into_inner())
                             }
                             Err(error) => {
-                                failure_log.report(&target, "watch_stargates", &error);
+                                log_stargate_grpc_failure(&target, "watch_stargates", &error, &mut last_certificate_failure);
                                 None
                             }
                         }
@@ -185,7 +185,12 @@ async fn watch_stargate_endpoint(
                 }
             }
             Err(error) => {
-                failure_log.report(&target, "watch_stargates", error.as_ref());
+                log_stargate_grpc_failure(
+                    &target,
+                    "watch_stargates",
+                    error.as_ref(),
+                    &mut last_certificate_failure,
+                );
                 None
             }
         };
@@ -196,22 +201,28 @@ async fn watch_stargate_endpoint(
                 };
                 let snapshot = match message {
                     Ok(Some(response)) => {
-                        failure_log.recovered();
+                        last_certificate_failure = None;
                         Some(watch_endpoint_snapshot_from_response(&watch_url, response))
                     }
                     Ok(None) => {
-                        failure_log.report(
+                        log_stargate_grpc_failure(
                             &target,
                             "watch_stargates_stream",
                             &std::io::Error::new(
                                 std::io::ErrorKind::UnexpectedEof,
                                 "discovery response stream ended",
                             ),
+                            &mut last_certificate_failure,
                         );
                         None
                     }
                     Err(error) => {
-                        failure_log.report(&target, "watch_stargates_stream", &error);
+                        log_stargate_grpc_failure(
+                            &target,
+                            "watch_stargates_stream",
+                            &error,
+                            &mut last_certificate_failure,
+                        );
                         None
                     }
                 };
