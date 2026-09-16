@@ -158,8 +158,12 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 // When rate.Period is zero (an unbounded limiter tier), no TTL is applied,
 // matching the previous behavior for that case.
 func newKeyPutOptions(rate limiter.Rate) []olric.PutOption {
-	if rate.Period.Milliseconds() > 0 {
-		return []olric.PutOption{olric.PX(rate.Period)}
+	if rate.Period > 0 {
+		ttl := rate.Period
+		if ttl < time.Millisecond {
+			ttl = time.Millisecond
+		}
+		return []olric.PutOption{olric.PX(ttl)}
 	}
 	return nil
 }
