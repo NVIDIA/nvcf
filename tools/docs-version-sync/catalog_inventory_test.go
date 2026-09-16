@@ -607,15 +607,56 @@ func TestRetainCurrentPublicationsDropsArtifactsWiredUpstream(t *testing.T) {
 }
 
 func TestValidateCatalogRejectsUnsupportedUpstreamRepository(t *testing.T) {
-	catalog := testCatalog()
-	catalog.Artifacts = []Artifact{{
-		Name: "private-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry,
-		UpstreamRepository: "registry.example.com/private-image", Version: "1.2.3",
-	}}
+	for _, repository := range []string{
+		"registry.example.com/private-image",
+		"docker.io/library/nats:latest",
+	} {
+		t.Run(repository, func(t *testing.T) {
+			catalog := testCatalog()
+			catalog.Artifacts = []Artifact{{
+				Name: "private-image", Type: ArtifactTypeImage, Registry: defaultImageRegistry,
+				UpstreamRepository: repository, Version: "1.2.3",
+			}}
 
-	err := ValidateCatalog(catalog)
-	if err == nil || !strings.Contains(err.Error(), "unsupported public upstream repository") {
-		t.Fatalf("ValidateCatalog error = %v, want unsupported upstream repository rejection", err)
+			err := ValidateCatalog(catalog)
+			if err == nil || !strings.Contains(err.Error(), "unsupported public upstream repository") {
+				t.Fatalf("ValidateCatalog error = %v, want unsupported upstream repository rejection", err)
+			}
+		})
+	}
+}
+
+func TestChartPullReferenceUsesUpstreamRepositoryFormat(t *testing.T) {
+	catalog := testCatalog()
+	for _, test := range []struct {
+		name       string
+		repository string
+		want       string
+	}{
+		{
+			name:       "HTTP",
+			repository: "https://open-telemetry.github.io/opentelemetry-helm-charts",
+			want:       "--repo https://open-telemetry.github.io/opentelemetry-helm-charts opentelemetry-operator",
+		},
+		{
+			name:       "OCI",
+			repository: "oci://ghcr.io/example/charts",
+			want:       "oci://ghcr.io/example/charts/opentelemetry-operator",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			artifact := Artifact{
+				Name: "opentelemetry-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry,
+				UpstreamRepository: test.repository, Version: "0.122.0",
+			}
+			got, err := catalog.chartPullReference(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("chartPullReference() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

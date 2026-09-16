@@ -717,6 +717,13 @@ func (catalog *Catalog) chartPullReference(artifact Artifact) (string, error) {
 		}
 		return strings.TrimSuffix(artifact.UpstreamRepository, "/") + "/" + name, nil
 	}
+	if !published && strings.HasPrefix(artifact.UpstreamRepository, "https://") {
+		name := artifact.RepositoryName
+		if name == "" {
+			name = artifact.Name
+		}
+		return "--repo " + strings.TrimSuffix(artifact.UpstreamRepository, "/") + " " + name, nil
+	}
 	path, err := catalog.artifactPath(artifact)
 	if err != nil {
 		return "", err

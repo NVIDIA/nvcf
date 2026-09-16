@@ -489,7 +489,8 @@ func publicUpstreamRegistry(repository string, artifactType ArtifactType) (Regis
 		return Registry{}, false
 	}
 	host, namespace, found := strings.Cut(value, "/")
-	if !found || host == "" || namespace == "" || strings.Contains(namespace, "//") {
+	if !found || host == "" || namespace == "" || strings.Contains(namespace, "//") ||
+		(artifactType == ArtifactTypeImage && strings.Contains(namespace, ":")) {
 		return Registry{}, false
 	}
 	registry := Registry{Host: hostPrefix + host, Namespace: namespace}

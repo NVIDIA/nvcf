@@ -92,7 +92,7 @@ func replaceVersionTable(content, chartName, version string) (string, int) {
 }
 
 func replaceNVCAOperatorChartPull(content, pullReference, version string) (string, int) {
-	re := regexp.MustCompile(`(?:(?:oci://[^\s]+/|[a-z0-9-]+/)(?:helm-nvca-operator|nvca-operator)|"\$\{HELM_NVCA_OPERATOR_REFERENCE:\?[^}]+\}") --version [^\s]+`)
+	re := regexp.MustCompile(`(?:(?:oci://[^\s]+/|[a-z0-9-]+/)(?:helm-nvca-operator|nvca-operator)|--repo https://[^\s]+ (?:helm-nvca-operator|nvca-operator)|"\$\{HELM_NVCA_OPERATOR_REFERENCE:\?[^}]+\}") --version [^\s]+`)
 	count := len(re.FindAllStringIndex(content, -1))
 	replacement := pullReference + " --version " + version
 	return re.ReplaceAllString(content, replacement), count
