@@ -75,6 +75,9 @@ releases:
           discovery:
             remoteWatchUrls: {{ .Values.router.remoteWatchUrls | toJson }}
           loadBalancer:
+{{- if .Values.router.loadBalancerConfig }}
+            config: {{ .Values.router.loadBalancerConfig | toJson | quote }}
+{{- else }}
             config: |
               {
                 "default": "wait-and-widen",
@@ -102,6 +105,7 @@ releases:
                   }
                 }
               }
+{{- end }}
           readiness:
             stabilizationSampleIntervalMs: null
             stabilizationWindow: null

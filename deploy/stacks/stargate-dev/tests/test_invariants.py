@@ -182,6 +182,58 @@ class RenderedStackTests(unittest.TestCase):
                     hold_ms,
                 )
 
+    def test_routing_policy_override_preserves_omitted_queue_bounds(self) -> None:
+        root = Path(self.temporary.name)
+        for region_name in ("us-west-2", "us-east-1"):
+            with self.subTest(region=region_name):
+                region = yaml.safe_load(
+                    (STACK_DIR / "environments" / f"{region_name}.yaml").read_text()
+                )
+                policy = {
+                    "default": "power-of-n",
+                    "models": {
+                        region["modelName"]: {
+                            "algorithm": "wait-and-widen",
+                            "comparator": "utilization",
+                            "cache_affinity_backend_selection_count": 2,
+                            "cache_affinity_wait_ms": 350,
+                            "max_queued": 8,
+                            "ttft_bucket_size_ms": 100,
+                        }
+                    },
+                }
+                credentials = root / f"policy-{region_name}-credentials.json"
+                credentials.write_text(
+                    json.dumps({**self.credentials, "region": region_name})
+                )
+                credentials.chmod(0o600)
+                values = root / f"policy-{region_name}-values.yaml"
+                values.write_text(
+                    yaml.safe_dump({"router": {"loadBalancerConfig": policy}})
+                )
+                result = subprocess.run(
+                    ["helmfile", "-e", region_name, "-l", "phase=stargate", "template"],
+                    cwd=STACK_DIR,
+                    env=dict(
+                        os.environ,
+                        STARGATE_DEV_VALUES_FILE=str(values),
+                        STARGATE_DEV_CREDENTIALS_FILE=str(credentials),
+                    ),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                configmap = next(
+                    resource
+                    for resource in yaml.safe_load_all(result.stdout)
+                    if isinstance(resource, dict)
+                    and resource.get("kind") == "ConfigMap"
+                    and resource["metadata"]["name"] == "llm-request-router-lb"
+                )
+                self.assertEqual(
+                    json.loads(configmap["data"]["lb-config.json"]), policy
+                )
+
     def test_east_region_renders_remote_discovery_and_unique_backends(self) -> None:
         root = Path(self.temporary.name)
         credentials = root / "east-credentials.json"

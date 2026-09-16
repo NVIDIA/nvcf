@@ -45,6 +45,8 @@ clusters:
           healthDelayMs: 0
 
 router:
+  # A non-empty object replaces the complete default routing policy.
+  loadBalancerConfig: {}
   cacheAffinityWaitMs: 200
   remoteWatchUrls: []
   hostname: router.use1.stargate-dev.example.invalid
