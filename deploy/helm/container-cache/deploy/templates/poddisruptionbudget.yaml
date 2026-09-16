@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 {{- if .Values.podDisruptionBudget.enabled }}
-{{- $pdbMinAvailable := .Values.podDisruptionBudget.minAvailable | toString }}
-{{- $pdbMaxUnavailable := .Values.podDisruptionBudget.maxUnavailable | toString }}
-{{- if and (ne $pdbMinAvailable "") (ne $pdbMaxUnavailable "") }}
+{{- $pdbMinAvailable := .Values.podDisruptionBudget.minAvailable }}
+{{- $pdbMaxUnavailable := .Values.podDisruptionBudget.maxUnavailable }}
+{{- $hasPdbMinAvailable := and (ne $pdbMinAvailable nil) (ne ($pdbMinAvailable | toString) "") }}
+{{- $hasPdbMaxUnavailable := and (ne $pdbMaxUnavailable nil) (ne ($pdbMaxUnavailable | toString) "") }}
+{{- if and $hasPdbMinAvailable $hasPdbMaxUnavailable }}
 {{- fail "podDisruptionBudget: set only one of minAvailable or maxUnavailable" }}
 {{- end }}
 apiVersion: policy/v1
@@ -27,10 +29,10 @@ metadata:
     app: {{ $.Release.Name }}
     {{- include "nvcf-container-cache.labels" . | nindent 4 }}
 spec:
-  {{- if ne $pdbMinAvailable "" }}
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
-  {{- else if ne $pdbMaxUnavailable "" }}
-  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- if $hasPdbMinAvailable }}
+  minAvailable: {{ $pdbMinAvailable }}
+  {{- else if $hasPdbMaxUnavailable }}
+  maxUnavailable: {{ $pdbMaxUnavailable }}
   {{- else }}
   minAvailable: 50%
   {{- end }}

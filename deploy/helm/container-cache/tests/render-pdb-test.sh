@@ -77,6 +77,31 @@ assert_pdb_value fallback \
   '.spec.minAvailable == "50%" and (.spec | has("maxUnavailable") | not)' \
   'expected only the minAvailable: "50%" fallback'
 
+render min-null \
+  --set podDisruptionBudget.enabled=true \
+  --set podDisruptionBudget.minAvailable=null
+assert_pdb_count min-null 1
+assert_pdb_value min-null \
+  '.spec.minAvailable == "50%" and (.spec | has("maxUnavailable") | not)' \
+  'expected a null minAvailable to use the fallback'
+
+render max-null \
+  --set podDisruptionBudget.enabled=true \
+  --set podDisruptionBudget.maxUnavailable=null
+assert_pdb_count max-null 1
+assert_pdb_value max-null \
+  '.spec.minAvailable == "50%" and (.spec | has("maxUnavailable") | not)' \
+  'expected a null maxUnavailable to use the fallback'
+
+render both-null \
+  --set podDisruptionBudget.enabled=true \
+  --set podDisruptionBudget.minAvailable=null \
+  --set podDisruptionBudget.maxUnavailable=null
+assert_pdb_count both-null 1
+assert_pdb_value both-null \
+  '.spec.minAvailable == "50%" and (.spec | has("maxUnavailable") | not)' \
+  'expected null availability fields to use the fallback'
+
 render zero \
   --set podDisruptionBudget.enabled=true \
   --set podDisruptionBudget.minAvailable=0
