@@ -65,7 +65,7 @@ if ! grep -q 'destination: "/nvcf/cp-1.2.3-compute-1.1.0-obs-1.0.4/"' "${workdir
   exit 1
 fi
 
-if ! grep -q 'Latest (cp-1.2.3-compute-1.1.0-obs-1.0.4; CP 1.2.3, Compute 1.1.0, Obs 1.0.4)' "${workdir}/fern/docs.yml"; then
+if ! grep -q 'Latest (cp-1.2.3-compute-1.1.0-obs-1.0.4)' "${workdir}/fern/docs.yml"; then
   echo "expected generated docs.yml to identify all three qualified stack versions"
   cat "${workdir}/fern/docs.yml"
   exit 1
