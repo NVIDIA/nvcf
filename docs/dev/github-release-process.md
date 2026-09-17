@@ -314,6 +314,30 @@ what ships a stack patch. `VERSION` on the branch must state the train
 the branch name claims, or the run fails rather than publishing a
 version for a train the branch does not hold.
 
+A push that does not change the stack's own tree cuts nothing. Not every
+push to a maintenance branch is a backport: bootstrapping the branch,
+editing `VERSION`, and backporting CI all land here and none of them
+change what the stack deploys. The comparison is between the tree at the
+train's newest tag and the tree at HEAD, at the service path, with the
+version file excluded. It is a tree comparison rather than a commit walk
+because a release branch is rooted at a synthetic commit, so the train's
+tags are usually not ancestors of HEAD.
+
+### Opening a train at a commit that predates this model
+
+Branching from a commit older than the `VERSION` files gives a branch
+whose own CI predates them: its `github-release-subprojects.json` has no
+`version_file`, its `github-release` has no `release_branch_only`, and
+its `release-tags.yml` has no `release-**/v*` push trigger, so the
+workflow does not run at all. `branch-cut` never hits this because it
+cuts from the default branch.
+
+Bootstrap such a branch by backporting `.github/workflows/release-tags.yml`,
+`tools/ci/github-release`, and `tools/ci/github-release-subprojects.json`
+alongside the `VERSION` file. That commit changes nothing under the stack
+path, so it publishes no version; the first release on the branch is the
+first backport that touches the stack.
+
 ### Building an unreleased tree
 
 `main` cuts no stack version, so a change that has not been branch-cut

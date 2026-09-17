@@ -1023,6 +1023,95 @@ class GithubReleaseTest(unittest.TestCase):
             )
             self.assertIn("would create deploy/stacks/self-managed/v0.21.0", on_branch)
 
+    def test_release_branch_skips_a_push_that_does_not_touch_the_stack(self):
+        # Backporting CI, tooling, or anything outside the stack's own tree is
+        # not a reason to publish a stack version.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "1.0.0", "release-deploy/stacks/self-managed/v1.0")
+            git(root, "tag", "deploy/stacks/self-managed/v1.0.0")
+            (root / "tools").mkdir(parents=True, exist_ok=True)
+            (root / "tools" / "ci-helper").write_text("backported tooling\n")
+            self.commit_all(root, "ci(self-managed): backport the release tooling")
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertIn("nothing changed under deploy/stacks/self-managed", output.getvalue())
+            self.assertNotIn("would create", output.getvalue())
+
+    def test_release_branch_skips_a_version_file_only_change(self):
+        # The exact bootstrap case: a branch cut from a commit that predates the
+        # VERSION file needs one commit to add it, and that commit ships nothing.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            stack_dir = root / "deploy/stacks/self-managed"
+            stack_dir.mkdir(parents=True, exist_ok=True)
+            (stack_dir / "helmfile.yaml").write_text("qualified content\n")
+            self.commit_all(root, "chore: the qualified commit, with no VERSION file")
+            git(root, "tag", "deploy/stacks/self-managed/v1.0.0")
+
+            git(root, "switch", "-c", "release-deploy/stacks/self-managed/v1.0")
+            (stack_dir / "VERSION").write_text("1.0.0\n")
+            self.commit_all(root, "chore(self-managed): seed VERSION for the 1.0 train")
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertNotIn("would create", output.getvalue())
+
+            # A real backport on top still releases, and it is the next patch.
+            (stack_dir / "helmfile.yaml").write_text("qualified content plus a backported fix\n")
+            self.commit_all(root, "fix(self-managed): backport the fix")
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertIn("would create deploy/stacks/self-managed/v1.0.1", output.getvalue())
+
+    def test_stack_change_detection_survives_a_synthetic_branch_root(self):
+        # A release branch is rooted at a synthetic commit, so the train's tags
+        # are not ancestors of HEAD. Comparison must be by tree, not by ancestry.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            stack_dir = root / "deploy/stacks/self-managed"
+            stack_dir.mkdir(parents=True, exist_ok=True)
+            (stack_dir / "helmfile.yaml").write_text("qualified content\n")
+            (stack_dir / "VERSION").write_text("1.0.0\n")
+            self.commit_all(root, "chore: qualified")
+            git(root, "tag", "deploy/stacks/self-managed/v1.0.0")
+            qualified = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+
+            # Graft: same tree, unrelated parentage.
+            base = self.github_release.linear_release_branch_base(root, qualified)
+            orphan = self.github_release.run(
+                ["git", "commit-tree", self.github_release.commit_tree(root, qualified), "-m", "snapshot"],
+                cwd=root,
+                capture=True,
+            ).strip()
+            git(root, "switch", "-c", "release-deploy/stacks/self-managed/v1.0", orphan)
+
+            self.assertFalse(
+                self.github_release.tag_is_reachable(root, "deploy/stacks/self-managed/v1.0.0"),
+                "the tag must not be an ancestor, or this test is not exercising the graft",
+            )
+            self.assertFalse(
+                self.github_release.stack_content_changed_since(
+                    root, self.SELF_MANAGED_STACK_SERVICE, "deploy/stacks/self-managed/v1.0.0"
+                ),
+                "identical trees across a graft must read as unchanged",
+            )
+            self.assertEqual(self.github_release.commit_tree(root, base), self.github_release.commit_tree(root, qualified))
+
     def test_release_branch_release_is_idempotent_at_head(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
