@@ -25,6 +25,29 @@ use std::time::Duration;
 use tower::{Service, ServiceExt};
 
 #[tokio::test]
+async fn test_info_route() -> anyhow::Result<()> {
+    let (_localstack, _nats, _mock_nvcf_api, config) = fixtures().await;
+
+    let mut app = app(config, None).await?;
+    let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+
+    let request = axum::http::Request::builder()
+        .method(Method::GET)
+        .uri("/info")
+        .body(Body::empty())?;
+    let response = app.call(request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri("/info")
+        .body(Body::empty())?;
+    let response = app.call(request).await?;
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_health_cache() -> anyhow::Result<()> {
     let (_localstack, _nats, mock_nvcf_api, config) = fixtures().await;
 
