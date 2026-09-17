@@ -6,17 +6,17 @@ This project provides a local Kubernetes (k3d) cluster setup (`ncp-local-cluster
 
 ## What it Does
 
-* Sets up a local k3d cluster.
-* Includes a `generic-credential-provider` Go binary (`./bin/generic-credential-provider`) that allows Kubelet to authenticate with container registries.
-* Provides sample configurations for deploying workloads and testing the credential provider.
+- Sets up a local k3d cluster.
+- Includes a `generic-credential-provider` Go binary (`./bin/generic-credential-provider`) that allows Kubelet to authenticate with container registries.
+- Provides sample configurations for deploying workloads and testing the credential provider.
 
 ## Required Tools
 
-* [Docker](https://www.docker.com/get-started)
-* [k3d](https://k3d.io/#installation) (v5.x or later recommended)
-* [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
-* [Make](https://www.gnu.org/software/make/)
-* Go (version 1.20+ recommended) for building the provider.
+- [Docker](https://www.docker.com/get-started)
+- [k3d](https://k3d.io/#installation) (v5.x or later recommended)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
+- [Make](https://www.gnu.org/software/make/)
+- Go (version 1.20+ recommended) for building the provider.
 
 ## Makefile Commands
 
@@ -24,17 +24,17 @@ The `Makefile` provides several convenient targets. Run `make help` to see a ful
 
 Key targets include:
 
-* `make help`: Display all available Makefile targets.
-* `make build`: Build the Go credential provider binary.
-* `make test`: Run unit tests for the Go provider and show coverage.
-* `make test-manual`: Run the manual end-to-end test harness for the provider.
-* `make start`: Create or start the local k3d cluster.
-* `make build-and-deploy-cluster`: A convenient command to clean, build the provider, start the cluster, and deploy a sample application.
-* `make build-and-deploy-multicluster`: Build one control-plane cluster and one or more compute-plane clusters.
-* `make build-and-deploy-control-plane-cluster`: Build only the local control-plane cluster.
-* `make build-and-deploy-compute-plane-cluster`: Build one local compute-plane cluster.
-* `make clean`: Remove built binaries and test coverage files.
-* `make build-credential-provider-multiarch`: Build `linux/amd64` and `linux/arm64` binaries locally without publishing.
+- `make help`: Display all available Makefile targets.
+- `make build`: Build the Go credential provider binary.
+- `make test`: Run unit tests for the Go provider and show coverage.
+- `make test-manual`: Run the manual end-to-end test harness for the provider.
+- `make start`: Create or start the local k3d cluster.
+- `make build-and-deploy-cluster`: A convenient command to clean, build the provider, start the cluster, and deploy a sample application.
+- `make build-and-deploy-multicluster`: Build one control-plane cluster and one or more compute-plane clusters.
+- `make build-and-deploy-control-plane-cluster`: Build only the local control-plane cluster.
+- `make build-and-deploy-compute-plane-cluster`: Build one local compute-plane cluster.
+- `make clean`: Remove built binaries and test coverage files.
+- `make build-credential-provider-multiarch`: Build `linux/amd64` and `linux/arm64` binaries locally without publishing.
 
 ## Multi-Cluster Mode
 
@@ -212,19 +212,19 @@ The `docker-config.json` file should look like this:
 }
 ```
 
-* Replace registry names and `auth` values with your actual details.
-* For NGC paths, replace `ngc-org` and `ngc-team` with the NGC org and team path segments.
-* The `auth` value is a base64 encoding of `username:password`. For example, `echo -n "myusername:mypassword" | base64`.
+- Replace registry names and `auth` values with your actual details.
+- For NGC paths, replace `ngc-org` and `ngc-team` with the NGC org and team path segments.
+- The `auth` value is a base64 encoding of `username:password`. For example, `echo -n "myusername:mypassword" | base64`.
 
 ## Building the Provider
 
 The credential provider is written in Go and located in the `credential-provider-go` directory.
 
-* To build the binary for `linux/arm64`: `make build`
-  * This will place the `generic-credential-provider` binary in the `./bin` directory.
-* To build for Linux AMD64: `make build-linux-amd64`
-  * This creates `./bin/generic-credential-provider-linux-amd64`.
-  * Important Note: the credential provider config should be updated to use this new binary name
+- To build the binary for `linux/arm64`: `make build`
+  - This will place the `generic-credential-provider` binary in the `./bin` directory.
+- To build for Linux AMD64: `make build-linux-amd64`
+  - This creates `./bin/generic-credential-provider-linux-amd64`.
+  - Important Note: the credential provider config should be updated to use this new binary name
 
 ## Testing the Provider
 
@@ -232,18 +232,18 @@ The credential provider is written in Go and located in the `credential-provider
 
 Unit tests for the Go provider verify individual functions and logic.
 
-* Run tests: `make test`
-  * This will also display a test coverage summary in the console.
-* Generate HTML coverage report: `make test-coverage-html`
-  * Open `credential-provider-go/coverage.html` in your browser to view detailed coverage.
+- Run tests: `make test`
+  - This will also display a test coverage summary in the console.
+- Generate HTML coverage report: `make test-coverage-html`
+  - Open `credential-provider-go/coverage.html` in your browser to view detailed coverage.
 
 ### Manual End-to-End Tests
 
 A manual test harness script (`credential-provider-go/hack/manual-test.sh`) is provided to test the compiled binary with various scenarios, mock Docker configurations, and image requests.
 
-* Run manual tests: `make test-manual`
-  * This target first ensures the binary is built.
-  * The script will output the STDOUT, STDERR, and EXIT_CODE for each test case, making it easy to verify behavior.
+- Run manual tests: `make test-manual`
+  - This target first ensures the binary is built.
+  - The script will output the STDOUT, STDERR, and EXIT_CODE for each test case, making it easy to verify behavior.
 
 For a quick, direct invocation (less comprehensive than `make test-manual`):
 
@@ -287,7 +287,7 @@ make build-credential-provider-multiarch
 The cluster is configured with 2 `agent` nodes (i.e. worker nodes - the control plane components run on a single `server` node).
 The agents are labeled, so a `nodeSelector` can be used.
 
-* `usage: workload`
+- `usage: workload`
 
 ## Accessing Routes
 
@@ -312,5 +312,5 @@ If `.localhost` domains don't resolve automatically, add entries to `/etc/hosts`
 
 Key design decisions for the Go credential provider are documented in:
 
-* `docs/go-conversion-proposal.md` (Initial conversion from Bash to Go)
-* `docs/go-multiple-credentials.md` (Support for path-specific credentials)
+- `docs/go-conversion-proposal.md` (Initial conversion from Bash to Go)
+- `docs/go-multiple-credentials.md` (Support for path-specific credentials)

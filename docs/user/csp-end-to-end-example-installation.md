@@ -31,6 +31,7 @@ Compute-plane commands run from the repository root with `make -C`.
 ```bash
 git clone https://github.com/nvidia/nvcf.git
 ```
+
 </Info>
 
 ## Installation order
@@ -39,7 +40,7 @@ The order matters. Each step produces an input that the next step needs. The
 load balancer address, in particular, must exist before you configure the
 environment file, because it becomes `global.domain` and the NVCA Host headers.
 
-```
+```text
 1. Install the Gateway          -> external load balancer address
 2. Configure the environment    -> environments/<env>.yaml + secrets/<env>-secrets.yaml
 3. Install the control plane    -> control-plane services + HTTPRoutes

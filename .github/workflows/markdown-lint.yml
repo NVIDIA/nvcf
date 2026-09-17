@@ -1,14 +1,21 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Report markdownlint violations for first-party markdown.
+# Lint first-party markdown.
 #
-# Reporting only, on purpose. The tree has not been cleaned up yet, so this
-# job records the current state in the run summary instead of gating on it.
-# It is the first half of the work: agree the ruleset here, clean up
-# incrementally, then flip this job to blocking once the count reaches zero.
-# A reporting job that never becomes blocking decays into noise, so treat the
-# count in the summary as a number that is supposed to go down.
+# Blocking. The job started out reporting only, while the tree still had 4791
+# violations, and flipped once the cleanup reached zero. Lint findings now fail
+# the build, which is the whole point of the exercise: a reporting job nobody
+# has to fix decays into noise.
+#
+# If this fails on your change, run the same command locally:
+#
+#   git ls-files '*.md' > /tmp/tracked.txt
+#   tr '\n' '\0' < /tmp/tracked.txt | xargs -0 markdownlint
+#
+# markdownlint --fix handles most findings. Check what it rewrote before
+# committing: it parses fenced code as prose when a fence is mispaired, and
+# will edit the contents of a block it should not touch.
 
 name: Markdown Lint
 
@@ -111,21 +118,28 @@ jobs:
               echo "markdownlint failed to execute (exit ${worst})."
               echo "No violation count was produced."
             } >> "${GITHUB_STEP_SUMMARY}"
-            # Lint findings stay non-blocking, but a job that cannot produce a
-            # trustworthy number has nothing to report and must not pass green.
+            # Distinct from a lint failure below: there is no count at all
+            # here, so the summary must not imply the tree was measured.
             exit 1
           fi
 
           total="$(wc -l < "${RUNNER_TEMP}/out.txt" | tr -d ' ')"
           files="$(cut -d: -f1 "${RUNNER_TEMP}/out.txt" | sort -u | wc -l | tr -d ' ')"
 
+          if [ "${total}" -eq 0 ]; then
+            echo "markdownlint: clean"
+            exit 0
+          fi
+
+          cat "${RUNNER_TEMP}/out.txt"
           {
             echo "## Markdown lint"
             echo
-            echo "Reporting only. Lint findings do not fail the build yet."
+            echo "${total} violation(s) across ${files} file(s)."
             echo
-            echo "- violations: ${total}"
-            echo "- files: ${files}"
+            echo '```text'
+            head -50 "${RUNNER_TEMP}/out.txt"
+            echo '```'
             echo
             echo "### By rule"
             echo
@@ -135,4 +149,5 @@ jobs:
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
-          echo "markdownlint: ${total} violations across ${files} files"
+          echo "::error::markdownlint: ${total} violations across ${files} files"
+          exit 1

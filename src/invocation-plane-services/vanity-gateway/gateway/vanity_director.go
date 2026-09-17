@@ -321,7 +321,9 @@ func appendTooManyRequestsMessage(body []byte, message string) []byte {
 		return body
 	}
 
-	if appendOpenAIErrorMessage(parsed, message) || appendProblemDetailsMessage(parsed, message) {
+	if appendOpenAIErrorMessage(parsed, message) ||
+		appendProblemDetailsMessage(parsed, message) ||
+		appendPlainMessage(parsed, message) {
 		if b, err := json.Marshal(parsed); err == nil {
 			return b
 		}
@@ -339,6 +341,17 @@ func appendOpenAIErrorMessage(parsed map[string]any, message string) bool {
 		return false
 	}
 	errorObj["message"] = msg + " " + message
+	return true
+}
+
+// appendPlainMessage handles a bare {"message": "..."} body, which is what echo
+// renders for the LLM Gateway's errors. Kept last so the two specific shapes win.
+func appendPlainMessage(parsed map[string]any, message string) bool {
+	msg, ok := parsed["message"].(string)
+	if !ok {
+		return false
+	}
+	parsed["message"] = msg + " " + message
 	return true
 }
 

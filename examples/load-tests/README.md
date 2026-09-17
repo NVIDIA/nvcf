@@ -6,7 +6,7 @@ Many of the function tests target the [Load Tester Supreme](../function-samples/
 
 ## Project Structure
 
-```
+```text
 functions/                  NVCF function load tests
   definitions/              Protocol buffer definitions (gRPC)
   test-configs/             k6 configuration files

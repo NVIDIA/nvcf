@@ -139,6 +139,31 @@ var (
 			Help:      "total nats errors on a nats connection",
 		})
 
+	// NatsErrorByTypeCounter breaks down NATS failures by error_type. Increment
+	// together with NatsErrorCounter so the total counter remains backward-compatible.
+	// All six series are pre-initialized so they appear on the first Prometheus
+	// scrape even before the first failure occurs.
+	// Known error_type values:
+	//   async_error          - asynchronous subscription/connection error (ErrorHandler)
+	//   permission_violation - subject missing from the worker NATS allow-list (ErrorHandler)
+	//   disconnect_error     - disconnect with a non-nil error (DisconnectErrHandler); includes TLS, TCP, and protocol errors
+	//   terminal_close       - connection closed with a terminal error (ClosedHandler)
+	//   auth_token           - failure to fetch or marshal the NATS auth token (TokenHandler)
+	//   jetstream_publish    - asynchronous JetStream publish error (PublishAsyncErrHandler)
+	NatsErrorByTypeCounter = func() *prometheus.CounterVec {
+		cv := promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: metrics.NatsNamespace,
+				Name:      "error_by_type_total",
+				Help:      "total NATS errors broken down by failure type; use nats_error_total for the aggregate",
+			}, []string{"error_type"})
+		// Pre-initialize all known series so they appear on the first scrape.
+		for _, t := range []string{"async_error", "permission_violation", "disconnect_error", "terminal_close", "auth_token", "jetstream_publish"} {
+			cv.WithLabelValues(t)
+		}
+		return cv
+	}()
+
 	NatsReconnectCounter = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: metrics.NatsNamespace,

@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -124,14 +123,8 @@ func TestNVCFCLIInvocationAdaptersExposeAllArguments(t *testing.T) {
 
 func TestVanityGatewayInvocationUsesExactHostAndKeepsAPIKeyOutOfCommand(t *testing.T) {
 	sc, fake := newScenarioContext(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
 	sc.NVCFCLIConfig = "config.yaml"
-	const apiKey = "sensitive-function-api-key"
-	statePath := filepath.Join(home, ".nvcf-cli.config.state")
-	if err := os.WriteFile(statePath, []byte(`{"apiKey":"`+apiKey+`"}`), 0o600); err != nil {
-		t.Fatalf("write CLI state: %v", err)
-	}
 	fake.result = harness.Result{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`}
 
 	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
@@ -149,22 +142,109 @@ func TestVanityGatewayInvocationUsesExactHostAndKeepsAPIKeyOutOfCommand(t *testi
 	}
 	run := fake.runs[0]
 	for _, expected := range []string{
-		"curl --silent --show-error --fail-with-body",
-		"Host: vanity.localhost",
-		"Content-Type: application/json",
-		`{"message":"vanity"}`,
-		"--retry 24 --retry-all-errors --retry-delay 5 --retry-max-time 120",
-		"http://127.0.0.1:8080/bdd/echo",
+		"nvcf-cli",
+		"--config config.yaml",
+		"function invoke",
+		"--vanity-host vanity.localhost",
+		"--path /bdd/echo",
+		"--timeout 120",
+		`--request-body '{"message":"vanity"}'`,
 	} {
 		if !strings.Contains(run.command, expected) {
 			t.Fatalf("command = %q, want %q", run.command, expected)
 		}
 	}
-	if strings.Contains(run.command, apiKey) {
-		t.Fatalf("command contains function API key: %q", run.command)
+	if run.sensitiveStdin != "" {
+		t.Fatalf("sensitive stdin = %q, want empty", run.sensitiveStdin)
 	}
-	if run.sensitiveStdin != apiKey {
-		t.Fatalf("sensitive stdin length = %d, want %d", len(run.sensitiveStdin), len(apiKey))
+}
+
+func TestVanityGatewayInvocationRetriesPlainNotFoundDuringRouteConvergence(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 1, Stderr: "DEBUG: invoking Vanity endpoint\n" + vanityRouteNotFoundError + "\n"},
+		{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`},
+	}
+
+	previousInterval := vanityInvocationRetryInterval
+	vanityInvocationRetryInterval = time.Nanosecond
+	t.Cleanup(func() { vanityInvocationRetryInterval = previousInterval })
+
+	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
+		context.Background(), "vanity.localhost", "/bdd/echo", "1",
+		&godog.DocString{Content: `{"message":"vanity"}`},
+	)
+	if err != nil {
+		t.Fatalf("invoke through Vanity Gateway: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+}
+
+func TestVanityGatewayInvocationDoesNotRetryDecoratedNotFound(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 1, Stderr: vanityRouteNotFoundError + ": upstream route failure"},
+		{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`},
+	}
+
+	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
+		context.Background(), "vanity.localhost", "/bdd/echo", "1",
+		&godog.DocString{Content: `{"message":"vanity"}`},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want decorated 404 failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	}
+}
+
+func TestVanityGatewayInvocationDoesNotRetryWhenWaitReachesDeadline(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 1, Stderr: vanityRouteNotFoundError},
+		{ExitCode: 0, Stdout: `{"rawResponse":"vanity"}`},
+	}
+
+	previousInterval := vanityInvocationRetryInterval
+	vanityInvocationRetryInterval = time.Second
+	t.Cleanup(func() { vanityInvocationRetryInterval = previousInterval })
+
+	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
+		context.Background(), "vanity.localhost", "/bdd/echo", "0.05",
+		&godog.DocString{Content: `{"message":"vanity"}`},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want initial route convergence failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want no attempt after retry deadline", len(fake.runs))
+	}
+}
+
+func TestVanityGatewayInvocationDoesNotRetryOtherErrors(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 1, Stderr: "API error 401: unauthorized"}
+
+	err := sc.iSuccessfullyInvokeFunctionThroughVanityGateway(
+		context.Background(), "vanity.localhost", "/bdd/echo", "1",
+		&godog.DocString{Content: `{"message":"vanity"}`},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want exit-zero assertion failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
 	}
 }
 

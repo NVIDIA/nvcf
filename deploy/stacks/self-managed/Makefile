@@ -3,12 +3,15 @@ include Makefile.dist
 
 .PHONY: test test-published-charts
 test:
+	@tests/custom-observability-environment.sh
+	@tests/llm-gateway-auth-transport.sh
 	@tests/llm-router-worker-address.sh
 	@tests/llm-router-split-cluster.sh
 	@tests/llm-router-local-chart.sh
 	@tests/llm-servicemonitor-defaults.sh
 	@tests/gateway-routes-local-chart.sh
 	@tests/gateway-routes-enable-wiring.sh
+	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh
@@ -26,7 +29,9 @@ test:
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
+	@tests/nats-auth-callout-wiring.sh
 	@tests/notary-image-repository.sh
+	@tests/nvcf-ui-migrations-image-tag.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"

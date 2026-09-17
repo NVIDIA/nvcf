@@ -14,6 +14,11 @@ This repository ships:
 
 The container builds [`golang-migrate`](https://github.com/golang-migrate/migrate) v4.19.1 from its checksum-verified release source. The build enables only the Cassandra database driver. This keeps unrelated database and cloud-provider clients out of the runtime binary.
 
+The image also replaces Cassandra's Jackson and Netty libraries with the
+coherent, checksum-pinned versions in `java-libraries.lock`. Set
+`MAVEN_REPOSITORY_BASE` at build time to use a caching Maven repository while
+preserving the locked paths and checksums.
+
 `execute_sqls.sh` uses the standard `golang-migrate` Cassandra driver query parameters: `x-multi-statement`, `x-migrations-table`, `username`, and `password`.
 
 ## Prerequisites
@@ -66,7 +71,7 @@ A failure in any keyspace's migration set stops the run.
 
 If a migration fails partway through, `golang-migrate` marks the row in `schema_migrations` as `dirty=true`. The next `migrate up` refuses to proceed and exits with:
 
-```
+```text
 Dirty database version <N>. Fix and force version.
 ```
 

@@ -13,6 +13,7 @@ lives under `tools/` and `tests/`.
 Use `python3`, not `python`, when Python is needed. Use the nearest nested `AGENTS.md` for subtree-specific guidance.
 
 Useful pointers:
+
 - `BAZEL.md` for the contributor-facing Bazel build path
 - `docs/AGENTS.md` for in-repo user and developer documentation
 - `tools/AGENTS.md` for repo tooling
@@ -38,6 +39,7 @@ update.
 
 For self-managed stack ownership, deployment order, chart/image-source mapping,
 or "which subtree owns this" questions, use:
+
 - `.cursor/skills/nvcf-explore-stack/SKILL.md` for the in-repo Helmfile,
   dependency, chart, hook, and image-source map
 
@@ -124,7 +126,7 @@ on the ticket, or temporary runbooks instead.
 
 Each skill is a directory named to match its `name` frontmatter field, containing at minimum a `SKILL.md`. Names must be lowercase with hyphens only, no leading/trailing/consecutive hyphens.
 
-```
+```text
 skill-name/
     SKILL.md              # Required (under 500 lines)
     README.md             # Optional: overview and usage
@@ -179,6 +181,7 @@ agent finishes. If it reports a fanout error, fix the symlinks or source
 placement before responding.
 
 When adding a skill:
+
 1. Decide visibility (public or private) and audience (`user/skills` or `dev/skills`).
 2. Create the `SKILL.md` with valid frontmatter.
 3. For root-wide dev skills, create matching `.cursor/skills/<name>`, `.codex/skills/<name>`, and `.claude/skills/<name>` symlinks to the same source directory.
@@ -247,7 +250,7 @@ Use Conventional Commits v1.0.0. Include issue references in the footer when req
 
 Format:
 
-```
+```text
 <type>(<scope>): <short description>
 
 [optional body]
@@ -277,6 +280,7 @@ not include a test plan checklist unless explicitly requested.
 Every Pull Request description must explain why the change is needed, not only
 what changed. Include enough context that a reviewer can understand the
 motivation without doing detective work. Always include:
+
 - the problem, requirement, review comment, or CI blocker driving the change
 - what changed and how the changed pieces connect
 - links to upstream Pull Requests, tickets, bugs, or related reviews when
@@ -284,7 +288,7 @@ motivation without doing detective work. Always include:
 - tests run, skipped tests, and whether QA is needed
 - dependency changes, license review status, and NOTICE impact
 
-```
+```text
 ## Why
 <context and motivation for the change>
 
@@ -394,6 +398,7 @@ Write self-documenting code. Add comments only when the logic is non-obvious. Ma
 Follow the documentation style rules in `.codex/skills/documentation-style/SKILL.md`
 (same source as `.cursor/skills/documentation-style/SKILL.md` and
 `.claude/skills/documentation-style/SKILL.md`):
+
 - No markdown bold for emphasis.
 - No emojis.
 - No em-dash (U+2014).
@@ -403,6 +408,7 @@ Follow the documentation style rules in `.codex/skills/documentation-style/SKILL
 ## Third-Party Dependencies
 
 Before adding a third-party dependency:
+
 1. Verify the license is compatible (check `.allowed-licenses.txt` at the root).
 2. Warn the user if the license is not in the allow list.
 3. Update `NOTICE` and any license attribution files required by the subtree.
@@ -418,12 +424,14 @@ Priority order for contributions: logs, then tracing, then metrics. This is the 
 Every service must produce structured logs. Use the logging library established in the subtree (`logrus` for Go, `zap` for invocation-plan services, `tracing` for Rust). Do not introduce a new logging library without a strong reason.
 
 Required context fields on every log line where available:
+
 - Request ID
 - Function ID
 - Cluster ID
 - Org/NCA ID (when auth context is present)
 
 Log level contract:
+
 - `error`: something failed and needs operator attention. Include the error message, the operation that failed, and enough context to start debugging without grepping other sources.
 - `warn`: degraded but recoverable. Rate-limited retries, fallback paths taken, near-quota conditions.
 - `info`: normal state transitions. Service startup/shutdown, config reloads, successful deployments, completed queue batches.
@@ -440,12 +448,14 @@ Add OpenTelemetry spans for cross-service calls, queue processing, and any opera
 Span naming: use `service.operation` format (for example `nvca.reconcile`, `ratelimiter.check`, `grpc-proxy.forward`). Keep names stable across releases so dashboards and alerts do not break.
 
 Required span attributes:
+
 - `nvcf.function.id` when operating on a function
 - `nvcf.cluster.id` when operating on a cluster
 - `nvcf.org.id` when auth context is available
 - `error` attribute set to `true` on failure, with `otel.status_code` = `ERROR`
 
 When to create spans:
+
 - New span for each inbound request (HTTP handler, gRPC method, queue message).
 - New child span for each outbound call (HTTP client, gRPC client, database query, queue publish).
 - Do not create spans for pure in-memory computation unless it is a known bottleneck.
@@ -455,6 +465,7 @@ Propagate trace context on all outbound HTTP and gRPC calls. Use `W3C Trace Cont
 ### Metrics (required for request-handling paths)
 
 Use the RED method as the baseline for every request-handling service:
+
 - Rate: request count by endpoint and status.
 - Errors: error count by endpoint and error category.
 - Duration: latency histogram by endpoint.
@@ -470,6 +481,7 @@ Histogram buckets: use default Prometheus buckets unless the operation has a kno
 ### Before merging
 
 When a change affects observability, verify:
+
 - New log lines include the required context fields.
 - New spans propagate context and set error attributes on failure.
 - New metrics follow the naming convention and are pre-initialized.

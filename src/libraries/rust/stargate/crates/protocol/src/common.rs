@@ -101,6 +101,10 @@ pub fn entries_from_header_map(
         .collect()
 }
 
+pub fn has_available_engine_slot(active_requests: u64, max_engine_concurrency: u64) -> bool {
+    max_engine_concurrency > 0 && active_requests < max_engine_concurrency
+}
+
 pub fn queue_time_delta_ms(input_tokens: u64, last_mean_input_tps: f64) -> Option<u64> {
     if input_tokens == 0 {
         return Some(0);

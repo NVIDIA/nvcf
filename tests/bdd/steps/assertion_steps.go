@@ -51,6 +51,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain Kubernetes resource "([^"/]+)/([^"]+)"$`, sc.renderedManifestsShouldContainKubernetesResource)
+	ctx.Step(`^the rendered workloads in "([^"]*)" should have valid container images$`, sc.renderedWorkloadsShouldHaveValidContainerImages)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
 	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
@@ -58,6 +59,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^these Kubernetes resources should not exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldNotExist)
 	ctx.Step(`^Kubernetes resource "([^"/]+)/([^"]+)" in namespace "([^"]*)" using context "([^"]*)" should contain:$`, sc.kubernetesResourceShouldContain)
 	ctx.Step(`^deployment "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should complete rollout within "([^"]*)"$`, sc.deploymentShouldCompleteRollout)
+	ctx.Step(`^DNS name "([^"]*)" should resolve within "([^"]*)" seconds$`, sc.dnsNameShouldResolve)
 	ctx.Step(`^NVCFBackend "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should report agent status "([^"]*)" within "([^"]*)"$`, sc.nvcfBackendShouldReportAgentStatus)
 	ctx.Step(`^these Gateway API routes should be accepted and resolved using context "([^"]*)" within "([^"]*)":$`, sc.gatewayAPIRoutesShouldBeAcceptedAndResolved)
 }
@@ -288,6 +290,12 @@ func (sc *ScenarioContext) renderedManifestsShouldContainKubernetesResource(path
 	)
 }
 
+// renderedWorkloadsShouldHaveValidContainerImages delegates manifest parsing
+// while the step handler resolves the repository-relative path.
+func (sc *ScenarioContext) renderedWorkloadsShouldHaveValidContainerImages(path string) error {
+	return dsl.RenderedWorkloadImagesAreValid(sc.resolvePath(dsl.Interpolate(path)))
+}
+
 func (sc *ScenarioContext) renderedManifestsUnderMatchingDirectoriesShouldContain(path, pattern string, table *godog.Table) error {
 	needles, err := tableToSingleColumn(table, "text")
 	if err != nil {
@@ -452,6 +460,22 @@ func (sc *ScenarioContext) deploymentShouldCompleteRollout(ctx context.Context, 
 	}
 	if err := sc.runSuccessfully(ctx, command); err != nil {
 		return fmt.Errorf("deployment %q did not complete rollout: %w", dsl.Interpolate(name), err)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) dnsNameShouldResolve(ctx context.Context, hostname, timeout string) error {
+	command, err := dsl.DNSResolutionCommand(hostname, timeout)
+	if err != nil {
+		return err
+	}
+	if err := sc.runResolvedSuccessfully(ctx, command); err != nil {
+		return fmt.Errorf(
+			"DNS name %q did not resolve within %s seconds: %w",
+			strings.TrimSpace(dsl.Interpolate(hostname)),
+			strings.TrimSpace(dsl.Interpolate(timeout)),
+			err,
+		)
 	}
 	return nil
 }

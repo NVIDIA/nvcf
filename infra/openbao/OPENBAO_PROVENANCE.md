@@ -28,7 +28,7 @@ The source build updates these modules before compiling the server:
 
 - Go 1.27.0
 - `golang.org/x/crypto v0.56.0`
-- `google.golang.org/grpc v1.83.1`
+- `google.golang.org/grpc v1.83.2`
 - `github.com/moby/go-archive v0.3.0`
 
 Go minimal version selection also updates the transitive modules required by

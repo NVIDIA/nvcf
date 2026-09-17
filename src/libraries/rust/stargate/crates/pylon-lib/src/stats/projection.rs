@@ -107,6 +107,10 @@ impl StatsAggregator {
             || ModelMetricsState::default().current_stats(inputs),
             |state| state.metrics.current_stats(inputs),
         );
+        stats.max_engine_concurrency = stats.max_engine_concurrency.or(self
+            .config
+            .fallback_max_engine_concurrency
+            .map(std::num::NonZeroU64::get));
         stats.queue_time_estimate_ms_by_priority = queue.queue_time_estimate_ms_by_priority;
         stats
     }

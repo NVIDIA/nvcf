@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/worker/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +34,7 @@ func TestPackageMetricsRegistered(t *testing.T) {
 	require.NotNil(t, WorkerThreadCountGauge)
 	require.NotNil(t, WorkerThreadBusyTimeCounter)
 	require.NotNil(t, NatsErrorCounter)
+	require.NotNil(t, NatsErrorByTypeCounter)
 	require.NotNil(t, NatsReconnectCounter)
 	require.NotNil(t, NatsLameDuckCounter)
 	require.NotNil(t, NatsDisconnectCounter)
@@ -42,6 +44,16 @@ func TestPackageMetricsRegistered(t *testing.T) {
 	require.NotNil(t, HealthcheckCounter)
 	require.NotNil(t, StatefulProxySuccessCounter)
 
+	// Assert that all six error_type series are pre-initialized (value 0) before
+	// any increment. This confirms the initialization loop in nvcf_metrics.go
+	// runs at startup and that WithLabelValues in the test does not silently
+	// create the series itself, which would pass even without the loop.
+	preInitTypes := []string{"async_error", "permission_violation", "disconnect_error", "terminal_close", "auth_token", "jetstream_publish"}
+	for _, errType := range preInitTypes {
+		require.Equal(t, float64(0), testutil.ToFloat64(NatsErrorByTypeCounter.WithLabelValues(errType)),
+			"NatsErrorByTypeCounter{error_type=%q} should be pre-initialized to 0", errType)
+	}
+
 	require.NotPanics(t, func() {
 		RequestCounter.Inc()
 		ResponseCounter.WithLabelValues("0").Inc()
@@ -49,6 +61,12 @@ func TestPackageMetricsRegistered(t *testing.T) {
 		WorkerThreadCountGauge.Set(2)
 		WorkerThreadBusyTimeCounter.Add(0.5)
 		NatsErrorCounter.Inc()
+		NatsErrorByTypeCounter.WithLabelValues("async_error").Inc()
+		NatsErrorByTypeCounter.WithLabelValues("permission_violation").Inc()
+		NatsErrorByTypeCounter.WithLabelValues("disconnect_error").Inc()
+		NatsErrorByTypeCounter.WithLabelValues("terminal_close").Inc()
+		NatsErrorByTypeCounter.WithLabelValues("auth_token").Inc()
+		NatsErrorByTypeCounter.WithLabelValues("jetstream_publish").Inc()
 		NatsReconnectCounter.Inc()
 		NatsLameDuckCounter.Inc()
 		NatsDisconnectCounter.Inc()

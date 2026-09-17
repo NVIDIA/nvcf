@@ -34,6 +34,7 @@ pub(super) const ENGINE_STATS_SOURCE: &str = "engine_stats_stream";
 #[derive(Debug, Default)]
 pub(super) struct ModelMetricsState {
     pub(super) last_mean_input_tps: f64,
+    pub(super) max_engine_concurrency: Option<u64>,
     pub(super) chat_output_tps_samples: VecDeque<f64>,
     pub(super) chat_output_tps_sum: f64,
     pub(super) embedding_item_tps_samples: VecDeque<f64>,
@@ -541,6 +542,23 @@ impl StatsAggregator {
         updated_models: &mut Vec<ModelStatsUpdate>,
     ) {
         match update {
+            StatsAggregatorUpdate::EngineConcurrency(update) => {
+                let Some(state) = self.per_model.get_mut(&update.model_id) else {
+                    return;
+                };
+                if update
+                    .generation
+                    .as_ref()
+                    .is_some_and(|generation| generation != &state.generation)
+                    || state.metrics.max_engine_concurrency == update.max_engine_concurrency
+                {
+                    return;
+                }
+                state.metrics.max_engine_concurrency = update.max_engine_concurrency;
+                state.metrics.stats_observed_at_unix_ms = current_unix_millis();
+                let generation = state.generation.clone();
+                updated_models.push((generation, self.snapshot(&update.model_id)));
+            }
             StatsAggregatorUpdate::RequestCounters(update) => {
                 self.apply_request_counters_into(update, updated_models)
             }
@@ -1105,7 +1123,7 @@ impl ModelMetricsState {
             kv_cache_used_tokens: self.kv_cache.kv_cache_used_tokens,
             kv_cache_free_tokens: self.kv_cache.kv_cache_free_tokens,
             num_running_queries: inputs.num_running_queries,
-            max_engine_concurrency: None,
+            max_engine_concurrency: self.max_engine_concurrency,
             total_query_input_size: inputs.total_query_input_size,
             queue_time_estimate_ms_by_priority: None,
             input_processing_queries: inputs.input_processing_queries,

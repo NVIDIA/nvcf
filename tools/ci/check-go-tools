@@ -5,9 +5,7 @@
 # Build, vet, and test every Go module under tools/.
 #
 # Nothing did this before. The repo tooling modules carry _test.go files that no
-# workflow ran, so a pull request could break them and still go green. That is
-# how tools/docs-version-sync came to have three failing tests on main without
-# anyone noticing: they had not run in CI since they were written.
+# workflow ran, so a pull request could break them and still go green.
 #
 # Modules are discovered rather than listed, so a new tool is covered the moment
 # it has a go.mod. A list would need editing by exactly the person who is least
@@ -28,19 +26,11 @@ trap 'rm -rf "${build_out}"' EXIT
 # Each entry needs a tracking issue: the point of an exclusion is that someone
 # comes back for it, and an unexplained one just becomes permanent. Excluded
 # modules are still built and vetted.
-#
-#   docs-version-sync  three manifest tests expect bitnami-cassandra in the
-#                      EA-CVE section and it is no longer classified there.
-#                      The data or the classification moved and the tests did
-#                      not, which is exactly the drift this check exists to
-#                      prevent from recurring. See NVIDIA/nvcf#1223.
-skip_tests=(
-  "tools/docs-version-sync"
-)
+skip_tests=()
 
 skipped() {
   local m="$1" s
-  for s in "${skip_tests[@]}"; do [ "${m}" = "${s}" ] && return 0; done
+  for s in "${skip_tests[@]-}"; do [ "${m}" = "${s}" ] && return 0; done
   return 1
 }
 

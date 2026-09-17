@@ -31,8 +31,6 @@ navigation:
         path: ../../docs/user/image-mirroring.md
       - page: Helmfile Installation
         path: ../../docs/user/helmfile-installation.md
-      - page: gRPC Invocation Enablement
-        path: ../../docs/user/grpc-invocation-enablement.md
       - page: CSP End-to-End Example
         path: ../../docs/user/csp-end-to-end-example-installation.md
 
@@ -55,6 +53,8 @@ navigation:
         path: ../../docs/user/optional-enhancements.md
       - page: Pod Disruption Budgets
         path: ../../docs/user/pod-disruption-budgets.md
+      - page: gRPC Invocation Enablement
+        path: ../../docs/user/grpc-invocation-enablement.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
       - page: LLM Request Router Load Balancing
@@ -294,6 +294,8 @@ navigation:
             path: ../../docs/ngc-managed/cluster-management/ngc-managed.md
           - page: Helm-Managed Clusters
             path: ../../docs/ngc-managed/cluster-management/helm-managed.md
+          - page: GitOps Cluster Registration
+            path: ../../docs/ngc-managed/cluster-management/gitops-registration.md
           - page: Configuration
             path: ../../docs/ngc-managed/cluster-management/configuration.md
           - page: Monitoring

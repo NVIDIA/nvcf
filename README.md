@@ -1,8 +1,18 @@
+<!-- markdownlint-disable-next-line MD041 -->
 ![NVCF banner](docs/user/images/nvcf-banner.svg)
 
 [![bazel](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml/badge.svg?branch=main)](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml?query=branch%3Amain)
 
 [Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
+
+> **Repository move in progress.** This repo is transferring from `NVIDIA/nvcf` to
+> `dsx-ai-factory/nvcf` on **Friday, 2026-09-18 at 8:00 AM Pacific**. GitHub
+> redirects old clone/fetch/`go get` URLs to the new location, so existing links
+> and `github.com/NVIDIA/nvcf` module paths keep working, but please update to
+> `dsx-ai-factory/nvcf` when convenient.
+>
+> **No PRs will be merged from 7:30 AM Pacific until the transfer is done.**
+> Land anything you need in before the freeze starts.
 
 # NVIDIA Cloud Functions
 

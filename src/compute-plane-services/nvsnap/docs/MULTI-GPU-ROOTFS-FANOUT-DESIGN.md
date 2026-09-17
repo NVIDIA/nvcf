@@ -104,7 +104,7 @@ named volume.
 
 Each capture is identified by a stable hash over:
 
-```
+```text
 sha256(
   image_digest,                      # exact container content
   model_id,                          # e.g. meta-llama/Llama-3.1-70B-Instruct
@@ -116,6 +116,7 @@ sha256(
 
 `engine_compat_flags` is per-engine — flags that affect what's in the
 cache:
+
 - vLLM: `--tensor-parallel-size`, `--dtype`, `--max-model-len`,
   `--gpu-memory-utilization`, `--quantization`
 - SGLang: `--tp-size`, `--mem-fraction-static`, `--dtype`
@@ -124,7 +125,7 @@ cache:
 
 Layout (backend-specific URL scheme; conceptually identical):
 
-```
+```text
 <root>/<hash[:16]>/manifest.json
 <root>/<hash[:16]>/tree/                          # captured directory tree
                        rootfs/...                 # (skipped for NIM)

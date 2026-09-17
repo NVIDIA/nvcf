@@ -252,6 +252,27 @@ func TestModifyTooManyRequestsResponse(t *testing.T) {
 			message:        "Check out this model at a partner!",
 			expectedDetail: "Rate limit exceeded. Check out this model at a partner!",
 		},
+		{
+			name:         "429 with a bare message appends to it",
+			statusCode:   http.StatusTooManyRequests,
+			responseBody: `{"message":"rate limit exceeded"}`,
+			message:      "Check out this model at a partner!",
+			expectedBody: `{"message":"rate limit exceeded Check out this model at a partner!"}`,
+		},
+		{
+			name:         "429 with a non-string message passes through unchanged",
+			statusCode:   http.StatusTooManyRequests,
+			responseBody: `{"message":42}`,
+			message:      "Check out this model at a partner!",
+			expectedBody: `{"message":42}`,
+		},
+		{
+			name:           "429 prefers problem details over a bare message",
+			statusCode:     http.StatusTooManyRequests,
+			responseBody:   `{"title":"Too Many Requests","detail":"Rate limit exceeded.","message":"ignored"}`,
+			message:        "Check out this model at a partner!",
+			expectedDetail: "Rate limit exceeded. Check out this model at a partner!",
+		},
 	}
 
 	for _, tc := range tests {

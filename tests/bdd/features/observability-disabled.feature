@@ -19,14 +19,12 @@ Feature: Render local Helmfile stacks with observability disabled
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-      | observability.profile           | disabled                             |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-disabled-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Create the compute-plane stack environment used by the worker render.
     And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-      | observability.profile           | disabled                             |
     # Seed the compute stack's registration handoff without contacting ICMS.
     # The Make target copies this input to OUTPUT_DIR before Helmfile evaluates it.
     And I copy the file "tests/bdd/fixtures/ncp-local-register-values.yaml" to "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml"

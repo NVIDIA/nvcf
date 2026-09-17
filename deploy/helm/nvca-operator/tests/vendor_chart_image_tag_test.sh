@@ -36,6 +36,7 @@ chart_root="${fixture_root}/deploy/helm/nvca-operator"
 NVCA_OPERATOR_VERSION="3.2.11" \
 NVCA_VERSION="3.2.11" \
 NVCA_SHARED_STORAGE_IMAGE_TAG="1.0.5" \
+NVCA_OTEL_COLLECTOR_IMAGE_TAG="0.160.0-nv-0.2.4" \
   "${chart_root}/scripts/ci_vendor_nvca_operator_chart" >/dev/null
 
 actual_tag="$(yq -r '.image.tag' "${chart_root}/nvca-operator/values.yaml")"

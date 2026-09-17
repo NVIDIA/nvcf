@@ -55,6 +55,12 @@ fn default_cassandra_page_size() -> i32 {
 fn default_policy_cache_max_capacity() -> u64 {
     10_000
 }
+fn default_policy_cache_ttl_seconds() -> u64 {
+    300
+}
+fn default_policy_request_timeout_seconds() -> u64 {
+    30
+}
 fn default_discovery_recently_invoked_lookback_minutes() -> u64 {
     5
 }
@@ -119,7 +125,7 @@ impl Default for ScalingSettings {
             discover_new_functions_interval: default_discover_interval(),
             decay_factor: 0.0,
             lookback: default_lookback(),
-            policy: ScalingPolicy::Static(StaticScalingPolicy::default()),
+            policy: ScalingPolicy::Custom(CustomScalingPolicyConfig::default()),
             discovery_lock_duration: default_discovery_lock_duration(),
             scale_to_zero_idle_timeout: default_scale_to_zero_idle_timeout(),
             utilization_window_seconds: default_utilization_window_seconds(),
@@ -197,7 +203,7 @@ impl ScalingSettings {
 /// Stickiness window for scaling decisions.
 /// Scaling only triggers if utilization was past the threshold for at least
 /// `required_minutes` out of the last `window_minutes`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Stickiness {
     pub window_minutes: u32,
     pub required_minutes: u32,
@@ -238,9 +244,22 @@ pub enum ScalingPolicy {
 pub struct CustomScalingPolicyConfig {
     #[serde(rename = "ttl_seconds")]
     pub ttl_seconds: u64,
+    #[serde(default = "default_policy_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
     // Fallback defaults when custom policy fetch fails
     pub default_thresholds: ScalingThresholds,
     pub default_factors: ScalingFactors,
+}
+
+impl Default for CustomScalingPolicyConfig {
+    fn default() -> Self {
+        Self {
+            ttl_seconds: default_policy_cache_ttl_seconds(),
+            request_timeout_seconds: default_policy_request_timeout_seconds(),
+            default_thresholds: ScalingThresholds::default(),
+            default_factors: ScalingFactors::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -249,7 +268,7 @@ pub struct StaticScalingPolicy {
     pub scaling_factors: ScalingFactors,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ScalingThresholds {
     pub scale_up_threshold: f32,
@@ -265,7 +284,7 @@ impl Default for ScalingThresholds {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ScalingFactors {
     pub scale_up_factor: f32,
@@ -483,6 +502,19 @@ pub fn decide_scaling(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_settings_enable_custom_policy_lookup() {
+        let settings = ScalingSettings::default();
+
+        let ScalingPolicy::Custom(config) = settings.policy else {
+            panic!("default scaling policy should be Custom");
+        };
+        assert_eq!(config.ttl_seconds, 300);
+        assert_eq!(config.request_timeout_seconds, 30);
+        assert_eq!(config.default_thresholds, ScalingThresholds::default());
+        assert_eq!(config.default_factors, ScalingFactors::default());
+    }
 
     fn default_policy() -> ResolvedScalingPolicy {
         ResolvedScalingPolicy {

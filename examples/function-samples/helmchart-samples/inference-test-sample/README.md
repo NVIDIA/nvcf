@@ -1,4 +1,5 @@
 # Inference-test Sample
+
 This sample is a Helm chart that deploys the `fastapi-echo-sample` container.
 
 ## Prerequisites
@@ -36,7 +37,7 @@ Package the chart and push it to an OCI registry your cluster can reach, then re
 
 ```bash
 helm package inference-test
-helm push inference-test-0.1.tgz oci://<your-registry>/<namespace>
+helm push inference-test-<version>.tgz oci://<your-registry>/<namespace>
 
 nvcf-cli registry add \
   --hostname <your-registry> \
@@ -51,12 +52,17 @@ To opt into worker-readiness-based instance health, set
 renders the optional `nvcf-workload-config` ConfigMap described in
 [Helm Functions](../../../../docs/user/helm-functions.md#use-worker-readiness-for-function-health).
 
+The chart declares CPU and memory requests and limits because self-managed
+NVCF validates resource limits before admitting Helm function workloads.
+Override `resources` in a values file if the inference container needs
+different amounts.
+
 Create a function that references the chart, then deploy it:
 
 ```bash
 nvcf-cli function create \
   --name inference-test \
-  --helm-chart <your-registry>/<namespace>/inference-test:0.1 \
+  --helm-chart <your-registry>/<namespace>/inference-test:<version> \
   --helm-chart-service entrypoint \
   --inference-url /echo \
   --inference-port 8000

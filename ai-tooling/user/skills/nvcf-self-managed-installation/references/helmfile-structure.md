@@ -2,7 +2,7 @@
 
 ## Directory Layout
 
-```
+```bash
 nvcf-self-managed-stack/
 |-- helmfile.d/
 |   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
@@ -129,6 +129,7 @@ From lowest to highest priority:
 `global.yaml.gotmpl` reads from `.Values` (the merged environment + env-specific YAML) and constructs chart-specific values. It only passes through keys it explicitly references:
 
 ### Cassandra
+
 - `cassandra.replicaCount`
 - `cassandra.image.*` (registry, repository)
 - `cassandra.migrations.image.*`
@@ -137,6 +138,7 @@ From lowest to highest priority:
 - `cassandra.global.defaultStorageClass`
 
 ### NATS
+
 - `nats.container.image.*`
 - `nats.reloader.image.*`
 - `nats.natsBox.container.image.*`
@@ -144,6 +146,7 @@ From lowest to highest priority:
 - `nats.podTemplate.merge.spec.nodeSelector` (if enabled)
 
 ### OpenBao
+
 - `openbao.migrations.image.*` and `openbao.migrations.env`
 - `openbao.injector.image.*`
 - `openbao.server.image.*`
@@ -151,6 +154,7 @@ From lowest to highest priority:
 - Node selectors (if enabled)
 
 ### Services (API, SIS, etc.)
+
 - `<service>.image.*` (registry, repository)
 - `<service>.nodeSelector` (if enabled)
 - `<service>.env.*` (observability settings)
@@ -172,8 +176,6 @@ addons:
     enabled: true
     gateway:
       replicaCount: 1
-      auth:
-        grpcInsecure: true
       metrics:
         serviceMonitor:
           enabled: false
@@ -192,11 +194,15 @@ agentConfig:
       stargateQUICInsecure: true
 ```
 
-Use `replicaCount: 1` only for local or single-node test clusters. For shared
-or production clusters, use the required replica count and TLS-capable service
-configuration. `addons.llm.gateway.auth.grpcInsecure` and
-`workload.stargateQUICInsecure` enable plaintext transports. Do not use them in
-production.
+Use `replicaCount: 1` only for local or single-node test clusters. The bundled
+NVCF API currently serves plaintext gRPC on port 9090, so the self-managed stack
+defaults the LLM API Gateway authentication hop to plaintext. Set
+`addons.llm.gateway.auth.grpcInsecure: false` only with a TLS-capable NVCF API.
+
+Worker-to-router transport is separate. For shared or production clusters, use
+the required replica count and the managed TLS configuration. The
+`workload.stargateQUICInsecure` setting enables plaintext worker transport and
+must not be used in production.
 
 The request router uses `power-of-two` when no load-balancer configuration is
 set. Configure other routing methods with the

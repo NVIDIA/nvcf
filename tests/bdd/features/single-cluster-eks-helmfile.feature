@@ -71,14 +71,19 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
   @gateway-setup
   Scenario: Install gateway, capture ELB address, and author the EKS env file
     # Captures the user's manual setup steps per
-    # docs/v0.5/helmfile-installation.md Step 1. Installs the
+    # docs/user/gateway-routing.md. Installs the
     # envoy-gateway controller, applies the nvcf-gateway Gateway,
     # waits for AWS to provision the NLB, captures the assigned
     # hostname into EKS_GATEWAY_ADDR, and patches eks-bdd.yaml with
     # all the EKS-specific values (including global.domain).
 
-    # 1. Install the envoy-gateway controller in envoy-gateway-system.
-    When I run command "helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version v1.1.3 --kube-context ${EKS_CONTEXT} -n envoy-gateway-system --create-namespace --wait --timeout 5m"
+    # 1. Install the same timeout-capable Envoy Gateway release used by the
+    # supported local-cluster setup; that script is the version authority.
+    When I run command "tests/bdd/scripts/read-envoy-gateway-version.sh"
+    Then the command exit code should be 0
+    When I export command output to environment variable "ENVOY_GATEWAY_VERSION"
+
+    When I run command "helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version ${ENVOY_GATEWAY_VERSION} --kube-context ${EKS_CONTEXT} -n envoy-gateway-system --create-namespace --wait --timeout 5m"
     Then the command exit code should be 0
 
     # 2. Apply the Gateway, GatewayClass, and envoy-gateway namespace.
@@ -103,8 +108,7 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
     #    DNS resolver. AWS DNS propagation typically lags ~30-90s
     #    behind NLB programming; without this wait, subsequent
     #    in-pod connections can fail intermittently.
-    When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
-    Then the command exit code should be 0
+    Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
 
     # 6. Copy base.yaml -> eks-bdd.yaml and patch with the EKS
     #    knobs (including global.domain from the just-exported
@@ -253,8 +257,8 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_CLUSTER_NAME}-register-values.yaml" should contain:
         """
         ncaID: nvcf-default
-        region: ${EKS_REGION}
         selfManaged:
+          region: ${EKS_REGION}
           identitySource: psat
         """
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_CLUSTER_NAME}-register-values.yaml" should have non-empty keys:

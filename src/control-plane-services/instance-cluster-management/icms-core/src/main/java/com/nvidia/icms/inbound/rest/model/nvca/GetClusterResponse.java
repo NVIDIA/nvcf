@@ -76,10 +76,6 @@ public class GetClusterResponse {
     @Schema(description = "Nvca version")
     String nvcaVersion;
 
-    @Deprecated
-    @Schema(description = "OAuth client ID used by cluster (deprecated, use oAuthClientId)")
-    String ssaClientId;
-
     @JsonProperty("oAuthClientId")
     @Schema(description = "OAuth client ID used by cluster")
     String oAuthClientId;

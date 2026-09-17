@@ -18,19 +18,18 @@ Feature: Register an LLM worker securely with routers in two local regions
         | global.imagePullSecrets[0].name                                  | nvcr-pull-secret                                                                       |
         | global.helm.sources.repository                                   | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                                  |
         | global.image.repository                                          | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                                  |
-        | global.workerEndpoints.llmRequestRouterAddress                   | https://llm-request-router.nvcf.svc.cluster.local:50071                                |
-        | addons.llm.requestRouter.workload.kind                            | Deployment                                                                             |
         | addons.llm.requestRouter.discovery.remoteWatchUrls[0]             | https://region-b-watch.nvcf.svc.cluster.local:50071                                    |
         | addons.llm.requestRouter.grpcTls.dnsNames[1]                      | region-b-watch.nvcf.svc.cluster.local                                                  |
-        | addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress       | https://llm-request-router.nvcf.svc.cluster.local:50071                                |
+        # Updating a YAML list replaces the inherited list, so retain the two
+        # stack identities before adding the Region B identities.
+        | addons.llm.pki.dnsNames[0]                                        | llm-request-router.nvcf.svc.cluster.local                                               |
+        | addons.llm.pki.dnsNames[1]                                        | *.llm-request-router-headless.nvcf.svc.cluster.local                                    |
         | addons.llm.pki.dnsNames[2]                                        | region-b-watch.nvcf.svc.cluster.local                                                  |
         | addons.llm.pki.dnsNames[3]                                        | *.llm-request-router-region-b-headless.nvcf.svc.cluster.local                          |
-        | observability.profile                                             | disabled                                                                               |
       And I prepare Helmfile environment "local-bdd-registration-multiregion" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-multiregion-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       When I run command "k3d cluster get ncp-local"
       Then the command exit code should be 1

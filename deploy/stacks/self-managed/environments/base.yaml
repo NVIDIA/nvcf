@@ -9,7 +9,7 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
-  # Option A: HTTP Helm repository (e.g. NGC public catalog):
+  # Option A: HTTPS Helm repository (e.g. NGC public catalog):
   #   sources:
   #     url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
   #     username: "$oauthtoken"
@@ -177,7 +177,7 @@ functionAutoscaler:
 # API environment entries are merged over the stack defaults. Remote config is
 # passed to the API chart and overrides its packaged application profile. When
 # the LLM addon is enabled, the stack defaults the Pylon image from
-# global.sidecars (or global.image) at version 0.16.2.
+# global.sidecars (or global.image) at version 0.18.0.
 api:
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
@@ -196,10 +196,10 @@ nvctApi:
   essBaseURL: ""
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
-# republished under the public nvidia/nvcf catalog, so it defaults to its
-# upstream source, docker.io/alpine/k8s:1.37.0. Leave these unset unless you
-# have mirrored the image into your own registry, in which case set registry
-# and repository together:
+# republished under the public nvidia/nvcf catalog. The API chart defaults to
+# its upstream source, docker.io/alpine/k8s:1.37.0. Leave these unset unless
+# you have mirrored the image into your own registry, in which case set
+# registry and repository together:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
@@ -281,9 +281,7 @@ cassandra:
   resourcesPreset: "xlarge"
   migrations:
     image:
-      # 0.17.3 includes the current NVCT task schema while preserving the
-      # legacy tables required by the published function autoscaler 1.21.0.
-      tag: 0.17.3
+      tag: 0.17.6
   # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
   # The default image name is `cassandra` under global.image.repository.
   # Override here when pulling from a registry that uses a different path or tag.
@@ -313,6 +311,12 @@ certManager:
   # installed outside this stack; that external installation must still
   # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
+  # The ACME solver defaults to quay.io/jetstack/cert-manager-acmesolver.
+  # Set acmesolver.image.repository when the deployment uses a private mirror.
+  # acmesolver:
+  #   image:
+  #     repository: nvcr.io/YOUR_ORG/YOUR_TEAM/cert-manager-acmesolver
+  #     tag: "v1.20.2"
 
 openbao:
   enabled: true
@@ -363,25 +367,22 @@ addons:
   llm:
     enabled: false
     requestRouter:
-      replicaCount: 3
+      # replicaCount defaults to the request-router chart value. Set it here
+      # only when the stack needs a different topology.
+      # replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
-      readiness:
-        warmupMs: 60000
-      workload:
-        # Deployment matches managed NVCF. Existing installations can pin
-        # StatefulSet and migrate workload kinds in a controlled maintenance
-        # window; Kubernetes cannot mutate one workload kind into the other.
-        kind: Deployment
-
-      discovery:
-        disableDnsDiscovery: false
-        # Maximum interval between unchanged local and remote Watch snapshots.
-        watchHeartbeatMs: 5000
-        # Recursive Watch endpoints require an explicit HTTPS URI. Plaintext
-        # HTTP is available only through the development-only opt-in below.
-        remoteWatchUrls: []
-        allowInsecureRemoteWatchHttp: false
+      # The chart owns readiness, workload, and discovery defaults. Override
+      # only the fields that differ for this stack environment.
+      # readiness:
+      #   warmupMs: 60000
+      # workload:
+      #   kind: StatefulSet
+      # discovery:
+      #   disableDnsDiscovery: true
+      #   watchHeartbeatMs: 5000
+      #   remoteWatchUrls: []
+      #   allowInsecureRemoteWatchHttp: false
 
       # Authority and SNI aware backend router. A worker holds one registration
       # stream and one reverse QUIC tunnel per router replica, and each must
@@ -398,7 +399,8 @@ addons:
       # inference traffic, so it sits in the data path and terminates QUIC TLS.
       backendRouter:
         # enabled: defaults to addons.llm.enabled
-        replicaCount: 2
+        # replicaCount defaults to the request-router chart value.
+        # replicaCount: 2
         # Addresses workers dial to reach the router. Both default to the
         # backend-router Service in-cluster, which is correct when workers run
         # alongside the control plane. Set both to externally reachable
@@ -477,7 +479,7 @@ addons:
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
       # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag and then 0.19.1 if
+      # tag falls back to openbao.migrations.image.tag and then 0.19.5 if
       # neither location is set.
       # image:
       #   registry: ""
@@ -655,7 +657,8 @@ ingress:
         routeAnnotations: {}
       grpcWorker:
         enabled: false
-        listenerName: worker-tcp
+        # listenerName defaults to worker-tcp in the gateway-routes chart.
+        # Set it only when the cluster-owned Gateway uses a different name.
         routeAnnotations: {}
       nats:
         enabled: false
@@ -688,15 +691,15 @@ ingress:
       nats:
         name: "" # must be set by the environment when routes.nats.enabled=true
         namespace: "" # must be set by the environment when routes.nats.enabled=true
-        listenerName: nats
+        # listenerName defaults to nats in the gateway-routes chart.
       llmGrpc:
         name: "" # required when routes.llmWorker.enabled=true
         namespace: "" # required when routes.llmWorker.enabled=true
-        listenerName: llm-grpc
+        # listenerName defaults to llm-grpc in the gateway-routes chart.
       llmQuic:
         name: "" # required when routes.llmWorker.enabled=true
         namespace: "" # required when routes.llmWorker.enabled=true
-        listenerName: llm-quic
+        # listenerName defaults to llm-quic in the gateway-routes chart.
 
 grpcproxy:
   # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.

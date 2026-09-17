@@ -34,6 +34,7 @@ Execute:
 ```
 
 Safety behavior:
+
 - Refuses contexts that look managed/cloud/prod (arn:aws, eks, gke, aks, prod,
   qa) unless `--allow-unsafe-context` is set.
 - Requires the release and namespace to exist and the data PVC to be `Bound`.

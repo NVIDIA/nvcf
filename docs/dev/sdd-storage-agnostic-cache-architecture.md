@@ -138,11 +138,13 @@ retried instead of leaving the namespace Terminating.
 Every reader is a static PV pre-bound to a claim by name. The PV is a copy of
 the writer's PV with: `storageClassName` cleared (a pre-bound pair whose classes
 differ never binds), `csi.readOnly: true` (access modes are not enforced at
-mount time), and `mountOptions` resolved per provisioner from the
-`nvca-cache-mount-options` ConfigMap. The catalog's `readerMountOptions` is the
-intended source for those options and is validated, but no reader code reads it
-yet. Only the volume handle differs by driver: NVMesh rewrites the namespace
-segment; every other driver reuses the writer's handle unchanged.
+mount time), and `mountOptions` taken from the request's persisted selection,
+which carries the catalog's `readerMountOptions`. Operator-configured options
+are appended unless they negate a required one (`rw` against `ro`). A request
+with no durable selection falls back to the per-provisioner
+`nvca-cache-mount-options` ConfigMap, so in-flight legacy requests keep their
+behavior. Only the volume handle differs by driver: NVMesh rewrites the
+namespace segment; every other driver reuses the writer's handle unchanged.
 
 A reader claim that names only a StorageClass gets a new empty volume from a
 dynamic provisioner. It binds, the pod starts, and the model is missing. That
@@ -173,8 +175,10 @@ NVMesh; `nvcf-miniservice-sc` present selects the shared-filesystem path;
 re-export of an `nvcf-sc` volume; otherwise a per-pod `emptyDir` with an init
 download. That is the path for a request with no persisted selection. A new
 request carries a selection derived from the catalog when it is created, and
-Helm backend selection follows it; the regular workflow records it but does not
-act on it yet. No controller creates a binding. Garbage collection is an idle
+Helm backend selection follows it, and the regular workflow follows a
+`ReadWriteMany` selection onto one shared claim per cache handle, populated once
+and mounted read-only by every reader; its `ReadOnlyMany` shape still takes the
+NVMesh path. No controller creates a binding. Garbage collection is an idle
 sweep keyed on a last-referenced annotation. The mutating webhook
 injects the reader PVC into workload pods as a volume named `model-data`.
 

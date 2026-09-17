@@ -222,6 +222,9 @@ Examples:
   # Using saved function context (from create/deploy)
   nvcf-cli function invoke --request-body '{"input": "test"}'
 
+  # Vanity Gateway invocation (preserves exact host without function ID prefix)
+  nvcf-cli function invoke --vanity-host vanity.localhost --path /bdd/echo --request-body '{"input": "test"}'
+
   # Using JSON configuration file
   nvcf-cli function invoke --input-file invoke-config.json`,
 	RunE: runInvoke,
@@ -420,9 +423,11 @@ type DeleteConfig struct {
 
 // InvokeConfig represents the JSON configuration for invoke command
 type InvokeConfig struct {
-	FunctionID          string                 `json:"functionId"`
-	VersionID           string                 `json:"versionId"`
+	FunctionID          string                 `json:"functionId,omitempty"`
+	VersionID           string                 `json:"versionId,omitempty"`
 	InferenceURL        string                 `json:"inferenceUrl,omitempty"` // Function path, or OpenAI-compatible path for LLM functions.
+	Path                string                 `json:"path,omitempty"`         // Mapped request path for Vanity Gateway invocation.
+	VanityHost          string                 `json:"vanityHost,omitempty"`   // Exact Vanity Gateway host header.
 	ModelName           string                 `json:"modelName,omitempty"`    // OpenAI model name for LLM functions.
 	RequestBody         map[string]interface{} `json:"requestBody"`
 	Timeout             int                    `json:"timeout,omitempty"`
@@ -526,6 +531,8 @@ var invokeFlags struct {
 	functionID          string
 	versionID           string
 	inferenceURL        string
+	path                string
+	vanityHost          string
 	modelName           string
 	requestBody         string
 	timeout             int
@@ -617,6 +624,8 @@ func init() {
 	invokeCmd.Flags().StringVar(&invokeFlags.functionID, "function-id", "", "Function ID (required)")
 	invokeCmd.Flags().StringVar(&invokeFlags.versionID, "version-id", "", "Version ID (required)")
 	invokeCmd.Flags().StringVar(&invokeFlags.inferenceURL, "inference-url", "", "Function path, or OpenAI-compatible path for LLM functions (required for LLM)")
+	invokeCmd.Flags().StringVar(&invokeFlags.path, "path", "", "Mapped request path for Vanity Gateway invocation (alternative to --inference-url)")
+	invokeCmd.Flags().StringVar(&invokeFlags.vanityHost, "vanity-host", "", "Exact Vanity Gateway host header (preserves host without prefixing function ID)")
 	invokeCmd.Flags().StringVar(&invokeFlags.modelName, "model-name", "", "OpenAI model name for LLM functions (required for LLM)")
 	invokeCmd.Flags().StringVar(&invokeFlags.requestBody, "request-body", "", "JSON request body (required)")
 	invokeCmd.Flags().IntVar(&invokeFlags.timeout, "timeout", 60, "Request timeout in seconds")
@@ -1143,7 +1152,9 @@ func loadCreateConfigFile(config *CreateConfig) error {
 		return fmt.Errorf(errParseInputFileFmt, createFlags.inputFile, err)
 	}
 
-	fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	if !IsJSONOutput() {
+		fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	}
 	return nil
 }
 
@@ -1524,6 +1535,12 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	if cmd.Flags().Changed("inference-url") {
 		config.InferenceURL = invokeFlags.inferenceURL
 	}
+	if cmd.Flags().Changed("path") {
+		config.Path = invokeFlags.path
+	}
+	if cmd.Flags().Changed("vanity-host") {
+		config.VanityHost = invokeFlags.vanityHost
+	}
 	if cmd.Flags().Changed("model-name") {
 		config.ModelName = invokeFlags.modelName
 	}
@@ -1652,14 +1669,16 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create function: %w", err)
 	}
+	if resp.Function.ID == "" || resp.Function.VersionID == "" {
+		return fmt.Errorf("function create response did not include a function ID and version ID")
+	}
 
 	SetCurrentFunction(resp.Function.ID, resp.Function.VersionID, resp.Function.Name)
 	if err := SaveStateForCurrentCommand(); err != nil {
 		logging.Warning("Failed to save function state: %v", err)
 	}
 
-	printCreateResult(resp, config, health, clientConfig.Demo)
-	return nil
+	return outputCreateResult(resp, config, health, clientConfig.Demo)
 }
 
 func validateCreateConfig(config *CreateConfig) error {
@@ -1907,14 +1926,7 @@ func createAPIBodyFormat(apiBodyFormat string) string {
 	return apiBodyFormat
 }
 
-func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto, demo bool) {
-	logging.Success("Function created successfully!")
-	logging.Plain("Function ID: %s", resp.Function.ID)
-	logging.Plain("Version ID: %s", resp.Function.VersionID)
-	logging.Plain("Name: %s", resp.Function.Name)
-	logging.Plain("Status: %s", resp.Function.Status)
-	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
-
+func outputCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto, demo bool) error {
 	if demo {
 		if err := generateDemoFolder(resp.Function.ID, resp.Function.VersionID, config); err != nil {
 			logging.Warning("Failed to generate demo folder: %v", err)
@@ -1922,6 +1934,22 @@ func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig
 			logging.Success("Demo folder '%s_demo' created with JSON stubs!", resp.Function.VersionID)
 		}
 	}
+
+	if IsJSONOutput() {
+		return OutputJSON(resp)
+	}
+
+	printCreateResult(resp, config, health)
+	return nil
+}
+
+func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto) {
+	logging.Success("Function created successfully!")
+	logging.Plain("Function ID: %s", resp.Function.ID)
+	logging.Plain("Version ID: %s", resp.Function.VersionID)
+	logging.Plain("Name: %s", resp.Function.Name)
+	logging.Plain("Status: %s", resp.Function.Status)
+	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
 
 	if health != nil {
 		logging.Plain("Health Configuration:")
@@ -2239,7 +2267,7 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 	// Use saved function context if function ID/version not specified
 	currentState := GetCurrentState()
 	applySavedInvokeContext(config, currentState)
-	if err := validateInvokeConfig(config); err != nil {
+	if err := validateInvokeConfig(config, invokeFlags.useGRPC); err != nil {
 		return err
 	}
 
@@ -2282,12 +2310,31 @@ func isSavedAPIKeyExpired(currentState *state.State) bool {
 		time.Now().After(currentState.APIKeyExpiration)
 }
 
-func validateInvokeConfig(config *InvokeConfig) error {
+func validateInvokeConfig(config *InvokeConfig, useGRPC bool) error {
+	if config.VanityHost != "" {
+		if useGRPC {
+			return fmt.Errorf("--vanity-host is not supported with --grpc; Vanity Gateway invocation is REST-only")
+		}
+		reqPath := config.Path
+		if reqPath == "" {
+			reqPath = config.InferenceURL
+		}
+		if reqPath == "" {
+			return fmt.Errorf("path (or --inference-url) is required when using --vanity-host")
+		}
+		if config.RequestBody == nil {
+			return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
+		}
+		return nil
+	}
 	if config.FunctionID == "" {
 		return fmt.Errorf("function ID is required (use --function-id, specify in JSON file, or create a function first)")
 	}
 	if config.VersionID == "" {
 		return fmt.Errorf("version ID is required (use --version-id, specify in JSON file, or create a function first)")
+	}
+	if config.Path != "" {
+		return fmt.Errorf("--path is only supported with --vanity-host (use --inference-url otherwise)")
 	}
 	if config.RequestBody == nil {
 		return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
@@ -2296,7 +2343,11 @@ func validateInvokeConfig(config *InvokeConfig) error {
 }
 
 func invokeViaREST(ctx context.Context, nvcfClient *client.Client, config *InvokeConfig) error {
-	logging.Info("Using direct REST invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
+	if config.VanityHost != "" {
+		logging.Info("Using Vanity Gateway invocation (host: %s)...", config.VanityHost)
+	} else {
+		logging.Info("Using direct REST invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
+	}
 
 	// Invoke function via direct REST
 	resp, err := nvcfClient.InvokeFunctionWithOptions(
@@ -2314,11 +2365,13 @@ func invokeViaREST(ctx context.Context, nvcfClient *client.Client, config *Invok
 }
 
 func invokeOptionsFromConfig(config *InvokeConfig) *client.InvokeFunctionOptions {
-	if config.InferenceURL == "" && config.ModelName == "" && config.PollDurationSeconds <= 0 {
+	if config.InferenceURL == "" && config.Path == "" && config.VanityHost == "" && config.ModelName == "" && config.PollDurationSeconds <= 0 {
 		return nil
 	}
 	return &client.InvokeFunctionOptions{
 		InferenceURL:        config.InferenceURL,
+		Path:                config.Path,
+		VanityHost:          config.VanityHost,
 		ModelName:           config.ModelName,
 		PollDurationSeconds: config.PollDurationSeconds,
 	}

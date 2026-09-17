@@ -34,21 +34,25 @@
       "path": "deploy/stacks/nvcf-compute-plane",
       "service_name": "nvcf-compute-plane-stack",
       "legacy_tag_prefix": "nvcf-compute-plane-stack-v",
-      "initial_version": "0.2.0"
+      "tag_format": "deploy/stacks/nvcf-compute-plane/v${version}",
+      "initial_version": "0.2.0",
+      "resolved_inventory_asset": "nvcf-compute-plane-stack-inventory.json"
     },
     {
       "id": "nvcf-self-managed-stack",
       "path": "deploy/stacks/self-managed",
       "service_name": "nvcf-self-managed-stack",
       "tag_format": "deploy/stacks/self-managed/v${version}",
-      "initial_version": "0.8.0"
+      "initial_version": "0.8.0",
+      "resolved_inventory_asset": "nvcf-self-managed-stack-inventory.json"
     },
     {
       "id": "nvcf-observability-stack",
       "path": "deploy/stacks/observability",
       "service_name": "nvcf-observability-stack",
       "tag_format": "deploy/stacks/observability/v${version}",
-      "initial_version": "0.0.0"
+      "initial_version": "0.0.0",
+      "resolved_inventory_asset": "nvcf-observability-stack-inventory.json"
     },
     {
       "id": "grpc-proxy",
@@ -142,6 +146,15 @@
       "legacy_tag_prefix": "nvcf-nats-auth-callout-service-v"
     },
     {
+      "id": "nats-auth-callout-helm",
+      "path": "deploy/helm/nats-auth-callout",
+      "service_name": "helm-nvcf-nats-auth-callout-service",
+      "initial_version": "1.1.3",
+      "deploys": [
+        "nats-auth-callout"
+      ]
+    },
+    {
       "id": "admin-token-issuer-proxy-app",
       "path": "src/control-plane-services/admin-token-issuer-proxy",
       "service_name": "admin-token-issuer-proxy"
@@ -157,6 +170,15 @@
       "path": "src/control-plane-services/helm-reval",
       "service_name": "nvcf-helm-reval-api",
       "legacy_tag_prefix": "nvcf-helm-reval-api-v"
+    },
+    {
+      "id": "reval-helm",
+      "path": "deploy/helm/helm-reval",
+      "service_name": "helm-reval",
+      "initial_version": "1.3.8",
+      "deploys": [
+        "helm-reval"
+      ]
     },
     {
       "id": "ess-agent",
@@ -212,7 +234,32 @@
       "id": "cassandra",
       "path": "deploy/helm/cassandra",
       "service_name": "helm-nvcf-cassandra",
-      "legacy_tag_prefix": "helm-nvcf-cassandra-v"
+      "legacy_tag_prefix": "helm-nvcf-cassandra-v",
+      "deploys": [
+        {
+          "service": "cassandra-image",
+          "values_paths": [
+            "cassandra.image.tag"
+          ],
+          "app_version": true
+        },
+        {
+          "service": "cassandra-migrations",
+          "values_paths": [
+            "cassandra.migrations.image.tag"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cassandra-image",
+      "path": "infra/cassandra",
+      "service_name": "nvcf-cassandra",
+      "artifact_version": {
+        "source_file": "Dockerfile",
+        "source_pattern": "(?m)^FROM cassandra:(?P<upstream>[0-9]+\\.[0-9]+\\.[0-9]+)@sha256:",
+        "format": "${upstream}-nv-${release}"
+      }
     },
     {
       "id": "api-keys-colocated",
@@ -224,7 +271,42 @@
       "id": "openbao",
       "path": "deploy/helm/openbao",
       "service_name": "helm-nvcf-openbao-server",
-      "legacy_tag_prefix": "helm-nvcf-openbao-server-v"
+      "legacy_tag_prefix": "helm-nvcf-openbao-server-v",
+      "deploys": [
+        {
+          "service": "openbao-image",
+          "values_paths": [
+            "openbao.server.image.tag",
+            "openbao.injector.agentImage.tag"
+          ],
+          "values_files": [
+            {
+              "file": "upgrade/values-upgrades.yaml",
+              "paths": [
+                "openbao.server.image.tag",
+                "openbao.injector.agentImage.tag"
+              ]
+            }
+          ],
+          "app_version": true
+        },
+        {
+          "service": "openbao-migrations",
+          "values_paths": [
+            "openbao.migrations.image.tag"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openbao-image",
+      "path": "infra/openbao",
+      "service_name": "nvcf-openbao",
+      "artifact_version": {
+        "source_file": "Dockerfile",
+        "source_pattern": "(?m)^ARG BAO_VERSION=(?P<upstream>[0-9]+\\.[0-9]+\\.[0-9]+)$",
+        "format": "${upstream}-nv-${release}"
+      }
     },
     {
       "id": "cert-manager",
@@ -267,7 +349,16 @@
       "service_name": "helm-nvca-operator",
       "legacy_tag_prefix": "helm-nvca-operator-v",
       "deploys": [
-        "nvca"
+        "nvca",
+        {
+          "service": "byoo-otel-collector",
+          "values_paths": [
+            "otelCollector.imageTag",
+            "agent.byooOtelCollector.imageTag",
+            "helmManaged.otelCollector.imageTag",
+            "selfManaged.otelCollector.imageTag"
+          ]
+        }
       ]
     },
     {

@@ -11,7 +11,7 @@ external workspace index.
 ## Layout
 
 - `docs/user/`: top-of-tree customer-facing documentation published as `dev`.
-- `docs/v*/`: frozen versioned documentation. Do not edit these trees unless the user explicitly asks for a historical docs fix.
+- `docs/v*/` and `docs/cp-*/`: frozen versioned documentation. Do not edit these trees unless the user explicitly asks for a historical docs fix.
 - `docs/ngc-managed/`: legacy NGC-managed (BYOC) platform documentation. Separate from the self-hosted docs in `docs/user/`.
 - `docs/dev/`: developer and local workflow documentation.
 - `docs/version-catalog/main.yaml`: source of truth for generated artifact versions in top-of-tree docs.
@@ -29,14 +29,14 @@ Prefer the Fern navigation files and the filesystem over static route tables.
 5. If Fern nav does not answer the question, search with `rg`:
 
 ```bash
-rg -n "<term>" docs/user docs/dev docs/v*
+rg -n "<term>" docs/user docs/dev docs/v* docs/cp-*
 ```
 
 Useful file listing commands:
 
 ```bash
 rg --files docs/user docs/dev
-rg --files docs/v*
+rg --files docs/v* docs/cp-*
 ```
 
 ## Editing
@@ -44,6 +44,10 @@ rg --files docs/v*
 Use `docs/user/` for top-of-tree customer docs and `docs/dev/` for developer workflows. The default published docs route points to the latest stable version, not `docs/user/`.
 
 ### Artifact manifest
+
+For the maintainer workflow, including automatic stack releases, public
+publication updates, and new artifact registration, see
+[`tools/docs-version-sync/README.md`](../tools/docs-version-sync/README.md).
 
 The generated tables in `docs/user/manifest.md` use catalog artifacts and
 `manifest.entries` from `docs/version-catalog/main.yaml`. For each entry, set
@@ -72,15 +76,37 @@ NVIDIA Cloud Functions glyphs inside green icon boxes must stay white in both mo
 Before finishing SVG changes, render light and dark previews for every changed SVG and compare them together for consistent background tone, panel contrast, connector contrast, text readability, and accent brightness.
 
 Use `--update-catalog` only when synchronizing artifact versions and registry
-paths from the latest stack manifest. Presentation-only changes to
+paths from the latest stable releases of all three stacks. Presentation-only changes to
 `manifest.entries` use the regeneration command above.
 
-To synchronize the catalog and generated blocks:
+To synchronize the development catalog and generated blocks from the latest
+stable releases of all three stacks:
 
 ```bash
 go run -C tools/docs-version-sync . --target main --update-catalog
 ./tools/ci/check-doc-version-sync
 ```
+
+The first command reads the inventories attached to the latest stable GitHub
+stack releases and writes a development release set. The second command is an
+offline consistency check. CI runs the offline check before this separate
+current-release check:
+
+```bash
+./tools/ci/check-doc-version-current-release
+```
+
+The current-release check does not discover public NGC availability. Keep
+exact public locations in `publications` and mark unavailable versions in
+`publication_pending`. Identify publication records by `name`, `type`, and
+`version` so charts, images, and resources with the same name remain distinct.
+Version overrides also require `name` and `type`.
+
+After QA qualifies an exact three-stack combination, use
+`--qualification-version` with all three explicit stack version flags. Generate
+the docs, then run `tools/scripts/cut-docs-version.sh`. The versioned catalog
+snapshot and Fern dropdown record the docs version and all three stack
+versions.
 
 Generated blocks are marked with comments such as:
 

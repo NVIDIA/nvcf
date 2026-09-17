@@ -289,6 +289,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, err
 		}
 	}
+	r.emitConditionEvents(ms, ms.Status.Conditions, msCopy.Status.Conditions)
+
 	if phaseChanged {
 		fromPhase := normalizeMiniServicePhase(ms.Status.Phase)
 		toPhase := normalizeMiniServicePhase(msCopy.Status.Phase)
@@ -298,12 +300,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 		if ms.Status.Phase == "" {
 			log.Info("MiniService changed phase", "new_status", msCopy.Status.Phase)
-			r.eventRecorder.Eventf(ms, "Normal", "PhaseChange", "phase changed to %s",
+			r.recordEvent(ms, corev1.EventTypeNormal, "PhaseChange", "phase changed to %s",
 				msCopy.Status.Phase)
 		} else {
 			log.Info("MiniService changed phase", "prev_status", ms.Status.Phase,
 				"new_status", msCopy.Status.Phase)
-			r.eventRecorder.Eventf(ms, "Normal", "PhaseChange", "phase changed from %s to %s",
+			r.recordEvent(ms, corev1.EventTypeNormal, "PhaseChange", "phase changed from %s to %s",
 				ms.Status.Phase, msCopy.Status.Phase)
 		}
 	}

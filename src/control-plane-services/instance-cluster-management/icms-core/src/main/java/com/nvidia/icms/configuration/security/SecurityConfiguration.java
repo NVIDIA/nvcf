@@ -49,7 +49,8 @@ public class SecurityConfiguration {
                     "/health",
                     "/v1/health",
                     "/v3/openapi",
-                    "/actuator/**");
+                    "/actuator/**",
+                    "/info");
             if (nvcaConfigurationProperties.isOidcClusterIdentityEnabled()) {
                 // NATS auth-callout webhook contract. Authentication is
                 // delegated to the signed JWT in the request body (same

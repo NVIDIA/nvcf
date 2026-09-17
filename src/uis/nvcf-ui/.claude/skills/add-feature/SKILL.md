@@ -36,7 +36,7 @@ For all component selection, layout decisions, and styling — invoke the `kaize
 
 A feature is a **domain boundary**, not a route. Each feature is self-contained under `ui/src/features/<name>/`:
 
-```
+```text
 features/<name>/
 ├── components/         # Smaller building blocks (badges, cards)
 ├── hooks/              # Feature-scoped hooks

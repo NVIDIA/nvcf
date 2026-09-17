@@ -72,6 +72,33 @@ before the rest of the cluster forms.
 {{- end -}}
 
 {{/*
+Space-separated StatefulSet pod DNS names for init hook readiness checks.
+*/}}
+
+{{- define "cassandra.replicaHosts" -}}
+{{- $svc := printf "%s-headless" (include "cassandra.fullname" .) -}}
+{{- $ns := include "cassandra.namespace" . -}}
+{{- $n := int .Values.cassandra.replicaCount -}}
+{{- $names := list -}}
+{{- range $i := until $n -}}
+{{- $names = append $names (printf "%s-%d.%s.%s.svc.cluster.local" (include "cassandra.fullname" $) $i $svc $ns) -}}
+{{- end -}}
+{{- join " " $names -}}
+{{- end -}}
+
+{{/*
+Stable DNS name for the first StatefulSet pod. Init always uses this as its
+write contact point, and migrations use it as their driver contact point so
+they do not depend on the load-balanced client Service during bootstrap.
+*/}}
+
+{{- define "cassandra.firstReplicaHost" -}}
+{{- $svc := printf "%s-headless" (include "cassandra.fullname" .) -}}
+{{- $ns := include "cassandra.namespace" . -}}
+{{- printf "%s-0.%s.%s.svc.cluster.local" (include "cassandra.fullname" .) $svc $ns -}}
+{{- end -}}
+
+{{/*
 Return the proper Docker Image Registry Secret Names.
 Supports both industry standard format and simplified format:
 - Industry standard: [{name: "secret1"}, {name: "secret2"}]

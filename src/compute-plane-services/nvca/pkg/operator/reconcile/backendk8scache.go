@@ -178,9 +178,9 @@ type BackendK8sCache struct {
 	// and let the shutdown handler manage the cleanup instead.
 	gracefulShutdown atomic.Bool
 
-	legacyBYOOConfigWarningMu              sync.Mutex
-	legacyBYOOConfigWarningResourceVersion string
-	legacyBYOOConfigWarningSeen            bool
+	legacyFirstClassConfigWarningMu              sync.Mutex
+	legacyFirstClassConfigWarningResourceVersion string
+	legacyFirstClassConfigWarningSeen            bool
 }
 
 // BackendK8sCacheBuilder builds Backendk8sCache and start related K8s

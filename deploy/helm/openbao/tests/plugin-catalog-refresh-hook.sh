@@ -7,8 +7,14 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 chart_source="${repo_root}/deploy/helm/openbao/helm"
 values_file="${repo_root}/tools/ci/helm-validate-values/openbao.yaml"
+openbao_tag="$(yq -r '.appVersion' "${chart_source}/Chart.yaml")"
+migrations_tag="$(yq -r '.openbao.migrations.image.tag' "${chart_source}/values.yaml")"
+upgrade_values="${repo_root}/deploy/helm/openbao/upgrade/values-upgrades.yaml"
 test_root="$(mktemp -d)"
 trap 'rm -rf "${test_root}"' EXIT
+
+test "$(yq -r '.openbao.server.image.tag' "${upgrade_values}")" = "${openbao_tag}"
+test "$(yq -r '.openbao.injector.agentImage.tag' "${upgrade_values}")" = "${openbao_tag}"
 
 chart_dir="${test_root}/helm"
 cp -R "${chart_source}" "${chart_dir}"
@@ -52,8 +58,9 @@ awk '
 test -s "${hook_document}"
 grep -q 'helm.sh/hook: post-upgrade' "${hook_document}"
 grep -q 'helm.sh/hook-weight: "0"' "${hook_document}"
-grep -q 'image: "example.com/nvcf/nvcf-openbao:2.5.5-nv-1.3.1"' "${hook_document}"
+grep -Fq "image: \"example.com/nvcf/nvcf-openbao:${openbao_tag}\"" "${hook_document}"
 grep -q 'bao plugin register' "${hook_document}"
+grep -Fq "image: \"example.com/nvcf/nvcf-openbao-migrations:${migrations_tag}\"" "${rendered}"
 
 if grep -q 'bao plugin reload' "${hook_document}"; then
   echo "plugin catalog refresh hook must not reload the plugin before pod rotation" >&2

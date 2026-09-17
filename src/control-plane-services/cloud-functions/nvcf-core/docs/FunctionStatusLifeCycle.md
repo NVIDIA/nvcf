@@ -14,7 +14,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-NVCF Function status lifecycle
+# NVCF Function status lifecycle
 
 INACTIVE, DEGRADED, and ERROR are not serviceable statuses, no inference requests will be accepted. The rest of the
 statuses including PARTIALLY_ACTIVE and DEGRADING, are serviceable.

@@ -2,7 +2,11 @@ environments:
   default:
     values:
       - ../environments/base.yaml
+      # Standalone use loads the selected environment. An including stack can
+      # skip this lookup after forwarding its already-resolved values.
+      {{- if not (dig "nvcfInternal" "observabilityEnvironmentLoaded" false .Values) }}
       - ../environments/{{ requiredEnv "HELMFILE_ENV" }}.yaml
+      {{- end }}
 
 ---
 
@@ -120,10 +124,81 @@ environments:
 {{- $_ := set $computePlaneMonitors "enabled" $computePlaneMonitorsEnabled }}
 {{- $_ := set $defaultMonitors "computePlane" $computePlaneMonitors }}
 
+{{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
+{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
+{{- fail "global.helm.sources.url must use https://" }}
+{{- end }}
+{{- $opentelemetryOperatorRepositoryURL := dig "opentelemetryOperator" "chartRepository" "url" "https://open-telemetry.github.io/opentelemetry-helm-charts" .Values }}
+{{- $opentelemetryOperatorRepositoryOCI := dig "opentelemetryOperator" "chartRepository" "oci" false .Values }}
+{{- $prometheusOperatorCrdsRepositoryURL := dig "prometheusOperatorCrds" "chartRepository" "url" "https://prometheus-community.github.io/helm-charts" .Values }}
+{{- $prometheusOperatorCrdsRepositoryOCI := dig "prometheusOperatorCrds" "chartRepository" "oci" false .Values }}
+{{- $victoriaMetricsRepositoryURL := dig "victoriaMetrics" "chartRepository" "url" "https://victoriametrics.github.io/helm-charts" .Values }}
+{{- $victoriaMetricsRepositoryOCI := dig "victoriaMetrics" "chartRepository" "oci" false .Values }}
+{{- range $name, $repository := dict
+      "opentelemetryOperator.chartRepository" (dict "url" $opentelemetryOperatorRepositoryURL "oci" $opentelemetryOperatorRepositoryOCI)
+      "prometheusOperatorCrds.chartRepository" (dict "url" $prometheusOperatorCrdsRepositoryURL "oci" $prometheusOperatorCrdsRepositoryOCI)
+      "victoriaMetrics.chartRepository" (dict "url" $victoriaMetricsRepositoryURL "oci" $victoriaMetricsRepositoryOCI) }}
+{{- if not (kindIs "string" $repository.url) }}
+{{- fail (printf "%s.url must be a string" $name) }}
+{{- end }}
+{{- if empty $repository.url }}
+{{- fail (printf "%s.url must not be empty" $name) }}
+{{- end }}
+{{- if not (kindIs "bool" $repository.oci) }}
+{{- fail (printf "%s.oci must be a YAML boolean" $name) }}
+{{- end }}
+{{- if and (not $repository.oci) (not (hasPrefix "https://" $repository.url)) }}
+{{- fail (printf "%s.url must use https:// when oci is false" $name) }}
+{{- end }}
+{{- end }}
+
 repositories:
+  - name: open-telemetry
+    url: {{ $opentelemetryOperatorRepositoryURL | quote }}
+    {{- if $opentelemetryOperatorRepositoryOCI }}
+    oci: true
+    {{- end }}
+    {{- with dig "opentelemetryOperator" "chartRepository" "username" "" .Values }}
+    username: {{ . | quote }}
+    {{- end }}
+    {{- with dig "opentelemetryOperator" "chartRepository" "password" "" .Values }}
+    password: {{ . | quote }}
+    {{- end }}
+  - name: prometheus-community
+    url: {{ $prometheusOperatorCrdsRepositoryURL | quote }}
+    {{- if $prometheusOperatorCrdsRepositoryOCI }}
+    oci: true
+    {{- end }}
+    {{- with dig "prometheusOperatorCrds" "chartRepository" "username" "" .Values }}
+    username: {{ . | quote }}
+    {{- end }}
+    {{- with dig "prometheusOperatorCrds" "chartRepository" "password" "" .Values }}
+    password: {{ . | quote }}
+    {{- end }}
+  - name: victoria-metrics
+    url: {{ $victoriaMetricsRepositoryURL | quote }}
+    {{- if $victoriaMetricsRepositoryOCI }}
+    oci: true
+    {{- end }}
+    {{- with dig "victoriaMetrics" "chartRepository" "username" "" .Values }}
+    username: {{ . | quote }}
+    {{- end }}
+    {{- with dig "victoriaMetrics" "chartRepository" "password" "" .Values }}
+    password: {{ . | quote }}
+    {{- end }}
   - name: nvcf
+{{- if $helmSourceURL }}
+    url: {{ $helmSourceURL | quote }}
+    {{- if dig "global" "helm" "sources" "username" "" .Values }}
+    username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
+    {{- end }}
+    {{- if dig "global" "helm" "sources" "password" "" .Values }}
+    password: {{ dig "global" "helm" "sources" "password" "" .Values | quote }}
+    {{- end }}
+{{- else }}
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
     oci: true
+{{- end }}
 
 helmDefaults:
   createNamespace: true
@@ -138,7 +213,7 @@ releases:
 
   {{- if $prometheusOperatorCrdsEnabled }}
   - name: prometheus-operator-crds
-    chart: nvcf/prometheus-operator-crds
+    chart: prometheus-community/prometheus-operator-crds
     version: {{ dig "prometheusOperatorCrds" "version" "31.0.1" .Values | quote }}
     namespace: {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}
     values:
@@ -149,7 +224,7 @@ releases:
 
   {{- if $opentelemetryOperatorEnabled }}
   - name: opentelemetry-operator
-    chart: nvcf/opentelemetry-operator
+    chart: open-telemetry/opentelemetry-operator
     version: {{ dig "opentelemetryOperator" "version" "0.122.0" .Values | quote }}
     namespace: {{ dig "opentelemetryOperator" "namespace" $observabilityNamespace .Values }}
     {{- if $prometheusOperatorCrdsEnabled }}
@@ -182,9 +257,13 @@ releases:
 
   {{- if $victoriaMetricsEnabled }}
   - name: victoria-metrics
-    chart: nvcf/victoria-metrics-single
+    chart: victoria-metrics/victoria-metrics-single
     version: {{ dig "victoriaMetrics" "version" "0.45.0" .Values | quote }}
     namespace: {{ $victoriaMetricsNamespace }}
+    {{- if $prometheusOperatorCrdsEnabled }}
+    needs:
+      - {{ dig "prometheusOperatorCrds" "namespace" $observabilityNamespace .Values }}/prometheus-operator-crds
+    {{- end }}
     values:
       - ../values/victoria-metrics.yaml.gotmpl
     labels:

@@ -20,7 +20,6 @@ import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.nvidia.nvcf.IntegrationTestConfiguration.MOCK_OAUTH2_TOKEN_SERVER;
 import static com.nvidia.nvcf.util.NvcfConstants.ADMIN_SCOPE_DEPLOY_FUNCTION;
-import static com.nvidia.nvcf.util.TestConstants.A10G;
 import static com.nvidia.nvcf.util.TestConstants.GFN;
 import static com.nvidia.nvcf.util.TestConstants.L40G;
 import static com.nvidia.nvcf.util.TestConstants.L40G_INSTANCE_TYPE;
@@ -42,6 +41,7 @@ import com.nvidia.nvcf.IntegrationTestConfiguration;
 import com.nvidia.nvcf.NvcfTestApp;
 import com.nvidia.nvcf.rest.account.TestAccountService;
 import com.nvidia.nvcf.rest.function.deployment.TestDeploymentService;
+import com.nvidia.nvcf.rest.function.deployment.dto.FunctionDeploymentDto;
 import com.nvidia.nvcf.rest.function.deployment.dto.FunctionDeploymentRequest;
 import com.nvidia.nvcf.rest.function.deployment.dto.GpuSpecificationDto;
 import com.nvidia.nvcf.rest.misc.dto.RolloverRequest;
@@ -53,8 +53,10 @@ import com.nvidia.nvcf.util.MockApiKeysServer;
 import com.nvidia.nvcf.util.MockEssServer;
 import com.nvidia.nvcf.util.MockIcmsServer;
 import java.net.URI;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
@@ -62,6 +64,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -162,194 +165,74 @@ class RolloverWorkersTest {
         MockEssServer.clearSecrets();
     }
 
-    Stream<Arguments> rolloverAllWorkerArgs() {
-        return Stream.of(
-                Arguments.of(null, HttpStatus.UNAUTHORIZED),
-                Arguments.of("nvapi-stg-key", HttpStatus.FORBIDDEN),
-                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(), 100), HttpStatus.FORBIDDEN),
-                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             HttpStatus.OK));
-    }
-
-    @ParameterizedTest
-    @MethodSource("rolloverAllWorkerArgs")
-    void shouldRolloverAllWorkers(String token, HttpStatus expectedStatus) {
-        // Deploy test function
-        var specs = List.of(
-                GpuSpecificationDto.builder()
-                        .gpu(T10).backend(GFN)
-                        .instanceType("g6.full")
-                        .maxInstances(5).minInstances(2).maxRequestConcurrency(9).build(),
-                GpuSpecificationDto.builder()
-                        .gpu(L40G).backend(GFN)
-                        .instanceType("gl40g_1.br25_2xlarge")
-                        .maxInstances(5).minInstances(2).maxRequestConcurrency(99).build());
-        var requestBody = FunctionDeploymentRequest.builder()
-                .deploymentSpecifications(specs).build();
-        deploymentService.createFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
-                                                   TEST_VERSION_ID_1, requestBody,
-                                                   auditEventPayloadBuilder,
-                                                   x -> true);
-        var dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
-                                                    TEST_VERSION_ID_1);
-        assertThat(dto.deploymentSpecifications().stream()
-                           .map(GpuSpecificationDto::instanceType)
-                           .collect(Collectors.toSet()))
-                .containsExactlyInAnyOrderElementsOf(Set.of(T10_INSTANCE_TYPE, L40G_INSTANCE_TYPE));
-
-        // Reset MockIcmsServer.
-        MockIcmsServer.stop();
-        MockIcmsServer.start(9096, jsonMapper);
-
-        // Invoke endpoint to rollover workers.
-        var requestEntity = RequestEntity
-                .put(URI.create("/v2/nvcf/accounts/" + TEST_NCA_ID + "/rolloverWorkers"
-                                        + "/functions/" + TEST_FUNCTION_ID
-                                        + "/versions/" + TEST_VERSION_ID_1))
-                .contentType(MediaType.APPLICATION_JSON)
-                .header("Authorization", "Bearer " + token)
-                .build();
-        var responseEntity = testRestTemplate.exchange(requestEntity, Void.class);
-        assertThat(responseEntity.getStatusCode()).isEqualTo(expectedStatus);
-        if (expectedStatus.isError()) {
-            return;
-        }
-
-        // Confirm ICMS requests to spawn new workers.
-        var expectedIcmsRequest = post(urlPathEqualTo("/v1/si"))
-                                .withQueryParam("Action",
-                                                new EqualToPattern("RequestInstances"))
-                .build()
-                .getRequest();
-        MockIcmsServer.getMockIcmsServer()
-                .verify(2, RequestPatternBuilder.like(expectedIcmsRequest));
-    }
-
     Stream<Arguments> rolloverWorkersUsingRolloverSpecArgs() {
-        var missingGpuTypeSpecs = List.of(RolloverSpecificationDto.builder()
-                                                  .instanceType("g6.full")
-                                                  .numInstances(3)
-                                                  .build(),
-                                          RolloverSpecificationDto.builder()
-                                                  .gpu(L40G)
-                                                  .instanceType("gl40g_1.br25_2xlarge")
-                                                  .numInstances(3)
-                                                  .build());
-        var missingInstanceTypeSpecs = List.of(RolloverSpecificationDto.builder()
-                                                       .gpu(T10)
-                                                       .numInstances(3)
-                                                       .build(),
-                                               RolloverSpecificationDto.builder()
-                                                       .gpu(L40G)
-                                                       .instanceType("gl40g_1.br25_2xlarge")
-                                                       .numInstances(3)
-                                                       .build());
-        var missingNumInstancesSpecs = List.of(RolloverSpecificationDto.builder()
-                                                       .gpu(T10)
-                                                       .instanceType("g6.full")
-                                                       .build(),
-                                               RolloverSpecificationDto.builder()
-                                                       .gpu(L40G)
-                                                       .instanceType("gl40g_1.br25_2xlarge")
-                                                       .numInstances(3)
-                                                       .build());
-        var zeroNumInstancesSpecs = List.of(RolloverSpecificationDto.builder()
-                                                    .gpu(T10)
-                                                    .instanceType("g6.full")
-                                                    .numInstances(0)
-                                                    .build(),
-                                            RolloverSpecificationDto.builder()
-                                                    .gpu(L40G)
-                                                    .instanceType("gl40g_1.br25_2xlarge")
-                                                    .numInstances(3)
-                                                    .build());
-        var negativeNumInstancesSpecs = List.of(RolloverSpecificationDto.builder()
-                                                        .gpu(T10)
-                                                        .instanceType("g6.full")
-                                                        .numInstances(-2)
-                                                        .build(),
-                                                RolloverSpecificationDto.builder()
-                                                        .gpu(L40G)
-                                                        .instanceType("gl40g_1.br25_2xlarge")
-                                                        .numInstances(3)
-                                                        .build());
-        // maxInstances in the corresponding deployment spec is 5.
-        var numInstancesHigherThanMaxInstancesSpecs = List.of(RolloverSpecificationDto.builder()
-                                                                      .gpu(T10)
-                                                                      .instanceType("g6.full")
-                                                                      .numInstances(100)
-                                                                      .build(),
-                                                              RolloverSpecificationDto.builder()
-                                                                      .gpu(L40G)
-                                                                      .instanceType(
-                                                                              "gl40g_1.br25_2xlarge")
-                                                                      .numInstances(3)
-                                                                      .build());
-        // Rollover spec not match the ones defined in the existing deployment spec of a function.
-        var invalidMatchRolloverSpecs = List.of(RolloverSpecificationDto.builder()
-                                                        .gpu(A10G)
-                                                        .instanceType("a10g_1x")
-                                                        .numInstances(5)
-                                                        .build());
-        var validRolloverSpecs = List.of(RolloverSpecificationDto.builder()
-                                                 .gpu(T10)
-                                                 .instanceType("g6.full")
-                                                 .numInstances(3)
-                                                 .build(),
-                                         RolloverSpecificationDto.builder()
-                                                 .gpu(L40G)
-                                                 .instanceType("gl40g_1.br25_2xlarge")
-                                                 .numInstances(3)
-                                                 .build());
-        var validRolloverSpecsSubsetOfDepSpec = List.of(RolloverSpecificationDto.builder()
-                                                                .gpu(T10)
-                                                                .instanceType("g6.full")
-                                                                .numInstances(3)
-                                                                .build());
+        var validSpec = RolloverSpecificationDto.builder().numInstances(3).build();
+        var missingGpuSpecId = RolloverSpecificationDto.builder().numInstances(3).build();
+        var missingNumInstances = RolloverSpecificationDto.builder().gpuSpecId(UUID.randomUUID())
+                .build();
+        var zeroNumInstances = RolloverSpecificationDto.builder().gpuSpecId(UUID.randomUUID())
+                .numInstances(0).build();
+        var negativeNumInstances = RolloverSpecificationDto.builder().gpuSpecId(UUID.randomUUID())
+                .numInstances(-2).build();
+        var numInstancesHigherThanMaxInstances =
+                RolloverSpecificationDto.builder().numInstances(100).build();
         return Stream.of(
-                Arguments.of(null, validRolloverSpecs, HttpStatus.UNAUTHORIZED),
-                Arguments.of("nvapi-stg-key", validRolloverSpecs, HttpStatus.FORBIDDEN),
-                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(), 100),
-                             validRolloverSpecs,
+                Arguments.of(null, List.of(validSpec), false, false, HttpStatus.UNAUTHORIZED),
+                Arguments.of("nvapi-stg-key", List.of(validSpec), false, false,
                              HttpStatus.FORBIDDEN),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             missingGpuTypeSpecs,
+                                                              List.of(), 100),
+                             List.of(validSpec),
+                             false,
+                             false,
+                             HttpStatus.FORBIDDEN),
+                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(),
+                             false,
+                             false,
                              HttpStatus.BAD_REQUEST),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             missingInstanceTypeSpecs,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(missingGpuSpecId),
+                             false,
+                             true,
                              HttpStatus.BAD_REQUEST),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             missingNumInstancesSpecs,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(missingNumInstances),
+                             false,
+                             false,
                              HttpStatus.BAD_REQUEST),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             negativeNumInstancesSpecs,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(negativeNumInstances),
+                             false,
+                             false,
                              HttpStatus.BAD_REQUEST),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             zeroNumInstancesSpecs,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(zeroNumInstances),
+                             false,
+                             false,
                              HttpStatus.BAD_REQUEST),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             numInstancesHigherThanMaxInstancesSpecs,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(numInstancesHigherThanMaxInstances),
+                             false,
+                             false,
                              HttpStatus.BAD_REQUEST),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             invalidMatchRolloverSpecs,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(validSpec),
+                             true,
+                             false,
                              HttpStatus.BAD_REQUEST),
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             validRolloverSpecsSubsetOfDepSpec,
-                             HttpStatus.OK),
-                Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_ADMIN_SUBJECT,
-                                                             List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
-                             validRolloverSpecs,
+                                                              List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100),
+                             List.of(validSpec, validSpec),
+                             false,
+                             false,
                              HttpStatus.OK));
     }
 
@@ -358,45 +241,55 @@ class RolloverWorkersTest {
     void shouldRolloverWorkersUsingRolloverSpec(
             String token,
             List<RolloverSpecificationDto> rolloverSpecs,
+            boolean useUnknownGpuSpecId,
+            boolean omitGpuSpecId,
             HttpStatus expectedStatus) {
-        // Deploy test function
-        var specs = List.of(
-                GpuSpecificationDto.builder()
-                        .gpu(T10).backend(GFN)
-                        .instanceType("g6.full")
-                        .maxInstances(5).minInstances(2).maxRequestConcurrency(9).build(),
-                GpuSpecificationDto.builder()
-                        .gpu(L40G).backend(GFN)
-                        .instanceType("gl40g_1.br25_2xlarge")
-                        .maxInstances(5).minInstances(2).maxRequestConcurrency(99).build());
-        var requestBody = FunctionDeploymentRequest.builder()
-                .deploymentSpecifications(specs).build();
-        deploymentService.createFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
-                                                   TEST_VERSION_ID_1, requestBody,
-                                                   auditEventPayloadBuilder,
-                                                   x -> true);
-        var dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
-                                                    TEST_VERSION_ID_1);
+        var dto = createDeployment();
         assertThat(dto.deploymentSpecifications().stream()
                            .map(GpuSpecificationDto::instanceType)
                            .collect(Collectors.toSet()))
                 .containsExactlyInAnyOrderElementsOf(Set.of(T10_INSTANCE_TYPE, L40G_INSTANCE_TYPE));
+        var deploymentId = dto.deploymentId();
+        var firstGpuSpecificationId = useUnknownGpuSpecId
+                ? UUID.randomUUID()
+                : dto.deploymentSpecifications().stream()
+                        .filter(spec -> T10_INSTANCE_TYPE.equals(spec.instanceType()))
+                        .findFirst()
+                        .orElseThrow()
+                        .gpuSpecificationId();
+        var secondGpuSpecificationId = dto.deploymentSpecifications().stream()
+                .filter(spec -> L40G_INSTANCE_TYPE.equals(spec.instanceType()))
+                .findFirst()
+                .orElseThrow()
+                .gpuSpecificationId();
+        var requestSpecs = rolloverSpecs.stream()
+                .map(spec -> RolloverSpecificationDto.builder()
+                        .gpuSpecId(omitGpuSpecId ? null : spec.gpuSpecId() == null
+                                ? firstGpuSpecificationId : spec.gpuSpecId())
+                        .numInstances(spec.numInstances())
+                        .build())
+                .collect(Collectors.toList());
+        if (requestSpecs.size() == 2) {
+            requestSpecs.set(1, RolloverSpecificationDto.builder()
+                    .gpuSpecId(secondGpuSpecificationId)
+                    .numInstances(requestSpecs.get(1).numInstances())
+                    .build());
+        }
+        var rolloverRequest = RolloverRequest.builder()
+                .rolloverSpecifications(requestSpecs)
+                .build();
 
         // Reset MockIcmsServer.
         MockIcmsServer.stop();
         MockIcmsServer.start(9096, jsonMapper);
 
-        // Invoke endpoint to rollover given number of workers for each spec.
-        var rolloverRequestBody = RolloverRequest.builder()
-                .rollOverSpecifications(rolloverSpecs)
-                .build();
+        // Invoke endpoint to rollover the requested GPU specifications.
         var requestEntity = RequestEntity
                 .put(URI.create("/v2/nvcf/accounts/" + TEST_NCA_ID + "/rolloverWorkers"
-                                        + "/functions/" + TEST_FUNCTION_ID
-                                        + "/versions/" + TEST_VERSION_ID_1))
+                                        + "/deployments/" + deploymentId))
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("Authorization", "Bearer " + token)
-                .body(rolloverRequestBody);
+                .body(rolloverRequest);
         var responseEntity = testRestTemplate.exchange(requestEntity, RolloverWorkersResponse.class);
         assertThat(responseEntity.getStatusCode()).isEqualTo(expectedStatus);
         if (expectedStatus.isError()) {
@@ -410,13 +303,92 @@ class RolloverWorkersTest {
                 .build()
                 .getRequest();
         MockIcmsServer.getMockIcmsServer()
-                .verify(2, RequestPatternBuilder.like(expectedIcmsRequest));
+                .verify(requestSpecs.size(), RequestPatternBuilder.like(expectedIcmsRequest));
 
-        // Validate the ICMS request IDs returned in the response
+        // Validate the ICMS request IDs returned in the response.
         var responseBody = responseEntity.getBody();
         assertThat(responseBody).isNotNull();
-        assertThat(responseBody.icmsRequestIds()).hasSize(2);
-        responseBody.icmsRequestIds().forEach(id -> assertThat(id).isNotNull());
+        assertThat(responseBody.icmsRequestIds()).hasSize(requestSpecs.size()).doesNotContainNull();
+    }
+
+    @Test
+    void shouldRejectDuplicateGpuSpecificationIds() {
+        var deployment = createDeployment();
+        resetMockIcmsServer();
+        var gpuSpecId = deployment.deploymentSpecifications().getFirst().gpuSpecificationId();
+        var rolloverSpec = RolloverSpecificationDto.builder()
+                .gpuSpecId(gpuSpecId)
+                .numInstances(5)
+                .build();
+        var request = RolloverRequest.builder()
+                .rolloverSpecifications(List.of(rolloverSpec, rolloverSpec))
+                .build();
+
+        var response = rolloverWorkers(deployment.deploymentId(), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verifyNoIcmsRequests();
+    }
+
+    @Test
+    void shouldRejectNullRolloverSpecification() {
+        var deployment = createDeployment();
+        resetMockIcmsServer();
+        var request = RolloverRequest.builder()
+                .rolloverSpecifications(Collections.singletonList(null))
+                .build();
+
+        var response = rolloverWorkers(deployment.deploymentId(), request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verifyNoIcmsRequests();
+    }
+
+    private FunctionDeploymentDto createDeployment() {
+        var specs = List.of(
+                GpuSpecificationDto.builder()
+                        .gpu(T10).backend(GFN)
+                        .instanceType("g6.full")
+                        .maxInstances(5).minInstances(2).maxRequestConcurrency(9).build(),
+                GpuSpecificationDto.builder()
+                        .gpu(L40G).backend(GFN)
+                        .instanceType("gl40g_1.br25_2xlarge")
+                        .maxInstances(5).minInstances(2).maxRequestConcurrency(99).build());
+        var request = FunctionDeploymentRequest.builder()
+                .deploymentSpecifications(specs)
+                .build();
+        deploymentService.createFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
+                                                   TEST_VERSION_ID_1, request,
+                                                   auditEventPayloadBuilder,
+                                                   x -> true);
+        return testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID, TEST_VERSION_ID_1);
+    }
+
+    private void resetMockIcmsServer() {
+        MockIcmsServer.stop();
+        MockIcmsServer.start(9096, jsonMapper);
+    }
+
+    private org.springframework.http.ResponseEntity<RolloverWorkersResponse> rolloverWorkers(
+            UUID deploymentId, RolloverRequest request) {
+        var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(
+                TEST_ADMIN_SUBJECT, List.of(ADMIN_SCOPE_DEPLOY_FUNCTION), 100);
+        var requestEntity = RequestEntity
+                .put(URI.create("/v2/nvcf/accounts/" + TEST_NCA_ID + "/rolloverWorkers"
+                                        + "/deployments/" + deploymentId))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + token)
+                .body(request);
+        return testRestTemplate.exchange(requestEntity, RolloverWorkersResponse.class);
+    }
+
+    private static void verifyNoIcmsRequests() {
+        var expectedIcmsRequest = post(urlPathEqualTo("/v1/si"))
+                .withQueryParam("Action", new EqualToPattern("RequestInstances"))
+                .build()
+                .getRequest();
+        MockIcmsServer.getMockIcmsServer()
+                .verify(0, RequestPatternBuilder.like(expectedIcmsRequest));
     }
 
 }

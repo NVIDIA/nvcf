@@ -3,6 +3,8 @@
 
 global:
   helm:
+    # Set url to use an HTTPS Helm repository. Otherwise, set registry and
+    # repository to use OCI.
     sources:
       registry: nvcr.io
       repository: YOUR_ORG/YOUR_TEAM
@@ -28,6 +30,12 @@ metricsBackend:
     clientPrivateKeyPath: ""
 
 prometheusOperatorCrds:
+  # Override this source when the chart is mirrored. For OCI, use the registry
+  # path without an oci:// prefix and set oci to true. Authenticated HTTPS
+  # repositories can also set username and password in environment values.
+  chartRepository:
+    url: https://prometheus-community.github.io/helm-charts
+    oci: false
   version: "31.0.1"
   values:
     crds:
@@ -53,6 +61,9 @@ prometheusOperatorCrds:
         enabled: false
 
 opentelemetryOperator:
+  chartRepository:
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+    oci: false
   version: "0.122.0"
   admissionWebhooks:
     certManager:
@@ -101,6 +112,9 @@ collector:
             - prometheusremotewrite
 
 victoriaMetrics:
+  chartRepository:
+    url: https://victoriametrics.github.io/helm-charts
+    oci: false
   version: "0.45.0"
   server:
     retentionPeriod: "1"
@@ -133,6 +147,13 @@ defaultMonitors:
         selector:
           app.kubernetes.io/instance: state-metrics
           app.kubernetes.io/name: helm-nvcf-state-metrics
+      # The shared stack owns this ServiceMonitor. The application chart owns
+      # the metrics port and service labels.
+      - name: function-autoscaler
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: function-autoscaler
+          app.kubernetes.io/name: helm-nvcf-function-autoscaler
       - name: invocation-service
         enabled: true
         selector:
@@ -179,5 +200,5 @@ defaultMonitors:
             operator: Exists
       interval: 30s
       path: /metrics
-      port: metrics
+      port: worker-metrics
       labels: {}

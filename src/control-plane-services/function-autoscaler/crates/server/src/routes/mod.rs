@@ -105,11 +105,12 @@ mod tests {
     use axum::response::IntoResponse;
 
     #[tokio::test]
-    async fn liveness_is_always_ok_even_when_cassandra_not_yet_up() {
+    async fn liveness_is_always_ok_even_when_dependencies_are_unhealthy() {
         // Liveness must never check dependencies — restarting the pod doesn't help
-        // if Cassandra is down.
+        // if Cassandra or TimeseriesDb is down.
         let health = Arc::new(Health::new());
         health.register_component("cassandra_client"); // initializes as Unhealthy
+        health.register_component("timeseries_db_client");
 
         let (status, _) = get_liveness().await;
         assert_eq!(status, StatusCode::OK);
@@ -120,6 +121,17 @@ mod tests {
         // register_component initializes as Unhealthy, matching server.rs startup order.
         let health = Arc::new(Health::new());
         health.register_component("cassandra_client");
+        health.set_component_healthy("timeseries_db_client", Some("connected".to_string()));
+
+        let (status, _) = get_readiness(State(health)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn readiness_returns_503_when_timeseries_db_is_unhealthy() {
+        let health = Arc::new(Health::new());
+        health.set_component_healthy("cassandra_client", Some("connected".to_string()));
+        health.register_component("timeseries_db_client");
 
         let (status, _) = get_readiness(State(health)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);

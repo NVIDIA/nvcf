@@ -29,7 +29,7 @@ No human `git tag` step. Steps 3-5 are automatic once the MR merges.
 Each service has its own version line. The git tag format is the
 repo-relative service path plus `v<X.Y.Z>`:
 
-```
+```text
 <service-path>/v<X.Y.Z>
 ```
 
@@ -489,6 +489,7 @@ from the pipeline's perspective but isn't truly idempotent at the
 registry layer.
 
 This matters when:
+
 - A release-worthy commit gets re-published by accident (the tag
   pipeline re-fires after the default-branch one). The second push
   is a no-op via skip.

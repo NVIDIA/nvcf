@@ -23,7 +23,8 @@ use axum::response::Response;
 use tracing::Span;
 
 use crate::load_balancer::{
-    LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRequest,
+    LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerDecision,
+    LoadBalancerRequest,
 };
 use crate::metrics::StargateMetrics;
 use crate::routing_state::{
@@ -38,7 +39,7 @@ use super::routing::{
     NoRoutingChoiceAction, NoRoutingChoiceInputs, NoRoutingFinalizationContext,
     classify_no_routing_choice, eligible_cluster_candidate_count, finalize_no_routing_choice,
     input_work_admission_rejection_reason, input_work_admission_rejection_response,
-    routing_retry_deadline, should_retry_routing, sleep_before_routing_retry,
+    routing_retry_deadline, routing_wait_delay, should_retry_routing, sleep_before_routing_retry,
 };
 use super::trace::{RoutingTraceFields, record_routing_to_span};
 
@@ -119,11 +120,13 @@ impl<'a> ProxyRequestRun<'a> {
         let num_candidates = candidates.len();
         let eligible_candidate_count =
             eligible_cluster_candidate_count(candidates, self.excluded_cluster_ids());
-        let selection = {
+        if eligible_candidate_count == 0 {
+            return self.resolve_no_routing_choice(num_candidates, 0).await;
+        }
+        let decision = {
             let lb_request = self.load_balancer_request();
             let lb_config = self.request.lb_resolution.config();
-            if eligible_candidate_count > 0
-                && let Some(limit_seconds) = lb_config.max_input_work_seconds
+            if let Some(limit_seconds) = lb_config.max_input_work_seconds
                 && let Some(reason) = input_work_admission_rejection_reason(
                     lb_config,
                     &lb_request,
@@ -137,26 +140,39 @@ impl<'a> ProxyRequestRun<'a> {
                     reason,
                 )));
             }
-            target_snapshot.as_ref().and_then(|snapshot| {
-                self.app
-                    .lb_router
-                    .choose_candidate_with_algorithm_resolution(
+            target_snapshot
+                .as_ref()
+                .map_or(LoadBalancerDecision::Unavailable, |snapshot| {
+                    self.app.lb_router.decide_with_algorithm_resolution(
                         snapshot.load_balancers(),
                         &lb_request,
                         candidates,
                         &self.request.lb_resolution,
                     )
-            })
+                })
         };
 
-        let Some(selection) = selection else {
+        if let LoadBalancerDecision::Wait(remaining) = decision
+            && let Some(delay) =
+                routing_wait_delay(remaining, self.routing_retry_deadline, Instant::now())
+        {
+            self.routing_retry_attempts += 1;
+            Span::current().record("routing.retry_attempts", self.routing_retry_attempts);
+            tracing::debug!(
+                remaining_ms = remaining.as_millis() as u64,
+                "waiting for routing bucket eligibility"
+            );
+            tokio::time::sleep(delay).await;
+            return None;
+        }
+        let Some(choice) = decision.selected() else {
             return self
                 .resolve_no_routing_choice(num_candidates, eligible_candidate_count)
                 .await;
         };
         let selected_cluster = SelectedClusterRun::new(
             target_snapshot.expect("a selected candidate must come from a routing target snapshot"),
-            selection,
+            self.request.lb_resolution.selection(choice),
             self.request.request_inputs.priority,
         );
         self.run_selected_cluster(&selected_cluster).await
@@ -501,5 +517,66 @@ mod tests {
 
         assert_eq!(excluded.len(), 1);
         assert!(excluded.contains("cluster-a"));
+    }
+
+    #[tokio::test]
+    async fn permanent_exclusions_finalize_without_affinity_wait() {
+        let config: crate::load_balancer::LoadBalancerConfig = serde_json::from_str(
+            r#"{"models":{"model-a":{"algorithm":"wait-and-widen","cache_affinity_backend_selection_count":1,"cache_affinity_wait_ms":60000}}}"#,
+        ).unwrap();
+        let app = super::super::test_support::test_proxy_app_state_with_lb_config(config);
+        let registration = app
+            .state
+            .begin_registration(&RegistrationIdentity {
+                inference_server_id: "inst-a".to_string(),
+                cluster_id: "cluster-a".to_string(),
+                inference_server_url: "quic://127.0.0.1:5000".to_string(),
+                routing_key: target().routing_key,
+                reverse_tunnel: false,
+            })
+            .unwrap();
+        let update = stargate_proto::pb::InferenceServerRegistration {
+            models: std::collections::HashMap::from([(
+                "model-a".to_string(),
+                stargate_proto::pb::InferenceServerModelRegistration {
+                    status: InferenceServerStatus::Active.into(),
+                    stats: Some(ModelStats {
+                        last_mean_input_tps: 1_000.0,
+                        max_engine_concurrency: 1,
+                        ..Default::default()
+                    }),
+                },
+            )]),
+            ..Default::default()
+        };
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                false,
+                Some(Duration::from_millis(1)),
+            )
+            .await;
+        assert_eq!(
+            app.state
+                .routing_target_snapshot(&target())
+                .await
+                .unwrap()
+                .clusters()
+                .len(),
+            1
+        );
+        for affinity_key in [None, Some("prefix".to_string())] {
+            let mut inputs = request_inputs();
+            inputs.cache_affinity_key = affinity_key;
+            let mut run = ProxyRequestRun::new(&app, prepared_request(&app, inputs));
+            run.failed_cluster_ids.insert("cluster-a".to_string());
+            let result = run.run_routing_attempt().await;
+            assert!(
+                matches!(result, Some(Err(StatusCode::SERVICE_UNAVAILABLE))),
+                "all registered candidates are permanently excluded; got {result:?}",
+            );
+        }
+        app.state.end_registration(registration).await;
     }
 }

@@ -9,7 +9,7 @@ in `AGENTS.md`.
 
 ## Directory layout
 
-```
+```text
 features/   Gherkin feature files: single-cluster CLI, multi-cluster CLI,
             single/multi-cluster Helmfile (k3d), and single/multi-cluster
             EKS Helmfile (non-local).
@@ -46,7 +46,12 @@ go test -short ./...
 
 Live runs build nvcf-cli, bring up a real k3d cluster, and exercise the
 feature end to end. They require an NGC API key and sample registry
-coordinates.
+coordinates. The single-cluster and multi-cluster Helmfile runs also require
+public task and function chart references. `SAMPLE_HELM_TASK_CHART` and
+`SAMPLE_HELM_FUNCTION_CHART` must declare CPU and memory resources. Their
+`_WITHOUT_RESOURCES` counterparts must omit them. The function charts must
+expose an `entrypoint` Service on port 8000, answer `/health`, and echo the
+request message from `/echo`.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -67,9 +72,12 @@ go test -run '^TestSingleClusterUpOneClick$' -timeout 30m -v
 # Multi-cluster CLI feature
 go test -run '^TestMultiClusterUp$' -timeout 60m -v
 
-# Single-cluster Helmfile feature (requires NGC_API_KEY, SAMPLE_NGC_ORG,
-# SAMPLE_NGC_TEAM)
+# Single-cluster Helmfile feature (also requires public function and task charts)
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_HELM_FUNCTION_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Focused single-cluster Helmfile feature for the documented public Docker Hub
@@ -83,9 +91,13 @@ BDD_CLEANUP_MODE=topology-multi \
 
 # Multi-cluster Helmfile feature: control-plane install on
 # k3d-ncp-local-cp followed by compute-plane register-cluster + install
-# on k3d-ncp-local-compute-1. Same secrets as the single-cluster
+# on k3d-ncp-local-compute-1. Same secrets and charts as the single-cluster
 # Helmfile feature.
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  SAMPLE_HELM_FUNCTION_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART=<chart-url-or-oci-reference> \
+  SAMPLE_HELM_TASK_CHART_WITHOUT_RESOURCES=<chart-url-or-oci-reference> \
   go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
 ```
 

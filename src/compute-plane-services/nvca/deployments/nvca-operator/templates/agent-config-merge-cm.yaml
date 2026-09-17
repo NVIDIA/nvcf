@@ -22,9 +22,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
-  {{- if eq (include "nvcaop.usesLegacyBYOOConfig" .) "true" }}
+  {{- if eq (include "nvcaop.usesLegacyFirstClassConfig" .) "true" }}
   annotations:
-    nvcf.nvidia.com/legacy-byoo-config: "true"
+    nvcf.nvidia.com/legacy-first-class-config: "true"
   {{- end }}
 data:
   config.yaml: |

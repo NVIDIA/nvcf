@@ -75,21 +75,32 @@ impl ClusterComparator {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Ttft {
     pub(crate) queue_ms: f64,
+    // Bucket formation applies the ignore flags; final ranking keeps all components.
     pub(crate) ttft_ms: f64,
+    pub(crate) comparator_ms: f64,
 }
 
 #[inline]
 pub(crate) fn ttft(
     candidate: &RoutedClusterSnapshot,
     input_tokens: Option<u64>,
+    input_tokens_scale: f64,
     priority: u32,
     ignore_queue_time: bool,
     ignore_input_processing_time: bool,
 ) -> Ttft {
     let input_tps = input_tps(candidate);
     let queue_ms = queue_delay_ms_with_tps(candidate, priority, input_tps);
-    let prefill_ms = processing_delay_ms(input_tokens.unwrap_or_default() as f64, input_tps);
-    let ttft_ms = rtt_ms(candidate)
+    let prefill_ms = if input_tokens.is_some_and(|tokens| tokens > 0) && input_tps <= 0.0 {
+        f64::INFINITY
+    } else {
+        processing_delay_ms(
+            input_tokens.unwrap_or_default() as f64 * input_tokens_scale,
+            input_tps,
+        )
+    };
+    let rtt_ms = rtt_ms(candidate);
+    let ttft_ms = rtt_ms
         + if ignore_queue_time { 0.0 } else { queue_ms }
         + if ignore_input_processing_time {
             0.0
@@ -97,7 +108,11 @@ pub(crate) fn ttft(
             prefill_ms
         };
 
-    Ttft { queue_ms, ttft_ms }
+    Ttft {
+        queue_ms,
+        ttft_ms,
+        comparator_ms: rtt_ms + queue_ms + prefill_ms,
+    }
 }
 
 #[inline]
@@ -114,6 +129,7 @@ fn ttft_ms(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_>)
     ttft(
         candidate,
         request.input_tokens,
+        1.0,
         request.priority,
         false,
         false,

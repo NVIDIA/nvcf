@@ -10,6 +10,7 @@ nvsnap's logic lives here; `cmd/` binaries wire these together.
 ## Package map
 
 **Capture / restore core**
+
 - [`agent/`](agent/) — checkpoint & restore orchestration; capture-path
   selection and backend detection.
 - [`criu/`](criu/) — go-criu RPC wrapper (dump/restore, RPC field plumbing).
@@ -21,6 +22,7 @@ nvsnap's logic lives here; `cmd/` binaries wire these together.
   [THIRD-PARTY-FORKS](../docs/THIRD-PARTY-FORKS.md)).
 
 **Storage / catalog**
+
 - [`checkpointstore/`](checkpointstore/) — the Backend chain (Local → ConfigMap
   → per-capture PVC → blob store).
 - [`blobstore/`](blobstore/) — disk-backed content-addressed blob store.
@@ -28,6 +30,7 @@ nvsnap's logic lives here; `cmd/` binaries wire these together.
 - [`db/`](db/) — SQLite catalog (checkpoints, retention, audit).
 
 **Control plane / platform**
+
 - [`server/`](server/) — REST API handlers + web UI serving.
 - [`webhook/`](webhook/) — mutating admission webhook (cachedir capture +
   restore injection).

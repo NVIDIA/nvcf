@@ -66,6 +66,10 @@ jobs:
         # reached. A test that gates nothing is not a test.
         run: go test -C tools/stack-pin-resolver ./...
 
+      - name: Test the commit type helper
+        # It decides the semver step of the stack release this bump causes.
+        run: bash tools/ci/test-release-bump-type
+
       - name: Select the tag
         id: tag
         run: |
@@ -115,7 +119,10 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          tools/ci/stack-pin-resolver --tag "${TAG}" --write
+          tools/ci/stack-pin-resolver --tag "${TAG}" --write | tee /tmp/bump.out
+          # The semver step the pin took, reported by the resolver as
+          # "bump: <level>". Empty when the stack already pinned this version.
+          echo "level=$(sed -n 's/^bump: //p' /tmp/bump.out | tail -n 1)" >> "${GITHUB_OUTPUT}"
           # Scoped to the same paths the commit below stages. Repo-wide, any
           # unrelated modification in the workspace would set changed=true and
           # the commit would then abort with nothing staged.
@@ -132,25 +139,50 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
+          LEVEL: ${{ steps.bump.outputs.level }}
           SERVER_URL: ${{ github.server_url }}
           REPO: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           branch="chore/stack-pin-bumps"
 
           git add deploy/stacks/self-managed/helmfile.d
+          # The commit type carries the semver step of the chart release into
+          # the stack release. deploy/stacks/self-managed is itself a release
+          # subproject, and tools/ci/github-release feeds RELEASE_RULES to
+          # semantic-release: fix cuts a patch, feat a minor, "!" a major, and
+          # chore cuts nothing, which would move the pin on main without any
+          # stack release for downstream to see.
+          type="$(tools/ci/release-bump-type for-level "${LEVEL}")"
+          case "${type}" in
+            *!) subject="${type%!}(stack)!: pin ${TAG#deploy/helm/}" ;;
+            *)  subject="${type}(stack): pin ${TAG#deploy/helm/}" ;;
+          esac
           # Separate -m flags rather than an embedded multi-line string: the
           # continuation lines of one would have to sit at column zero, which
           # ends the YAML block scalar this script lives in.
-          # fix, not chore. deploy/stacks/self-managed is itself a release
-          # subproject, and tools/ci/github-release feeds RELEASE_RULES to
-          # semantic-release, where chore carries "release": false. A chore
-          # commit would move the pin on main without ever cutting a stack
-          # release, so nothing downstream would see the new pin.
-          git commit \
-            -m "fix(stack): pin ${TAG#deploy/helm/}" \
-            -m "Opened by the stack pin bump workflow on release of ${TAG}."
+          if [ "${type}" = 'feat!' ]; then
+            git commit \
+              -m "${subject}" \
+              -m "Opened by the stack pin bump workflow on release of ${TAG}." \
+              -m "BREAKING CHANGE: ${TAG} is a major release of a chart this stack pins."
+          else
+            git commit \
+              -m "${subject}" \
+              -m "Opened by the stack pin bump workflow on release of ${TAG}."
+          fi
           git push --force-with-lease origin "${branch}"
+
+          # The pull request squashes to one commit, so its title has to carry
+          # the largest step among every pin accumulated on the branch.
+          pr_type="$(tools/ci/release-bump-type for-branch "origin/${BASE_BRANCH}")"
+          case "${pr_type}" in
+            *!) title="${pr_type%!}(stack)!: bump self-managed stack chart pins"
+                breaking="BREAKING CHANGE: a pinned chart moved to a new major version." ;;
+            *)  title="${pr_type}(stack): bump self-managed stack chart pins"
+                breaking="" ;;
+          esac
 
           body="$(printf '%s\n' \
             "Opened by \`.github/workflows/stack-pin-bump.yml\` when \`${TAG}\` was published." \
@@ -162,7 +194,8 @@ jobs:
             "If this pull request sits unmerged, later chart releases add their bumps to the same branch, so merging it applies all of them." \
             "" \
             "Github commit:" \
-            "fix(stack): pin ${TAG#deploy/helm/}" \
+            "${title}" \
+            "${breaking}" \
             "")"
 
           # gh api, not `gh pr edit`. Against this repository `gh pr edit` fails
@@ -171,11 +204,11 @@ jobs:
           # cards it does not need. The REST endpoint has no such dependency.
           number="$(gh api "repos/${REPO}/pulls?head=${REPO%%/*}:${branch}&state=open" -q '.[0].number')"
           if [ -n "${number}" ] && [ "${number}" != "null" ]; then
-            jq -n --arg b "${body}" '{body: $b}' \
+            jq -n --arg t "${title}" --arg b "${body}" '{title: $t, body: $b}' \
               | gh api -X PATCH "repos/${REPO}/pulls/${number}" --input - >/dev/null
             echo "refreshed pull request #${number}"
           else
             gh pr create --base main --head "${branch}" \
-              --title "fix(stack): bump self-managed stack chart pins" \
+              --title "${title}" \
               --body "${body}"
           fi

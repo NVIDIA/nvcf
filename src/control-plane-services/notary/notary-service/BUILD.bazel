@@ -54,6 +54,7 @@ nvcf_java_test(
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
         "@nv_third_party_deps//:org_springframework_spring_beans",
         "@nv_third_party_deps//:org_springframework_spring_web",
+        "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
     ],
     timeout = "long",
 )

@@ -288,6 +288,68 @@ func TestInvokeFunctionWithOptionsUsesFunctionHostnameRouting(t *testing.T) {
 	}
 }
 
+// TestInvokeFunctionWithOptionsVanityGateway verifies that Vanity Gateway invocations
+// preserve the exact configured host without prepending the function ID.
+func TestInvokeFunctionWithOptionsVanityGateway(t *testing.T) {
+	tests := []struct {
+		name          string
+		baseInvokeURL string
+		path          string
+		inferenceURL  string
+		vanityHost    string
+		wantURL       string
+		wantHost      string
+	}{
+		{
+			name:          "vanity host with path preserves exact host and routes to path",
+			baseInvokeURL: "http://127.0.0.1:8080",
+			path:          "/bdd/echo",
+			vanityHost:    "vanity.localhost",
+			wantURL:       "http://127.0.0.1:8080/bdd/echo",
+			wantHost:      "vanity.localhost",
+		},
+		{
+			name:          "vanity host with inference-url fallback preserves exact host",
+			baseInvokeURL: "https://invocation.example.com",
+			inferenceURL:  "/v1/models",
+			vanityHost:    "llama.api.myorg.com",
+			wantURL:       "https://invocation.example.com/v1/models",
+			wantHost:      "llama.api.myorg.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &invokeRequestCaptureTransport{}
+			client := &Client{
+				config: &Config{
+					BaseInvokeURL: tt.baseInvokeURL,
+					InvokeHost:    "invocation.localhost", // ensure normal invokeHost is overridden by VanityHost
+				},
+				httpClient: &http.Client{Transport: capture},
+			}
+
+			_, err := client.InvokeFunctionWithOptions(context.Background(), "func-123", "ver-456", map[string]interface{}{"message": "hello"}, 0, &InvokeFunctionOptions{
+				Path:         tt.path,
+				InferenceURL: tt.inferenceURL,
+				VanityHost:   tt.vanityHost,
+			})
+			if err != nil {
+				t.Fatalf("InvokeFunctionWithOptions returned error: %v", err)
+			}
+			if capture.req == nil {
+				t.Fatal("expected invocation request to be captured")
+			}
+			if got := capture.req.URL.String(); got != tt.wantURL {
+				t.Fatalf("request URL = %q, want %q", got, tt.wantURL)
+			}
+			if got := capture.req.Host; got != tt.wantHost {
+				t.Fatalf("request Host = %q, want %q (must not prefix function ID)", got, tt.wantHost)
+			}
+		})
+	}
+}
+
 func TestInvokeFunctionRoutesLLMFunctionsThroughLLMGateway(t *testing.T) {
 	capture := &invokeFunctionDetailsTransport{
 		t:            t,

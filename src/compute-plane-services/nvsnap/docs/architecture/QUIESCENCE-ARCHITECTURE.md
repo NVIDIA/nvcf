@@ -16,7 +16,7 @@ io_uring is Linux's high-performance async I/O interface. It presents several ch
 2. **SQPOLL Kernel Thread**: When `IORING_SETUP_SQPOLL` is enabled, a kernel polling thread (`iou-sqp-<pid>`) actively accesses the ring
 3. **Registered Resources**: Files and buffers registered with io_uring have kernel-side state
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                    io_uring Architecture                         │
 ├─────────────────────────────────────────────────────────────────┤
@@ -48,6 +48,7 @@ io_uring is Linux's high-performance async I/O interface. It presents several ch
 ```
 
 **CRIU cannot checkpoint when:**
+
 - SQ has pending submissions (`sq_head != sq_tail`)
 - CQ has unreaped completions (`cq_head != cq_tail`)
 - SQPOLL thread is actively polling
@@ -60,7 +61,7 @@ uvloop is a fast Python event loop built on libuv. After CRIU restore:
 2. **Cached Handle Pointers**: uvloop's Python objects contain C pointers to `uv_handle_t` structures
 3. **Signal State**: Signal handler registrations are lost
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                   uvloop/libuv State                             │
 ├─────────────────────────────────────────────────────────────────┤
@@ -96,7 +97,7 @@ uvloop is a fast Python event loop built on libuv. After CRIU restore:
 
 ### Component Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         NVSNAP Quiescence System                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -135,7 +136,7 @@ uvloop is a fast Python event loop built on libuv. After CRIU restore:
 
 ### Checkpoint Flow
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           Checkpoint Timeline                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -184,7 +185,7 @@ uvloop is a fast Python event loop built on libuv. After CRIU restore:
 
 ### Restore Flow
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                            Restore Timeline                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -382,6 +383,7 @@ class UVProcess:
 ```
 
 After CRIU restore:
+
 - The `uv_process_t` structure exists in memory (restored by CRIU)
 - The handle's loop pointer is valid
 - But the kernel-side state the handle references may need revalidation
@@ -424,7 +426,7 @@ For `uv_process_t` handles (critical for vLLM's GPU workers):
 3. **Signal handling is reinited by `uv_loop_fork()`** - SIGCHLD delivery works
 4. **We validate before any operation** - ensure handle state is consistent
 
-```
+```text
 Before Checkpoint:          After Restore:
 ┌─────────────┐             ┌─────────────┐
 │ Parent      │             │ Parent      │
@@ -474,7 +476,7 @@ Note: CPU affinity for the SQPOLL thread may need reapplication after restore
 
 ### Diagnostic Output
 
-```
+```text
 [09:16:25.746] [INFO] [nvsnap_init_explicit] === NVSNAP Interception Library Initializing ===
 [09:16:25.746] [INFO] [nvsnap_init_explicit] PID: 117528
 [09:16:25.755] [INFO] [nvsnap_quiesce_init] Quiesce module initialized (restored=0, ack_fd=-1)

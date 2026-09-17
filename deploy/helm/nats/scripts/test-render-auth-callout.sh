@@ -59,13 +59,27 @@ assert_not_contains() {
 
 default_render="$tmpdir/default.yaml"
 render > "$default_render"
+reloader_image="$(yq -r '.nats.reloader.image.registry + "/" + .nats.reloader.image.repository + ":" + .nats.reloader.image.tag' "$chart_dir/values.yaml")"
+assert_contains "$default_render" "image: $reloader_image"
 assert_contains "$default_render" "# Source: helm-nvcf-nats/templates/nats-auth-callout-nkeys-secret.yaml"
 assert_contains "$default_render" "name: nats-auth-callout-nkeys"
 assert_contains "$default_render" "nkey_signature:"
-# secrets.json is no longer rendered into the Secret — vault-agent assembles
-# it at the auth-callout pod's startup from KV.
+# The shared-worker Secret contains the non-secret public-key mapping consumed
+# as a partial service config. Private auth-callout seeds remain separate.
 assert_not_contains "$default_render" "secrets.json:"
-assert_not_contains "$default_render" "nkey_mappings"
+assert_contains "$default_render" "auth-callout-plugin.yaml:"
+plugin_config="$tmpdir/auth-callout-plugin.yaml"
+yq -r 'select(.kind == "Secret" and .metadata.name == "nats-nkeys") | .data."auth-callout-plugin.yaml"' "$default_render" | base64 -d > "$plugin_config"
+worker_public_key=$(yq -r 'select(.kind == "Secret" and .metadata.name == "nats-nkeys") | .data."user.pub"' "$default_render" | base64 -d)
+test "$(yq -r '.service.plugin_configs.nkey.plugin_type' "$plugin_config")" = "nkey"
+test "$(yq -r '.service.plugin_configs.nkey.config.nkey_mappings[0].nkey' "$plugin_config")" = "$worker_public_key"
+test "$(yq -r '.service.plugin_configs.nkey.config.nkey_mappings[0].account' "$plugin_config")" = "APP"
+test "$(yq -r '.service.plugin_configs.sis.plugin_type' "$plugin_config")" = "webhook"
+test "$(yq -r '.service.plugin_configs.sis.config.url' "$plugin_config")" = "http://api.sis.svc.cluster.local:8080/v1/nvca/nats-authorize"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins | length' "$plugin_config")" = "2"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[0].id' "$plugin_config")" = "sis"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[0].alias' "$plugin_config")" = "oidc"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[1].id' "$plugin_config")" = "nkey"
 # nkey-bao-access RBAC must grant openbao-migrations read on both the
 # shared-worker Secret and the auth-callout Secret so 19_setup_nats-auth-callout.sh
 # can mirror seeds into KV.

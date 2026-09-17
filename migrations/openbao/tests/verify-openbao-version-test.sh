@@ -6,6 +6,17 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 verifier="$script_dir/../scripts/verify-openbao.sh"
+builder="$script_dir/../scripts/build-openbao.sh"
+
+expect_line() {
+  pattern=$1
+  file=$2
+  message=$3
+  if ! grep -Fq "$pattern" "$file"; then
+    echo "$message" >&2
+    exit 1
+  fi
+}
 
 expect_ge() {
   current=$1
@@ -39,20 +50,26 @@ expect_invalid() {
   fi
 }
 
-expect_ge v1.83.1 v1.83.1
-expect_ge v1.83.2-0.20260905120000-deadbeef v1.83.1
+expect_line "grpc_version=\${GRPC_VERSION:-v1.83.2}" "$builder" \
+  "OpenBao build does not pin gRPC v1.83.2"
+expect_line "required_grpc_version=\${REQUIRED_GRPC_VERSION:-v1.83.2}" "$verifier" \
+  "OpenBao verifier does not require gRPC v1.83.2"
+
+expect_ge v1.83.2 v1.83.2
+expect_ge v1.83.3-0.20260905120000-deadbeef v1.83.2
 expect_ge v0.0.0-20260905120000-deadbeef v0.0.0-20260904120000-feedface
-expect_ge v1.83.1-rc.10 v1.83.1-rc.2
+expect_ge v1.83.2-rc.10 v1.83.2-rc.2
 
-expect_lt v1.83.1-rc.1 v1.83.1
-expect_lt v1.83.1-0.20260905120000-deadbeef v1.83.1
-expect_lt v1.83.1-rc.2 v1.83.1-rc.10
+expect_lt v1.83.1 v1.83.2
+expect_lt v1.83.2-rc.1 v1.83.2
+expect_lt v1.83.2-0.20260905120000-deadbeef v1.83.2
+expect_lt v1.83.2-rc.2 v1.83.2-rc.10
 
-expect_invalid v1.83.1- v1.83.1
-expect_invalid v1.83.1+ v1.83.1
-expect_invalid v1.83.1-rc..1 v1.83.1
-expect_invalid v1.83.1+build..1 v1.83.1
-expect_invalid v1.83.1-rc.01 v1.83.1
-expect_invalid v01.83.1 v1.83.1
+expect_invalid v1.83.2- v1.83.2
+expect_invalid v1.83.2+ v1.83.2
+expect_invalid v1.83.2-rc..1 v1.83.2
+expect_invalid v1.83.2+build..1 v1.83.2
+expect_invalid v1.83.2-rc.01 v1.83.2
+expect_invalid v01.83.2 v1.83.2
 
 echo "OpenBao dependency version comparisons passed"

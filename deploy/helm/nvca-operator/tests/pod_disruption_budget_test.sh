@@ -28,8 +28,14 @@ assert_render_fails() {
 }
 
 for chart in "${source_chart}" "${vendored_chart}"; do
-  chart_name="$(basename "${chart}")"
+  if [[ "${chart}" == "${source_chart}" ]]; then
+    chart_name="source"
+  else
+    chart_name="vendored"
+  fi
   default_manifest="${tmp_dir}/${chart_name}-default.yaml"
+  reused_values_chart="${tmp_dir}/${chart_name}-reused-values"
+  reused_values_manifest="${tmp_dir}/${chart_name}-reused-values.yaml"
   min_available_manifest="${tmp_dir}/${chart_name}-min-available.yaml"
   max_unavailable_manifest="${tmp_dir}/${chart_name}-max-unavailable.yaml"
 
@@ -40,6 +46,16 @@ for chart in "${source_chart}" "${vendored_chart}"; do
     > "${default_manifest}"
   if grep -Fq 'kind: PodDisruptionBudget' "${default_manifest}"; then
     echo "expected PDB to be disabled by default for ${chart}" >&2
+    exit 1
+  fi
+
+  cp -R "${chart}" "${reused_values_chart}"
+  yq -i 'del(.podDisruptionBudget)' "${reused_values_chart}/values.yaml"
+  helm template nvca-operator "${reused_values_chart}" \
+    --set-string ngcConfig.serviceKey="${test_service_key}" \
+    > "${reused_values_manifest}"
+  if grep -Fq 'kind: PodDisruptionBudget' "${reused_values_manifest}"; then
+    echo "expected PDB to be disabled when reused values omit its configuration for ${chart}" >&2
     exit 1
   fi
 

@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Command stack-pin-resolver resolves which self-managed stack pins a released
-// chart, and edits them.
+// Command stack-pin-resolver resolves which stack pins (across every stack
+// under deploy/stacks, not just self-managed) a released chart, and edits
+// them.
 //
 //	stack-pin-resolver --audit
 //	stack-pin-resolver --tag deploy/helm/nats/v0.8.0 [--write]
@@ -151,12 +152,14 @@ func Bump(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 	}
 
 	changed := 0
+	level := ""
 	for _, r := range targets {
 		if r.Version == version {
 			fmt.Fprintf(out, "%s: already %s\n", r.Name, version)
 			continue
 		}
 		fmt.Fprintf(out, "%s: %s -> %s\n", r.Name, r.Version, version)
+		level = HigherLevel(level, BumpLevel(r.Version, version))
 		changed++
 		if write {
 			if err := WritePin(root, r, version); err != nil {
@@ -166,6 +169,10 @@ func Bump(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 	}
 	if changed == 0 {
 		fmt.Fprintln(out, "nothing to change")
+	} else if level != "" {
+		// One machine-readable line for the workflow: the largest semver step
+		// any pin took, so the stack release carries the chart's step.
+		fmt.Fprintf(out, "bump: %s\n", level)
 	}
 	return 0, nil
 }

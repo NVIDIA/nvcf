@@ -1,8 +1,8 @@
 # NV Boot Starter Audit
 
-Audit logging for applications as per NVIDIA Audit Specification. This starter ships a single 
+Audit logging for applications as per NVIDIA Audit Specification. This starter ships a single
 concrete JSON-based audit path(`AuditService`, `AuditEventPayload`, `BootAuditEvent`) that works
-the same in open-source and managed deployments. Optional HMAC signing is enabled when the 
+the same in open-source and managed deployments. Optional HMAC signing is enabled when the
 application registers an `AuditProperties` bean (see below).
 
 ## Adding as a Dependency
@@ -34,7 +34,7 @@ Add to your application's `pom.xml`:
 
 ## Auto Configured Beans - Library Provided
 
-This starter module autoconfigures an `AuditService` bean using `AuditAutoConfiguration`. Apps 
+This starter module autoconfigures an `AuditService` bean using `AuditAutoConfiguration`. Apps
 can inject `AuditService` and use the builder to dispatch audit events as shown below:
 
 ```java

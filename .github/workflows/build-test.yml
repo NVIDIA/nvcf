@@ -25,6 +25,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-go@v5
         with:
@@ -36,6 +39,12 @@ jobs:
 
       - name: Run docs validation
         run: ./tools/ci/check-docs
+
+      - name: Check latest stack release
+        continue-on-error: true
+        env:
+          DOC_VERSION_SYNC_GITHUB_TOKEN: ${{ github.token }}
+        run: ./tools/ci/check-doc-version-current-release
 
   go-lib-codegen:
     name: go-lib codegen
@@ -109,16 +118,28 @@ jobs:
           NVCA_VERSION="$(yq '.selfManaged.nvcaVersion' nvca-operator/values.yaml)" \
           NVCA_OPERATOR_VERSION="$(yq '.appVersion' nvca-operator/Chart.yaml)" \
           NVCA_SHARED_STORAGE_IMAGE_TAG="$(yq '.selfManaged.sharedStorage.imageTag' nvca-operator/values.yaml)" \
+          NVCA_OTEL_COLLECTOR_IMAGE_TAG="$(yq '.otelCollector.imageTag' nvca-operator/values.yaml)" \
             make check-vendor-chart
+
+      - name: Test NVCA default ownership
+        run: |
+          make -C deploy/helm/nvca-operator test-default-ownership
+          make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
 
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
+
+      - name: Run observability Helmfile profile tests
+        run: make -C deploy/stacks/observability test
 
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
 
       - name: Test OpenBao plugin catalog refresh hook
         run: bash deploy/helm/openbao/tests/plugin-catalog-refresh-hook.sh
+
+      - name: Test ReVal authorization configuration
+        run: bash deploy/helm/helm-reval/tests/auth-config.sh
 
       - name: Check for uncommitted helm dependency artifacts
         run: |
@@ -144,6 +165,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-go@v5
         with:

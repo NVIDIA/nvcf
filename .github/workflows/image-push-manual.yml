@@ -6,7 +6,7 @@
 # pullable by NVCF clusters for pre-merge testing -- the GitHub-side
 # counterpart to the GitLab "<svc>-image-push-mr-manual" jobs.
 #
-# Manual (workflow_dispatch) only; no image is pushed automatically.
+# Runs on workflow_dispatch, or automatically for PRs carrying the deploy-to-stg label.
 # Requires repo configuration (set in GitHub repo settings, not in source):
 #   - secret  NGC_NCP_DEV_KEY   : NGC key with push to the ncp-dev registry
 #   - secret NCP_DEV_REGISTRY   : the ncp-dev registry base (host/tenant/repo-prefix)
@@ -66,14 +66,15 @@ jobs:
         (github.event.action != 'labeled' || github.event.label.name == 'deploy-to-stg')
       )
     outputs:
-      service_path: ${{ steps.pick.outputs.service_path }}
+      # JSON array of service subtrees to build; the push job fans out over it.
+      service_paths: ${{ steps.pick.outputs.service_paths }}
       found: ${{ steps.pick.outputs.found }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Pick the subtree to build
+      - name: Pick the subtrees to build
         id: pick
         env:
           INPUT_PATH: ${{ github.event.inputs.service_path }}
@@ -81,51 +82,63 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if [ -n "${INPUT_PATH}" ]; then
-            echo "service_path=${INPUT_PATH}" >> "$GITHUB_OUTPUT"
+          # The output is always a JSON array so the push job can fan out with
+          # one matrix expression whether one or several subtrees were picked.
+          emit() {
+            printf '%s\n' "$@" | jq -R . | jq -c -s . | sed 's/^/service_paths=/' >> "$GITHUB_OUTPUT"
             echo "found=true" >> "$GITHUB_OUTPUT"
+          }
+          if [ -n "${INPUT_PATH}" ]; then
+            emit "${INPUT_PATH}"
             echo "dispatch: ${INPUT_PATH}"
             exit 0
           fi
 
           # A PR event carries no path input, so derive it from what changed.
           # Service subtrees are src/<plane>/<service>; take that prefix from
-          # every changed file and require exactly one, because a dev image is
-          # for one service and guessing between several would be wrong.
+          # every changed file and build every one that is a Bazel service. A
+          # PR touching two services gets two dev images; it used to get none.
           # Three dots, not two: compare the merge base of the two commits with
           # the head, so only this PR's own changes are considered. A two-dot
           # diff also reports whatever landed on the base branch after this PR
-          # forked, so an unrelated service merging to main would make a
-          # single-service PR look like a multi-service one and skip its image.
+          # forked, so an unrelated service merging to main would be built too.
           mapfile -t subtrees < <(
             git diff --name-only "${BASE_SHA}...${HEAD_SHA}" \
               | grep -E '^src/[^/]+/[^/]+/' \
               | cut -d/ -f1-3 | sort -u
           )
-          if [ "${#subtrees[@]}" -eq 1 ] && [ -f "${subtrees[0]}/BUILD.bazel" ]; then
-            echo "service_path=${subtrees[0]}" >> "$GITHUB_OUTPUT"
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "resolved from changed files: ${subtrees[0]}"
+          buildable=()
+          for s in "${subtrees[@]}"; do
+            if [ -f "$s/BUILD.bazel" ]; then
+              buildable+=("$s")
+            else
+              echo "::notice::$s has no BUILD.bazel, so it is not a buildable service subtree; skipping it."
+            fi
+          done
+          if [ "${#buildable[@]}" -gt 0 ]; then
+            emit "${buildable[@]}"
+            echo "resolved from changed files: ${buildable[*]}"
             exit 0
           fi
 
-          # Three distinct reasons to skip. They need distinct messages: the
-          # right next step differs, and a wrong explanation sends people to
-          # workflow_dispatch when dispatch would not help either.
           echo "found=false" >> "$GITHUB_OUTPUT"
           if [ "${#subtrees[@]}" -eq 0 ]; then
             echo "::notice::No service subtree changed; nothing to push."
-          elif [ "${#subtrees[@]}" -eq 1 ]; then
-            echo "::notice::${subtrees[0]} has no BUILD.bazel, so it is not a buildable service subtree; nothing to push."
           else
-            echo "::notice::Changed ${#subtrees[@]} subtrees (${subtrees[*]}); a dev image targets one. Use workflow_dispatch to pick one."
+            echo "::notice::None of the changed subtrees (${subtrees[*]}) is a buildable service; nothing to push."
           fi
 
   push:
-    name: push to ncp-dev
+    name: push to ncp-dev (${{ matrix.service_path }})
     needs: resolve
     if: needs.resolve.outputs.found == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      # One leg per changed service. A failure in one service's build must not
+      # cancel the others; each leg is an independent image.
+      fail-fast: false
+      matrix:
+        service_path: ${{ fromJSON(needs.resolve.outputs.service_paths) }}
     # Same public EC2 Buildbarn cache the matrix build uses. workflow_dispatch
     # is restricted to users with write access, so the secret is available;
     # fork PRs cannot reach this workflow at all.
@@ -156,7 +169,7 @@ jobs:
       - name: Resolve service name for cache keys
         id: svc
         env:
-          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
+          SVC_PATH: ${{ matrix.service_path }}
         run: |
           set -euo pipefail
           echo "name=$(basename "$SVC_PATH")" >> "$GITHUB_OUTPUT"
@@ -261,7 +274,7 @@ jobs:
       - name: Resolve Bazel module layout
         id: layout
         env:
-          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
+          SVC_PATH: ${{ matrix.service_path }}
         run: |
           set -euo pipefail
           if [ ! -d "$SVC_PATH" ]; then
@@ -283,7 +296,7 @@ jobs:
       - name: Build and push multi-arch image(s)
         working-directory: ${{ steps.layout.outputs.workdir }}
         env:
-          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
+          SVC_PATH: ${{ matrix.service_path }}
           SCOPE: ${{ steps.layout.outputs.scope }}
           TAG: ${{ steps.meta.outputs.tag }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}

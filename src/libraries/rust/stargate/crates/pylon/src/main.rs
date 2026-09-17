@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroU64;
+
 use anyhow::Result;
 use pylon_lib::{
     EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol, UpstreamBackend,
@@ -132,6 +134,9 @@ struct Args {
     /// Upstream HTTP path for the engine stats stream
     #[arg(long, default_value = "/pylon/v1/stats/stream", value_name = "PATH")]
     engine_stats_stream_path: String,
+    /// Fallback maximum engine concurrency for every model until the engine reports a limit
+    #[arg(long, value_name = "N")]
+    max_engine_concurrency: Option<NonZeroU64>,
     /// Minimum interval between registration/stat updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
@@ -586,6 +591,7 @@ mod tests {
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
         assert_eq!(args.engine_stats_stream_path, "/pylon/v1/stats/stream");
+        assert!(metrics_config.fallback_max_engine_concurrency.is_none());
         assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(
             !metrics_config.openai_fallback_stats_enabled,
@@ -602,6 +608,31 @@ mod tests {
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Off);
         assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(metrics_config.openai_fallback_stats_enabled);
+    }
+
+    #[test]
+    fn max_engine_concurrency_fallback_is_configured_in_every_stats_mode() {
+        for mode in ["auto", "off", "required"] {
+            let args = parse_argv(&[
+                "--engine-stats-stream",
+                mode,
+                "--max-engine-concurrency",
+                "25",
+            ]);
+            let config = stats_collector_config_from_args(&args, &args.upstream_http_base_url);
+
+            assert_eq!(config.fallback_max_engine_concurrency, NonZeroU64::new(25));
+        }
+    }
+
+    #[test]
+    fn invalid_max_engine_concurrency_is_rejected() {
+        for value in ["0", "-1", "1.5", "18446744073709551616"] {
+            assert!(
+                try_parse_argv(&[&format!("--max-engine-concurrency={value}")]).is_err(),
+                "{value} must be rejected"
+            );
+        }
     }
 
     #[test]

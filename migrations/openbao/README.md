@@ -16,6 +16,13 @@ This repository ships:
 - An example Kubernetes Job manifest (`job.yaml`)
 - A Docker-based integration test for the helper functions (`tests/`)
 
+## Releases
+
+Release-worthy changes under `migrations/openbao` publish the
+`nvcf-openbao-migrations` image. GitHub source releases use tags in the
+`migrations/openbao/vX.Y.Z` stream. Each release rebuilds both supported
+architectures from the source and dependency pins in this directory.
+
 ## Prerequisites
 
 - A reachable OpenBao or Vault deployment (the entrypoint waits for the service to become healthy and locates the leader before applying migrations)
@@ -41,7 +48,7 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 ## Building the container
 
-The `Dockerfile` uses the public upstream OpenBao 2.6.2 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.1, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
+The `Dockerfile` uses the public upstream OpenBao 2.6.2 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
 
 The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0. It rebuilds Kubernetes v1.36.4 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.6 toolchain and vendored dependencies. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform.
 

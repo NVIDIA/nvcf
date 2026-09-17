@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use reqwest::header::HeaderMap;
-use stargate_protocol::common::{queue_time_delta_ms, valid_last_mean_input_tps};
+use stargate_protocol::common::{
+    has_available_engine_slot, queue_time_delta_ms, valid_last_mean_input_tps,
+};
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS;
 
 use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
@@ -271,6 +273,7 @@ impl LiveRequestState {
             required,
             Some(&ModelGeneration::new(required.model_id.clone(), 0)),
             headers,
+            None,
         )
     }
 
@@ -280,6 +283,7 @@ impl LiveRequestState {
         required: &RequiredTunnelHeaders,
         generation: Option<&ModelGeneration>,
         headers: &HeaderMap,
+        max_engine_concurrency: Option<u64>,
     ) -> QueueAdmissionDecision {
         if !config.enabled {
             return QueueAdmissionDecision::Disabled;
@@ -306,6 +310,7 @@ impl LiveRequestState {
                     model.queue_estimate_ms_for_priority_excluding(
                         required.queue_priority(),
                         excluded_request,
+                        max_engine_concurrency,
                     )
                 })
             })
@@ -697,7 +702,19 @@ impl QueueModelState {
         &self,
         priority: u32,
         excluded_request: Option<&TrackedPromptRequest>,
+        max_engine_concurrency: Option<u64>,
     ) -> Option<u64> {
+        let active_requests = self
+            .phase_requests
+            .iter()
+            .try_fold(0usize, |total, count| total.checked_add(*count))
+            .expect("model running request count overflowed")
+            .saturating_sub(usize::from(excluded_request.is_some()));
+        if max_engine_concurrency
+            .is_some_and(|limit| has_available_engine_slot(saturated_u64(active_requests), limit))
+        {
+            return Some(0);
+        }
         let last_mean_input_tps = self.last_mean_input_tps?;
         let mut input_tokens = self
             .prompt_work_by_priority
@@ -1006,6 +1023,64 @@ mod tests {
     }
 
     #[test]
+    fn admission_uses_live_capacity_including_decode_and_excludes_its_own_reservation() {
+        let runtime = crate::PylonRuntimeState::new(
+            stargate_proto::pb::InferenceServerStatus::Active,
+            &["model-a".to_string()],
+        );
+        runtime.set_model_stats(
+            "model-a",
+            crate::CurrentModelStats {
+                last_mean_input_tps: 8_000.0,
+                max_engine_concurrency: Some(25),
+                ..Default::default()
+            },
+        );
+        let mut prefill = runtime.track_request(&required("prefill", 0, 80_000));
+        prefill.on_backend_submission();
+        let _decode: Vec<_> = (0..23)
+            .map(|index| {
+                let mut guard = runtime.track_request(&required(&format!("decode-{index}"), 0, 10));
+                guard.observe_output();
+                guard
+            })
+            .collect();
+        let incoming = required("incoming", 0, 120_000);
+        let _incoming = runtime.track_request(&incoming);
+        let generation = runtime.current_generation("model-a").unwrap();
+        let evaluate = || {
+            runtime.evaluate_generation_queue_admission(
+                &PylonQueueMismatchRetryConfig::default(),
+                &incoming,
+                Some(&generation),
+                &headers_with_expected("0"),
+            )
+        };
+        assert_eq!(evaluate().actual_ms(), Some(0));
+        assert!(matches!(
+            evaluate(),
+            QueueAdmissionDecision::Accepted { .. }
+        ));
+
+        // The next pending assignment consumes the last free slot. Decode
+        // requests still occupy slots even though they have no prompt backlog.
+        let pending = runtime.track_request(&required("pending", 0, 8_000));
+        assert_eq!(evaluate(), rejected(11_000));
+        drop(pending);
+        assert_eq!(evaluate().actual_ms(), Some(0));
+
+        // A withdrawn capacity report must restore conservative queue handling.
+        runtime.set_model_stats(
+            "model-a",
+            crate::CurrentModelStats {
+                last_mean_input_tps: 8_000.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(evaluate(), rejected(10_000));
+    }
+
+    #[test]
     fn threshold_helper_accepts_at_threshold_and_rejects_above() {
         let mut config = PylonQueueMismatchRetryConfig::default();
         let threshold = mismatch_threshold_ms(100, &config);
@@ -1218,7 +1293,7 @@ mod tests {
         let headers = headers_with_expected("0");
 
         assert_eq!(
-            live_requests.evaluate_generation(&config, &incoming, None, &headers),
+            live_requests.evaluate_generation(&config, &incoming, None, &headers, None),
             QueueAdmissionDecision::UnknownLocalEstimate { expected_ms: 0 }
         );
         assert_eq!(

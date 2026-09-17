@@ -28,7 +28,7 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.Builder;
 
-// Mirrors cloud-functions TempRegistryCredentialDetailsDto so both sides of the Get Account
+// Mirrors cloud-functions RegistryCredentialDetailsDto so both sides of the Get Account
 // Details contract stay in sync. The only intentional divergence is secret, which is nullable
 // here because NVCT no longer reads it from the response and instead resolves it from ESS by
 // registryCredentialId.
