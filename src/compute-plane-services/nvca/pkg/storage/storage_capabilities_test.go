@@ -358,11 +358,20 @@ func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
 	require.NoError(t, validateStorageCapabilityCatalog(catalog))
 }
 
-func TestShippedStorageCapabilityCatalog(t *testing.T) {
+// shippedChartDir locates the operator chart: Bazel runs the test from the
+// runfiles root with the storage-capability-catalog data dependency, go test
+// runs it from the package directory.
+func shippedChartDir(t *testing.T) string {
+	t.Helper()
 	chartDir := filepath.Join("src", "compute-plane-services", "nvca", "deployments", "nvca-operator")
 	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
 		chartDir = filepath.Join("..", "..", "deployments", "nvca-operator")
 	}
+	return chartDir
+}
+
+func TestShippedStorageCapabilityCatalog(t *testing.T) {
+	chartDir := shippedChartDir(t)
 	raw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
 	require.NoError(t, err)
 	c := capabilityClient(t, capabilityCatalogConfigMap(string(raw))).Build()
@@ -574,10 +583,7 @@ func TestResolveModelCacheStorageWithClientsetMissingCatalogUsesBuiltin(t *testi
 // The built-in catalog must be the one the chart installs, or an agent ahead
 // of its chart would resolve differently from a converged install.
 func TestBuiltinCatalogMatchesChart(t *testing.T) {
-	// Reachable under go test from the package dir and under Bazel through the
-	// storage-capability-catalog data dependency with rundir ".".
-	chartCopy, err := os.ReadFile(filepath.Join("..", "..", "deployments", "nvca-operator", "files",
-		"nvcf-storage-capabilities-v1alpha1.yaml"))
+	chartCopy, err := os.ReadFile(filepath.Join(shippedChartDir(t), "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
 	require.NoError(t, err, "the chart catalog must be readable; the built-in copy is checked against it")
 	assert.Equal(t, string(chartCopy), builtinStorageCapabilityCatalogYAML)
 	_, _, err = builtinStorageCapabilityCatalog()
