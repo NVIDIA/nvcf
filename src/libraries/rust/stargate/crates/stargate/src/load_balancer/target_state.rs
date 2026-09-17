@@ -16,13 +16,20 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use scc::HashMap as SccHashMap;
 
 use super::{LoadBalancer, LoadBalancerAlgorithmConfig, create_load_balancer_with_config};
 
 #[derive(Clone, Debug)]
-pub(super) struct LoadBalancerDefinition(Arc<LoadBalancerAlgorithmConfig>);
+pub(crate) struct LoadBalancerDefinition(Arc<CompiledDefinition>);
+
+#[derive(Debug)]
+struct CompiledDefinition {
+    config: LoadBalancerAlgorithmConfig,
+    is_retired: AtomicBool,
+}
 
 impl PartialEq for LoadBalancerDefinition {
     fn eq(&self, other: &Self) -> bool {
@@ -39,20 +46,27 @@ impl Hash for LoadBalancerDefinition {
 }
 
 impl LoadBalancerDefinition {
-    pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
+    pub(crate) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
         let _ = create_load_balancer_with_config(&config)?;
-        Ok(Self(Arc::new(config)))
+        Ok(Self(Arc::new(CompiledDefinition {
+            config,
+            is_retired: AtomicBool::new(false),
+        })))
     }
 
-    pub(super) fn config(&self) -> &LoadBalancerAlgorithmConfig {
-        &self.0
+    pub(crate) fn config(&self) -> &LoadBalancerAlgorithmConfig {
+        &self.0.config
+    }
+
+    pub(super) fn retire(&self) {
+        self.0.is_retired.store(true, Ordering::SeqCst);
     }
 }
 
 /// Load balancers owned by one routing-target generation; replacement resets target-local counters and caches.
 #[derive(Default)]
 pub struct LoadBalancerTargetState {
-    instances: SccHashMap<LoadBalancerDefinition, Arc<dyn LoadBalancer>>,
+    pub(crate) instances: SccHashMap<LoadBalancerDefinition, Arc<dyn LoadBalancer>>,
 }
 
 impl LoadBalancerTargetState {
@@ -69,17 +83,22 @@ impl LoadBalancerTargetState {
 
         let lb = create_load_balancer_with_config(definition.config())
             .expect("load balancer config validated during router construction");
-        if self
-            .instances
-            .insert_sync(definition.clone(), lb.clone())
-            .is_ok()
-        {
+        if definition.0.is_retired.load(Ordering::SeqCst) {
             return lb;
         }
 
-        self.instances
-            .read_sync(definition, |_definition, lb| lb.clone())
-            .expect("target-local load balancer should exist after insert race")
+        let lb = self
+            .instances
+            .entry_sync(definition.clone())
+            .or_insert(lb)
+            .get()
+            .clone();
+        // An in-flight request can insert after eviction's removal. Do not retain
+        // its instance if the definition was retired while insertion was running.
+        if definition.0.is_retired.load(Ordering::SeqCst) {
+            self.instances.remove_sync(definition);
+        }
+        lb
     }
 
     #[cfg(test)]

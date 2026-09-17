@@ -51,6 +51,16 @@ pub struct StargateState {
 }
 
 impl StargateState {
+    pub(crate) fn forget_load_balancer_instance(
+        &self,
+        target: &RoutingTargetKey,
+        definition: &crate::load_balancer::LoadBalancerDefinition,
+    ) {
+        self.routing.targets.read_sync(target, |_, state| {
+            state.load_balancers.instances.remove_sync(definition);
+        });
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

@@ -408,7 +408,7 @@ The trusted gateway can then set:
 x-routing-method: pulsar
 ```
 
-Header values are trimmed, converted to lowercase, and normalized from
+Method-only header values are trimmed, converted to lowercase, and normalized from
 underscores to hyphens. For example, `pulsar_wait_and_widen` selects
 `pulsar-wait-and-widen`.
 
@@ -421,6 +421,44 @@ configured algorithm is always available as an override without a
 Treat routing headers as trusted internal metadata. A gateway should derive or
 validate them instead of forwarding public caller values.
 
+### Routing expressions
+
+Append parameters to a configured method to override its settings for a request:
+
+```text
+x-routing-method: pulsar-wait-and-widen;seed=stable-a;n=2;max_queue_time_floor_ms=100;max_queue_time_ceil_ms=500
+```
+
+The method uses the same configuration lookup as a method-only override. Parameters
+replace individual fields; omitted fields keep their configured values. Parameter
+names match the configuration fields documented above and must apply to the selected
+algorithm. Common parameters include `require_cache_affinity_key`,
+`require_input_tokens`, and `max_input_work_seconds`.
+
+Expressions follow an RFC 8941 Item-with-Parameters profile, limited to 1024 bytes
+and 32 unique parameters. Every parameter needs `=value`. Spaces may follow `;`
+but cannot surround `=`. Use `true` or `false` for booleans. Strings may be quoted
+but cannot contain commas or semicolons; commas are forbidden anywhere. Quote
+numbers requiring more than three fractional digits, such as
+`next_bucket_unlock_factor="0.0625"`. Quoted numbers must be plain finite numbers,
+without exponents.
+
+Expression values for `n`, `ttft_bucket_size_ms`, `max_input_work_seconds`,
+`cache_affinity_virtual_nodes`, and `cache_affinity_backend_selection_count` must
+be positive. Setting either queue-time bound requires both bounds in the resulting
+configuration. Static configuration behavior is unchanged.
+
+Unchanged expression bytes reuse the configuration and load balancer for the same
+routing key and model. Changed bytes replace that entry. Entries expire after
+15 minutes without access; cleanup occurs during cache operations.
+
+Invalid routing headers return HTTP `400` before backend selection, with
+`content-type: application/json`, `x-stargate-error-code: <class>`, and body
+`{"error":"<message>","code":"<class>"}`. Classes are `malformed_expression`,
+`unknown_method`, `unavailable`, `unknown_parameter`, `not_applicable`,
+`invalid_value`, `inert_combination`, and `inert_value`. Method-only rejections
+use the same response shape.
+
 ## Load-balancer request headers
 
 These proxy headers affect load-balancer behavior:
@@ -429,7 +467,7 @@ These proxy headers affect load-balancer behavior:
 | --- | --- | --- |
 | `x-model` | required | Exact model ID used for model configuration lookup. |
 | `x-routing-key` | optional | Authenticated routing scope. It participates in affinity hashes. |
-| `x-routing-method` | optional | Preconfigured request algorithm. |
+| `x-routing-method` | optional | Preconfigured request algorithm, optionally with expression parameters. |
 | `x-cache-affinity-key` | optional or config-required | Opaque stable prefix or session identity. Blank means absent. |
 | `x-input-tokens` | required `u64` | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
 | `x-priority` | optional `u32`, default `0` | Chooses the nearest published queue estimate at or below this priority. |

@@ -20,12 +20,14 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span};
+use tracing::{Instrument, Span, info};
 
-use crate::load_balancer::LoadBalancerRouter;
+use crate::load_balancer::dynamic_config::{DynamicConfigCache, Outcome};
+use crate::load_balancer::expression::{RejectionError, RoutingExpression};
+use crate::load_balancer::{LoadBalancerAlgorithmResolution, LoadBalancerRouter};
 use crate::metrics::StargateMetrics;
 use crate::routing_state::StargateState;
 use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
@@ -55,6 +57,31 @@ const HEADER_MAX_WAIT_MS: &str = "x-max-wait-ms";
 const HEADER_REQUEST_SLO_MS: &str = "x-request-slo-ms";
 const HEADER_CACHE_AFFINITY_KEY: &str = "x-cache-affinity-key";
 const HEADER_STARGATE_ERROR_CODE: &str = "x-stargate-error-code";
+
+#[derive(Debug, PartialEq, Eq)]
+enum ProxyRequestError {
+    Status(StatusCode),
+    Routing(RejectionError),
+}
+
+impl From<StatusCode> for ProxyRequestError {
+    fn from(status: StatusCode) -> Self {
+        Self::Status(status)
+    }
+}
+
+impl IntoResponse for ProxyRequestError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Status(status) => status.into_response(),
+            Self::Routing(error) => routing::json_error_response(
+                StatusCode::BAD_REQUEST,
+                error.class,
+                serde_json::json!({"error": error.message, "code": error.class}).to_string(),
+            ),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct OpenAiProxyEndpoint {
@@ -119,6 +146,7 @@ pub struct ProxyAppState {
     pub traffic: ProxyTrafficState,
     pub readiness: ReadinessState,
     pub lb_router: Arc<LoadBalancerRouter>,
+    pub(crate) dynamic_config: Arc<DynamicConfigCache>,
     pub metrics: Arc<StargateMetrics>,
     pub retry: ProxyRetryConfig,
     pub debug_config: DebugConfig,
@@ -151,13 +179,16 @@ async fn proxy_openai_request(
     app: ProxyAppState,
     req: Request,
     endpoint: OpenAiProxyEndpoint,
-) -> Result<Response<Body>, StatusCode> {
+) -> Result<Response<Body>, ProxyRequestError> {
     let request_start = Instant::now();
     let (parts, body) = req.into_parts();
     let span = proxy_openai_request_span(&parts.headers);
     async move {
         let request = prepare_proxy_request(&app, parts, body, endpoint, request_start)?;
-        ProxyRequestRun::new(&app, request).execute().await
+        ProxyRequestRun::new(&app, request)
+            .execute()
+            .await
+            .map_err(Into::into)
     }
     .instrument(span)
     .await
@@ -169,7 +200,7 @@ fn prepare_proxy_request(
     body: Body,
     endpoint: OpenAiProxyEndpoint,
     request_start: Instant,
-) -> Result<PreparedProxyRequest, StatusCode> {
+) -> Result<PreparedProxyRequest, ProxyRequestError> {
     let request_path = parts.uri.path();
     let path_and_query = parts
         .uri
@@ -195,10 +226,55 @@ fn prepare_proxy_request(
         },
     );
 
-    let lb_resolution = app
-        .lb_router
-        .resolve_algorithm_override(model_id, request_inputs.routing_algorithm_override.as_ref())
-        .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
+    let lb_resolution = if let Some(raw) = &request_inputs.routing_expression {
+        let (definition, outcome) = app
+            .dynamic_config
+            .resolve(target, raw, || {
+                RoutingExpression::parse(raw)?.compile(&app.lb_router, model_id)
+            })
+            .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
+        if outcome != Outcome::Hit {
+            info!(
+                routing_key = ?target.routing_key,
+                model_id = %model_id,
+                algorithm = %definition.config().algorithm(),
+                outcome = outcome.as_str(),
+                expression = %raw,
+                "routing expression configuration built"
+            );
+        }
+        LoadBalancerAlgorithmResolution {
+            definition,
+            requested_algorithm: Some(raw.clone()),
+        }
+    } else {
+        let mut resolution = app
+            .lb_router
+            .resolve_algorithm_override(
+                model_id,
+                request_inputs.routing_algorithm_override.as_ref(),
+            )
+            .map_err(|error| {
+                let requested = parts
+                    .headers
+                    .get(HEADER_ROUTING_METHOD)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or(error.requested_algorithm())
+                    .to_owned();
+                reject_invalid_routing_algorithm(
+                    target,
+                    &RejectionError::algorithm(error, &requested),
+                )
+            })?;
+        if let Some(raw) = parts
+            .headers
+            .get(HEADER_ROUTING_METHOD)
+            .and_then(|value| value.to_str().ok())
+        {
+            resolution.requested_algorithm = Some(raw.to_owned());
+        }
+        resolution
+    };
     validate_load_balancer_request_requirements(lb_resolution.config(), &request_inputs)?;
     let retry_deadline = retry_budget_deadline(&parts.headers, &app.retry, request_start)?;
     let replay_body =
@@ -258,8 +334,13 @@ mod test_support {
     ) -> ProxyAppState {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let state = Arc::new(StargateState::new());
         ProxyAppState {
-            state: Arc::new(StargateState::new()),
+            dynamic_config: Arc::new(super::DynamicConfigCache::new(
+                state.clone(),
+                Duration::from_secs(15 * 60),
+            )),
+            state,
             quic_proxy: Arc::new(
                 QuicHttpProxy::new(
                     QuicTunnelConfig {
@@ -288,6 +369,56 @@ mod test_support {
             metrics,
             retry: ProxyRetryConfig::default(),
             debug_config: DebugConfig::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn method_only_requests_use_static_definitions_without_caching() {
+        use crate::load_balancer::LoadBalancerAlgorithmOverride;
+
+        let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
+        for header in ["round-robin", " RANDOM ", "PULSAR_WAIT_AND_WIDEN"] {
+            let request = axum::http::Request::builder()
+                .uri("/v1/chat/completions")
+                .header("x-model", "model")
+                .header("x-request-id", "method-only")
+                .header("x-input-tokens", "1")
+                .header("x-routing-method", header)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let (parts, body) = request.into_parts();
+            let prepared = super::prepare_proxy_request(
+                &app,
+                parts,
+                body,
+                super::OpenAiProxyEndpoint::CHAT_COMPLETIONS,
+                std::time::Instant::now(),
+            )
+            .unwrap();
+            let expected = app
+                .lb_router
+                .resolve_algorithm_override(
+                    "model",
+                    Some(&LoadBalancerAlgorithmOverride::parse(header).unwrap()),
+                )
+                .unwrap();
+            assert_eq!(
+                prepared.lb_resolution.definition, expected.definition,
+                "{header}"
+            );
+            assert_eq!(
+                prepared.lb_resolution.requested_algorithm.as_deref(),
+                Some(header)
+            );
+            let marker = super::RejectionError::new("invalid_value", "cache miss", header);
+            assert_eq!(
+                app.dynamic_config
+                    .resolve(&prepared.request_inputs.target, header, || Err(
+                        marker.clone()
+                    )),
+                Err(marker),
+                "method-only header populated the cache: {header}",
+            );
         }
     }
 

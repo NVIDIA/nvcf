@@ -24,7 +24,7 @@ use super::*;
 
 #[derive(Debug, Default)]
 pub(super) struct RoutingLifecycle {
-    targets: SccHashMap<RoutingTargetKey, Arc<RoutingTargetState>>,
+    pub(super) targets: SccHashMap<RoutingTargetKey, Arc<RoutingTargetState>>,
     metrics: Option<Arc<StargateMetrics>>,
 }
 
