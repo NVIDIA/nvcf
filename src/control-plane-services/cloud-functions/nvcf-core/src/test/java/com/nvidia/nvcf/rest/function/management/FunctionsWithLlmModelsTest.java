@@ -596,6 +596,44 @@ class FunctionsWithLlmModelsTest {
     }
 
     @Test
+    void shouldPersistRoutingExpressionsAsReceivedOnCreateAndUpdate() {
+        var initialRoutingMethod = "Pulsar_Wait_And_Widen; seed=stable-a;n=2";
+        var function = createInitialLlmFunction(
+                TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli(),
+                "1-M", initialRoutingMethod);
+
+        assertThat(function.models().getFirst().getLlmConfig().getRoutingMethod())
+                .isEqualTo(initialRoutingMethod);
+        assertLlmConfigPersisted(function.versionId(), "1-M", initialRoutingMethod);
+
+        var updatedRoutingMethod = "pulsar;seed=stable-b";
+        var updateToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(
+                TEST_CLIENT_SUBJECT, List.of(SCOPE_UPDATE_FUNCTION), 100);
+        var updateRequest = UpdateFunctionRequest.builder()
+                .modelUpdates(List.of(UpdateFunctionRequest.ModelUpdateDto.builder()
+                        .modelName(TEST_LLM_MODEL_NAME)
+                        .llmConfig(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
+                                .routingMethod(updatedRoutingMethod)
+                                .build())
+                        .build()))
+                .build();
+        var updateEntity = RequestEntity.put(URI.create("/v2/nvcf/functions/" + function.id()
+                        + "/versions/" + function.versionId()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + updateToken)
+                .body(updateRequest);
+
+        var response = testRestTemplate.exchange(updateEntity, FunctionResponse.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+        var updatedModel = response.getBody().function().models().getFirst();
+        assertThat(updatedModel.getLlmConfig().getRoutingMethod())
+                .isEqualTo(updatedRoutingMethod);
+        assertLlmConfigPersisted(function.versionId(), "1-M", updatedRoutingMethod);
+    }
+
+    @Test
     void shouldRejectCreateWithInvalidRoutingMethod() {
         var createToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
                                                           List.of(SCOPE_REGISTER_FUNCTION), 100);
@@ -605,7 +643,7 @@ class FunctionsWithLlmModelsTest {
                 .inferenceUrl(TEST_INFERENCE_URL)
                 .inferencePort(TEST_INFERENCE_PORT)
                 .functionType(FunctionTypeEnum.LLM)
-                .models(List.of(llmModel("1-M", "not-a-method")))
+                .models(List.of(llmModel("1-M", "pulsar,seed=x")))
                 .build();
         var createEntity = RequestEntity.post(URI.create("/v2/nvcf/functions"))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -615,7 +653,8 @@ class FunctionsWithLlmModelsTest {
         var response = testRestTemplate.exchange(createEntity, String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).contains("llmConfig.routingMethod");
+        assertThat(response.getBody()).contains(
+                "llmConfig.routingMethod", TEST_LLM_MODEL_NAME, "commas are not allowed");
     }
 
     @Test
@@ -652,7 +691,7 @@ class FunctionsWithLlmModelsTest {
                 .modelUpdates(List.of(UpdateFunctionRequest.ModelUpdateDto.builder()
                         .modelName(TEST_LLM_MODEL_NAME)
                         .llmConfig(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
-                                .routingMethod("not-a-method")
+                                .routingMethod("pulsar;n=?1")
                                 .build())
                         .build()))
                 .build();
@@ -665,7 +704,8 @@ class FunctionsWithLlmModelsTest {
         var response = testRestTemplate.exchange(updateEntity, String.class);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).contains("llmConfig.routingMethod");
+        assertThat(response.getBody()).contains(
+                "llmConfig.routingMethod", TEST_LLM_MODEL_NAME, "value for 'n'");
     }
 
     @Test
