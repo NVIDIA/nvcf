@@ -18,6 +18,7 @@ package com.nvidia.nvcf.service.function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.nvidia.nvcf.configuration.llm.LlmRoutingExpressionsProperties;
 import com.nvidia.nvcf.rest.function.management.dto.LlmInvocationConfigDto;
 import com.nvidia.nvcf.rest.function.management.dto.PriorityDto;
 import java.util.HashMap;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,6 +40,9 @@ class FunctionLlmServicePriorityTest {
     private FunctionLookupService functionLookupService;
     @Mock
     private FunctionMapperService functionMapperService;
+    @Spy
+    private LlmRoutingMethodValidator llmRoutingMethodValidator =
+            new LlmRoutingMethodValidator(new LlmRoutingExpressionsProperties());
     @InjectMocks
     private FunctionLlmService service;
 

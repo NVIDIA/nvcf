@@ -73,6 +73,7 @@ public class FunctionLlmService {
 
     private final FunctionLookupService functionLookupService;
     private final FunctionMapperService functionMapperService;
+    private final LlmRoutingMethodValidator llmRoutingMethodValidator;
 
     /**
      * Resolves the caller's invocation priority: the per-account override when the caller has one,
@@ -90,13 +91,21 @@ public class FunctionLlmService {
     }
 
     /**
-     * Reject a create request that sets llmInvocationConfig on a non-LLM function.
+     * Restrict llmInvocationConfig to LLM functions and validate their routing expressions.
      */
     public void validateCreateFunctionRequestWithLlmConfig(CreateFunctionRequest request) {
         if (request.getLlmInvocationConfig() != null
                 && request.getFunctionType() != FunctionTypeEnum.LLM) {
             log.error(MESG_FUNCTION_NOT_LLM_INVOCATION_CONFIG);
             throw new BadRequestException(MESG_FUNCTION_NOT_LLM_INVOCATION_CONFIG);
+        }
+        if (request.getFunctionType() == FunctionTypeEnum.LLM && request.getModels() != null) {
+            for (var model : request.getModels()) {
+                if (model.getLlmConfig() != null) {
+                    llmRoutingMethodValidator.validate(
+                            model.getName(), model.getLlmConfig().getRoutingMethod());
+                }
+            }
         }
     }
 
@@ -403,7 +412,7 @@ public class FunctionLlmService {
                     llmConfig.setTokenRateLimit(llmConfigUpdate.tokenRateLimit());
                 }
                 if (llmConfigUpdate.routingMethod() != null) {
-                    LlmConfigValidator.validateRoutingMethod(
+                    llmRoutingMethodValidator.validate(
                             modelUpdate.modelName(), llmConfigUpdate.routingMethod());
                     llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
                 }

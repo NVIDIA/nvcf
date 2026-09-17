@@ -182,6 +182,9 @@ logging:
     com.github.tomakehurst.wiremock: DEBUG
 
 nvcf:
+  llm:
+    routing-expressions:
+      enabled: true
   request:
     timeout: 1s # only whole seconds
   fqdn: http://localhost:${server.port}
