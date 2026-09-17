@@ -18,7 +18,9 @@ limitations under the License.
 package storage
 
 import (
+	"context"
 	"encoding/json"
+	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"os"
 	"path/filepath"
 	"strings"
@@ -544,4 +546,21 @@ func TestStorageCapabilityCatalogEncryptionSupported(t *testing.T) {
 		digestDriverProfile(NVMeshStorageClassProvisioner, nvmesh, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
 		digestDriverProfile(NVMeshStorageClassProvisioner, without, ModelCacheWorkflowHelm, ModelCacheTransitionROXReadOnly),
 		"encryption support is part of the driver profile digest")
+}
+
+func TestResolveModelCacheStorageWithClientsetMissingCatalogIsSentinel(t *testing.T) {
+	sc := storageClassWithProvisioner(DefaultModelCacheStorageClassName, NVMeshStorageClassProvisioner)
+	k8s := fakek8sclient.NewSimpleClientset(sc)
+
+	_, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.ErrorIs(t, err, ErrStorageCapabilityCatalogNotFound)
+	assert.NotErrorIs(t, err, ErrModelCacheStorageClassNotFound)
+
+	// A present but empty catalog is a configuration error, not absence.
+	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: "nvca-system"},
+	})
+	_, err = ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrStorageCapabilityCatalogNotFound)
 }

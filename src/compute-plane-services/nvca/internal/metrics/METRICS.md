@@ -583,6 +583,7 @@ rate(nvca_k8s_api_failure_total[5m]) > 0.1
 | Reason | Description |
 |--------|-------------|
 | `cache_spec_invalid` | Spec validation failures (missing fields, decode errors) |
+| `catalog_missing` | Storage capability catalog ConfigMap absent at request creation; the request proceeds without a durable cache |
 | `pvc_setup_failed` | Primary PV/PVC setup failures |
 | `pvc_bind_failed` | RO PVC bind failures |
 | `rw_pvc_bind_failed` | RW PVC bind failures |

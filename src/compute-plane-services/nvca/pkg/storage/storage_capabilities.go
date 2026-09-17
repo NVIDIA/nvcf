@@ -65,6 +65,12 @@ var (
 	// ErrModelCacheStorageClassNotFound means nvcf-sc is absent. Callers may map
 	// this to a documented non-durable fallback.
 	ErrModelCacheStorageClassNotFound = errors.New("model cache StorageClass not found")
+	// ErrStorageCapabilityCatalogNotFound means the catalog ConfigMap is absent,
+	// which happens when the agent image runs ahead of the chart that installs
+	// it. Callers treat it like an absent nvcf-sc: nothing is qualified, so the
+	// request proceeds without a durable cache. A present but malformed catalog
+	// is a different error and stays fatal.
+	ErrStorageCapabilityCatalogNotFound = errors.New("storage capability catalog ConfigMap not found")
 	// ErrModelCacheStorageSelectionDrift marks a deterministic mismatch between
 	// a persisted selection and its live StorageClass or catalog input. Callers
 	// can fail the request without treating transient API errors as drift.
@@ -214,6 +220,9 @@ func loadStorageCapabilityCatalog(
 
 	cm := &corev1.ConfigMap{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: StorageCapabilityConfigMapName}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			err = fmt.Errorf("%w: %w", ErrStorageCapabilityCatalogNotFound, err)
+		}
 		return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
 			namespace, StorageCapabilityConfigMapName, err)
 	}
@@ -238,6 +247,9 @@ func loadStorageCapabilityCatalogSnapshot(
 
 	cm := &corev1.ConfigMap{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: StorageCapabilityConfigMapName}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			err = fmt.Errorf("%w: %w", ErrStorageCapabilityCatalogNotFound, err)
+		}
 		return nil, "", fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
 			namespace, StorageCapabilityConfigMapName, err)
 	}
@@ -317,6 +329,10 @@ func ResolveModelCacheStorageWithClientset(
 	cm, err := k8sClient.CoreV1().ConfigMaps(catalogNamespace).Get(
 		ctx, StorageCapabilityConfigMapName, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
+				catalogNamespace, StorageCapabilityConfigMapName, ErrStorageCapabilityCatalogNotFound)
+		}
 		return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
 			catalogNamespace, StorageCapabilityConfigMapName, err)
 	}

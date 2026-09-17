@@ -215,6 +215,7 @@ a `Retain` class must be created for the cache.
 |---|---|
 | Catalog, class, or gate changes after the binding exists | Binding stays authoritative |
 | Class or catalog drifts before the binding exists | Fail before any side effect |
+| Catalog ConfigMap is absent (agent ahead of its chart) | Warn, count, deploy without a durable cache; Helm falls back to ephemeral |
 | Binding is `Retiring`, missing, or lacks this request's reference | Fail; never rebind |
 | Object has foreign or missing ownership | Never adopt or delete it |
 | Reader PV and claim disagree on class | Never binds; prevented by construction |
