@@ -812,9 +812,11 @@ highAvailability:
     # JetStream stream replica factor (RF). Applied under HA to the stream
     # creators — nvcf-api and invocation-service — so the worker/result streams
     # they declare are replicated across the NATS cluster (survives a node
-    # loss). RF must be <= nats.replicas. Default 2 per the SDD.
+    # loss). RF must be <= nats.replicas. Default 3: JetStream streams use
+    # Raft quorum, so RF=2 loses quorum on a single replica failure and
+    # provides no HA benefit over RF=1.
     jetstream:
-      replicaFactor: 2
+      replicaFactor: 3
     podDisruptionBudget:
       enabled: true
       merge:

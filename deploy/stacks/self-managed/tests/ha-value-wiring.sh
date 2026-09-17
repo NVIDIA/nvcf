@@ -111,12 +111,12 @@ grep -q "whenUnsatisfiable: ScheduleAnyway" "$work_dir/api-on.yaml" ||
   fail "api: expected ScheduleAnyway topology spread when highAvailability.mode=preferred"
 awk '/^api:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/api-on.yaml" | grep -q "podDisruptionBudget:" ||
   fail "api: expected podDisruptionBudget when highAvailability.mode=preferred"
-grep -q 'NVCF_NATS_REPLICAS: "2"' "$work_dir/api-on.yaml" ||
-  fail "api: expected JetStream RF NVCF_NATS_REPLICAS=2 when highAvailability.mode=preferred"
+grep -q 'NVCF_NATS_REPLICAS: "3"' "$work_dir/api-on.yaml" ||
+  fail "api: expected JetStream RF NVCF_NATS_REPLICAS=3 when highAvailability.mode=preferred"
 
 render_chart_values invocation-service "$work_dir/invocation-on.yaml" "$core" || fail "render invocation (preferred)"
-grep -q 'NATS_PROPERTIES__REPLICAS: "2"' "$work_dir/invocation-on.yaml" ||
-  fail "invocation: expected JetStream RF NATS_PROPERTIES__REPLICAS=2 when highAvailability.mode=preferred"
+grep -q 'NATS_PROPERTIES__REPLICAS: "3"' "$work_dir/invocation-on.yaml" ||
+  fail "invocation: expected JetStream RF NATS_PROPERTIES__REPLICAS=3 when highAvailability.mode=preferred"
 
 render_chart_values cassandra "$work_dir/cassandra-on.yaml" "$deps" || fail "render cassandra (preferred)"
 grep -E "replicaCount:[[:space:]]*3" "$work_dir/cassandra-on.yaml" >/dev/null ||

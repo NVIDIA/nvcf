@@ -65,9 +65,12 @@ In-scope charts MUST expose the required value hooks.
 {{/* JetStream stream replica factor (RF) under HA. Applied to the stream
      creators — nvcf-api (Java, nvcf.nats.replicas) and invocation (Rust,
      nats_properties.replicas) — via their env so the streams they declare are
-     replicated across the NATS cluster. Defaults to 2 per the SDD. */}}
+     replicated across the NATS cluster. Defaults to 3: JetStream streams use
+     Raft quorum, and RF=2 provides no failure tolerance (loses quorum on a
+     single replica loss) — see the NATS JetStream replication guidance and
+     the HA values design review. */}}
 {{- define "nvcf.ha.natsStreamReplicas" -}}
-{{- dig "highAvailability" "nats" "jetstream" "replicaFactor" 2 . -}}
+{{- dig "highAvailability" "nats" "jetstream" "replicaFactor" 3 . -}}
 {{- end -}}
 
 {{/* Soft/hard pod anti-affinity on hostname for a Helm release instance name.
