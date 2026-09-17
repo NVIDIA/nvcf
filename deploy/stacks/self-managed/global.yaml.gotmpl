@@ -32,8 +32,8 @@ affinity, PDB, update strategy).
 
 highAvailability.mode:
   none          — keep existing env/chart defaults (local / CI / BDD).
-  ha-preferred  — HA sizing; preferred hostname anti-affinity.
-  ha-enforced   — HA sizing; required hostname anti-affinity.
+  preferred  — HA sizing; preferred hostname anti-affinity.
+  enforced   — HA sizing; required hostname anti-affinity.
 
 Requires ≥3 schedulable nodes unless mode is none. Nested keys under
 stateless/hotPath/nats/openbao/cassandra override those defaults.
@@ -74,12 +74,12 @@ In-scope charts MUST expose the required value hooks.
      Context: dict "Values" $.Values "instance" "<release-instance>" */}}
 {{- define "nvcf.ha.statelessAffinity" -}}
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
+{{- if or (eq $haMode "preferred") (eq $haMode "enforced") -}}
 {{- $paa := dig "highAvailability" "stateless" "podAntiAffinity" dict .Values -}}
 {{- if dig "enabled" true $paa -}}
 affinity:
   podAntiAffinity:
-{{- if eq $haMode "ha-enforced" }}
+{{- if eq $haMode "enforced" }}
     requiredDuringSchedulingIgnoredDuringExecution:
       - labelSelector:
           matchExpressions:
@@ -106,18 +106,18 @@ affinity:
 
 {{/* Zone-level topology spread for a Helm release instance name. Spreads
      replicas across topology.kubernetes.io/zone. whenUnsatisfiable follows the
-     mode: ha-preferred → ScheduleAnyway (best effort), ha-enforced →
+     mode: preferred → ScheduleAnyway (best effort), enforced →
      DoNotSchedule (hard). Nodes MUST carry topology.kubernetes.io/zone.
      Context: dict "Values" $.Values "instance" "<release-instance>" */}}
 {{- define "nvcf.ha.statelessTopologySpread" -}}
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
+{{- if or (eq $haMode "preferred") (eq $haMode "enforced") -}}
 {{- $ts := dig "highAvailability" "stateless" "topologySpread" dict .Values -}}
 {{- if dig "enabled" true $ts -}}
 topologySpreadConstraints:
   - maxSkew: {{ dig "maxSkew" 1 $ts }}
     topologyKey: topology.kubernetes.io/zone
-    whenUnsatisfiable: {{ if eq $haMode "ha-enforced" }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
+    whenUnsatisfiable: {{ if eq $haMode "enforced" }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
     labelSelector:
       matchLabels:
         app.kubernetes.io/instance: {{ .instance | quote }}
@@ -127,19 +127,19 @@ topologySpreadConstraints:
 
 {{/* Hostname pod anti-affinity for a Tier-2 quorum release (Cassandra, NATS,
      OpenBao) so the 3 quorum peers land on distinct nodes. Matches
-     app.kubernetes.io/instance = release name. ha-preferred → preferred (soft,
-     stays schedulable on small pools), ha-enforced → required (hard). Emits the
+     app.kubernetes.io/instance = release name. preferred → preferred (soft,
+     stays schedulable on small pools), enforced → required (hard). Emits the
      podAntiAffinity body only (no affinity: wrapper) so callers can nest it as a
      map (Cassandra affinity, NATS podTemplate.merge.spec.affinity) or a string
      (OpenBao server.affinity). Gated by highAvailability.tier2.podAntiAffinity.
      Context: dict "Values" $.Values "instance" "<release-instance>" */}}
 {{- define "nvcf.ha.tier2Affinity" -}}
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
+{{- if or (eq $haMode "preferred") (eq $haMode "enforced") -}}
 {{- $paa := dig "highAvailability" "tier2" "podAntiAffinity" dict .Values -}}
 {{- if dig "enabled" true $paa -}}
 podAntiAffinity:
-{{- if eq $haMode "ha-enforced" }}
+{{- if eq $haMode "enforced" }}
   requiredDuringSchedulingIgnoredDuringExecution:
     - labelSelector:
         matchExpressions:
@@ -180,7 +180,7 @@ podAntiAffinity:
      "instance" "<release-instance>" */}}
 {{- define "nvcf.ha.tier2TopologySpread" -}}
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
+{{- if or (eq $haMode "preferred") (eq $haMode "enforced") -}}
 {{- $ts := dig "highAvailability" "tier2" "topologySpread" dict .Values -}}
 {{- if dig "enabled" false $ts -}}
 - maxSkew: {{ dig "maxSkew" 1 $ts }}
@@ -194,10 +194,10 @@ podAntiAffinity:
 {{- end -}}
 
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString }}
-{{- if not (has $haMode (list "none" "ha-preferred" "ha-enforced")) }}
-{{- fail (printf "highAvailability.mode must be none, ha-preferred, or ha-enforced, got %q" $haMode) }}
+{{- if not (has $haMode (list "none" "preferred" "enforced")) }}
+{{- fail (printf "highAvailability.mode must be none, preferred, or enforced, got %q" $haMode) }}
 {{- end }}
-{{- $haEnabled := or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") }}
+{{- $haEnabled := or (eq $haMode "preferred") (eq $haMode "enforced") }}
 
 cassandra:
   global:

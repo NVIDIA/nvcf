@@ -729,10 +729,10 @@ grpcproxy:
 #
 # mode: none         (default) — keep existing env/chart replica and PDB values
 #                                (local / CI / BDD).
-#       ha-preferred           — HA sizing below; hostname anti-affinity is
+#       preferred           — HA sizing below; hostname anti-affinity is
 #                                preferred (still schedule if a second node/AZ
 #                                has no capacity). Requires ≥3 schedulable nodes.
-#       ha-enforced            — same HA sizing; hostname anti-affinity is
+#       enforced            — same HA sizing; hostname anti-affinity is
 #                                required (second replica stays Pending rather
 #                                than packing). Requires ≥3 schedulable nodes.
 #
@@ -755,7 +755,7 @@ highAvailability:
       enabled: true
     # Spread replicas across availability zones. Nodes MUST be labelled
     # topology.kubernetes.io/zone=<az>. whenUnsatisfiable follows mode:
-    # ha-preferred → ScheduleAnyway, ha-enforced → DoNotSchedule.
+    # preferred → ScheduleAnyway, enforced → DoNotSchedule.
     topologySpread:
       enabled: true
       maxSkew: 1
@@ -779,8 +779,8 @@ highAvailability:
   # Tier-2 quorum services (Cassandra, NATS, OpenBao). Under HA their peers get
   # hostname pod anti-affinity (matching app.kubernetes.io/instance per release)
   # so the 3 quorum members land on distinct nodes. whenUnsatisfiable follows
-  # mode: ha-preferred → preferred/soft (stays schedulable on small pools),
-  # ha-enforced → required/hard. The upstream OpenBao chart ships a hard
+  # mode: preferred → preferred/soft (stays schedulable on small pools),
+  # enforced → required/hard. The upstream OpenBao chart ships a hard
   # anti-affinity by default that the stack disables for single-node installs;
   # this re-enables it (soft/hard by mode) under HA. Set enabled: false to keep
   # the chart defaults.
