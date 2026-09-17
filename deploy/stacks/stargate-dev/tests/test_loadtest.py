@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import copy
+import io
 import importlib.util
 import json
 import sys
 import tempfile
+import tarfile
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -441,11 +444,13 @@ class CanonicalSuiteTests(unittest.TestCase):
                     directory=campaign.output / "arm",
                     command=["spark"],
                     expected_seconds=1,
-                    metadata={},
+                    metadata={"scenario": "smoke"},
                 )
                 process = mock.Mock()
                 process.poll.return_value = spark_status
                 with (
+                    mock.patch.object(campaign, "verify_environment"),
+                    mock.patch.object(campaign, "pod_state", return_value={}),
                     mock.patch.object(campaign, "save_state"),
                     mock.patch.object(campaign, "stop_processes") as stop,
                     mock.patch.object(
@@ -461,6 +466,270 @@ class CanonicalSuiteTests(unittest.TestCase):
                 self.assertNotEqual(metadata["status"], "complete")
                 self.assertFalse((run.directory / "spark.txt").exists())
 
+    def campaign(self, output, suite=None):
+        args = SimpleNamespace(
+            region="us-west-2",
+            peer_region=[],
+            output=output,
+            endpoint=None,
+            spark_pod=None,
+            algorithm="both",
+            suite="capacity",
+            spark_image="spark:test",
+            local_port=18000,
+            resume=False,
+            grafana_url="http://grafana.invalid",
+        )
+        return LOADTEST.Campaign(args, suite or LOADTEST.load_suite())
+
+    def local_run(
+        self,
+        campaign,
+        *,
+        cache_hits=0,
+        scenario="saturation",
+        relative="saturation/r08/wait-and-widen",
+    ):
+        workload = campaign.workload_dir / "test.yaml"
+        LOADTEST.write_workload(workload, ["unique prompt"], "test")
+        run = campaign.spark_run(
+            Path(relative),
+            "wait-and-widen",
+            scenario=scenario,
+            rate=8,
+            workers=1,
+            workload=workload,
+            requests=1,
+        )
+        report = {
+            "summary": {"total_requests": 1, "successful": 1, "failed": 0},
+            "throughput": {
+                "kv_cache_hit_requests": cache_hits,
+                "kv_cache_observed_requests": 1,
+            },
+        }
+        script = (
+            "from pathlib import Path; "
+            f"Path({str(run.directory / 'spark.json')!r}).write_text({json.dumps(report)!r})"
+        )
+        run.command = [sys.executable, "-c", script]
+        run.metadata["command"] = run.command
+        return run
+
+    def test_capacity_prompts_are_disjoint_from_smoke_and_every_arm(self):
+        suite = LOADTEST.load_suite()
+        suite["scenarios"]["smoke"]["requests"] = 2
+        suite["scenarios"]["saturation"].update(rates=[2, 4], durationSeconds=1)
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary) / "campaign", suite)
+            try:
+                campaign.prepare_workloads()
+                prompts = []
+                for path in campaign.workload_dir.glob("*.yaml"):
+                    prompts.extend(
+                        yaml.safe_load(path.read_text())["scenarios"][0]["prompts"]
+                    )
+                self.assertEqual(len(prompts), 18)
+                self.assertEqual(
+                    len({prompt[:256] for prompt in prompts}), len(prompts)
+                )
+                arms = []
+                with (
+                    mock.patch.object(
+                        campaign, "execute", side_effect=lambda runs: arms.extend(runs)
+                    ),
+                    mock.patch.object(campaign, "cooldown"),
+                ):
+                    campaign.run_saturation(suite["scenarios"]["saturation"])
+                self.assertEqual(len({run.metadata["workload"] for run in arms}), 4)
+            finally:
+                campaign.close()
+
+    def test_resume_checks_effective_suite_and_preserves_environment_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary) / "campaign")
+            deployment = {
+                "items": [
+                    {
+                        "metadata": {"name": "router"},
+                        "spec": {
+                            "replicas": 1,
+                            "template": {
+                                "spec": {
+                                    "containers": [{"name": "router", "image": "old"}]
+                                }
+                            },
+                        },
+                    }
+                ]
+            }
+            policy = {"n": 2}
+            campaign.args.spark_pod = "spark"
+            spark_pod = {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "spark",
+                            "image": "pinned",
+                            "resources": {"limits": {"cpu": "2"}},
+                        }
+                    ]
+                },
+                "status": {
+                    "containerStatuses": [{"name": "spark", "imageID": "old-digest"}]
+                },
+            }
+
+            def read(context, arguments):
+                if arguments[1] == "configmap":
+                    return json.dumps({"data": {"lb-config.json": json.dumps(policy)}})
+                if arguments[1] == "pod":
+                    return json.dumps(spark_pod)
+                return json.dumps(deployment)
+
+            with mock.patch.object(campaign, "kubectl", side_effect=read):
+                campaign.snapshot_environment({"Id": "spark-digest"})
+                path = campaign.output / "environment.json"
+                original = path.read_bytes()
+                for changed in ("policy", "image", "spark-image", "spark-resources"):
+                    with self.subTest(changed=changed):
+                        policy["n"] = 4 if changed == "policy" else 2
+                        deployment["items"][0]["spec"]["template"]["spec"][
+                            "containers"
+                        ][0]["image"] = "new" if changed == "image" else "old"
+                        spark_pod["status"]["containerStatuses"][0]["imageID"] = (
+                            "new-digest" if changed == "spark-image" else "old-digest"
+                        )
+                        spark_pod["spec"]["containers"][0]["resources"]["limits"][
+                            "cpu"
+                        ] = "4" if changed == "spark-resources" else "2"
+                        with self.assertRaisesRegex(
+                            LOADTEST.LoadTestError, "settings changed"
+                        ):
+                            campaign.snapshot_environment({"Id": "spark-digest"})
+                        self.assertEqual(path.read_bytes(), original)
+            campaign.close()
+            args = campaign.args
+            args.resume = True
+            changed_suite = copy.deepcopy(campaign.suite)
+            changed_suite["defaults"]["maxTokens"] += 1
+            with self.assertRaisesRegex(LOADTEST.LoadTestError, "resume arguments"):
+                LOADTEST.Campaign(args, changed_suite)
+
+    def test_mixed_cache_failure_rejects_both_reports(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary) / "campaign")
+            root = Path("mixed-sessions/repeat-01/wait-and-widen")
+            runs = [
+                self.local_run(
+                    campaign,
+                    scenario=f"mixed-sessions-{stream}",
+                    relative=root / stream,
+                )
+                for stream in ("hot", "short")
+            ]
+            before_warmup = {"backend": {"kv_cache_hit_count": 0}}
+            try:
+                with (
+                    mock.patch.object(campaign, "verify_environment"),
+                    mock.patch.object(campaign, "pod_state", return_value={}),
+                    mock.patch.object(
+                        campaign,
+                        "record_cache_delta",
+                        side_effect=RuntimeError("cache API failed"),
+                    ) as record,
+                    self.assertRaisesRegex(RuntimeError, "cache API failed"),
+                ):
+                    campaign.execute(runs, cache_before=before_warmup)
+                record.assert_called_once_with(campaign.runs / root, before_warmup)
+                for run in runs:
+                    self.assertIsNone(campaign.completed_report(run))
+            finally:
+                campaign.close()
+
+    def test_post_run_validation_failure_never_commits_completion(self):
+        for failure in ("pod", "cache", "cache-hit"):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                campaign = self.campaign(Path(temporary) / "campaign")
+                run = self.local_run(campaign, cache_hits=int(failure == "cache-hit"))
+                try:
+                    with (
+                        mock.patch.object(campaign, "verify_environment"),
+                        mock.patch.object(
+                            campaign,
+                            "pod_state",
+                            side_effect=[{}, RuntimeError("pod API failed")]
+                            if failure == "pod"
+                            else [{}, {}],
+                        ),
+                        mock.patch.object(campaign, "cache_stats", return_value={}),
+                        mock.patch.object(
+                            campaign,
+                            "record_cache_delta",
+                            side_effect=RuntimeError("cache API failed")
+                            if failure == "cache"
+                            else None,
+                        ),
+                        self.assertRaises((RuntimeError, LOADTEST.LoadTestError)),
+                    ):
+                        campaign.execute([run])
+                    self.assertIsNone(campaign.completed_report(run))
+                    self.assertFalse((run.directory / "validation.json").exists())
+                finally:
+                    campaign.close()
+
+    def test_offline_render_failure_cannot_relaunch_accepted_measurement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.campaign(Path(temporary) / "campaign")
+            run = self.local_run(campaign)
+            try:
+                with (
+                    mock.patch.object(campaign, "verify_environment"),
+                    mock.patch.object(campaign, "pod_state", return_value={}),
+                    mock.patch.object(campaign, "cache_stats", return_value={}),
+                    mock.patch.object(campaign, "record_cache_delta"),
+                ):
+                    reports = campaign.execute([run])
+                    with mock.patch.object(
+                        LOADTEST.subprocess,
+                        "run",
+                        return_value=CompletedProcess([], 1, "", "renderer failed"),
+                    ):
+                        with self.assertRaisesRegex(
+                            LOADTEST.LoadTestError, "offline report rendering failed"
+                        ):
+                            LOADTEST.render_reports(campaign.output, "spark:test")
+                    self.assertEqual(campaign.completed_report(run), reports[0])
+                    with mock.patch.object(
+                        LOADTEST.subprocess,
+                        "Popen",
+                        side_effect=AssertionError("traffic must not restart"),
+                    ):
+                        self.assertEqual(campaign.execute([run]), reports)
+                    with mock.patch.object(
+                        LOADTEST.subprocess,
+                        "run",
+                        return_value=CompletedProcess([], 0, "rendered", ""),
+                    ):
+                        LOADTEST.render_reports(campaign.output, "spark:test")
+                    self.assertEqual(
+                        (run.directory / "spark.txt").read_text(), "rendered"
+                    )
+                    (run.directory / "spark.json").write_text('{"summary": {}}')
+                    with self.assertRaisesRegex(
+                        LOADTEST.LoadTestError, "accepted report changed"
+                    ):
+                        LOADTEST.render_reports(campaign.output, "spark:test")
+                    with self.assertRaisesRegex(
+                        LOADTEST.LoadTestError, "artifacts changed"
+                    ):
+                        campaign.completed_report(run)
+            finally:
+                campaign.close()
+
     def test_remote_workload_mismatch_stops_before_traffic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             campaign = object.__new__(LOADTEST.Campaign)
@@ -471,6 +740,8 @@ class CanonicalSuiteTests(unittest.TestCase):
             )
             campaign.stargate_context = "hub"
             campaign.namespace = "test"
+            original_pod = '{"metadata":{"uid":"original-pod"}}'
+            (campaign.output / "spark-pod.json").write_text(original_pod)
             LOADTEST.write_workload(
                 campaign.workload_dir / "smoke.yaml", ["test"], "test"
             )
@@ -492,6 +763,58 @@ class CanonicalSuiteTests(unittest.TestCase):
                 self.assertRaisesRegex(LOADTEST.LoadTestError, "fingerprint differs"),
             ):
                 campaign.prepare_spark_pod()
+            self.assertEqual(
+                (campaign.output / "spark-pod.json").read_text(), original_pod
+            )
+
+    def test_download_extracts_and_verifies_the_remote_report(self):
+        contents = b'{"summary":{"total_requests":1}}\n'
+        for valid_checksum in (True, False):
+            with (
+                self.subTest(valid_checksum=valid_checksum),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                campaign = self.campaign(Path(temporary) / "campaign")
+                campaign.args.spark_pod = "spark"
+                run = LOADTEST.SparkRun(campaign.runs / "arm", [], 1, {})
+                run.directory.mkdir(parents=True)
+                (run.directory / "spark.json").write_text("stale report")
+
+                def download(command, *, stdout, **kwargs):
+                    with tarfile.open(fileobj=stdout, mode="w:gz") as archive:
+                        entry = tarfile.TarInfo("spark.json")
+                        entry.size = len(contents)
+                        archive.addfile(entry, io.BytesIO(contents))
+                    return CompletedProcess(command, 0, b"", b"")
+
+                checksum = (
+                    hashlib.sha256(contents).hexdigest() if valid_checksum else "0" * 64
+                )
+                try:
+                    with (
+                        mock.patch.object(
+                            LOADTEST.subprocess, "run", side_effect=download
+                        ),
+                        mock.patch.object(
+                            campaign,
+                            "command",
+                            return_value=CompletedProcess(
+                                [], 0, checksum + " spark.json"
+                            ),
+                        ),
+                    ):
+                        if valid_checksum:
+                            campaign.download_report(run)
+                            self.assertEqual(
+                                (run.directory / "spark.json").read_bytes(), contents
+                            )
+                        else:
+                            with self.assertRaisesRegex(
+                                LOADTEST.LoadTestError, "checksum differs"
+                            ):
+                                campaign.download_report(run)
+                finally:
+                    campaign.close()
 
 
 if __name__ == "__main__":

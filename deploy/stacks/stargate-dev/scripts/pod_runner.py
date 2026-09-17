@@ -15,7 +15,7 @@ from pathlib import Path
 LAUNCH = 'IFS= read -r OPENAI_API_KEY || exit 1; export OPENAI_API_KEY; run_dir=$1; shift; nohup setsid bash -c "$@" > "$run_dir/spark.log" 2>&1 < /dev/null &'
 WAIT = 'run_dir=$1; shift; exec 9>"$run_dir/spark.lock" || exit 1; flock -x -w 5 9 || exit 1; if test -e "$run_dir/spark.cancelled"; then exit 143; fi; printf "%s\\n" "$$" > "$run_dir/spark.pid.tmp" && mv "$run_dir/spark.pid.tmp" "$run_dir/spark.pid" || exit 1; flock -u 9; exec 9>&-; "$@"; run_status=$?; printf "%s\\n" "$run_status" > "$run_dir/spark.exit.tmp"; mv "$run_dir/spark.exit.tmp" "$run_dir/spark.exit"; exit "$run_status"'
 CANCEL = 'run_dir=$1; mkdir -p "$run_dir" || exit 1; exec 9>"$run_dir/spark.lock" || exit 1; flock -x -w 5 9 || exit 1; : > "$run_dir/spark.cancelled"'
-STOP = 'if tr "\\0" "\\n" < "/proc/$1/cmdline" | grep -Fxq -- "$2"; then kill -TERM -- "-$1"; fi'
+STOP = 'if tr "\\0" "\\n" < "/proc/$1/cmdline" | grep -Fxq -- "$2"; then kill -KILL -- "-$1"; fi'
 
 
 class PodRunner:
@@ -117,6 +117,23 @@ class PodRunner:
             return code
         return None
 
+    def process_group_running(self, pid: int) -> bool:
+        result = self.exec(
+            "bash",
+            "-c",
+            'for stat_file in /proc/[0-9]*/stat; do if stat_value=$(cat "$stat_file"); then printf "%s\\0" "$stat_value"; elif test -e "$stat_file"; then exit 1; fi; done',
+        )
+        if result.returncode:
+            raise RuntimeError(
+                result.stderr.decode(errors="replace").strip()
+                or "Cannot inspect the detached Spark process group"
+            )
+        for stat in result.stdout.split(b"\0")[:-1]:
+            fields = stat.rsplit(b") ", 1)[1].split()
+            if int(fields[2]) == pid and fields[0] not in {b"Z", b"X"}:
+                return True
+        return False
+
     def print_log(self) -> None:
         result = self.exec(
             "tail", "-c", f"+{self.log_offset}", f"{self.state['directory']}/spark.log"
@@ -130,12 +147,10 @@ class PodRunner:
         for attempt in range(3):
             try:
                 identity = self.pod_identity()
-                if identity is None or list(identity) != self.state.get("podIdentity"):
-                    self.save(
-                        phase="cancelled",
-                        reason="original Spark container no longer exists",
+                if identity is None:
+                    raise RuntimeError(
+                        "Cannot fence the Spark launch without a running Pod"
                     )
-                    return
                 fenced = self.state.get("protocolVersion", 1) == 2
                 if fenced:
                     # Serialize cancellation with PID publication so a delayed
@@ -149,26 +164,35 @@ class PodRunner:
                             or "Cannot prevent a delayed Spark launch"
                         )
                 pid = self.process_id()
-                if pid is None:
-                    if (
-                        fenced
-                        or self.read_file(f"{self.state['directory']}/spark.pid")
-                        is not None
-                        or self.exit_code() is not None
-                    ):
-                        self.save(phase="cancelled")
-                        return
+                if pid is not None:
+                    result = self.exec(
+                        "bash", "-c", STOP, "--", str(pid), self.state["marker"]
+                    )
+                    if result.returncode:
+                        raise RuntimeError(
+                            result.stderr.decode(errors="replace").strip()
+                        )
+                else:
+                    published = self.read_file(f"{self.state['directory']}/spark.pid")
+                    if published is not None:
+                        pid = int(published)
+                        if pid <= 1:
+                            raise RuntimeError("Invalid detached Spark process ID")
+                if pid is not None and self.process_group_running(pid):
+                    # A missing wrapper does not prove its children stopped, and
+                    # a stale PID alone does not authorize signalling them.
                     time.sleep(1)
                     continue
-                result = self.exec(
-                    "bash", "-c", STOP, "--", str(pid), self.state["marker"]
-                )
-                if result.returncode:
-                    raise RuntimeError(result.stderr.decode(errors="replace").strip())
-                time.sleep(1)
-                if self.process_id() is None:
-                    self.save(phase="cancelled")
-                    return
+                if pid is None and (
+                    list(identity) != self.state.get("podIdentity")
+                    or (not fenced and self.exit_code() is None)
+                ):
+                    time.sleep(1)
+                    continue
+                if self.pod_identity() != identity:
+                    continue
+                self.save(phase="cancelled")
+                return
             except (RuntimeError, subprocess.SubprocessError, OSError):
                 time.sleep(1)
         self.save(phase="cancel-unconfirmed")

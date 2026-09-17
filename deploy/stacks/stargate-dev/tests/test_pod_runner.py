@@ -5,6 +5,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import signal
 import subprocess
 import sys
@@ -42,6 +43,76 @@ class PodRunnerTests(unittest.TestCase):
             capture_output=True,
             timeout=5,
         )
+
+    def wait_for_pid(self, path):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if path.exists() and (value := path.read_text().strip()):
+                return int(value)
+            time.sleep(0.01)
+        self.fail(f"Process did not publish its PID: {path}")
+
+    @staticmethod
+    def cleanup_group(runner):
+        path = Path(runner.state["directory"]) / "spark.pid"
+        if path.exists():
+            try:
+                os.killpg(int(path.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def test_process_scan_skips_only_files_that_disappear_during_read(self):
+        for failure in ("disappear", "unreadable"):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                runner = self.runner(root)
+                proc = root / "proc"
+                for pid, content in ((1, failure), (2, "2 (worker) S 1 42 42\n")):
+                    path = proc / str(pid) / "stat"
+                    path.parent.mkdir(parents=True)
+                    path.write_text(content)
+                tools = root / "tools"
+                tools.mkdir()
+                cat = tools / "cat"
+                cat.write_text(
+                    f"#!{sys.executable}\n"
+                    "from pathlib import Path\n"
+                    "import sys\n"
+                    "path = Path(sys.argv[1])\n"
+                    "content = path.read_text()\n"
+                    "if path.parent.name == '1':\n"
+                    "    sys.stdout.write('partial stat record')\n"
+                    "    if content == 'disappear':\n"
+                    "        path.unlink()\n"
+                    "    sys.stderr.write('stat read failed\\n')\n"
+                    "    raise SystemExit(1)\n"
+                    "sys.stdout.write(content)\n"
+                )
+                cat.chmod(0o700)
+
+                def execute(*command):
+                    script = command[2].replace(
+                        "/proc/[0-9]*/stat", shlex.quote(str(proc)) + "/[0-9]*/stat"
+                    )
+                    return subprocess.run(
+                        ["bash", "-c", script],
+                        capture_output=True,
+                        timeout=5,
+                        env={
+                            **os.environ,
+                            "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                        },
+                    )
+
+                with mock.patch.object(runner, "exec", side_effect=execute):
+                    if failure == "disappear":
+                        self.assertTrue(runner.process_group_running(42))
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "stat read failed"):
+                            runner.process_group_running(42)
 
     def test_lost_launch_ack_and_poll_do_not_restart_the_workload(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -112,7 +183,7 @@ class PodRunnerTests(unittest.TestCase):
                 json.loads(runner.state_file.read_text())["phase"], "failed"
             )
 
-    def test_cancellation_stops_the_owned_process_group(self):
+    def test_cancellation_stops_the_owned_group_even_if_it_ignores_term(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner = self.runner(root)
@@ -120,7 +191,7 @@ class PodRunnerTests(unittest.TestCase):
             command = [
                 sys.executable,
                 "-c",
-                "import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)",
+                "import os,pathlib,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)",
                 str(child_file),
             ]
             with (
@@ -129,32 +200,33 @@ class PodRunnerTests(unittest.TestCase):
                     runner, "pod_identity", return_value=("pod-id", ["container-id"])
                 ),
             ):
-                runner.exec(
-                    "bash",
-                    "-c",
-                    LAUNCH,
-                    "--",
-                    runner.state["directory"],
-                    WAIT,
-                    runner.state["marker"],
-                    runner.state["directory"],
-                    "timeout",
-                    "--foreground",
-                    "10s",
-                    *command,
-                    token="test\n",
-                )
-                deadline = time.monotonic() + 5
-                while not child_file.exists() and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertTrue(child_file.exists())
-                runner.cancel()
-                self.assertIsNone(runner.process_id())
-            child = Path(f"/proc/{child_file.read_text()}/stat")
-            self.assertTrue(
-                not child.exists()
-                or child.read_text().rsplit(") ", 1)[1].split()[0] == "Z"
-            )
+                try:
+                    runner.exec(
+                        "bash",
+                        "-c",
+                        LAUNCH,
+                        "--",
+                        runner.state["directory"],
+                        WAIT,
+                        runner.state["marker"],
+                        runner.state["directory"],
+                        "timeout",
+                        "--foreground",
+                        "--kill-after=10s",
+                        "10s",
+                        *command,
+                        token="test\n",
+                    )
+                    child_pid = self.wait_for_pid(child_file)
+                    runner.cancel()
+                    self.assertIsNone(runner.process_id())
+                    child = Path(f"/proc/{child_pid}/stat")
+                    self.assertTrue(
+                        not child.exists()
+                        or child.read_text().rsplit(") ", 1)[1].split()[0] == "Z"
+                    )
+                finally:
+                    self.cleanup_group(runner)
 
     def test_stale_pid_does_not_signal_an_unrelated_process(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -172,11 +244,105 @@ class PodRunnerTests(unittest.TestCase):
                         return_value=("pod-id", ["container-id"]),
                     ),
                 ):
-                    runner.cancel()
+                    with self.assertRaisesRegex(RuntimeError, "Cannot confirm"):
+                        runner.cancel()
                 self.assertIsNone(unrelated.poll())
+                self.assertEqual(runner.state["phase"], "cancel-unconfirmed")
             finally:
                 os.killpg(unrelated.pid, signal.SIGTERM)
                 unrelated.wait(timeout=5)
+
+    def test_replacement_during_launch_still_stops_the_launched_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = self.runner(root)
+            child_file = root / "child.pid"
+            identity = ("pod-id", ["container-id"])
+
+            def execute(*command, token=None):
+                nonlocal identity
+                if command[:3] == ("bash", "-c", LAUNCH):
+                    identity = ("replacement", ["replacement-container"])
+                    result = self.local_exec(*command, token=token)
+                    self.wait_for_pid(child_file)
+                    return result
+                return self.local_exec(*command, token=token)
+
+            command = [
+                sys.executable,
+                "-c",
+                "import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)",
+                str(child_file),
+            ]
+            with (
+                mock.patch.object(runner, "exec", side_effect=execute),
+                mock.patch.object(runner, "pod_identity", side_effect=lambda: identity),
+                mock.patch.object(runner, "print_log"),
+            ):
+                try:
+                    with self.assertRaisesRegex(ValueError, "container changed"):
+                        runner.run("test", command, 10)
+                    pid = int(
+                        (Path(runner.state["directory"]) / "spark.pid").read_text()
+                    )
+                    self.assertFalse(runner.process_group_running(pid))
+                    self.assertTrue(
+                        (Path(runner.state["directory"]) / "spark.cancelled").exists()
+                    )
+                    self.assertEqual(runner.state["phase"], "cancelled")
+                finally:
+                    self.cleanup_group(runner)
+
+    def test_missing_wrapper_does_not_prove_its_children_stopped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = self.runner(root)
+            runner.state.pop("protocolVersion")
+            child_file = root / "child.pid"
+            with (
+                mock.patch.object(runner, "exec", side_effect=self.local_exec),
+                mock.patch.object(
+                    runner, "pod_identity", return_value=("pod-id", ["container-id"])
+                ),
+            ):
+                try:
+                    runner.exec(
+                        "bash",
+                        "-c",
+                        LAUNCH,
+                        "--",
+                        runner.state["directory"],
+                        WAIT,
+                        runner.state["marker"],
+                        runner.state["directory"],
+                        sys.executable,
+                        "-c",
+                        "import os,pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)",
+                        str(child_file),
+                        token="test\n",
+                    )
+                    child = self.wait_for_pid(child_file)
+                    pid = runner.process_id()
+                    self.assertIsNotNone(pid)
+                    os.kill(pid, signal.SIGKILL)
+                    deadline = time.monotonic() + 5
+                    while (
+                        runner.process_id() is not None and time.monotonic() < deadline
+                    ):
+                        time.sleep(0.01)
+                    self.assertIsNone(runner.process_id())
+                    with self.assertRaisesRegex(RuntimeError, "Cannot confirm"):
+                        runner.cancel()
+                    self.assertEqual(runner.state["phase"], "cancel-unconfirmed")
+                    self.assertNotEqual(
+                        Path(f"/proc/{child}/stat")
+                        .read_text()
+                        .rsplit(") ", 1)[1]
+                        .split()[0],
+                        "Z",
+                    )
+                finally:
+                    self.cleanup_group(runner)
 
     def test_cancellation_prevents_a_delayed_workload_from_starting(self):
         with tempfile.TemporaryDirectory() as directory:

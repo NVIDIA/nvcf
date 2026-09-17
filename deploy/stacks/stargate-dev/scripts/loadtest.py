@@ -111,8 +111,8 @@ def fixed_size_text(prefix: str, phrase: str, size: int) -> str:
     return (prefix + phrase * repeats)[:size]
 
 
-def unique_prompts(count: int, size: int) -> Iterable[str]:
-    for index in range(count):
+def unique_prompts(count: int, size: int, *, start: int = 0) -> Iterable[str]:
+    for index in range(start, start + count):
         yield fixed_size_text(
             f"canonical-unique-session={index:08d}; ",
             "Unique request context that must not share a cache affinity key. ",
@@ -229,6 +229,54 @@ def write_workload(path: Path, prompts: Iterable[str], kind: str) -> None:
     )
 
 
+def render_reports(output: Path, spark_image: str) -> None:
+    def render(arguments: list[str], destination: Path) -> None:
+        command = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{output}:/campaign:ro",
+            spark_image,
+            *arguments,
+        ]
+        rendered = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        if rendered.returncode:
+            raise LoadTestError(
+                f"offline report rendering failed for {destination}: {rendered.stderr or rendered.stdout}"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(ANSI_ESCAPE.sub("", rendered.stdout), encoding="utf-8")
+
+    pairs = {}
+    for path in sorted((output / "runs").glob("**/metadata.json")):
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        if metadata.get("status") != "complete":
+            continue
+        receipt = json.loads(
+            (path.parent / "validation.json").read_text(encoding="utf-8")
+        )
+        if (
+            receipt["reportSha256"]
+            != hashlib.sha256((path.parent / "spark.json").read_bytes()).hexdigest()
+        ):
+            raise LoadTestError(f"accepted report changed: {path.parent}")
+        report = f"/campaign/{(path.parent / 'spark.json').relative_to(output)}"
+        render(["show", report], path.parent / "spark.txt")
+        if not metadata.get("measured"):
+            continue
+        relative = path.parent.relative_to(output)
+        parts = list(relative.parts)
+        parts.remove(metadata["algorithm"])
+        pairs.setdefault(Path(*parts), {})[metadata["algorithm"]] = report
+    for relative, reports in pairs.items():
+        if set(reports) == set(ALGORITHM_ORDER):
+            render(
+                ["compare", *(reports[algorithm] for algorithm in ALGORITHM_ORDER)],
+                output / relative / "wait-and-widen-vs-power-of-n.txt",
+            )
+
+
 @dataclass
 class SparkRun:
     directory: Path
@@ -267,9 +315,13 @@ class Campaign:
         )
         self.scenarios = suite["suites"][args.suite]
         self.identity = {
+            "version": 2,
             "region": args.region,
             "suite": args.suite,
-            "suiteSha256": hashlib.sha256(SUITE_PATH.read_bytes()).hexdigest(),
+            "suiteSha256": hashlib.sha256(
+                json.dumps(suite, sort_keys=True).encode()
+            ).hexdigest(),
+            "runnerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "sparkImage": args.spark_image,
             "algorithms": self.algorithms,
             "endpoint": self.endpoint
@@ -420,6 +472,8 @@ class Campaign:
             self.start_port_forward()
         self.state["status"] = "running"
         self.save_state()
+        if self.suite["scenarios"][self.scenarios[0]]["kind"] in {"requests", "sweep"}:
+            self.reset_caches("campaign-start")
 
     @property
     def spark_directory(self) -> Path:
@@ -446,7 +500,8 @@ class Campaign:
                 self.stargate_context, ["get", "pod", self.args.spark_pod, "-o", "json"]
             )
         )
-        atomic_json(self.output / "spark-pod.json", pod)
+        if not (self.output / "spark-pod.json").exists():
+            atomic_json(self.output / "spark-pod.json", pod)
         local_version = self.command(
             ["docker", "run", "--rm", self.args.spark_image, "--version"]
         ).stdout.strip()
@@ -506,6 +561,14 @@ class Campaign:
                     raise LoadTestError("remote Spark report is missing")
                 with (run.directory / "spark.json").open("wb") as output:
                     shutil.copyfileobj(report, output)
+        remote_checksum = self.command(
+            self.pod_exec("sha256sum", str(directory / "spark.json"))
+        ).stdout.split()
+        local_checksum = hashlib.sha256(
+            (run.directory / "spark.json").read_bytes()
+        ).hexdigest()
+        if not remote_checksum or remote_checksum[0] != local_checksum:
+            raise LoadTestError(f"downloaded report checksum differs: {run.directory}")
 
     def load_token(self) -> str:
         if token := os.environ.get("OPENAI_API_KEY"):
@@ -561,20 +624,107 @@ class Campaign:
             load_balancers[region["region"]] = json.loads(
                 load_balancer["data"]["lb-config.json"]
             )
-        atomic_json(
-            self.output / "environment.json",
-            {
-                "capturedAt": utc_now(),
-                "loadBalancerConfig": load_balancers[self.args.region],
-                "loadBalancerConfigsByRegion": load_balancers,
-                "deployments": snapshots,
-                "sparkImage": {
-                    "id": image.get("Id"),
-                    "repoDigests": image.get("RepoDigests", []),
-                    "repoTags": image.get("RepoTags", []),
-                },
+        snapshot = {
+            "capturedAt": utc_now(),
+            "loadBalancerConfig": load_balancers[self.args.region],
+            "loadBalancerConfigsByRegion": load_balancers,
+            "deployments": snapshots,
+            "sparkImage": {
+                "id": image.get("Id"),
+                "repoDigests": image.get("RepoDigests", []),
+                "repoTags": image.get("RepoTags", []),
             },
-        )
+        }
+        controls = {
+            "loadBalancers": load_balancers,
+            "deployments": {
+                context: {
+                    deployment["metadata"]["name"]: {
+                        "replicas": deployment["spec"].get("replicas"),
+                        "podSpec": deployment["spec"]["template"]["spec"],
+                    }
+                    for deployment in listing["items"]
+                }
+                for context, listing in snapshots.items()
+            },
+            "sparkImageId": image["Id"],
+        }
+        if self.args.spark_pod:
+            pod = json.loads(
+                self.kubectl(
+                    self.stargate_context,
+                    ["get", "pod", self.args.spark_pod, "-o", "json"],
+                )
+            )
+            controls["sparkPod"] = {
+                "containers": [
+                    {
+                        key: container.get(key)
+                        for key in (
+                            "name",
+                            "image",
+                            "command",
+                            "args",
+                            "env",
+                            "resources",
+                        )
+                    }
+                    for container in pod["spec"]["containers"]
+                ],
+                "defaultContainer": pod.get("metadata", {})
+                .get("annotations", {})
+                .get(
+                    "kubectl.kubernetes.io/default-container",
+                    pod["spec"]["containers"][0]["name"],
+                ),
+                "imageIds": {
+                    container["name"]: container["imageID"]
+                    for container in pod["status"]["containerStatuses"]
+                },
+            }
+        snapshot["controls"] = controls
+        path = self.output / "environment.json"
+        if path.exists():
+            original = json.loads(path.read_text(encoding="utf-8"))
+            if original.get("controls") != controls:
+                raise LoadTestError(
+                    "benchmark images, resources or routing settings changed; "
+                    "use a new campaign directory"
+                )
+        else:
+            atomic_json(path, snapshot)
+
+    def verify_environment(self) -> None:
+        image = json.loads(
+            self.command(["docker", "image", "inspect", self.args.spark_image]).stdout
+        )[0]
+        self.snapshot_environment(image)
+
+    def pod_state(self) -> dict:
+        pods = {}
+        for region in self.regions:
+            for cluster in [
+                region["clusters"]["stargate"],
+                *region["clusters"]["mockdcs"],
+            ]:
+                context = cluster["kubeContext"]
+                listing = json.loads(
+                    self.kubectl(context, ["get", "pods", "-o", "json"])
+                )
+                for pod in listing["items"]:
+                    if pod["metadata"].get("deletionTimestamp"):
+                        continue
+                    pods[f"{context}/{pod['metadata']['name']}"] = {
+                        "uid": pod["metadata"]["uid"],
+                        "containers": {
+                            container["name"]: {
+                                key: container.get(key)
+                                for key in ("containerID", "imageID", "restartCount")
+                            }
+                            for container in pod["status"].get("containerStatuses", [])
+                        },
+                    }
+        return pods
 
     def start_port_forward(self) -> None:
         with socket.socket() as probe:
@@ -642,14 +792,22 @@ class Campaign:
                 )
                 self.workloads[name] = {"main": path}
             elif kind == "sweep":
-                count = math.ceil(
-                    max(scenario["rates"]) * scenario["durationSeconds"] * 1.05
-                )
-                path = self.workload_dir / f"{name}.yaml"
-                write_workload(
-                    path, unique_prompts(count, scenario["promptBytes"]), kind
-                )
-                self.workloads[name] = {"main": path}
+                offset = self.suite["scenarios"]["smoke"]["requests"]
+                self.workloads[name] = {}
+                for rate in scenario["rates"]:
+                    count = math.ceil(rate * scenario["durationSeconds"] * 1.05)
+                    for algorithm in self.algorithms:
+                        key = f"r{rate}-{algorithm}"
+                        path = self.workload_dir / f"{name}-{key}.yaml"
+                        write_workload(
+                            path,
+                            unique_prompts(
+                                count, scenario["promptBytes"], start=offset
+                            ),
+                            kind,
+                        )
+                        self.workloads[name][key] = path
+                        offset += count
             elif kind == "session-affinity":
                 path = self.workload_dir / f"{name}.yaml"
                 write_workload(
@@ -718,17 +876,7 @@ class Campaign:
             raise LoadTestError("Spark run must set duration or requests")
         directory = self.runs / relative
         defaults = self.suite["defaults"]
-        command = [
-            "docker",
-            "run",
-            "--rm",
-            "--network",
-            "host",
-            "-e",
-            "OPENAI_API_KEY",
-            "-v",
-            f"{self.output}:/campaign",
-            self.args.spark_image,
+        arguments = [
             "--endpoint",
             self.endpoint,
             "--model",
@@ -760,13 +908,13 @@ class Campaign:
             "--scenario",
             "normal",
         ]
-        command.extend(
+        arguments.extend(
             ["--duration", f"{duration}s"]
             if duration is not None
             else ["--requests", str(requests)]
         )
         if header := self.suite["algorithms"][algorithm]["routingHeader"]:
-            command.extend(["--stargate-load-balancing-algorithm", header])
+            arguments.extend(["--stargate-load-balancing-algorithm", header])
         expected_seconds = float(
             duration
             if duration is not None
@@ -777,7 +925,6 @@ class Campaign:
             )
         )
         if self.args.spark_pod:
-            arguments = command[command.index("--endpoint") :]
             relative = directory.relative_to(self.output)
             state_name = hashlib.sha256(str(relative).encode()).hexdigest() + ".json"
             command = [
@@ -798,6 +945,20 @@ class Campaign:
                 str(math.ceil(expected_seconds + 600)),
                 "--",
                 "spark",
+                *arguments,
+            ]
+        else:
+            command = [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "host",
+                "-e",
+                "OPENAI_API_KEY",
+                "-v",
+                f"{self.output}:/campaign",
+                self.args.spark_image,
                 *arguments,
             ]
         return SparkRun(
@@ -827,14 +988,39 @@ class Campaign:
             return None
         if metadata.get("command") != run.command:
             raise LoadTestError(f"completed run command changed: {run.directory}")
+        receipt_path = run.directory / "validation.json"
+        if not receipt_path.is_file():
+            raise LoadTestError(
+                f"completed run lacks validation evidence: {run.directory}"
+            )
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if receipt != {
+            "reportSha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+            "workloadSha256": hashlib.sha256(
+                (self.output / run.metadata["workload"]).read_bytes()
+            ).hexdigest(),
+        }:
+            raise LoadTestError(f"completed run artifacts changed: {run.directory}")
         return json.loads(report_path.read_text(encoding="utf-8"))
 
-    def execute(self, runs: list[SparkRun], *, reuse: bool = True) -> list[dict]:
+    def execute(
+        self,
+        runs: list[SparkRun],
+        *,
+        reuse: bool = True,
+        cache_before: dict | None = None,
+    ) -> list[dict]:
+        self.verify_environment()
         completed = [self.completed_report(run) for run in runs]
         if reuse and all(report is not None for report in completed):
             for run in runs:
                 self.log(f"reusing {run.directory.relative_to(self.output)}")
             return completed
+
+        before = self.pod_state()
+        cold_capacity = all(run.metadata["scenario"] == "saturation" for run in runs)
+        if cold_capacity and cache_before is None:
+            cache_before = self.cache_stats()
 
         environment = os.environ.copy()
         environment["OPENAI_API_KEY"] = self.token
@@ -846,6 +1032,7 @@ class Campaign:
             run.directory.mkdir(parents=True, exist_ok=True)
             value = {**run.metadata, "status": "running", "startedAt": utc_now()}
             atomic_json(run.directory / "metadata.json", value)
+            atomic_json(run.directory / "pods.before.json", before)
             (run.directory / "command.txt").write_text(
                 shlex.join(run.command) + "\n", encoding="utf-8"
             )
@@ -922,20 +1109,50 @@ class Campaign:
             if not report_path.is_file():
                 raise LoadTestError(f"Spark did not write {report_path}")
             report = json.loads(report_path.read_text(encoding="utf-8"))
-            rendered = self.command(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "-v",
-                    f"{self.output}:/campaign:ro",
-                    self.args.spark_image,
-                    "show",
-                    f"/campaign/{report_path.relative_to(self.output)}",
-                ]
+            value["status"] = "validating"
+            atomic_json(run.directory / "metadata.json", value)
+            summary = report["summary"]
+            if summary["successful"] + summary["failed"] != summary["total_requests"]:
+                raise LoadTestError(f"inconsistent request totals: {run.directory}")
+            if (
+                run.metadata["requests"] is not None
+                and summary["total_requests"] != run.metadata["requests"]
+            ):
+                raise LoadTestError(
+                    f"incomplete fixed-count measurement: {run.directory}"
+                )
+            if cold_capacity:
+                throughput = report["throughput"]
+                if throughput["kv_cache_hit_requests"] or (
+                    summary["successful"]
+                    and not throughput["kv_cache_observed_requests"]
+                ):
+                    raise LoadTestError(
+                        f"capacity measurement lacks cold-cache evidence: {run.directory}"
+                    )
+            reports.append(report)
+
+        after = self.pod_state()
+        self.verify_environment()
+        if before != after:
+            raise LoadTestError(
+                "Pod replacement or restart invalidated this measurement"
             )
-            (run.directory / "spark.txt").write_text(
-                ANSI_ESCAPE.sub("", rendered.stdout), encoding="utf-8"
+        if cache_before is not None:
+            directory = Path(os.path.commonpath([run.directory for run in runs]))
+            self.record_cache_delta(directory, cache_before)
+        for run, value, report in zip(runs, metadata, reports):
+            atomic_json(run.directory / "pods.after.json", after)
+            atomic_json(
+                run.directory / "validation.json",
+                {
+                    "reportSha256": hashlib.sha256(
+                        (run.directory / "spark.json").read_bytes()
+                    ).hexdigest(),
+                    "workloadSha256": hashlib.sha256(
+                        (self.output / run.metadata["workload"]).read_bytes()
+                    ).hexdigest(),
+                },
             )
             value["status"] = "complete"
             value["summary"] = report.get("summary")
@@ -945,7 +1162,6 @@ class Campaign:
                 f"completed {run.directory.relative_to(self.output)}: "
                 f"{report.get('summary')}"
             )
-            reports.append(report)
         self.state.pop("currentRuns", None)
         self.save_state()
         return reports
@@ -1045,27 +1261,6 @@ class Campaign:
             },
         )
 
-    def compare(self, directory: Path, left: Path, right: Path) -> None:
-        if len(self.algorithms) != 2:
-            return
-        directory.mkdir(parents=True, exist_ok=True)
-        result = self.command(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{self.output}:/campaign:ro",
-                self.args.spark_image,
-                "compare",
-                f"/campaign/{left.relative_to(self.output)}",
-                f"/campaign/{right.relative_to(self.output)}",
-            ]
-        )
-        (directory / "wait-and-widen-vs-power-of-n.txt").write_text(
-            ANSI_ESCAPE.sub("", result.stdout), encoding="utf-8"
-        )
-
     def cooldown(self) -> None:
         seconds = self.suite["defaults"]["cooldownSeconds"]
         self.log(f"cooldown for {seconds} seconds")
@@ -1076,7 +1271,6 @@ class Campaign:
         return [algorithm for algorithm in order if algorithm in self.algorithms]
 
     def run_smoke(self, scenario: dict) -> None:
-        root = self.runs / "smoke"
         for algorithm in self.algorithm_order():
             report = self.execute(
                 [
@@ -1093,11 +1287,6 @@ class Campaign:
             )[0]
             if report["summary"]["failed"]:
                 raise LoadTestError(f"smoke failed for {algorithm}")
-        self.compare(
-            root,
-            root / "wait-and-widen" / "spark.json",
-            root / "power-of-n" / "spark.json",
-        )
 
     def run_saturation(self, scenario: dict) -> None:
         for rate_index, rate in enumerate(scenario["rates"]):
@@ -1115,17 +1304,14 @@ class Campaign:
                                 scenario["minimumWorkers"],
                                 rate * scenario["workersPerRps"],
                             ),
-                            workload=self.workloads["saturation"]["main"],
+                            workload=self.workloads["saturation"][
+                                f"r{rate}-{algorithm}"
+                            ],
                             duration=scenario["durationSeconds"],
                         )
                     ]
                 )
                 self.cooldown()
-            self.compare(
-                root,
-                root / "wait-and-widen" / "spark.json",
-                root / "power-of-n" / "spark.json",
-            )
 
     def run_affinity(self, name: str, scenario: dict) -> None:
         if scenario["kind"] == "session-workers":
@@ -1154,13 +1340,7 @@ class Campaign:
                     self.log(f"reusing clean-cache arm {run.directory}")
                     continue
                 before = self.reset_caches(f"{name}-repeat-{repeat:02d}-{algorithm}")
-                self.execute([run], reuse=False)
-                self.record_cache_delta(root / algorithm, before)
-            self.compare(
-                root,
-                root / "wait-and-widen" / "spark.json",
-                root / "power-of-n" / "spark.json",
-            )
+                self.execute([run], reuse=False, cache_before=before)
 
     def run_mixed_sessions(self, scenario: dict) -> None:
         hot = scenario["hot"]
@@ -1213,14 +1393,7 @@ class Campaign:
                     ],
                     reuse=False,
                 )
-                self.execute(measured_runs, reuse=False)
-                self.record_cache_delta(root / algorithm, before)
-            for stream in ("hot", "short"):
-                self.compare(
-                    root / stream,
-                    root / "wait-and-widen" / stream / "spark.json",
-                    root / "power-of-n" / stream / "spark.json",
-                )
+                self.execute(measured_runs, reuse=False, cache_before=before)
 
     def write_summary(self) -> None:
         runs = []
@@ -1330,6 +1503,11 @@ def parse_args(suite: dict) -> argparse.Namespace:
     parser.add_argument("--local-port", type=int, default=18000)
     parser.add_argument("--grafana-url", default="http://localhost:3000")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--render-only",
+        action="store_true",
+        help="Render accepted reports without cluster access or traffic",
+    )
     return parser.parse_args()
 
 
@@ -1344,6 +1522,11 @@ def main() -> int:
                     f"{name}: at least {minimum_measured_minutes(suite, name):.1f} measured minutes at rate caps: "
                     f"{', '.join(scenarios)}"
                 )
+            return 0
+        if args.render_only:
+            if args.output is None or args.spark_image is None:
+                raise LoadTestError("--render-only requires --output and --spark-image")
+            render_reports(args.output.expanduser().resolve(), args.spark_image)
             return 0
         missing = [
             name
@@ -1361,6 +1544,7 @@ def main() -> int:
             raise LoadTestError("--local-port must be between 1 and 65535")
         campaign = Campaign(args, suite)
         campaign.run()
+        render_reports(campaign.output, args.spark_image)
         return 0
     except (
         LoadTestError,
@@ -1370,14 +1554,14 @@ def main() -> int:
         yaml.YAMLError,
         subprocess.TimeoutExpired,
     ) as error:
-        if campaign is not None:
+        if campaign is not None and campaign.state.get("status") != "complete":
             campaign.state["status"] = "failed"
             campaign.state["error"] = str(error)
             campaign.save_state()
         print(f"error: {error}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        if campaign is not None:
+        if campaign is not None and campaign.state.get("status") != "complete":
             campaign.state["status"] = "interrupted"
             campaign.save_state()
         print("interrupted", file=sys.stderr)
