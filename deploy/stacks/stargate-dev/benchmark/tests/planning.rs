@@ -100,3 +100,73 @@ fn selected_algorithm_is_the_only_algorithm_in_the_plan() {
         assert_eq!(arm["algorithm"], "power-of-n");
     }
 }
+
+#[test]
+fn reduced_suite_selects_only_the_requested_pairs_and_each_pair_is_individually_available() {
+    let suite = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../loadtest/reduced.yaml");
+    for (name, expected_scenarios) in [
+        (
+            "reduced",
+            vec!["session-affinity", "mixed-sessions", "saturation"],
+        ),
+        ("session-affinity", vec!["session-affinity"]),
+        ("mixed-sessions", vec!["mixed-sessions"]),
+        ("capacity", vec!["saturation"]),
+    ] {
+        let output = benchmark()
+            .arg("--suite-file")
+            .arg(&suite)
+            .args(["plan", "--suite", name])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let arms = plan["arms"].as_array().unwrap();
+        assert_eq!(arms.len(), expected_scenarios.len() * 2);
+        for scenario in expected_scenarios {
+            for algorithm in ["wait-and-widen", "power-of-n"] {
+                let selected: Vec<_> = arms
+                    .iter()
+                    .filter(|arm| arm["scenario"] == scenario && arm["algorithm"] == algorithm)
+                    .collect();
+                assert_eq!(selected.len(), 1);
+                let streams = selected[0]["streams"].as_array().unwrap();
+                match scenario {
+                    "session-affinity" => {
+                        assert_eq!(
+                            streams[0]["limit"],
+                            serde_json::json!({"kind":"requests","value":6144})
+                        );
+                        assert_eq!(streams[0]["rate"], 24);
+                    }
+                    "mixed-sessions" => {
+                        assert_eq!(streams.len(), 2);
+                        assert_eq!(streams[0]["name"], "hot");
+                        assert_eq!(streams[1]["name"], "short");
+                        assert_eq!(streams[0]["rate"], 8);
+                        assert_eq!(streams[1]["rate"], 4);
+                        for stream in streams {
+                            assert_eq!(
+                                stream["limit"],
+                                serde_json::json!({"kind":"duration-seconds","value":600})
+                            );
+                        }
+                    }
+                    "saturation" => {
+                        assert_eq!(streams[0]["rate"], 96);
+                        assert_eq!(streams[0]["workers"], 192);
+                        assert_eq!(
+                            streams[0]["limit"],
+                            serde_json::json!({"kind":"duration-seconds","value":120})
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+}

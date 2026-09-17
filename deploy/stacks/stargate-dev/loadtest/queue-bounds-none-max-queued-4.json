@@ -1,0 +1,26 @@
+{
+  "default": "wait-and-widen",
+  "models": {
+    "stargate-dev-model": {
+      "algorithm": "wait-and-widen",
+      "cache_affinity_backend_selection_count": 2,
+      "cache_affinity_input_tokens_scale": 0.1,
+      "cache_affinity_virtual_nodes": 150,
+      "cache_affinity_wait_ms": 200,
+      "comparator": "utilization",
+      "max_queued": 4,
+      "n": 2,
+      "next_bucket_unlock_factor": 0.25,
+      "require_cache_affinity_key": true,
+      "require_input_tokens": true,
+      "ttft_bucket_size_ms": 20
+    }
+  },
+  "request_algorithms": {
+    "power-of-n": {
+      "algorithm": "power-of-n",
+      "comparator": "ttft",
+      "sample_count": 2
+    }
+  }
+}

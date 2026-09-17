@@ -669,3 +669,54 @@ fn interrupted_unacknowledged_pod_batch_reconciles_both_live_streams() {
         3
     );
 }
+
+#[test]
+fn expected_configuration_is_checked_before_traffic_and_bound_to_resume() {
+    let directory = tempfile::tempdir().unwrap();
+    let fake = FakeCommand::new();
+    environment(&fake);
+    fs::write(directory.path().join("suite.yaml"), SUITE).unwrap();
+    let policy = directory.path().join("expected.json");
+    let run = |resume| {
+        run_command(&fake, directory.path(), resume)
+            .args([
+                "--endpoint",
+                "http://fixture.invalid/v1",
+                "--expected-config",
+            ])
+            .arg(&policy)
+            .output()
+            .unwrap()
+    };
+    fs::write(&policy, "[]").unwrap();
+    let invalid = run(false);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(!directory.path().join("results").exists());
+    assert!(fake.calls().is_empty());
+
+    fs::write(&policy, r#"{"n":3}"#).unwrap();
+    let mismatch = run(false);
+    assert!(!mismatch.status.success());
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("configuration"));
+    assert_eq!(starts(&fake), 0);
+    assert!(!directory.path().join("results/campaign.json").exists());
+    assert!(
+        fake.calls()
+            .iter()
+            .all(|args| !args.windows(2).any(|pair| pair == ["rollout", "restart"]))
+    );
+
+    fs::write(&policy, r#"{"n":2}"#).unwrap();
+    successful(run(false));
+    let manifest = fs::read(directory.path().join("results/campaign.json")).unwrap();
+    let calls_before = fake.calls().len();
+    fs::write(&policy, r#"{"n":3}"#).unwrap();
+    let changed = run(true);
+    assert!(!changed.status.success());
+    assert!(String::from_utf8_lossy(&changed.stderr).contains("resume inputs differ"));
+    assert_eq!(fake.calls().len(), calls_before);
+    assert_eq!(
+        fs::read(directory.path().join("results/campaign.json")).unwrap(),
+        manifest
+    );
+}

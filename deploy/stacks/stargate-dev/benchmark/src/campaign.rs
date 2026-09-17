@@ -47,6 +47,9 @@ pub struct Options {
     pub spark_pod: Option<String>,
     #[arg(long)]
     pub endpoint: Option<String>,
+    /// Require this load-balancer JSON configuration in every selected region.
+    #[arg(long, value_name = "PATH", value_parser = parse_expected_config)]
+    pub expected_config: Option<Value>,
     #[arg(long, default_value = "18000")]
     pub local_port: NonZeroU16,
     #[arg(long, default_value = "http://localhost:3000")]
@@ -63,6 +66,7 @@ struct Settings {
     spark_image: String,
     spark_pod: Option<String>,
     endpoint: Option<String>,
+    expected_config: Option<Value>,
     local_port: NonZeroU16,
 }
 
@@ -74,6 +78,7 @@ impl Options {
             spark_image: self.spark_image.clone(),
             spark_pod: self.spark_pod.clone(),
             endpoint: self.endpoint.clone(),
+            expected_config: self.expected_config.clone(),
             local_port: self.local_port,
         }
     }
@@ -87,6 +92,14 @@ impl Options {
             }
         })
     }
+}
+
+fn parse_expected_config(path: &str) -> Result<Value, String> {
+    let value: Value = read_json(Path::new(path)).map_err(|error| format!("{error:#}"))?;
+    if !value.is_object() {
+        return Err("expected configuration must be a JSON object".into());
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -679,8 +692,33 @@ async fn prepare_manifest(
         controls: topology.snapshot_controls().await?,
         workloads,
     };
+    validate_expected_config(&manifest.settings, &manifest.controls)?;
     atomic_json(&path, &manifest)?;
     Ok(manifest)
+}
+
+fn validate_expected_config(settings: &Settings, controls: &Value) -> Result<()> {
+    let Some(expected) = &settings.expected_config else {
+        return Ok(());
+    };
+    ensure!(
+        expected.is_object(),
+        "expected configuration must be a JSON object"
+    );
+    let policies = controls
+        .get("loadBalancers")
+        .and_then(Value::as_object)
+        .context("controls do not contain load-balancer policies")?;
+    for region in std::iter::once(&settings.region).chain(&settings.peer_regions) {
+        let policy = policies.get(region).with_context(|| {
+            format!("controls do not contain a load-balancer policy for {region}")
+        })?;
+        ensure!(
+            policy == expected,
+            "load-balancer policy for {region} differs from the expected configuration"
+        );
+    }
+    Ok(())
 }
 
 async fn verify_controls(
@@ -1499,6 +1537,7 @@ fn load_manifest(output: &Path) -> Result<Manifest> {
         "frozen engine does not match the selected transport"
     );
     manifest.plan.validate()?;
+    validate_expected_config(&manifest.settings, &manifest.controls)?;
     Ok(manifest)
 }
 
@@ -1614,6 +1653,7 @@ mod tests {
             spark_image: "spark:test".into(),
             spark_pod: None,
             endpoint: Some("http://test.invalid/v1".into()),
+            expected_config: None,
             local_port: NonZeroU16::new(18000).unwrap(),
             grafana_url: "http://grafana.invalid".into(),
             resume: false,
@@ -1675,6 +1715,72 @@ mod tests {
             "Config":{"Labels":{OWNER_LABEL:owner,CAMPAIGN_LABEL:launch.campaign},"Env":["OPENAI_API_KEY=do-not-save"]},
             "State":{"Status":"running","Running":true,"ExitCode":0}
         }]).to_string()
+    }
+
+    #[test]
+    fn expected_configuration_is_an_object_read_at_the_input_boundary() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("expected.json");
+        let input = path.to_str().unwrap();
+        let policy = json!({"max_queued":4});
+        atomic_json(&path, &policy)?;
+        let mut options = options(directory.path());
+        options.expected_config = Some(parse_expected_config(input).map_err(anyhow::Error::msg)?);
+        fs::remove_file(&path)?;
+        assert_eq!(options.settings().expected_config, Some(policy));
+        assert!(parse_expected_config(input).is_err());
+        for invalid in ["null", "[]", "1", "true", "\"policy\"", "{"] {
+            fs::write(&path, invalid)?;
+            assert!(parse_expected_config(input).is_err(), "accepted {invalid}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn frozen_expected_policy_must_match_every_selected_region() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("campaign.json");
+        let mut frozen = manifest(directory.path(), plan("smoke"));
+        atomic_json(&path, &frozen)?;
+        load_manifest(directory.path())?;
+
+        let policy = json!({"max_queued":4});
+        frozen.settings.peer_regions = vec!["us-east-1".into()];
+        frozen.settings.expected_config = Some(policy.clone());
+        frozen.controls = json!({"loadBalancers":{
+            "us-west-2":policy, "us-east-1":policy
+        }});
+        atomic_json(&path, &frozen)?;
+        load_manifest(directory.path())?;
+
+        frozen.controls["loadBalancers"]["us-east-1"]["max_queued"] = json!(8);
+        atomic_json(&path, &frozen)?;
+        assert!(
+            load_manifest(directory.path())
+                .unwrap_err()
+                .to_string()
+                .contains("us-east-1")
+        );
+        frozen.controls["loadBalancers"] = json!({"us-west-2":policy});
+        atomic_json(&path, &frozen)?;
+        assert!(
+            load_manifest(directory.path())
+                .unwrap_err()
+                .to_string()
+                .contains("us-east-1")
+        );
+        frozen.controls = json!({});
+        atomic_json(&path, &frozen)?;
+        assert!(load_manifest(directory.path()).is_err());
+        frozen.settings.expected_config = Some(json!([]));
+        atomic_json(&path, &frozen)?;
+        assert!(
+            load_manifest(directory.path())
+                .unwrap_err()
+                .to_string()
+                .contains("JSON object")
+        );
+        Ok(())
     }
 
     #[test]
