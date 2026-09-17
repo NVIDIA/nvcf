@@ -195,18 +195,20 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 
 ```bash
 # Set stack versions
-export STACK_VERSION="0.20.6"
+export STACK_VERSION="0.20.7"
 export COMPUTE_STACK_VERSION="0.4.4"
 export OBSERVABILITY_STACK_VERSION="0.2.2"
 
 # Download a specific control-plane stack version
-# Publication pending: nvcf-self-managed-stack 0.20.6 is not yet available for download.
+# Publication pending: nvcf-self-managed-stack 0.20.7 is not yet available for download.
 
 # Download a specific compute-plane stack version
-# Publication pending: nvcf-compute-plane-stack 0.4.4 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 
 # Download a specific observability stack version
-# Publication pending: nvcf-observability-stack 0.2.2 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_STACK_VERSION}"
 ```
 
 {/*docs-version-sync:END image-mirroring-resource-examples*/}
@@ -226,7 +228,7 @@ and its listed artifact versions are QA-qualified together.
 {/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-self-managed-stack 0.20.6 is not yet available for download.
+# Publication pending: nvcf-self-managed-stack 0.20.7 is not yet available for download.
 ```
 
 {/*docs-version-sync:END image-mirroring-stack-snippet*/}
@@ -251,7 +253,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-compute-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-compute-plane-stack 0.4.4 is not yet available for download.
+# Set the version
+export COMPUTE_VERSION="0.4.4"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
+   mkdir -p nvcf-compute-plane-stack && \
+   tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
+   rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-compute-stack-snippet*/}
@@ -279,7 +287,13 @@ Download and extract:
 {/*docs-version-sync:BEGIN image-mirroring-observability-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-observability-stack 0.2.2 is not yet available for download.
+# Set the version
+export OBSERVABILITY_VERSION="0.2.2"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-observability-stack:${OBSERVABILITY_VERSION}" && \
+   mkdir -p nvcf-observability-stack && \
+   tar -xzf nvcf-observability-stack_v${OBSERVABILITY_VERSION}/nvcf-observability-stack-${OBSERVABILITY_VERSION}.tar.gz -C nvcf-observability-stack && \
+   rm -rf nvcf-observability-stack_v${OBSERVABILITY_VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-observability-stack-snippet*/}

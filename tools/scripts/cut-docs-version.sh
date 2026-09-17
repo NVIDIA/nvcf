@@ -123,7 +123,7 @@ def entry_slug(entry):
 
 
 latest_entry = (
-    f'- display-name: "Latest ({display}; {stack_display})"\n'
+    f'- display-name: "Latest ({display})"\n'
     f"  path: versions/{version}.yml\n"
     '  slug: ""\n'
 )

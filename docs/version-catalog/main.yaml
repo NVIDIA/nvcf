@@ -36,10 +36,6 @@ publications:
     type: image
     version: 0.19.7-nonroot
     registry: public-images
-  - name: nvcf-state-metrics-service
-    type: image
-    version: 1.23.7
-    registry: public-images
   - name: helm-nvcf-cert-manager
     type: chart
     version: 0.1.0
@@ -48,11 +44,6 @@ publications:
   - name: helm-nvcf-pki
     type: chart
     version: 0.1.0
-    registry: public-helm
-    chart_format: http
-  - name: helm-nvcf-state-metrics
-    type: chart
-    version: 1.0.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-ui
@@ -327,15 +318,23 @@ publications:
     type: resource
     version: 1.16.2
     registry: public-resources
+  - name: nvcf-compute-plane-stack
+    type: resource
+    version: 0.4.4
+    registry: public-resources
+  - name: nvcf-observability-stack
+    type: resource
+    version: 0.2.2
+    registry: public-resources
 version_overrides:
   - name: nvcf-cli
     type: resource
     version: 1.16.2
     source: independent source release; not pinned by stack
 publication_pending:
-  - nvcf-compute-plane-stack
-  - nvcf-observability-stack
+  - helm-nvcf-state-metrics
   - nvcf-self-managed-stack
+  - nvcf-state-metrics-service
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -931,9 +930,9 @@ release_set:
   status: development
   stacks:
     control-plane:
-      version: 0.20.6
-      source_tag: deploy/stacks/self-managed/v0.20.6
-      source_commit: 98c440f90a9df76b82be84791a574732b712bce9
+      version: 0.20.7
+      source_tag: deploy/stacks/self-managed/v0.20.7
+      source_commit: c1dd7c6db3eb89c6ff1664b1094a97d7c8e03914
       inventory_asset: nvcf-self-managed-stack-inventory.json
     compute-plane:
       version: 0.4.4
@@ -947,10 +946,10 @@ release_set:
       inventory_asset: nvcf-observability-stack-inventory.json
 stack:
   name: nvcf-self-managed-stack
-  version: 0.20.6
+  version: 0.20.7
   registry: public-resources
-  source_tag: deploy/stacks/self-managed/v0.20.6
-  source_commit: 98c440f90a9df76b82be84791a574732b712bce9
+  source_tag: deploy/stacks/self-managed/v0.20.7
+  source_commit: c1dd7c6db3eb89c6ff1664b1094a97d7c8e03914
   pin_sources:
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
@@ -1265,7 +1264,7 @@ artifacts:
   - name: nvcf-state-metrics-service
     type: image
     registry: public-images
-    version: 1.23.7
+    version: 1.24.1
     stacks:
       - self-managed
     requirement: required
@@ -1513,7 +1512,7 @@ artifacts:
   - name: helm-nvcf-state-metrics
     type: chart
     registry: public-helm
-    version: 1.0.2
+    version: 1.0.6
     stacks:
       - self-managed
     requirement: required

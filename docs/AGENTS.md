@@ -11,7 +11,7 @@ external workspace index.
 ## Layout
 
 - `docs/user/`: top-of-tree customer-facing documentation published as `dev`.
-- `docs/v*/`: frozen versioned documentation. Do not edit these trees unless the user explicitly asks for a historical docs fix.
+- `docs/v*/` and `docs/cp-*/`: frozen versioned documentation. Do not edit these trees unless the user explicitly asks for a historical docs fix.
 - `docs/ngc-managed/`: legacy NGC-managed (BYOC) platform documentation. Separate from the self-hosted docs in `docs/user/`.
 - `docs/dev/`: developer and local workflow documentation.
 - `docs/version-catalog/main.yaml`: source of truth for generated artifact versions in top-of-tree docs.
@@ -29,14 +29,14 @@ Prefer the Fern navigation files and the filesystem over static route tables.
 5. If Fern nav does not answer the question, search with `rg`:
 
 ```bash
-rg -n "<term>" docs/user docs/dev docs/v*
+rg -n "<term>" docs/user docs/dev docs/v* docs/cp-*
 ```
 
 Useful file listing commands:
 
 ```bash
 rg --files docs/user docs/dev
-rg --files docs/v*
+rg --files docs/v* docs/cp-*
 ```
 
 ## Editing
