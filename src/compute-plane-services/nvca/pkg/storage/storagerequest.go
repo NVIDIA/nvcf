@@ -36,9 +36,6 @@ import (
 
 const (
 	requeableStorageErrorToken = "RequeableStorageError"
-	// ICMSRequestUIDAnnotationKey binds a namespaced StorageRequest to the
-	// exact ICMSRequest generation that created it.
-	ICMSRequestUIDAnnotationKey = "nvca.nvcf.nvidia.io/icms-request-uid"
 )
 
 func NewModelCacheStorageRequest(req *nvcav2beta1.ICMSRequest, fff featureflag.Fetcher) (*nvcav2beta1.StorageRequest, error) {
@@ -69,28 +66,7 @@ func NewModelCacheStorageRequest(req *nvcav2beta1.ICMSRequest, fff featureflag.F
 		st.Labels = map[string]string{}
 	}
 	st.Labels[modelCacheHandleLabelKey] = cacheLaunchSpec.CacheHandle
-	selectionRaw := req.Annotations[ModelCacheStorageSelectionAnnotationKey]
-	if selectionRaw != "" {
-		if st.Annotations == nil {
-			st.Annotations = map[string]string{}
-		}
-		st.Annotations[ModelCacheStorageSelectionAnnotationKey] = selectionRaw
-	}
-	if req.UID != "" {
-		if st.Annotations == nil {
-			st.Annotations = map[string]string{}
-		}
-		st.Annotations[ICMSRequestUIDAnnotationKey] = string(req.UID)
-	}
-	encryptionRequired := fff.IsFeatureFlagEnabled(featureflag.NVMeshEncryption)
-	if selectionRaw != "" {
-		selection, err := ParsePersistedModelCacheStorageSelection(selectionRaw)
-		if err != nil {
-			return nil, fmt.Errorf("parse persisted model cache storage selection: %w", err)
-		}
-		encryptionRequired = selection.EncryptionRequired
-	}
-	if encryptionRequired {
+	if fff.IsFeatureFlagEnabled(featureflag.NVMeshEncryption) {
 		st.Spec.ModelCache.Encryption = &nvcav2beta1.ModelCacheEncryption{
 			Required: true,
 		}
