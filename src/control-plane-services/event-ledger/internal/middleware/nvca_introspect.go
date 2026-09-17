@@ -44,7 +44,7 @@ type NVCAIdentity struct {
 
 // WithNVCAIdentity attaches an NVCA identity to ctx. Production code reaches
 // this only via a successful SIS introspection in
-// newNVCAAwareJWTMiddleware; it is exported so other packages (and tests
+// newJWTWithPSATMiddleware; it is exported so other packages (and tests
 // simulating an already-authenticated request) can do the same.
 func WithNVCAIdentity(ctx context.Context, identity NVCAIdentity) context.Context {
 	return context.WithValue(ctx, nvcaIdentityContextKey, identity)
@@ -57,12 +57,12 @@ func NVCAIdentityFromContext(ctx context.Context) (NVCAIdentity, bool) {
 	return identity, ok
 }
 
-// newNVCAAwareJWTMiddleware tries local OpenBao JWT verification first. When
+// newJWTWithPSATMiddleware tries local OpenBao JWT verification first. When
 // the bearer token is not an OpenBao token, it falls back to SIS
 // introspection for NVCA's PSAT, following the same ordered chain ReVal
 // uses. It never inspects the unverified aud claim to route between the two;
 // each path performs full local or remote verification.
-func newNVCAAwareJWTMiddleware(opts JWTParserOptions, jwkCache *jwk.Cache, introspector nvca.Introspector) mux.MiddlewareFunc {
+func newJWTWithPSATMiddleware(opts JWTParserOptions, jwkCache *jwk.Cache, introspector nvca.Introspector) mux.MiddlewareFunc {
 	if opts.Method == nil {
 		opts.Method = jwt.SigningMethodES256
 	}

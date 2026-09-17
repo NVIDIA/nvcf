@@ -403,7 +403,7 @@ func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOp
 	case jwtOpts == nil:
 		// no JWT verification configured
 	case introspector != nil:
-		jwtVerify = newNVCAAwareJWTMiddleware(*jwtOpts, jwkCache, introspector)
+		jwtVerify = newJWTWithPSATMiddleware(*jwtOpts, jwkCache, introspector)
 	default:
 		jwtVerify = NewParseJWTMiddleware(*jwtOpts, jwkCache)
 	}
