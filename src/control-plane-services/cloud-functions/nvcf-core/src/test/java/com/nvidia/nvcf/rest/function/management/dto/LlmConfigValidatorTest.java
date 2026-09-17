@@ -11,6 +11,7 @@ import com.nvidia.boot.exceptions.BadRequestException;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -63,6 +64,17 @@ class LlmConfigValidatorTest {
                 .hasMessageContaining("routingMethod")
                 .hasMessageContaining(MODEL)
                 .hasMessageContaining(rule);
+    }
+
+    @Test
+    void controlCharactersInRejectedSegmentReplaced() {
+        var routingMethod = "pulsar;seed=a\nb\rc";
+
+        assertThatThrownBy(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("parameter 'seed=a?b?c' must be key=value")
+                .hasMessageNotContaining("\n")
+                .hasMessageNotContaining("\r");
     }
 
     private static Stream<String> routingMethodsAtLimits() {

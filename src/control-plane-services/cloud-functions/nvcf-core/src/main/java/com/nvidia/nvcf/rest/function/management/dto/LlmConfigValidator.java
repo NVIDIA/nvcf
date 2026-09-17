@@ -31,6 +31,8 @@ public final class LlmConfigValidator {
             Pattern.compile("[A-Za-z*][A-Za-z0-9!#$%&'*+.^_`|~:/-]*");
     private static final Pattern STRING_PATTERN = Pattern.compile(
             "\"(?:[\\x20\\x21\\x23-\\x2b\\x2d-\\x3a\\x3c-\\x5b\\x5d-\\x7e]|\\\\[\"\\\\])*\"");
+    private static final Pattern CONTROL_CHARACTERS =
+            Pattern.compile("[\\p{Cntrl}\\p{Zl}\\p{Zp}]");
 
     // Comma-separated '<positiveInteger>-<unit>' entries, no unit repeated.
     private static final Pattern TOKEN_RATE_LIMIT_PATTERN = Pattern.compile(
@@ -95,7 +97,8 @@ public final class LlmConfigValidator {
     private static void validateParameter(String modelName, String segment, Set<String> keys) {
         var parameter = PARAMETER_PATTERN.matcher(segment);
         if (!parameter.matches()) {
-            rejectRoutingMethod(modelName, MESG_INVALID_PARAMETER.formatted(segment));
+            rejectRoutingMethod(modelName,
+                    MESG_INVALID_PARAMETER.formatted(withoutControlCharacters(segment)));
         }
         var key = parameter.group(1);
         if (!isValidBareValue(parameter.group(2))) {
@@ -104,6 +107,12 @@ public final class LlmConfigValidator {
         if (!keys.add(key)) {
             rejectRoutingMethod(modelName, MESG_DUPLICATE_PARAMETER.formatted(key));
         }
+    }
+
+    // The segment is raw request text echoed in the log and the 400 body; a line break in it
+    // could forge a log line.
+    private static String withoutControlCharacters(String segment) {
+        return CONTROL_CHARACTERS.matcher(segment).replaceAll("?");
     }
 
     private static boolean isValidBareValue(String value) {
