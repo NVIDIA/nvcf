@@ -63,6 +63,16 @@ def chdir(path):
 class GithubReleaseTest(unittest.TestCase):
     def setUp(self):
         self.github_release = load_github_release()
+        # `current_branch` prefers GITHUB_REF_TYPE/GITHUB_REF_NAME over the
+        # checked-out branch, and both are set on every Actions runner. A test
+        # that builds a repo in a temp directory would otherwise be told it is
+        # on the pull request's merge ref, which is how this suite passed
+        # locally and failed in CI. Any test that wants them sets them itself.
+        env = mock.patch.dict(os.environ, {}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("GITHUB_REF_TYPE", None)
+        os.environ.pop("GITHUB_REF_NAME", None)
 
     def init_repo(self, root):
         git(root, "init")
@@ -970,42 +980,46 @@ class GithubReleaseTest(unittest.TestCase):
                 )
             self.assertIn("would create deploy/stacks/self-managed/v0.21.1", output.getvalue())
 
-    def _run_auto(self, root, service, branch):
-        """`auto` as the workflow runs it, on `branch`, scoped to one service."""
+    def _run_auto(self, root, service, expected_branch, default_branch):
+        """`auto` as the workflow runs it, on the checked-out branch."""
         metadata_path = root / "metadata.json"
         metadata_path.write_text(json.dumps({"version": 1, "services": [service]}))
         env = {
             "NVCF_GITHUB_AUTO_TAGGING_ENABLED": "true",
             "NVCF_GITHUB_RELEASE_DRY_RUN": "true",
-            "GITHUB_DEFAULT_BRANCH": "main",
+            "GITHUB_DEFAULT_BRANCH": default_branch,
         }
         args = types.SimpleNamespace(metadata=str(metadata_path), service=service["id"])
         output = io.StringIO()
-        # GITHUB_REF_* would otherwise override the checked-out branch, which is
-        # what this test is varying.
         with mock.patch.dict(os.environ, env, clear=False):
-            os.environ.pop("GITHUB_REF_TYPE", None)
-            os.environ.pop("GITHUB_REF_NAME", None)
             with chdir(root), contextlib.redirect_stdout(output):
                 self.github_release.auto_release(args)
-        self.assertIn(f"branch={branch}", output.getvalue())
+        self.assertIn(f"branch={expected_branch}", output.getvalue())
         return output.getvalue()
 
-    def test_auto_releases_a_stack_from_its_branch_and_not_from_main(self):
-        # The whole point of the model: a merge to main must leave the stack's
-        # version alone, and the maintenance branch is what moves it.
+    def test_auto_releases_a_stack_from_its_branch_and_not_from_the_default_branch(self):
+        # The whole point of the model: a merge to the default branch must leave
+        # the stack's version alone, and the maintenance branch is what moves it.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._seed_stack_release_branch(root, "0.21.0", "")
+            # Read rather than assume: `git init` names the first branch from
+            # the machine's init.defaultBranch, which is not `main` everywhere.
+            default_branch = self.github_release.run(
+                ["git", "branch", "--show-current"], cwd=root, capture=True
+            ).strip()
             (root / "deploy/stacks/self-managed/README.md").write_text("a customer fix\n")
             self.commit_all(root, "fix(self-managed): a change that would release anywhere else")
 
-            on_main = self._run_auto(root, self.SELF_MANAGED_STACK_SERVICE, "main")
-            self.assertNotIn("would create", on_main)
+            on_default = self._run_auto(
+                root, self.SELF_MANAGED_STACK_SERVICE, default_branch, default_branch
+            )
+            self.assertNotIn("would create", on_default)
 
-            git(root, "switch", "-c", "release-deploy/stacks/self-managed/v0.21")
+            release_branch = "release-deploy/stacks/self-managed/v0.21"
+            git(root, "switch", "-c", release_branch)
             on_branch = self._run_auto(
-                root, self.SELF_MANAGED_STACK_SERVICE, "release-deploy/stacks/self-managed/v0.21"
+                root, self.SELF_MANAGED_STACK_SERVICE, release_branch, default_branch
             )
             self.assertIn("would create deploy/stacks/self-managed/v0.21.0", on_branch)
 
