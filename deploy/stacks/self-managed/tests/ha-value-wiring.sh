@@ -140,6 +140,8 @@ grep -A5 "^[[:space:]]*ha:" "$work_dir/openbao-on.yaml" | grep -E "replicas:[[:s
   fail "openbao: expected server.ha.replicas 3 when highAvailability.mode=preferred"
 grep -q "podAntiAffinity:" "$work_dir/openbao-on.yaml" ||
   fail "openbao: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
+grep -A3 "disruptionBudget:" "$work_dir/openbao-on.yaml" | grep -q "maxUnavailable: 1" ||
+  fail "openbao: expected server.ha.disruptionBudget maxUnavailable=1 when highAvailability.mode=preferred"
 
 render_chart_values nats "$work_dir/nats-on.yaml" "$deps" || fail "render nats (preferred)"
 grep -A5 "cluster:" "$work_dir/nats-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||

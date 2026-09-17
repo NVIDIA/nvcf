@@ -406,7 +406,15 @@ openbao:
       enabled: {{ dig "highAvailability" "openbao" "ha" "enabled" true .Values }}
       replicas: {{ dig "highAvailability" "openbao" "ha" "replicas" 3 .Values }}
       {{- end }}
-      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      {{- $openbaoDisruptionBudget := dict }}
+      {{- if $haEnabled }}
+      {{/* Default: allow at most 1 of the 3 Raft peers to be voluntarily
+           disrupted at a time, so a rolling drain/upgrade can never take the
+           quorum below 2 of 3. Without this, HA renders 3 replicas but the
+           Raft cluster has no disruption protection. */}}
+      {{- $openbaoDisruptionBudget = dict "enabled" true "maxUnavailable" 1 }}
+      {{- end }}
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" $openbaoDisruptionBudget .Values }}
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -1186,10 +1194,10 @@ adminIssuerProxy:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "admin-token-issuer-proxy") }}
+  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "admin-issuer-proxy") }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "admin-token-issuer-proxy") }}
+  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "admin-issuer-proxy") }}
   {{- . | nindent 2 }}
   {{- end }}
   gateway:
