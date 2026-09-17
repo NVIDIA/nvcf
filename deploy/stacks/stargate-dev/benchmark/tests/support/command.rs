@@ -3,6 +3,10 @@
 
 use std::ffi::OsString;
 
+#[cfg(not(test))]
+#[path = "pod.rs"]
+mod pod;
+
 pub fn arguments_bytes(arguments: &[OsString]) -> Vec<u8> {
     let mut encoded = Vec::new();
     for argument in arguments {
@@ -48,6 +52,33 @@ fn main() -> std::io::Result<()> {
     counter.set_len(0)?;
     write!(counter, "{}", index + 1)?;
     counter.unlock()?;
+
+    if root.join("forward-exit-on-start").exists()
+        && arguments.iter().any(|argument| argument == "port-forward")
+    {
+        let port = arguments
+            .last()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split_once(':')
+            .unwrap()
+            .0
+            .parse::<u16>()
+            .unwrap();
+        let _listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+        for _ in 0..1000 {
+            if root.join("started").exists() {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        return Err(std::io::Error::other("fixture traffic never started"));
+    }
+
+    if root.join("pod-fixture").exists() && pod::run(root, &arguments)? {
+        return Ok(());
+    }
 
     if root.join("docker-report.json").exists()
         && arguments

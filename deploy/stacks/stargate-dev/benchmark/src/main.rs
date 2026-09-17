@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod artifact;
 mod campaign;
 mod cluster;
+mod pod;
 mod process;
 mod report;
 mod suite;
@@ -47,7 +49,7 @@ enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
     },
-    /// Run or resume a controlled local Docker campaign.
+    /// Run or resume a controlled Spark campaign.
     Run {
         #[arg(long)]
         suite: String,

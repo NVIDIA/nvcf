@@ -21,6 +21,18 @@ scenarios:
   session: {kind: session-affinity, sessions: 1, turnsPerSession: 2, repeats: 1, rate: 1, workers: 1, stablePrefixBytes: 64, turnBytes: 64}
 "#;
 
+fn mixed_suite() -> String {
+    SUITE.split("scenarios:").next().unwrap().to_owned()
+        + r#"scenarios:
+  session:
+    kind: mixed-sessions
+    durationSeconds: 1
+    repeats: 1
+    hot: {rate: 2, workers: 2, minPromptBytes: 256, maxPromptBytes: 512}
+    short: {rate: 1, workers: 1, promptBytesByTurn: [256, 512]}
+"#
+}
+
 fn kubectl(
     fake: &FakeCommand,
     context: &str,
@@ -42,6 +54,12 @@ fn kubectl(
 fn environment(fake: &FakeCommand) {
     let executable = fake.executable();
     let root = executable.parent().unwrap();
+    // Resume must use the same executable even if another Cargo build finishes.
+    fs::copy(
+        env!("CARGO_BIN_EXE_stargate-dev-bench"),
+        root.join("benchmark"),
+    )
+    .unwrap();
     for name in ["kubectl", "docker"] {
         std::os::unix::fs::symlink(&executable, root.join(name)).unwrap();
     }
@@ -56,9 +74,36 @@ fn environment(fake: &FakeCommand) {
     report["summary"]["successful"] = json!(1);
     report["throughput"]["kv_cache_observed_requests"] = json!(1);
     fs::write(root.join("docker-warm-report.json"), report.to_string()).unwrap();
-    fake.default_response(&[(0, "", "")]); // rollout restart/status
+    fake.default_response(&[(1, "", "Forbidden: unexpected fixture command")]);
     let namespace = "stargate-dev";
     for context in ["stargate-usw2", "mockdc-usw2-a", "mockdc-usw2-b"] {
+        let deployments = if context == "stargate-usw2" {
+            vec!["llm-request-router".to_owned()]
+        } else {
+            (0..2)
+                .map(|index| format!("{context}-stargate-dev-mockdc-backend-{index}"))
+                .collect()
+        };
+        for deployment in deployments {
+            for (operation, timeout) in [("restart", "115s"), ("status", "325s")] {
+                let request_timeout = format!("--request-timeout={timeout}");
+                let target = format!("deployment/{deployment}");
+                let mut args = vec![
+                    "--context",
+                    context,
+                    "-n",
+                    namespace,
+                    &request_timeout,
+                    "rollout",
+                    operation,
+                    &target,
+                ];
+                if operation == "status" {
+                    args.push("--timeout=5m");
+                }
+                fake.respond(&args, &[(0, "", "")]);
+            }
+        }
         for (name, replicas) in [
             ("stargate-dev-auth", 1),
             ("llm-request-router", 3),
@@ -169,8 +214,21 @@ fn environment(fake: &FakeCommand) {
     }
 }
 
+fn pod_environment(fake: &FakeCommand) -> std::path::PathBuf {
+    environment(fake);
+    let root = fake.executable().parent().unwrap().to_owned();
+    fs::write(root.join("pod-fixture"), "").unwrap();
+    std::os::unix::fs::symlink(fake.executable(), root.join("spark")).unwrap();
+    fs::write(root.join("pod.json"), json!({
+        "metadata":{"name":"spark-test","namespace":"stargate-dev","uid":"00000000-0000-4000-8000-000000000001"},
+        "spec":{"containers":[{"name":"spark","image":"fixture:image","resources":{"requests":{"cpu":"1","memory":"128Mi"},"limits":{"cpu":"1","memory":"128Mi"}}}]},
+        "status":{"phase":"Running","containerStatuses":[{"name":"spark","ready":true,"restartCount":0,"containerID":"containerd://fixture-spark","imageID":format!("fixture@sha256:{}","b".repeat(64)),"state":{"running":{"startedAt":"2026-09-17T00:00:00Z"}}}]}
+    }).to_string()).unwrap();
+    root
+}
+
 fn run_command(fake: &FakeCommand, directory: &Path, resume: bool) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_stargate-dev-bench"));
+    let mut command = Command::new(fake.executable().parent().unwrap().join("benchmark"));
     command
         .env_clear()
         .env("PATH", fake.executable().parent().unwrap())
@@ -185,8 +243,6 @@ fn run_command(fake: &FakeCommand, directory: &Path, resume: bool) -> Command {
             "us-west-2",
             "--spark-image",
             "fixture:image",
-            "--endpoint",
-            "http://fixture.invalid/v1",
             "--output",
         ])
         .arg(directory.join("results"));
@@ -197,7 +253,10 @@ fn run_command(fake: &FakeCommand, directory: &Path, resume: bool) -> Command {
 }
 
 fn run(fake: &FakeCommand, directory: &Path, resume: bool) -> Output {
-    run_command(fake, directory, resume).output().unwrap()
+    run_command(fake, directory, resume)
+        .args(["--endpoint", "http://fixture.invalid/v1"])
+        .output()
+        .unwrap()
 }
 
 fn successful(output: Output) {
@@ -278,15 +337,7 @@ fn mixed_pair_creates_both_streams_before_start_and_excludes_warmup_from_compari
     let directory = tempfile::tempdir().unwrap();
     let fake = FakeCommand::new();
     environment(&fake);
-    let suite = SUITE.split("scenarios:").next().unwrap().to_owned()
-        + r#"scenarios:
-  session:
-    kind: mixed-sessions
-    durationSeconds: 1
-    repeats: 1
-    hot: {rate: 2, workers: 2, minPromptBytes: 256, maxPromptBytes: 512}
-    short: {rate: 1, workers: 1, promptBytesByTurn: [256, 512]}
-"#;
+    let suite = mixed_suite();
     fs::write(directory.path().join("suite.yaml"), suite).unwrap();
     successful(run(&fake, directory.path(), false));
     let operations: Vec<_> = fake
@@ -329,6 +380,7 @@ fn interruption_removes_owned_container_and_resume_cleans_up_before_rejecting_ch
     fs::write(root.join("hold-start"), "").unwrap();
     fs::write(directory.path().join("suite.yaml"), SUITE).unwrap();
     let mut child = run_command(&fake, directory.path(), false)
+        .args(["--endpoint", "http://fixture.invalid/v1"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -398,4 +450,222 @@ fn interruption_removes_owned_container_and_resume_cleans_up_before_rejecting_ch
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("routing settings changed"));
     assert!(!root.join("containers").join(&id).exists());
     assert_eq!(starts(&fake), 1);
+}
+
+#[test]
+fn pod_campaign_uploads_runs_and_downloads_without_docker_then_resumes_without_traffic() {
+    for mixed in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let fake = FakeCommand::new();
+        let root = pod_environment(&fake);
+        if mixed {
+            fs::write(root.join("lose-launch-ack"), "").unwrap();
+        }
+        fs::write(
+            directory.path().join("suite.yaml"),
+            if mixed {
+                mixed_suite()
+            } else {
+                SUITE.to_owned()
+            },
+        )
+        .unwrap();
+        let run = |resume| {
+            run_command(&fake, directory.path(), resume)
+                .args(["--spark-pod", "spark-test"])
+                .output()
+                .unwrap()
+        };
+        let first = run(false);
+        let lost_acknowledgements = String::from_utf8_lossy(&first.stderr)
+            .matches("Pod launch acknowledgement unavailable")
+            .count();
+        successful(first);
+        if mixed {
+            assert_eq!(lost_acknowledgements, 6);
+        }
+        let calls_before = fake.calls();
+        let spark_before = calls_before
+            .iter()
+            .filter(|args| args.first().is_some_and(|arg| arg == "--endpoint"))
+            .count();
+        assert_eq!(spark_before, if mixed { 6 } else { 2 });
+        successful(run(true));
+        assert_eq!(
+            fake.calls()
+                .iter()
+                .filter(|args| args.first().is_some_and(|arg| arg == "--endpoint"))
+                .count(),
+            spark_before
+        );
+        assert!(fake.calls().iter().all(|args| {
+            !args
+                .first()
+                .is_some_and(|arg| arg == "image" || arg == "container")
+        }));
+        let summary: Value = serde_json::from_slice(
+            &fs::read(directory.path().join("results/summary.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            summary["rows"].as_array().unwrap().len(),
+            if mixed { 4 } else { 2 }
+        );
+    }
+}
+
+#[test]
+fn dead_port_forward_rejects_measurement_and_stops_owned_traffic() {
+    let directory = tempfile::tempdir().unwrap();
+    let fake = FakeCommand::new();
+    environment(&fake);
+    let root = fake.executable().parent().unwrap().to_owned();
+    fs::write(root.join("forward-exit-on-start"), "").unwrap();
+    fs::write(root.join("hold-start"), "").unwrap();
+    fs::write(directory.path().join("suite.yaml"), SUITE).unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let failed = run_command(&fake, directory.path(), false)
+        .args(["--local-port", &port.to_string()])
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("owned port-forward exited"));
+    assert_eq!(starts(&fake), 1);
+    assert!(!directory.path().join("results/accepted").exists());
+    assert_eq!(fs::read_dir(root.join("containers")).unwrap().count(), 0);
+}
+
+#[test]
+fn interrupted_unacknowledged_pod_batch_reconciles_both_live_streams() {
+    use rustix::fd::OwnedFd;
+    use rustix::process::{Pid, PidfdFlags, Signal, kill_process, pidfd_open, pidfd_send_signal};
+    use std::collections::BTreeMap;
+    use std::process::{Child, Stdio};
+    use std::time::{Duration, Instant};
+
+    struct Controller(Child);
+    impl Drop for Controller {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    struct OwnedProcess(OwnedFd);
+    impl Drop for OwnedProcess {
+        fn drop(&mut self) {
+            let _ = pidfd_send_signal(&self.0, Signal::KILL);
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let fake = FakeCommand::new();
+    let root = pod_environment(&fake);
+    fs::write(root.join("hold-mixed-launches"), "").unwrap();
+    fs::write(directory.path().join("suite.yaml"), mixed_suite()).unwrap();
+    let mut controller = Controller(
+        run_command(&fake, directory.path(), false)
+            .args(["--spark-pod", "spark-test"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(25);
+    let mut processes = BTreeMap::new();
+    while processes.len() < 4 {
+        for marker in [
+            "spark-running-hot",
+            "spark-running-short",
+            "ack-held-hot",
+            "ack-held-short",
+        ] {
+            if processes.contains_key(marker) {
+                continue;
+            }
+            if let Some(pid) = fs::read_to_string(root.join(marker))
+                .ok()
+                .and_then(|text| text.parse::<u32>().ok())
+            {
+                let handle = pidfd_open(
+                    Pid::from_raw(i32::try_from(pid).unwrap()).unwrap(),
+                    PidfdFlags::empty(),
+                )
+                .unwrap();
+                processes.insert(marker, (pid, OwnedProcess(handle)));
+            }
+        }
+        assert!(
+            controller.0.try_wait().unwrap().is_none(),
+            "controller exited before both launch acknowledgements were held"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "both mixed streams did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    kill_process(
+        Pid::from_raw(i32::try_from(controller.0.id()).unwrap()).unwrap(),
+        Signal::INT,
+    )
+    .unwrap();
+    loop {
+        if let Some(status) = controller.0.try_wait().unwrap() {
+            assert_eq!(status.code(), Some(130));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Pod interruption did not finish reconciliation"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for (marker, (pid, _guard)) in &processes {
+        match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => assert!(
+                matches!(
+                    stat.rsplit_once(") ").unwrap().1.split_whitespace().next(),
+                    Some("Z" | "X")
+                ),
+                "fixture {marker} remains active"
+            ),
+            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+        }
+    }
+    let output = directory.path().join("results");
+    assert!(!output.join("accepted").exists());
+    let attempt = fs::read_dir(output.join("attempts"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let records: Vec<Value> = fs::read_dir(attempt.join("pod-launches"))
+        .unwrap()
+        .map(|entry| serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap())
+        .collect();
+    assert_eq!(records.len(), 3);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["phase"] == "cancelled")
+            .count(),
+        2
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["phase"] == json!({"exited":{"code":0}}))
+            .count(),
+        1
+    );
+    assert_eq!(
+        fake.calls()
+            .iter()
+            .filter(|args| args.first().is_some_and(|arg| arg == "--endpoint"))
+            .count(),
+        3
+    );
 }

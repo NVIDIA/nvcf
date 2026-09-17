@@ -83,6 +83,12 @@ impl fmt::Display for AuthenticationFailure {
 impl std::error::Error for AuthenticationFailure {}
 
 impl Topology {
+    #[cfg(test)]
+    pub(crate) fn with_executable(mut self, executable: PathBuf) -> Self {
+        self.executable = executable;
+        self
+    }
+
     pub fn load(primary: &str, peers: &[String]) -> Result<Self> {
         let mut names = BTreeSet::new();
         let mut contexts = BTreeSet::new();
@@ -685,7 +691,7 @@ fn command_stdout(output: Output, context: &str) -> Result<String> {
         .with_context(|| format!("kubectl returned non-UTF-8 output for {context}"))
 }
 
-fn authentication_error(message: &str) -> bool {
+pub(crate) fn authentication_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     [
         "unauthorized",
@@ -706,7 +712,7 @@ fn authentication_error(message: &str) -> bool {
     .any(|pattern| message.contains(pattern))
 }
 
-fn transient_control_error(message: &str) -> bool {
+pub(crate) fn transient_control_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     [
         "tls handshake timeout",

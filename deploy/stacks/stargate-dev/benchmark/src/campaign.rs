@@ -3,10 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::num::NonZeroU16;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -14,20 +14,21 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::net::TcpStream;
 use tokio::process::Command;
-use tokio::time::{Instant, sleep, timeout};
+use tokio::time::{Instant, sleep, timeout, timeout_at};
 use uuid::Uuid;
 
+use crate::artifact::{atomic_json, below, hash_file, read_json};
 use crate::cluster::Topology;
+use crate::pod;
 use crate::process::{self, Process, capture};
 use crate::report;
 use crate::suite::{Arm, ArmKind, Plan, RunLimit, Stream};
 use crate::workload::Fingerprint;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const OWNER_LABEL: &str = "nvcf.stargate-bench.owner";
 const CAMPAIGN_LABEL: &str = "nvcf.stargate-bench.campaign";
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -42,6 +43,8 @@ pub struct Options {
     pub output: PathBuf,
     #[arg(long, env = "STARGATE_SPARK_IMAGE")]
     pub spark_image: String,
+    #[arg(long)]
+    pub spark_pod: Option<String>,
     #[arg(long)]
     pub endpoint: Option<String>,
     #[arg(long, default_value = "18000")]
@@ -58,6 +61,7 @@ struct Settings {
     region: String,
     peer_regions: Vec<String>,
     spark_image: String,
+    spark_pod: Option<String>,
     endpoint: Option<String>,
     local_port: NonZeroU16,
 }
@@ -68,15 +72,20 @@ impl Options {
             region: self.region.clone(),
             peer_regions: self.peer_region.clone(),
             spark_image: self.spark_image.clone(),
+            spark_pod: self.spark_pod.clone(),
             endpoint: self.endpoint.clone(),
             local_port: self.local_port,
         }
     }
 
     fn endpoint(&self) -> String {
-        self.endpoint
-            .clone()
-            .unwrap_or_else(|| format!("http://127.0.0.1:{}/v1", self.local_port))
+        self.endpoint.clone().unwrap_or_else(|| {
+            if self.spark_pod.is_some() {
+                "http://llm-request-router:8000/v1".into()
+            } else {
+                format!("http://127.0.0.1:{}/v1", self.local_port)
+            }
+        })
     }
 }
 
@@ -90,9 +99,21 @@ struct Manifest {
     settings: Settings,
     plan: Plan,
     topology: Value,
-    image_id: String,
+    engine: EngineIdentity,
     controls: Value,
     workloads: BTreeMap<String, Fingerprint>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum EngineIdentity {
+    Docker { image_id: String },
+    Pod { environment: pod::Environment },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -231,30 +252,59 @@ impl Docker {
     }
 }
 
-struct Resources {
-    docker: Docker,
+enum Engine<'a> {
+    Docker(Docker),
+    Pod(pod::Runner<'a>),
+}
+
+impl<'a> Engine<'a> {
+    fn new(topology: &'a Topology, name: Option<&'a str>) -> Result<Self> {
+        match name {
+            Some(name) => Ok(Self::Pod(pod::Runner::new(topology, name)?)),
+            None => Ok(Self::Docker(Docker {
+                executable: PathBuf::from("docker"),
+            })),
+        }
+    }
+
+    async fn identity(&self, reference: &str) -> Result<EngineIdentity> {
+        match self {
+            Self::Docker(docker) => Ok(EngineIdentity::Docker {
+                image_id: docker.image_id(reference).await?,
+            }),
+            Self::Pod(runner) => Ok(EngineIdentity::Pod {
+                environment: runner.inspect(reference).await?,
+            }),
+        }
+    }
+
+    async fn prepare(&self, output: &Path, manifest: &Manifest) -> Result<PathBuf> {
+        match self {
+            Self::Docker(_) => Ok(PathBuf::from("/campaign")),
+            Self::Pod(runner) => Ok(PathBuf::from(
+                runner
+                    .prepare(&manifest.id, output, &manifest.workloads)
+                    .await?,
+            )),
+        }
+    }
+
+    async fn reconcile(&self, output: &Path, manifest: &Manifest) -> Result<()> {
+        match self {
+            Self::Docker(docker) => reconcile_launches(output, manifest, docker).await,
+            Self::Pod(runner) => runner.reconcile(output, &manifest.id).await,
+        }
+    }
+}
+
+struct Resources<'a> {
+    engine: Engine<'a>,
     clients: Vec<Process>,
     forward: Option<Process>,
     validated: bool,
 }
 
-impl Resources {
-    async fn stop_clients(&mut self) -> Result<()> {
-        let mut errors = Vec::new();
-        for client in &mut self.clients {
-            if let Err(error) = client.stop().await {
-                errors.push(format!("{error:#}"));
-            }
-        }
-        self.clients.clear();
-        ensure!(
-            errors.is_empty(),
-            "stop Docker clients: {}",
-            errors.join("; ")
-        );
-        Ok(())
-    }
-
+impl Resources<'_> {
     async fn stop_forward(&mut self) -> Result<()> {
         if let Some(mut forward) = self.forward.take() {
             forward.stop().await.context("stop owned port-forward")?;
@@ -264,13 +314,13 @@ impl Resources {
 
     async fn cleanup(&mut self, output: &Path) -> Result<()> {
         let mut errors = Vec::new();
-        if let Err(error) = self.stop_clients().await {
+        if let Err(error) = stop_clients(&mut self.clients).await {
             errors.push(format!("{error:#}"));
         }
         if self.validated && output.join("campaign.json").is_file() {
             match load_manifest(output) {
                 Ok(manifest) => {
-                    if let Err(error) = reconcile_launches(output, &manifest, &self.docker).await {
+                    if let Err(error) = self.engine.reconcile(output, &manifest).await {
                         errors.push(format!("{error:#}"));
                     }
                 }
@@ -324,7 +374,7 @@ impl Resources {
         self.forward = Some(Process::spawn(command)?);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            self.check_forward()?;
+            check_forward(&mut self.forward)?;
             if matches!(
                 timeout(
                     Duration::from_secs(1),
@@ -333,7 +383,7 @@ impl Resources {
                 .await,
                 Ok(Ok(_))
             ) {
-                self.check_forward()?;
+                check_forward(&mut self.forward)?;
                 return Ok(());
             }
             ensure!(
@@ -343,16 +393,32 @@ impl Resources {
             sleep(Duration::from_millis(200)).await;
         }
     }
+}
 
-    fn check_forward(&mut self) -> Result<()> {
-        if let Some(forward) = &mut self.forward {
-            ensure!(
-                forward.try_wait()?.is_none(),
-                "owned port-forward exited; measurement is invalid"
-            );
-        }
-        Ok(())
+fn check_forward(forward: &mut Option<Process>) -> Result<()> {
+    if let Some(forward) = forward {
+        ensure!(
+            forward.try_wait()?.is_none(),
+            "owned port-forward exited; measurement is invalid"
+        );
     }
+    Ok(())
+}
+
+async fn stop_clients(clients: &mut Vec<Process>) -> Result<()> {
+    let mut errors = Vec::new();
+    for client in clients.iter_mut() {
+        if let Err(error) = client.stop().await {
+            errors.push(format!("{error:#}"));
+        }
+    }
+    clients.clear();
+    ensure!(
+        errors.is_empty(),
+        "stop Docker clients: {}",
+        errors.join("; ")
+    );
+    Ok(())
 }
 
 pub async fn run(options: Options, plan: Plan) -> Result<()> {
@@ -374,12 +440,11 @@ pub async fn run(options: Options, plan: Plan) -> Result<()> {
         "endpoint must not be empty"
     );
     let topology = Topology::load(&options.region, &options.peer_region)?;
+    let engine = Engine::new(&topology, options.spark_pod.as_deref())?;
     let output = prepare_directory(&options.output)?;
     let lock = lock_output(&output)?;
     let mut resources = Resources {
-        docker: Docker {
-            executable: PathBuf::from("docker"),
-        },
+        engine,
         clients: Vec::new(),
         forward: None,
         validated: false,
@@ -407,12 +472,12 @@ async fn execute(
     options: &Options,
     plan: Plan,
     topology: &Topology,
-    resources: &mut Resources,
+    resources: &mut Resources<'_>,
 ) -> Result<()> {
-    let manifest = prepare_manifest(output, options, plan, topology, &resources.docker).await?;
+    let manifest = prepare_manifest(output, options, plan, topology, &resources.engine).await?;
     resources.validated = true;
-    reconcile_launches(output, &manifest, &resources.docker).await?;
-    verify_controls(&manifest, topology, &resources.docker).await?;
+    resources.engine.reconcile(output, &manifest).await?;
+    verify_controls(&manifest, topology, &resources.engine).await?;
     // Validate every accepted arm before any reset or new traffic.
     let accepted: Vec<bool> = manifest
         .plan
@@ -425,19 +490,21 @@ async fn execute(
     }
     topology.wait_ready().await?;
     let token = topology.load_token().await?;
+    let artifact_root = resources.engine.prepare(output, &manifest).await?;
     let execution = Execution {
         output,
         options,
         manifest: &manifest,
         topology,
         token: &token,
+        artifact_root: &artifact_root,
     };
     let mut first_pending = true;
     for (arm, accepted) in manifest.plan.arms.iter().zip(accepted) {
         if accepted {
             continue;
         }
-        verify_controls(&manifest, topology, &resources.docker).await?;
+        verify_controls(&manifest, topology, &resources.engine).await?;
         let attempt = Path::new("attempts").join(Uuid::new_v4().to_string());
         fs::create_dir_all(output.join(&attempt))?;
         atomic_json(
@@ -460,7 +527,8 @@ async fn execute(
         } else {
             None
         };
-        if options.endpoint.is_none() && resources.forward.is_none() {
+        if options.spark_pod.is_none() && options.endpoint.is_none() && resources.forward.is_none()
+        {
             resources.start_forward(topology, options, output).await?;
         }
         first_pending = false;
@@ -497,7 +565,7 @@ async fn execute(
             "Pod replacement or restart invalidated {}",
             arm.directory.display()
         );
-        verify_controls(&manifest, topology, &resources.docker).await?;
+        verify_controls(&manifest, topology, &resources.engine).await?;
         if let Some(baseline) = baseline {
             let after = topology.cache_stats().await?;
             let delta = cache_delta(&baseline, &after)?;
@@ -536,7 +604,7 @@ async fn prepare_manifest(
     options: &Options,
     plan: Plan,
     topology: &Topology,
-    docker: &Docker,
+    engine: &Engine<'_>,
 ) -> Result<Manifest> {
     let path = output.join("campaign.json");
     let binary_sha256 =
@@ -607,7 +675,7 @@ async fn prepare_manifest(
         settings: options.settings(),
         plan,
         topology: topology_value,
-        image_id: docker.image_id(&options.spark_image).await?,
+        engine: engine.identity(&options.spark_image).await?,
         controls: topology.snapshot_controls().await?,
         workloads,
     };
@@ -615,10 +683,14 @@ async fn prepare_manifest(
     Ok(manifest)
 }
 
-async fn verify_controls(manifest: &Manifest, topology: &Topology, docker: &Docker) -> Result<()> {
+async fn verify_controls(
+    manifest: &Manifest,
+    topology: &Topology,
+    engine: &Engine<'_>,
+) -> Result<()> {
     ensure!(
-        docker.image_id(&manifest.settings.spark_image).await? == manifest.image_id,
-        "Spark image identity changed; use a new campaign directory"
+        engine.identity(&manifest.settings.spark_image).await? == manifest.engine,
+        "Spark engine identity changed; use a new campaign directory"
     );
     ensure!(
         topology.snapshot_controls().await? == manifest.controls,
@@ -682,6 +754,13 @@ struct Execution<'a> {
     manifest: &'a Manifest,
     topology: &'a Topology,
     token: &'a str,
+    artifact_root: &'a Path,
+}
+
+struct PreparedStream {
+    directory: PathBuf,
+    arguments: Vec<String>,
+    timeout: Duration,
 }
 
 impl Execution<'_> {
@@ -691,25 +770,94 @@ impl Execution<'_> {
         streams: &[Stream],
         attempt: &Path,
         warmup: bool,
-        resources: &mut Resources,
+        resources: &mut Resources<'_>,
     ) -> Result<Vec<AcceptedReport>> {
+        let mut prepared = Vec::new();
+        for stream in streams {
+            let directory = attempt.join(stream.name.as_deref().unwrap_or("main"));
+            fs::create_dir_all(self.output.join(&directory))?;
+            let arguments = spark_arguments(
+                stream,
+                arm,
+                &self.manifest.plan,
+                &directory,
+                self.artifact_root,
+                &self.options.endpoint(),
+                self.topology.primary(),
+            )?;
+            atomic_json(
+                &self.output.join(&directory).join("command.json"),
+                &arguments,
+            )?;
+            prepared.push(PreparedStream {
+                directory,
+                arguments,
+                timeout: deadline(stream)?,
+            });
+        }
+        match &resources.engine {
+            Engine::Docker(docker) => {
+                self.docker_streams(
+                    &prepared,
+                    attempt,
+                    docker,
+                    &mut resources.clients,
+                    &mut resources.forward,
+                )
+                .await?
+            }
+            Engine::Pod(runner) => self.pod_streams(&prepared, attempt, runner).await?,
+        }
+        streams
+            .iter()
+            .zip(prepared)
+            .map(|(stream, prepared)| {
+                let path = prepared.directory.join("spark.json");
+                let verified = report::inspect(
+                    &self.output.join(&path),
+                    stream.limit,
+                    arm.kind == ArmKind::Capacity,
+                )?;
+                if warmup || arm.kind == ArmKind::Smoke {
+                    ensure!(
+                        verified.metrics.failed == 0,
+                        "smoke or warm-up requests failed: {}",
+                        path.display()
+                    );
+                }
+                Ok(AcceptedReport {
+                    stream: stream.name.clone(),
+                    path,
+                    sha256: verified.sha256,
+                })
+            })
+            .collect()
+    }
+
+    async fn docker_streams(
+        &self,
+        streams: &[PreparedStream],
+        attempt: &Path,
+        docker: &Docker,
+        clients: &mut Vec<Process>,
+        forward: &mut Option<Process>,
+    ) -> Result<()> {
         let Self {
             output,
-            options,
             manifest,
-            topology,
             token,
+            ..
         } = self;
         ensure!(
-            resources.clients.is_empty(),
+            clients.is_empty(),
             "previous Docker clients are still owned"
         );
         let mut launches = Vec::new();
-        let mut reports = Vec::new();
         let mut maximum = Duration::ZERO;
+        let EngineIdentity::Docker { image_id } = &manifest.engine else {
+            bail!("Docker execution does not match the frozen engine");
+        };
         for stream in streams {
-            let directory = attempt.join(stream.name.as_deref().unwrap_or("main"));
-            fs::create_dir_all(output.join(&directory))?;
             let owner = Uuid::new_v4().simple().to_string();
             let launch_path = output
                 .join(attempt)
@@ -724,7 +872,7 @@ impl Execution<'_> {
                 phase: LaunchPhase::Creating,
             };
             atomic_json(&launch_path, &launch)?;
-            let mut command = resources.docker.command();
+            let mut command = docker.command();
             command
                 .args([
                     "container",
@@ -748,25 +896,9 @@ impl Execution<'_> {
                     "-v",
                 ])
                 .arg(format!("{}:/campaign", output.display()))
-                .arg(&manifest.image_id);
-            let primary = topology.primary();
-            command.args(spark_arguments(
-                stream,
-                arm,
-                &manifest.plan,
-                &directory,
-                &options.endpoint(),
-                &primary.model_name,
-                &primary.routing_key,
-            )?);
-            atomic_json(
-                &output.join(&directory).join("command.json"),
-                &command
-                    .as_std()
-                    .get_args()
-                    .map(|value| value.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>(),
-            )?;
+                .arg(image_id);
+            // The Docker image supplies Spark as its entry point.
+            command.args(&stream.arguments[1..]);
             command.env("OPENAI_API_KEY", token);
             let created = capture(command, None, CONTROL_TIMEOUT)
                 .await
@@ -783,8 +915,7 @@ impl Execution<'_> {
                 .trim()
                 .to_owned();
             ensure!(valid_id(&id), "Docker create did not return a container ID");
-            let container = resources
-                .docker
+            let container = docker
                 .inspect(&id)
                 .await?
                 .context("created container is missing")?;
@@ -797,20 +928,19 @@ impl Execution<'_> {
             launch.phase = LaunchPhase::Ready;
             atomic_json(&launch_path, &launch)?;
             launches.push((launch_path, launch));
-            reports.push(directory.join("spark.json"));
-            maximum = maximum.max(deadline(stream)?);
+            maximum = maximum.max(stream.timeout);
         }
-        resources.check_forward()?;
+        check_forward(forward)?;
         let deadline = Instant::now()
             .checked_add(maximum)
             .context("Spark deadline exceeds monotonic clock range")?;
-        for ((launch_path, launch), report) in launches.iter_mut().zip(&reports) {
+        for ((launch_path, launch), stream) in launches.iter_mut().zip(streams) {
             let id = launch
                 .container_id
                 .as_deref()
                 .context("ready Docker launch has no container ID")?;
-            let log = File::create(output.join(report).with_file_name("spark.log"))?;
-            let mut start = resources.docker.command();
+            let log = File::create(output.join(&stream.directory).join("spark.log"))?;
+            let mut start = docker.command();
             start
                 .args(["container", "start", "--attach", id])
                 .stdin(Stdio::null())
@@ -819,7 +949,7 @@ impl Execution<'_> {
             launch.phase = LaunchPhase::Running;
             atomic_json(launch_path, launch)?;
             match Process::spawn(start) {
-                Ok(process) => resources.clients.push(process),
+                Ok(process) => clients.push(process),
                 Err(error) => {
                     // No start process exists, so this container cannot have started.
                     launch.phase = LaunchPhase::Ready;
@@ -829,9 +959,9 @@ impl Execution<'_> {
             }
         }
         loop {
-            resources.check_forward()?;
+            check_forward(forward)?;
             let mut complete = true;
-            for client in &mut resources.clients {
+            for client in clients.iter_mut() {
                 match client.try_wait()? {
                     Some(status) => {
                         ensure!(status.success(), "Spark Docker client failed with {status}")
@@ -848,9 +978,9 @@ impl Execution<'_> {
             );
             sleep(Duration::from_millis(200)).await;
         }
-        resources.check_forward()?;
+        check_forward(forward)?;
         for (path, launch) in &mut launches {
-            let container = resources.docker.inspect(&launch.name).await?.context(
+            let container = docker.inspect(&launch.name).await?.context(
                 "completed Docker client has no container; launch completion is unconfirmed",
             )?;
             verify_owner(launch, &manifest.id, &container)?;
@@ -864,33 +994,97 @@ impl Execution<'_> {
             launch.container_id = Some(container.id);
             atomic_json(path, launch)?;
         }
-        resources.stop_clients().await?;
+        stop_clients(clients).await?;
         for (path, _) in launches {
-            reconcile_launch(output, &manifest.id, &resources.docker, &path).await?;
+            reconcile_launch(output, &manifest.id, docker, &path).await?;
         }
-        streams
+        Ok(())
+    }
+
+    async fn pod_streams(
+        &self,
+        streams: &[PreparedStream],
+        attempt: &Path,
+        runner: &pod::Runner<'_>,
+    ) -> Result<()> {
+        let EngineIdentity::Pod { environment } = &self.manifest.engine else {
+            bail!("Pod execution does not match the frozen engine");
+        };
+        let states: Vec<_> = streams
             .iter()
-            .zip(reports)
-            .map(|(stream, path)| {
-                let verified = report::inspect(
-                    &output.join(&path),
-                    stream.limit,
-                    arm.kind == ArmKind::Capacity,
-                )?;
-                if warmup || arm.kind == ArmKind::Smoke {
-                    ensure!(
-                        verified.metrics.failed == 0,
-                        "smoke or warm-up requests failed: {}",
-                        path.display()
-                    );
-                }
-                Ok(AcceptedReport {
-                    stream: stream.name.clone(),
-                    path,
-                    sha256: verified.sha256,
-                })
+            .map(|_| {
+                self.output
+                    .join(attempt)
+                    .join("pod-launches")
+                    .join(format!("{}.json", Uuid::new_v4()))
             })
-            .collect()
+            .collect();
+        let directories: Vec<_> = streams
+            .iter()
+            .map(|stream| {
+                self.artifact_root
+                    .join(&stream.directory)
+                    .to_str()
+                    .map(str::to_owned)
+                    .context("remote Spark directory is not UTF-8")
+            })
+            .collect::<Result<_>>()?;
+        let maximum = streams
+            .iter()
+            .map(|stream| stream.timeout)
+            .max()
+            .context("Pod batch contains no streams")?;
+        let end = Instant::now()
+            .checked_add(maximum)
+            .context("Spark deadline exceeds monotonic clock range")?;
+        let start = |index: usize| {
+            runner.start(
+                &states[index],
+                &directories[index],
+                &environment.identity,
+                self.token,
+                &streams[index].arguments,
+                streams[index].timeout,
+            )
+        };
+        let mut launches = match streams.len() {
+            1 => vec![start(0).await?],
+            2 => {
+                let (hot, short) = tokio::try_join!(start(0), start(1))?;
+                vec![hot, short]
+            }
+            _ => bail!("Pod batches support one stream or the paired mixed streams"),
+        };
+        loop {
+            let mut complete = true;
+            for ((launch, state), stream) in launches.iter_mut().zip(&states).zip(streams) {
+                let log = self.output.join(&stream.directory).join("spark.log");
+                match timeout_at(end, runner.poll(launch, state, &log))
+                    .await
+                    .context("Spark exceeded its expected duration")??
+                {
+                    Some(status) => ensure!(
+                        status == 0,
+                        "Spark Pod process failed with exit status {status}"
+                    ),
+                    None => complete = false,
+                }
+            }
+            if complete {
+                break;
+            }
+            ensure!(Instant::now() < end, "Spark exceeded its expected duration");
+            sleep(Duration::from_secs(2)).await;
+        }
+        for (launch, stream) in launches.iter().zip(streams) {
+            runner
+                .download(
+                    launch,
+                    &self.output.join(&stream.directory).join("spark.json"),
+                )
+                .await?;
+        }
+        Ok(())
     }
 }
 
@@ -899,17 +1093,18 @@ fn spark_arguments(
     arm: &Arm,
     plan: &Plan,
     directory: &Path,
+    artifact_root: &Path,
     endpoint: &str,
-    model: &str,
-    routing_key: &str,
+    primary: &crate::cluster::Region,
 ) -> Result<Vec<String>> {
     let mut args = vec![
+        "spark".into(),
         "--endpoint".into(),
         endpoint.into(),
         "--model".into(),
-        model.into(),
+        primary.model_name.clone(),
         "--stargate-routing-key".into(),
-        routing_key.into(),
+        primary.routing_key.clone(),
         "--stargate-max-wait-ms".into(),
         stream.limits.max_wait_ms.to_string(),
         "--stargate-request-slo-ms".into(),
@@ -926,13 +1121,17 @@ fn spark_arguments(
         "0".into(),
         "--quiet".into(),
         "--output".into(),
-        Path::new("/campaign")
+        artifact_root
             .join(directory)
             .join("spark.json")
             .display()
             .to_string(),
         "--workload".into(),
-        format!("/campaign/workloads/{}", stream.workload),
+        artifact_root
+            .join("workloads")
+            .join(&stream.workload)
+            .display()
+            .to_string(),
         "--scenario".into(),
         "normal".into(),
     ];
@@ -977,14 +1176,10 @@ pub async fn reconcile(output: &Path) -> Result<()> {
     let output = output.canonicalize().context("locate campaign output")?;
     let manifest = load_manifest(&output)?;
     let _lock = lock_output(&output)?;
-    reconcile_launches(
-        &output,
-        &manifest,
-        &Docker {
-            executable: PathBuf::from("docker"),
-        },
-    )
-    .await
+    let topology = Topology::load(&manifest.settings.region, &manifest.settings.peer_regions)?;
+    Engine::new(&topology, manifest.settings.spark_pod.as_deref())?
+        .reconcile(&output, &manifest)
+        .await
 }
 
 async fn reconcile_launches(output: &Path, manifest: &Manifest, docker: &Docker) -> Result<()> {
@@ -1298,6 +1493,11 @@ fn load_manifest(output: &Path) -> Result<Manifest> {
         "campaign output moved; use its original directory"
     );
     Uuid::parse_str(&manifest.id).context("invalid campaign ID")?;
+    ensure!(
+        matches!(&manifest.engine, EngineIdentity::Pod { .. })
+            == manifest.settings.spark_pod.is_some(),
+        "frozen engine does not match the selected transport"
+    );
     manifest.plan.validate()?;
     Ok(manifest)
 }
@@ -1322,58 +1522,6 @@ fn lock_output(output: &Path) -> Result<File> {
     lock.try_lock()
         .context("another benchmark controller is using this output directory")?;
     Ok(lock)
-}
-
-fn below(output: &Path, relative: &Path) -> Result<PathBuf> {
-    ensure!(
-        !relative.as_os_str().is_empty()
-            && relative
-                .components()
-                .all(|part| matches!(part, Component::Normal(_))),
-        "artifact path must remain below the output root"
-    );
-    let path = output.join(relative);
-    if path.exists() {
-        ensure!(
-            path.canonicalize()?.starts_with(output),
-            "artifact symlink escapes the output root"
-        );
-    }
-    Ok(path)
-}
-
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    serde_json::from_reader(File::open(path).with_context(|| format!("open {}", path.display()))?)
-        .with_context(|| format!("parse {}", path.display()))
-}
-
-fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
-    let parent = path.parent().context("artifact has no parent directory")?;
-    fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    serde_json::to_writer_pretty(&mut temporary, value)?;
-    temporary.write_all(b"\n")?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .with_context(|| format!("commit {}", path.display()))?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-fn hash_file(path: &Path) -> Result<String> {
-    let mut file =
-        File::open(path).with_context(|| format!("open {} for hashing", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn evidence_file(
@@ -1464,6 +1612,7 @@ mod tests {
             peer_region: Vec::new(),
             output: output.to_owned(),
             spark_image: "spark:test".into(),
+            spark_pod: None,
             endpoint: Some("http://test.invalid/v1".into()),
             local_port: NonZeroU16::new(18000).unwrap(),
             grafana_url: "http://grafana.invalid".into(),
@@ -1490,7 +1639,9 @@ mod tests {
             settings: options(output).settings(),
             plan,
             topology: json!([]),
-            image_id: format!("sha256:{}", "a".repeat(64)),
+            engine: EngineIdentity::Docker {
+                image_id: format!("sha256:{}", "a".repeat(64)),
+            },
             controls: json!({}),
             workloads,
         }
@@ -1528,6 +1679,7 @@ mod tests {
 
     #[test]
     fn deadlines_and_headers_follow_the_resolved_plan() -> Result<()> {
+        let topology = Topology::load("us-west-2", &[])?;
         let plan = plan("canonical");
         let smoke = &plan.arms[0];
         assert_eq!(deadline(&smoke.streams[0])?, Duration::from_secs(720));
@@ -1548,9 +1700,9 @@ mod tests {
             smoke,
             &plan,
             Path::new("attempts/id/main"),
+            Path::new("/campaign"),
             "http://test.invalid/v1",
-            "model",
-            "routing",
+            topology.primary(),
         )?;
         assert!(
             !arguments
@@ -1568,9 +1720,9 @@ mod tests {
             power,
             &plan,
             Path::new("attempts/id/main"),
+            Path::new("/campaign"),
             "http://test.invalid/v1",
-            "model",
-            "routing",
+            topology.primary(),
         )?;
         assert!(
             arguments
@@ -1580,6 +1732,52 @@ mod tests {
         let mut impossible = smoke.streams[0].clone();
         impossible.limits.timeout_seconds = u64::MAX;
         assert!(deadline(&impossible).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn pod_defaults_and_command_paths_do_not_use_the_local_forward() -> Result<()> {
+        let mut options = options(Path::new("unused"));
+        options.endpoint = None;
+        assert_eq!(options.endpoint(), "http://127.0.0.1:18000/v1");
+        options.spark_pod = Some("spark-worker".into());
+        assert_eq!(options.endpoint(), "http://llm-request-router:8000/v1");
+        let topology = Topology::load("us-west-2", &[])?;
+        let plan = plan("smoke");
+        let arm = &plan.arms[0];
+        let root = Path::new("/tmp/stargate-bench/campaign-id");
+        let arguments = spark_arguments(
+            &arm.streams[0],
+            arm,
+            &plan,
+            Path::new("attempts/id/main"),
+            root,
+            &options.endpoint(),
+            topology.primary(),
+        )?;
+        assert_eq!(arguments[0], "spark");
+        assert!(arguments.windows(2).any(|pair| pair
+            == [
+                "--output",
+                "/tmp/stargate-bench/campaign-id/attempts/id/main/spark.json"
+            ]));
+        assert!(arguments.windows(2).any(|pair| pair
+            == [
+                "--workload",
+                "/tmp/stargate-bench/campaign-id/workloads/smoke.yaml"
+            ]));
+        options.endpoint = Some("http://custom.invalid/v1".into());
+        assert_eq!(options.endpoint(), "http://custom.invalid/v1");
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_cannot_switch_transport_by_changing_only_settings() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut frozen = manifest(directory.path(), plan("smoke"));
+        frozen.settings.spark_pod = Some("spark-worker".into());
+        atomic_json(&directory.path().join("campaign.json"), &frozen)?;
+        assert!(load_manifest(directory.path()).is_err());
         Ok(())
     }
 
@@ -1668,9 +1866,9 @@ mod tests {
     {
         let directory = tempfile::tempdir()?;
         let fake = FakeCommand::new();
-        let docker = Docker {
+        let engine = Engine::Docker(Docker {
             executable: fake.executable(),
-        };
+        });
         let topology = Topology::load("us-west-2", &[])?;
         let mut options = options(directory.path());
         fs::write(directory.path().join("foreign"), "keep me")?;
@@ -1680,7 +1878,7 @@ mod tests {
                 &options,
                 plan("smoke"),
                 &topology,
-                &docker
+                &engine
             )
             .await
             .is_err()
@@ -1700,7 +1898,7 @@ mod tests {
                 &options,
                 plan("smoke"),
                 &topology,
-                &docker
+                &engine
             )
             .await
             .is_err()
@@ -1778,16 +1976,16 @@ mod tests {
             },
         )?;
         let fake = FakeCommand::new();
-        let docker = Docker {
+        let engine = Engine::Docker(Docker {
             executable: fake.executable(),
-        };
+        });
         let topology = Topology::load("us-west-2", &[])?;
         let error = prepare_manifest(
             directory.path(),
             &options(directory.path()),
             plan("smoke"),
             &topology,
-            &docker,
+            &engine,
         )
         .await
         .unwrap_err();
