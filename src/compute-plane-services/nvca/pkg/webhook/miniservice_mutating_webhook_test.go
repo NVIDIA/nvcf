@@ -28,6 +28,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	evanphxpatch "github.com/evanphx/json-patch/v5"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
@@ -39,7 +40,6 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
@@ -1454,15 +1454,14 @@ func volumeMountKeys(vms []corev1.VolumeMount) []string {
 }
 
 func TestMiniserviceOperatorWebhook_NVLinkComputeDomain_DisableViaWorkloadConfig(t *testing.T) {
-	ctx := core.WithDefaultLogger(context.Background())
-
-	newGPUPod := func() *corev1.Pod {
+	newGPUPod := func(annos map[string]string) *corev1.Pod {
 		return &corev1.Pod{
 			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "gpu-pod",
-				Namespace: testNamespace,
-				Labels:    miniserviceNameLabels(),
+				Name:        "gpu-pod",
+				Namespace:   testNamespace,
+				Labels:      miniserviceNameLabels(),
+				Annotations: annos,
 			},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
@@ -1485,8 +1484,7 @@ func TestMiniserviceOperatorWebhook_NVLinkComputeDomain_DisableViaWorkloadConfig
 		},
 	}
 
-	handleCreate := func(t *testing.T, wh *miniserviceMutatingWebhook) *corev1.Pod {
-		pod := newGPUPod()
+	handleCreate := func(t *testing.T, ctx context.Context, wh *miniserviceMutatingWebhook, pod *corev1.Pod) *corev1.Pod {
 		raw, _ := json.Marshal(pod)
 		req := admission.Request{}
 		req.Namespace = testNamespace
@@ -1508,7 +1506,7 @@ func TestMiniserviceOperatorWebhook_NVLinkComputeDomain_DisableViaWorkloadConfig
 		wh := makeWebhook(t, cm)
 		wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
 
-		got := handleCreate(t, wh)
+		got := handleCreate(t, core.WithDefaultLogger(context.Background()), wh, newGPUPod(nil))
 
 		require.Len(t, got.Spec.ResourceClaims, 1)
 		require.Len(t, got.Spec.Containers[0].Resources.Claims, 1)
@@ -1519,14 +1517,12 @@ func TestMiniserviceOperatorWebhook_NVLinkComputeDomain_DisableViaWorkloadConfig
 
 	t.Run("DisableNVLinkComputeDomain: no claim and no NVLink affinity", func(t *testing.T) {
 		meta := baseMeta
-		meta.WorkloadConfig = &v1alpha1.WorkloadConfig{
-			FeatureFlags: map[string]bool{featureflag.DisableNVLinkComputeDomain: true},
-		}
+		meta.WorkloadFeatureFlags = map[string]bool{featureflag.DisableNVLinkComputeDomain: true}
 		cm := createConfigMapFromMeta(t, testNamespace, meta)
 		wh := makeWebhook(t, cm)
 		wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
 
-		got := handleCreate(t, wh)
+		got := handleCreate(t, core.WithDefaultLogger(context.Background()), wh, newGPUPod(nil))
 
 		assert.Empty(t, got.Spec.ResourceClaims)
 		assert.Empty(t, got.Spec.Containers[0].Resources.Claims)
@@ -1534,5 +1530,29 @@ func TestMiniserviceOperatorWebhook_NVLinkComputeDomain_DisableViaWorkloadConfig
 			assert.Empty(t, got.Spec.Affinity.PodAffinity.PreferredDuringSchedulingIgnoredDuringExecution)
 			assert.Empty(t, got.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution)
 		}
+	})
+
+	t.Run("annotation and DisableNVLinkComputeDomain both set: warns and skips claim", func(t *testing.T) {
+		meta := baseMeta
+		meta.WorkloadFeatureFlags = map[string]bool{featureflag.DisableNVLinkComputeDomain: true}
+		cm := createConfigMapFromMeta(t, testNamespace, meta)
+		wh := makeWebhook(t, cm)
+		wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
+
+		ctx, hook := core.WithTestingLogger(context.Background())
+		pod := newGPUPod(map[string]string{nvcfdra.RequiredNVLinkDomainIndexAnnotation: "0"})
+
+		got := handleCreate(t, ctx, wh, pod)
+
+		assert.Empty(t, got.Spec.ResourceClaims)
+		assert.Empty(t, got.Spec.Containers[0].Resources.Claims)
+
+		var warned bool
+		for _, e := range hook.AllEntries() {
+			if e.Level == logrus.WarnLevel {
+				warned = true
+			}
+		}
+		assert.True(t, warned, "expected a warning log entry for the conflicting annotation and feature flag")
 	})
 }

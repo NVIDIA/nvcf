@@ -30,6 +30,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	translatecommon "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	"github.com/sirupsen/logrus"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -329,9 +330,18 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 		if isCreate {
 			// NVLink DRA mutations for claims/scheduling. Skipped when the function has opted
 			// out via DisableNVLinkComputeDomain, since it does not need cross-node NVLink.
-			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) &&
-				!meta.WorkloadConfig.IsFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain) {
-				w.mutateNVLinkDRA(obj.GetNamespace(), t)
+			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
+				disableComputeDomain := meta.IsWorkloadFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain)
+				if _, hasIdx := t.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; hasIdx && disableComputeDomain {
+					core.GetLogger(ctx).WithFields(logrus.Fields{
+						"pod":       t.Name,
+						"namespace": obj.GetNamespace(),
+					}).Warnf("pod sets %s but %s is also enabled; skipping ComputeDomain allocation despite the annotation",
+						nvcfdra.RequiredNVLinkDomainIndexAnnotation, featureflag.DisableNVLinkComputeDomain)
+				}
+				if !disableComputeDomain {
+					w.mutateNVLinkDRA(obj.GetNamespace(), t)
+				}
 			}
 
 			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {

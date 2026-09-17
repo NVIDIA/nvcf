@@ -629,9 +629,12 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
 		return reconcile.Result{}, err
 	}
-	// Carry the decoded workload config through to the admission webhook via the miniservice
-	// metadata ConfigMap, so it can read workload-level feature flags at Pod admission time.
-	metaInput.WorkloadConfig = workloadConfig
+	// Carry the decoded workload feature flags through to the admission webhook via the
+	// miniservice metadata ConfigMap, so it can read them at Pod admission time. Only the
+	// feature flags are carried, not the rest of WorkloadConfig, which the webhook has no use for.
+	if workloadConfig != nil {
+		metaInput.WorkloadFeatureFlags = workloadConfig.FeatureFlags
+	}
 	// Update the resources status in the MiniService status.
 	updateResourcesStatus(ms, resources)
 	// ReVal may render filtered workload pull secrets, which should be used if possible.
