@@ -574,11 +574,11 @@ func TestResolveModelCacheStorageWithClientsetMissingCatalogUsesBuiltin(t *testi
 // The built-in catalog must be the one the chart installs, or an agent ahead
 // of its chart would resolve differently from a converged install.
 func TestBuiltinCatalogMatchesChart(t *testing.T) {
+	// Reachable under go test from the package dir and under Bazel through the
+	// storage-capability-catalog data dependency with rundir ".".
 	chartCopy, err := os.ReadFile(filepath.Join("..", "..", "deployments", "nvca-operator", "files",
 		"nvcf-storage-capabilities-v1alpha1.yaml"))
-	if err != nil {
-		t.Skipf("chart catalog not reachable from this test root: %v", err)
-	}
+	require.NoError(t, err, "the chart catalog must be readable; the built-in copy is checked against it")
 	assert.Equal(t, string(chartCopy), builtinStorageCapabilityCatalogYAML)
 	_, _, err = builtinStorageCapabilityCatalog()
 	require.NoError(t, err)
