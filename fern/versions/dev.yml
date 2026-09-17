@@ -55,6 +55,8 @@ navigation:
         path: ../../docs/user/optional-enhancements.md
       - page: Pod Disruption Budgets
         path: ../../docs/user/pod-disruption-budgets.md
+      - page: High Availability
+        path: ../../docs/user/high-availability.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
       - page: LLM Request Router Load Balancing

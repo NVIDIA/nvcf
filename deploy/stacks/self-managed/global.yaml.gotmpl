@@ -27,177 +27,217 @@ tolerations:
 {{/*
 highAvailability helpers.
 
-global.yaml.gotmpl maps highAvailability.* onto chart values (replicaCount,
-affinity, PDB, update strategy).
+global.yaml.gotmpl maps highAvailability.mode onto chart values (replicaCount,
+affinity, topology spread, PDB, update strategy). There is no per-component HA
+subtree (stateless/hotPath/tier2/nats/openbao/cassandra) beneath
+highAvailability: sizing and placement are derived uniformly from mode for
+every in-scope release, per the HA values design review.
 
 highAvailability.mode:
-  none          — keep existing env/chart defaults (local / CI / BDD).
-  ha-preferred  — HA sizing; preferred hostname anti-affinity.
-  ha-enforced   — HA sizing; required hostname anti-affinity.
+  none       — keep existing env/chart defaults (local / CI / BDD).
+  preferred  — HA sizing; soft (preferred/ScheduleAnyway) hostname
+               anti-affinity and zone topology spread.
+  enforced   — HA sizing; hard (required/DoNotSchedule) hostname
+               anti-affinity and zone topology spread.
 
-Requires ≥3 schedulable nodes unless mode is none. Nested keys under
-stateless/hotPath/nats/openbao/cassandra override those defaults.
+Requires >= 3 schedulable nodes unless mode is none.
 
-stateless — nvcf-api, admin-token-issuer-proxy, and llm-api-gateway (LLM
-  addon): replicaCount, hostname anti-affinity, zone topology spread, PDB.
+Shared scheduling tuning: global.affinity and global.topologySpreadConstraints
+resolve class-specific override -> "all" -> the mode-derived convention above,
+the same fallback pattern as the existing global.nodeSelectors /
+global.tolerations. An explicit {} (affinity) or [] (topology spread) for a
+class — or for "all" — suppresses the generated policy for that class;
+presence is the signal, so this is NOT equivalent to omitting the key.
+Component-shaped values in the selected environment remain the final
+per-release escape hatch and are applied by each release block below, not by
+these helpers.
+
+Replica-safe Deployments (api, invocation, grpcproxy, adminIssuerProxy,
+rateLimiter, natsAuthCalloutService, llmApiGateway): 2 replicas under HA (see
+NOTE below for invocation/grpcproxy), hostname anti-affinity, zone topology
+spread, PDB minAvailable 1.
   NOTE: invocation-service and grpc-proxy remain single-replica for now
   (anti-affinity/zone-spread still applied but no-ops at 1 replica, no PDB).
   Their multi-replica scaling is deferred until Envoy support lands in the
   self-hosted stack (worker-callback host binding; see #987/#989 review).
-hotPath   — rateLimiter, nats-auth-callout: 2 replicas + anti-affinity +
-  zone topology spread + PDB.
-tier2     — Cassandra, NATS, OpenBao: quorum sizing (3) + PDB + hostname pod
-  anti-affinity so the 3 peers land on distinct nodes. NATS JetStream RF is
-  applied to the stream creators (nvcf-api, invocation) via their env.
+
+Quorum services (Cassandra, NATS, OpenBao): 3 replicas, hostname
+anti-affinity and zone topology spread so peers land on distinct
+nodes/zones, PDB sized to tolerate exactly one voluntary disruption. NATS
+JetStream RF is applied to the stream creators (nvcf-api, invocation) via
+their env.
 
 In-scope charts MUST expose the required value hooks.
 */}}
-{{- define "nvcf.ha.statelessReplicaCount" -}}
-{{- dig "highAvailability" "stateless" "replicaCount" 2 . -}}
+{{- define "nvcf.ha.replicaSafeReplicaCount" -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}2{{- end -}}
 {{- end -}}
 
-{{/* Replica count for hot-path helper Deployments (rateLimiter,
-     nats-auth-callout) under HA. Defaults to 2. */}}
-{{- define "nvcf.ha.hotPathReplicaCount" -}}
-{{- dig "highAvailability" "hotPath" "replicaCount" 2 . -}}
+{{/* Internal: minAvailable-shaped PodDisruptionBudget body, empty under mode
+     none. Context: dict "haMode" "<mode>" "minAvailable" <int> */}}
+{{- define "nvcf.ha._podDisruptionBudget" -}}
+{{- if ne .haMode "none" -}}
+enabled: true
+minAvailable: {{ .minAvailable }}
+{{- end -}}
+{{- end -}}
+
+{{/* PodDisruptionBudget for a replica-safe Tier-1 Deployment (2 replicas
+     under HA): minAvailable 1, so a voluntary disruption can never remove
+     both. Context: .Values (called as nvcf.ha.replicaSafeReplicaCount is) */}}
+{{- define "nvcf.ha.replicaSafePodDisruptionBudget" -}}
+{{- include "nvcf.ha._podDisruptionBudget" (dict "haMode" (dig "highAvailability" "mode" "none" . | toString) "minAvailable" 1) -}}
+{{- end -}}
+
+{{/* PodDisruptionBudget for a 3-member quorum service (Cassandra): tolerates
+     exactly one voluntary disruption (minAvailable 2 of 3). Context: .Values */}}
+{{- define "nvcf.ha.quorumPodDisruptionBudget" -}}
+{{- include "nvcf.ha._podDisruptionBudget" (dict "haMode" (dig "highAvailability" "mode" "none" . | toString) "minAvailable" 2) -}}
+{{- end -}}
+
+{{/* PodDisruptionBudget for the NATS quorum, in the shape the NATS chart's
+     podDisruptionBudget.merge.spec values expect. Tolerates exactly one
+     voluntary disruption (minAvailable 2 of 3). Context: .Values */}}
+{{- define "nvcf.ha.natsQuorumPodDisruptionBudget" -}}
+{{- if ne (dig "highAvailability" "mode" "none" . | toString) "none" -}}
+enabled: true
+merge:
+  spec:
+    minAvailable: 2
+{{- end -}}
 {{- end -}}
 
 {{/* JetStream stream replica factor (RF) under HA. Applied to the stream
      creators — nvcf-api (Java, nvcf.nats.replicas) and invocation (Rust,
      nats_properties.replicas) — via their env so the streams they declare are
-     replicated across the NATS cluster. Defaults to 2 per the SDD. */}}
+     replicated across the NATS cluster. Defaults to 3: JetStream streams use
+     Raft quorum, and RF=2 provides no failure tolerance (loses quorum on a
+     single replica loss) — see the NATS JetStream replication guidance and
+     the HA values design review. */}}
 {{- define "nvcf.ha.natsStreamReplicas" -}}
-{{- dig "highAvailability" "nats" "jetstream" "replicaFactor" 2 . -}}
+{{- dig "highAvailability" "nats" "jetstream" "replicaFactor" 3 . -}}
 {{- end -}}
 
-{{/* Soft/hard pod anti-affinity on hostname for a Helm release instance name.
-     Context: dict "Values" $.Values "instance" "<release-instance>" */}}
-{{- define "nvcf.ha.statelessAffinity" -}}
-{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
-{{- $paa := dig "highAvailability" "stateless" "podAntiAffinity" dict .Values -}}
-{{- if dig "enabled" true $paa -}}
-affinity:
-  podAntiAffinity:
-{{- if eq $haMode "ha-enforced" }}
-    requiredDuringSchedulingIgnoredDuringExecution:
-      - labelSelector:
-          matchExpressions:
-            - key: app.kubernetes.io/instance
-              operator: In
-              values:
-                - {{ .instance | quote }}
-        topologyKey: kubernetes.io/hostname
-{{- else }}
-    preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 100
-        podAffinityTerm:
-          labelSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/instance
-                operator: In
-                values:
-                  - {{ .instance | quote }}
-          topologyKey: kubernetes.io/hostname
-{{- end }}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-
-{{/* Zone-level topology spread for a Helm release instance name. Spreads
-     replicas across topology.kubernetes.io/zone. whenUnsatisfiable follows the
-     mode: ha-preferred → ScheduleAnyway (best effort), ha-enforced →
-     DoNotSchedule (hard). Nodes MUST carry topology.kubernetes.io/zone.
-     Context: dict "Values" $.Values "instance" "<release-instance>" */}}
-{{- define "nvcf.ha.statelessTopologySpread" -}}
-{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
-{{- $ts := dig "highAvailability" "stateless" "topologySpread" dict .Values -}}
-{{- if dig "enabled" true $ts -}}
-topologySpreadConstraints:
-  - maxSkew: {{ dig "maxSkew" 1 $ts }}
-    topologyKey: topology.kubernetes.io/zone
-    whenUnsatisfiable: {{ if eq $haMode "ha-enforced" }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
-    labelSelector:
-      matchLabels:
-        app.kubernetes.io/instance: {{ .instance | quote }}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-
-{{/* Hostname pod anti-affinity for a Tier-2 quorum release (Cassandra, NATS,
-     OpenBao) so the 3 quorum peers land on distinct nodes. Matches
-     app.kubernetes.io/instance = release name. ha-preferred → preferred (soft,
-     stays schedulable on small pools), ha-enforced → required (hard). Emits the
-     podAntiAffinity body only (no affinity: wrapper) so callers can nest it as a
-     map (Cassandra affinity, NATS podTemplate.merge.spec.affinity) or a string
-     (OpenBao server.affinity). Gated by highAvailability.tier2.podAntiAffinity.
-     Context: dict "Values" $.Values "instance" "<release-instance>" */}}
-{{- define "nvcf.ha.tier2Affinity" -}}
-{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
-{{- $paa := dig "highAvailability" "tier2" "podAntiAffinity" dict .Values -}}
-{{- if dig "enabled" true $paa -}}
-podAntiAffinity:
-{{- if eq $haMode "ha-enforced" }}
-  requiredDuringSchedulingIgnoredDuringExecution:
-    - labelSelector:
+{{/* Mode-derived hostname pod anti-affinity body (no podAntiAffinity: key),
+     hard under enforced, soft under preferred, empty under none. Internal:
+     called only from nvcf.ha.podAntiAffinity. Context: dict "haMode" "<mode>"
+     "instance" "<release-instance>" */}}
+{{- define "nvcf.ha._generatedPodAntiAffinity" -}}
+{{- if eq .haMode "enforced" -}}
+requiredDuringSchedulingIgnoredDuringExecution:
+  - labelSelector:
+      matchExpressions:
+        - key: app.kubernetes.io/instance
+          operator: In
+          values:
+            - {{ .instance | quote }}
+    topologyKey: kubernetes.io/hostname
+{{- else if eq .haMode "preferred" -}}
+preferredDuringSchedulingIgnoredDuringExecution:
+  - weight: 100
+    podAffinityTerm:
+      labelSelector:
         matchExpressions:
           - key: app.kubernetes.io/instance
             operator: In
             values:
               - {{ .instance | quote }}
       topologyKey: kubernetes.io/hostname
-{{- else }}
-  preferredDuringSchedulingIgnoredDuringExecution:
-    - weight: 100
-      podAffinityTerm:
-        labelSelector:
-          matchExpressions:
-            - key: app.kubernetes.io/instance
-              operator: In
-              values:
-                - {{ .instance | quote }}
-        topologyKey: kubernetes.io/hostname
-{{- end }}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 
-{{/* Zone topology spread for a Tier-2 quorum release (Cassandra, NATS,
-     OpenBao) so the 3 quorum peers land in distinct availability zones. Matches
-     app.kubernetes.io/instance = release name on topology.kubernetes.io/zone.
-     OPT-IN: gated by highAvailability.tier2.topologySpread.enabled (default
-     false) because correct behaviour depends on operator infrastructure — a
-     StorageClass with volumeBindingMode: WaitForFirstConsumer (so each zonal PV
-     is created in the zone the scheduler picks) and capacity in >= 3 AZs.
-     whenUnsatisfiable defaults to ScheduleAnyway (soft) so a short AZ never
-     leaves a peer Pending; set topologySpread.strict: true (>= 3-AZ clusters
-     only) for DoNotSchedule (hard). Emits only the constraint list items (no
-     topologySpreadConstraints: key) so callers can nest it as a list (Cassandra
-     value, NATS podTemplate.merge.spec) or a string (OpenBao
-     server.topologySpreadConstraints). Context: dict "Values" $.Values
+{{/* Mode-derived zone topology-spread constraint list items (no
+     topologySpreadConstraints: key), ScheduleAnyway under preferred,
+     DoNotSchedule under enforced, empty under none. Internal: called only
+     from nvcf.ha.topologySpreadItems. Context: dict "haMode" "<mode>"
      "instance" "<release-instance>" */}}
-{{- define "nvcf.ha.tier2TopologySpread" -}}
-{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
-{{- if or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") -}}
-{{- $ts := dig "highAvailability" "tier2" "topologySpread" dict .Values -}}
-{{- if dig "enabled" false $ts -}}
-- maxSkew: {{ dig "maxSkew" 1 $ts }}
+{{- define "nvcf.ha._generatedTopologySpread" -}}
+{{- if or (eq .haMode "preferred") (eq .haMode "enforced") -}}
+- maxSkew: 1
   topologyKey: topology.kubernetes.io/zone
-  whenUnsatisfiable: {{ if dig "strict" false $ts }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
+  whenUnsatisfiable: {{ if eq .haMode "enforced" }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
   labelSelector:
     matchLabels:
       app.kubernetes.io/instance: {{ .instance | quote }}
 {{- end -}}
 {{- end -}}
+
+{{/* Resolves the content of a workload's affinity: block: global.affinity.<class>
+     -> global.affinity.all -> the mode-derived convention. Emits content ready
+     to nest directly under an affinity: key (map value), or to wrap as a
+     string (chart values that take affinity as templated YAML text, e.g.
+     OpenBao) — never the affinity: key itself, so callers control that
+     nesting. An operator override IS the full affinity content (may set
+     podAntiAffinity, podAffinity, and/or nodeAffinity) and is emitted as-is,
+     not merged with the generated convention. The generated convention emits
+     only podAntiAffinity, matching that same "content under affinity:"
+     contract. Context: dict "Values" $.Values "instance" "<release-instance>"
+     "class" "<workload-class>" */}}
+{{- define "nvcf.ha.podAntiAffinity" -}}
+{{- $byClass := dig "global" "affinity" dict .Values -}}
+{{- if hasKey $byClass .class -}}
+{{- with index $byClass .class -}}{{- toYaml . -}}{{- end -}}
+{{- else if hasKey $byClass "all" -}}
+{{- with index $byClass "all" -}}{{- toYaml . -}}{{- end -}}
+{{- else -}}
+{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
+{{- with include "nvcf.ha._generatedPodAntiAffinity" (dict "haMode" $haMode "instance" .instance) }}
+podAntiAffinity:
+{{- . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Resolves topologySpreadConstraints for a workload: same fallback as
+     nvcf.ha.podAntiAffinity via global.topologySpreadConstraints. Emits the
+     constraint list items only (no topologySpreadConstraints: key), for the
+     same nesting/string reasons as nvcf.ha.podAntiAffinity. Context: dict
+     "Values" $.Values "instance" "<release-instance>" "class" "<workload-class>" */}}
+{{- define "nvcf.ha.topologySpreadItems" -}}
+{{- $byClass := dig "global" "topologySpreadConstraints" dict .Values -}}
+{{- if hasKey $byClass .class -}}
+{{- with index $byClass .class -}}{{- toYaml . -}}{{- end -}}
+{{- else if hasKey $byClass "all" -}}
+{{- with index $byClass "all" -}}{{- toYaml . -}}{{- end -}}
+{{- else -}}
+{{- $haMode := dig "highAvailability" "mode" "none" .Values | toString -}}
+{{- include "nvcf.ha._generatedTopologySpread" (dict "haMode" $haMode "instance" .instance) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Full affinity: block wrapper around nvcf.ha.podAntiAffinity, for release
+     values that take affinity as a plain map with no other keys nvcf.yaml
+     needs to set. Context: same as nvcf.ha.podAntiAffinity */}}
+{{- define "nvcf.ha.affinity" -}}
+{{- with include "nvcf.ha.podAntiAffinity" . -}}
+affinity:
+{{- . | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/* Full topologySpreadConstraints: block wrapper around
+     nvcf.ha.topologySpreadItems. Context: same as nvcf.ha.topologySpreadItems */}}
+{{- define "nvcf.ha.topologySpreadConstraints" -}}
+{{- with include "nvcf.ha.topologySpreadItems" . -}}
+topologySpreadConstraints:
+{{- . | nindent 2 }}
+{{- end -}}
 {{- end -}}
 
 {{- $haMode := dig "highAvailability" "mode" "none" .Values | toString }}
-{{- if not (has $haMode (list "none" "ha-preferred" "ha-enforced")) }}
-{{- fail (printf "highAvailability.mode must be none, ha-preferred, or ha-enforced, got %q" $haMode) }}
+{{- if not (kindIs "string" $haMode) }}
+{{- fail "highAvailability.mode must be a string" }}
 {{- end }}
-{{- $haEnabled := or (eq $haMode "ha-preferred") (eq $haMode "ha-enforced") }}
+{{- if not (has $haMode (list "none" "preferred" "enforced")) }}
+{{- fail (printf "highAvailability.mode must be none, preferred, or enforced, got %q" $haMode) }}
+{{- end }}
+{{- $haEnabled := or (eq $haMode "preferred") (eq $haMode "enforced") }}
+{{- range $key := list "affinity" "topologySpreadConstraints" }}
+{{- $byClass := dig "global" $key dict $.Values }}
+{{- if not (kindIs "map" $byClass) }}
+{{- fail (printf "global.%s must be a map keyed by workload class (or \"all\")" $key) }}
+{{- end }}
+{{- end }}
 
 cassandra:
   global:
@@ -211,13 +251,13 @@ cassandra:
     defaultStorageClass: {{ .Values.global.storageClass }}
     {{- end }}
 
-  replicaCount: {{ if $haEnabled }}{{ dig "highAvailability" "cassandra" "replicaCount" 3 .Values }}{{ else }}{{ dig "cassandra" "replicaCount" 3 .Values }}{{ end }}
+  replicaCount: {{ if $haEnabled }}3{{ else }}{{ dig "cassandra" "replicaCount" 3 .Values }}{{ end }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
   {{- if $haEnabled }}
-  {{- with dig "highAvailability" "cassandra" "podDisruptionBudget" dict .Values }}
+  {{- with include "nvcf.ha.quorumPodDisruptionBudget" .Values }}
   podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   {{- else }}
   {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
@@ -233,11 +273,11 @@ cassandra:
   {{- . | nindent 2 }}
   {{- end }}
   {{- if $haEnabled }}
-  {{- with include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "cassandra") }}
+  {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "cassandra" "class" "cassandra") }}
   affinity:
     {{- . | nindent 4 }}
   {{- end }}
-  {{- with include "nvcf.ha.tier2TopologySpread" (dict "Values" .Values "instance" "cassandra") }}
+  {{- with include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "cassandra" "class" "cassandra") }}
   topologySpreadConstraints:
     {{- . | nindent 4 }}
   {{- end }}
@@ -347,7 +387,7 @@ openbao:
     {{- with include "nvcf.tolerations" (dict "type" "vault" "tolerations" .Values.global.tolerations) }}
     {{- . | nindent 4 }}
     {{- end }}
-    replicas: {{ if $haEnabled }}{{ dig "highAvailability" "openbao" "injector" "replicas" 2 .Values }}{{ else }}{{ .Values.openbao.injector.replicas }}{{ end }}
+    replicas: {{ if $haEnabled }}2{{ else }}{{ .Values.openbao.injector.replicas }}{{ end }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
     {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
@@ -369,15 +409,15 @@ openbao:
       minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
     {{- if $haEnabled }}
-    {{- with include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "openbao-server") }}
+    {{- with include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "openbao-server" "class" "vault") }}
     # String form: the OpenBao chart tpl-renders server.affinity. The wrapper
     # sets it to "" for single-node installs; HA re-enables hostname spread.
     affinity: |
       {{- . | nindent 6 }}
     {{- end }}
-    {{- with include "nvcf.ha.tier2TopologySpread" (dict "Values" .Values "instance" "openbao-server") }}
+    {{- with include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "openbao-server" "class" "vault") }}
     # String form: the OpenBao chart tpl-renders server.topologySpreadConstraints
-    # under a topologySpreadConstraints: key. Opt-in via tier2.topologySpread.
+    # under a topologySpreadConstraints: key.
     topologySpreadConstraints: |
       {{- . | nindent 6 }}
     {{- end }}
@@ -400,10 +440,18 @@ openbao:
 
     ha:
       {{- if $haEnabled }}
-      enabled: {{ dig "highAvailability" "openbao" "ha" "enabled" true .Values }}
-      replicas: {{ dig "highAvailability" "openbao" "ha" "replicas" 3 .Values }}
+      enabled: true
+      replicas: 3
       {{- end }}
-      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      {{- $openbaoDisruptionBudget := dict }}
+      {{- if $haEnabled }}
+      {{/* Default: allow at most 1 of the 3 Raft peers to be voluntarily
+           disrupted at a time, so a rolling drain/upgrade can never take the
+           quorum below 2 of 3. Without this, HA renders 3 replicas but the
+           Raft cluster has no disruption protection. */}}
+      {{- $openbaoDisruptionBudget = dict "enabled" true "maxUnavailable" 1 }}
+      {{- end }}
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" $openbaoDisruptionBudget .Values }}
       disruptionBudget:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -448,8 +496,8 @@ nats:
   {{- $natsAffinity := "" -}}
   {{- $natsTopoSpread := "" -}}
   {{- if $haEnabled -}}
-  {{- $natsAffinity = include "nvcf.ha.tier2Affinity" (dict "Values" .Values "instance" "nats") -}}
-  {{- $natsTopoSpread = include "nvcf.ha.tier2TopologySpread" (dict "Values" .Values "instance" "nats") -}}
+  {{- $natsAffinity = include "nvcf.ha.podAntiAffinity" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
+  {{- $natsTopoSpread = include "nvcf.ha.topologySpreadItems" (dict "Values" .Values "instance" "nats" "class" "controlplane") -}}
   {{- end -}}
   {{- if or $natsNs $natsTol $natsAffinity $natsTopoSpread }}
   podTemplate:
@@ -489,7 +537,7 @@ nats:
     {{- if $haEnabled }}
     cluster:
       enabled: true
-      replicas: {{ dig "highAvailability" "nats" "replicas" 3 .Values }}
+      replicas: 3
     {{- end }}
     {{- if .Values.global.storageClass }}
     jetstream:
@@ -504,9 +552,9 @@ nats:
     {{- end }}
 
   {{- if $haEnabled }}
-  {{- with dig "highAvailability" "nats" "podDisruptionBudget" dict .Values }}
+  {{- with include "nvcf.ha.natsQuorumPodDisruptionBudget" .Values }}
   podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   {{- else }}
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}
@@ -545,12 +593,16 @@ apikeys:
 
 natsAuthCalloutService:
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.hotPathReplicaCount" .Values }}
+  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "nats-auth-callout-service") }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
+  podDisruptionBudget:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "nats-auth-callout-service") }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "nats-auth-callout-service" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
@@ -729,7 +781,7 @@ natsAuthCalloutService:
 api:
   fullnameOverride: nvcf-api
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -749,16 +801,16 @@ api:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "api") }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "api" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "api") }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "api" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
   {{- if $haEnabled }}
-  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
   podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   {{- else }}
   {{- with dig "api" "podDisruptionBudget" dict .Values }}
@@ -902,10 +954,10 @@ invocation:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "invocation-service") }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "invocation-service" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "invocation-service") }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "invocation-service" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
 
@@ -997,8 +1049,8 @@ grpcproxy:
   {{- . | nindent 2 }}
   {{- end }}
   {{- if $haEnabled }}
-  {{- $grpcAffinity := include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "grpc-proxy") }}
-  {{- $grpcTopologySpread := include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "grpc-proxy") }}
+  {{- $grpcAffinity := include "nvcf.ha.affinity" (dict "Values" .Values "instance" "grpc-proxy" "class" "controlplane") }}
+  {{- $grpcTopologySpread := include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "grpc-proxy" "class" "controlplane") }}
   {{- if or $grpcAffinity $grpcTopologySpread }}
   deployment:
     {{- with $grpcAffinity }}
@@ -1050,11 +1102,11 @@ rateLimiter:
   nodeSelector:
     {{ .Values.global.nodeSelectors.controlplane.key }}: {{ .Values.global.nodeSelectors.controlplane.value }}
   {{- end }}
-  replicaCount: {{ if $haEnabled }}{{ include "nvcf.ha.hotPathReplicaCount" .Values }}{{ else }}{{ .Values.rateLimiter.replicaCount }}{{ end }}
-  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "ratelimiter") }}
+  replicaCount: {{ if $haEnabled }}{{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}{{ else }}{{ .Values.rateLimiter.replicaCount }}{{ end }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "ratelimiter" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "ratelimiter") }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "ratelimiter" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
   {{- if .Values.global.observability.tracing.enabled }}
@@ -1062,9 +1114,9 @@ rateLimiter:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
   {{- end }}
   {{- if $haEnabled }}
-  {{- with dig "highAvailability" "hotPath" "podDisruptionBudget" dict .Values }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
   podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   {{- else }}
   {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
@@ -1165,7 +1217,7 @@ sis:
 adminIssuerProxy:
   fullnameOverride: admin-token-issuer-proxy
   {{- if $haEnabled }}
-  replicaCount: {{ include "nvcf.ha.statelessReplicaCount" .Values }}
+  replicaCount: {{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}
   {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -1183,10 +1235,10 @@ adminIssuerProxy:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "admin-token-issuer-proxy") }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "admin-issuer-proxy" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "admin-token-issuer-proxy") }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "admin-issuer-proxy" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
   gateway:
@@ -1197,9 +1249,9 @@ adminIssuerProxy:
     hostname: "api-keys.{{ .Values.global.domain }}"
     path: "/v1/admin/keys"
   {{- if $haEnabled }}
-  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
   podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   {{- else }}
   {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
@@ -1318,7 +1370,7 @@ reval:
 llmApiGateway:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-api-gateway
-  replicaCount: {{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}
+  replicaCount: {{ if $haEnabled }}{{ include "nvcf.ha.replicaSafeReplicaCount" .Values }}{{ else }}{{ dig "addons" "llm" "gateway" "replicaCount" 3 .Values }}{{ end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -1338,10 +1390,10 @@ llmApiGateway:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessAffinity" (dict "Values" .Values "instance" "llm-api-gateway") }}
+  {{- with include "nvcf.ha.affinity" (dict "Values" .Values "instance" "llm-api-gateway" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- with include "nvcf.ha.statelessTopologySpread" (dict "Values" .Values "instance" "llm-api-gateway") }}
+  {{- with include "nvcf.ha.topologySpreadConstraints" (dict "Values" .Values "instance" "llm-api-gateway" "class" "controlplane") }}
   {{- . | nindent 2 }}
   {{- end }}
   {{- if dig "addons" "llm" "gateway" "auth" "grpcInsecure" false .Values }}
@@ -1359,9 +1411,9 @@ llmApiGateway:
       endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
       {{- end }}
   {{- if $haEnabled }}
-  {{- with dig "highAvailability" "stateless" "podDisruptionBudget" dict .Values }}
+  {{- with include "nvcf.ha.replicaSafePodDisruptionBudget" .Values }}
   podDisruptionBudget:
-    {{- toYaml . | nindent 4 }}
+    {{- . | nindent 4 }}
   {{- end }}
   {{- else }}
   {{- with dig "llmApiGateway" "podDisruptionBudget" dict .Values }}
