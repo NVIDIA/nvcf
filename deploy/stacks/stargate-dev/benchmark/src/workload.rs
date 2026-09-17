@@ -12,7 +12,7 @@ use tempfile::NamedTempFile;
 
 const HEADER: &[u8] = b"version: 1\nscenarios:\n  - name: normal\n    mode: normal\n    prompts:\n";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "kebab-case",
@@ -199,7 +199,21 @@ impl Workload {
         Ok(fingerprint)
     }
 
-    fn write_prompts(&self, writer: &mut WorkloadWriter) -> Result<()> {
+    pub fn fingerprint(&self) -> Result<Fingerprint> {
+        self.validate()?;
+        let mut writer = WorkloadWriter {
+            output: std::io::sink(),
+            hasher: Sha256::new(),
+        };
+        writer.write_all(HEADER)?;
+        self.write_prompts(&mut writer)?;
+        Ok(Fingerprint {
+            prompt_count: self.prompt_count()?,
+            sha256: format!("{:x}", writer.hasher.finalize()),
+        })
+    }
+
+    fn write_prompts(&self, writer: &mut impl Write) -> Result<()> {
         match self {
             Self::Unique {
                 count,
@@ -374,19 +388,19 @@ fn extend_prompt(prompt: &mut String, phrase: &str, bytes: usize) -> Result<()> 
     Ok(())
 }
 
-fn write_prompt(writer: &mut WorkloadWriter, prompt: &str) -> Result<()> {
+fn write_prompt(writer: &mut impl Write, prompt: &str) -> Result<()> {
     writer.write_all(b"      - ")?;
     serde_json::to_writer(&mut *writer, prompt)?;
     writer.write_all(b"\n")?;
     Ok(())
 }
 
-struct WorkloadWriter {
-    output: BufWriter<NamedTempFile>,
+struct WorkloadWriter<W> {
+    output: W,
     hasher: Sha256,
 }
 
-impl Write for WorkloadWriter {
+impl<W: Write> Write for WorkloadWriter<W> {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         let written = self.output.write(buffer)?;
         self.hasher.update(&buffer[..written]);
@@ -473,6 +487,7 @@ mod tests {
             fs::write(&path, "old workload").unwrap();
             fs::write(&sidecar, "old fingerprint").unwrap();
             let fingerprint = workload.write(&path).unwrap();
+            assert_eq!(workload.fingerprint().unwrap(), fingerprint);
             let contents = fs::read(&path).unwrap();
             assert_eq!(fingerprint.prompt_count, count);
             assert_eq!(fingerprint.sha256, expected_hash);

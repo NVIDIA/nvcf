@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::fmt;
 use std::marker::PhantomData;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::de::{Error, MapAccess, Visitor};
@@ -37,17 +37,27 @@ impl fmt::Display for Algorithm {
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Plan {
     pub arms: Vec<Arm>,
     pub workloads: BTreeMap<String, Workload>,
     pub routing_headers: BTreeMap<Algorithm, Option<String>>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArmKind {
+    Smoke,
+    Capacity,
+    Affinity,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Arm {
+    pub kind: ArmKind,
     pub directory: PathBuf,
     pub algorithm: Algorithm,
     pub scenario: String,
@@ -57,8 +67,8 @@ pub struct Arm {
     pub streams: Vec<Stream>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Stream {
     pub name: Option<String>,
     pub workload: String,
@@ -68,15 +78,15 @@ pub struct Stream {
     pub limits: RequestLimits,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum RunLimit {
     Requests(usize),
     DurationSeconds(u64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestLimits {
     pub max_tokens: usize,
     pub timeout_seconds: u64,
@@ -506,6 +516,7 @@ impl Suite {
                 } => {
                     for algorithm in algorithm_order(algorithms, false) {
                         plan.arms.push(Arm {
+                            kind: ArmKind::Smoke,
                             directory: Path::new(scenario_name).join(algorithm.as_str()),
                             algorithm,
                             scenario: scenario_name.clone(),
@@ -557,6 +568,7 @@ impl Suite {
                                     .context("sweep worker count exceeds platform size")?,
                             );
                             plan.arms.push(Arm {
+                                kind: ArmKind::Capacity,
                                 directory: Path::new(scenario_name)
                                     .join(format!("r{:02}", rate.get()))
                                     .join(algorithm.as_str()),
@@ -600,6 +612,7 @@ impl Suite {
                     for repeat in 1..=repeats.get() {
                         for algorithm in algorithm_order(algorithms, repeat % 2 == 0) {
                             plan.arms.push(Arm {
+                                kind: ArmKind::Affinity,
                                 directory: Path::new(scenario_name)
                                     .join(format!("repeat-{repeat:02}"))
                                     .join(algorithm.as_str()),
@@ -646,6 +659,7 @@ impl Suite {
                     for repeat in 1..=repeats.get() {
                         for algorithm in algorithm_order(algorithms, repeat % 2 == 1) {
                             plan.arms.push(Arm {
+                                kind: ArmKind::Mixed,
                                 directory: Path::new(scenario_name)
                                     .join(format!("repeat-{repeat:02}"))
                                     .join(algorithm.as_str()),
@@ -694,23 +708,23 @@ impl Suite {
         {
             arm.reset_cache = true;
         }
-        for arm in &plan.arms {
-            for stream in arm.warmup.iter().chain(&arm.streams) {
-                stream.validate().with_context(|| {
-                    format!(
-                        "invalid Spark stream {} in {}",
-                        stream.name.as_deref().unwrap_or("main"),
-                        arm.directory.display()
-                    )
-                })?;
-            }
-        }
+        plan.validate()?;
         Ok(plan)
     }
 }
 
 impl Stream {
     fn validate(&self) -> Result<()> {
+        ensure!(
+            self.workers > 0 && self.rate > 0,
+            "workers and rate must be positive"
+        );
+        ensure!(
+            self.limits.timeout_seconds > 0
+                && self.limits.max_wait_ms > 0
+                && self.limits.request_slo_ms > 0,
+            "request time limits must be positive"
+        );
         ensure!(
             self.workers <= i32::MAX as usize,
             "workers {} exceeds Spark's i32 limit ({})",
@@ -729,17 +743,100 @@ impl Stream {
             self.rate
         );
         if let RunLimit::Requests(requests) = self.limit {
+            ensure!(requests > 0, "fixed request limit must be positive");
             ensure!(
                 requests <= i32::MAX as usize,
                 "requests {requests} exceeds Spark's i32 limit ({})",
                 i32::MAX
             );
         }
+        if let RunLimit::DurationSeconds(seconds) = self.limit {
+            ensure!(seconds > 0, "duration must be positive");
+        }
         Ok(())
     }
 }
 
 impl Plan {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(!self.arms.is_empty(), "plan contains no arms");
+        let mut paths = BTreeSet::new();
+        for (name, workload) in &self.workloads {
+            let path = Path::new(name);
+            ensure!(
+                path.components().count() == 1
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension == "yaml"),
+                "invalid workload filename {name}"
+            );
+            validate_name(
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .context("workload filename is not UTF-8")?,
+            )?;
+            workload
+                .validate()
+                .with_context(|| format!("invalid workload {name}"))?;
+        }
+        for arm in &self.arms {
+            ensure!(
+                paths.insert(&arm.directory),
+                "duplicate arm directory {}",
+                arm.directory.display()
+            );
+            ensure!(!arm.directory.as_os_str().is_empty(), "empty arm directory");
+            for component in arm.directory.components() {
+                let Component::Normal(name) = component else {
+                    anyhow::bail!("arm directory must remain below the output root");
+                };
+                validate_name(name.to_str().context("arm directory is not UTF-8")?)?;
+            }
+            validate_name(&arm.scenario)?;
+            ensure!(
+                arm.directory.starts_with(&arm.scenario)
+                    && arm
+                        .directory
+                        .file_name()
+                        .is_some_and(|name| name == arm.algorithm.as_str()),
+                "arm directory does not match its scenario and algorithm"
+            );
+            ensure!(
+                self.routing_headers.contains_key(&arm.algorithm),
+                "missing routing header configuration"
+            );
+            if arm.kind == ArmKind::Mixed {
+                ensure!(
+                    arm.reset_cache
+                        && arm.streams.len() == 2
+                        && arm.streams[0].name.as_deref() == Some("hot")
+                        && arm.streams[1].name.as_deref() == Some("short")
+                        && arm
+                            .warmup
+                            .as_ref()
+                            .is_some_and(|stream| stream.name.as_deref() == Some("warm")),
+                    "invalid mixed arm layout"
+                );
+            } else {
+                ensure!(
+                    arm.streams.len() == 1 && arm.streams[0].name.is_none() && arm.warmup.is_none(),
+                    "invalid single-stream arm layout"
+                );
+            }
+            for stream in arm.warmup.iter().chain(&arm.streams) {
+                stream.validate().with_context(|| {
+                    format!("invalid Spark stream in {}", arm.directory.display())
+                })?;
+                ensure!(
+                    self.workloads.contains_key(&stream.workload),
+                    "unknown workload {}",
+                    stream.workload
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn minimum_measured_minutes(&self) -> f64 {
         self.arms
             .iter()
@@ -1020,6 +1117,30 @@ mod tests {
             Path::new("screen-high-context/repeat-01/wait-and-widen")
         );
         assert_eq!(plan.arms[2].streams[0].limit, RunLimit::Requests(768));
+        Ok(())
+    }
+
+    #[test]
+    fn native_plan_loading_revalidates_paths_references_and_limits() -> Result<()> {
+        let plan = Suite::from_yaml(CANONICAL)?.plan("canonical", &Algorithm::ALL)?;
+        let original = serde_json::to_value(&plan)?;
+        serde_json::from_value::<Plan>(original.clone())?.validate()?;
+        for (pointer, replacement) in [
+            ("/arms/0/directory", serde_json::json!("../elsewhere")),
+            (
+                "/arms/0/streams/0/workload",
+                serde_json::json!("unknown.yaml"),
+            ),
+            ("/arms/0/streams/0/rate", serde_json::json!(0)),
+            (
+                "/arms/0/streams/0/limits/timeoutSeconds",
+                serde_json::json!(0),
+            ),
+        ] {
+            let mut invalid = original.clone();
+            *invalid.pointer_mut(pointer).context("test plan pointer")? = replacement;
+            assert!(serde_json::from_value::<Plan>(invalid)?.validate().is_err());
+        }
         Ok(())
     }
 }

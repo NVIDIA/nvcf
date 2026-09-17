@@ -1,19 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod campaign;
+mod cluster;
+mod process;
+mod report;
 mod suite;
 mod workload;
 
-use anyhow::{Context, Result};
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
+
+use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use suite::{Algorithm, Suite};
 
 #[derive(Parser)]
-#[command(version, about = "Plan controlled Spark campaigns for Stargate")]
+#[command(version, about = "Run controlled Spark campaigns for Stargate")]
 struct Cli {
     #[arg(
         long,
@@ -38,6 +47,34 @@ enum Command {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Run or resume a controlled local Docker campaign.
+    Run {
+        #[arg(long)]
+        suite: String,
+        #[arg(long, value_enum, default_value = "both")]
+        algorithm: Algorithms,
+        #[command(flatten)]
+        options: campaign::Options,
+    },
+    /// Regenerate accepted results without cluster access or traffic.
+    Render {
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Stop and reconcile processes owned by a campaign.
+    Reconcile {
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Verify the deployed development topology.
+    Verify {
+        #[arg(long)]
+        region: String,
+        #[arg(long)]
+        peer_region: Vec<String>,
+        #[arg(long, value_enum)]
+        phase: cluster::Phase,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -47,18 +84,23 @@ enum Algorithms {
     PowerOfN,
 }
 
+impl Algorithms {
+    fn selected(self) -> &'static [Algorithm] {
+        match self {
+            Self::Both => &Algorithm::ALL,
+            Self::WaitAndWiden => &[Algorithm::WaitAndWiden],
+            Self::PowerOfN => &[Algorithm::PowerOfN],
+        }
+    }
+}
+
 fn write_plan(
     suite: &Suite,
     name: &str,
     algorithm: Algorithms,
     output: Option<&Path>,
 ) -> Result<()> {
-    let algorithms: &[Algorithm] = match algorithm {
-        Algorithms::Both => &Algorithm::ALL,
-        Algorithms::WaitAndWiden => &[Algorithm::WaitAndWiden],
-        Algorithms::PowerOfN => &[Algorithm::PowerOfN],
-    };
-    let plan = suite.plan(name, algorithms)?;
+    let plan = suite.plan(name, algorithm.selected())?;
     let encoded =
         serde_json::to_string_pretty(&plan).context("serialize resolved benchmark plan")?;
     if let Some(output) = output {
@@ -106,14 +148,23 @@ fn write_plan(
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let suite = match cli.suite_file {
-        Some(path) => Suite::load(&path)?,
-        None => Suite::from_yaml(include_str!("../../loadtest/suite.yaml"))?,
+async fn execute(cli: Cli) -> Result<()> {
+    let suite = || match &cli.suite_file {
+        Some(path) => Suite::load(path),
+        None => Suite::from_yaml(include_str!("../../loadtest/suite.yaml")),
     };
+    if matches!(
+        &cli.command,
+        Command::Render { .. } | Command::Reconcile { .. } | Command::Verify { .. }
+    ) {
+        ensure!(
+            cli.suite_file.is_none(),
+            "--suite-file applies only to list, plan and run"
+        );
+    }
     match cli.command {
         Command::List => {
+            let suite = suite()?;
             for (name, scenarios) in &suite.suites {
                 let plan = suite.plan(name, &Algorithm::ALL)?;
                 writeln!(
@@ -129,6 +180,48 @@ fn main() -> Result<()> {
             suite: name,
             algorithm,
             output,
-        } => write_plan(&suite, &name, algorithm, output.as_deref()),
+        } => write_plan(&suite()?, &name, algorithm, output.as_deref()),
+        Command::Run {
+            suite: name,
+            algorithm,
+            options,
+        } => {
+            let plan = suite()?.plan(&name, algorithm.selected())?;
+            campaign::run(options, plan).await
+        }
+        Command::Render { output } => campaign::render(&output),
+        Command::Reconcile { output } => campaign::reconcile(&output).await,
+        Command::Verify {
+            region,
+            peer_region,
+            phase,
+        } => {
+            let topology = cluster::Topology::load(&region, &peer_region)?;
+            tokio::select! {
+                biased;
+                interrupted = process::interrupted() => interrupted?,
+                verified = topology.verify_region(0, phase) => { verified?; },
+            }
+            writeln!(
+                std::io::stdout().lock(),
+                "verified {phase:?} phase for {region}"
+            )?;
+            Ok(())
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    match execute(Cli::parse()).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(std::io::stderr().lock(), "error: {error:#}");
+            ExitCode::from(if error.is::<process::Interrupted>() {
+                130
+            } else {
+                1
+            })
+        }
     }
 }
