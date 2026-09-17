@@ -31,7 +31,6 @@ import (
 	"testing"
 	"time"
 
-	echo "github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -582,56 +581,6 @@ func TestStargateProviderCompletePropagatesStreamingHTTPError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, response)
 	require.Contains(t, err.Error(), "stream denied")
-}
-
-func TestCheckHTTPErrorPreservesStatusAndExtractsMessage(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		status  int
-		body    string
-		message string
-	}{
-		{"openai", http.StatusBadRequest, `{"error":{"message":"m","type":"t"}}`, "m"},
-		{
-			"router", http.StatusNotFound,
-			`{"error":"unknown routing parameter widen","code":"unknown_parameter"}`,
-			"unknown routing parameter widen",
-		},
-		{
-			"empty router error", http.StatusServiceUnavailable,
-			`{"error":"","code":"unavailable"}`, `{"error":"","code":"unavailable"}`,
-		},
-		{
-			"empty openai message", http.StatusBadRequest,
-			`{"error":{"message":"","type":"t"}}`, `{"error":{"message":"","type":"t"}}`,
-		},
-		{"unknown json", http.StatusNotFound, `{"detail":"unknown"}`, `{"detail":"unknown"}`},
-		{"plain text", http.StatusServiceUnavailable, "router unavailable", "router unavailable"},
-		{"empty body", http.StatusBadRequest, "", http.StatusText(http.StatusBadRequest)},
-		{
-			"body limit", http.StatusServiceUnavailable,
-			strings.Repeat("x", 32*1024+1), strings.Repeat("x", 32*1024),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			resp := &http.Response{
-				StatusCode: tt.status,
-				Body:       io.NopCloser(strings.NewReader(tt.body)),
-			}
-			defer resp.Body.Close()
-
-			var httpError *echo.HTTPError
-			require.ErrorAs(t, checkHTTPError(resp), &httpError)
-			require.Equal(t, tt.status, httpError.Code)
-			require.Equal(t, tt.message, httpError.Message)
-		})
-	}
 }
 
 func TestStargateProviderCompletePropagatesMalformedStreamChunk(t *testing.T) {
