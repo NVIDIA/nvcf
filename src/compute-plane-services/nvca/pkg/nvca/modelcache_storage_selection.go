@@ -80,23 +80,11 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 		var err error
 		resolved, err = nvcastorage.ResolveModelCacheStorageWithClientset(
 			ctx, c.clients.K8s, c.systemNamespace, workflow)
+		if err == nil && resolved.CatalogBuiltin {
+			c.noteBuiltinCatalog(ctx, req, workflow)
+		}
 		switch {
 		case errors.Is(err, nvcastorage.ErrModelCacheStorageClassNotFound):
-			if workflow == nvcastorage.ModelCacheWorkflowHelm {
-				mode = nvcastorage.ModelCacheSelectionEphemeral
-			}
-		case errors.Is(err, nvcastorage.ErrStorageCapabilityCatalogNotFound):
-			// The chart that ships this agent also installs the catalog, so
-			// its absence means the rollout has not converged. Blocking every
-			// deployment until it does helps nobody; run uncached and say so.
-			logging.NewICMSRequestFieldLogger(req, core.GetLogger(ctx)).WithError(err).WithFields(logrus.Fields{
-				"configMap": c.systemNamespace + "/" + nvcastorage.StorageCapabilityConfigMapName,
-				"workflow":  workflow,
-			}).Warn("storage capability catalog is missing, deploying without a durable model cache")
-			if m := nvcametrics.FromContext(ctx); m != nil {
-				// The backend label is empty: no catalog means no backend is known.
-				m.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonCatalogMissing, "")
-			}
 			if workflow == nvcastorage.ModelCacheWorkflowHelm {
 				mode = nvcastorage.ModelCacheSelectionEphemeral
 			}
@@ -139,4 +127,21 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 	}
 	req.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey] = payload
 	return nil
+}
+
+// noteBuiltinCatalog records that a request was resolved against the catalog
+// compiled into NVCA because the nvcf-storage-capabilities ConfigMap is absent.
+// The selection is the one a converged install would make; the warning and the
+// counter exist so the chart rollout gap is visible.
+func (c *BackendK8sCache) noteBuiltinCatalog(
+	ctx context.Context, req *nvcav2beta1.ICMSRequest, workflow nvcastorage.ModelCacheWorkflow,
+) {
+	logging.NewICMSRequestFieldLogger(req, core.GetLogger(ctx)).WithFields(logrus.Fields{
+		"configMap": c.systemNamespace + "/" + nvcastorage.StorageCapabilityConfigMapName,
+		"workflow":  workflow,
+	}).Warn("storage capability catalog ConfigMap is missing, using the catalog built into NVCA")
+	if m := nvcametrics.FromContext(ctx); m != nil {
+		// The backend label is empty: the selection has not chosen a backend yet.
+		m.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonCatalogMissing, "")
+	}
 }

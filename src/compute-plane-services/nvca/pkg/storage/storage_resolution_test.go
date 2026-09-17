@@ -158,13 +158,6 @@ func TestResolveModelCacheStorageErrors(t *testing.T) {
 			notFound: true,
 		},
 		{
-			name:      "missing catalog ConfigMap",
-			namespace: testCatalogNamespace,
-			workflow:  ModelCacheWorkflowRegular,
-			objects:   func() []client.Object { return []client.Object{testModelCacheStorageClass()} },
-			want:      "get storage capability ConfigMap",
-		},
-		{
 			name:      "catalog ConfigMap missing data key",
 			namespace: testCatalogNamespace,
 			workflow:  ModelCacheWorkflowRegular,
@@ -314,13 +307,6 @@ func TestResolveModelCacheStorageWithClientsetErrors(t *testing.T) {
 			},
 			want:     "model cache StorageClass not found",
 			notFound: true,
-		},
-		{
-			name:      "missing catalog ConfigMap",
-			namespace: testCatalogNamespace,
-			workflow:  ModelCacheWorkflowRegular,
-			objects:   func() []runtime.Object { return []runtime.Object{testModelCacheStorageClass()} },
-			want:      "get storage capability ConfigMap",
 		},
 		{
 			name:      "empty catalog namespace",

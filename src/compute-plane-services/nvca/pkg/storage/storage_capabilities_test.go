@@ -20,7 +20,6 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"os"
 	"path/filepath"
@@ -96,9 +95,6 @@ func TestLoadStorageCapabilityCatalogStrict(t *testing.T) {
 }
 
 func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
-	missingConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: testCatalogNamespace},
-	}
 	missingData := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: testCatalogNamespace},
 	}
@@ -120,10 +116,6 @@ func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
 		{
 			name: "empty namespace", namespace: "",
 			configMap: capabilityCatalogConfigMap(validCatalog), want: "namespace is empty",
-		},
-		{
-			name: "missing ConfigMap", namespace: testCatalogNamespace,
-			configMap: missingConfigMap, want: "get storage capability ConfigMap",
 		},
 		{
 			name: "missing data key", namespace: testCatalogNamespace,
@@ -549,20 +541,57 @@ func TestStorageCapabilityCatalogEncryptionSupported(t *testing.T) {
 		"encryption support is part of the driver profile digest")
 }
 
-func TestResolveModelCacheStorageWithClientsetMissingCatalogIsSentinel(t *testing.T) {
-	sc := storageClassWithProvisioner(DefaultModelCacheStorageClassName, NVMeshStorageClassProvisioner)
+func TestResolveModelCacheStorageWithClientsetMissingCatalogUsesBuiltin(t *testing.T) {
+	sc := testModelCacheStorageClass()
 	k8s := fakek8sclient.NewSimpleClientset(sc)
 
-	_, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
-	require.ErrorIs(t, err, ErrStorageCapabilityCatalogNotFound)
-	assert.NotErrorIs(t, err, ErrModelCacheStorageClassNotFound)
-	assert.True(t, apierrors.IsNotFound(err), "the Kubernetes NotFound cause must survive wrapping")
+	selection, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err, "an absent catalog ConfigMap must resolve against the built-in catalog")
+	assert.True(t, selection.CatalogBuiltin)
+	assert.Equal(t, ModelCacheProviderNVMesh, selection.Provider)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, selection.Transition)
+	assert.Equal(t, digestCatalogPayload(builtinStorageCapabilityCatalogYAML), selection.CatalogRevision)
+
+	// With the ConfigMap present the selection is identical except for the flag.
+	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: "nvca-system"},
+		Data:       map[string]string{StorageCapabilityConfigMapKey: builtinStorageCapabilityCatalogYAML},
+	})
+	fromConfigMap, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.False(t, fromConfigMap.CatalogBuiltin)
+	fromConfigMap.CatalogBuiltin = true
+	assert.Equal(t, selection, fromConfigMap)
 
 	// A present but empty catalog is a configuration error, not absence.
 	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: StorageCapabilityConfigMapName, Namespace: "nvca-system"},
 	})
 	_, err = ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
-	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrStorageCapabilityCatalogNotFound)
+	require.ErrorContains(t, err, "has no")
+}
+
+// The built-in catalog must be the one the chart installs, or an agent ahead
+// of its chart would resolve differently from a converged install.
+func TestBuiltinCatalogMatchesChart(t *testing.T) {
+	chartCopy, err := os.ReadFile(filepath.Join("..", "..", "deployments", "nvca-operator", "files",
+		"nvcf-storage-capabilities-v1alpha1.yaml"))
+	if err != nil {
+		t.Skipf("chart catalog not reachable from this test root: %v", err)
+	}
+	assert.Equal(t, string(chartCopy), builtinStorageCapabilityCatalogYAML)
+	_, _, err = builtinStorageCapabilityCatalog()
+	require.NoError(t, err)
+}
+
+func TestLoadStorageCapabilityCatalogMissingConfigMapUsesBuiltin(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	catalog, digest, builtin, err := loadStorageCapabilityCatalogSnapshot(t.Context(), c, testCatalogNamespace)
+	require.NoError(t, err)
+	assert.True(t, builtin)
+	assert.Equal(t, digestCatalogPayload(builtinStorageCapabilityCatalogYAML), digest)
+	_, ok := catalog.Drivers[NVMeshStorageClassProvisioner]
+	assert.True(t, ok, "the built-in catalog must qualify NVMesh")
 }
