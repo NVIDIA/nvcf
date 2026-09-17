@@ -40,6 +40,8 @@ import (
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	logsv1 "go.opentelemetry.io/proto/otlp/logs/v1"
 
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
@@ -611,7 +613,7 @@ func TestExtractK8sEvent(t *testing.T) {
 		"extra_field": "extra_value",
 	})
 
-	event, err := extractK8sEvent(lr)
+	event, err := extractK8sEvent(context.Background(), lr)
 	require.NoError(t, err)
 
 	// Check struct fields
@@ -680,11 +682,55 @@ func TestExtractK8sEvent_ResourceID(t *testing.T) {
 		"resource_id": "icms-abc",
 	})
 
-	event, err := extractK8sEvent(lr)
+	event, err := extractK8sEvent(context.Background(), lr)
 	require.NoError(t, err)
 
 	// resource_id participates in the context (sorted last), keeping the row unique.
 	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-abc", event.Context)
+}
+
+// TestExtractK8sEvent_NVCAClusterBinding verifies that an SIS-verified NVCA
+// cluster identity is authoritative over the payload: a matching cluster_id
+// is accepted, a missing one is populated, and a mismatched one is rejected
+// so a PSAT valid for one cluster cannot write events for another.
+func TestExtractK8sEvent_NVCAClusterBinding(t *testing.T) {
+	nvcaCtx := middleware.WithNVCAIdentity(context.Background(), middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+
+	t.Run("matching payload cluster_id is accepted", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "nvca", "pod-1", map[string]string{
+			"cluster_id": "cluster-a",
+		})
+		event, err := extractK8sEvent(nvcaCtx, lr)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("missing payload cluster_id is populated from the verified identity", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "nvca", "pod-1", nil)
+		event, err := extractK8sEvent(nvcaCtx, lr)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("mismatched payload cluster_id is rejected", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "nvca", "pod-1", map[string]string{
+			"cluster_id": "cluster-b",
+		})
+		_, err := extractK8sEvent(nvcaCtx, lr)
+		assert.Error(t, err)
+	})
+
+	t.Run("no NVCA identity leaves the payload cluster_id untouched", func(t *testing.T) {
+		lr := createOTLPLogRecord("pod.ready", "tenant-123", "sis", "pod-1", map[string]string{
+			"cluster_id": "cluster-a",
+		})
+		event, err := extractK8sEvent(context.Background(), lr)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
 }
 
 // TestExtractK8sEvent_DistinctResourceIDsDoNotCollide verifies two resources with
@@ -695,7 +741,7 @@ func TestExtractK8sEvent_DistinctResourceIDsDoNotCollide(t *testing.T) {
 			"cluster_id":  "clus-1",
 			"resource_id": resourceID,
 		})
-		event, err := extractK8sEvent(lr)
+		event, err := extractK8sEvent(context.Background(), lr)
 		require.NoError(t, err)
 		return event.Context
 	}
@@ -712,7 +758,7 @@ func TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails(t *testing.T) {
 		"icms_request_id": "icms-xyz",
 	})
 
-	event, err := extractK8sEvent(lr)
+	event, err := extractK8sEvent(context.Background(), lr)
 	require.NoError(t, err)
 
 	// Pod context stays the original shape and excludes the unmapped attribute.
@@ -733,7 +779,7 @@ func TestExtractCloudEvent_SourceRequired(t *testing.T) {
 	ce.SetSource("") // Empty source
 	ce.SetExtension("namespace", "test-namespace")
 
-	_, err := extractCloudEvent(&ce)
+	_, err := extractCloudEvent(context.Background(), &ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: source")
 }
@@ -746,7 +792,7 @@ func TestExtractCloudEvent_TypeRequired(t *testing.T) {
 	ce.SetSource("/test")
 	ce.SetExtension("namespace", "test-namespace")
 
-	_, err := extractCloudEvent(&ce)
+	_, err := extractCloudEvent(context.Background(), &ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: type")
 }
@@ -759,7 +805,7 @@ func TestExtractCloudEvent_IdRequired(t *testing.T) {
 	ce.SetSource("/test")
 	ce.SetExtension("namespace", "test-namespace")
 
-	_, err := extractCloudEvent(&ce)
+	_, err := extractCloudEvent(context.Background(), &ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: id")
 }
@@ -775,7 +821,7 @@ func TestExtractCloudEvent_ResourceID(t *testing.T) {
 	ce.SetExtension("clusterId", "clus-1")
 	ce.SetExtension("resourceId", "icms-1")
 
-	event, err := extractCloudEvent(&ce)
+	event, err := extractCloudEvent(context.Background(), &ce)
 	require.NoError(t, err)
 	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-1", event.Context)
 }

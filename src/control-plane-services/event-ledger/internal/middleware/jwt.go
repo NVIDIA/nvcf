@@ -304,6 +304,13 @@ func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement) fun
 					next.ServeHTTP(w, r)
 					return
 				}
+				// An SIS-introspected NVCA identity carries no scopes either.
+				// Only trust it on the write routes it was scoped for, never
+				// as a stand-in for an arbitrary required scope.
+				if _, ok := NVCAIdentityFromContext(parentCtx); ok && requiredScopes == WriteScopes {
+					next.ServeHTTP(w, r)
+					return
+				}
 				logger.WarnContext(traceCtx, ErrMissingClaims)
 				status := http.StatusUnauthorized
 				// http.Error(w, ErrMissingClaims, status)
@@ -450,7 +457,11 @@ func MaybeRequirePathTenant(enabled bool) mux.MiddlewareFunc {
 	}
 }
 
-func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.ResponseWriter, r *http.Request) (context.Context, error) {
+// processJWTToken parses and validates a JWT from the request's Authorization
+// header. When writeResponse is false, it returns the error without writing
+// an HTTP response, so a caller can fall back to another verification path
+// (e.g. SIS introspection) before deciding what to send the client.
+func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.ResponseWriter, r *http.Request, writeResponse bool) (context.Context, error) {
 	ctx := r.Context()
 	// Safe guard against nil context
 	if ctx == nil {
@@ -467,12 +478,19 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	}
 
 	errType := "Process JWT Token Error"
+
+	respondUnauthorized := func(err error) {
+		if !writeResponse {
+			return
+		}
+		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, http.StatusUnauthorized, err, w)
+		logging.LogHTTPResponse(traceCtx, ctxLogger, http.StatusUnauthorized, w.Header())
+	}
+
 	if opts.JwksURL == "" {
 		ctxLogger.WarnContext(traceCtx, ErrMissingJWKSURL)
-		status := http.StatusUnauthorized
 		err := errors.New(ErrMissingJWKSURL)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
@@ -480,10 +498,8 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		ctxLogger.WarnContext(traceCtx, ErrMissingAuthHeader)
-		status := http.StatusUnauthorized
 		err := errors.New(ErrMissingAuthHeader)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
@@ -493,10 +509,8 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	if tokenString == authHeader {
 		ctxLogger.WarnContext(traceCtx, ErrInvalidAuthFormat)
-		status := http.StatusUnauthorized
 		err := errors.New(ErrInvalidAuthFormat)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
@@ -508,19 +522,15 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	token, err := parseJWTWithOptions(tokenString, claims, keyFunc, opts)
 	if err != nil {
 		ctxLogger.WarnContext(traceCtx, "invalid token", zap.Error(err))
-		status := http.StatusUnauthorized
 		err = fmt.Errorf("%s: %v", ErrInvalidToken, err)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
 	if !token.Valid {
 		ctxLogger.WarnContext(traceCtx, ErrInvalidToken)
-		status := http.StatusUnauthorized
 		err = errors.New(ErrInvalidToken)
-		api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-		logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+		respondUnauthorized(err)
 		return nil, err
 	}
 
@@ -529,10 +539,8 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 		authorizedTenants := tenantValuesFromClaim(claims[opts.TenantClaim])
 		if len(authorizedTenants) == 0 {
 			ctxLogger.WarnContext(traceCtx, "missing or invalid tenant claim", zap.String("claim", opts.TenantClaim))
-			status := http.StatusUnauthorized
 			err = errors.New(ErrInvalidToken)
-			api_error.GenerateErrorResponse(traceCtx, errType, "Unauthorized", r.URL.Path, status, err, w)
-			logging.LogHTTPResponse(traceCtx, ctxLogger, status, w.Header())
+			respondUnauthorized(err)
 			return nil, err
 		}
 		newCtx = context.WithValue(newCtx, tenantClaimsContextKey, authorizedTenants)
@@ -548,7 +556,7 @@ func newParseJWTMiddleware(opts JWTParserOptions, jwkCache *jwk.Cache) mux.Middl
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			newContext, err := processJWTToken(opts, jwkCache, w, r)
+			newContext, err := processJWTToken(opts, jwkCache, w, r, true)
 			if err != nil {
 				return
 			}
