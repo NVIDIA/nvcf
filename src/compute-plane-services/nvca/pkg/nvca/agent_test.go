@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1833,8 +1834,16 @@ func TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance(t *test
 	// absence in the same pass; the lister may not have converged yet by the time the
 	// check runs, so retry a few times (mirroring the retry-on-next-reconcile behavior
 	// this PR's fix relies on) until the successfully purged pod is reported.
+	//
+	// Eventually's condition runs in its own goroutine, so errors are captured here and
+	// asserted after Eventually returns rather than via require inside the closure, which
+	// is unsafe to call outside the test goroutine.
+	var evictErr error
 	require.Eventually(t, func() bool {
-		require.NoError(t, ag.evictAllWorkloads(ctx))
+		evictErr = ag.evictAllWorkloads(ctx)
+		if evictErr != nil {
+			return false
+		}
 		for _, u := range mockICMS.postedStatusUpdates {
 			if u.instanceID == "instance-ok" {
 				return true
@@ -1842,6 +1851,7 @@ func TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance(t *test
 		}
 		return false
 	}, 5*time.Second, 100*time.Millisecond, "instance-ok should eventually be reported terminated")
+	require.NoError(t, evictErr)
 
 	// The Pod instance was successfully purged; the MiniService instance was not.
 	_, err = ag.backendk8scache.clients.K8s.CoreV1().Pods(podNamespace).Get(ctx, "instance-ok", metav1.GetOptions{})
@@ -1857,6 +1867,113 @@ func TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance(t *test
 	}
 	assert.Contains(t, reportedIDs, "instance-ok", "successfully purged instance should be reported terminated")
 	assert.NotContains(t, reportedIDs, "instance-blocked-miniservice", "still-present instance must not be reported terminated")
+}
+
+// TestHandleSelfDestruct_RetriesUntilInstancesConfirmedTerminated verifies that
+// handleSelfDestruct retries eviction when an instance's backing MiniService is not yet
+// confirmed gone on the first pass, and only enters self-destruct mode (which disables
+// further ICMS status-sync communication) once it is reported terminated.
+func TestHandleSelfDestruct_RetriesUntilInstancesConfirmedTerminated(t *testing.T) {
+	ctx := newTestContext()
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MaintenanceMode:                types.MaintenanceModeCordonAndDrain,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	testReq := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-request-1",
+			Namespace: "default",
+		},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID: "req-1",
+		},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: nvcav2beta1.ICMSRequestStatusInProgress,
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-blocked-then-ok-miniservice": {
+					ID:     "instance-blocked-then-ok-miniservice",
+					Type:   nvcav2beta1.InstanceTypeMiniService,
+					Status: string(types.ICMSInstanceRunning),
+				},
+			},
+		},
+	}
+
+	mockICMS := &mockICMSClient{}
+	ag := newMockAgentSingleGPU(t, ctx, agentOpts)
+	ag.icmsClient = mockICMS
+
+	require.NoError(t, ag.Start(ctx))
+
+	_, err := ag.backendk8scache.clients.BART.NvcaV2beta1().ICMSRequests(testReq.Namespace).Create(ctx, testReq, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		items, _ := ag.backendk8scache.icmsRequestLister.List(labels.Everything())
+		return len(items) >= 1
+	}, time.Second, time.Millisecond*50)
+
+	// Block the MiniService's delete on the first attempt only, then let subsequent
+	// attempts through, simulating a finalizer that releases shortly after eviction starts.
+	var deleteAttempts atomic.Int32
+	sch := newMiniServiceScheme()
+	fakeHelmClient := ctrlfake.NewClientBuilder().
+		WithScheme(sch).
+		WithStatusSubresource(&v1alpha1.MiniService{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if deleteAttempts.Add(1) == 1 {
+					return nil
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	ag.backendk8scache.clients.HelmV2 = fakeHelmClient
+
+	ms := &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "instance-blocked-then-ok-miniservice"},
+	}
+	require.NoError(t, ag.backendk8scache.clients.HelmV2.Create(ctx, ms))
+
+	require.NoError(t, ag.handleSelfDestruct(ctx))
+
+	assert.True(t, ag.selfDestruct.Load(), "agent should enter self-destruct mode once eviction completes")
+	assert.GreaterOrEqual(t, deleteAttempts.Load(), int32(2), "eviction should have retried the delete at least once")
+
+	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-blocked-then-ok-miniservice"}, &v1alpha1.MiniService{})
+	assert.True(t, errors.IsNotFound(err), "MiniService should be deleted once its finalizer released")
+
+	var reportedIDs []string
+	for _, u := range mockICMS.postedStatusUpdates {
+		reportedIDs = append(reportedIDs, u.instanceID)
+	}
+	assert.Contains(t, reportedIDs, "instance-blocked-then-ok-miniservice",
+		"instance should be reported terminated once confirmed gone, before self-destruct disables status sync")
 }
 
 func TestEvictAllWorkloads_EmptyList(t *testing.T) {
