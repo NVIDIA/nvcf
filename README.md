@@ -6,13 +6,13 @@
 [Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/user/installation.md) | [API Reference](docs/user/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
 > **Repository move in progress.** This repo is transferring from `NVIDIA/nvcf` to
-> `dsx-ai-factory/nvcf` on **Friday, 2026-09-18 at 8:00 AM Pacific**. GitHub
-> redirects old clone/fetch/`go get` URLs to the new location, so existing links
-> and `github.com/NVIDIA/nvcf` module paths keep working, but please update to
-> `dsx-ai-factory/nvcf` when convenient.
+> `dsx-ai-factory/nvcf`. Now targeted for **after 2026-09-27** — exact date and
+> time still pending. GitHub redirects old clone/fetch/`go get` URLs to the new
+> location, so existing links and `github.com/NVIDIA/nvcf` module paths keep
+> working, but please update to `dsx-ai-factory/nvcf` when convenient.
 >
-> **No PRs will be merged from 7:30 AM Pacific until the transfer is done.**
-> Land anything you need in before the freeze starts.
+> A short PR merge freeze will be announced here once the exact transfer window
+> is set.
 
 # NVIDIA Cloud Functions
 
