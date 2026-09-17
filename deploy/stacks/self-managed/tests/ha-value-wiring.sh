@@ -127,13 +127,14 @@ grep -q "podAntiAffinity:" "$work_dir/cassandra-on.yaml" ||
   fail "cassandra: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
 grep -q "preferredDuringSchedulingIgnoredDuringExecution:" "$work_dir/cassandra-on.yaml" ||
   fail "cassandra: expected preferred Tier-2 anti-affinity when highAvailability.mode=preferred"
-# Zone topology spread is opt-in: no zone constraint in the cassandra block
-# unless tier2.topologySpread.enabled (the chart ships an empty default list).
-# NOTE: the write-values file holds every release's values, so scope to the
-# cassandra: block — stateless releases carry their own (expected) zone spread.
-if awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-on.yaml" | grep -q "topology.kubernetes.io/zone"; then
-  fail "cassandra: Tier-2 zone spread leaked without tier2.topologySpread.enabled"
-fi
+# Zone topology spread is part of the same mode convention as hostname
+# anti-affinity (soft under preferred) — it is no longer a separate opt-in
+# toggle. NOTE: the write-values file holds every release's values, so scope
+# to the cassandra: block.
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-on.yaml" | grep -q "topology.kubernetes.io/zone" ||
+  fail "cassandra: expected Tier-2 zone spread when highAvailability.mode=preferred"
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-on.yaml" | grep -q "whenUnsatisfiable: ScheduleAnyway" ||
+  fail "cassandra: expected soft (ScheduleAnyway) Tier-2 spread when highAvailability.mode=preferred"
 
 render_chart_values openbao-server "$work_dir/openbao-on.yaml" "$deps" || fail "render openbao (preferred)"
 grep -A5 "^[[:space:]]*ha:" "$work_dir/openbao-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||
@@ -142,12 +143,16 @@ grep -q "podAntiAffinity:" "$work_dir/openbao-on.yaml" ||
   fail "openbao: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
 grep -A3 "disruptionBudget:" "$work_dir/openbao-on.yaml" | grep -q "maxUnavailable: 1" ||
   fail "openbao: expected server.ha.disruptionBudget maxUnavailable=1 when highAvailability.mode=preferred"
+awk '/^openbao:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/openbao-on.yaml" | grep -q "topology.kubernetes.io/zone" ||
+  fail "openbao: expected Tier-2 zone spread when highAvailability.mode=preferred"
 
 render_chart_values nats "$work_dir/nats-on.yaml" "$deps" || fail "render nats (preferred)"
 grep -A5 "cluster:" "$work_dir/nats-on.yaml" | grep -E "replicas:[[:space:]]*3" >/dev/null ||
   fail "nats: expected config.cluster.replicas 3 when highAvailability.mode=preferred"
 grep -q "podAntiAffinity:" "$work_dir/nats-on.yaml" ||
   fail "nats: expected Tier-2 anti-affinity when highAvailability.mode=preferred"
+awk '/^nats:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/nats-on.yaml" | grep -q "topology.kubernetes.io/zone" ||
+  fail "nats: expected Tier-2 zone spread when highAvailability.mode=preferred"
 
 # Hot-path helpers (#988): rateLimiter + nats-auth-callout to 2 replicas.
 render_chart_values ratelimiter "$work_dir/ratelimiter-on.yaml" "$core" --state-values-set rateLimiter.enabled=true ||
@@ -163,6 +168,8 @@ render_chart_values nats-auth-callout-service "$work_dir/natsauth-on.yaml" "$cor
   fail "render nats-auth-callout (preferred)"
 awk '/^natsAuthCalloutService:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/natsauth-on.yaml" | grep -E "replicaCount:[[:space:]]*2" >/dev/null ||
   fail "nats-auth-callout: expected replicaCount 2 when highAvailability.mode=preferred"
+awk '/^natsAuthCalloutService:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/natsauth-on.yaml" | grep -q "podDisruptionBudget:" ||
+  fail "nats-auth-callout: expected podDisruptionBudget when highAvailability.mode=preferred (was previously never wired)"
 
 # llm-api-gateway (#987): stateless anti-affinity when the LLM addon is on.
 render_chart_values llm-api-gateway "$work_dir/llmgw-on.yaml" "$core" --state-values-set addons.llm.enabled=true ||
@@ -195,44 +202,72 @@ if awk '/^grpcproxy:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/grpcproxy-on.yaml
   fail "grpc-proxy: HA PDB must not be enabled while single-replica (deferred until Envoy)"
 fi
 
-echo "== highAvailability tier-2 zone topology spread (opt-in) =="
+echo "== global.affinity / global.topologySpreadConstraints fallback (class -> all -> convention) =="
+
+# class-specific global.affinity override wins over the generated convention.
 write_env <<'EOF'
 highAvailability:
   mode: preferred
-  tier2:
-    topologySpread:
-      enabled: true
+global:
+  affinity:
+    cassandra:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                custom: override
+            topologyKey: kubernetes.io/hostname
 EOF
+render_chart_values cassandra "$work_dir/cassandra-global-class.yaml" "$deps" || fail "render cassandra (global.affinity.cassandra override)"
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-global-class.yaml" | grep -q "custom: override" ||
+  fail "cassandra: expected global.affinity.cassandra override to win over the generated convention"
+# The generated anti-affinity's own selector ("operator: In" against
+# app.kubernetes.io/instance) must not also render — only the override
+# content. app.kubernetes.io/instance alone is not distinctive enough to
+# assert on: the (unrelated, mode-derived) topologySpreadConstraints block
+# legitimately uses it too.
+if awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-global-class.yaml" | grep -A2 "podAntiAffinity:" | grep -q "operator: In"; then
+  fail "cassandra: generated anti-affinity must not also render alongside a class override"
+fi
 
-# Scope assertions to each release's own block (the write-values file holds all).
-render_chart_values cassandra "$work_dir/cassandra-spread.yaml" "$deps" || fail "render cassandra (zone spread)"
-awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-spread.yaml" | grep -q "topology.kubernetes.io/zone" ||
-  fail "cassandra: expected Tier-2 zone spread when tier2.topologySpread.enabled=true"
-awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-spread.yaml" | grep -q "whenUnsatisfiable: ScheduleAnyway" ||
-  fail "cassandra: expected soft (ScheduleAnyway) Tier-2 spread by default"
-
-render_chart_values openbao-server "$work_dir/openbao-spread.yaml" "$deps" || fail "render openbao (zone spread)"
-awk '/^openbao:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/openbao-spread.yaml" | grep -q "topology.kubernetes.io/zone" ||
-  fail "openbao: expected Tier-2 zone spread when tier2.topologySpread.enabled=true"
-
-render_chart_values nats "$work_dir/nats-spread.yaml" "$deps" || fail "render nats (zone spread)"
-awk '/^nats:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/nats-spread.yaml" | grep -q "topology.kubernetes.io/zone" ||
-  fail "nats: expected Tier-2 zone spread when tier2.topologySpread.enabled=true"
-
-# strict: true -> hard (DoNotSchedule), for >= 3-AZ clusters.
+# global.affinity.all applies when no class-specific override exists.
 write_env <<'EOF'
 highAvailability:
-  mode: enforced
-  tier2:
-    topologySpread:
-      enabled: true
-      strict: true
+  mode: preferred
+global:
+  affinity:
+    all:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                custom: shared
+            topologyKey: kubernetes.io/hostname
 EOF
-render_chart_values cassandra "$work_dir/cassandra-spread-strict.yaml" "$deps" || fail "render cassandra (strict spread)"
-awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-spread-strict.yaml" | grep -q "whenUnsatisfiable: DoNotSchedule" ||
-  fail "cassandra: expected hard (DoNotSchedule) Tier-2 spread when strict=true"
+render_chart_values cassandra "$work_dir/cassandra-global-all.yaml" "$deps" || fail "render cassandra (global.affinity.all)"
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-global-all.yaml" | grep -q "custom: shared" ||
+  fail "cassandra: expected global.affinity.all to apply when no class-specific override exists"
 
-echo "== highAvailability enforced: required anti-affinity =="
+# An explicit {} for a class suppresses the generated anti-affinity entirely —
+# presence is the signal, not truthiness.
+write_env <<'EOF'
+highAvailability:
+  mode: preferred
+global:
+  affinity:
+    cassandra: {}
+  topologySpreadConstraints:
+    cassandra: []
+EOF
+render_chart_values cassandra "$work_dir/cassandra-global-suppressed.yaml" "$deps" || fail "render cassandra (global.affinity.cassandra: {})"
+if awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-global-suppressed.yaml" | grep -q "podAntiAffinity:"; then
+  fail "cassandra: expected explicit global.affinity.cassandra: {} to suppress generated anti-affinity"
+fi
+if awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-global-suppressed.yaml" | grep -q "topology.kubernetes.io/zone"; then
+  fail "cassandra: expected explicit global.topologySpreadConstraints.cassandra: [] to suppress generated zone spread"
+fi
+
+echo "== highAvailability enforced: required anti-affinity, hard zone spread =="
 write_env <<'EOF'
 highAvailability:
   mode: enforced
@@ -247,6 +282,8 @@ grep -q "whenUnsatisfiable: DoNotSchedule" "$work_dir/api-enforced.yaml" ||
 render_chart_values cassandra "$work_dir/cassandra-enforced.yaml" "$deps" || fail "render cassandra (enforced)"
 grep -q "requiredDuringSchedulingIgnoredDuringExecution:" "$work_dir/cassandra-enforced.yaml" ||
   fail "cassandra: expected required Tier-2 anti-affinity when highAvailability.mode=enforced"
+awk '/^cassandra:/{p=1;next} /^[a-zA-Z]/{p=0} p' "$work_dir/cassandra-enforced.yaml" | grep -q "whenUnsatisfiable: DoNotSchedule" ||
+  fail "cassandra: expected hard (DoNotSchedule) Tier-2 spread when highAvailability.mode=enforced"
 
 render_chart_values ratelimiter "$work_dir/ratelimiter-enforced.yaml" "$core" --state-values-set rateLimiter.enabled=true ||
   fail "render ratelimiter (enforced)"
