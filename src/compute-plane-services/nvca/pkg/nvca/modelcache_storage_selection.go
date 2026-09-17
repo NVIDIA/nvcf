@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
 	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
@@ -88,13 +89,13 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 			// The chart that ships this agent also installs the catalog, so
 			// its absence means the rollout has not converged. Blocking every
 			// deployment until it does helps nobody; run uncached and say so.
-			core.GetLogger(ctx).WithError(err).WithFields(logrus.Fields{
+			logging.NewICMSRequestFieldLogger(req, core.GetLogger(ctx)).WithError(err).WithFields(logrus.Fields{
 				"configMap": c.systemNamespace + "/" + nvcastorage.StorageCapabilityConfigMapName,
 				"workflow":  workflow,
 			}).Warn("storage capability catalog is missing, deploying without a durable model cache")
 			if m := nvcametrics.FromContext(ctx); m != nil {
-				m.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonCatalogMissing,
-					string(nvcastorage.HelmCacheBackendNone))
+				// The backend label is empty: no catalog means no backend is known.
+				m.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonCatalogMissing, "")
 			}
 			if workflow == nvcastorage.ModelCacheWorkflowHelm {
 				mode = nvcastorage.ModelCacheSelectionEphemeral

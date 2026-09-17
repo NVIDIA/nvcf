@@ -330,8 +330,8 @@ func ResolveModelCacheStorageWithClientset(
 		ctx, StorageCapabilityConfigMapName, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
-				catalogNamespace, StorageCapabilityConfigMapName, ErrStorageCapabilityCatalogNotFound)
+			return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w: %w",
+				catalogNamespace, StorageCapabilityConfigMapName, ErrStorageCapabilityCatalogNotFound, err)
 		}
 		return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
 			catalogNamespace, StorageCapabilityConfigMapName, err)

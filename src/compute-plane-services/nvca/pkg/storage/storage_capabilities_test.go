@@ -20,6 +20,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"os"
 	"path/filepath"
@@ -555,6 +556,7 @@ func TestResolveModelCacheStorageWithClientsetMissingCatalogIsSentinel(t *testin
 	_, err := ResolveModelCacheStorageWithClientset(context.Background(), k8s, "nvca-system", ModelCacheWorkflowRegular)
 	require.ErrorIs(t, err, ErrStorageCapabilityCatalogNotFound)
 	assert.NotErrorIs(t, err, ErrModelCacheStorageClassNotFound)
+	assert.True(t, apierrors.IsNotFound(err), "the Kubernetes NotFound cause must survive wrapping")
 
 	// A present but empty catalog is a configuration error, not absence.
 	k8s = fakek8sclient.NewSimpleClientset(sc, &corev1.ConfigMap{
