@@ -323,6 +323,14 @@ def commit_tree(root, ref):
 
 
 def linear_release_branch_base(root, base_sha):
+    """A commit carrying base_sha's tree whose history has no merges.
+
+    The release ruleset requires a linear commit graph, so a release branch
+    cannot simply point at the default branch head. The consequence is that a
+    release branch is a parallel history: its tags are not ancestors of the
+    default branch, which is why `release_baseline_version` filters on
+    reachability.
+    """
     merges = run(
         ["git", "rev-list", "--topo-order", "--reverse", "--merges", base_sha],
         cwd=root,
@@ -789,6 +797,11 @@ def stale_checkout_output(output):
 
 
 def validate_version_file(root, service):
+    """The stable X.Y.Z this service's VERSION file holds.
+
+    Stable only. A prerelease here would be cut verbatim as the train's first
+    release, and the rc counter derives its base version from this value.
+    """
     service_dir = root / service["path"]
     version_file = service.get("version_file") or ""
     version_path = service_dir / version_file
@@ -1607,6 +1620,16 @@ def release_branch_pr_body(service, release_branch, base_sha, version_file_path,
 
 
 def branch_cut(args):
+    """Open the next release train: the maintenance branch, and the VERSION bump.
+
+    Two outputs, both required. The release branch is where the train releases
+    from; the pull request advances VERSION on the default branch so the next
+    cut opens the following train rather than this one again.
+
+    Re-running is safe. A release branch already holding the selected tree is
+    reused, one holding a different tree is an error rather than a silent
+    reset, and an open bump pull request is reported rather than replaced.
+    """
     root = repo_root()
     metadata = load_metadata(root, args.metadata)
     service = find_service(metadata, args.service)
