@@ -60,9 +60,9 @@ releases no stack version at all.
   without a version landing on its stable line.
 
 `nvca` used the same model until the 3.3 line and now releases from `main`
-like every other subproject. The `-dev.N` tags nvca and the stacks published
-under the older form of this model remain in the repository as history;
-nothing publishes a `-dev.N` any more.
+like every other subproject. Nothing publishes a `-dev.N` any more, and none
+of the ones published under the older form of this model are still in the
+repository; every remaining stack and nvca tag is a stable version.
 
 ## Branch Naming
 

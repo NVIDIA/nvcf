@@ -106,8 +106,8 @@ their version from a `VERSION` file and release from a maintenance
 branch rather than from `main`; see "The version-file model" below.
 NVCA opted out the same way until the 3.3 line and now takes its next
 version from semantic-release like every other service. Neither
-publishes a `-dev.N` any more, and the ones already published stay in
-the repository as history.
+publishes a `-dev.N` any more, and none of the ones they did publish
+are still in the repository.
 
 Every release the workflow creates comments the version it shipped on
 the pull requests that release covers, which is the note
