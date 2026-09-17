@@ -212,10 +212,11 @@ func TestBackendK8sCache_CreateOrUpdateNamespace(t *testing.T) {
 		err := bc.createOrUpdateNamespace(ctx, ns)
 		assert.NoError(t, err)
 
-		// Verify namespace was updated
+		// Verify namespace was updated without dropping metadata NVCA does not own
 		updated, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		assert.NoError(t, err)
 		assert.Equal(t, "label", updated.Labels["new"])
+		assert.Equal(t, "label", updated.Labels["old"])
 	})
 }
 
