@@ -26,12 +26,15 @@ navbar-links:
   value: https://github.com/NVIDIA/nvcf
 
 versions:
-- display-name: "Latest (0.6.1)"
-  path: versions/v0.6.1.yml
+- display-name: "Latest (cp-0.20.6-compute-0.4.4-obs-0.2.2)"
+  path: versions/cp-0.20.6-compute-0.4.4-obs-0.2.2.yml
   slug: ""
 - display-name: dev
   path: versions/dev.yml
   slug: dev
+- display-name: "cp-0.20.6-compute-0.4.4-obs-0.2.2 (CP 0.20.6, Compute 0.4.4, Obs 0.2.2)"
+  path: versions/cp-0.20.6-compute-0.4.4-obs-0.2.2.yml
+  slug: "cp-0.20.6-compute-0.4.4-obs-0.2.2"
 - display-name: "0.6.1"
   path: versions/v0.6.1.yml
   slug: "v0.6.1"
@@ -97,3 +100,5 @@ redirects:
     destination: "/nvcf/operations"
   - source: "/nvcf/dev/registry-allowlist"
     destination: "/nvcf/registry-allowlist"
+  - source: "/nvcf/cp-0.20.6-compute-0.4.4-obs-0.2.2/index.html"
+    destination: "/nvcf/cp-0.20.6-compute-0.4.4-obs-0.2.2/"
