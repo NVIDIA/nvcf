@@ -26,7 +26,7 @@ llmApiGateway:
   image:
     registry: ""
     repository: ""
-    tag: "0.14.2"
+    tag: "0.14.3"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
