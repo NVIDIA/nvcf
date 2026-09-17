@@ -3,7 +3,9 @@
 The public GitHub workflow in `.github/workflows/release-tags.yml` runs
 NVCF release automation. The cutover is complete: this repository is
 the sole tag and release authority, publishing is live, and a merge to
-`main` cuts real tags and GitHub Releases for every registered service.
+`main` cuts real tags and GitHub Releases for every registered service
+except the three under `deploy/stacks/`, which release from a
+maintenance branch instead.
 
 ## Publish gate
 
@@ -46,15 +48,20 @@ image release pipeline.
 
 ## Service auto-tags
 
-Releases are cut from the default branch only. A push to a `release-*`
+Releases are cut from the default branch only, except for the three
+`deploy/stacks/` subprojects, which release from their maintenance
+branch and nowhere else. For everything else a push to a `release-*`
 maintenance branch still runs the build, test, lint, and scan
 workflows, but cuts no tag; a patch on such a branch is tagged by hand.
 
-On `main` branch pushes, the workflow runs:
+On `main` and on release-branch pushes, the workflow runs:
 
 ```bash
 ./tools/ci/github-release auto
 ```
+
+Which subprojects it acts on depends on the branch, and `auto` is a
+no-op for the rest.
 
 The script reads `tools/ci/github-release-subprojects.json`. The file
 intentionally contains only public release metadata:
@@ -64,6 +71,8 @@ intentionally contains only public release metadata:
 - service tag format
 - optional initial version floor for a service or chart that has no tags
   yet
+- optional `version_file` plus `release_branch_only`, for a subproject
+  that takes its version from a file and releases from a branch
 - legacy service tag prefix, when a release line still needs old-tag
   compatibility
 - generated/mechanical file basenames to ignore for release decisions
@@ -92,13 +101,13 @@ uses those old tags as version anchors but creates any new tags with
 the path-scoped tag derived from the service path, unless the metadata
 declares an explicit `tag_format` override.
 
-NVCA and the three stacks under `deploy/stacks/` used to opt out of
-this, reading a stable base version from a `VERSION` file and cutting
-`-dev.N` prereleases on `main`. They no longer do. Every registered
-service now takes its next version from semantic-release, the `VERSION`
-files are gone, and the `-dev.N` tags already published stay in the
-repository as history. See "Retiring the version-file model" below for
-the anchors that carried those version lines across.
+The three stacks under `deploy/stacks/` opt out of this. They read
+their version from a `VERSION` file and release from a maintenance
+branch rather than from `main`; see "The version-file model" below.
+NVCA opted out the same way until the 3.3 line and now takes its next
+version from semantic-release like every other service. Neither
+publishes a `-dev.N` any more, and the ones already published stay in
+the repository as history.
 
 Every release the workflow creates comments the version it shipped on
 the pull requests that release covers, which is the note
@@ -223,10 +232,15 @@ Package metadata uses SemVer without the leading `v`:
 
 ## Release branches
 
-Release automation does not cut or tag these branches; it runs on the
-default branch only. The convention below is what the `tag` command
-reports in release notes, and what a maintainer follows when creating a
+For every subproject except the three under `deploy/stacks/`, release
+automation does not cut or tag these branches; it runs on the default
+branch only. The convention below is what the `tag` command reports in
+release notes, and what a maintainer follows when creating a
 maintenance branch or tagging a patch on one.
+
+The stacks are the exception: their release branch is the only place
+they release from, and both the branch and its tags are automated. See
+"The version-file model" below.
 
 Release branch names use:
 
@@ -244,58 +258,114 @@ Examples:
 
 Slashes remain branch namespace separators.
 
-## Retiring the version-file model
+## The version-file model
 
-NVCA, `nvcf-compute-plane-stack`, `nvcf-self-managed-stack`, and
-`nvcf-observability-stack` used to declare `version_file` and
-`dev_prerelease`. On `main` they cut `<path>/v<X.Y.Z>-dev.N` from a
-`VERSION` file, and a stable version only appeared on a release branch.
-They now use semantic-release like every other service.
+`nvcf-compute-plane-stack`, `nvcf-self-managed-stack`, and
+`nvcf-observability-stack` declare `version_file` and
+`release_branch_only`. They do not use semantic-release. A stack is a
+pinned composition of charts, so its version states which set was
+qualified together, and semantic-release answers a different question:
+what the commits since the last tag imply.
 
-Each declares an `initial_version` floor equal to the version its
-`VERSION` file last held:
+NVCA declared the same pair until the 3.3 line and now uses
+semantic-release; see "NVCA's cutover onto semantic-release" below.
 
-| Service | Floor |
+### What runs where
+
+| Ref | What `auto` does |
 | --- | --- |
-| `nvca` | `3.3.0` |
-| `nvcf-compute-plane-stack` | `0.2.0` |
-| `nvcf-self-managed-stack` | `0.8.0` |
-| `nvcf-observability-stack` | `0.0.0` |
+| `main` | nothing for these three |
+| `release-<tag-prefix>X.Y` | cuts the next patch on train `X.Y` |
+
+The `VERSION` file in the stack directory names the train the next
+branch cut will open. On `main` it is the only thing that moves, and it
+moves through the pull request `branch-cut` generates.
+
+### Cutting a train
+
+`workflow_dispatch` on `release-tags` with `operation=branch-cut` and
+the stack's service id runs:
+
+```bash
+./tools/ci/github-release branch-cut --service nvcf-self-managed-stack
+```
+
+That reads `VERSION`, creates `release-deploy/stacks/self-managed/vX.Y`
+holding the default branch's content, and opens a pull request setting
+`VERSION` to `X.Y+1.0` on the default branch.
+
+The release branch is rooted at a synthetic commit
+(`chore(release): snapshot default branch for linear history`) carrying
+the selected tree, not at the default branch head, because the release
+ruleset requires a linear commit graph. The consequence is that a
+release branch is a parallel history: its tags are not ancestors of
+`main`, which is why `release_baseline_version` filters on
+reachability.
+
+Re-running `branch-cut` is safe. An existing release branch whose tree
+matches the selected base is reused, one whose tree differs is an
+error, and an open bump pull request is reported rather than replaced.
+
+### Releasing on the train
+
+Every push to the release branch runs `auto`, which cuts `X.Y.0` the
+first time and the next patch each time after. Backporting a fix is
+what ships a stack patch. `VERSION` on the branch must state the train
+the branch name claims, or the run fails rather than publishing a
+version for a train the branch does not hold.
+
+### Building an unreleased tree
+
+`main` cuts no stack version, so a change that has not been branch-cut
+has no artifact until somebody asks for one. `workflow_dispatch` with
+`operation=release-candidate`, dispatched from the branch to build,
+runs:
+
+```bash
+./tools/ci/github-release release-candidate --service nvcf-self-managed-stack
+```
+
+It cuts `X.Y.Z-rc.N` at that ref, counting `N` up from the release
+candidates already published for that base version. The internal
+publish lanes accept `-rc.N`, so the stack is packaged and published
+from the tag without a version landing on the stable line. Select a
+pull request's branch in the run dialog to build that pull request.
+
+`workflow_dispatch` offers same-repository branches only, so a fork's
+branch cannot be selected and release credentials never run against
+unreviewed code.
+
+## NVCA's cutover onto semantic-release
+
+NVCA declared `version_file` and `dev_prerelease` until the 3.3 line.
+It now takes its version from semantic-release and declares an
+`initial_version` floor of `3.3.0`, the version its `VERSION` file last
+held.
 
 The floor is a local computation baseline. Nothing is pushed for it, so
 no tag and no GitHub Release exist at the floor version and nothing
 downstream reacts to it. The first published release is the next bump
-above the floor: `3.3.1` for an NVCA `fix`, `3.4.0` for a `feat`.
-
-For the stacks the floor names a version that was never released, so
-their first stable release skips it. `nvcf-compute-plane-stack` reads
-`0.2.0-dev.518` then `0.2.1`; `nvcf-self-managed-stack` reads
-`0.8.0-dev.314` then `0.8.1`; `nvcf-observability-stack` reads
-`0.0.0-dev.496` then `0.0.1`. Those gaps are deliberate. Setting a floor
-one minor lower would let a `feat` land on the skipped version, but a
-`fix` would land below the dev series those stacks already published.
+above the floor: `3.3.1` for a `fix`, `3.4.0` for a `feat`.
 
 ### Why the floor has to outrank the computed baseline
 
 `initial_version` applies whenever the version semantic-release would
 otherwise compute from is below it. The narrower rule it replaced only
 synthesized a floor for a service with no tags at all, which silently
-skipped every service migrating off the dev-prerelease model:
+skipped a service migrating off the dev-prerelease model:
 
-- Each of the four carries hundreds of `-dev.N` tags, and any tag at
-  all used to suppress the floor.
+- NVCA carries hundreds of `-dev.N` tags, and any tag at all used to
+  suppress the floor.
 - semantic-release ignores prereleases when it resolves the last
   release, so those tags are not a baseline either.
-- The stable line they had already shipped is not reachable from
-  `main`. `branch-cut` created a release branch from a synthetic root
-  commit (`chore(release): snapshot default branch for linear history`)
-  rather than branching from `main`, so the whole NVCA 3.2 line is a
-  parallel history. Only `src/compute-plane-services/nvca/v3.1.0`, cut
-  before that mechanism existed, is an ancestor of `main`.
+- The stable line it had already shipped is not reachable from `main`,
+  because a release branch is rooted at a synthetic commit rather than
+  branching from `main`. The whole NVCA 3.2 line is a parallel history.
+  Only `src/compute-plane-services/nvca/v3.1.0`, cut before that
+  mechanism existed, is an ancestor of `main`.
 
 Left alone, NVCA would have computed `3.2.0` from `3.1.0` and failed on
-a tag that already exists at a different commit, and the two stacks
-with no stable tag would have restarted at `0.1.0`.
+a tag that already exists at a different commit.
 
 `release_baseline_version` answers the same question semantic-release
 asks: the highest stable version whose tag is an ancestor of `HEAD`. It

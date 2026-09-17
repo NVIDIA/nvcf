@@ -600,19 +600,14 @@ class GithubReleaseTest(unittest.TestCase):
             anchored = self.github_release.tag_sha(root, "src/compute-plane-services/nvca/v3.3.0")
             self.assertEqual(anchored, newest)
 
-    def test_the_migrated_services_all_resolve_a_floor_above_their_baseline(self):
-        # Guards the cutover itself: if any of the four stopped needing its floor,
-        # its first automatic release would silently restart or regress the line.
+    def test_nvca_resolves_a_floor_above_its_baseline(self):
+        # Guards nvca's cutover onto semantic-release: if it stopped needing its
+        # floor, its next automatic release would silently restart the line. The
+        # three stacks migrated with it and have since moved back to the VERSION
+        # file, so they have no floor to check.
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
         by_id = {s["id"]: s for s in metadata["services"]}
-        for service_id, floor in (
-            ("nvca", "3.3.0"),
-            ("nvcf-compute-plane-stack", "0.2.0"),
-            ("nvcf-self-managed-stack", "0.8.0"),
-            ("nvcf-observability-stack", "0.0.0"),
-        ):
-            with self.subTest(service=service_id):
-                self.assertEqual(self.github_release.initial_floor_version(by_id[service_id]), floor)
+        self.assertEqual(self.github_release.initial_floor_version(by_id["nvca"]), "3.3.0")
 
     def test_initial_version_anchor_honors_metadata(self):
         service = {
@@ -869,25 +864,34 @@ class GithubReleaseTest(unittest.TestCase):
             "deploy/helm/http-invocation/v1.5.6",
         )
 
-    def test_only_the_default_branch_releases(self):
-        nvca = {
-            "id": "nvca",
-            "path": "src/compute-plane-services/nvca",
-            "service_name": "nvca",
-            "legacy_tag_prefix": "nvca-v",
-            "initial_version": "3.3.0",
-        }
-        grpc_proxy = {
-            "id": "grpc-proxy",
-            "path": "src/invocation-plane-services/grpc-proxy",
-            "service_name": "nvcf-grpc-proxy",
-            "legacy_tag_prefix": "nvcf-grpc-proxy-v",
-        }
+    NVCA_MAIN_SERVICE = {
+        "id": "nvca",
+        "path": "src/compute-plane-services/nvca",
+        "service_name": "nvca",
+        "legacy_tag_prefix": "nvca-v",
+        "initial_version": "3.3.0",
+    }
+    GRPC_PROXY_SERVICE = {
+        "id": "grpc-proxy",
+        "path": "src/invocation-plane-services/grpc-proxy",
+        "service_name": "nvcf-grpc-proxy",
+        "legacy_tag_prefix": "nvcf-grpc-proxy-v",
+    }
+    SELF_MANAGED_STACK_SERVICE = {
+        "id": "nvcf-self-managed-stack",
+        "path": "deploy/stacks/self-managed",
+        "service_name": "nvcf-self-managed-stack",
+        "tag_format": "deploy/stacks/self-managed/v${version}",
+        "version_file": "VERSION",
+        "release_branch_only": True,
+    }
+
+    def test_only_the_default_branch_releases_a_semantic_release_service(self):
         release_branch = "release-src/compute-plane-services/nvca/v3.1"
 
-        # Maintenance branches still build and test, but no longer release:
-        # a tag on one of them is cut by hand.
-        for service in (nvca, grpc_proxy):
+        # Maintenance branches for these still build and test but do not
+        # release: a tag on one of them is cut by hand.
+        for service in (self.NVCA_MAIN_SERVICE, self.GRPC_PROXY_SERVICE):
             with self.subTest(service=service["id"]):
                 self.assertTrue(self.github_release.should_process_auto_service(service, "", "main", "main"))
                 self.assertFalse(
@@ -895,8 +899,271 @@ class GithubReleaseTest(unittest.TestCase):
                 )
 
         # The service filter still scopes a run to one service.
-        self.assertFalse(self.github_release.should_process_auto_service(nvca, "grpc-proxy", "main", "main"))
-        self.assertTrue(self.github_release.should_process_auto_service(grpc_proxy, "grpc-proxy", "main", "main"))
+        self.assertFalse(
+            self.github_release.should_process_auto_service(self.NVCA_MAIN_SERVICE, "grpc-proxy", "main", "main")
+        )
+        self.assertTrue(
+            self.github_release.should_process_auto_service(self.GRPC_PROXY_SERVICE, "grpc-proxy", "main", "main")
+        )
+
+    def test_a_release_branch_only_service_never_releases_from_main(self):
+        stack = self.SELF_MANAGED_STACK_SERVICE
+        own_branch = "release-deploy/stacks/self-managed/v0.21"
+
+        self.assertTrue(self.github_release.should_process_auto_service(stack, "", own_branch, "main"))
+        # Including a detached checkout, which `auto` treats as the default
+        # branch for every other service.
+        for branch in ("main", ""):
+            with self.subTest(branch=branch or "<detached>"):
+                self.assertFalse(self.github_release.should_process_auto_service(stack, "", branch, "main"))
+
+        # Another subproject's maintenance branch, and a branch whose suffix is
+        # not an X.Y train, are both somebody else's push.
+        for branch in (
+            "release-src/compute-plane-services/nvca/v3.1",
+            "release-deploy/stacks/observability/v0.3",
+            "release-deploy/stacks/self-managed/v0.21.4",
+            "release-deploy/stacks/self-managed/vnext",
+        ):
+            with self.subTest(branch=branch):
+                self.assertFalse(self.github_release.should_process_auto_service(stack, "", branch, "main"))
+
+        # A push to a stack's maintenance branch must not release anything else.
+        for service in (self.NVCA_MAIN_SERVICE, self.GRPC_PROXY_SERVICE):
+            with self.subTest(service=service["id"]):
+                self.assertFalse(
+                    self.github_release.should_process_auto_service(service, "", own_branch, "main")
+                )
+
+    def _seed_stack_release_branch(self, root, version, branch):
+        """A stack repo checked out on `branch` with VERSION set to `version`."""
+        self.init_repo(root)
+        stack_dir = root / "deploy/stacks/self-managed"
+        stack_dir.mkdir(parents=True, exist_ok=True)
+        (stack_dir / "VERSION").write_text(f"{version}\n")
+        (stack_dir / "README.md").write_text("stack\n")
+        self.commit_all(root, "chore: seed the self-managed stack")
+        if branch:
+            git(root, "switch", "-c", branch)
+
+    def test_release_branch_cuts_the_trains_first_version_then_patches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            branch = "release-deploy/stacks/self-managed/v0.21"
+            self._seed_stack_release_branch(root, "0.21.0", branch)
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertIn("would create deploy/stacks/self-managed/v0.21.0", output.getvalue())
+
+            git(root, "tag", "deploy/stacks/self-managed/v0.21.0")
+            (root / "deploy/stacks/self-managed/README.md").write_text("backport\n")
+            self.commit_all(root, "fix(self-managed): backport")
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertIn("would create deploy/stacks/self-managed/v0.21.1", output.getvalue())
+
+    def _run_auto(self, root, service, branch):
+        """`auto` as the workflow runs it, on `branch`, scoped to one service."""
+        metadata_path = root / "metadata.json"
+        metadata_path.write_text(json.dumps({"version": 1, "services": [service]}))
+        env = {
+            "NVCF_GITHUB_AUTO_TAGGING_ENABLED": "true",
+            "NVCF_GITHUB_RELEASE_DRY_RUN": "true",
+            "GITHUB_DEFAULT_BRANCH": "main",
+        }
+        args = types.SimpleNamespace(metadata=str(metadata_path), service=service["id"])
+        output = io.StringIO()
+        # GITHUB_REF_* would otherwise override the checked-out branch, which is
+        # what this test is varying.
+        with mock.patch.dict(os.environ, env, clear=False):
+            os.environ.pop("GITHUB_REF_TYPE", None)
+            os.environ.pop("GITHUB_REF_NAME", None)
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.auto_release(args)
+        self.assertIn(f"branch={branch}", output.getvalue())
+        return output.getvalue()
+
+    def test_auto_releases_a_stack_from_its_branch_and_not_from_main(self):
+        # The whole point of the model: a merge to main must leave the stack's
+        # version alone, and the maintenance branch is what moves it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "")
+            (root / "deploy/stacks/self-managed/README.md").write_text("a customer fix\n")
+            self.commit_all(root, "fix(self-managed): a change that would release anywhere else")
+
+            on_main = self._run_auto(root, self.SELF_MANAGED_STACK_SERVICE, "main")
+            self.assertNotIn("would create", on_main)
+
+            git(root, "switch", "-c", "release-deploy/stacks/self-managed/v0.21")
+            on_branch = self._run_auto(
+                root, self.SELF_MANAGED_STACK_SERVICE, "release-deploy/stacks/self-managed/v0.21"
+            )
+            self.assertIn("would create deploy/stacks/self-managed/v0.21.0", on_branch)
+
+    def test_release_branch_release_is_idempotent_at_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "release-deploy/stacks/self-managed/v0.21")
+            git(root, "tag", "deploy/stacks/self-managed/v0.21.0")
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+            self.assertIn("already points at HEAD", output.getvalue())
+
+    def test_release_branch_release_refuses_a_version_from_another_train(self):
+        # The branch names the train and VERSION states it. Disagreeing means
+        # the branch would publish a version for a train it does not hold.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.22.0", "release-deploy/stacks/self-managed/v0.21")
+            with chdir(root), self.assertRaisesRegex(SystemExit, "does not match release branch train 0.21"):
+                self.github_release.publish_release_branch_release(
+                    root, self.SELF_MANAGED_STACK_SERVICE, dry_run=True, draft=False
+                )
+
+    def test_release_candidate_counts_up_from_the_published_rcs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "kpathak/some-pull-request")
+            git(root, "tag", "deploy/stacks/self-managed/v0.21.0-rc.0")
+            git(root, "tag", "deploy/stacks/self-managed/v0.21.0-rc.1")
+            metadata_path = root / "metadata.json"
+            metadata_path.write_text(
+                json.dumps({"version": 1, "services": [self.SELF_MANAGED_STACK_SERVICE]})
+            )
+
+            args = types.SimpleNamespace(
+                metadata=str(metadata_path), service="nvcf-self-managed-stack", dry_run=True
+            )
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.release_candidate(args)
+
+            text = output.getvalue()
+            self.assertIn("would create deploy/stacks/self-managed/v0.21.0-rc.2", text)
+            # Cutting an rc must not advance the stable line.
+            self.assertNotIn("deploy/stacks/self-managed/v0.21.0 ", text)
+
+    def test_release_candidate_requires_a_version_file_service(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "")
+            metadata_path = root / "metadata.json"
+            metadata_path.write_text(
+                json.dumps({"version": 1, "services": [self.NVCA_MAIN_SERVICE]})
+            )
+
+            args = types.SimpleNamespace(metadata=str(metadata_path), service="nvca", dry_run=True)
+            with chdir(root), self.assertRaisesRegex(SystemExit, "requires release.version_file"):
+                self.github_release.release_candidate(args)
+
+    def test_branch_cut_dry_run_reports_release_branch_and_bump_pr(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "")
+            metadata_path = root / "metadata.json"
+            metadata_path.write_text(
+                json.dumps({"version": 1, "services": [self.SELF_MANAGED_STACK_SERVICE]})
+            )
+
+            args = types.SimpleNamespace(
+                metadata=str(metadata_path),
+                service="nvcf-self-managed-stack",
+                ref="HEAD",
+                target_branch="main",
+                dry_run=True,
+            )
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                self.github_release.branch_cut(args)
+
+            text = output.getvalue()
+            self.assertIn("release-deploy/stacks/self-managed/v0.21", text)
+            self.assertIn("release-bump/nvcf-self-managed-stack/v0.21-to-v0.22", text)
+            self.assertIn("deploy/stacks/self-managed/VERSION=0.21.0->0.22.0", text)
+
+    def test_branch_cut_requires_a_release_branch_only_service(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "")
+            service = dict(self.SELF_MANAGED_STACK_SERVICE)
+            del service["release_branch_only"]
+            metadata_path = root / "metadata.json"
+            metadata_path.write_text(json.dumps({"version": 1, "services": [service]}))
+
+            args = types.SimpleNamespace(
+                metadata=str(metadata_path),
+                service="nvcf-self-managed-stack",
+                ref="HEAD",
+                target_branch="main",
+                dry_run=True,
+            )
+            with chdir(root), self.assertRaisesRegex(SystemExit, "requires release.release_branch_only"):
+                self.github_release.branch_cut(args)
+
+    def test_version_file_must_hold_a_stable_version(self):
+        # A prerelease here would be cut verbatim as the train's first release.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0-rc.1", "")
+            with self.assertRaisesRegex(SystemExit, "does not contain a stable"):
+                self.github_release.validate_version_file(root, self.SELF_MANAGED_STACK_SERVICE)
+
+    def test_linear_release_branch_base_preserves_the_selected_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "")
+            main_branch = self.github_release.run(
+                ["git", "branch", "--show-current"], cwd=root, capture=True
+            ).strip()
+
+            git(root, "switch", "-c", "merged-change")
+            (root / "merged.txt").write_text("merged change\n")
+            self.commit_all(root, "fix: merged change")
+
+            git(root, "switch", main_branch)
+            (root / "main.txt").write_text("main change\n")
+            self.commit_all(root, "fix: main change")
+            git(root, "merge", "--no-ff", "merged-change", "-m", "Merge merged-change")
+
+            base_sha = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+            release_base = self.github_release.linear_release_branch_base(root, base_sha)
+
+            self.assertNotEqual(release_base, base_sha)
+            self.assertEqual(
+                self.github_release.commit_tree(root, release_base),
+                self.github_release.commit_tree(root, base_sha),
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "rev-list", "--merges", release_base], cwd=root, capture=True
+                ).strip(),
+                "",
+            )
+
+    def test_linear_release_branch_base_keeps_an_already_linear_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "0.21.0", "")
+            base_sha = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+
+            self.assertEqual(self.github_release.linear_release_branch_base(root, base_sha), base_sha)
 
     # Image sources that live beside a chart of the same name. Each pair
     # releases independently: the chart from deploy/helm/<name>, the image
@@ -950,34 +1217,61 @@ class GithubReleaseTest(unittest.TestCase):
                     self.github_release.latest_service_tag(image, root), "infra/openbao/v1.3.1"
                 )
 
-    def test_no_service_uses_the_retired_version_file_model(self):
-        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
-        for service in metadata["services"]:
-            with self.subTest(service=service["id"]):
-                self.assertNotIn("version_file", service)
-                self.assertNotIn("dev_prerelease", service)
+    # The subprojects that release from a maintenance branch instead of from
+    # main, and the VERSION each one's next branch cut will open.
+    RELEASE_BRANCH_STACKS = (
+        ("nvcf-self-managed-stack", "deploy/stacks/self-managed"),
+        ("nvcf-compute-plane-stack", "deploy/stacks/nvcf-compute-plane"),
+        ("nvcf-observability-stack", "deploy/stacks/observability"),
+    )
 
-    def test_migrated_services_declare_their_version_floor(self):
-        # nvca and the three stacks moved off the VERSION file onto
-        # semantic-release. Their stable lines resume from these floors, which
-        # are anchored on the GitHub commit graph at cutover.
-        expected = {
-            "nvca": "3.3.0",
-            "nvcf-compute-plane-stack": "0.2.0",
-            "nvcf-self-managed-stack": "0.8.0",
-            "nvcf-observability-stack": "0.0.0",
-        }
+    def test_the_stacks_release_from_a_branch_and_nothing_else_does(self):
         root = SCRIPT_PATH.parents[2]
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
         by_id = {service["id"]: service for service in metadata["services"]}
+        expected = {stack_id for stack_id, _path in self.RELEASE_BRANCH_STACKS}
 
-        for service_id, floor in expected.items():
-            with self.subTest(service=service_id):
-                service = by_id[service_id]
-                self.assertEqual(service.get("initial_version"), floor)
-                # The VERSION file these floors came from is gone; nothing may
-                # reintroduce it, or the service would silently stop releasing.
-                self.assertFalse((root / service["path"] / "VERSION").exists())
+        declared = {s["id"] for s in metadata["services"] if s.get("release_branch_only")}
+        self.assertEqual(declared, expected)
+
+        # version_file and release_branch_only are one model, not two settings.
+        # A version_file without the branch rule releases from main off a file
+        # nothing advances; the branch rule without a file has no version to cut.
+        for service in metadata["services"]:
+            with self.subTest(service=service["id"]):
+                self.assertEqual(
+                    bool(service.get("version_file")), bool(service.get("release_branch_only"))
+                )
+                # The retired spelling. A `dev_prerelease` entry would be read by
+                # nothing and the subproject would silently stop releasing.
+                self.assertNotIn("dev_prerelease", service)
+
+        for stack_id, path in self.RELEASE_BRANCH_STACKS:
+            with self.subTest(service=stack_id):
+                service = by_id[stack_id]
+                self.assertEqual(service["path"], path)
+                self.assertEqual(service["version_file"], "VERSION")
+                # A floor is for a semantic-release subproject. Leaving one here
+                # would state a second, contradictory source for the version.
+                self.assertNotIn("initial_version", service)
+                version = self.github_release.validate_version_file(root, service)
+                self.assertTrue(
+                    self.github_release.service_release_branch(service, version, root).startswith("release-")
+                )
+                self.assertTrue(
+                    self.github_release.service_version_bump_branch(service, version).startswith("release-bump/")
+                )
+
+    def test_nvca_still_releases_from_main(self):
+        # nvca migrated to semantic-release alongside the stacks and stays there.
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        nvca = {service["id"]: service for service in metadata["services"]}["nvca"]
+
+        self.assertEqual(nvca.get("initial_version"), "3.3.0")
+        self.assertNotIn("version_file", nvca)
+        self.assertNotIn("release_branch_only", nvca)
+        self.assertFalse((root / nvca["path"] / "VERSION").exists())
 
     NVCA_SERVICE = {
         "id": "nvca",

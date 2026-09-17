@@ -14,10 +14,11 @@ authoritative behavior; this document summarizes it for contributors.
 
 Releases are commit-triggered, not calendar-triggered. There is no fixed
 weekly or monthly cadence. On every push to `main`, the `service-release` job
-runs `./tools/ci/github-release auto`. Every subproject registered in
+runs `./tools/ci/github-release auto`. Almost every subproject registered in
 [`tools/ci/github-release-subprojects.json`](tools/ci/github-release-subprojects.json)
 uses the same model: semantic-release walks the commits since the
-subproject's last release tag and decides whether to cut a new version.
+subproject's last release tag and decides whether to cut a new version. The
+three `deploy/stacks/` subprojects are the exception and are covered below.
 
 - Commits typed `feat`, `fix`, or `perf` (the "customer" commit types defined
   in [`CONTRIBUTING.md`](CONTRIBUTING.md#how-to-select-a-commit-type)) trigger
@@ -32,29 +33,51 @@ Only commits that touch a subproject's own path count toward its version.
 `semantic-release-monorepo` scopes the commit analysis to the subtree, so a
 `fix(grpc-proxy):` commit cannot release `nvcf-cli` and vice versa.
 
-`nvca` and the three Helm stacks under `deploy/stacks/` previously used a
-separate model: a push to `main` only bumped a `-dev.N` prerelease read from
-a `VERSION` file, and a stable version was cut only on a release branch.
-Those subprojects now release from `main` like every other one, the `VERSION`
-files are gone, and the `-dev.N` tags they already published remain in the
-repository as history.
-
 Release notes are generated from commit messages (semantic-release
 conventions) and attached to the GitHub Release for each tag.
+
+### The Helm stacks release from a branch
+
+The three Helm stacks under `deploy/stacks/` are the exception. A stack is a
+pinned composition of charts, so its version is a claim about a set somebody
+qualified together, not about the last commit that touched the tree. They are
+registered with `version_file` and `release_branch_only`. A merge to `main`
+releases no stack version at all.
+
+- A `VERSION` file in the stack directory names the train that the next branch
+  cut will open, for example `deploy/stacks/self-managed/VERSION`.
+- Cutting that train is a manual `workflow_dispatch` on `release-tags` with
+  `operation=branch-cut` and the stack's service id. It creates
+  `release-deploy/stacks/<stack>/vMAJOR.MINOR` holding the default branch's
+  content, and opens a pull request advancing `VERSION` to the next minor on
+  `main`.
+- Every push to that branch then releases: `MAJOR.MINOR.0` first, and the next
+  patch for each push after it. Backporting a fix is what ships a stack patch.
+- To build an unreleased tree, whether a pull request or `main` between branch
+  cuts, dispatch `operation=release-candidate` with the stack's service id,
+  selecting the branch you want built. It cuts `MAJOR.MINOR.PATCH-rc.N` at that ref. The
+  internal publish lanes accept `-rc.N`, so the stack is packaged and published
+  without a version landing on its stable line.
+
+`nvca` used the same model until the 3.3 line and now releases from `main`
+like every other subproject. The `-dev.N` tags nvca and the stacks published
+under the older form of this model remain in the repository as history;
+nothing publishes a `-dev.N` any more.
 
 ## Branch Naming
 
 - `main`: the active development branch. All pull requests target `main`,
   except hotfixes (see [`CONTRIBUTING.md`](CONTRIBUTING.md#step-2-create-a-branch)).
 - `release-<service-path>/vMAJOR.MINOR`: a maintenance branch for one
-  subproject's release train. These branches still run the build, test, lint,
-  and scan workflows, but they no longer cut release tags. Release automation
-  runs on `main` only.
+  subproject's release train. These branches always run the build, test, lint,
+  and scan workflows. Whether a push to one also cuts a tag depends on the
+  subproject: for the `deploy/stacks/` subprojects it does, because that is
+  where they release from; for everything else release automation runs on
+  `main` only and a maintenance tag is cut by hand.
 
 Real examples from this repository:
 
-- `release-src/compute-plane-services/nvca/v3.1`
-- `release-src/compute-plane-services/nvca/v3.2`
+- `release-src/compute-plane-services/nvca/v3.7`
 - `release-deploy/stacks/self-managed/v0.7`
 
 The separator between the service id and the version can vary by how a
@@ -76,10 +99,16 @@ commit is a `feat`, `fix`, or `perf` type. No separate release action is
 needed after merge.
 
 Manual: `.github/workflows/release-tags.yml` also accepts a
-`workflow_dispatch` trigger that re-runs the same automatic logic on demand,
-optionally scoped to a single service through the `service` input. This is a
-recovery path for a run that failed or was cancelled, not a way to force a
-version that the commits do not justify.
+`workflow_dispatch` trigger, whose `operation` input selects what it does.
+
+- `auto` (the default) re-runs the same automatic logic on demand, optionally
+  scoped to a single service through the `service` input. This is a recovery
+  path for a run that failed or was cancelled, not a way to force a version
+  that the commits do not justify.
+- `branch-cut` opens the next release train for a `deploy/stacks/` subproject,
+  named by the required `service` input.
+- `release-candidate` cuts an `-rc.N` for a `deploy/stacks/` subproject at the
+  branch the run is dispatched from, named by the required `service` input.
 
 `workflow_dispatch` requires GitHub write access to the repository. In this
 repository that access is granted through organization team membership:
@@ -125,9 +154,14 @@ A release branch older than N-1 is effectively end of life and does not
 receive further backports.
 
 Mechanism: cherry-pick the commit from `main` onto the `release-*` branch,
-following the same commit and review conventions as `main`. Because release
-automation runs on `main` only, a maintainer then creates the patch tag by
-hand:
+following the same commit and review conventions as `main`. There is no
+automation that backports a commit for you.
+
+For a `deploy/stacks/` subproject that is all of it: the push to the release
+branch cuts the next patch on that train.
+
+For every other subproject, release automation runs on `main` only, so a
+maintainer creates the patch tag by hand:
 
 ```sh
 git tag <service-path>/vMAJOR.MINOR.PATCH <commit-on-the-release-branch>
@@ -135,5 +169,4 @@ git push origin <service-path>/vMAJOR.MINOR.PATCH
 ```
 
 Push the tag with a token that can start workflows, so the tag workflow
-creates the matching GitHub Release. There is no automation that backports a
-commit or cuts a maintenance release for you.
+creates the matching GitHub Release.
