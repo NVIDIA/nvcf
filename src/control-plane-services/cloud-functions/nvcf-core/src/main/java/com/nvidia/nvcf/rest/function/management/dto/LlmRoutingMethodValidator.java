@@ -44,16 +44,19 @@ public final class LlmRoutingMethodValidator {
             Pattern.compile("[A-Za-z*][A-Za-z0-9!#$%&'*+.^_`|~:/-]*");
     private static final Pattern STRING_PATTERN = Pattern.compile(
             "\"(?:[\\x20\\x21\\x23-\\x2b\\x2d-\\x3a\\x3c-\\x5b\\x5d-\\x7e]|\\\\[\"\\\\])*\"");
+    // \p{Cc} covers the C1 controls such as U+0085 (NEL), which \p{Cntrl} does not.
     private static final Pattern CONTROL_CHARACTERS =
-            Pattern.compile("[\\p{Cntrl}\\p{Zl}\\p{Zp}]");
+            Pattern.compile("[\\p{Cc}\\p{Zl}\\p{Zp}]");
 
     private static final String MESG_INVALID_ROUTING_METHOD =
             "Invalid request: 'llmConfig.routingMethod' for model '%s' is invalid: %s";
-    private static final String MESG_EXPRESSION_TOO_LONG = "expression exceeds 1024 bytes";
+    private static final String MESG_EXPRESSION_TOO_LONG =
+            "expression exceeds %d bytes".formatted(MAX_EXPRESSION_BYTES);
     private static final String MESG_COMMAS_NOT_ALLOWED = "commas are not allowed";
     private static final String MESG_INVALID_METHOD_NAME =
             "method name must match [A-Za-z][A-Za-z0-9_-]*";
-    private static final String MESG_TOO_MANY_PARAMETERS = "at most 32 parameters are allowed";
+    private static final String MESG_TOO_MANY_PARAMETERS =
+            "at most %d parameters are allowed".formatted(MAX_PARAMETERS);
     private static final String MESG_INVALID_PARAMETER =
             "parameter '%s' must be key=value with key matching [a-z][a-z0-9_]*";
     private static final String MESG_INVALID_VALUE =
@@ -110,10 +113,10 @@ public final class LlmRoutingMethodValidator {
         }
     }
 
-    // The segment is raw request text echoed in the log and the 400 body; a line break in it
-    // could forge a log line.
-    private static String withoutControlCharacters(String segment) {
-        return CONTROL_CHARACTERS.matcher(segment).replaceAll("?");
+    // Segments and model names are raw request text echoed in the log and the 400 body; a line
+    // break in them could forge a log line. Shared with LlmConfigValidator.
+    static String withoutControlCharacters(String text) {
+        return CONTROL_CHARACTERS.matcher(text).replaceAll("?");
     }
 
     private static boolean isValidBareValue(String value) {
@@ -123,9 +126,10 @@ public final class LlmRoutingMethodValidator {
                 || STRING_PATTERN.matcher(value).matches();
     }
 
+    // A malformed client value is not an operator problem, so it is logged below error level.
     private static void reject(String modelName, String rule) {
-        var mesg = MESG_INVALID_ROUTING_METHOD.formatted(modelName, rule);
-        log.error(mesg);
+        var mesg = MESG_INVALID_ROUTING_METHOD.formatted(withoutControlCharacters(modelName), rule);
+        log.warn(mesg);
         throw new BadRequestException(mesg);
     }
 }
