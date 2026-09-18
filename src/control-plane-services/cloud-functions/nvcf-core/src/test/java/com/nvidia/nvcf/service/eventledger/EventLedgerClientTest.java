@@ -23,7 +23,6 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
 import static io.cloudevents.jackson.JsonFormat.CONTENT_TYPE;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
@@ -33,9 +32,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -64,7 +60,6 @@ class EventLedgerClientTest {
 
     @AfterEach
     void tearDown() {
-        client.close();
         server.stop();
     }
 
@@ -85,7 +80,7 @@ class EventLedgerClientTest {
                 "account-1", functionId, functionVersionId, deploymentId,
                 previousStatus, status, persistedAt);
 
-        await().untilAsserted(() -> assertThat(server.getAllServeEvents()).hasSize(1));
+        assertThat(server.getAllServeEvents()).hasSize(1);
         var request = server.getAllServeEvents().getFirst().getRequest();
         var cloudEvent = EventFormatProvider.getInstance()
                 .resolveFormat(CONTENT_TYPE)
@@ -158,12 +153,24 @@ class EventLedgerClientTest {
 
         publish(FunctionStatus.DEPLOYING, FunctionStatus.ERROR);
 
-        await().untilAsserted(() -> assertThat(server.getAllServeEvents()).hasSize(1));
+        assertThat(server.getAllServeEvents()).hasSize(1);
+    }
+
+    @Test
+    void waitsForEventLedgerResponse() {
+        server.stubFor(post(urlEqualTo(EventLedgerClient.CLOUD_EVENTS_PATH))
+                               .willReturn(aResponse().withStatus(202).withFixedDelay(250)));
+
+        var startedAt = Instant.now();
+        publish(FunctionStatus.DEPLOYING, FunctionStatus.ACTIVE);
+
+        assertThat(Duration.between(startedAt, Instant.now()))
+                .isGreaterThanOrEqualTo(Duration.ofMillis(200));
+        assertThat(server.getAllServeEvents()).hasSize(1);
     }
 
     @Test
     void skipsPublishingWhenDisabled() {
-        client.close();
         client = newClient(Duration.ofSeconds(1), false);
 
         publish(FunctionStatus.DEPLOYING, FunctionStatus.ACTIVE);
@@ -176,14 +183,11 @@ class EventLedgerClientTest {
     }
 
     private EventLedgerClient newClient(Duration timeout, boolean enabled) {
-        var executor = new ThreadPoolExecutor(
-                1, 1, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(10));
         return new EventLedgerClient(
                 enabled,
                 timeout,
                 WebClient.builder().baseUrl(server.baseUrl()).build(),
-                new JsonMapper(),
-                executor);
+                new JsonMapper());
     }
 
     private void publish(

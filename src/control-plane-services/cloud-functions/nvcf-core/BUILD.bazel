@@ -99,7 +99,6 @@ nvcf_java_library(
         "@nv_third_party_deps//:io_cloudevents_cloudevents_json_jackson",
         "@nv_third_party_deps//:net_devh_grpc_common_spring_boot",
         "@nv_third_party_deps//:io_micrometer_micrometer_core",
-        "@nv_third_party_deps//:io_micrometer_context_propagation",
         "@nv_third_party_deps//:io_micrometer_micrometer_observation",
         "@nv_third_party_deps//:io_micrometer_micrometer_registry_prometheus",
         "@nv_third_party_deps//:io_micrometer_micrometer_tracing",
