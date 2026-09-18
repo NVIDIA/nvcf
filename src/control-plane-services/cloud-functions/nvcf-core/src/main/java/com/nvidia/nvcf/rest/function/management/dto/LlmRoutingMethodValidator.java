@@ -113,10 +113,10 @@ public final class LlmRoutingMethodValidator {
         }
     }
 
-    // Segments and model names are raw request text echoed in the log and the 400 body; a line
-    // break in them could forge a log line. Shared with LlmConfigValidator.
-    static String withoutControlCharacters(String text) {
-        return CONTROL_CHARACTERS.matcher(text).replaceAll("?");
+    // The segment is raw request text echoed in the log and the 400 body; a line break in it
+    // could forge a log line.
+    private static String withoutControlCharacters(String segment) {
+        return CONTROL_CHARACTERS.matcher(segment).replaceAll("?");
     }
 
     private static boolean isValidBareValue(String value) {
@@ -128,7 +128,7 @@ public final class LlmRoutingMethodValidator {
 
     // A malformed client value is not an operator problem, so it is logged below error level.
     private static void reject(String modelName, String rule) {
-        var mesg = MESG_INVALID_ROUTING_METHOD.formatted(withoutControlCharacters(modelName), rule);
+        var mesg = MESG_INVALID_ROUTING_METHOD.formatted(modelName, rule);
         log.warn(mesg);
         throw new BadRequestException(mesg);
     }

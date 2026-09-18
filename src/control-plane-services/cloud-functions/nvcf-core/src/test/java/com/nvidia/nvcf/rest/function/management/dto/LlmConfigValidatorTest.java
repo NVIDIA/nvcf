@@ -8,7 +8,6 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nvidia.boot.exceptions.BadRequestException;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -52,13 +51,5 @@ class LlmConfigValidatorTest {
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("tokenRateLimit")
                 .hasMessageContaining(MODEL);
-    }
-
-    @Test
-    void controlCharactersInModelNameReplaced() {
-        assertThatThrownBy(() -> LlmConfigValidator.validateTokenRateLimit("m\nx", "20-X"))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("for model 'm?x'")
-                .hasMessageNotContaining("\n");
     }
 }
