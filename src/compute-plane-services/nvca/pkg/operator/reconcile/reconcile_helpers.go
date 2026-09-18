@@ -109,26 +109,86 @@ func getNBAnnotations(nb *nvidiaiov1.NVCFBackend) map[string]string {
 	}
 }
 
-//nolint:dupl
-func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.Namespace) error {
-	// get and create if not exists
-	_, err := bc.clients.K8s.CoreV1().Namespaces().Get(ctx, ns.Name, metav1.GetOptions{})
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			_, err := bc.clients.K8s.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-			if err != nil && !k8serrors.IsAlreadyExists(err) {
-				return fmt.Errorf("failed to create %v namespace, err: %v", ns.Name, err)
-			}
-		} else {
-			return fmt.Errorf("failed to get %v namespace, err: %v", ns.Name, err)
+// namespaceOwnedKeys names the metadata keys NVCA owns on a namespace but does not always set. Labels and
+// annotations are listed separately so a conditional label never removes an annotation that happens to share its
+// key. A listed key is deleted when the desired object omits it; an unlisted key is never deleted.
+type namespaceOwnedKeys struct {
+	labels      []string
+	annotations []string
+}
+
+// mergeOwnedKeys writes the desired key/value pairs into live and deletes the optional owned keys that desired
+// omits. Keys absent from both desired and optionalOwnedKeys are left untouched, so metadata written by other
+// controllers survives. It returns the resulting map and whether anything changed.
+func mergeOwnedKeys(live, desired map[string]string, optionalOwnedKeys []string) (map[string]string, bool) {
+	merged := live
+	changed := false
+
+	for key, value := range desired {
+		if current, ok := merged[key]; ok && current == value {
+			continue
 		}
-	} else {
-		// update namespace with new labels
-		_, err = bc.clients.K8s.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to update %v namespace, err: %v", ns.Name, err)
+		if merged == nil {
+			merged = make(map[string]string, len(desired))
+		}
+		merged[key] = value
+		changed = true
+	}
+
+	for _, key := range optionalOwnedKeys {
+		if _, ok := desired[key]; ok {
+			continue
+		}
+		if _, ok := merged[key]; ok {
+			delete(merged, key)
+			changed = true
 		}
 	}
+
+	return merged, changed
+}
+
+// createOrUpdateNamespace creates ns when it does not exist. When it already exists, the live namespace is read
+// and only the label and annotation keys ns names are written back, so identity, finalizers, owner references and
+// metadata owned by other controllers (GitOps tracking annotations, for example) are preserved.
+// optional names the label and annotation keys NVCA owns but does not always set; they are removed from the live
+// namespace when ns omits them. Reads and writes are retried on conflict so a concurrent external edit is merged
+// rather than overwritten.
+func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.Namespace,
+	optional namespaceOwnedKeys) error {
+	namespaces := bc.clients.K8s.CoreV1().Namespaces()
+
+	retriable := func(err error) bool {
+		return k8serrors.IsConflict(err) || k8serrors.IsAlreadyExists(err)
+	}
+
+	err := retry.OnError(retry.DefaultRetry, retriable, func() error {
+		live, err := namespaces.Get(ctx, ns.Name, metav1.GetOptions{})
+		if err != nil {
+			if !k8serrors.IsNotFound(err) {
+				return err
+			}
+			// Another writer may win the race; retriable sends AlreadyExists back through the merge path.
+			_, err = namespaces.Create(ctx, ns, metav1.CreateOptions{})
+			return err
+		}
+
+		updated := live.DeepCopy()
+		labels, labelsChanged := mergeOwnedKeys(updated.Labels, ns.Labels, optional.labels)
+		annotations, annotationsChanged := mergeOwnedKeys(updated.Annotations, ns.Annotations, optional.annotations)
+		if !labelsChanged && !annotationsChanged {
+			return nil
+		}
+
+		updated.Labels = labels
+		updated.Annotations = annotations
+		_, err = namespaces.Update(ctx, updated, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile %v namespace, err: %w", ns.Name, err)
+	}
+
 	return nil
 }
 
