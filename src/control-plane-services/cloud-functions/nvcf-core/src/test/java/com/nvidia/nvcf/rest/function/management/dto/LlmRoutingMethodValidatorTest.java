@@ -16,6 +16,7 @@
  */
 package com.nvidia.nvcf.rest.function.management.dto;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -89,8 +90,26 @@ class LlmRoutingMethodValidatorTest {
                 .hasMessageNotContaining("\r");
     }
 
+    @ParameterizedTest(name = "{index}: [{0}] is stored as [{1}]")
+    @MethodSource("storedValues")
+    void returnsValueWithoutOuterSpaces(String routingMethod, String stored) {
+        assertThat(LlmRoutingMethodValidator.validate(MODEL, routingMethod)).isEqualTo(stored);
+    }
+
+    private static Stream<Arguments> storedValues() {
+        return Stream.of(
+                Arguments.of(null, null),
+                Arguments.of("", ""),
+                Arguments.of("   ", ""),
+                Arguments.of("pulsar", "pulsar"),
+                Arguments.of("  pulsar  ", "pulsar"),
+                Arguments.of("  Power_Of_Two;seed=x  ", "Power_Of_Two;seed=x"),
+                Arguments.of("pulsar;  seed=x", "pulsar;  seed=x"));
+    }
+
     private static Stream<String> routingMethodsAtLimits() {
-        return Stream.of("a".repeat(1024), " " + "a".repeat(1023), "pulsar" + parameters(32));
+        return Stream.of(
+                "a".repeat(1024), " " + "a".repeat(1024) + " ", "pulsar" + parameters(32));
     }
 
     private static Stream<Arguments> invalidRoutingMethods() {
@@ -102,7 +121,6 @@ class LlmRoutingMethodValidatorTest {
                 Arguments.of("\tpulsar", "method name must match"),
                 Arguments.of("\n", "method name must match"),
                 Arguments.of("pulsar;seed=x\n", "must be key=value"),
-                Arguments.of(" " + "a".repeat(1024), "expression exceeds 1024 bytes"),
                 Arguments.of("pulsar,seed=x", "commas are not allowed"),
                 Arguments.of("pulsar;seed=\"a,b\"", "commas are not allowed"),
                 Arguments.of("pulsar;seed=\"a;b\"", "value for 'seed'"),

@@ -265,7 +265,8 @@ public class FunctionLlmService {
                         UpdateFunctionRequest.ModelUpdateDto::modelName,
                         u -> FunctionModelDto.LlmConfigDto.builder()
                                 .tokenRateLimit(u.llmConfig().tokenRateLimit())
-                                .routingMethod(u.llmConfig().routingMethod())
+                                .routingMethod(LlmRoutingMethodValidator.validate(
+                                        u.modelName(), u.llmConfig().routingMethod()))
                                 .build()));
         if (overrides.isEmpty()) {
             return Map.of();
@@ -404,9 +405,8 @@ public class FunctionLlmService {
                     llmConfig.setTokenRateLimit(llmConfigUpdate.tokenRateLimit());
                 }
                 if (llmConfigUpdate.routingMethod() != null) {
-                    LlmRoutingMethodValidator.validate(
-                            modelUpdate.modelName(), llmConfigUpdate.routingMethod());
-                    llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
+                    llmConfig.setRoutingMethod(LlmRoutingMethodValidator.validate(
+                            modelUpdate.modelName(), llmConfigUpdate.routingMethod()));
                 }
                 updated = true;
                 break;

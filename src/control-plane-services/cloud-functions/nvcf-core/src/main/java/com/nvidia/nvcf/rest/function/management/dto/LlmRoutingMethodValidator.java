@@ -63,21 +63,21 @@ public final class LlmRoutingMethodValidator {
     private LlmRoutingMethodValidator() {}
 
     /**
-     * Rejects a routingMethod whose syntax the router could not parse. Empty or space-only values
-     * are allowed.
+     * Rejects a routingMethod whose syntax the router could not parse and returns the value to
+     * store: the input without outer spaces, so validated and stored bytes are identical. Any
+     * other outer character, including tabs and line breaks, fails the grammar.
      */
-    public static void validate(String modelName, @Nullable String routingMethod) {
+    @Nullable
+    public static String validate(String modelName, @Nullable String routingMethod) {
         if (routingMethod == null) {
-            return;
-        }
-        // Callers persist and forward the value as received, so the limit counts the raw bytes and
-        // only outer spaces are insignificant; other outer control characters must fail below.
-        if (routingMethod.getBytes(StandardCharsets.UTF_8).length > MAX_EXPRESSION_BYTES) {
-            reject(modelName, MESG_EXPRESSION_TOO_LONG);
+            return null;
         }
         var value = StringUtils.strip(routingMethod, " ");
         if (value.isEmpty()) {
-            return;
+            return value;
+        }
+        if (value.getBytes(StandardCharsets.UTF_8).length > MAX_EXPRESSION_BYTES) {
+            reject(modelName, MESG_EXPRESSION_TOO_LONG);
         }
         if (value.contains(",")) {
             reject(modelName, MESG_COMMAS_NOT_ALLOWED);
@@ -93,6 +93,7 @@ public final class LlmRoutingMethodValidator {
         for (var index = 1; index < segments.length; index++) {
             validateParameter(modelName, segments[index], keys);
         }
+        return value;
     }
 
     private static void validateParameter(String modelName, String segment, Set<String> keys) {

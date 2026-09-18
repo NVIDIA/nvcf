@@ -596,15 +596,20 @@ class FunctionsWithLlmModelsTest {
     }
 
     @Test
-    void shouldPersistRoutingExpressionsAsReceivedOnCreateAndUpdate() {
-        var initialRoutingMethod = "Pulsar_Wait_And_Widen; seed=stable-a;n=2";
+    void shouldStoreRoutingExpressionsWithoutOuterSpacesOnCreateAndUpdate() {
+        var functionName = TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli();
+        var storedRoutingMethod = "Pulsar_Wait_And_Widen; seed=stable-a;n=2";
         var function = createInitialLlmFunction(
-                TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli(),
-                "1-M", initialRoutingMethod);
+                functionName, "1-M", "  " + storedRoutingMethod + "  ");
 
         assertThat(function.models().getFirst().getLlmConfig().getRoutingMethod())
-                .isEqualTo(initialRoutingMethod);
-        assertLlmConfigPersisted(function.versionId(), "1-M", initialRoutingMethod);
+                .isEqualTo(storedRoutingMethod);
+        assertLlmConfigPersisted(function.versionId(), "1-M", storedRoutingMethod);
+
+        var secondVersion = createAdditionalLlmFunctionVersion(
+                function.id(), functionName, "1-M", " " + storedRoutingMethod);
+        assertThat(secondVersion.models().getFirst().getLlmConfig().getRoutingMethod())
+                .isEqualTo(storedRoutingMethod);
 
         var updatedRoutingMethod = "pulsar;seed=stable-b";
         var updateToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(
@@ -613,7 +618,7 @@ class FunctionsWithLlmModelsTest {
                 .modelUpdates(List.of(UpdateFunctionRequest.ModelUpdateDto.builder()
                         .modelName(TEST_LLM_MODEL_NAME)
                         .llmConfig(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
-                                .routingMethod(updatedRoutingMethod)
+                                .routingMethod(" " + updatedRoutingMethod + " ")
                                 .build())
                         .build()))
                 .build();
@@ -631,6 +636,7 @@ class FunctionsWithLlmModelsTest {
         assertThat(updatedModel.getLlmConfig().getRoutingMethod())
                 .isEqualTo(updatedRoutingMethod);
         assertLlmConfigPersisted(function.versionId(), "1-M", updatedRoutingMethod);
+        assertLlmConfigPersisted(secondVersion.versionId(), "1-M", updatedRoutingMethod);
     }
 
     @Test
