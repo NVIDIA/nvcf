@@ -62,7 +62,7 @@ drivers:
     encryptionSupported: true
   - name: csi.weka.io
     provider: weka
-    accessModes: []
+    accessModes: [ReadWriteMany]
     readerMountOptions: []
 ```
 

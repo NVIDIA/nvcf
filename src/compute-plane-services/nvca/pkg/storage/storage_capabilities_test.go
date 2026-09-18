@@ -380,17 +380,26 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NotNil(t, nvmesh.ReaderMountOptions)
 	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 
-	// Weka, FSS and Lustre are recorded but not qualified for a cache workflow,
-	// so they carry no access modes and caching stays off for them. Enabling
-	// one is an edit to its accessModes, backed by a qualification run.
-	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "lustre.csi.oraclecloud.com"} {
+	// Weka and OCI FSS are shared filesystems enabled on the ReadWriteMany
+	// shape: one shared claim, readers mount it read-only, no derived reader
+	// PV and therefore no reader mount options.
+	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
 		require.NotNil(t, driver.AccessModes, provisioner)
-		assert.Empty(t, *driver.AccessModes, provisioner)
+		assert.Equal(t, []string{"ReadWriteMany"}, *driver.AccessModes, provisioner)
 		require.NotNil(t, driver.ReaderMountOptions, provisioner)
 		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
 	}
+
+	// Lustre is recorded but not enabled for a cache workflow, so it carries
+	// no access modes and caching stays off for it.
+	lustre, ok := catalog.Drivers["lustre.csi.oraclecloud.com"]
+	require.True(t, ok)
+	require.NotNil(t, lustre.AccessModes)
+	assert.Empty(t, *lustre.AccessModes)
+	require.NotNil(t, lustre.ReaderMountOptions)
+	assert.Empty(t, *lustre.ReaderMountOptions)
 
 	schemaRaw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.schema.json"))
 	require.NoError(t, err)

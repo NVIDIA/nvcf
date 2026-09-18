@@ -45,16 +45,23 @@ drivers:
       - nouuid
   - name: csi.weka.io
     provider: weka
-    # Fresh ReadWriteMany and ReadOnlyMany claims were tested, but a cache
-    # workflow was not, so nothing is qualified yet.
-    accessModes: []
+    # Weka is a shared filesystem: one ReadWriteMany claim per cache handle,
+    # populated once and mounted read-only by every reader, with no derived
+    # reader PV, so readerMountOptions stays empty. Enabled so the cache
+    # workflows can be exercised; record the qualification run in the pull
+    # request that flips this entry.
+    accessModes:
+      - ReadWriteMany
     readerMountOptions: []
   - name: fss.csi.oraclecloud.com
     provider: ociFss
-    # A ReadWriteMany claim was tested; its readers used read-only Pod mounts,
-    # which is not evidence for a ReadOnlyMany claim. No cache workflow was
-    # qualified.
-    accessModes: []
+    # OCI File Storage is NFS: one ReadWriteMany claim per cache handle,
+    # populated once and mounted read-only by every reader, with no derived
+    # reader PV, so readerMountOptions stays empty. Enabled so the cache
+    # workflows can be exercised; record the qualification run in the pull
+    # request that flips this entry.
+    accessModes:
+      - ReadWriteMany
     readerMountOptions: []
   - name: lustre.csi.oraclecloud.com
     provider: ociLustre
