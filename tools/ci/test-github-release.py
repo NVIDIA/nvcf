@@ -1075,6 +1075,20 @@ class GithubReleaseTest(unittest.TestCase):
                 )
             self.assertIn("would create deploy/stacks/self-managed/v1.0.1", output.getvalue())
 
+    def test_stack_change_detection_fails_closed_when_the_diff_cannot_run(self):
+        # A diff that does not run must not read as "the stack changed".
+        # run(capture=True) folds stderr into stdout, so an unreadable tag would
+        # come back as `fatal: bad revision ...`, parse as one changed path, and
+        # publish a version off an error message.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed_stack_release_branch(root, "1.0.0", "release-deploy/stacks/self-managed/v1.0")
+
+            with self.assertRaisesRegex(SystemExit, "cannot compare deploy/stacks/self-managed"):
+                self.github_release.stack_content_changed_since(
+                    root, self.SELF_MANAGED_STACK_SERVICE, "deploy/stacks/self-managed/v9.9.9"
+                )
+
     def test_stack_change_detection_survives_a_synthetic_branch_root(self):
         # A release branch is rooted at a synthetic commit, so the train's tags
         # are not ancestors of HEAD. Comparison must be by tree, not by ancestry.

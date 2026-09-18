@@ -1502,15 +1502,28 @@ def stack_content_changed_since(root, service, tag):
     The version file is excluded. It is release bookkeeping, not part of what
     the stack deploys, so a commit that only seeds or bumps it is not a reason
     to publish a version whose content nobody changed.
+
+    A diff that does not run is fatal rather than a "yes". This decides whether
+    to publish, so the failure has to be loud: `run(capture=True)` folds stderr
+    into stdout, and an unreadable tag object would otherwise come back as
+    `fatal: bad revision ...`, parse as one changed path, and cut a release off
+    an error message.
     """
     service_path = service["path"].rstrip("/")
-    raw = run(
+    result = subprocess.run(
         ["git", "diff", "--name-only", tag, "HEAD", "--", service_path],
         cwd=root,
-        capture=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         check=False,
     )
-    changed = {line.strip() for line in raw.splitlines() if line.strip()}
+    if result.returncode != 0:
+        raise SystemExit(
+            f"{service['id']}: cannot compare {service_path} against {tag} "
+            f"(git diff exited {result.returncode}): {(result.stderr or '').strip()}"
+        )
+    changed = {line.strip() for line in result.stdout.splitlines() if line.strip()}
     version_file = service.get("version_file")
     if version_file:
         changed.discard(f"{service_path}/{version_file}")
