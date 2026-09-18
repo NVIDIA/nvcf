@@ -338,6 +338,8 @@ func TestNewPolicyMiddleware(t *testing.T) {
 		name                 string
 		client               *stubPolicyClient
 		token                string
+		rawAuthHeader        string
+		setRawAuthHeader     bool
 		claims               jwt.MapClaims
 		expectedStatusCode   int
 		expectedClientCalled bool
@@ -393,6 +395,26 @@ func TestNewPolicyMiddleware(t *testing.T) {
 			expectedClientCalled: false,
 		},
 		{
+			// "Bearer " with nothing after it is Bearer-prefixed, so it must
+			// not slip past the fail-fast check via the happy-path branch.
+			name:                 "Empty Bearer Token",
+			client:               &stubPolicyClient{result: allowResult(nil)},
+			rawAuthHeader:        "Bearer ",
+			setRawAuthHeader:     true,
+			expectedStatusCode:   http.StatusUnauthorized,
+			expectedClientCalled: false,
+		},
+		{
+			// Whitespace-only value after "Bearer " must be treated the same
+			// as an empty token, not forwarded to the policy evaluator.
+			name:                 "Whitespace-Only Bearer Token",
+			client:               &stubPolicyClient{result: allowResult(nil)},
+			rawAuthHeader:        "Bearer    ",
+			setRawAuthHeader:     true,
+			expectedStatusCode:   http.StatusUnauthorized,
+			expectedClientCalled: false,
+		},
+		{
 			// Simulates the managed-mode JWT-then-policy chain: jwtVerify
 			// already validated the token and cleared the Authorization
 			// header, but stashed claims in the request context. The policy
@@ -418,7 +440,9 @@ func TestNewPolicyMiddleware(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)
-			if tt.token != "" {
+			if tt.setRawAuthHeader {
+				req.Header.Set("Authorization", tt.rawAuthHeader)
+			} else if tt.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
 			if tt.claims != nil {
