@@ -90,6 +90,25 @@ class LlmRoutingMethodValidatorTest {
                 .hasMessageNotContaining("\r");
     }
 
+    @Test
+    void nextLineControlCharacterInRejectedSegmentReplaced() {
+        var nextLine = String.valueOf((char) 0x85);
+        var routingMethod = "pulsar;seed=a" + nextLine + "b";
+
+        assertThatThrownBy(() -> LlmRoutingMethodValidator.validate(MODEL, routingMethod))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("parameter 'seed=a?b' must be key=value")
+                .hasMessageNotContaining(nextLine);
+    }
+
+    @Test
+    void controlCharactersInModelNameReplaced() {
+        assertThatThrownBy(() -> LlmRoutingMethodValidator.validate("m\nx", "pulsar,seed=x"))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("for model 'm?x'")
+                .hasMessageNotContaining("\n");
+    }
+
     @ParameterizedTest(name = "{index}: [{0}] is stored as [{1}]")
     @MethodSource("storedValues")
     void returnsValueWithoutOuterSpaces(String routingMethod, String stored) {

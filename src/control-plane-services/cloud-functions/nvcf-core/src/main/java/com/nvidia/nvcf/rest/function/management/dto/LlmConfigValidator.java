@@ -34,8 +34,9 @@ public final class LlmConfigValidator {
             return;
         }
         if (!TOKEN_RATE_LIMIT_PATTERN.matcher(tokenRateLimit).matches()) {
-            var mesg = MESG_INVALID_TOKEN_RATE_LIMIT.formatted(modelName);
-            log.error(mesg);
+            var mesg = MESG_INVALID_TOKEN_RATE_LIMIT.formatted(
+                    LlmRoutingMethodValidator.withoutControlCharacters(modelName));
+            log.warn(mesg);
             throw new BadRequestException(mesg);
         }
     }

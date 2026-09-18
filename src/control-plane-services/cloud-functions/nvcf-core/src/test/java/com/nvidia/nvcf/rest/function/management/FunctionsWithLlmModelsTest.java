@@ -606,10 +606,14 @@ class FunctionsWithLlmModelsTest {
                 .isEqualTo(storedRoutingMethod);
         assertLlmConfigPersisted(function.versionId(), "1-M", storedRoutingMethod);
 
+        // A different value forces the sibling write, which copies the converter's trimmed DTO.
+        var secondRoutingMethod = "wait-and-widen;n=3";
         var secondVersion = createAdditionalLlmFunctionVersion(
-                function.id(), functionName, "1-M", " " + storedRoutingMethod);
+                function.id(), functionName, "1-M", " " + secondRoutingMethod + " ");
         assertThat(secondVersion.models().getFirst().getLlmConfig().getRoutingMethod())
-                .isEqualTo(storedRoutingMethod);
+                .isEqualTo(secondRoutingMethod);
+        assertLlmConfigPersisted(function.versionId(), "1-M", secondRoutingMethod);
+        assertLlmConfigPersisted(secondVersion.versionId(), "1-M", secondRoutingMethod);
 
         // Unknown method and parameter: well formed, so it persists; the router owns semantics.
         var updatedRoutingMethod = "fastest;widen=2";
