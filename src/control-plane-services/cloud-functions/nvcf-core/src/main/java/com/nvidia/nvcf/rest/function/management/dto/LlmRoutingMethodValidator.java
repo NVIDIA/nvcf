@@ -62,14 +62,22 @@ public final class LlmRoutingMethodValidator {
 
     private LlmRoutingMethodValidator() {}
 
-    /** Rejects a routingMethod whose syntax the router could not parse. Blank is allowed. */
+    /**
+     * Rejects a routingMethod whose syntax the router could not parse. Empty or space-only values
+     * are allowed.
+     */
     public static void validate(String modelName, @Nullable String routingMethod) {
-        if (StringUtils.isBlank(routingMethod)) {
+        if (routingMethod == null) {
             return;
         }
-        var value = routingMethod.trim();
-        if (value.getBytes(StandardCharsets.UTF_8).length > MAX_EXPRESSION_BYTES) {
+        // Callers persist and forward the value as received, so the limit counts the raw bytes and
+        // only outer spaces are insignificant; other outer control characters must fail below.
+        if (routingMethod.getBytes(StandardCharsets.UTF_8).length > MAX_EXPRESSION_BYTES) {
             reject(modelName, MESG_EXPRESSION_TOO_LONG);
+        }
+        var value = StringUtils.strip(routingMethod, " ");
+        if (value.isEmpty()) {
+            return;
         }
         if (value.contains(",")) {
             reject(modelName, MESG_COMMAS_NOT_ALLOWED);

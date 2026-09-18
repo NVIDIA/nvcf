@@ -90,7 +90,7 @@ class LlmRoutingMethodValidatorTest {
     }
 
     private static Stream<String> routingMethodsAtLimits() {
-        return Stream.of("a".repeat(1024), "pulsar" + parameters(32));
+        return Stream.of("a".repeat(1024), " " + "a".repeat(1023), "pulsar" + parameters(32));
     }
 
     private static Stream<Arguments> invalidRoutingMethods() {
@@ -98,6 +98,11 @@ class LlmRoutingMethodValidatorTest {
                 Arguments.of("round robin", "method name must match"),
                 Arguments.of("power-of-3!", "method name must match"),
                 Arguments.of(";seed=x", "method name must match"),
+                Arguments.of("pulsar\n", "method name must match"),
+                Arguments.of("\tpulsar", "method name must match"),
+                Arguments.of("\n", "method name must match"),
+                Arguments.of("pulsar;seed=x\n", "must be key=value"),
+                Arguments.of(" " + "a".repeat(1024), "expression exceeds 1024 bytes"),
                 Arguments.of("pulsar,seed=x", "commas are not allowed"),
                 Arguments.of("pulsar;seed=\"a,b\"", "commas are not allowed"),
                 Arguments.of("pulsar;seed=\"a;b\"", "value for 'seed'"),
