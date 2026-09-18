@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
 	nvcak8sutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
@@ -96,15 +95,15 @@ func TestDoStatus_BYOOSidecarUnhealthy(t *testing.T) {
 	}
 
 	tests := []struct {
-		name                       string
-		workloadConfig             *v1alpha1.WorkloadConfig
-		wantPhase                  v1alpha1.MiniServicePhase
-		wantConditionType          string
-		wantConditionStatus        metav1.ConditionStatus
-		wantConditionReason        string
-		wantWorkersHealthyStatus   metav1.ConditionStatus
-		wantWorkersHealthyReason   string
-		wantErr                    bool
+		name                     string
+		workloadConfig           *v1alpha1.WorkloadConfig
+		wantPhase                v1alpha1.MiniServicePhase
+		wantConditionType        string
+		wantConditionStatus      metav1.ConditionStatus
+		wantConditionReason      string
+		wantWorkersHealthyStatus metav1.ConditionStatus
+		wantWorkersHealthyReason string
+		wantErr                  bool
 	}{
 		{
 			// StatusByWorkerReadiness absent (default): doStatusAggressive runs.
@@ -165,16 +164,12 @@ func TestDoStatus_BYOOSidecarUnhealthy(t *testing.T) {
 				degradedUtilsPod,
 			)
 
-			cache := chartcache.New(t.TempDir())
-			require.NoError(t, cache.Start(ctx))
-
 			r := &Reconciler{
 				ControllerOptions: ControllerOptions{
 					K8sTimeConfig: (&nvcak8sutil.TimeConfig{}).Complete(),
 				},
 				Client:                c,
 				Decoder:               serializer.NewCodecFactory(mgrScheme).UniversalDeserializer(),
-				chartCache:            cache,
 				newPermissionsChecker: newFakePermissionsChecker,
 				now:                   time.Now,
 			}
@@ -182,7 +177,7 @@ func TestDoStatus_BYOOSidecarUnhealthy(t *testing.T) {
 			// Pre-save empty rendered objects so collectObjectStatuses does not
 			// attempt a full Helm render. The BYOO sidecar lives in the utils pod
 			// (not as a Helm-rendered object), so no Helm objects are needed.
-			require.NoError(t, r.saveRenderedData(ctx, ms, []byte("[]")))
+			r.saveRenderedData(ctx, ms, []byte("[]"))
 
 			_, err := r.doStatus(ctx, ms, icmsReq)
 

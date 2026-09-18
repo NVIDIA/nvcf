@@ -18,7 +18,6 @@ limitations under the License.
 package mscontroller
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -66,7 +65,6 @@ import (
 
 	nvcalogging "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice/chartcache"
 	nvcaotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
@@ -93,8 +91,9 @@ type Reconciler struct {
 
 	eventRecorder record.EventRecorder
 
-	// Chart cache.
-	chartCache chartcache.Cache
+	// In-memory rendered Helm Charts by MiniService name, backed by the rendered Secret
+	// in each instance namespace (see rendered_secret.go).
+	renderedCache sync.Map
 	// Instance type cache
 	regITCache registrationInstanceTypeCache
 	// Attributes for enforcement
@@ -531,10 +530,7 @@ func (r *Reconciler) prepareUpdateIfNeeded(ctx context.Context, ms *v1alpha1.Min
 		return nil
 	}
 
-	oldCacheKey := getCacheKey(ms)
-	if err := r.chartCache.Delete(oldCacheKey); err != nil {
-		log.V(1).Info("Failed to delete old chart cache entry (may not exist)", "error", err)
-	}
+	r.forgetRenderedData(ms)
 
 	ms.Status.RenderDetails = nil
 	ms.Status.Revision++
@@ -617,9 +613,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 			return reconcile.Result{}, err
 		}
 
-		if err := r.saveRenderedData(ctx, ms, objsData); err != nil {
-			return reconcile.Result{}, err
-		}
+		r.saveRenderedData(ctx, ms, objsData)
 	}
 
 	workloadObjs, resources, workloadConfig, err := decodeObjects(ctx, r.Decoder, objsData)
@@ -662,6 +656,12 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		r.ClusterRegion, r.ClusterName, functionName, taskName, false)
 
 	if err := r.ensureInstanceNamespace(ctx, ms, icmsReq); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// Persist the rendered chart before applying any objects, as Helm stores the release record
+	// before installing, so later reconciles never depend on ReVal for this render.
+	if err := r.persistRenderedData(ctx, ms, objsData); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -972,9 +972,13 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		})
 		r.failedWorkloadUpdateRevisionCacheLock.Unlock()
 
-		if err := r.saveRenderedData(ctx, ms, objsData); err != nil {
-			return nil, nil, nil, "", "", err
-		}
+		r.saveRenderedData(ctx, ms, objsData)
+	}
+
+	// Persist before applying, like Helm records the release before install. This is a no-op once the
+	// rendered Secret is in sync, and retries a previously failed Secret write on later reconciles.
+	if err := r.persistRenderedData(ctx, ms, objsData); err != nil {
+		return nil, nil, nil, "", "", err
 	}
 
 	workloadObjs, resources, workloadConfig, err := decodeObjects(ctx, r.Decoder, objsData)
@@ -1455,10 +1459,8 @@ func (r *Reconciler) doCleanup(ctx context.Context, //nolint:gocyclo
 		log.Info("Miniservice namespace terminated, waiting for deletion", "namespace", ms.Spec.Namespace)
 	}
 
-	// Clean up function from cache after namespace termination to prevent resource leakage.
-	if err := r.chartCache.Delete(getCacheKey(ms)); err != nil {
-		return reconcile.Result{}, err
-	}
+	// The rendered Secret is deleted with the namespace; drop the in-memory copy.
+	r.forgetRenderedData(ms)
 
 	stList := &nvcav2beta1.StorageRequestList{}
 	if err := r.Client.List(ctx, stList, client.InNamespace(ms.Spec.Namespace)); err != nil {
@@ -1537,20 +1539,6 @@ func getTaskPodsToDelete(ms *v1alpha1.MiniService, podList *corev1.PodList) (tas
 		return taskPodsToDelete, true
 	}
 	return taskPodsToDelete, false
-}
-
-func getCacheKey(ms *v1alpha1.MiniService) chartcache.ChartCacheInput {
-	return chartcache.ChartCacheInput{
-		HelmChartURL:         ms.Spec.HelmChartConfig.URL,
-		HelmChartServicePort: ms.Spec.HelmChartConfig.ServicePort,
-		HelmChartServiceName: ms.Spec.HelmChartConfig.ServiceName,
-		Values:               ms.Spec.HelmChartConfig.Values,
-		APIVersions:          nil, // Not used right now.
-		// Namespace must be included in cache key because Helm templates using
-		// .Release.Namespace render namespace-specific values (e.g., service URLs).
-		// Without this, cached output from namespace A is incorrectly returned for B.
-		Namespace: ms.Spec.Namespace,
-	}
 }
 
 func (r *Reconciler) applyInfra(ctx context.Context,
@@ -1950,43 +1938,6 @@ func (r *Reconciler) getObjectGVKOrUnknown(ctx context.Context, obj client.Objec
 func (r *Reconciler) getClusterAPIVersions(_ context.Context) ([]string, error) {
 	// TODO: use dynamic client to find API versions available to functions.
 	return nil, nil
-}
-
-func (r *Reconciler) saveRenderedData(ctx context.Context,
-	ms *v1alpha1.MiniService,
-	data []byte,
-) error {
-	logf.FromContext(ctx).Info("Saving rendered Helm Chart data")
-
-	h, err := r.chartCache.Put(getCacheKey(ms), bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return fmt.Errorf("put cache item: %v", err)
-	}
-
-	ms.Status.RenderDetails = &v1alpha1.RenderDetailsStatus{
-		Hash: h,
-	}
-	return nil
-}
-
-func (r *Reconciler) getRenderedData(ctx context.Context,
-	ms *v1alpha1.MiniService,
-) ([]byte, bool, error) {
-	log := logf.FromContext(ctx)
-
-	rd := ms.Status.RenderDetails
-	if rd == nil {
-		log.V(1).Info("Rendered data not found")
-		return nil, false, nil
-	}
-
-	// TODO: reuse buffer for efficiency.
-	buf := &bytes.Buffer{}
-	found, err := r.chartCache.Get(getCacheKey(ms), buf)
-	if err == nil && found {
-		return buf.Bytes(), true, nil
-	}
-	return nil, found, err
 }
 
 func getFunctionNameAndTaskName(
