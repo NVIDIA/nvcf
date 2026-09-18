@@ -98,6 +98,10 @@ to connect GPU workload Pods through IMEX.
 Each GPU-enabled Pod must request a full node of GPUs.
 </Note>
 
+A function that does not need cross-node NVLink memory sharing can opt out of
+`ComputeDomain` allocation with the `DisableNVLinkComputeDomain` workload
+feature flag. See [Workload configuration](#workload-configuration).
+
 #### Legacy NVCA NVLink partition annotation
 
 <Warning>
@@ -243,6 +247,36 @@ curl -s -X POST "http://${GATEWAY_ADDR}/v2/nvcf/deployments/functions/${FUNCTION
  }'
 ```
 
+## Workload configuration
+
+Function owners can supply per-function configuration through an optional
+`nvcf-workload-config` ConfigMap included in the Helm chart. Cloud Functions
+reads this configuration from the rendered chart at install time; it does not
+create the ConfigMap in the instance namespace or apply it to the cluster.
+
+Add `templates/nvcf-workload-config.yaml` to the function chart:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcf-workload-config
+data:
+  config.yaml: |
+    featureFlags:
+      <FlagName>: true
+```
+
+The ConfigMap must be named `nvcf-workload-config` and the `config.yaml` key
+must exist. Unrecognized feature flag keys are ignored.
+
+### Recognized feature flags
+
+| Flag | Effect |
+| --- | --- |
+| `StatusByWorkerReadiness` | Use only the inference worker's readiness endpoint to determine instance health, instead of every Helm chart object's status. See [Use worker readiness for function health](#use-worker-readiness-for-function-health). |
+| `DisableNVLinkComputeDomain` | Skip NVLink `ComputeDomain` and IMEX channel resource claim allocation for this function on an NVLink-optimized cluster, for functions that do not need cross-node NVLink memory sharing. See [Multi-node NVLink scheduling](#multi-node-nvlink-scheduling). |
+
 ## Instance health
 
 By default, Cloud Functions considers the health of every Kubernetes object rendered by a Helm chart
@@ -305,7 +339,8 @@ instance. This behavior may not be desirable if some objects in your chart are e
 to serving inference. When your function is configured with the `StatusByWorkerReadiness` feature flag, the instance health check performed by NVCF becomes the sole determinant of instance health.
 The flag is read from the chart at install time to configure the function instance.
 
-Add `templates/nvcf-workload-config.yaml` to the function chart:
+Set the flag through the `nvcf-workload-config` ConfigMap mechanism described
+in [Workload configuration](#workload-configuration):
 
 ```yaml
 apiVersion: v1
@@ -317,10 +352,6 @@ data:
     featureFlags:
       StatusByWorkerReadiness: true
 ```
-
-The ConfigMap must be named `nvcf-workload-config` and the `config.yaml` key must exist.
-Cloud Functions reads this configuration from the chart and does not create the ConfigMap
-in the instance namespace.
 
 Package and push the chart, then create and deploy the function:
 

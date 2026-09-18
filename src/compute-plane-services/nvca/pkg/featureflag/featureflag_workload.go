@@ -48,12 +48,19 @@ const (
 	// container readiness when determining MiniService readiness, rather than aggressively
 	// accounting for the health of all workload objects.
 	StatusByWorkerReadiness = "StatusByWorkerReadiness"
+
+	// DisableNVLinkComputeDomain lets a function opt out of ComputeDomain and IMEX channel
+	// resource claim allocation on an NVLinkOptimized cluster. Set this when the function does
+	// not need cross-node NVLink memory sharing, so its Pods are not forced into a one-Pod-per-node
+	// placement by an unneeded ComputeDomain claim.
+	DisableNVLinkComputeDomain = "DisableNVLinkComputeDomain"
 )
 
 // workloadFeatureFlagKeys is the set of recognized workload feature flag keys. Unrecognized
 // keys are ignored (with a warning) by DecodeWorkloadConfig.
 var workloadFeatureFlagKeys = map[string]struct{}{
-	StatusByWorkerReadiness: {},
+	StatusByWorkerReadiness:    {},
+	DisableNVLinkComputeDomain: {},
 }
 
 // DecodeWorkloadConfig decodes the workload config ConfigMap into a WorkloadConfig. The
