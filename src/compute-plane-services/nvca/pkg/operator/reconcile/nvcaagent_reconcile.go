@@ -250,6 +250,11 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		nvcatypes.WorkloadInstanceTypeLabel: WorkloadInstanceTypeValuePodSpec,
 	}
 
+	// set the label for gxcache if enabled
+	if bc.enableGXCache {
+		labels[clustermgmt.ShaderCacheLabelKey] = strconv.FormatBool(true)
+	}
+
 	reqNSObj := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   requestsNamespace,
@@ -257,22 +262,11 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		},
 	}
 
-	// set the labels for gxcache if enabled
-	if bc.enableGXCache {
-		if _, ok := reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey]; !ok {
-			if reqNSObj.Labels == nil {
-				reqNSObj.Labels = make(map[string]string)
-			}
-			reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey] = strconv.FormatBool(true)
-		}
-	} else {
-		if _, ok := reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey]; !ok {
-			delete(reqNSObj.Labels, clustermgmt.ShaderCacheLabelKey)
-		}
-	}
-
-	if err := bc.createOrUpdateNamespace(ctx, reqNSObj); err != nil {
-		return fmt.Errorf("failed to setup namespace %v", reqNSObj.Name)
+	// The GXCache label is NVCA-owned but conditional, so name it explicitly: reconciliation drops it from the
+	// namespace once the feature is turned off, while leaving metadata owned by other controllers alone.
+	ownedKeys := namespaceOwnedKeys{labels: []string{clustermgmt.ShaderCacheLabelKey}}
+	if err := bc.createOrUpdateNamespace(ctx, reqNSObj, ownedKeys); err != nil {
+		return fmt.Errorf("failed to setup namespace %v: %w", reqNSObj.Name, err)
 	}
 
 	defaultSA := &corev1.ServiceAccount{
@@ -301,7 +295,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 		},
 	}
 
-	if err := bc.createOrUpdateNamespace(ctx, sysNSObj); err != nil {
+	if err := bc.createOrUpdateNamespace(ctx, sysNSObj, namespaceOwnedKeys{}); err != nil {
 		return fmt.Errorf("failed to setup namespace %s: %v", sysNSObj.Name, err)
 	}
 
