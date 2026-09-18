@@ -63,6 +63,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
 var (
@@ -532,6 +533,23 @@ func mockKubeClientsForIntegrationTests() *kubeclients.KubeClients {
 	}
 }
 
+// testStorageCapabilityCatalog is the shipped catalog shape, enough for the
+// sync tests to prove the mirror carries the data through unchanged.
+const testStorageCapabilityCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
+drivers:
+  - name: nvmesh-csi.excelero.com
+    provider: nvmesh
+    encryptionSupported: true
+    accessModes:
+      - ReadWriteOnce
+      - ReadOnlyMany
+    readerMountOptions:
+      - ro
+      - norecovery
+      - nouuid
+`
+
 func mockKubeClients() *kubeclients.KubeClients {
 	scheme := newTestScheme()
 	k8sClient := fakek8sclient.NewSimpleClientset(
@@ -542,6 +560,15 @@ func mockKubeClients() *kubeclients.KubeClients {
 				Namespace: NVCAOperatorNamespace,
 			},
 			Data: map[string]string{},
+		},
+		// Rendered by the chart into the operator namespace; the sync must
+		// mirror it into the agent namespace, where NVCA reads it.
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      nvcastorage.StorageCapabilityConfigMapName,
+				Namespace: NVCAOperatorNamespace,
+			},
+			Data: map[string]string{nvcastorage.StorageCapabilityConfigMapKey: testStorageCapabilityCatalog},
 		},
 	)
 	discClient := k8sClient.Discovery().(*fakediscovery.FakeDiscovery)
@@ -719,6 +746,10 @@ func TestBackendK8sSyncMinimal(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		require.NoError(ct, err)
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		require.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace")
+		require.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey])
 
 		_, err = bc.clients.K8s.CoreV1().Secrets(getSystemNamespace(nb)).Get(ctx, NGCServiceAPIKeySecretName, metav1.GetOptions{})
 		require.NoError(ct, err)
@@ -924,6 +955,10 @@ func TestBackendK8sSyncMinimalExternal(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		require.NoError(ct, err)
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		require.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace")
+		require.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey])
 
 		nbObj, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(agentOpts.SystemNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
 		require.NoError(ct, err)
@@ -1140,6 +1175,14 @@ func TestBackendK8sSyncAllFeatures(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		if !assert.NoError(ct, err) {
+			return
+		}
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		if !assert.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace") {
+			return
+		}
+		if !assert.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey]) {
 			return
 		}
 
