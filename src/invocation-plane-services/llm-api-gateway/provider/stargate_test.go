@@ -917,6 +917,77 @@ func TestStargateProviderProxyForwardsRoutingMethod(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.StatusCode)
 }
 
+func TestStargateProviderProxyUsesOnlyContextRoutingMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		reqCtx *requestctx.RequestContext
+		want   []string
+	}{
+		{"unset", &requestctx.RequestContext{}, nil},
+		{"metadata", &requestctx.RequestContext{RoutingMethod: "pulsar;seed=a"}, []string{"pulsar;seed=a"}},
+		{"nil context", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := &ProxyRequest{
+				Method: http.MethodPost,
+				Path:   "/v1/embeddings",
+				Header: http.Header{headerRoutingMethod: []string{"client-method", "another-client-method"}},
+				Body:   io.NopCloser(strings.NewReader(`{"model":"proxy-model","input":"hello"}`)),
+			}
+			provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+			require.NoError(t, err)
+			provider.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, tt.want, r.Header.Values(headerRoutingMethod))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
+				}, nil
+			})}
+
+			response, err := provider.Proxy(context.Background(), tt.reqCtx, request)
+			require.NoError(t, err)
+			defer response.Body.Close()
+			require.Equal(t, http.StatusOK, response.StatusCode)
+		})
+	}
+}
+
+func TestStargateProviderNewOutboundRequestUsesOnlyContextRoutingMethod(t *testing.T) {
+	t.Parallel()
+
+	provider, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	request := &NormalizedRequest{ChatRequest: &models.ChatCompletionRequest{Model: "upstream-model"}}
+	tests := []struct {
+		name          string
+		stream        bool
+		routingMethod string
+		want          []string
+	}{
+		{"chat unset", false, "", nil},
+		{"chat metadata", false, "pulsar;seed=a", []string{"pulsar;seed=a"}},
+		{"stream unset", true, "", nil},
+		{"stream metadata", true, "pulsar;seed=a", []string{"pulsar;seed=a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			outbound, err := provider.newOutboundRequest(
+				&requestctx.RequestContext{RoutingMethod: tt.routingMethod}, request, tt.stream,
+			)
+			require.NoError(t, err)
+			defer outbound.Body.Close()
+			require.Equal(t, tt.want, outbound.Header.Values(headerRoutingMethod))
+		})
+	}
+}
+
 func TestStargateProviderNewOutboundRequestForwardsPriority(t *testing.T) {
 	t.Parallel()
 
