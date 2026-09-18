@@ -799,7 +799,7 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
 }
 ```
 
-For LLM models, `nvcf-cli` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random` for `llmConfig.routingMethod`. The function API also accepts routing expressions with `;key=value` parameters, described in [LLM Request Router Load Balancing](./llm-request-router-load-balancing.md); the CLI does not pass them through yet.
+For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
 
