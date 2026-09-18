@@ -335,24 +335,27 @@ func TestPolicyAuthInputFields(t *testing.T) {
 
 func TestNewPolicyMiddleware(t *testing.T) {
 	tests := []struct {
-		name               string
-		client             *stubPolicyClient
-		token              string
-		expectedStatusCode int
-		expectedActorID    string
-		expectedOrgName    string
-		expectedActorType  string
-		expectedRoles      []string
+		name                 string
+		client               *stubPolicyClient
+		token                string
+		claims               jwt.MapClaims
+		expectedStatusCode   int
+		expectedClientCalled bool
+		expectedActorID      string
+		expectedOrgName      string
+		expectedActorType    string
+		expectedRoles        []string
 	}{
 		{
-			name:               "Successful Authorization",
-			client:             &stubPolicyClient{result: allowResult(nil)},
-			token:              "valid-token",
-			expectedStatusCode: http.StatusOK,
-			expectedActorID:    "user123",
-			expectedOrgName:    "org123",
-			expectedActorType:  "user",
-			expectedRoles:      []string{"admin", "user"},
+			name:                 "Successful Authorization",
+			client:               &stubPolicyClient{result: allowResult(nil)},
+			token:                "valid-token",
+			expectedStatusCode:   http.StatusOK,
+			expectedClientCalled: true,
+			expectedActorID:      "user123",
+			expectedOrgName:      "org123",
+			expectedActorType:    "user",
+			expectedRoles:        []string{"admin", "user"},
 		},
 		{
 			name: "Failed Authorization",
@@ -361,35 +364,54 @@ func TestNewPolicyMiddleware(t *testing.T) {
 				"statusCode": 403,
 				"reasons":    []interface{}{"unauthorized access"},
 			}},
-			token:              "invalid-token",
-			expectedStatusCode: http.StatusForbidden,
+			token:                "invalid-token",
+			expectedStatusCode:   http.StatusForbidden,
+			expectedClientCalled: true,
 		},
 		{
-			name:               "Policy Service Error",
-			client:             &stubPolicyClient{err: errors.New("service unavailable")},
-			token:              "token",
-			expectedStatusCode: http.StatusUnauthorized,
+			name:                 "Policy Service Error",
+			client:               &stubPolicyClient{err: errors.New("service unavailable")},
+			token:                "token",
+			expectedStatusCode:   http.StatusUnauthorized,
+			expectedClientCalled: true,
 		},
 		{
-			name:               "Empty Result From Policy",
-			client:             &stubPolicyClient{empty: true},
-			token:              "token",
-			expectedStatusCode: http.StatusUnauthorized,
+			name:                 "Empty Result From Policy",
+			client:               &stubPolicyClient{empty: true},
+			token:                "token",
+			expectedStatusCode:   http.StatusUnauthorized,
+			expectedClientCalled: true,
 		},
 		{
-			name: "No Token Provided",
+			// No Authorization header and no prior JWT verification: fail
+			// fast locally instead of sending an empty API key to the
+			// policy evaluator.
+			name:                 "No Token Provided",
+			client:               &stubPolicyClient{result: allowResult(nil)},
+			token:                "",
+			expectedStatusCode:   http.StatusUnauthorized,
+			expectedClientCalled: false,
+		},
+		{
+			// Simulates the managed-mode JWT-then-policy chain: jwtVerify
+			// already validated the token and cleared the Authorization
+			// header, but stashed claims in the request context. The policy
+			// evaluator must still be consulted using those claims.
+			name: "No Header, But Already-Verified JWT Claims",
 			client: &stubPolicyClient{result: allowResult(map[string]interface{}{
-				"actorId":   "anonymous",
-				"orgName":   "anonymous",
-				"actorType": "anonymous",
-				"roles":     []interface{}{"guest"},
+				"actorId":   "user456",
+				"orgName":   "org456",
+				"actorType": "user",
+				"roles":     []interface{}{"user"},
 			})},
-			token:              "",
-			expectedStatusCode: http.StatusOK,
-			expectedActorID:    "anonymous",
-			expectedOrgName:    "anonymous",
-			expectedActorType:  "anonymous",
-			expectedRoles:      []string{"guest"},
+			claims:               jwt.MapClaims{"sub": "user456"},
+			token:                "",
+			expectedStatusCode:   http.StatusOK,
+			expectedClientCalled: true,
+			expectedActorID:      "user456",
+			expectedOrgName:      "org456",
+			expectedActorType:    "user",
+			expectedRoles:        []string{"user"},
 		},
 	}
 
@@ -399,10 +421,13 @@ func TestNewPolicyMiddleware(t *testing.T) {
 			if tt.token != "" {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
+			if tt.claims != nil {
+				req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, tt.claims))
+			}
 
 			recorder, capturedCtx := servePolicy(t, tt.client, req)
 			assert.Equal(t, tt.expectedStatusCode, recorder.Code)
-			assert.True(t, tt.client.called)
+			assert.Equal(t, tt.expectedClientCalled, tt.client.called)
 
 			if tt.expectedStatusCode != http.StatusOK {
 				return

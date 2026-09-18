@@ -209,11 +209,19 @@ func newPolicyMiddleware(policyClient policy.Authorizer, serviceName string, log
 			// 1. Extract the token (simple bearer token extraction)
 			token := ""
 			authHeader := r.Header.Get("Authorization")
+			_, hasJWTClaims := r.Context().Value(claimsContextKey).(jwt.MapClaims)
 			if strings.HasPrefix(authHeader, "Bearer ") {
 				token = strings.TrimPrefix(authHeader, "Bearer ")
 				logger.InfoContext(traceCtx, "policy: token extracted", zap.String("token_length", strconv.Itoa(len(token))))
-			} else {
+			} else if !hasJWTClaims {
+				// No credential of any kind: fail fast instead of asking the
+				// policy evaluator to deny an empty API key. hasJWTClaims
+				// covers the managed-mode JWT-then-policy chain, where
+				// jwtVerify already consumed and cleared this header after a
+				// successful local verification.
 				logger.WarnContext(traceCtx, "policy: no bearer token found in authorization header")
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
 			}
 
 			authCtx := map[string]interface{}{
