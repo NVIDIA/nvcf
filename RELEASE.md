@@ -51,8 +51,10 @@ releases no stack version at all.
   `release-deploy/stacks/<stack>/vMAJOR.MINOR` holding the default branch's
   content, and opens a pull request advancing `VERSION` to the next minor on
   `main`.
-- Every push to that branch then releases: `MAJOR.MINOR.0` first, and the next
-  patch for each push after it. Backporting a fix is what ships a stack patch.
+- A push to that branch releases when it changes the stack's own tree:
+  `MAJOR.MINOR.0` first, and the next patch each time after. Backporting a fix
+  is what ships a stack patch. A push that leaves the stack tree alone, such as
+  backported CI or a `VERSION` edit, cuts nothing.
 - To build an unreleased tree, whether a pull request or `main` between branch
   cuts, dispatch `operation=release-candidate` with the stack's service id,
   selecting the branch you want built. It cuts `MAJOR.MINOR.PATCH-rc.N` at that ref. The
