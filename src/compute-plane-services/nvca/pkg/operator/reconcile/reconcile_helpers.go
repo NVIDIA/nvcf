@@ -109,6 +109,14 @@ func getNBAnnotations(nb *nvidiaiov1.NVCFBackend) map[string]string {
 	}
 }
 
+// namespaceOwnedKeys names the metadata keys NVCA owns on a namespace but does not always set. Labels and
+// annotations are listed separately so a conditional label never removes an annotation that happens to share its
+// key. A listed key is deleted when the desired object omits it; an unlisted key is never deleted.
+type namespaceOwnedKeys struct {
+	labels      []string
+	annotations []string
+}
+
 // mergeOwnedKeys writes the desired key/value pairs into live and deletes the optional owned keys that desired
 // omits. Keys absent from both desired and optionalOwnedKeys are left untouched, so metadata written by other
 // controllers survives. It returns the resulting map and whether anything changed.
@@ -143,11 +151,11 @@ func mergeOwnedKeys(live, desired map[string]string, optionalOwnedKeys []string)
 // createOrUpdateNamespace creates ns when it does not exist. When it already exists, the live namespace is read
 // and only the label and annotation keys ns names are written back, so identity, finalizers, owner references and
 // metadata owned by other controllers (GitOps tracking annotations, for example) are preserved.
-// optionalOwnedKeys names label and annotation keys NVCA owns but does not always set; they are removed from the
-// live namespace when ns omits them. Reads and writes are retried on conflict so a concurrent external edit is
-// merged rather than overwritten.
+// optional names the label and annotation keys NVCA owns but does not always set; they are removed from the live
+// namespace when ns omits them. Reads and writes are retried on conflict so a concurrent external edit is merged
+// rather than overwritten.
 func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.Namespace,
-	optionalOwnedKeys ...string) error {
+	optional namespaceOwnedKeys) error {
 	namespaces := bc.clients.K8s.CoreV1().Namespaces()
 
 	retriable := func(err error) bool {
@@ -166,8 +174,8 @@ func (bc *BackendK8sCache) createOrUpdateNamespace(ctx context.Context, ns *v1.N
 		}
 
 		updated := live.DeepCopy()
-		labels, labelsChanged := mergeOwnedKeys(updated.Labels, ns.Labels, optionalOwnedKeys)
-		annotations, annotationsChanged := mergeOwnedKeys(updated.Annotations, ns.Annotations, optionalOwnedKeys)
+		labels, labelsChanged := mergeOwnedKeys(updated.Labels, ns.Labels, optional.labels)
+		annotations, annotationsChanged := mergeOwnedKeys(updated.Annotations, ns.Annotations, optional.annotations)
 		if !labelsChanged && !annotationsChanged {
 			return nil
 		}

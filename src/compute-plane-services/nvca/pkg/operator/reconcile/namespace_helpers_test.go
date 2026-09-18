@@ -281,6 +281,9 @@ const (
 	externalAnnotationKey = "platform.example.com/audit"
 )
 
+// gxCacheOwnedKeys mirrors what setupRequestsNamespace declares: the GXCache key is owned as a label only.
+var gxCacheOwnedKeys = namespaceOwnedKeys{labels: []string{clustermgmt.ShaderCacheLabelKey}}
+
 func newNamespaceCache(t *testing.T, objects ...runtime.Object) (*BackendK8sCache, *fake.Clientset) {
 	t.Helper()
 
@@ -310,7 +313,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 			},
 		}
 
-		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired))
+		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, namespaceOwnedKeys{}))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		require.NoError(t, err)
@@ -335,7 +338,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 			ObjectMeta: metav1.ObjectMeta{Name: "test-ns", Labels: getAppLabels()},
 		}
 
-		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired))
+		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, namespaceOwnedKeys{}))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		require.NoError(t, err)
@@ -361,7 +364,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 			ObjectMeta: metav1.ObjectMeta{Name: "test-ns", Labels: getAppLabels()},
 		}
 
-		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, clustermgmt.ShaderCacheLabelKey))
+		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, gxCacheOwnedKeys))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		require.NoError(t, err)
@@ -381,7 +384,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 			},
 		}
 
-		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, clustermgmt.ShaderCacheLabelKey))
+		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, gxCacheOwnedKeys))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		require.NoError(t, err)
@@ -395,10 +398,10 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 
 		require.NoError(t, bc.createOrUpdateNamespace(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-ns", Labels: getAppLabels()},
-		}))
+		}, namespaceOwnedKeys{}))
 		require.NoError(t, bc.createOrUpdateNamespace(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-ns"},
-		}))
+		}, namespaceOwnedKeys{}))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		require.NoError(t, err)
@@ -417,7 +420,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 			},
 		}
 
-		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired))
+		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, namespaceOwnedKeys{}))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		require.NoError(t, err)
@@ -437,11 +440,66 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 
 		require.NoError(t, bc.createOrUpdateNamespace(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-ns", Labels: getAppLabels()},
-		}))
+		}, namespaceOwnedKeys{}))
 
 		for _, action := range clientset.Actions() {
 			assert.NotEqual(t, "update", action.GetVerb(), "namespace was rewritten with no metadata change")
 		}
+	})
+
+	t.Run("an optional owned label key does not remove the annotation of the same name", func(t *testing.T) {
+		bc, clientset := newNamespaceCache(t, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test-ns",
+				Labels:      map[string]string{clustermgmt.ShaderCacheLabelKey: "true"},
+				Annotations: map[string]string{clustermgmt.ShaderCacheLabelKey: "external"},
+			},
+		})
+
+		desired := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-ns", Labels: getAppLabels()},
+		}
+
+		require.NoError(t, bc.createOrUpdateNamespace(ctx, desired, gxCacheOwnedKeys))
+
+		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.NotContains(t, got.Labels, clustermgmt.ShaderCacheLabelKey)
+		assert.Equal(t, "external", got.Annotations[clustermgmt.ShaderCacheLabelKey])
+	})
+
+	t.Run("lost create race falls through to the merge path", func(t *testing.T) {
+		bc, clientset := newNamespaceCache(t)
+
+		creates := 0
+		clientset.PrependReactor("create", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			creates++
+
+			// Simulate another writer creating the namespace between our failed read and our create.
+			winner := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-ns",
+					Labels:      map[string]string{externalLabelKey: "platform"},
+					Annotations: map[string]string{externalAnnotationKey: "enabled"},
+				},
+			}
+			if err := clientset.Tracker().Add(winner); err != nil {
+				return true, nil, err
+			}
+
+			return true, nil, k8serrors.NewAlreadyExists(corev1.Resource("namespaces"), "test-ns")
+		})
+
+		require.NoError(t, bc.createOrUpdateNamespace(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-ns", Labels: getAppLabels()},
+		}, namespaceOwnedKeys{}))
+
+		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, 1, creates)
+		assert.Equal(t, "platform", got.Labels[externalLabelKey])
+		assert.Equal(t, "enabled", got.Annotations[externalAnnotationKey])
+		assert.Equal(t, nvcaoptypes.NVCAModuleName, got.Labels[InstanceLabelKey])
 	})
 
 	t.Run("concurrent external metadata change is merged on conflict", func(t *testing.T) {
@@ -477,7 +535,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespaceMetadataOwnership(t *testing.T) 
 
 		require.NoError(t, bc.createOrUpdateNamespace(ctx, &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "test-ns", Labels: getAppLabels()},
-		}))
+		}, namespaceOwnedKeys{}))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, "test-ns", metav1.GetOptions{})
 		require.NoError(t, err)

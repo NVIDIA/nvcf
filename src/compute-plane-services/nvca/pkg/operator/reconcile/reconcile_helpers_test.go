@@ -173,7 +173,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespace(t *testing.T) {
 			},
 		}
 
-		err := bc.createOrUpdateNamespace(ctx, ns)
+		err := bc.createOrUpdateNamespace(ctx, ns, namespaceOwnedKeys{})
 		assert.NoError(t, err)
 
 		// Verify namespace was created
@@ -209,7 +209,7 @@ func TestBackendK8sCache_CreateOrUpdateNamespace(t *testing.T) {
 			},
 		}
 
-		err := bc.createOrUpdateNamespace(ctx, ns)
+		err := bc.createOrUpdateNamespace(ctx, ns, namespaceOwnedKeys{})
 		assert.NoError(t, err)
 
 		// Verify namespace was updated without dropping metadata NVCA does not own
