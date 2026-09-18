@@ -357,6 +357,8 @@ func (p *StargateProvider) Proxy(
 	// inbound request must never reach Stargate, even when no priority
 	// resolves for this request.
 	outbound.Header.Del(headerPriority)
+	// An inbound X-Routing-Method request header must never reach the router.
+	outbound.Header.Del(headerRoutingMethod)
 
 	if reqCtx != nil {
 		if reqCtx.RequestID != "" {
