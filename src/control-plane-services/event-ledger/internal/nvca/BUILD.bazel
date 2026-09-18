@@ -5,6 +5,9 @@ go_library(
     srcs = ["introspect.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca",
     visibility = ["//:__subpackages__"],
+    deps = [
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
 )
 
 alias(

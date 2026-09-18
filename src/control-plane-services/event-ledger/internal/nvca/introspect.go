@@ -35,6 +35,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // MaxTokenSize bounds how much bearer token material the introspection client
@@ -123,9 +125,18 @@ func NewClient(introspectURL string, timeout, cacheTTL time.Duration) (*Client, 
 	}
 	return &Client{
 		introspectURL: introspectURL,
-		httpClient:    &http.Client{Timeout: timeout},
-		cacheTTL:      cacheTTL,
-		cache:         make(map[string]cacheEntry),
+		httpClient: &http.Client{
+			Timeout: timeout,
+			// Can't reuse middleware.GetSharedHTTPClient here: internal/middleware
+			// imports internal/nvca, so importing middleware back would cycle.
+			Transport: otelhttp.NewTransport(http.DefaultTransport,
+				otelhttp.WithSpanNameFormatter(func(_ string, _ *http.Request) string {
+					return "nvca.introspect"
+				}),
+			),
+		},
+		cacheTTL: cacheTTL,
+		cache:    make(map[string]cacheEntry),
 	}, nil
 }
 
