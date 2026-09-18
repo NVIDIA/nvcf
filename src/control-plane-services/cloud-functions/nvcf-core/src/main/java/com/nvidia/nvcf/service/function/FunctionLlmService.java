@@ -26,6 +26,7 @@ import com.nvidia.nvcf.rest.function.management.dto.FunctionModelDto;
 import com.nvidia.nvcf.rest.function.management.dto.FunctionTypeEnum;
 import com.nvidia.nvcf.rest.function.management.dto.LlmConfigValidator;
 import com.nvidia.nvcf.rest.function.management.dto.LlmInvocationConfigDto;
+import com.nvidia.nvcf.rest.function.management.dto.LlmRoutingMethodValidator;
 import com.nvidia.nvcf.rest.function.management.dto.UpdateFunctionRequest;
 import jakarta.annotation.Nullable;
 import java.util.Comparator;
@@ -73,7 +74,6 @@ public class FunctionLlmService {
 
     private final FunctionLookupService functionLookupService;
     private final FunctionMapperService functionMapperService;
-    private final LlmRoutingMethodValidator llmRoutingMethodValidator;
 
     /**
      * Resolves the caller's invocation priority: the per-account override when the caller has one,
@@ -91,21 +91,13 @@ public class FunctionLlmService {
     }
 
     /**
-     * Restrict llmInvocationConfig to LLM functions and validate their routing expressions.
+     * Reject a create request that sets llmInvocationConfig on a non-LLM function.
      */
     public void validateCreateFunctionRequestWithLlmConfig(CreateFunctionRequest request) {
         if (request.getLlmInvocationConfig() != null
                 && request.getFunctionType() != FunctionTypeEnum.LLM) {
             log.error(MESG_FUNCTION_NOT_LLM_INVOCATION_CONFIG);
             throw new BadRequestException(MESG_FUNCTION_NOT_LLM_INVOCATION_CONFIG);
-        }
-        if (request.getFunctionType() == FunctionTypeEnum.LLM && request.getModels() != null) {
-            for (var model : request.getModels()) {
-                if (model.getLlmConfig() != null) {
-                    llmRoutingMethodValidator.validate(
-                            model.getName(), model.getLlmConfig().getRoutingMethod());
-                }
-            }
         }
     }
 
@@ -412,7 +404,7 @@ public class FunctionLlmService {
                     llmConfig.setTokenRateLimit(llmConfigUpdate.tokenRateLimit());
                 }
                 if (llmConfigUpdate.routingMethod() != null) {
-                    llmRoutingMethodValidator.validate(
+                    LlmRoutingMethodValidator.validate(
                             modelUpdate.modelName(), llmConfigUpdate.routingMethod());
                     llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
                 }
