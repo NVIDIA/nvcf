@@ -94,7 +94,7 @@ Algorithm availability is enforced at separate layers:
 | Layer | Input contract |
 | --- | --- |
 | `lb-config.json` | Canonical Stargate algorithm names: `power-of-two`, `wait-and-widen`, `round-robin`, `random`, `pulsar`, and `pulsar-wait-and-widen`. Legacy `groq-multiregion` and `pulsar-multiregion` aliases remain accepted for existing deployments. |
-| Function model `llmConfig.routingMethod` | A routing expression: an algorithm name, optionally followed by `;key=value` parameters. The control plane checks the syntax described below and stores the value as received apart from outer spaces. Stargate decides at request time whether the algorithm and parameters apply. |
+| Function model `llmConfig.routingMethod` | The same algorithm names, with underscores accepted in place of hyphens. Legacy aliases remain accepted for existing functions. |
 | LLM API Gateway | Nonblank routing method from authenticated model metadata, trimmed and forwarded as `x-routing-method` without algorithm validation. |
 | Stargate `x-routing-method` | Case-insensitive algorithm name with hyphens or underscores. It must match the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
 
@@ -107,28 +107,6 @@ Use `wait-and-widen` and `pulsar-wait-and-widen` in new function metadata,
 `lb-config.json` files, request-algorithm maps, and deployment manifests.
 Existing `groq-multiregion` and `pulsar-multiregion` values continue to work
 through the Stargate and control-plane compatibility aliases.
-
-### Routing expression syntax
-
-`llmConfig.routingMethod` follows a profile of RFC 8941 structured field
-parameters:
-
-- An algorithm name matching `[A-Za-z][A-Za-z0-9_-]*`, optionally followed by
-  parameters separated by `;`, for example `pulsar; seed=stable-a; n=2`.
-- Each parameter is `key=value`. Keys match `[a-z][a-z0-9_]*`. Spaces are
-  allowed before a key but not around `=`.
-- A value is an integer of up to 15 digits, a decimal with up to 12 integer
-  digits and 1 to 3 fraction digits, a token that starts with a letter or `*`,
-  or a double-quoted string of printable ASCII in which only `\"` and `\\`
-  are escaped.
-- At most 32 parameters and 1024 bytes. Commas are not allowed anywhere,
-  including inside quoted strings, and a quoted string cannot contain `;`.
-- Leading and trailing spaces are removed before the value is stored. Tabs,
-  line breaks, and other control characters are rejected.
-
-The control plane does not check algorithm names or parameter names. A
-well-formed expression that Stargate does not understand is stored and is
-rejected at request time with HTTP `400`.
 
 ## Keep router headers trusted
 
