@@ -83,6 +83,9 @@ const (
 // live nvcf-sc object and the public capability catalog. It deliberately does
 // not infer behavior from a provider name or access mode.
 type ModelCacheStorageSelection struct {
+	// CatalogBuiltin is set when the ConfigMap was absent and the selection was
+	// resolved against the catalog compiled into NVCA.
+	CatalogBuiltin       bool
 	EncryptionSupported  bool
 	StorageClassName     string
 	StorageClassUID      types.UID
@@ -214,6 +217,10 @@ func loadStorageCapabilityCatalog(
 
 	cm := &corev1.ConfigMap{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: StorageCapabilityConfigMapName}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			catalog, _, berr := builtinStorageCapabilityCatalog()
+			return catalog, berr
+		}
 		return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
 			namespace, StorageCapabilityConfigMapName, err)
 	}
@@ -227,20 +234,33 @@ func loadStorageCapabilityCatalog(
 	return parseStorageCapabilityCatalog(raw)
 }
 
+// loadStorageCapabilityCatalogSnapshot returns the catalog, its payload
+// digest, and whether the compiled-in copy was used because the ConfigMap is
+// absent. A ConfigMap that exists but is empty or malformed is an error.
 func loadStorageCapabilityCatalogSnapshot(
 	ctx context.Context,
 	c client.Client,
 	namespace string,
-) (*storageCapabilityCatalog, string, error) {
+) (*storageCapabilityCatalog, string, bool, error) {
 	if namespace == "" {
-		return nil, "", fmt.Errorf("storage capability ConfigMap namespace is empty")
+		return nil, "", false, fmt.Errorf("storage capability ConfigMap namespace is empty")
 	}
 
 	cm := &corev1.ConfigMap{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: StorageCapabilityConfigMapName}, cm); err != nil {
-		return nil, "", fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
+		if apierrors.IsNotFound(err) {
+			catalog, digest, berr := builtinStorageCapabilityCatalog()
+			return catalog, digest, true, berr
+		}
+		return nil, "", false, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
 			namespace, StorageCapabilityConfigMapName, err)
 	}
+	catalog, digest, err := parseStorageCapabilityConfigMap(cm, namespace)
+	return catalog, digest, false, err
+}
+
+// parseStorageCapabilityConfigMap parses a present catalog ConfigMap.
+func parseStorageCapabilityConfigMap(cm *corev1.ConfigMap, namespace string) (*storageCapabilityCatalog, string, error) {
 	raw, ok := cm.Data[StorageCapabilityConfigMapKey]
 	if !ok || raw == "" {
 		return nil, "", fmt.Errorf("storage capability ConfigMap %s/%s has no %q data",
@@ -286,11 +306,16 @@ func ResolveModelCacheStorage(
 		return nil, fmt.Errorf("get model cache StorageClass %q: %w", DefaultModelCacheStorageClassName, err)
 	}
 
-	catalog, catalogDigest, err := loadStorageCapabilityCatalogSnapshot(ctx, c, catalogNamespace)
+	catalog, catalogDigest, builtin, err := loadStorageCapabilityCatalogSnapshot(ctx, c, catalogNamespace)
 	if err != nil {
 		return nil, err
 	}
-	return selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow)
+	selection, err := selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow)
+	if err != nil {
+		return nil, err
+	}
+	selection.CatalogBuiltin = builtin
+	return selection, nil
 }
 
 // ResolveModelCacheStorageWithClientset provides the same decision to the
@@ -314,22 +339,34 @@ func ResolveModelCacheStorageWithClientset(
 		}
 		return nil, fmt.Errorf("get model cache StorageClass %q: %w", DefaultModelCacheStorageClassName, err)
 	}
+	var (
+		catalog       *storageCapabilityCatalog
+		catalogDigest string
+		builtin       bool
+	)
 	cm, err := k8sClient.CoreV1().ConfigMaps(catalogNamespace).Get(
 		ctx, StorageCapabilityConfigMapName, metav1.GetOptions{})
-	if err != nil {
+	switch {
+	case apierrors.IsNotFound(err):
+		// The chart that ships this agent installs the ConfigMap. Until it has,
+		// resolve against the same catalog it would install.
+		catalog, catalogDigest, err = builtinStorageCapabilityCatalog()
+		builtin = true
+	case err != nil:
 		return nil, fmt.Errorf("get storage capability ConfigMap %s/%s: %w",
 			catalogNamespace, StorageCapabilityConfigMapName, err)
+	default:
+		catalog, catalogDigest, err = parseStorageCapabilityConfigMap(cm, catalogNamespace)
 	}
-	raw, ok := cm.Data[StorageCapabilityConfigMapKey]
-	if !ok || raw == "" {
-		return nil, fmt.Errorf("storage capability ConfigMap %s/%s has no %q data",
-			catalogNamespace, StorageCapabilityConfigMapName, StorageCapabilityConfigMapKey)
-	}
-	catalog, err := parseStorageCapabilityCatalog(raw)
 	if err != nil {
 		return nil, err
 	}
-	return selectModelCacheStorageFromObjects(sc, catalog, digestCatalogPayload(raw), workflow)
+	selection, err := selectModelCacheStorageFromObjects(sc, catalog, catalogDigest, workflow)
+	if err != nil {
+		return nil, err
+	}
+	selection.CatalogBuiltin = builtin
+	return selection, nil
 }
 
 func selectModelCacheStorageFromObjects(

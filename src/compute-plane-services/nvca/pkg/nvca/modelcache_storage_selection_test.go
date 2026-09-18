@@ -250,6 +250,36 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			wantMode:     nvcastorage.ModelCacheSelectionNone,
 		},
 		{
+			name: "missing catalog ConfigMap resolves against the built-in catalog",
+			objects: func() []runtime.Object {
+				return []runtime.Object{selectionStorageClass()}
+			},
+			flags:             []*featureflag.FeatureFlag{featureflag.CachingSupport},
+			wantWorkflow:      nvcastorage.ModelCacheWorkflowRegular,
+			wantMode:          nvcastorage.ModelCacheSelectionDurable,
+			wantTransition:    nvcastorage.ModelCacheTransitionROXReadOnly,
+			wantResolvedState: true,
+			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
+			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
+		},
+		{
+			name: "missing catalog ConfigMap resolves Helm against the built-in catalog",
+			helm: true,
+			objects: func() []runtime.Object {
+				return []runtime.Object{selectionStorageClass()}
+			},
+			flags: []*featureflag.FeatureFlag{
+				featureflag.CachingSupport,
+				featureflag.HelmModelCaching,
+			},
+			wantWorkflow:      nvcastorage.ModelCacheWorkflowHelm,
+			wantMode:          nvcastorage.ModelCacheSelectionDurable,
+			wantTransition:    nvcastorage.ModelCacheTransitionROXReadOnly,
+			wantResolvedState: true,
+			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
+			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
+		},
+		{
 			name: "missing StorageClass falls Helm back to ephemeral",
 			helm: true,
 			objects: func() []runtime.Object {
@@ -325,4 +355,42 @@ func TestCreateICMSCreationMessageRequestInvalidCatalogFailsBeforeCreate(t *test
 		List(t.Context(), metav1.ListOptions{})
 	require.NoError(t, listErr)
 	assert.Empty(t, requests.Items, "an invalid catalog must fail before the ICMSRequest Create call")
+}
+
+// A 3.7.1 agent rolled out ahead of its chart hit this: the catalog ConfigMap
+// did not exist, every creation message failed before the ICMSRequest was
+// created, and the queue retried it forever. The agent must resolve against
+// the catalog it was built with instead.
+func TestCreateICMSCreationMessageRequestMissingCatalogUsesBuiltinCatalog(t *testing.T) {
+	objects := []runtime.Object{selectionStorageClass()}
+	cache, _ := selectionBackendCache(objects, featureflag.CachingSupport)
+	cache.clients = mockKubeClients(objects...)
+	cache.requestsNamespace = RequestsNamespace
+
+	msg := function.CreationQueueMessage{
+		CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
+			RequestID: "missing-catalog-request",
+			NCAID:     "test-nca",
+			Action:    common.FunctionCreationAction,
+		},
+		Details: function.Details{
+			FunctionID:        "function-id",
+			FunctionVersionID: "function-version-id",
+		},
+		LaunchSpecification: selectionRequest(false).Spec.CreationMsgInfo.FunctionLaunchSpecification,
+	}
+
+	created, err := cache.CreateICMSCreationMessageRequest(
+		newTestContext(), msg, "receipt", "message-id", "queue")
+	require.NoError(t, err, "a missing catalog must not fail the creation message")
+	require.NotNil(t, created)
+
+	requests, listErr := cache.clients.BART.NvcaV2beta1().ICMSRequests(RequestsNamespace).
+		List(t.Context(), metav1.ListOptions{})
+	require.NoError(t, listErr)
+	require.Len(t, requests.Items, 1)
+	selection := parseRequestStorageSelection(t, &requests.Items[0])
+	assert.Equal(t, nvcastorage.ModelCacheSelectionDurable, selection.Mode)
+	assert.Equal(t, nvcastorage.ModelCacheProviderNVMesh, selection.Provider)
+	assert.Equal(t, nvcastorage.DefaultModelCacheStorageClassName, selection.StorageClassName)
 }
