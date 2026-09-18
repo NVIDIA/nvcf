@@ -94,10 +94,12 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 			if workflow == nvcastorage.ModelCacheWorkflowHelm {
 				mode = nvcastorage.ModelCacheSelectionEphemeral
 			}
-		case resolved.Transition == nvcastorage.ModelCacheTransitionROXReadOnly:
-			mode = nvcastorage.ModelCacheSelectionDurable
-		case resolved.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly &&
-			workflow == nvcastorage.ModelCacheWorkflowRegular:
+		case resolved.Transition == nvcastorage.ModelCacheTransitionROXReadOnly,
+			resolved.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly:
+			// Both shapes are durable for both workflows. Helm routes the
+			// ReadWriteMany shape to the shared-filesystem backend through
+			// HelmCacheBackendFromSelection; the regular workflow serves it from
+			// one shared claim per cache handle.
 			mode = nvcastorage.ModelCacheSelectionDurable
 		default:
 			return fmt.Errorf("unsupported model cache transition %q", resolved.Transition)

@@ -211,6 +211,29 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			wantProvisioner:   "csi.weka.io",
 		},
 		{
+			// Weka and OCI FSS enable this shape; a Helm request on them must
+			// persist a durable selection that HelmCacheBackendFromSelection routes
+			// to the shared-filesystem backend, not fail the creation message.
+			name: "Helm durable provider-neutral RWX",
+			helm: true,
+			objects: func() []runtime.Object {
+				return []runtime.Object{
+					selectionStorageClassForProvisioner("csi.weka.io"),
+					selectionCatalogConfigMap(selectionCatalogRWXReadOnly),
+				}
+			},
+			flags: []*featureflag.FeatureFlag{
+				featureflag.CachingSupport,
+				featureflag.HelmModelCaching,
+			},
+			wantWorkflow:      nvcastorage.ModelCacheWorkflowHelm,
+			wantMode:          nvcastorage.ModelCacheSelectionDurable,
+			wantTransition:    nvcastorage.ModelCacheTransitionRWXReadOnly,
+			wantResolvedState: true,
+			wantProvider:      "weka",
+			wantProvisioner:   "csi.weka.io",
+		},
+		{
 			name: "disabled regular cache persists none",
 			objects: func() []runtime.Object {
 				return []runtime.Object{selectionStorageClass(), selectionCatalogConfigMap(selectionCatalogDisabled)}
@@ -393,4 +416,19 @@ func TestCreateICMSCreationMessageRequestMissingCatalogUsesBuiltinCatalog(t *tes
 	assert.Equal(t, nvcastorage.ModelCacheSelectionDurable, selection.Mode)
 	assert.Equal(t, nvcastorage.ModelCacheProviderNVMesh, selection.Provider)
 	assert.Equal(t, nvcastorage.DefaultModelCacheStorageClassName, selection.StorageClassName)
+}
+
+// The persisted Helm selection on a ReadWriteMany provider must route to the
+// shared-filesystem backend, the end-to-end contract this fix restores.
+func TestHelmRWXSelectionRoutesToSharedFS(t *testing.T) {
+	cache, _ := selectionBackendCache([]runtime.Object{
+		selectionStorageClassForProvisioner("csi.weka.io"),
+		selectionCatalogConfigMap(selectionCatalogRWXReadOnly),
+	}, featureflag.CachingSupport, featureflag.HelmModelCaching)
+	req := selectionRequest(true)
+	require.NoError(t, cache.persistModelCacheStorageSelection(t.Context(), req))
+	selection := parseRequestStorageSelection(t, req)
+	backend, err := nvcastorage.HelmCacheBackendFromSelection(selection)
+	require.NoError(t, err)
+	assert.Equal(t, nvcastorage.HelmCacheBackendSharedFS, backend)
 }
