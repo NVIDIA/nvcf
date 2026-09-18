@@ -24,9 +24,6 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
-import io.micrometer.context.ContextSnapshot;
-import io.micrometer.context.ContextSnapshotFactory;
-import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -34,11 +31,6 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,11 +52,6 @@ public class EventLedgerClient {
 
     private static final String MESG_UNKNOWN_FUNCTION_STATUS =
             "Event Ledger unknown function status: {}, skip publishing.";
-    private static final String MESG_QUEUE_FULL =
-            "Event Ledger queue is full: accountId={}, functionId={}, deploymentId={}, status={}";
-    private static final String MESG_FAILED_TO_ENQUEUE_EVENT =
-            "Failed to enqueue Event Ledger event: accountId={}, functionId={}, deploymentId={}, "
-                    + "status={}";
     private static final String MESG_FAILED_TO_PUBLISH_FUNCTION_STATUS =
             "Failed to publish function status to Event Ledger: accountId={}, functionId={}, "
                     + "functionVersionId={}, deploymentId={}, status={}";
@@ -75,14 +62,10 @@ public class EventLedgerClient {
             FunctionStatus.DEGRADED, "Function.Degraded",
             FunctionStatus.ERROR, "Function.Error",
             FunctionStatus.INACTIVE, "Function.Inactive");
-    private static final ContextSnapshotFactory CONTEXT_SNAPSHOT_FACTORY =
-            ContextSnapshotFactory.builder().build();
-
     private final Duration timeout;
     private final boolean enabled;
     private final WebClient webClient;
     private final JsonMapper jsonMapper;
-    private final ExecutorService executor;
     private final EventFormat eventFormat;
 
     private record FunctionStatusTransition(
@@ -100,8 +83,6 @@ public class EventLedgerClient {
             @Value("${nvcf.event-ledger.base-url:http://event-ledger.nvcf.svc.cluster.local:8080}")
                     String baseUrl,
             @Value("${nvcf.event-ledger.timeout:2s}") Duration timeout,
-            @Value("${nvcf.event-ledger.publisher-threads:2}") int publisherThreads,
-            @Value("${nvcf.event-ledger.queue-capacity:1000}") int queueCapacity,
             @Value("${spring.security.oauth2.client.registration.event-ledger.client-id:}")
                     String clientId,
             @Value("${spring.security.oauth2.client.registration.event-ledger.client-secret:}")
@@ -113,25 +94,18 @@ public class EventLedgerClient {
         this(enabled, timeout, enabled
                      ? authenticatedWebClient(
                              baseUrl, clientId, clientSecret, scope, tokenUri, webClientBuilder)
-                     : webClientBuilder.baseUrl(baseUrl).build(), jsonMapper,
-             new ThreadPoolExecutor(publisherThreads, publisherThreads, 0L, TimeUnit.MILLISECONDS,
-                                    new ArrayBlockingQueue<>(queueCapacity),
-                                    Thread.ofPlatform().name("event-ledger-publisher-", 0)
-                                            .factory(),
-                                    new ThreadPoolExecutor.AbortPolicy()));
+                     : webClientBuilder.baseUrl(baseUrl).build(), jsonMapper);
     }
 
     EventLedgerClient(
             boolean enabled,
             Duration timeout,
             WebClient webClient,
-            JsonMapper jsonMapper,
-            ExecutorService executor) {
+            JsonMapper jsonMapper) {
         this.enabled = enabled;
         this.timeout = timeout;
         this.webClient = webClient;
         this.jsonMapper = jsonMapper;
-        this.executor = executor;
         this.eventFormat = EventFormatProvider.getInstance().resolveFormat(CONTENT_TYPE);
     }
 
@@ -160,19 +134,7 @@ public class EventLedgerClient {
             return;
         }
 
-        try {
-            // Preserve tracing and logging context when publishing on the executor thread.
-            ContextSnapshot contextSnapshot = CONTEXT_SNAPSHOT_FACTORY.captureAll();
-            executor.execute(contextSnapshot.wrap(() -> send(ncaId, transition, eventName)));
-        } catch (RejectedExecutionException ex) {
-            log.warn(MESG_QUEUE_FULL,
-                     ncaId, transition.functionId(), transition.deploymentId(),
-                     transition.currentStatus());
-        } catch (RuntimeException ex) {
-            log.warn(MESG_FAILED_TO_ENQUEUE_EVENT,
-                     ncaId, transition.functionId(), transition.deploymentId(),
-                     transition.currentStatus(), ex);
-        }
+        send(ncaId, transition, eventName);
     }
 
     private void send(
@@ -222,10 +184,5 @@ public class EventLedgerClient {
                 .filter(NvcfOAuth2ClientUtils.getOAuth2ExchangeFilter(
                         builder, CLIENT_REGISTRATION_ID, tokenUri, clientId, clientSecret, scope))
                 .build();
-    }
-
-    @PreDestroy
-    void close() {
-        executor.shutdownNow();
     }
 }
