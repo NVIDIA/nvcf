@@ -128,7 +128,7 @@ public final class LlmRoutingMethodValidator {
 
     // A malformed client value is not an operator problem, so it is logged below error level.
     private static void reject(String modelName, String rule) {
-        var mesg = MESG_INVALID_ROUTING_METHOD.formatted(modelName, rule);
+        var mesg = MESG_INVALID_ROUTING_METHOD.formatted(withoutControlCharacters(modelName), rule);
         log.warn(mesg);
         throw new BadRequestException(mesg);
     }

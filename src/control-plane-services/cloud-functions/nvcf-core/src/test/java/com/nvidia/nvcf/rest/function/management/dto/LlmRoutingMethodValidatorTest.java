@@ -101,6 +101,14 @@ class LlmRoutingMethodValidatorTest {
                 .hasMessageNotContaining(nextLine);
     }
 
+    @Test
+    void controlCharactersInModelNameReplaced() {
+        assertThatThrownBy(() -> LlmRoutingMethodValidator.validate("m\nx", "pulsar,seed=x"))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("for model 'm?x'")
+                .hasMessageNotContaining("\n");
+    }
+
     @ParameterizedTest(name = "{index}: [{0}] is stored as [{1}]")
     @MethodSource("storedValues")
     void returnsValueWithoutOuterSpaces(String routingMethod, String stored) {
