@@ -826,6 +826,56 @@ func TestExtractCloudEvent_ResourceID(t *testing.T) {
 	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-1", event.Context)
 }
 
+// TestExtractCloudEvent_NVCAClusterBinding mirrors
+// TestExtractK8sEvent_NVCAClusterBinding: bindNVCAClusterID is wired into
+// both extractK8sEvent and extractCloudEvent, so both need the same
+// match/populate/reject/no-identity coverage.
+func TestExtractCloudEvent_NVCAClusterBinding(t *testing.T) {
+	nvcaCtx := middleware.WithNVCAIdentity(context.Background(), middleware.NVCAIdentity{
+		Subject:   "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	})
+
+	newEvent := func(clusterID string) cloudevents.Event {
+		ce := cloudevents.NewEvent()
+		ce.SetID("test-id")
+		ce.SetType("test.event")
+		ce.SetSource("/test")
+		ce.SetExtension("namespace", "tenant-123")
+		if clusterID != "" {
+			ce.SetExtension("clusterId", clusterID)
+		}
+		return ce
+	}
+
+	t.Run("matching payload cluster_id is accepted", func(t *testing.T) {
+		ce := newEvent("cluster-a")
+		event, err := extractCloudEvent(nvcaCtx, &ce)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("missing payload cluster_id is populated from the verified identity", func(t *testing.T) {
+		ce := newEvent("")
+		event, err := extractCloudEvent(nvcaCtx, &ce)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+
+	t.Run("mismatched payload cluster_id is rejected", func(t *testing.T) {
+		ce := newEvent("cluster-b")
+		_, err := extractCloudEvent(nvcaCtx, &ce)
+		assert.Error(t, err)
+	})
+
+	t.Run("no NVCA identity leaves the payload cluster_id untouched", func(t *testing.T) {
+		ce := newEvent("cluster-a")
+		event, err := extractCloudEvent(context.Background(), &ce)
+		require.NoError(t, err)
+		assert.Contains(t, event.Context, "cluster_id=cluster-a")
+	})
+}
+
 // ======================
 // CloudEvents Endpoint Validation Tests
 // ======================

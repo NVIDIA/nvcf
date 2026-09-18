@@ -47,6 +47,11 @@ const MaxTokenSize = 2048
 // ErrTokenTooLarge is returned when the bearer token exceeds MaxTokenSize.
 var ErrTokenTooLarge = errors.New("bearer token exceeds maximum size of 2048 bytes")
 
+// maxCacheEntries bounds the introspection cache so high-cardinality token
+// traffic can't grow it without limit. Realistic cardinality is one entry
+// per distinct NVCA pod PSAT across all registered clusters, far under this.
+const maxCacheEntries = 1024
+
 const (
 	// psatSubjectPrefix matches Kubernetes service-account token subjects.
 	psatSubjectPrefix = "system:serviceaccount:"
@@ -156,10 +161,13 @@ func (c *Client) Introspect(ctx context.Context, token string) (*IntrospectResul
 		return nil, err
 	}
 
-	// Only a positive, subject-valid result is cached. A token that comes
+	// Only a complete, subject-valid result is cached. A token that comes
 	// back inactive or with the wrong subject may pass moments later (clock
-	// skew, an nbf window), so it must be re-checked rather than pinned.
-	if result.Active && IsValidNVCASubject(result.Sub) {
+	// skew, an nbf window), so it must be re-checked rather than pinned. A
+	// missing ClusterID must not be cached either: caching it would pin a
+	// transient, incomplete SIS response as a 403 for the full TTL even
+	// after SIS starts returning a complete one.
+	if result.Active && IsValidNVCASubject(result.Sub) && result.ClusterID != "" {
 		c.cacheStore(key, result, token)
 	}
 
@@ -252,13 +260,16 @@ func (c *Client) cacheStore(key string, result *IntrospectResult, token string) 
 	if ttl <= 0 {
 		return
 	}
-	now := time.Now()
 	c.cacheMu.Lock()
-	for k, e := range c.cache {
-		if !now.Before(e.expiresAt) {
+	if _, exists := c.cache[key]; !exists && len(c.cache) >= maxCacheEntries {
+		// At capacity: evict one entry rather than scanning the whole map.
+		// Go's range order is randomized, so this is an arbitrary eviction,
+		// not LRU - acceptable since entries are already TTL-bounded.
+		for k := range c.cache {
 			delete(c.cache, k)
+			break
 		}
 	}
-	c.cache[key] = cacheEntry{result: result, expiresAt: now.Add(ttl)}
+	c.cache[key] = cacheEntry{result: result, expiresAt: time.Now().Add(ttl)}
 	c.cacheMu.Unlock()
 }

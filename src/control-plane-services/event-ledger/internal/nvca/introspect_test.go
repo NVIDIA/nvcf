@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -124,4 +125,57 @@ func TestClientIntrospectDoesNotCacheInactiveResult(t *testing.T) {
 	_, err = client.Introspect(context.Background(), token)
 	require.NoError(t, err)
 	assert.Equal(t, 2, calls, "an inactive result must never be cached, since clock skew can make the same token valid moments later")
+}
+
+func TestClientIntrospectDoesNotCacheMissingClusterID(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(IntrospectResult{
+			Active: true,
+			Sub:    "system:serviceaccount:customer-ns:nvca",
+			// ClusterID intentionally omitted.
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, time.Second, time.Minute)
+	require.NoError(t, err)
+
+	token := signedTestToken(t, time.Now().Add(time.Hour))
+
+	_, err = client.Introspect(context.Background(), token)
+	require.NoError(t, err)
+	_, err = client.Introspect(context.Background(), token)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls, "a result missing ClusterID must not be cached, or a later complete SIS response stays hidden behind the stale cache entry until it expires")
+}
+
+func TestClientIntrospectCacheEvictsAtCapacity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req IntrospectRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(IntrospectResult{
+			Active:    true,
+			Sub:       "system:serviceaccount:customer-ns:nvca",
+			ClusterID: "cluster-" + req.Token,
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, time.Second, time.Minute)
+	require.NoError(t, err)
+
+	for i := 0; i <= maxCacheEntries; i++ {
+		token := signedTestToken(t, time.Now().Add(time.Hour)) + fmt.Sprintf(".%d", i)
+		_, err := client.Introspect(context.Background(), token)
+		require.NoError(t, err)
+	}
+
+	client.cacheMu.RLock()
+	size := len(client.cache)
+	client.cacheMu.RUnlock()
+	assert.LessOrEqual(t, size, maxCacheEntries, "cache must never grow past maxCacheEntries")
 }
