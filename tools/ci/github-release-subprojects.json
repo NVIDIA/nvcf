@@ -35,7 +35,8 @@
       "service_name": "nvcf-compute-plane-stack",
       "legacy_tag_prefix": "nvcf-compute-plane-stack-v",
       "tag_format": "deploy/stacks/nvcf-compute-plane/v${version}",
-      "initial_version": "0.2.0",
+      "version_file": "VERSION",
+      "release_branch_only": true,
       "resolved_inventory_asset": "nvcf-compute-plane-stack-inventory.json"
     },
     {
@@ -43,7 +44,8 @@
       "path": "deploy/stacks/self-managed",
       "service_name": "nvcf-self-managed-stack",
       "tag_format": "deploy/stacks/self-managed/v${version}",
-      "initial_version": "0.8.0",
+      "version_file": "VERSION",
+      "release_branch_only": true,
       "resolved_inventory_asset": "nvcf-self-managed-stack-inventory.json"
     },
     {
@@ -51,7 +53,8 @@
       "path": "deploy/stacks/observability",
       "service_name": "nvcf-observability-stack",
       "tag_format": "deploy/stacks/observability/v${version}",
-      "initial_version": "0.0.0",
+      "version_file": "VERSION",
+      "release_branch_only": true,
       "resolved_inventory_asset": "nvcf-observability-stack-inventory.json"
     },
     {
