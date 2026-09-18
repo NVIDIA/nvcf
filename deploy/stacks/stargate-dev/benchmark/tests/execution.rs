@@ -431,7 +431,7 @@ fn interruption_removes_owned_container_and_resume_cleans_up_before_rejecting_ch
         })
         .unwrap();
     let mut record: Value = serde_json::from_slice(&fs::read(&launch).unwrap()).unwrap();
-    record["phase"] = json!("running");
+    record["phase"] = json!("owned");
     fs::write(&launch, record.to_string()).unwrap();
     fs::write(root.join("containers").join(&id), owned).unwrap();
     kubectl(

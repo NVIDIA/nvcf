@@ -171,3 +171,26 @@ jobs:
         run: |
           bash tools/ci/test-check-gazelle
           bash tools/ci/check-gazelle
+
+  stargate-dev-benchmark:
+    name: Stargate development benchmark
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/stacks/stargate-dev/benchmark
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+
+      - name: Check formatting
+        run: rustup run stable cargo fmt --check
+
+      - name: Test the benchmark controller
+        run: rustup run stable cargo test --locked --all-targets
+
+      - name: Check Rust diagnostics
+        run: rustup run stable cargo clippy --locked --all-targets -- -D warnings

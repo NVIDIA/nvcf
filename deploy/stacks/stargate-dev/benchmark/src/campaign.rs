@@ -158,8 +158,7 @@ struct AcceptedArm {
 #[serde(rename_all = "kebab-case")]
 enum LaunchPhase {
     Creating,
-    Ready,
-    Running,
+    Owned,
     Removed,
 }
 
@@ -963,7 +962,7 @@ impl Execution<'_> {
                 "newly created Spark container is not in created state"
             );
             launch.container_id = Some(id);
-            launch.phase = LaunchPhase::Ready;
+            launch.phase = LaunchPhase::Owned;
             atomic_json(&launch_path, &launch)?;
             launches.push((launch_path, launch));
             maximum = maximum.max(stream.timeout);
@@ -972,11 +971,11 @@ impl Execution<'_> {
         let deadline = Instant::now()
             .checked_add(maximum)
             .context("Spark deadline exceeds monotonic clock range")?;
-        for ((launch_path, launch), stream) in launches.iter_mut().zip(streams) {
+        for ((_, launch), stream) in launches.iter().zip(streams) {
             let id = launch
                 .container_id
                 .as_deref()
-                .context("ready Docker launch has no container ID")?;
+                .context("owned Docker launch has no container ID")?;
             let log = File::create(output.join(&stream.directory).join("spark.log"))?;
             let mut start = docker.command();
             start
@@ -984,17 +983,7 @@ impl Execution<'_> {
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(log.try_clone()?))
                 .stderr(Stdio::from(log));
-            launch.phase = LaunchPhase::Running;
-            atomic_json(launch_path, launch)?;
-            match Process::spawn(start) {
-                Ok(process) => clients.push(process),
-                Err(error) => {
-                    // No start process exists, so this container cannot have started.
-                    launch.phase = LaunchPhase::Ready;
-                    atomic_json(launch_path, launch)?;
-                    return Err(error);
-                }
-            }
+            clients.push(Process::spawn(start)?);
         }
         loop {
             check_forward(forward)?;
@@ -1017,7 +1006,7 @@ impl Execution<'_> {
             sleep(Duration::from_millis(200)).await;
         }
         check_forward(forward)?;
-        for (path, launch) in &mut launches {
+        for (_, launch) in &launches {
             let container = docker.inspect(&launch.name).await?.context(
                 "completed Docker client has no container; launch completion is unconfirmed",
             )?;
@@ -1029,8 +1018,6 @@ impl Execution<'_> {
                 "Spark container {} did not exit successfully",
                 launch.name
             );
-            launch.container_id = Some(container.id);
-            atomic_json(path, launch)?;
         }
         stop_clients(clients).await?;
         for (path, _) in launches {
@@ -1890,7 +1877,7 @@ mod tests {
     #[tokio::test]
     async fn reconciliation_never_removes_a_container_without_owner_proof() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let (path, launch) = launch(directory.path(), LaunchPhase::Running);
+        let (path, launch) = launch(directory.path(), LaunchPhase::Owned);
         let fake = FakeCommand::new();
         let response = container(&launch, "another-owner");
         fake.respond(
@@ -1906,7 +1893,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fake.calls().len(), 1);
-        assert_eq!(read_json::<Launch>(&path)?.phase, LaunchPhase::Running);
+        assert_eq!(read_json::<Launch>(&path)?.phase, LaunchPhase::Owned);
         Ok(())
     }
 
@@ -1914,7 +1901,7 @@ mod tests {
     async fn reconciliation_verifies_removal_even_if_the_acknowledgement_fails() -> Result<()> {
         for status in [0, 1] {
             let directory = tempfile::tempdir()?;
-            let (path, launch) = launch(directory.path(), LaunchPhase::Running);
+            let (path, launch) = launch(directory.path(), LaunchPhase::Owned);
             let fake = FakeCommand::new();
             let response = container(&launch, &launch.owner);
             let id = "a".repeat(64);
@@ -1942,8 +1929,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_creation_cannot_have_traffic_but_missing_start_proof_is_rejected() -> Result<()>
-    {
+    async fn missing_creation_cannot_have_traffic_but_missing_container_identity_is_rejected()
+    -> Result<()> {
         let directory = tempfile::tempdir()?;
         let (path, mut launch) = launch(directory.path(), LaunchPhase::Creating);
         let fake = FakeCommand::new();
@@ -1956,14 +1943,14 @@ mod tests {
         };
         reconcile_launch(directory.path(), &launch.campaign, &docker, &path).await?;
         assert_eq!(read_json::<Launch>(&path)?.phase, LaunchPhase::Creating);
-        launch.phase = LaunchPhase::Running;
+        launch.phase = LaunchPhase::Owned;
         atomic_json(&path, &launch)?;
         assert!(
             reconcile_launch(directory.path(), &launch.campaign, &docker, &path)
                 .await
                 .is_err()
         );
-        assert_eq!(read_json::<Launch>(&path)?.phase, LaunchPhase::Running);
+        assert_eq!(read_json::<Launch>(&path)?.phase, LaunchPhase::Owned);
         Ok(())
     }
 

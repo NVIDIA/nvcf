@@ -103,8 +103,6 @@ fn write_plan(
     output: Option<&Path>,
 ) -> Result<()> {
     let plan = suite.plan(name, algorithm.selected())?;
-    let encoded =
-        serde_json::to_string_pretty(&plan).context("serialize resolved benchmark plan")?;
     if let Some(output) = output {
         if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty()) {
             fs::DirBuilder::new()
@@ -124,28 +122,17 @@ fn write_plan(
         for (name, recipe) in &plan.workloads {
             recipe.write(&directory.join(name))?;
         }
-        let mut temporary =
-            tempfile::NamedTempFile::new_in(output).context("create plan staging file")?;
-        temporary
-            .write_all(encoded.as_bytes())
-            .context("write resolved plan")?;
-        temporary
-            .as_file()
-            .sync_all()
-            .context("sync resolved plan")?;
-        temporary
-            .persist(output.join("plan.json"))
-            .context("commit resolved plan")?;
-        fs::File::open(output)?
-            .sync_all()
-            .context("sync plan directory")?;
+        artifact::atomic_json(&output.join("plan.json"), &plan)?;
         writeln!(
             std::io::stdout().lock(),
             "{}",
             output.join("plan.json").display()
         )?;
     } else {
-        writeln!(std::io::stdout().lock(), "{encoded}")?;
+        let mut output = std::io::stdout().lock();
+        serde_json::to_writer_pretty(&mut output, &plan)
+            .context("serialize resolved benchmark plan")?;
+        writeln!(output)?;
     }
     Ok(())
 }

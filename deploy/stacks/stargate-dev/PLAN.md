@@ -1,6 +1,163 @@
 # Global Stargate dev deployment plan
 
-## Decision
+## Current scope
+
+The checked-in stack supports `us-west-2` and `us-east-1`. Each region has one
+Stargate hub cluster and two MockDC clusters. Connected regions provide eight
+backends. Deployment and observability provisioning remain in `scripts/deploy.py`
+and `scripts/observability.py`.
+
+Verification and benchmark orchestration use the standalone Rust 2024 CLI in
+[benchmark/](benchmark/). Spark remains the load generator. The current stack uses
+a direct Stargate service, Grafana Alloy, and Amazon Managed Prometheus. The
+[five-region deployment proposal](#earlier-deployment-proposal) below records the
+earlier gateway and collector design; it is not the current operational runbook.
+Use `helmfile.yaml.gotmpl`, `environments/`, and `values/versions.yaml` for current
+deployment settings.
+
+## Rust benchmark workflow
+
+Run these commands from the repository root on Linux. Build with current stable
+Rust and keep a copy of the executable for the campaign. Resume requires that
+exact executable as well as the same inputs and deployment controls.
+
+```sh
+rustup run stable cargo build --locked --release --manifest-path deploy/stacks/stargate-dev/benchmark/Cargo.toml
+```
+
+Copy the executable to an operator-selected location and set `STARGATE_BENCH` to
+that path before running the following commands. Do not rebuild over the retained
+copy while a campaign uses it.
+
+```sh
+cp deploy/stacks/stargate-dev/benchmark/target/release/stargate-dev-bench /secure/path/stargate-dev-bench
+```
+
+```sh
+export STARGATE_BENCH=/secure/path/stargate-dev-bench
+```
+
+List or preview the reduced suite without cluster access or traffic:
+
+```sh
+"$STARGATE_BENCH" --suite-file deploy/stacks/stargate-dev/loadtest/reduced.yaml list
+```
+
+```sh
+"$STARGATE_BENCH" --suite-file deploy/stacks/stargate-dev/loadtest/reduced.yaml plan --suite reduced
+```
+
+`plan --output DIRECTORY` also writes the resolved plan and deterministic
+workloads into a new directory. `run` can adopt that directory when the requested
+plan and workload fingerprints match. It refuses to overwrite foreign artifacts.
+
+The reduced suite contains exactly these measured pairs:
+
+| Scenario | Per-algorithm workload |
+|---|---|
+| Session affinity | 6,144 requests at 24 RPS, 48 workers, one repeat |
+| Mixed hot/short | 600 seconds; hot at 8 RPS with 128 workers, short at 4 RPS with 64 workers; one repeat |
+| Capacity | 120 seconds at 96 RPS with 192 workers |
+
+Each pair runs WaitAndWiden and PowerOfN. The selected policy sets PowerOfN's
+sample count to two, making it the PowerOf2 baseline. Mixed arms include one
+unmeasured warm-up request and produce separate hot and short reports. The suite
+has six measured arms and eight reports. It excludes smoke, extra repeats,
+long-context, and east-ingress traffic. The same file exposes `session-affinity`,
+`mixed-sessions`, and `capacity` to select one pair independently.
+
+Verify the west ingress hub against the connected eight-backend topology:
+
+```sh
+"$STARGATE_BENCH" verify --region us-west-2 --peer-region us-east-1 --phase regional
+```
+
+Run through an existing Pod with a container named `spark`:
+
+```sh
+"$STARGATE_BENCH" --suite-file deploy/stacks/stargate-dev/loadtest/reduced.yaml run --suite reduced --region us-west-2 --peer-region us-east-1 --spark-pod SPARK_POD --spark-image IMAGE --expected-config deploy/stacks/stargate-dev/loadtest/queue-bounds-none-max-queued-4.json --output RESULTS
+```
+
+`IMAGE` must match the selected container's image reference exactly. The
+controller also freezes its runtime image ID, Spark version, resources, and Pod
+specification hash. Pod mode needs `kubectl` locally and Bash, coreutils,
+`setsid`, `flock`, `grep`, and `tar` in the Spark image. It sends the API key through stdin
+and the process environment. It does not require local Docker.
+
+`--expected-config` checks the policy in every selected region before traffic;
+it does not apply configuration. Put the complete selected JSON object in
+`router.loadBalancerConfig` in each region's protected deployment values when
+applying the policy. The chart defaults enable startup calibration at concurrency
+25, set engine concurrency to 25, disable periodic canaries, and disable the
+MockDynamo stats stream. Pylon uses its fallback statistics.
+
+Without `--spark-pod`, the controller uses a local Docker image and an owned
+WebSocket port-forward. `--endpoint` supplies a different reachable endpoint.
+Runs reset caches and restart participating backends and routers when the plan
+requires clean caches. Readiness and control checks include peer regions;
+benchmark ingress remains the selected `--region`.
+
+### Acceptance and recovery
+
+```text
+suite + controls -> immutable campaign + workloads -> Spark attempts
+                                                        |
+                                                   validation
+                                                   /        \
+                                             rejected      accepted receipt
+                                             retained            |
+                                                          offline rendering
+```
+
+An attempt is accepted only after report counts, cold-capacity cache observations,
+checksums, Pod identity, deployment configuration, and cache evidence pass their
+checks. Capacity arms use disjoint prompt IDs. Failed attempts remain available
+for inspection and are not included in accepted-result summaries.
+
+Repeat the original `run` command with `--resume` to continue a native campaign.
+The controller checks local input identity, reconciles owned unfinished work,
+then checks current deployment controls before starting more traffic. A missing
+launch acknowledgement never causes a second launch. Unconfirmed cancellation
+blocks further traffic.
+
+Reconcile a stopped controller's campaign explicitly:
+
+```sh
+"$STARGATE_BENCH" reconcile --output RESULTS
+```
+
+Render accepted reports without a cluster, Docker, or new traffic:
+
+```sh
+"$STARGATE_BENCH" render --output RESULTS
+```
+
+Keep the output directory at its original path. `campaign.json` freezes inputs;
+`attempts/` contains raw reports and evidence; `accepted/` contains completion
+receipts. `summary.json`, `summary.csv`, and `summary.txt` are derived outputs.
+Rendering verifies recorded hashes and cannot turn an invalid attempt into an
+accepted result.
+
+Summaries report successful throughput, recorded failures, retries, cache hits,
+TTFT p99, end-to-end p99, and observed matched-pair ranges. Timed runs exclude
+window-end cancellations from recorded request counts. Latency quantiles describe
+successful requests and use Spark's histogram bucket lower bounds. Observed
+ranges are not confidence intervals. Production recommendations remain pending
+real-engine QA.
+
+Historical Python campaigns retain their original worktrees and artifacts. They
+cannot be resumed as native campaigns; use the retained historical controller
+when reconciling those records. Existing performance measurements are not a live
+validation of this Rust rewrite.
+
+## Earlier deployment proposal
+
+The following sections retain the original planning context, including the
+five-region inventory and proposed gateway/collector components. Cluster status
+is a historical handoff snapshot. Verification examples use the current
+`STARGATE_BENCH` command configured above.
+
+### Decision
 
 Use Helm for every Kubernetes resource.
 
@@ -14,7 +171,7 @@ The auth fixture is test infrastructure. Keep its chart under this dev stack, bu
 
 Separate Helm releases are preferable to one umbrella chart because a Helm release belongs to one Kubernetes cluster, while each region contains three clusters with different lifecycles.
 
-## Goals
+### Goals
 
 - Deploy the five confirmed regions.
 - Deploy one Stargate cluster and two MockDC clusters in each region.
@@ -23,7 +180,7 @@ Separate Helm releases are preferable to one umbrella chart because a Helm relea
 - Export application metrics from every cluster to one global Grafana dashboard.
 - Avoid committing credentials or relying on the current kubectl context.
 
-## Non-goals for the first deployment
+### Non-goals for the first deployment
 
 - Global request routing between regional gateways.
 - Running Grafana or a metrics database inside a Stargate or MockDC cluster.
@@ -32,7 +189,7 @@ Separate Helm releases are preferable to one umbrella chart because a Helm relea
 - Production identity semantics, JWT or OAuth validation, credential issuance, runtime credential rotation, or auth configuration reload.
 - High availability for the dev-only auth fixture.
 
-## Topology
+### Topology
 
 ```text
                               Grafana Cloud
@@ -65,7 +222,7 @@ Separate Helm releases are preferable to one umbrella chart because a Helm relea
    +-------------------------------+  +---------------------------+
 ```
 
-## Confirmed cluster inventory
+### Confirmed cluster inventory
 
 | Region | Stargate cluster | Stargate nodes | MockDC clusters | Nodes per MockDC |
 |---|---|---|---|---|
@@ -79,7 +236,7 @@ All 15 clusters were handed off as active on Kubernetes 1.34, with CS-Admin auth
 
 Use each MockDC Kubernetes cluster name as its logical MockDC cluster ID. This keeps one identifier per cluster and already guarantees that the two IDs in each region differ.
 
-## Deployment invariants
+### Deployment invariants
 
 - Every region has exactly one Stargate cluster and two MockDC clusters.
 - The Stargate cluster has three Stargate replicas, three router replicas, two gateway replicas, and one auth replica.
@@ -99,7 +256,7 @@ Use each MockDC Kubernetes cluster name as its logical MockDC cluster ID. This k
 - A region deploys and verifies its Stargate plane before either MockDC is deployed.
 - One OTel Collector performs Prometheus scraping in each cluster to avoid duplicate samples.
 
-## Repository layout
+### Repository layout
 
 ```text
 deploy/stacks/stargate-dev/
@@ -122,7 +279,14 @@ deploy/stacks/stargate-dev/
   scripts/
     deploy.py                           # credential init and guarded apply only
     provision_dashboard.py
-    verify.py
+  benchmark/
+    Cargo.toml                         # native verification and Spark controller
+    src/
+    tests/
+  loadtest/
+    suite.yaml
+    reduced.yaml
+    queue-bounds-none-max-queued-4.json
   tests/
     test_invariants.py
 ```
@@ -131,7 +295,7 @@ Each region has one nested environment file. It owns the region's AWS account, t
 
 The example environment contains placeholders and documents the same shape. Real environment files never contain secret values.
 
-## Helmfile design
+### Helmfile design
 
 Select one region with `--environment`. Each release supplies its own `kubeContext` and labels.
 
@@ -150,9 +314,9 @@ Release groups:
 
 Use Helmfile `needs` for dependencies within a cluster. Do not rely on a cross-cluster `needs` edge for NLB or DNS readiness. The deployment command verifies the Stargate endpoint before applying the MockDC phase.
 
-## Existing chart changes
+### Existing chart changes
 
-### LLM request router
+#### LLM request router
 
 Use the existing `deploy/helm/llm-request-router/llm-request-router` chart.
 
@@ -193,7 +357,7 @@ The backend-router Service becomes an internet-facing AWS NLB exposing:
 
 Configure `backendRouter.pylonGrpcDialAddress` with the NLB's `https://` address. Regional wildcard DNS resolves `{pod_name}.stargate.<region>.<dev-zone>` to this NLB and supplies the per-Stargate gRPC authority and QUIC SNI identity.
 
-### LLM API Gateway
+#### LLM API Gateway
 
 Use the existing `deploy/helm/llm-api-gateway/llm-api-gateway` chart.
 
@@ -220,9 +384,9 @@ Add chart values where they are currently missing:
 
 Keep the existing gateway Service as ClusterIP for readiness and metrics. The separate external Service selects the same Pods but exposes only port 443, so port 9464 is never added to the NLB. Terminate TLS at the NLB with an ACM certificate and forward plaintext HTTP to port 8080 inside the cluster. Do not add an ALB or Kubernetes Ingress path.
 
-## New dev workloads
+### New dev workloads
 
-### `stargate-dev-auth`
+#### `stargate-dev-auth`
 
 Deploy a stateless fixture for the two NVCF LLM gateway auth RPCs. This is not a reduced production NVCF API. Its only purpose is to authenticate fixed credentials for this dev deployment.
 
@@ -274,7 +438,7 @@ The dev auth chart owns `stargate-dev-auth-credentials`. It stores the fixture c
 
 The fixture reads its Secret once and does not watch for changes. Repeated applies must reuse the same credential bundle. The deployment wrapper refuses to continue when an existing credential Secret contains different data. Rotation requires a workload rollout and is outside the initial deployment workflow.
 
-### `stargate-dev-mockdc`
+#### `stargate-dev-mockdc`
 
 Keep this chart under `deploy/stacks/stargate-dev/charts`. It serves this stack only; move it to shared chart ownership only after another concrete deployment needs the same workload contract.
 
@@ -307,7 +471,7 @@ The chart must reject:
 
 Do not expose a separate cluster-ID, backend-count, or inference-server-ID value. The chart always uses the Kubernetes cluster name as its cluster ID, renders two backends, and derives their IDs. The Helmfile fails rendering or apply when the two regional cluster names are equal or the four derived inference-server IDs are not distinct.
 
-### OpenTelemetry Collector
+#### OpenTelemetry Collector
 
 Install the upstream `open-telemetry/opentelemetry-collector` Helm chart directly in each cluster. Pin the chart version in `values/versions.yaml`, set `mode: deployment`, and run one replica. The chart already supports an image digest, existing-Secret environment variables, and additional ClusterRole rules. Do not install the OpenTelemetry Operator, its CRDs, or a Target Allocator for this fixed collector.
 
@@ -335,7 +499,7 @@ Keep this collector configuration metrics-only. Add traces, logs, events, kubele
 
 The invariant test must assert the cross-component discovery contract: Stargate, backend-router, gateway, auth, and Pylon Pods have the annotations and ports selected by the collector configuration. Do not install or render Prometheus Operator resources.
 
-## Image delivery
+### Image delivery
 
 Publish the following multi-architecture images through the existing CI and registry path:
 
@@ -355,7 +519,7 @@ Requirements:
 - Never use `latest` or a mutable environment tag in a values file.
 - Publish the auth fixture only to the development image repository and never promote it with production Stargate artifacts.
 
-## Networking and TLS
+### Networking and TLS
 
 The cluster handoff must provide:
 
@@ -371,7 +535,7 @@ Keep the gateway NLB internal. Make the backend-router NLB internet-facing so Mo
 
 Use the existing-secret TLS mode. Pylon trusts the regional root CA. Do not make insecure QUIC the checked-in default.
 
-## Metrics and Grafana
+### Metrics and Grafana
 
 Use Grafana Cloud for the first deployment so the metrics backend is independent of every workload region. If external SaaS is not allowed, use Amazon Managed Prometheus with Amazon Managed Grafana in a separate observability account or region.
 
@@ -406,7 +570,7 @@ The script:
 
 The stable UID and overwrite operation make rerunning the script the recovery path. The deployment workflow never deletes the external dashboard.
 
-## Deployment command
+### Deployment command
 
 Use Helmfile directly for lint, template, diff, and status. Keep `scripts/deploy.py` limited to the two operations that need additional safety logic:
 
@@ -422,11 +586,11 @@ python3 deploy/stacks/stargate-dev/scripts/deploy.py init --region us-east-1 --c
 export STARGATE_DEV_CREDENTIALS_FILE=/secure/path/us-east-1.json
 helmfile --environment us-east-1 diff --suppress-secrets --selector phase=stargate
 python3 deploy/stacks/stargate-dev/scripts/deploy.py apply --region us-east-1 --phase stargate --credentials /secure/path/us-east-1.json
-python3 deploy/stacks/stargate-dev/scripts/verify.py --region us-east-1 --phase stargate
+"$STARGATE_BENCH" verify --region us-east-1 --phase stargate
 helmfile --environment us-east-1 status --selector phase=stargate
 helmfile --environment us-east-1 diff --suppress-secrets --selector phase=mockdc
 python3 deploy/stacks/stargate-dev/scripts/deploy.py apply --region us-east-1 --phase mockdc --credentials /secure/path/us-east-1.json
-python3 deploy/stacks/stargate-dev/scripts/verify.py --region us-east-1 --phase regional
+"$STARGATE_BENCH" verify --region us-east-1 --phase regional
 GRAFANA_URL=https://example.grafana.net \
 GRAFANA_FOLDER_UID=stargate-dev \
 GRAFANA_TOKEN_FILE=/secure/path/grafana-token \
@@ -447,9 +611,9 @@ Safety behavior:
 - Suppress Secrets in diffs. Keep template output containing Secret manifests in a mode `0700` temporary directory and delete it after validation.
 - Redact Grafana API authorization headers and never log Secret contents.
 
-## Validation
+### Validation
 
-### Static validation
+#### Static validation
 
 Use the standard tools for chart mechanics:
 
@@ -471,7 +635,7 @@ Keep `tests/test_invariants.py` limited to contracts that those tools cannot pro
 
 Test the auth fixture itself at its trust boundary: valid credentials succeed, invalid or missing service, client, and worker tokens fail, and routing keys are limited to the worker mappings. Do not add render assertions for ordinary Helm output such as probes, selectors, PDB fields, and container literals.
 
-### One-region acceptance
+#### One-region acceptance
 
 - Three Stargate, three router, two gateway, and one auth replica are ready.
 - Both MockDC clusters have two healthy MockDynamo/Pylon Pods.
@@ -486,7 +650,7 @@ Test the auth fixture itself at its trust boundary: valid credentials succeed, i
 
 After one region soaks successfully, deploy the other four regions sequentially.
 
-## Implementation sequence
+### Implementation sequence
 
 1. Extend the request-router and gateway charts with digest, ready-only Service, NLB, scrape-annotation, Vault-disable, and existing-Secret support.
 2. Extend the existing worker-auth fixture with invocation auth, build its dedicated dev-only image target, and add the stack-local `stargate-dev-auth` chart.
@@ -495,7 +659,7 @@ After one region soaks successfully, deploy the other four regions sequentially.
 5. Add focused invariant tests, regional verification, the dashboard JSON, and the direct dashboard provisioning script.
 6. Deploy and soak one region, provision the dashboard, then deploy the other four regions sequentially and verify their data in the same dashboard.
 
-## Required inputs before deployment
+### Required inputs before deployment
 
 - Exact kube-context names
 - Expected AWS account and EKS cluster ARNs

@@ -131,7 +131,7 @@ pub fn run(root: &Path, arguments: &[OsString]) -> io::Result<bool> {
         } else {
             paths[1].clone()
         };
-        copy_tree(&paths[0], &destination)?;
+        fs::copy(&paths[0], &destination)?;
         return Ok(true);
     }
     Ok(false)
@@ -146,17 +146,4 @@ fn remote_path(root: &Path, value: &OsStr) -> OsString {
             &format!("{}/remote/", root.display()),
         )
         .into()
-}
-
-fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
-    if source.is_dir() {
-        fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            copy_tree(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-    } else {
-        fs::copy(source, destination)?;
-    }
-    Ok(())
 }
