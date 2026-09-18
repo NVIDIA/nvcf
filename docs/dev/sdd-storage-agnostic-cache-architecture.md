@@ -50,8 +50,12 @@ Four pieces:
 
 ## Capability catalog
 
-Installed by the NVCA chart as ConfigMap `nvcf-storage-capabilities`, validated
-by a packaged JSON Schema and by the Go loader with the same rules.
+Installed by the NVCA chart as ConfigMap `nvcf-storage-capabilities` in the
+operator's namespace; the operator mirrors it into the agent's namespace, where
+the agent and the storage controller read it, and re-mirrors on every edit. A
+copy of the shipped catalog is compiled into NVCA and used only while the
+ConfigMap is absent. Validated by a packaged JSON Schema and by the Go loader
+with the same rules.
 
 ```yaml
 drivers:

@@ -62,6 +62,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/metrics"
 	nvcaopotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
 const (
@@ -581,7 +582,8 @@ func configMapUpdateForcesNVCAReconcile(name string) bool {
 		nvcfGPUProfilingConfigMapName,
 		nvcfBackendChartDefaultsConfigMapName,
 		agentConfigMergeConfigMapName,
-		nvcaOperatorConfigMapName:
+		nvcaOperatorConfigMapName,
+		nvcastorage.StorageCapabilityConfigMapName:
 		return true
 	default:
 		return false

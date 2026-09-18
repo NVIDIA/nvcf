@@ -59,6 +59,7 @@ import (
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -577,6 +578,12 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
+	err = bc.setupStorageCapabilityCatalogConfigMap(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcastorage.StorageCapabilityConfigMapName,
+			nb.Namespace, nb.Name, err)
+	}
+
 	err = bc.setupGPUProfilingConfigMap(ctx, nb)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcfGPUProfilingConfigMapName,
@@ -995,6 +1002,37 @@ func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.N
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      srcName,
 			Namespace: getSystemNamespace(nb),
+		},
+		Data: srcCM.Data,
+	}
+	return bc.createOrUpdateConfigMap(ctx, &cmTemplate)
+}
+
+// setupStorageCapabilityCatalogConfigMap mirrors the chart-created
+// nvcf-storage-capabilities ConfigMap into the agent's system namespace, where
+// the agent and the storage controller read it. The chart renders it into the
+// operator's release namespace; without this copy the agent never sees it. An
+// absent source is skipped with a warning rather than failing the reconcile:
+// the agent falls back to the catalog compiled into it until the chart that
+// ships the ConfigMap has converged.
+func (bc *BackendK8sCache) setupStorageCapabilityCatalogConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+	log := core.GetLogger(ctx)
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(
+		ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			log.Warnf("%v/%v configmap not found, not mirroring the storage capability catalog into %v",
+				NVCAOperatorNamespace, nvcastorage.StorageCapabilityConfigMapName, getSystemNamespace(nb))
+			return nil
+		}
+		return err
+	}
+	cmTemplate := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        nvcastorage.StorageCapabilityConfigMapName,
+			Namespace:   getSystemNamespace(nb),
+			Annotations: getNBAnnotations(nb),
+			Labels:      getAppLabels(),
 		},
 		Data: srcCM.Data,
 	}
