@@ -611,7 +611,8 @@ class FunctionsWithLlmModelsTest {
         assertThat(secondVersion.models().getFirst().getLlmConfig().getRoutingMethod())
                 .isEqualTo(storedRoutingMethod);
 
-        var updatedRoutingMethod = "pulsar;seed=stable-b";
+        // Unknown method and parameter: well formed, so it persists; the router owns semantics.
+        var updatedRoutingMethod = "fastest;widen=2";
         var updateToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(
                 TEST_CLIENT_SUBJECT, List.of(SCOPE_UPDATE_FUNCTION), 100);
         var updateRequest = UpdateFunctionRequest.builder()
@@ -661,6 +662,34 @@ class FunctionsWithLlmModelsTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains(
                 "llmConfig.routingMethod", TEST_LLM_MODEL_NAME, "commas are not allowed");
+    }
+
+    @Test
+    void shouldRejectVersionCreateWithInvalidRoutingMethod() {
+        var functionName = TEST_FUNCTION_NAME + "-" + Instant.now().toEpochMilli();
+        var function = createInitialLlmFunction(functionName, "1-M", "round-robin");
+
+        var createToken = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                          List.of(SCOPE_REGISTER_FUNCTION), 100);
+        var createRequest = CreateFunctionRequest.builder()
+                .name(functionName)
+                .containerImage(TEST_NGC_CONTAINER_IMAGE)
+                .inferenceUrl(TEST_INFERENCE_URL)
+                .inferencePort(TEST_INFERENCE_PORT)
+                .functionType(FunctionTypeEnum.LLM)
+                .models(List.of(llmModel("1-M", "pulsar;seed=")))
+                .build();
+        var createEntity = RequestEntity.post(URI.create(
+                        "/v2/nvcf/functions/" + function.id() + "/versions"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + createToken)
+                .body(createRequest);
+
+        var response = testRestTemplate.exchange(createEntity, String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains(
+                "llmConfig.routingMethod", TEST_LLM_MODEL_NAME, "must be key=value");
     }
 
     @Test
