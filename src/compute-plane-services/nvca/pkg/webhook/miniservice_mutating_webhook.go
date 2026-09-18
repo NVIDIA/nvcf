@@ -334,8 +334,11 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 				disableComputeDomain := meta.IsWorkloadFeatureFlagEnabled(featureflag.DisableNVLinkComputeDomain)
 				if _, hasIdx := t.GetAnnotations()[nvcfdra.RequiredNVLinkDomainIndexAnnotation]; hasIdx && disableComputeDomain {
 					core.GetLogger(ctx).WithFields(logrus.Fields{
-						"pod":       t.Name,
-						"namespace": obj.GetNamespace(),
+						"pod":                          t.Name,
+						"namespace":                    obj.GetNamespace(),
+						nvcatypes.FunctionIDKey:        meta.Labels[nvcatypes.FunctionIDKey],
+						nvcatypes.FunctionVersionIDKey: meta.Labels[nvcatypes.FunctionVersionIDKey],
+						nvcatypes.NCAIDKey:             meta.Annotations[nvcatypes.NCAIDKey],
 					}).Warnf("pod sets %s but %s is also enabled; skipping ComputeDomain allocation despite the annotation",
 						nvcfdra.RequiredNVLinkDomainIndexAnnotation, featureflag.DisableNVLinkComputeDomain)
 				}

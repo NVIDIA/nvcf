@@ -1682,7 +1682,7 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 1)
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 1, nil)
 	})
 	t.Run("required domains", func(t *testing.T) {
 		helmObjs := []client.Object{
@@ -1789,7 +1789,7 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 1)
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 1, nil)
 	})
 	t.Run("disabled via workload config", func(t *testing.T) {
 		helmObjs := []client.Object{
@@ -1855,7 +1855,7 @@ func TestReconcile_Function_NVLinkOptimized(t *testing.T) {
 				},
 			},
 		}
-		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 0)
+		testReconcileNVLinkOptimizedHelper(t, helmObjs, expDeployments, 0, map[string]bool{featureflag.DisableNVLinkComputeDomain: true})
 	})
 }
 
@@ -1864,6 +1864,7 @@ func testReconcileNVLinkOptimizedHelper(
 	helmObjs []client.Object,
 	expDeployments []appsv1.Deployment,
 	expComputeDomainCount int,
+	expWorkloadFeatureFlags map[string]bool,
 ) {
 	ctx := newTestContext()
 	testScheme := mgrScheme
@@ -2229,6 +2230,18 @@ rules:
 	err = r.Client.List(ctx, gotComputeDomains, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
 	assert.Len(t, gotComputeDomains.Items, expComputeDomainCount)
+
+	// Verify the flag actually reaches the webhook through the miniservice metadata
+	// ConfigMap, not just the reconciler's local decision to (not) create a ComputeDomain.
+	metadataCM := &corev1.ConfigMap{}
+	err = r.Client.Get(ctx, client.ObjectKey{
+		Namespace: ms.Spec.Namespace,
+		Name:      nvcatypes.MiniserviceMetadataConfigMapName,
+	}, metadataCM)
+	require.NoError(t, err, "metadata ConfigMap should exist")
+	msMeta, err := nvcatypes.FromConfigMapData(metadataCM.Data)
+	require.NoError(t, err, "metadata ConfigMap should deserialize")
+	assert.Equal(t, expWorkloadFeatureFlags, msMeta.WorkloadFeatureFlags)
 
 	err = r.Client.Get(ctx, client.ObjectKeyFromObject(ms), ms)
 	require.NoError(t, err)
