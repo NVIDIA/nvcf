@@ -296,9 +296,6 @@ nvcf:
           oauth2:
             base-url: https://stg.authn.nvidia.com
             group-scope: ngc-stg
-  llm:
-    routing-expressions:
-      enabled: false
   account:
     max-functions-allowed: 50
     max-tasks-allowed: 50
