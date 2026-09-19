@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
 	"github.com/golang-jwt/jwt/v5"
@@ -390,11 +391,20 @@ func chainMiddleware(first, second mux.MiddlewareFunc) mux.MiddlewareFunc {
 // Anything else is treated as an opaque API key and sent to policyClient
 // directly. policyClient's evaluation contract only accepts an API key, which
 // is why a JWT cannot be routed through it in self-managed deployments.
-func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, selfManaged bool, logger *otelzap.Logger) mux.MiddlewareFunc {
+//
+// When introspector is non-nil, a JWT-shaped token that fails local OpenBao
+// verification is retried against SIS's NVCA introspection endpoint before
+// being rejected, following the same ordered chain ReVal uses for NVCA's PSAT.
+func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, selfManaged bool, introspector nvca.Introspector, logger *otelzap.Logger) mux.MiddlewareFunc {
 	apiKeyAuth := newPolicyMiddleware(policyClient, serviceName, logger)
 
 	var jwtVerify mux.MiddlewareFunc
-	if jwtOpts != nil {
+	switch {
+	case jwtOpts == nil:
+		// no JWT verification configured
+	case introspector != nil:
+		jwtVerify = newJWTWithPSATMiddleware(*jwtOpts, jwkCache, introspector)
+	default:
 		jwtVerify = NewParseJWTMiddleware(*jwtOpts, jwkCache)
 	}
 	if jwtVerify == nil {

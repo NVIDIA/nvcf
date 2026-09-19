@@ -297,7 +297,7 @@ func (s *Server) processOTLPEvents(traceCtx context.Context, req *collectorlogsv
 	for _, rl := range req.ResourceLogs {
 		for _, sl := range rl.ScopeLogs {
 			for _, lr := range sl.LogRecords {
-				event, err := extractK8sEvent(lr)
+				event, err := extractK8sEvent(traceCtx, lr)
 				if err != nil {
 					logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
 					result.FailureCount++
@@ -442,6 +442,25 @@ func eventContextToCanonical(eventContext ContextV3) (string, error) {
 	return strings.Join(parts, ","), nil
 }
 
+// bindNVCAClusterID makes an SIS-verified NVCA cluster identity authoritative
+// over whatever cluster_id a request payload claims: a missing payload value
+// is populated from it, and a mismatching one is rejected outright, so a PSAT
+// valid for one cluster cannot write events attributed to another. Requests
+// with no NVCA identity in context (SIS/Spot JWT callers) are unaffected.
+func bindNVCAClusterID(ctx context.Context, payloadClusterID string) (string, error) {
+	identity, ok := middleware.NVCAIdentityFromContext(ctx)
+	if !ok {
+		return payloadClusterID, nil
+	}
+	if payloadClusterID == "" {
+		return identity.ClusterID, nil
+	}
+	if payloadClusterID != identity.ClusterID {
+		return "", fmt.Errorf("cluster_id %q does not match the authorized cluster", payloadClusterID)
+	}
+	return payloadClusterID, nil
+}
+
 // extractK8sEvent converts an OTLP log record to EventV3
 // Expected OTLP attributes:
 //   - event_name (string): Event type
@@ -450,7 +469,7 @@ func eventContextToCanonical(eventContext ContextV3) (string, error) {
 //   - Context fields (optional): instance_id, deployment_id, gpu_specification_id, cluster_id
 //   - resource_id (optional): generic unique identifier for events that have no
 //     other distinguishing context field (e.g. an ICMSRequest keyed by its request id).
-func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
+func extractK8sEvent(ctx context.Context, lr *logsv1.LogRecord) (*EventV3, error) {
 	// Step 1: Convert OTLP protobuf attributes to map
 	attrs := make(map[string]any)
 	for _, attr := range lr.Attributes {
@@ -464,11 +483,15 @@ func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
 	}
 
 	// Step 3: Convert wire format to internal context representation
+	clusterID, err := bindNVCAClusterID(ctx, wireFormat.ClusterID)
+	if err != nil {
+		return nil, err
+	}
 	contextV3 := ContextV3{
 		InstanceID:         wireFormat.InstanceID,
 		DeploymentID:       wireFormat.DeploymentID,
 		GPUSpecificationID: wireFormat.GPUSpecificationID,
-		ClusterID:          wireFormat.ClusterID,
+		ClusterID:          clusterID,
 		ResourceID:         wireFormat.ResourceID,
 	}
 
@@ -522,7 +545,7 @@ func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
 //   - namespace (required)
 //   - Context fields (optional, camelCase): instanceId, deploymentId, gpuSpecificationId, clusterId
 //     Note: CloudEvents spec forbids underscores in extension names, so we use camelCase
-func extractCloudEvent(ce *cloudevents.Event) (*EventV3, error) {
+func extractCloudEvent(ctx context.Context, ce *cloudevents.Event) (*EventV3, error) {
 	// Validate required CloudEvents fields per spec (using CloudEvents field names in errors)
 	if strings.TrimSpace(ce.ID()) == "" {
 		return nil, errors.New("missing required field: id")
@@ -541,11 +564,15 @@ func extractCloudEvent(ce *cloudevents.Event) (*EventV3, error) {
 	}
 
 	// Convert wire format to internal context representation
+	clusterID, err := bindNVCAClusterID(ctx, wireFormat.ClusterID)
+	if err != nil {
+		return nil, err
+	}
 	contextV3 := ContextV3{
 		InstanceID:         wireFormat.InstanceID,
 		DeploymentID:       wireFormat.DeploymentID,
 		GPUSpecificationID: wireFormat.GPUSpecificationID,
-		ClusterID:          wireFormat.ClusterID,
+		ClusterID:          clusterID,
 		ResourceID:         wireFormat.ResourceID,
 	}
 
@@ -595,7 +622,7 @@ func (s *Server) processCloudEvents(traceCtx context.Context, cloudEvents []*clo
 			continue
 		}
 
-		event, err := extractCloudEvent(cloudEvent)
+		event, err := extractCloudEvent(traceCtx, cloudEvent)
 		if err != nil {
 			logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
 			result.FailureCount++

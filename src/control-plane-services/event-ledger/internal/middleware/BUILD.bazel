@@ -9,6 +9,7 @@ go_library(
         "http_client.go",
         "jwt.go",
         "metrics.go",
+        "nvca_introspect.go",
         "policy.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware",
@@ -16,6 +17,7 @@ go_library(
     deps = [
         "//src/control-plane-services/event-ledger/cmd/api/error",
         "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/nvca",
         "//src/control-plane-services/event-ledger/internal/observability/logging",
         "//src/control-plane-services/event-ledger/internal/policy",
         "//src/control-plane-services/event-ledger/pkg/constants",
@@ -54,6 +56,7 @@ go_test(
     embed = [":middleware"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/nvca",
         "//src/control-plane-services/event-ledger/internal/observability/logging",
         "//src/control-plane-services/event-ledger/internal/policy",
         "//src/control-plane-services/event-ledger/pkg/testutils",
