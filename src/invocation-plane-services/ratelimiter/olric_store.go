@@ -99,7 +99,13 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 	value := 1
 	// initialize the value to 1 if key doesn't exist
 	if errors.Is(err, olric.ErrKeyNotFound) {
-		err = store.dmap.Put(ctx, fullKey, 1)
+		// Set the TTL on this same write instead of as a follow-up Put (see #1571):
+		// a key that is ever written without a TTL is never given one later, so
+		// creating it with no expiry and only setting the TTL in a second write
+		// left a window - rate.Period == 0, a silently-ignored ErrKeyNotFound on
+		// the follow-up write, or a crash/restart between the two writes - where
+		// the key would live forever and leak memory.
+		err = store.dmap.Put(ctx, fullKey, value, newKeyPutOptions(rate)...)
 		if err != nil {
 			return limiter.Context{}, err
 		}
@@ -115,8 +121,9 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 				return limiter.Context{}, err
 			}
 		} else {
-			// when ttl is 0, reset the value to 1
-			err = store.dmap.Put(ctx, fullKey, 1)
+			// when ttl is 0, reset the value to 1 and (re)apply the TTL on this
+			// same write so a key whose TTL already expired can't go immortal.
+			err = store.dmap.Put(ctx, fullKey, value, newKeyPutOptions(rate)...)
 			if err != nil {
 				zap.L().Error("Failed to update value", zap.Error(err))
 				return limiter.Context{}, err
@@ -128,16 +135,6 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 	now := time.Now()
 	expiration := now.Add(rate.Period)
 	if value == 1 {
-		if rate.Period.Milliseconds() > 0 {
-			ttlOption := olric.PX(rate.Period)
-			err = store.dmap.Put(ctx, fullKey, value, ttlOption)
-
-			// ignore key not found error
-			if err != nil && !errors.Is(err, olric.ErrKeyNotFound) {
-				zap.L().Error("Failed to set expiration", zap.Error(err))
-				return limiter.Context{}, err
-			}
-		}
 		return common.GetContextFromState(now, rate, expiration, int64(value)), nil
 	}
 
@@ -147,10 +144,41 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 	}
 
 	if result.TTL() > 0 {
-		expiration = now.Add(time.Duration(result.TTL()) * time.Millisecond)
+		expiration = expirationFromTTLMillis(result.TTL())
 	}
 	span.SetAttributes(attribute.String("expiration", expiration.String()))
 	return common.GetContextFromState(now, rate, expiration, int64(value)), nil
+}
+
+// expirationFromTTLMillis converts the absolute Unix-millisecond expiry that
+// olric.GetResponse.TTL() returns into a time.Time. GetResponse.TTL() reports
+// an absolute epoch-millisecond timestamp of when the key expires - not a
+// duration remaining - matching how Olric's own internal atomic-increment
+// code treats the same value (time.UnixMilli(ttl) in olric-data/olric's
+// internal/dmap package). Treating it as a millisecond count and adding it
+// to time.Now(), as this code previously did, produced an expiration tens
+// of thousands of years in the future instead of the key's real remaining
+// lifetime.
+func expirationFromTTLMillis(ttlMillis int64) time.Time {
+	return time.UnixMilli(ttlMillis)
+}
+
+// newKeyPutOptions returns the Olric put options used whenever a key is
+// (re)created with value 1. Folding the TTL into that same Put call - rather
+// than applying it in a separate follow-up write - is what closes #1571:
+// nothing in this store ever re-applies a TTL to a key that already lacks
+// one, so the key must get its TTL atomically with the write that creates it.
+// When rate.Period is zero (an unbounded limiter tier), no TTL is applied,
+// matching the previous behavior for that case.
+func newKeyPutOptions(rate limiter.Rate) []olric.PutOption {
+	if rate.Period > 0 {
+		ttl := rate.Period
+		if ttl < time.Millisecond {
+			ttl = time.Millisecond
+		}
+		return []olric.PutOption{olric.PX(ttl)}
+	}
+	return nil
 }
 
 // Peek returns the limit for the given identifier, without modification on current values.
