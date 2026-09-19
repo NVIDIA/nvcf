@@ -12,15 +12,18 @@ deploy_nvcf:
   variables:
     KUBECONFIG: $KUBECONFIG_FILE
   script:
-    - nvcf-cli self-hosted check --pre --json | jq -e '.event != "phase_failed"' || exit 2
+    - nvcf-cli self-hosted check --pre --json 2>&1 >/dev/null | grep '^{' | jq -se 'length > 0 and all(.[]; .event != "phase_failed")' || exit 2
     - nvcf-cli self-hosted up --cluster-name=$CLUSTER_NAME --token=$NVCF_ADMIN_JWT --non-interactive --json
-    - nvcf-cli self-hosted status --json | jq -e '.verdict == "healthy"'
+    - nvcf-cli self-hosted status --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .verdict == "healthy")'
 ```
 
 Notes:
 
 - `--non-interactive --token=$JWT` is required in CI; never use interactive `init`.
 - Always `--json` for machine-parsing.
+- `--json` writes JSONL to stderr, not stdout, so redirect with `2>&1 >/dev/null` before a parser.
+- Slurp with `jq -s` before testing a condition. Without it `jq -e` takes its exit status from the last event alone, so a `phase_failed` followed by any other event still exits 0.
+- stderr also carries plain-text notices, so filter to JSON lines. Do not add `--show-logs` here: it appends a non-JSON transcript to the same stream.
 - Final status check gates downstream stages on `verdict == "healthy"`.
 
 ## GitOps (Argo / Flux) pattern
