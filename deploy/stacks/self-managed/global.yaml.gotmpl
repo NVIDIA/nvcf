@@ -364,14 +364,10 @@ natsAuthCalloutService:
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
-{{- $llmRequestRouterUsesBackend := $backendRouterEnabled }}
-{{- if not (kindIs "bool" $llmRequestRouterUsesBackend) }}
-{{- /* Match the chart's backendRouterEnabled helper when enabled is null. */}}
-{{- $llmRequestRouterUsesBackend = and
-      (eq (dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values) "Deployment")
-      (gt (dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values | int) 1) }}
+{{- $llmRequestRouterDefaultAddress := "llm-request-router.nvcf.svc.cluster.local:50071" }}
+{{- if $backendRouterEnabled }}
+{{- $llmRequestRouterDefaultAddress = "http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071" }}
 {{- end }}
-{{- $llmRequestRouterDefaultAddress := ternary "http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071" "llm-request-router.nvcf.svc.cluster.local:50071" $llmRequestRouterUsesBackend }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}

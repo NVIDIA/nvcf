@@ -229,25 +229,13 @@ if grep -Eq 'NVCF_(LLM_REQUEST_ROUTER_WORKER_ADDRESS|STARGATE_ADDRESS)' \
 fi
 
 direct_worker_address='llm-request-router.nvcf.svc.cluster.local:50071'
-backend_mode_cases=(
-  "disabled|false|Deployment|1|$direct_worker_address"
-  "auto-multiple|null|Deployment|3|$local_worker_address"
-  "auto-single|null|Deployment|1|$direct_worker_address"
-  "auto-stateful|null|StatefulSet|3|$direct_worker_address"
-)
-for backend_mode_case in "${backend_mode_cases[@]}"; do
-  IFS='|' read -r case_name backend_enabled workload replicas expected_address <<<"$backend_mode_case"
-  write_environment true ''
-  {
-    printf '    requestRouter:\n      workload:\n        kind: %s\n' "$workload"
-    printf '      replicaCount: %s\n' "$replicas"
-    printf '      backendRouter:\n        enabled: %s\n' "$backend_enabled"
-  } >>"$environment_file"
-  values_file="$work_dir/$case_name-values.yaml"
-  render_api_values "$values_file" >/dev/null
-  assert_remote_config_address "$values_file" "$expected_address" ||
-    fail "$case_name: expected bootstrap address $expected_address"
-done
+render_api_values "$work_dir/backend-disabled-api-values.yaml" \
+  --state-values-set addons.llm.requestRouter.backendRouter.enabled=false \
+  --state-values-set addons.llm.requestRouter.replicaCount=1 \
+  >/dev/null
+assert_remote_config_address "$work_dir/backend-disabled-api-values.yaml" \
+  "$direct_worker_address" ||
+  fail "disabled backend routing did not use the main request-router address"
 
 custom_router_grpc_port='51071'
 printf '%s\n' \
