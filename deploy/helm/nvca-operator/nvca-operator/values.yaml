@@ -177,7 +177,10 @@ worker:
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
 ## @description agentConfig.mergeConfig is deprecated for BYOO, storage, and worker settings. Use the top-level byoo/storage/worker values instead.
 agentConfig:
-  mergeConfig: ""
+  mergeConfig: |-
+    cluster:
+      validationPolicy:
+        name: Unrestricted
   # Example:
   #
   # mergeConfig: |

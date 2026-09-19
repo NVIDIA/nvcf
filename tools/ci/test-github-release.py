@@ -2618,16 +2618,28 @@ class FollowerReleaseTest(unittest.TestCase):
                     root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
                 )
 
-    def test_follower_skips_a_prerelease_leader(self):
+    def test_follower_follows_the_stable_tag_under_a_newer_prerelease(self):
+        """A prerelease must not hide the stable release the follower owes a tag."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
             root.mkdir()
             self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "fix(nvca): correct a thing")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.12.2")
+            stable_commit = git_out(root, "rev-parse", "HEAD").strip()
+            # A release candidate cut afterwards sorts above the stable release.
+            self.touch(root, "src/compute-plane-services/nvca/b.go", "feat(nvca): start the next line")
             git(root, "tag", "src/compute-plane-services/nvca/v3.13.0-rc.1")
+
             self.github_release.publish_follower_release(
                 root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
             )
-            self.assertEqual(git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v*").split(), [])
+
+            tag = "deploy/helm/nvca-operator/v3.12.2"
+            self.assertEqual(
+                git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v*").split(), [tag]
+            )
+            self.assertEqual(git_out(root, "rev-parse", f"{tag}^{{commit}}").strip(), stable_commit)
 
 
 if __name__ == "__main__":

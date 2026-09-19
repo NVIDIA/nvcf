@@ -27,11 +27,7 @@ assert_render_fails() {
 }
 
 for chart in "${vendored_chart}"; do
-  if [[ "${chart}" == "${source_chart}" ]]; then
-    chart_name="source"
-  else
-    chart_name="vendored"
-  fi
+  chart_name="vendored"
   default_manifest="${tmp_dir}/${chart_name}-default.yaml"
   reused_values_chart="${tmp_dir}/${chart_name}-reused-values"
   reused_values_manifest="${tmp_dir}/${chart_name}-reused-values.yaml"

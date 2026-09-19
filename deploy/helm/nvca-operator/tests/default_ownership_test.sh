@@ -51,13 +51,9 @@ backend_config() {
 default_manifest="${work_dir}/default.yaml"
 render "${default_manifest}"
 default_config="$(agent_config "${default_manifest}")"
-# The chart ships no cluster validation policy. Unrestricted is NVIDIA's own
-# deployment choice and is supplied by the compute-plane configuration, so a
-# customer installing the published chart gets the operator's own default
-# rather than a permissive policy they did not ask for.
 default_policy="$(printf '%s' "${default_config}" | yq -r '.cluster.validationPolicy.name')"
-test "${default_policy}" = "null" ||
-  fail "chart should ship no default validation policy, got ${default_policy:-missing}"
+test "${default_policy}" = "Unrestricted" ||
+  fail "chart default validation policy is ${default_policy:-missing}, expected Unrestricted"
 default_quic_present="$(printf '%s' "${default_config}" | yq -r '(.workload // {}) | has("stargateQUICInsecure")')"
 test "${default_quic_present}" = "false" ||
   fail "chart serializes the runtime-default stargateQUICInsecure value"

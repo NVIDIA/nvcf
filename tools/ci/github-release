@@ -1574,7 +1574,14 @@ def publish_follower_release(root, service, metadata, dry_run, draft):
     """
     leader_id = service["version_follows"]
     leader = find_service(metadata, leader_id)
-    leader_tag = latest_service_tag(leader, root)
+    # latest_service_tag orders prereleases above the stable release they lead
+    # to, so it can hand back an rc the follower must refuse, leaving the stable
+    # tag unfollowed. Select from the stable, reachable set instead, the same
+    # set semantic-release resolves a baseline from.
+    stable = stable_reachable_versions(root, leader)
+    leader_tag = (
+        sorted(stable, key=lambda item: semverish_sort_key(item[0]))[-1][1] if stable else ""
+    )
     if not leader_tag:
         print(
             f"[github-release] {service['id']}: {leader_id} has no release tag to follow; "
@@ -2054,6 +2061,15 @@ def auto_release(args):
                         )
                         stale_checkouts.append(service["id"])
                         continue
+                    if preview == "unknown":
+                        # An unreadable preview is not a "nothing to release".
+                        # Treating it as one would either skip the publish run or
+                        # cut an owned-path tag without a trustworthy baseline.
+                        raise SystemExit(
+                            f"[github-release] ERROR: {service['id']}: semantic-release preview "
+                            f"exited {preview_code} without a trustworthy release decision; "
+                            "not releasing from an unreadable preview"
+                        )
                     previewed = parse_next_version(preview_output) if preview == "released" else ""
                     version, source = multi_path_release_version(root, service, previewed)
                     if source == "owned-paths":
