@@ -73,6 +73,15 @@ global:
   #   effect: NoSchedule
 
 # One profile controls all compute observability defaults.
+# NVIDIA-operated compute planes run an unrestricted cluster validation policy.
+# This is deployment policy, not chart behaviour, so it is set here rather than
+# shipped as a published chart default.
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+
 observability:
   profile: compute
 

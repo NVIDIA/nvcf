@@ -17,9 +17,12 @@ install_kubeconform() {
 run_lint() {
   local chart_name=${1}
   shift
-  local chart_dir="${repo_root}/deployments/${chart_name}"
-  local values_file="${repo_root}/deployments/${chart_name}/values.yaml"
-  local args=()
+  local chart_dir="${repo_root}/../../../deploy/helm/nvca-operator/${chart_name}"
+  local values_file="${repo_root}/../../../deploy/helm/nvca-operator/${chart_name}/values.yaml"
+  # The chart ships no default NGC service key. An ngc-managed install supplies
+  # one, and the generated image pull secret requires it, so lint renders the
+  # way a real install does. Callers that disable the pull secret override this.
+  local args=(--set-string "ngcConfig.serviceKey=lint-service-key")
 
   # Process arguments
   while [[ $# -gt 0 ]]; do
@@ -63,37 +66,44 @@ assert_pre_delete_cleanup_rbac() {
   trap 'rm -f "${rendered}"' RETURN
 
   local release_name="test-release"
-  local cleanup_name="${release_name}-nvca-operator-pre-delete-cleanup"
 
-  helm template "${release_name}" "${repo_root}/deployments/nvca-operator" \
+  helm template "${release_name}" "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
     --set "ngcConfig.serviceKey=fakekey" >"${rendered}"
 
+  # Read the hook object name from the render rather than rebuilding it here.
+  # The chart may set fullnameOverride, so a name assembled from the release
+  # name does not necessarily match what the chart emits.
+  local cleanup_name
+  cleanup_name="$(yq -r 'select(.kind == "Job" and (.metadata.name | test("pre-delete-cleanup"))) | .metadata.name' "${rendered}")"
+  test -n "${cleanup_name}" || { echo "pre-delete cleanup Job not rendered" >&2; return 1; }
+  export CLEANUP_NAME="${cleanup_name}"
+
   assert_eq "${cleanup_name}" \
-    "$(yq 'select(.kind == "Job" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .spec.template.spec.serviceAccountName' "${rendered}")" \
+    "$(yq 'select(.kind == "Job" and .metadata.name == strenv(CLEANUP_NAME)) | .spec.template.spec.serviceAccountName' "${rendered}")" \
     "pre-delete cleanup Job uses hook-scoped ServiceAccount"
   assert_eq "pre-delete" \
-    "$(yq 'select(.kind == "ServiceAccount" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook"' "${rendered}")" \
+    "$(yq 'select(.kind == "ServiceAccount" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook"' "${rendered}")" \
     "pre-delete cleanup ServiceAccount is a pre-delete hook"
   assert_eq "-20" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-weight"' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook-weight"' "${rendered}")" \
     "pre-delete cleanup RBAC runs before cleanup Job"
   assert_eq "${cleanup_name}" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .subjects[0].name' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .subjects[0].name' "${rendered}")" \
     "pre-delete cleanup ClusterRoleBinding binds hook ServiceAccount"
   assert_eq "${cleanup_name}" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .roleRef.name' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .roleRef.name' "${rendered}")" \
     "pre-delete cleanup ClusterRoleBinding uses hook ClusterRole"
   assert_eq "before-hook-creation,hook-succeeded" \
-    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
     "pre-delete cleanup ClusterRoleBinding is removed by Helm after job succeeds"
   assert_eq "before-hook-creation" \
-    "$(yq 'select(.kind == "ClusterRole" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
+    "$(yq 'select(.kind == "ClusterRole" and .metadata.name == strenv(CLEANUP_NAME)) | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
     "pre-delete cleanup hook RBAC is kept for the running Job"
 }
 
 assert_storage_capability_catalog() (
-  local service_chart="${repo_root}/deployments/nvca-operator"
-  local release_chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
+  local service_chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
+  local release_chart="${service_chart}"
   local catalog="files/nvcf-storage-capabilities-v1alpha1.yaml"
   local schema="files/nvcf-storage-capabilities-v1alpha1.schema.json"
   local template="templates/storage-capabilities-configmap.yaml"
@@ -107,12 +117,9 @@ assert_storage_capability_catalog() (
     --requirement "${repo_root}/scripts/requirements-lint.txt"
   schema_check='import json,sys,yaml,jsonschema; schema=json.load(open(sys.argv[1])); jsonschema.Draft202012Validator.check_schema(schema); jsonschema.Draft202012Validator(schema).validate(yaml.safe_load(open(sys.argv[2])))'
 
-  for relative in "${catalog}" "${schema}" "${template}"; do
-    diff -u "${service_chart}/${relative}" "${release_chart}/${relative}"
-  done
-
   rendered="${tmpdir}/rendered.yaml"
   helm template test-release "${service_chart}" --namespace nvca-system \
+    --set-string "ngcConfig.serviceKey=lint-service-key" \
     --set "ngcConfig.serviceKey=fakekey" \
     --show-only "${template}" >"${rendered}"
   assert_eq "nvcf-storage-capabilities" "$(yq -r ".metadata.name" "${rendered}")" \
@@ -229,6 +236,7 @@ assert_storage_capability_catalog() (
   echo "PASS: schema rejects an unknown driver field"
 
   helm template test-release "${release_chart}" --namespace nvca-system \
+    --set-string "ngcConfig.serviceKey=lint-service-key" \
     --show-only "${template}" >"${rendered}"
   assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
     "release-chart storage capability ConfigMap is owned by the release namespace"
@@ -272,7 +280,6 @@ assert_distroless_operator_commands() {
     "${chart_label} cleanup Job starts the packaged binary directly"
 }
 
-assert_distroless_operator_commands "${repo_root}/deployments/nvca-operator" "service chart"
 assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 install_kubeconform
 assert_pre_delete_cleanup_rbac
@@ -281,7 +288,7 @@ run_lint nvca-operator --set "generateImagePullSecret=false" --set "imagePullSec
 
 echo -e "\nTesting self-managed endpoint validation..."
 missing_endpoint_output="$(mktemp)"
-if helm template test-release "${repo_root}/deployments/nvca-operator" \
+if helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --set "generateImagePullSecret=false" \
   --set "ngcConfig.clusterSource=self-managed" \
   --set-string "clusterID=id" \
@@ -328,7 +335,7 @@ assert_service_oauth_nil_safe() {
   shift
   local render_output
   render_output="$(mktemp)"
-  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+  if ! helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "$@" \
     --values "${reuse_values_file}" > "${render_output}" 2>&1; then
     echo "Expected ${label} cluster-dto to render without agent.serviceOAuth defaults"
     cat "${render_output}"
@@ -392,7 +399,6 @@ assert_helm_managed_vault_address() {
   done
 }
 
-assert_helm_managed_vault_address "${repo_root}/deployments/nvca-operator" "service chart"
 assert_helm_managed_vault_address "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 
 assert_service_oauth_nil_safe "self-managed" \
@@ -420,7 +426,7 @@ assert_transport_trust_config() {
   local render_output
   render_output="$(mktemp)"
 
-  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+  if ! helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "$@" \
     --show-only templates/operator-config-cm.yaml > "${render_output}" 2>&1; then
     echo "Expected ${label} workload transport trust ConfigMap to render"
     cat "${render_output}"
@@ -489,13 +495,13 @@ run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml" -
 
 # Test ConfigMaps contain expected structure when custom values provided
 echo "Testing ConfigMap structure with custom values..."
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --values "${repo_root}/test/test-network-policies.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
   | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap created" || echo "FAIL Network policies ConfigMap missing"
 
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --values "${repo_root}/test/test-custom-annotations.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
@@ -503,12 +509,12 @@ helm template test-release "${repo_root}/deployments/nvca-operator" \
 
 # Test ConfigMaps are created even without custom values (always created behavior)
 echo "Testing ConfigMaps are always created..."
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
   | grep -q "nvca-namespace-pod-annotations" && echo "ok Annotations ConfigMap always created" || echo "FAIL Annotations ConfigMap not created"
 
-helm template test-release "${repo_root}/deployments/nvca-operator" \
+helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
   | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap always created" || echo "FAIL Network policies ConfigMap not created"

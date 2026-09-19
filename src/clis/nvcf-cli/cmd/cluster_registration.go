@@ -552,7 +552,7 @@ func registeredClusterIDs(resp *client.RegisterClusterResponse) (clusterGroupID,
 // Schema matches the nvca-operator chart's expected keys. clusterID,
 // clusterGroupID, and ncaID live at the top level with the mixed-case "ID"
 // suffix to match the `## @param` annotations in
-// `deployments/nvca-operator/values.yaml` (e.g. `## @param clusterID`). Region
+// `deploy/helm/nvca-operator/nvca-operator/values.yaml` (e.g. `## @param clusterID`). Region
 // lives under selfManaged because that is the value the self-managed backend
 // template consumes. identitySource is lifecycle metadata used by CLI teardown;
 // the chart deliberately ignores it.

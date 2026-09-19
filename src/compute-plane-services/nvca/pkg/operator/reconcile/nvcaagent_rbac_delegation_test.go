@@ -33,9 +33,9 @@ import (
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
-// chartPath is the operator chart this test renders. Source of truth; the
-// vendored copy under deploy/helm is generated from it.
-const chartPath = "../../../deployments/nvca-operator"
+// chartPath is the operator chart this test renders. It is the single
+// published chart; there is no second copy to keep in step.
+const chartPath = "../../../../../../deploy/helm/nvca-operator/nvca-operator"
 
 // Test_NVCAAgentRBAC_OperatorCanDelegate asserts the operator holds every
 // permission it grants to the agent.

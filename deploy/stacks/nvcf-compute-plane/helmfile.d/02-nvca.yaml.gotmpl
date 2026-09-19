@@ -84,7 +84,7 @@ helmDefaults:
   # install/upgrade). Without them, `helm uninstall` gets no --timeout flag at
   # all and falls back to Helm's 5m hook-wait default, well under the
   # nvca-operator pre-delete hook's ~10m worst-case cordon-and-drain budget
-  # (see deployments/nvca-operator/values.yaml gracefulShutdown.cleanupTimeoutSeconds).
+  # (see the nvca-operator chart values.yaml gracefulShutdown.cleanupTimeoutSeconds).
   deleteWait: true
   deleteTimeout: 900
   wait: true
@@ -273,6 +273,11 @@ releases:
         webhookConfig:
           imageConfig:
             pullPolicy: IfNotPresent
+        # The published chart is named helm-nvca-operator, so Helm would otherwise
+        # derive resource names from that. Pin them to the operator's own name so
+        # this stack and a direct nvca-operator install produce the same objects.
+        nameOverride: nvca-operator
+        fullnameOverride: nvca-operator
         {{- if $agentMergeConfig }}
         agentConfig:
           mergeConfig: |

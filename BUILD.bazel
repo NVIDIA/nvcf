@@ -39,6 +39,18 @@ exports_files(
     visibility = [":java_notice_consumers"],
 )
 
+# The nvca-operator chart lives under deploy/, which is excluded from gazelle
+# and so has no package of its own. Its storage-capability catalog is consumed
+# by Go tests under src/, so it is exported from the root package here.
+filegroup(
+    name = "nvca-operator-storage-capability-catalog",
+    srcs = [
+        "deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json",
+        "deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml",
+    ],
+    visibility = ["//src/compute-plane-services/nvca:__pkg__"],
+)
+
 # Gazelle manages only the native Go subtrees listed in go.work.bazel.
 # nv-boot-parent and Cloud Tasks are also owned by the root Bazel module, but
 # their checked-in Java BUILD files are maintained manually and remain outside

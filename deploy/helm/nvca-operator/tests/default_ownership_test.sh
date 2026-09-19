@@ -15,8 +15,7 @@ fail() {
 }
 
 for schema in \
-  "${chart}/values.schema.json" \
-  "${chart_root}/../../../src/compute-plane-services/nvca/deployments/nvca-operator/values.schema.json"; do
+  "${chart}/values.schema.json"; do
   test "$(yq -r '.properties.selfManaged.properties.region.default' "${schema}")" = "us-west-1" ||
     fail "${schema} does not declare the selfManaged.region default"
   test "$(yq -r '.properties.helmManaged.properties | has("region")' "${schema}")" = "false" ||
@@ -28,6 +27,7 @@ render() {
   shift
   helm template nvca-operator "${chart}" \
     --namespace nvca-operator \
+    --set-string "ngcConfig.serviceKey=test-service-key" \
     --values "${chart}/values.yaml" \
     --set-string ngcConfig.clusterSource=self-managed \
     --set-string selfManaged.icmsServiceURL=http://icms.example.invalid:8080 \
@@ -51,9 +51,13 @@ backend_config() {
 default_manifest="${work_dir}/default.yaml"
 render "${default_manifest}"
 default_config="$(agent_config "${default_manifest}")"
+# The chart ships no cluster validation policy. Unrestricted is NVIDIA's own
+# deployment choice and is supplied by the compute-plane configuration, so a
+# customer installing the published chart gets the operator's own default
+# rather than a permissive policy they did not ask for.
 default_policy="$(printf '%s' "${default_config}" | yq -r '.cluster.validationPolicy.name')"
-test "${default_policy}" = "Unrestricted" ||
-  fail "chart default validation policy is ${default_policy:-missing}, expected Unrestricted"
+test "${default_policy}" = "null" ||
+  fail "chart should ship no default validation policy, got ${default_policy:-missing}"
 default_quic_present="$(printf '%s' "${default_config}" | yq -r '(.workload // {}) | has("stargateQUICInsecure")')"
 test "${default_quic_present}" = "false" ||
   fail "chart serializes the runtime-default stargateQUICInsecure value"

@@ -44,7 +44,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci sync-chart check-synced-chart render-values-from-stack install-from-stack test-render-values test-vendor-chart-image-tag test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-otel-collector-compatibility test-image-pull-secret-defaults test-pod-disruption-budget test-first-class-byoo-values test-first-class-storage-worker-values test-default-ownership test-resource-quantity-schema
+.PHONY: install uninstall status lint template validate clean package push-oci render-values-from-stack install-from-stack test-render-values test-build-release-assets test-release-image-manifest test-release-artifact-permissions test-package-release-assets test-attach-release-assets test-release-sbom-wrapper test-self-managed-nvca-image-reference test-otel-collector-compatibility test-image-pull-secret-defaults test-pod-disruption-budget test-first-class-byoo-values test-first-class-storage-worker-values test-default-ownership test-resource-quantity-schema
 
 install:
 ifndef values
@@ -91,9 +91,6 @@ install-from-stack: render-values-from-stack
 
 test-render-values:
 	@bash ./tests/render_values_from_stack_env_test.sh
-
-test-vendor-chart-image-tag:
-	@bash ./tests/vendor_chart_image_tag_test.sh
 
 test-build-release-assets:
 	@bash ./tests/build_release_assets_test.sh
@@ -192,24 +189,3 @@ push-oci:
 	@rm -rf ./packaged-charts
 	@echo "[push-oci] Cleanup complete."
 
-# Sync NVCA Operator chart from monorepo source chart
-vendor-chart:
-	@echo "🚀 [vendor-chart] Vendor NVCA Operator chart from local monorepo source..."
-	@./scripts/ci_vendor_nvca_operator_chart
-	@echo "🎉 [vendor-chart] Vendor complete. Deployments available in $(helm_dir)/"
-
-check-vendor-chart: vendor-chart
-	@echo "🚀 [check-vendor-chart] Checking if chart is synced..."
-	@if ! git diff --ignore-space-at-eol --exit-code -- .; then \
-		echo ""; \
-		echo "❌ [check-vendor-chart] Chart is NOT synced with source chart!"; \
-		echo ""; \
-		echo "📋 To fix this issue:"; \
-		echo "   1. Run: make vendor-chart"; \
-		echo "   2. Review and commit the changes"; \
-		echo "   3. Update your merge request"; \
-		echo ""; \
-		echo "💡 This ensures your deployment matches the monorepo source NVCA Operator chart."; \
-		exit 1; \
-	fi
-	@echo "🎉 [check-vendor-chart] Chart is synced."

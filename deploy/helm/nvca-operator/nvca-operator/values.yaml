@@ -177,10 +177,7 @@ worker:
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
 ## @description agentConfig.mergeConfig is deprecated for BYOO, storage, and worker settings. Use the top-level byoo/storage/worker values instead.
 agentConfig:
-  mergeConfig: |-
-    cluster:
-      validationPolicy:
-        name: Unrestricted
+  mergeConfig: ""
   # Example:
   #
   # mergeConfig: |
@@ -347,7 +344,7 @@ webhook:
 ##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
-  serviceKey: "dummy-api-key"
+  serviceKey: ""
   serviceKeySecretName: "ngc-service-key"
   serviceKeySecretKeyName: "ngcServiceKey"
   apiURL: https://api.ngc.nvidia.com
@@ -403,7 +400,7 @@ helmManaged:
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: "3.12.7"
+  nvcaVersion: ""
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.
@@ -425,19 +422,19 @@ selfManaged:
     imageRepository: ""
     imageTag: 0.160.0-nv-0.2.5
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  icmsServiceURL: "http://icms.example.invalid:8080"
+  icmsServiceURL: ""
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
   icmsServiceHostHeaderOverride: ""
   ## @param selfManaged.revalServiceURL URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  revalServiceURL: "http://reval.example.invalid:8080"
+  revalServiceURL: ""
   ## @param selfManaged.revalServiceHostHeaderOverride Optional Host header override for selfManaged.revalServiceURL.
   revalServiceHostHeaderOverride: ""
   ## @param selfManaged.natsURL URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  natsURL: "nats://nats.example.invalid:4222"
+  natsURL: ""
   ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.
   natsHostOverride: ""
   sharedStorage:
-    imageTag: 1.0.5
+    imageTag: ""
 ## @section Node Selector Configuration
 ## @param nodeSelector.key Node-selector Label key
 ## @param nodeSelector.value Node-selector Label value
@@ -573,5 +570,5 @@ clusterValidator:
     limits:
       cpu: 200m
       memory: 128Mi
-nameOverride: nvca-operator
-fullnameOverride: nvca-operator
+nameOverride: ""
+fullnameOverride: ""

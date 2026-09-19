@@ -360,14 +360,23 @@ func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
 
 // shippedChartDir locates the operator chart: Bazel runs the test from the
 // runfiles root with the storage-capability-catalog data dependency, go test
-// runs it from the package directory.
+// runs it from the package directory. The chart also lives outside this
+// package, so probe a file rather than the directory: the parent exists in
+// runfiles even when its contents are not staged.
 func shippedChartDir(t *testing.T) string {
 	t.Helper()
-	chartDir := filepath.Join("src", "compute-plane-services", "nvca", "deployments", "nvca-operator")
-	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
-		chartDir = filepath.Join("..", "..", "deployments", "nvca-operator")
+	rel := filepath.Join("deploy", "helm", "nvca-operator", "nvca-operator")
+	for _, candidate := range []string{
+		rel,
+		filepath.Join("_main", rel),
+		filepath.Join("..", "..", "..", "..", "..", rel),
+	} {
+		if _, err := os.Stat(filepath.Join(candidate, "files", "nvcf-storage-capabilities-v1alpha1.yaml")); err == nil {
+			return candidate
+		}
 	}
-	return chartDir
+	t.Fatal("could not locate the nvca-operator chart files")
+	return ""
 }
 
 func TestShippedStorageCapabilityCatalog(t *testing.T) {
