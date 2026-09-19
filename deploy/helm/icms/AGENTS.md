@@ -5,8 +5,8 @@
 - Repo: `sis-colocated-deploy`
 - Workspace(s): `self-hosted-nvcf`
 - Tier: `chart`
-- Team: `@NVIDIA/nvcf-dev`
-- Default owner: `@NVIDIA/nvcf-dev`.
+- Team: `@dsx-ai-factory/nvcf-dev`
+- Default owner: `@dsx-ai-factory/nvcf-dev`.
 - Manifest description: Helm chart for the ICMS API (published as `helm-nvcf-sis`)
 
 ## Use `nvcf-agentic-dev` As The Routing Layer
