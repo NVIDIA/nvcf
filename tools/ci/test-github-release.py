@@ -2642,5 +2642,53 @@ class FollowerReleaseTest(unittest.TestCase):
             self.assertEqual(git_out(root, "rev-parse", f"{tag}^{{commit}}").strip(), stable_commit)
 
 
+class PackagedAppVersionTest(unittest.TestCase):
+    """A follower chart publishes the operator version its release carries."""
+
+    setUp = GithubReleaseTest.setUp
+
+    def chart(self, tmp, app_version="3.10.0"):
+        chart_dir = Path(tmp) / "nvca-operator"
+        chart_dir.mkdir()
+        (chart_dir / "Chart.yaml").write_text(
+            "apiVersion: v2\n"
+            "name: helm-nvca-operator\n"
+            "version: 0.0.0\n"
+            f'appVersion: "{app_version}"\n'
+        )
+        (chart_dir / "values.yaml").write_text("image:\n  tag: \"\"\n")
+        return chart_dir
+
+    def packaged_app_version(self, package):
+        out = subprocess.run(
+            ["helm", "show", "chart", str(package)],
+            check=True, stdout=subprocess.PIPE, text=True,
+        ).stdout
+        for line in out.splitlines():
+            if line.startswith("appVersion:"):
+                return line.split(":", 1)[1].strip().strip('"')
+        return ""
+
+    def test_follower_package_carries_the_release_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            out.mkdir()
+            package = self.github_release.package_release_chart(
+                self.chart(tmp), "3.13.0", out, app_version="3.13.0"
+            )
+            # Committed appVersion was 3.10.0. Publishing it unchanged would ship
+            # a chart that resolves the operator image to a superseded release.
+            self.assertEqual(self.packaged_app_version(package), "3.13.0")
+
+    def test_other_charts_keep_their_committed_app_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            out.mkdir()
+            package = self.github_release.package_release_chart(
+                self.chart(tmp), "1.28.4", out
+            )
+            self.assertEqual(self.packaged_app_version(package), "3.10.0")
+
+
 if __name__ == "__main__":
     unittest.main()

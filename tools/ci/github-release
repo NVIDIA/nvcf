@@ -935,8 +935,15 @@ def helm_registry_login(registry, api_key):
         raise SystemExit(f"Helm registry login failed for {host}")
 
 
-def package_release_chart(chart_dir, version, output_dir):
-    """Build chart dependencies and package an isolated copy at the tag version."""
+def package_release_chart(chart_dir, version, output_dir, app_version=None):
+    """Build chart dependencies and package an isolated copy at the tag version.
+
+    `app_version` stamps Chart.yaml's appVersion into the package. A chart that
+    follows a leader deploys the release its version came from, and the chart
+    ships an empty image tag so appVersion is what the templates resolve. Left
+    at whatever is committed, the published chart would point at whichever
+    release last edited the file.
+    """
     staged_chart = output_dir / "source" / chart_dir.name
     staged_chart.parent.mkdir(parents=True)
     shutil.copytree(chart_dir, staged_chart)
@@ -951,7 +958,10 @@ def package_release_chart(chart_dir, version, output_dir):
 
     package_dir = output_dir / "package"
     package_dir.mkdir()
-    run(["helm", "package", str(staged_chart), "--version", version, "--destination", str(package_dir)])
+    package_cmd = ["helm", "package", str(staged_chart), "--version", version]
+    if app_version:
+        package_cmd += ["--app-version", app_version]
+    run(package_cmd + ["--destination", str(package_dir)])
     packages = list(package_dir.glob("*.tgz"))
     if len(packages) != 1:
         raise SystemExit(f"expected one packaged Helm chart, found {len(packages)}")
@@ -1017,7 +1027,11 @@ def publish_release_chart(root, service, version, dry_run):
     registry, api_key = helm_registry_settings()
     with tempfile.TemporaryDirectory(prefix="nvcf-release-chart-") as tmp:
         package_root = Path(tmp)
-        local_package = package_release_chart(chart_dir, version, package_root)
+        # A follower's version is its leader's, so it is also the operator
+        # version the chart deploys. Any other chart keeps the appVersion its
+        # own bump flow maintains.
+        app_version = version if service.get("version_follows") else None
+        local_package = package_release_chart(chart_dir, version, package_root, app_version)
         helm_registry_login(registry, api_key)
         status, output, remote_packages = pull_release_chart(
             registry, chart_name, version, package_root / "published"
