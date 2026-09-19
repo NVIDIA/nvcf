@@ -175,6 +175,7 @@ fn log_deregistration(
     identity: &RegistrationIdentity,
     outcome: &Result<(), RegistrationError>,
     removed_model_ids: &BTreeSet<String>,
+    closed_connections: usize,
 ) {
     // Router shutdown is a normal state transition; any error means a worker was lost.
     match outcome {
@@ -195,7 +196,8 @@ fn log_deregistration(
             reason = error.kind(),
             error = %error,
             removed_model_ids = ?removed_model_ids,
-            "inference server deregistered; removed from routing"
+            closed_connections,
+            "inference server deregistered; removed from routing, in-flight requests cancelled"
         ),
     }
 }
@@ -373,9 +375,20 @@ impl RegistrationSession {
             ..
         } = self;
         let identity = registration.identity().clone();
+        let generation = registration.generation();
         health_check.shutdown().await;
         let removed_model_ids = state.end_registration(registration).await;
-        log_deregistration(&identity, &outcome, &removed_model_ids);
+        // Router shutdown keeps the tunnels open so the HTTP drain can finish.
+        // Any other end means the backend is gone: fail its in-flight requests
+        // now instead of at the QUIC idle timeout.
+        let closed_connections = match &outcome {
+            Ok(()) => 0,
+            Err(_) => generation
+                .tunnel_connections()
+                .retire_and_close_connections()
+                .unwrap_or_default(),
+        };
+        log_deregistration(&identity, &outcome, &removed_model_ids, closed_connections);
         // Routing teardown must finish before the exact tunnel generation is released.
         drop(tunnel);
     }

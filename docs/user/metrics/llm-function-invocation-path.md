@@ -56,6 +56,7 @@ synchronizer and Pub/Sub metrics under the worker service name.
 | `stargate_routing_selections_total` | `routing_key`, `model`, `algorithm`, `selection` |
 | `stargate_routing_kv_free_token_fallback_selections_total` | `routing_key`, `model`, `algorithm` |
 | `stargate_proxy_retry_exhausted_total` | `routing_key`, `model`, `reason` |
+| `stargate_backend_loss_cancellations_total` | `routing_key`, `model`, `outcome` |
 | `stargate_admission_rejections_total` | `routing_key`, `model`, `reason` |
 | `stargate_quic_connection_evictions_total` | `inference_server_id`, `reason` |
 | `stargate_quic_hot_path_reconnect_total` | `inference_server_id`, `result` |

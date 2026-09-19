@@ -29,6 +29,13 @@ use super::raw_quic::RawQuicConnectionHandle;
 use super::request::OpenTunnelRequest;
 use super::webtransport::WebTransportConnectionHandle;
 
+/// QUIC application close code sent when a retired generation's connections
+/// are closed under in-flight requests. Tells the peer the router dropped the
+/// backend rather than a transport fault. The value mirrors the tracking
+/// issue number (NVIDIA/nvcf#1533) so it is recognizable in peer logs.
+const BACKEND_LOST_CLOSE_CODE: u32 = 0x1533;
+const BACKEND_LOST_CLOSE_REASON: &[u8] = b"backend registration lost";
+
 #[derive(Clone)]
 pub(super) enum TunnelConnection {
     RawQuic(RawQuicConnectionHandle),
@@ -70,6 +77,15 @@ impl TunnelConnection {
         }
     }
 
+    fn close_for_backend_loss(&self) {
+        let code = quinn::VarInt::from_u32(BACKEND_LOST_CLOSE_CODE);
+        match self {
+            Self::RawQuic(handle) => handle.close(code, BACKEND_LOST_CLOSE_REASON),
+            Self::Http3(handle) => handle.close(code, BACKEND_LOST_CLOSE_REASON),
+            Self::WebTransport(handle) => handle.close(code, BACKEND_LOST_CLOSE_REASON),
+        }
+    }
+
     pub(super) async fn open_streaming_request(
         self,
         request: OpenTunnelRequest<'_>,
@@ -88,11 +104,30 @@ impl RegistrationConnections {
         Self { state }
     }
 
+    /// Retires the generation but leaves its connections open, so requests
+    /// already in flight can finish (router shutdown drains them).
     pub(super) fn retire(&self) -> bool {
         self.set_if_active(ConnectionState::Retired)
     }
 
-    pub(super) fn is_active(&self) -> bool {
+    /// Retires the generation and closes every connection it still holds, so
+    /// requests in flight on a lost backend fail now instead of at the QUIC
+    /// idle timeout. Returns the number of connections closed, or `None` if
+    /// the generation was already retired.
+    pub(crate) fn retire_and_close_connections(&self) -> Option<usize> {
+        let mut retired = None;
+        self.state.send_if_modified(|state| {
+            if matches!(state, ConnectionState::Retired) {
+                return false;
+            }
+            retired = Some(state.connections().cloned());
+            *state = ConnectionState::Retired;
+            true
+        });
+        retired.map(|connections| connections.map_or(0, |set| set.close_all_for_backend_loss()))
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
         !matches!(&*self.state.borrow(), ConnectionState::Retired)
     }
 
@@ -347,6 +382,13 @@ impl TunnelConnectionSet {
             .connections
             .iter()
             .any(|connection| connection.stable_id() == stable_id)
+    }
+
+    fn close_all_for_backend_loss(&self) -> usize {
+        for connection in &self.inner.connections {
+            connection.close_for_backend_loss();
+        }
+        self.inner.connections.len()
     }
 }
 

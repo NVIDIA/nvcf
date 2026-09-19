@@ -207,6 +207,15 @@ The local upstream may mark `429` or `503` retryable for pylon with
 `x-stargate-upstream-retryable: true`; pylon converts that to Stargate retry
 metadata and does not forward the upstream header downstream.
 
+When a backend's registration is lost while requests are in flight, Stargate
+closes that backend's tunnel connections immediately. A request whose response
+headers have not arrived is retried on another eligible backend under the same
+replay and budget rules; if none is eligible it fails with `502` or `503`. A
+request whose response already started is terminated at once and is not
+retried, so a truncated stream after backend loss ends within seconds instead
+of at the QUIC idle timeout. Router shutdown does not cancel in-flight
+requests; they drain as before.
+
 Gateway rules:
 
 - Set `x-stargate-max-wait-ms` from the remaining request deadline.

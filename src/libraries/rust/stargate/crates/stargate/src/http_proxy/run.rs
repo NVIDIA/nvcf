@@ -64,6 +64,9 @@ pub(super) struct ProxyRequestRun<'a> {
     pub(super) failed_backend_ids: HashSet<String>,
     failed_cluster_ids: HashSet<String>,
     pub(super) attempt_counters: ProxyAttemptCounters,
+    /// Set when an attempt was cut short by backend loss and a retry was
+    /// granted; cleared by the attempt that re-dispatches it.
+    pub(super) backend_loss_pending: bool,
 }
 
 impl<'a> ProxyRequestRun<'a> {
@@ -79,15 +82,28 @@ impl<'a> ProxyRequestRun<'a> {
             failed_backend_ids: HashSet::new(),
             failed_cluster_ids: HashSet::new(),
             attempt_counters: ProxyAttemptCounters::default(),
+            backend_loss_pending: false,
         }
     }
 
     pub(super) async fn execute(mut self) -> Result<Response<Body>, StatusCode> {
-        loop {
+        let response = loop {
             if let Some(response) = self.run_routing_attempt().await {
-                return response;
+                break response;
             }
+        };
+        if self.backend_loss_pending {
+            let target = &self.request.request_inputs.target;
+            self.app
+                .metrics
+                .backend_loss_cancellations_total(
+                    target.routing_key.as_deref(),
+                    &target.model_id,
+                    "no_alternative",
+                )
+                .inc();
         }
+        response
     }
 
     fn excluded_cluster_ids(&self) -> Option<&HashSet<String>> {

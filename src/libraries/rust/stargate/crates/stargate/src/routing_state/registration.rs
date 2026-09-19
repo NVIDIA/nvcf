@@ -115,6 +115,11 @@ impl RegistrationGeneration {
     pub(crate) fn tunnel_connections(&self) -> &RegistrationConnections {
         &self.tunnel_connections
     }
+
+    /// False once the registration session behind this generation has ended.
+    pub(crate) fn is_active(&self) -> bool {
+        self.tunnel_connections.is_active()
+    }
 }
 
 impl RegistrationClusterGeneration {
