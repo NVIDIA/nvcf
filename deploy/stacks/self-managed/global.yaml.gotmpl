@@ -362,7 +362,16 @@ natsAuthCalloutService:
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
-{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
+{{- $llmRequestRouterUsesBackend := $backendRouterEnabled }}
+{{- if not (kindIs "bool" $llmRequestRouterUsesBackend) }}
+{{- /* Match the chart's backendRouterEnabled helper when enabled is null. */}}
+{{- $llmRequestRouterUsesBackend = and
+      (eq (dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values) "Deployment")
+      (gt (dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values | int) 1) }}
+{{- end }}
+{{- $llmRequestRouterDefaultAddress := ternary "http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071" "llm-request-router.nvcf.svc.cluster.local:50071" $llmRequestRouterUsesBackend }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
@@ -371,7 +380,6 @@ natsAuthCalloutService:
 {{- else if hasPrefix "http://" $llmRequestRouterWorkerAuthority }}
 {{- $llmRequestRouterWorkerAuthority = trimPrefix "http://" $llmRequestRouterWorkerAuthority }}
 {{- end }}
-{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- if $llmEnabled }}
 {{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
 {{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
@@ -1045,7 +1053,6 @@ llmApiGateway:
 
 {{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
 {{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
-{{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
 {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
 {{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
 {{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}

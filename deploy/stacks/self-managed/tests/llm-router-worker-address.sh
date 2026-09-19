@@ -213,7 +213,7 @@ if assert_remote_config_address "$work_dir/wrong-owner-values.yaml" \
   fail "remote-config assertion accepted a worker address outside the API values"
 fi
 
-local_worker_address='llm-request-router.nvcf.svc.cluster.local:50071'
+local_worker_address='http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071'
 printf '%s\n' \
   'addons:' \
   '  llm:' \
@@ -228,8 +228,28 @@ if grep -Eq 'NVCF_(LLM_REQUEST_ROUTER_WORKER_ADDRESS|STARGATE_ADDRESS)' \
   fail "enabled LLM rendered the worker address through the legacy API env path"
 fi
 
+direct_worker_address='llm-request-router.nvcf.svc.cluster.local:50071'
+backend_mode_cases=(
+  "disabled|false|Deployment|1|$direct_worker_address"
+  "auto-multiple|null|Deployment|3|$local_worker_address"
+  "auto-single|null|Deployment|1|$direct_worker_address"
+  "auto-stateful|null|StatefulSet|3|$direct_worker_address"
+)
+for backend_mode_case in "${backend_mode_cases[@]}"; do
+  IFS='|' read -r case_name backend_enabled workload replicas expected_address <<<"$backend_mode_case"
+  write_environment true ''
+  {
+    printf '    requestRouter:\n      workload:\n        kind: %s\n' "$workload"
+    printf '      replicaCount: %s\n' "$replicas"
+    printf '      backendRouter:\n        enabled: %s\n' "$backend_enabled"
+  } >>"$environment_file"
+  values_file="$work_dir/$case_name-values.yaml"
+  render_api_values "$values_file" >/dev/null
+  assert_remote_config_address "$values_file" "$expected_address" ||
+    fail "$case_name: expected bootstrap address $expected_address"
+done
+
 custom_router_grpc_port='51071'
-custom_port_worker_address="llm-request-router.nvcf.svc.cluster.local:$custom_router_grpc_port"
 printf '%s\n' \
   'addons:' \
   '  llm:' \
@@ -241,8 +261,8 @@ render_api_values \
   "addons.llm.requestRouter.service.grpcPort=$custom_router_grpc_port" \
   >/dev/null
 assert_remote_config_address "$work_dir/custom-port-api-values.yaml" \
-  "$custom_port_worker_address" ||
-  fail "enabled local LLM did not use the configured request-router gRPC port"
+  "$local_worker_address" ||
+  fail "request-router gRPC port changed the backend-router bootstrap address"
 assert_llm_request_router_grpc_port "$work_dir/custom-port-api-values.yaml" \
   "$custom_router_grpc_port" ||
   fail "enabled LLM did not pass the configured gRPC port to the request-router chart"
