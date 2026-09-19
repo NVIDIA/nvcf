@@ -51,6 +51,11 @@ import static com.nvidia.nvcf.util.TestUtil.createHealthUdt;
 import static java.util.concurrent.Future.State.RUNNING;
 import static java.util.concurrent.Future.State.SUCCESS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import com.google.common.collect.Sets;
 import com.nvidia.nvcf.IntegrationTestConfiguration;
@@ -62,8 +67,11 @@ import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.persistence.function.entity.GpuSpecificationEntity;
 import com.nvidia.nvcf.persistence.function.entity.GpuSpecificationKey;
 import com.nvidia.nvcf.rest.function.deployment.dto.HelmValidationPolicyDto;
+import com.nvidia.nvcf.service.eventledger.EventLedgerClient;
 import com.nvidia.nvcf.service.function.FunctionDeploymentContext;
 import com.nvidia.nvcf.service.function.FunctionDeploymentLookupService;
+import com.nvidia.nvcf.service.function.FunctionStatusTransitionService;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -80,9 +88,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import tools.jackson.databind.json.JsonMapper;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -111,6 +121,15 @@ class FunctionsRepositoryTest {
     @Autowired
     private JsonMapper jsonMapper;
 
+    @Autowired
+    private FunctionStatusTransitionService functionStatusTransitionService;
+
+    @Autowired
+    private Clock clock;
+
+    @MockitoBean
+    private EventLedgerClient eventLedgerClient;
+
     private Set<String> functionLevelAuthzParties = Set.of(TEST_AUTHORIZED_NCA_ID_1,
                                                            TEST_AUTHORIZED_NCA_ID_2);
     private Set<String> versionLevelAuthzParties = Set.of(TEST_AUTHORIZED_NCA_ID_4,
@@ -130,6 +149,7 @@ class FunctionsRepositoryTest {
     void init() {
         functionsRepository.deleteAll();
         functionsDeploymentRepository.deleteAll();
+        clearInvocations(eventLedgerClient);
     }
 
     @AfterEach
@@ -533,6 +553,52 @@ class FunctionsRepositoryTest {
                            .map(FunctionEntity::getFunctionVersionId)
                            .collect(Collectors.toSet()))
                 .containsExactlyInAnyOrder(TEST_VERSION_ID_3);
+    }
+
+    @Test
+    void persistsFunctionStatusTransitionAndPublishesEvent() {
+        var function = getTestEntity(
+                TEST_FUNCTION_ID, TEST_VERSION_ID_1, TEST_NCA_ID, TEST_FUNCTION_NAME);
+        functionsRepository.save(function);
+        var timestampLowerBound = Instant.now(clock);
+
+        functionStatusTransitionService.persist(
+                function, TEST_DEPLOYMENT_ID, FunctionStatus.ACTIVE);
+        var timestampUpperBound = Instant.now(clock);
+
+        var persistedFunction = functionsRepository
+                .getByFunctionVersionId(TEST_VERSION_ID_1)
+                .orElseThrow();
+        assertThat(persistedFunction.getFunctionStatus()).isEqualTo(FunctionStatus.ACTIVE);
+
+        var timestampCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(eventLedgerClient).publish(
+                eq(TEST_NCA_ID),
+                eq(TEST_FUNCTION_ID),
+                eq(TEST_VERSION_ID_1),
+                eq(TEST_DEPLOYMENT_ID),
+                eq(FunctionStatus.INACTIVE),
+                eq(FunctionStatus.ACTIVE),
+                timestampCaptor.capture());
+        assertThat(timestampCaptor.getValue())
+                .isBetween(timestampLowerBound, timestampUpperBound);
+    }
+
+    @Test
+    void skipsUnchangedFunctionStatus() {
+        var function = getTestEntity(
+                TEST_FUNCTION_ID, TEST_VERSION_ID_1, TEST_NCA_ID, TEST_FUNCTION_NAME);
+        functionsRepository.save(function);
+
+        functionStatusTransitionService.persist(
+                function, TEST_DEPLOYMENT_ID, FunctionStatus.INACTIVE);
+
+        assertThat(functionsRepository.getByFunctionVersionId(TEST_VERSION_ID_1))
+                .get()
+                .extracting(FunctionEntity::getFunctionStatus)
+                .isEqualTo(FunctionStatus.INACTIVE);
+        verify(eventLedgerClient, never()).publish(
+                eq(TEST_NCA_ID), any(), any(), any(), any(), any(), any());
     }
 
     private FunctionEntity getTestEntity(
