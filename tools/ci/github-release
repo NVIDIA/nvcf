@@ -2058,6 +2058,19 @@ def auto_release(args):
                     reason = f"semantic-release dry-run exited {code} without a trustworthy release decision"
                     print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
                     dry_run_failures.append((service["id"], reason))
+                if owned_release_paths(service) and outcome in ("released", "no-release"):
+                    # Preview what publishing would actually do. Without this the
+                    # dry run reports semantic-release's answer alone, which is
+                    # not the answer a service owning extra paths would get.
+                    previewed = parse_next_version(output) if outcome == "released" else ""
+                    version, source = multi_path_release_version(root, service, previewed)
+                    if not version:
+                        print(f"[github-release] {service['id']}: would release nothing")
+                    else:
+                        print(
+                            f"[github-release] {service['id']}: would release {version} "
+                            f"(decided by {source})"
+                        )
             else:
                 if owned_release_paths(service):
                     # semantic-release publishes as soon as it computes a
