@@ -26,6 +26,7 @@ import com.nvidia.nvcf.rest.function.management.dto.FunctionModelDto;
 import com.nvidia.nvcf.rest.function.management.dto.FunctionTypeEnum;
 import com.nvidia.nvcf.rest.function.management.dto.LlmConfigValidator;
 import com.nvidia.nvcf.rest.function.management.dto.LlmInvocationConfigDto;
+import com.nvidia.nvcf.rest.function.management.dto.LlmRoutingMethodValidator;
 import com.nvidia.nvcf.rest.function.management.dto.UpdateFunctionRequest;
 import jakarta.annotation.Nullable;
 import java.util.Comparator;
@@ -264,7 +265,8 @@ public class FunctionLlmService {
                         UpdateFunctionRequest.ModelUpdateDto::modelName,
                         u -> FunctionModelDto.LlmConfigDto.builder()
                                 .tokenRateLimit(u.llmConfig().tokenRateLimit())
-                                .routingMethod(u.llmConfig().routingMethod())
+                                .routingMethod(LlmRoutingMethodValidator.validate(
+                                        u.modelName(), u.llmConfig().routingMethod()))
                                 .build()));
         if (overrides.isEmpty()) {
             return Map.of();
@@ -403,9 +405,8 @@ public class FunctionLlmService {
                     llmConfig.setTokenRateLimit(llmConfigUpdate.tokenRateLimit());
                 }
                 if (llmConfigUpdate.routingMethod() != null) {
-                    LlmConfigValidator.validateRoutingMethod(
-                            modelUpdate.modelName(), llmConfigUpdate.routingMethod());
-                    llmConfig.setRoutingMethod(llmConfigUpdate.routingMethod());
+                    llmConfig.setRoutingMethod(LlmRoutingMethodValidator.validate(
+                            modelUpdate.modelName(), llmConfigUpdate.routingMethod()));
                 }
                 updated = true;
                 break;
