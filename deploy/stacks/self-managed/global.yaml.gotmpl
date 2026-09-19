@@ -364,7 +364,7 @@ natsAuthCalloutService:
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
-{{- $llmRequestRouterDefaultAddress := "llm-request-router.nvcf.svc.cluster.local:50071" }}
+{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
 {{- if $backendRouterEnabled }}
 {{- $llmRequestRouterDefaultAddress = "http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071" }}
 {{- end }}

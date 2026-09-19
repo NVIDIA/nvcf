@@ -228,14 +228,17 @@ if grep -Eq 'NVCF_(LLM_REQUEST_ROUTER_WORKER_ADDRESS|STARGATE_ADDRESS)' \
   fail "enabled LLM rendered the worker address through the legacy API env path"
 fi
 
-direct_worker_address='llm-request-router.nvcf.svc.cluster.local:50071'
-render_api_values "$work_dir/backend-disabled-api-values.yaml" \
-  --state-values-set addons.llm.requestRouter.backendRouter.enabled=false \
-  --state-values-set addons.llm.requestRouter.replicaCount=1 \
-  >/dev/null
-assert_remote_config_address "$work_dir/backend-disabled-api-values.yaml" \
-  "$direct_worker_address" ||
-  fail "disabled backend routing did not use the main request-router address"
+for direct_grpc_port in 50071 51071; do
+  direct_worker_address="llm-request-router.nvcf.svc.cluster.local:$direct_grpc_port"
+  direct_values_file="$work_dir/backend-disabled-$direct_grpc_port-api-values.yaml"
+  render_api_values "$direct_values_file" \
+    --state-values-set addons.llm.requestRouter.backendRouter.enabled=false \
+    --state-values-set addons.llm.requestRouter.replicaCount=1 \
+    --state-values-set "addons.llm.requestRouter.service.grpcPort=$direct_grpc_port" \
+    >/dev/null
+  assert_remote_config_address "$direct_values_file" "$direct_worker_address" ||
+    fail "disabled backend routing did not use the main request-router port $direct_grpc_port"
+done
 
 custom_router_grpc_port='51071'
 printf '%s\n' \
