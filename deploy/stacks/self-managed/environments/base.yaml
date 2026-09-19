@@ -79,8 +79,9 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
-    # Optional LLM request-router address override advertised to LLM worker
-    # sidecars. Empty uses llm-request-router.nvcf.svc.cluster.local:50071.
+    # Pylon discovery endpoint. Empty uses the backend-router Service on port
+    # 50071 when enabled, otherwise the main Service's configured gRPC port.
+    # Set the full address for a custom backend-router port or remote workers.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
