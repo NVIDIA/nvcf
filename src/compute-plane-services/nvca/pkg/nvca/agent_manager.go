@@ -224,7 +224,8 @@ func startControllerManagerForAgent(
 	}
 
 	// Add GC cleaners to the manager
-	gcRunnable := gc.NewRunnable(clients, metrics, gc.DefaultInterval, a.RequestsNamespace)
+	gcRunnable := gc.NewRunnable(clients, metrics, gc.DefaultInterval, a.RequestsNamespace,
+		newRecreationBudgetCleaner(clients.K8s, a.SystemNamespace, metrics))
 	if err := mgr.Add(gcRunnable); err != nil {
 		log.WithError(err).Error("Failed to add GC controller to controller manager")
 		return fmt.Errorf("add GC controller to controller manager: %v", err)
