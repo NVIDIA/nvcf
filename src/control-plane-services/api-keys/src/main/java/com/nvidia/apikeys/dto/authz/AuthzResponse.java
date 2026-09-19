@@ -17,7 +17,9 @@
 
 package com.nvidia.apikeys.dto.authz;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.annotation.Nullable;
 import tools.jackson.databind.JsonNode;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -49,8 +51,32 @@ public class AuthzResponse {
         String ownerId;
         @JsonProperty("policy")
         JsonNode policy;
+        // Only set for the *.llm_allow rule; absent otherwise. No rate-limit data source is
+        // wired up yet (mirrors the same gap on the managed side), so always null for now.
+        @JsonProperty("accountTokenRateLimit")
+        @Nullable
+        AccountTokenRateLimit accountTokenRateLimit;
     }
 
-    private Result result;
+    // ALWAYS: the mapper's default is NON_NULL, but both fields being null is itself
+    // meaningful (no rate configured) and callers expect the two keys present, not a bare {}.
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    public static class AccountTokenRateLimit {
+
+        @JsonProperty("inputTokenRateLimit")
+        @Nullable
+        String inputTokenRateLimit;
+        @JsonProperty("outputTokenRateLimit")
+        @Nullable
+        String outputTokenRateLimit;
+    }
+
+    // Result for apikey.allow/apikey.llm_allow; AccountTokenRateLimit for the
+    // tiered-rate-limit rule, which returns only the rate fields.
+    private Object result;
 
 }

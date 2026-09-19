@@ -22,6 +22,7 @@ import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.annotation.Nulls;
 import com.google.common.annotations.VisibleForTesting;
 import jakarta.annotation.Nullable;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -30,38 +31,38 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import lombok.Getter;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.core.DefaultOAuth2AuthenticatedPrincipal;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
 import org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal;
+import org.springframework.security.oauth2.core.OAuth2TokenIntrospectionClaimNames;
+import org.springframework.security.oauth2.server.resource.authentication.BearerTokenAuthentication;
 import org.springframework.util.StringUtils;
 
 /**
  * Represents the result of ApiKey validation.
  *
- * @param allowed    indicates whether the current request should be allowed to proceed
- * @param ncaId      NVIDIA Cloud Account(NCA) id
- * @param ownerId    for Service Keys, this parameter will be NCA Id; for Personal Keys,
- *                   this parameter will be OIDC Id
- * @param policy     resource types and scopes
+ * @param allowed               indicates whether the current request should be allowed to proceed
+ * @param ncaId                 NVIDIA Cloud Account(NCA) id
+ * @param ownerId               for Service Keys, this parameter will be NCA Id; for Personal Keys,
+ *                              this parameter will be OIDC Id
+ * @param policy                resource types and scopes
+ * @param accountTokenRateLimit account-scoped LLM token rate limit, resolved by this same
+ *                              evaluation (not stored or computed by NVCF); absent when none applies
  */
 public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
                               @JsonProperty("ncaId") String ncaId,
                               @JsonProperty("ownerId") String ownerId,
-                              @JsonProperty("policy") Policy policy) {
+                              @JsonProperty("policy") Policy policy,
+                              @JsonProperty("accountTokenRateLimit") @Nullable RateLimitAttributes accountTokenRateLimit) {
 
     public static final String FUNCTION_ACCESS_ATTRIBUTE = "function_access";
     public static final String POLICY_RESULT_ATTRIBUTE = "policy_result";
 
-    public ApiKeyValidationResult(
-            boolean allowed,
-            String ncaId,
-            String ownerId,
-            Policy policy) {
-        this.allowed = allowed;
-        this.ncaId = ncaId;
-        this.ownerId = ownerId;
-        this.policy = policy;
+    public ApiKeyValidationResult(boolean allowed, String ncaId, String ownerId, Policy policy) {
+        this(allowed, ncaId, ownerId, policy, null);
     }
 
     public record Resource(@JsonProperty("type") String type, @JsonProperty("id") String id) {
@@ -72,6 +73,16 @@ public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
             @JsonProperty("resources") @JsonSetter(nulls = Nulls.AS_EMPTY) List<Resource> resources,
             @JsonProperty("scopes") @JsonSetter(nulls = Nulls.AS_EMPTY) List<String> scopes,
             @JsonProperty("product") String product) {
+
+    }
+
+    /**
+     * Fields use the same "&lt;value&gt;-&lt;unit&gt;" format as the gateway's own
+     * tokenRateLimit, not a raw quota number.
+     */
+    public record RateLimitAttributes(
+            @JsonProperty("inputTokenRateLimit") @Nullable String inputTokenRateLimit,
+            @JsonProperty("outputTokenRateLimit") @Nullable String outputTokenRateLimit) {
 
     }
 
@@ -89,6 +100,17 @@ public record ApiKeyValidationResult(@JsonProperty("allowed") boolean allowed,
                 .map(scope -> (GrantedAuthority) new SimpleGrantedAuthority("apikey:" + scope))
                 .toList();
         return new DefaultOAuth2AuthenticatedPrincipal(ownerId, resourcesAttribute, scopes);
+    }
+
+    // Matches AuthManagerResolverConfiguration's apiKeyConverter(), for callers that bypass
+    // the shared AuthenticationManagerResolver.
+    @JsonIgnore
+    public Authentication toBearerTokenAuthentication(String rawToken) {
+        var principal = getOAuth2Principal();
+        Instant iat = principal.getAttribute(OAuth2TokenIntrospectionClaimNames.IAT);
+        Instant exp = principal.getAttribute(OAuth2TokenIntrospectionClaimNames.EXP);
+        var accessToken = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, rawToken, iat, exp);
+        return new BearerTokenAuthentication(principal, accessToken, principal.getAuthorities());
     }
 
     public static class ApiKeyFunctionVersionSpecifier {

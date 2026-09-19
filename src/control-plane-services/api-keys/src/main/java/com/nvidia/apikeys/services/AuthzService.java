@@ -37,14 +37,24 @@ public class AuthzService {
 
 
     public AuthzResponse.Result evaluatePolicy(
-            String audienceServiceId, IntrospectionResponse introspectionResponse) {
+            String audienceServiceId, IntrospectionResponse introspectionResponse, String ruleName) {
 
-        return AuthzResponse.Result.builder()
+        var builder = AuthzResponse.Result.builder()
                 .ncaId(nakProperties.getNcaId())
                 .ownerId(introspectionResponse.getOwnerId())
                 .allowed(true)
-                .policy(getPolicyByAudience(audienceServiceId, introspectionResponse))
-                .build();
+                .policy(getPolicyByAudience(audienceServiceId, introspectionResponse));
+        if (ruleName != null && ruleName.endsWith("llm_allow")) {
+            builder.accountTokenRateLimit(
+                    AuthzResponse.AccountTokenRateLimit.builder().build());
+        }
+        return builder.build();
+    }
+
+    // No rate-limit data source is wired up yet (mirrors the same gap on the managed side), so
+    // always empty for now.
+    public AuthzResponse.AccountTokenRateLimit resolveTieredRateLimit(String ncaId) {
+        return AuthzResponse.AccountTokenRateLimit.builder().build();
     }
 
     private JsonNode getPolicyByAudience(

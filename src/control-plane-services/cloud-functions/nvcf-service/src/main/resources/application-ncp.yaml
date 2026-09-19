@@ -132,6 +132,11 @@ nvcf:
     # base-url: http://api-keys.nvcf.svc.cluster.local:8080 -- Use when self-hosted stack is ready
     static:
       token: ${kv.tokens.api-keys}
+  # This evaluation is served by the same api-keys evaluations gateway; without this, the
+  # OAuth2 fallback picks up api-keys' client-id/token-uri above, which are "unused" here.
+  service-account:
+    static:
+      token: ${kv.tokens.api-keys}
   registries:
     account-provisioning:
       artifact-types: CONTAINER,HELM

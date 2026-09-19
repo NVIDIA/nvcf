@@ -144,6 +144,14 @@ spring:
             client-secret: ${kv.oauth2.client-secret}
             authorization-grant-type: client_credentials
             scope: helmreval:validate
+          # Used for resolving the per-account tiered token rate limit for
+          # JWT authenticated LLM invocations
+          service-account:
+            provider: service-account
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: pdp-evaluate
         provider:
           icms:
             token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
@@ -154,6 +162,8 @@ spring:
           notary:
             token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
           reval:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          service-account:
             token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
 
 logging:
@@ -223,6 +233,12 @@ nvcf:
       enabled: true
   api-keys:
     base-url: http://localhost:9093
+  service-account:
+    base-url: http://localhost:9112
+  # Off by default in production (see ServiceAccountService/GrpcLlmService) until the
+  # companion policy change merges; tests turn it on to exercise the real
+  # lookup/cache/fail-closed behavior on both the JWT and API-key paths.
+  account-token-rate-limit-enabled: true
   account:
     max-functions-allowed: 50
     max-tasks-allowed: 50

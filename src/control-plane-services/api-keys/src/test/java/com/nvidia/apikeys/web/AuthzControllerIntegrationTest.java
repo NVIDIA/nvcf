@@ -271,4 +271,99 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                         "detail":"Api key is not provided",\
                         "instance":"/v1/namespaces/nvcf/evaluations/apikey.allow"}""", response.getBody());
     }
-} 
+
+    @Test
+    void runAuthz_shouldReturnTieredRateLimitForServiceAccountRuleBypassingApiKeyIntrospection() {
+        // Arrange
+        String namespace = "nvcf";
+        String policyName = "ssa.allow";
+        String requestBody = """
+                {
+                    "input": {
+                        "tiered_rate_key": "some-nca-id"
+                    }
+                }
+                """;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+
+        // Act
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/v1/namespaces/{namespace}/evaluations/{policy-name}",
+                HttpMethod.POST, entity, String.class, namespace, policyName);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(OK);
+        assertJsonBodyEquals(
+                """
+                        {"namespace":"nvcf",\
+                        "result":{"inputTokenRateLimit":null,"outputTokenRateLimit":null},\
+                        "rule_name":"ssa.allow"}""", response.getBody());
+    }
+
+    @Test
+    void runAuthz_shouldReturnErrorForMissingTieredRateKey() {
+        // Arrange
+        String namespace = "nvcf";
+        String policyName = "ssa.allow";
+        String requestBody = """
+                {
+                    "input": {}
+                }
+                """;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+
+        // Act
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/v1/namespaces/{namespace}/evaluations/{policy-name}",
+                HttpMethod.POST, entity, String.class, namespace, policyName);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(BAD_REQUEST);
+        assertJsonBodyEquals(
+                """
+                        {"type":"urn:nv-boot:problem-details:bad-request",\
+                        "title":"Bad Request",\
+                        "status":400,\
+                        "detail":"Tiered rate key is not provided",\
+                        "instance":"/v1/namespaces/nvcf/evaluations/ssa.allow"}""", response.getBody());
+    }
+
+    @Test
+    void runAuthz_shouldReturnErrorForUnconfiguredNamespaceOnTieredRateLimitRule() {
+        // Arrange
+        String namespace = "unknown-ns";
+        String policyName = "ssa.allow";
+        String requestBody = """
+                {
+                    "input": {
+                        "tiered_rate_key": "some-nca-id"
+                    }
+                }
+                """;
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+
+        // Act
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/v1/namespaces/{namespace}/evaluations/{policy-name}",
+                HttpMethod.POST, entity, String.class, namespace, policyName);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(BAD_REQUEST);
+        assertJsonBodyEquals(
+                """
+                        {"type":"urn:nv-boot:problem-details:bad-request",\
+                        "title":"Bad Request",\
+                        "status":400,\
+                        "detail":"Namespace 'unknown-ns' is not configured",\
+                        "instance":"/v1/namespaces/unknown-ns/evaluations/ssa.allow"}""", response.getBody());
+    }
+}

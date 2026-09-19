@@ -35,4 +35,8 @@ public class PolicyEvaluationRequestVo {
 
     private IntrospectionRequest introspectionRequest;
 
+    // Set instead of introspectionRequest for the tiered-rate-limit rule, which bypasses
+    // api-key introspection entirely.
+    private String tieredRateKey;
+
 }

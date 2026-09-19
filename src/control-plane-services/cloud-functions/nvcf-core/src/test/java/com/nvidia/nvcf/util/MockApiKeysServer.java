@@ -63,23 +63,62 @@ public class MockApiKeysServer {
             List<Resource> resources,
             List<String> scopes,
             boolean allowed) {
-        var response = new ApiKeyValidationResponse("nvcf", "apikey.allow",
+        setApiKeyValidationResponse(ncaId, ownerId, resources, scopes, allowed, null);
+    }
+
+    @SneakyThrows
+    public static void setApiKeyValidationResponse(
+            String ncaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed,
+            ApiKeyValidationResult.RateLimitAttributes accountTokenRateLimit) {
+        stub("apikey.allow", "/v1/namespaces/nvcf/evaluations/apikey.allow",
+             ncaId, ownerId, resources, scopes, allowed, accountTokenRateLimit);
+    }
+
+    // Same WireMockServer as apikey.allow, different path - LlmApiKeyClient defaults to
+    // ApiKeysClient's own base-url.
+    @SneakyThrows
+    public static void setLlmApiKeyValidationResponse(
+            String ncaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed,
+            ApiKeyValidationResult.RateLimitAttributes accountTokenRateLimit) {
+        stub("apikey.llm_allow", "/v1/namespaces/nvcf/evaluations/apikey.llm_allow",
+             ncaId, ownerId, resources, scopes, allowed, accountTokenRateLimit);
+    }
+
+    @SneakyThrows
+    private static void stub(
+            String policyName,
+            String path,
+            String ncaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed,
+            ApiKeyValidationResult.RateLimitAttributes accountTokenRateLimit) {
+        var response = new ApiKeyValidationResponse("nvcf", policyName,
                                                        new ApiKeyValidationResult(allowed,
                                                               ncaId,
                                                               ownerId,
                                                               new ApiKeyValidationResult.Policy(resources,
                                                                                          scopes,
-                                                                                         "nv-cloud-functions")
+                                                                                         "nv-cloud-functions"),
+                                                              accountTokenRateLimit
                                           ));
         byte[] responseBytes = OBJECT_MAPPER.writeValueAsBytes(response);
         mockApiKeysServer.stubFor(
-                post(urlPathEqualTo("/v1/namespaces/nvcf/evaluations/apikey.allow"))
+                post(urlPathEqualTo(path))
                         .willReturn(aResponse().withStatus(200)
                                             .withHeader(HttpHeaders.CONTENT_TYPE,
                                                         MediaType.APPLICATION_JSON_VALUE)
                                             .withBody(responseBytes)));
     }
-
 
     @SneakyThrows
     public static void setResponse(
@@ -92,5 +131,6 @@ public class MockApiKeysServer {
 
     public static void resetToDefault() {
         setResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(), List.of());
+        setLlmApiKeyValidationResponse(TEST_NCA_ID, TEST_OWNER_ID, List.of(), List.of(), true, null);
     }
 }
