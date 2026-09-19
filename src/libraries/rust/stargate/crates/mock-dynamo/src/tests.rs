@@ -27,12 +27,10 @@ use axum::routing::{get, post, put};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn request() -> ChatRequest {
-    ChatRequest {
-        stream: Some(true),
-        model: Some("dummy-model".to_string()),
-        max_tokens: Some(1),
-        messages: Vec::new(),
-    }
+    serde_json::from_value(serde_json::json!({
+        "stream": true, "model": "dummy-model", "max_tokens": 1, "messages": []
+    }))
+    .unwrap()
 }
 
 fn test_stats_events() -> broadcast::Sender<StatsStreamEvent> {
@@ -582,11 +580,78 @@ fn chat_stream_chunks_preserve_delta_and_finish_shapes() {
         ),
     ] {
         let value: serde_json::Value =
-            serde_json::from_str(&chat_chunk_json("id", "model", chunk)).unwrap();
+            serde_json::from_str(&chat_chunk_json("id", "model", chunk, false)).unwrap();
         assert_eq!(value["choices"][0]["delta"], delta);
         assert_eq!(value["choices"][0]["finish_reason"], finish_reason);
         assert!(value.get("usage").is_none());
     }
+}
+
+#[tokio::test]
+async fn streaming_chat_usage_reports_actual_output_only_when_requested() {
+    let state = AppState {
+        output_tokens: OutputTokenConfig {
+            min: 100,
+            max: 100,
+            distribution: OutputTokenDistribution::Uniform,
+        },
+        context_length_tokens: 5,
+        ..test_state()
+    };
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(state);
+    let (address, server) = spawn_test_app(app).await;
+    for include_usage in [None, Some(false), Some(true)] {
+        let mut body = serde_json::json!({
+            "model": "dummy-model", "messages": [], "stream": true, "max_tokens": 100
+        });
+        if let Some(include_usage) = include_usage {
+            body["stream_options"] = serde_json::json!({"include_usage": include_usage});
+        }
+        let response = json_response(
+            address,
+            "POST",
+            "/v1/chat/completions",
+            "connection: close\r\nx-input-tokens: 2\r\nx-output-tokens: 100",
+            &body.to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        let data: Vec<_> = response
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .collect();
+        assert_eq!(data.last(), Some(&"[DONE]"));
+        let events: Vec<serde_json::Value> = data[..data.len() - 1]
+            .iter()
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["choices"][0]["delta"]["content"].is_string())
+                .count(),
+            3
+        );
+        if include_usage == Some(true) {
+            let (usage, output_events) = events.split_last().unwrap();
+            assert_eq!(usage["choices"], serde_json::json!([]));
+            assert_eq!(
+                usage["usage"],
+                serde_json::json!({"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5})
+            );
+            assert!(
+                output_events
+                    .iter()
+                    .all(|event| event.get("usage") == Some(&serde_json::Value::Null))
+            );
+        } else {
+            assert!(events.iter().all(|event| event.get("usage").is_none()));
+        }
+    }
+    server.abort();
+    let _ = server.await;
 }
 
 #[tokio::test]
