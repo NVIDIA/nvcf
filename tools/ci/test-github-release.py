@@ -2591,6 +2591,33 @@ class FollowerReleaseTest(unittest.TestCase):
             tag = "deploy/helm/nvca-operator/v3.12.2"
             self.assertEqual(git_out(root, "rev-parse", f"{tag}^{{commit}}").strip(), leader_commit)
 
+    def test_follower_resolves_an_annotated_leader_tag_to_its_commit(self):
+        """An annotated tag is its own object, not the commit it points at.
+
+        semantic-release creates annotated tags, so resolving one with
+        rev-parse rather than peeling it would hand the follower a tag object.
+        The follower tag would then point at that object instead of the commit,
+        which peeling in the assertion would hide. Compare the direct target.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "fix(nvca): correct a thing")
+            leader_commit = git_out(root, "rev-parse", "HEAD").strip()
+            git(root, "tag", "-a", "src/compute-plane-services/nvca/v3.12.2", "-m", "release 3.12.2")
+            leader_tag_object = git_out(
+                root, "rev-parse", "src/compute-plane-services/nvca/v3.12.2"
+            ).strip()
+            self.assertNotEqual(leader_tag_object, leader_commit, "tag should be annotated")
+
+            self.github_release.publish_follower_release(
+                root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
+            )
+
+            follower = "deploy/helm/nvca-operator/v3.12.2"
+            self.assertEqual(git_out(root, "rev-parse", follower).strip(), leader_commit)
+
     def test_follower_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "repo"
