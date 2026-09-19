@@ -186,12 +186,13 @@ When `addons.llm.enabled` is `true`, the stack defaults
 backend routing is enabled, which is the stack default. This lets discovery
 return the same pod identities that the backend router uses for registration.
 When backend routing is disabled, the default is
-`llm-request-router.nvcf.svc.cluster.local:50071`.
+`llm-request-router.nvcf.svc.cluster.local` with the port from
+`addons.llm.requestRouter.service.grpcPort` (default `50071`).
 
-An explicit worker address takes precedence. Both defaults use port `50071`
-independently of `addons.llm.requestRouter.service.grpcPort`. For a custom port
-or a split control-plane and compute-plane deployment, set the full address
-to an endpoint that worker pods can reach.
+An explicit worker address takes precedence. The backend-router default uses
+port `50071` independently of `addons.llm.requestRouter.service.grpcPort`.
+For a custom backend-router port or a split control-plane and compute-plane
+deployment, set the full address to an endpoint that worker pods can reach.
 
 The stack maps the configured or default address to
 `api.remoteConfig.configData.nvcf.llm-request-router.worker-address`. The NVCF

@@ -208,7 +208,7 @@ global:
     invocationServiceURL: ""       # Empty = in-cluster default. Workers use this for the invocation stream address.
     # CHANGE (multi-cluster): worker-reachable request-router endpoint. Empty
     # uses the backend-router Service on port 50071 when backend routing is
-    # enabled, otherwise the main request-router Service on port 50071.
+    # enabled, otherwise the main Service on its configured gRPC port.
     llmRequestRouterAddress: ""
 
   nodeSelectors:

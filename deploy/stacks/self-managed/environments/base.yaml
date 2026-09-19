@@ -79,9 +79,9 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
-    # Pylon discovery endpoint. Empty uses the backend-router Service when
-    # backend routing is enabled, otherwise the main request-router Service,
-    # on port 50071. Set the full address for a custom port or remote workers.
+    # Pylon discovery endpoint. Empty uses the backend-router Service on port
+    # 50071 when enabled, otherwise the main Service's configured gRPC port.
+    # Set the full address for a custom backend-router port or remote workers.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
