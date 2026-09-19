@@ -1,0 +1,54 @@
+---
+# Source: helm-nvcf-invocation-service/templates/configmap-vault-agent-template.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: invocation-service-vault-agent-tpl
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-invocation-service-1.6.1
+    app.kubernetes.io/name: helm-nvcf-invocation-service
+    app.kubernetes.io/instance: invocation-service
+    app.kubernetes.io/version: "0.12.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  secrets.json.tmpl: |-
+    {
+      "nats": {
+        {{- with secret "/services/all/kv/data/nats/creds" }}
+          "nkey_pub": "{{ .Data.data.public_key }}",
+          "nkey_seed": "{{ .Data.data.key }}"
+        {{- end }}
+      },
+      "fixed_bearer_secrets": {
+        {{- with secret "services/nvcf-api/jwt/sign/invocation-api" }}
+        "nvcf_api_token": "{{ .Data.token }}",
+        {{- end }}
+        {{- with secret "services/ratelimiter-api/jwt/sign/invocation-api" }}
+        "rate_limit_token": "{{ .Data.token }}"
+        {{- end }}
+      },
+      "oauth2": {
+        "client_id": "no-client",
+        "client_secret": "no-secret",
+        "base_url": "https://oauth2.example.com"
+      },
+      "tracing": {
+        "access_key": "no-key"
+      }
+    }

@@ -22,6 +22,12 @@ MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 # Directory where templated manifests will be stored
 OUTPUT_DIR    ?= $(MAKEFILE_DIR)/out
 
+# Optional override for helmfile's --output-dir-template. Empty by default, so
+# normal template/install behavior keeps helmfile's native layout. The
+# repo-owned golden tests set this to a stable template because helmfile's
+# default path includes a hash of the checkout path.
+OUTPUT_DIR_TEMPLATE ?=
+
 # Version requirements
 # IMPORTANT: Helmfile v1.2.0+ changed helmfile.d/ processing to parallel mode which breaks
 # implicit alphabetical file ordering. Use helmfile v1.1.x to ensure proper deployment order.
@@ -149,7 +155,8 @@ template: clean check-versions
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	OUTPUT_DIR="$(OUTPUT_DIR)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template --output-dir "$(OUTPUT_DIR)"
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template --output-dir "$(OUTPUT_DIR)" \
+		$(if $(OUTPUT_DIR_TEMPLATE),--output-dir-template '$(OUTPUT_DIR_TEMPLATE)')
 
 	@echo ">>> Templating complete. Manifests generated in $(OUTPUT_DIR)"
 

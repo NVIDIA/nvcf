@@ -1,0 +1,146 @@
+---
+# Source: helm-nvcf-api/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvcf-api
+  namespace: nvcf
+  labels:
+    helm.sh/chart: helm-nvcf-api-1.27.0
+    app.kubernetes.io/name: helm-nvcf-api
+    app.kubernetes.io/instance: api
+    app.kubernetes.io/version: "1.18.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-nvcf-api
+      app.kubernetes.io/instance: api
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "nvcf-api"
+        vault.hashicorp.com/auth-path: "auth/jwt"
+        vault.hashicorp.com/auth-config-token-path: "/var/run/secrets/openbao/token"
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-nvcf-api
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl"
+        vault.hashicorp.com/secret-volume-path: "/home/app/vault"
+        checksum/config-env: b5f95ab5b588866a6e15b5e4a6d48852160aa4a5cdb550f31a8ad2eaf485ef72
+        checksum/vault-agent-template: 381e7e32c1ef7f799360701ad3fc56f92d89ca9c64a258e576ddec3283d73d01
+      labels:
+        app.kubernetes.io/name: helm-nvcf-api
+        app.kubernetes.io/instance: api
+    spec:
+      terminationGracePeriodSeconds: 60
+      serviceAccountName: nvcf-api
+      securityContext:
+        {}
+      containers:
+        - name: helm-nvcf-api
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            runAsUser: 1000
+          image: "nvcr.io/nvidia/nvcf/nvcf-service-oss:1.18.0"
+          imagePullPolicy: IfNotPresent
+          lifecycle:
+            null
+          volumeMounts:
+            - mountPath: /var/run/secrets/openbao
+              name: token
+              readOnly: true
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+          livenessProbe:
+            failureThreshold: 6
+            httpGet:
+              path: /actuator/health/liveness
+              port: management-port
+            periodSeconds: 10
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 1
+            httpGet:
+              path: /actuator/health/readiness
+              port: management-port
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            successThreshold: 3
+            timeoutSeconds: 1
+          startupProbe:
+            failureThreshold: 180
+            httpGet:
+              path: /actuator/health/readiness
+              port: management-port
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: AWS_REGION
+              value: "ncp"
+            - name: SPRING_PROFILES_ACTIVE
+              value: "ncp"
+            - name: REMOTE_CONFIG_ENABLED
+              value: "true"
+            - name: REMOTE_CONFIG_NAME
+              value: "nvcf-api-remote-config"
+          envFrom:
+            - configMapRef:
+                name: nvcf-api-env
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+            - name: management-port
+              containerPort: 8181
+              protocol: TCP
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 2
+              memory: 4Gi
+            requests:
+              cpu: 2
+              memory: 4Gi
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
+                expirationSeconds: 3600
+                path: token
+        - name: vault-config-templates
+          configMap:
+            name: nvcf-api-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl

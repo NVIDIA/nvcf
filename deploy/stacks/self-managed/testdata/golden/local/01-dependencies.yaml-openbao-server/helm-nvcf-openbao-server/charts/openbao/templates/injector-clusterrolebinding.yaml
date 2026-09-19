@@ -1,0 +1,18 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/injector-clusterrolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openbao-server-agent-injector-binding
+  labels:
+    app.kubernetes.io/name: openbao-agent-injector
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openbao-server-agent-injector-clusterrole
+subjects:
+- kind: ServiceAccount
+  name: openbao-server-agent-injector
+  namespace: vault-system

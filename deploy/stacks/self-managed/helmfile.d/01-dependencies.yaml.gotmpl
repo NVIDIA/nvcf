@@ -70,8 +70,9 @@ environments:
 {{- end }}
 
 {{- $helmSourceURL := dig "global" "helm" "sources" "url" "" .Values }}
-{{- if and $helmSourceURL (not (hasPrefix "https://" $helmSourceURL)) }}
-{{- fail "global.helm.sources.url must use https://" }}
+{{- $helmSourceURLIsLoopbackHTTP := or (hasPrefix "http://127.0.0.1:" $helmSourceURL) (hasPrefix "http://localhost:" $helmSourceURL) }}
+{{- if and $helmSourceURL (not (or (hasPrefix "https://" $helmSourceURL) $helmSourceURLIsLoopbackHTTP)) }}
+{{- fail "global.helm.sources.url must use https:// unless it points at local loopback HTTP for tests" }}
 {{- end }}
 
 repositories:

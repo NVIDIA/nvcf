@@ -1,0 +1,29 @@
+---
+# Source: helm-nvcf-openbao-server/charts/openbao/templates/server-service.yaml
+# Service for OpenBao cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao-server
+  namespace: vault-system
+  labels:
+    helm.sh/chart: openbao-0.28.3
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    app.kubernetes.io/managed-by: Helm
+spec:
+  # We want the servers to become available even if they're not ready
+  # since this DNS is also used for join operations.
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+      appProtocol: HTTP
+    - name: https-internal
+      port: 8201
+      targetPort: 8201
+  selector:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: openbao-server
+    component: server

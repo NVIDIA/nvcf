@@ -1,0 +1,46 @@
+---
+# Source: helm-nvcf-sis/templates/configmap-vault-agent-template.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spot-instance-service-vault-agent-tpl
+  namespace: sis
+  labels:
+    helm.sh/chart: helm-nvcf-sis-2.3.0
+    app.kubernetes.io/name: helm-nvcf-sis
+    app.kubernetes.io/instance: sis
+    app.kubernetes.io/version: "0.7.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  secrets.json.tmpl: |-
+    {
+      "kv": {
+        "cassandra": {
+          {{- with secret "/services/sis-api/kv/data/cassandra/creds" }}
+          "username": "{{ .Data.data.username }}",
+          "password": "{{ .Data.data.password }}"
+          {{- end }}
+        },
+        "nkey_seed": "{{ with secret "/services/all/kv/data/nats/creds" }}{{ .Data.data.key }}{{ end }}",
+        "tokens": {
+          {{- with secret `services/event-ledger/jwt/sign/sis-api` }}
+          "eventLedger": "{{ .Data.token }}"
+          {{- end }}
+        }
+      }
+    }

@@ -1,0 +1,114 @@
+---
+# Source: helm-admin-token-issuer-proxy/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin-token-issuer-proxy
+  namespace: api-keys
+  labels:
+    helm.sh/chart: helm-admin-token-issuer-proxy-1.5.2
+    app.kubernetes.io/name: helm-admin-token-issuer-proxy
+    app.kubernetes.io/instance: admin-issuer-proxy
+    app.kubernetes.io/version: "1.1.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-admin-token-issuer-proxy
+      app.kubernetes.io/instance: admin-issuer-proxy
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "admin-issuer-proxy"
+        vault.hashicorp.com/auth-path: "auth/jwt"
+        vault.hashicorp.com/agent-copy-volume-mounts: helm-admin-token-issuer-proxy
+        vault.hashicorp.com/agent-run-as-same-user: "true"
+        vault.hashicorp.com/agent-inject-token: "true"
+      labels:
+        app.kubernetes.io/name: helm-admin-token-issuer-proxy
+        app.kubernetes.io/instance: admin-issuer-proxy
+    spec:
+      serviceAccountName: admin-issuer-proxy
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: helm-admin-token-issuer-proxy
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+        image: "nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.1.1"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: VAULT_ADDR
+          value: "http://openbao-server.vault-system.svc.cluster.local:8200"
+        - name: SIGN_PATH
+          value: "services/nvcf-api/jwt/sign"
+        - name: ROLE
+          value: "admin-issuer-proxy"
+        - name: VAULT_TOKEN_FILE
+          value: "/vault/secrets/token"
+        - name: LISTEN_ADDR
+          value: ":8080"
+        - name: SERVICE_METADATA_URL
+          value: "http://api-keys.api-keys.svc.cluster.local:8080/v1/services"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        volumeMounts:
+          - name: token
+            mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+            readOnly: true
+      volumes:
+        - name: token
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600
+                audience: http://openbao-server.vault-system.svc.cluster.local:8200
