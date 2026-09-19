@@ -160,6 +160,68 @@ func Test_parseErrorEventMessage(t *testing.T) {
 			expIsError: false,
 		},
 		{
+			name: "transient FailedCreate - webhook connection reset (hijacked/reset, not a timeout)",
+			event: corev1.Event{
+				Type:   corev1.EventTypeWarning,
+				Reason: "FailedCreate",
+				Message: `create Pod nvcf-test-func-0 in StatefulSet nvcf-test-func failed error: ` +
+					`Internal error occurred: failed calling webhook "mutate-pod-nodeaffinity.nvca.nvcf.nvidia.io": ` +
+					`failed to call webhook: an error on the server ("") has prevented the request from succeeding`,
+			},
+			expInclude: true,
+			expIsError: false,
+		},
+		{
+			name: "transient BindingError - webhook EOF",
+			event: corev1.Event{
+				Type:   corev1.EventTypeWarning,
+				Reason: "BindingError",
+				Message: `Post "https://nvca.nvca-system.svc:8443/validate": ` +
+					`failed calling webhook "validate-helm-charts.nvca.nvcf.nvidia.io": ` +
+					`Post "https://nvca.nvca-system.svc:8443/validate": EOF`,
+			},
+			expInclude: true,
+			expIsError: false,
+		},
+		{
+			name: "transient FailedCreate - webhook signature match is case-insensitive",
+			event: corev1.Event{
+				Type:   corev1.EventTypeWarning,
+				Reason: "FailedCreate",
+				Message: `create Pod nvcf-test-func-0 in StatefulSet nvcf-test-func failed error: ` +
+					`Internal error occurred: Failed Calling Webhook "mutate-pod-nodeaffinity.nvca.nvcf.nvidia.io": ` +
+					`failed to call webhook: an error on the server ("") has prevented the Request From Succeeding`,
+			},
+			expInclude: true,
+			expIsError: false,
+		},
+		{
+			name: "non-transient BindingError should still be an error",
+			event: corev1.Event{
+				Type:   corev1.EventTypeWarning,
+				Reason: "BindingError",
+				// A real denial (matches the forbidden: rule every other
+				// Reason's non-transient path already relies on), not a
+				// resourceVersion conflict -- conflicts are routine,
+				// self-healing, and auto-retried by controllers, so using
+				// one here would misrepresent what a genuine terminal
+				// BindingError looks like.
+				Message: `pods "foo-0" is forbidden: ` + exceededQuotaMsg,
+			},
+			expInclude: true,
+			expIsError: true,
+		},
+		{
+			name: "transient BindingError - resourceVersion conflict is routine, not terminal",
+			event: corev1.Event{
+				Type:    corev1.EventTypeWarning,
+				Reason:  "BindingError",
+				Message: `Operation cannot be fulfilled on pods "foo-0": the object has been modified`,
+			},
+			expInclude: true,
+			expIsError: false,
+		},
+		{
 			name: "policy violation warning should be excluded",
 			event: corev1.Event{
 				Type:    corev1.EventTypeWarning,
@@ -176,6 +238,24 @@ func Test_parseErrorEventMessage(t *testing.T) {
 			assert.Equal(t, tt.expIsError, isError)
 		})
 	}
+}
+
+func Test_isTransientWebhookUnavailableMessage(t *testing.T) {
+	const prefix = `Internal error occurred: failed calling webhook "mutate-pod-nodeaffinity.nvca.nvcf.nvidia.io": `
+
+	for _, signature := range transientWebhookUnavailableSignatures {
+		t.Run(signature, func(t *testing.T) {
+			assert.True(t, isTransientWebhookUnavailableMessage(prefix+signature))
+		})
+	}
+
+	t.Run("no signature match", func(t *testing.T) {
+		assert.False(t, isTransientWebhookUnavailableMessage(prefix+"x509: certificate signed by unknown authority"))
+	})
+
+	t.Run("signature present but not a webhook call failure", func(t *testing.T) {
+		assert.False(t, isTransientWebhookUnavailableMessage("connection refused"))
+	})
 }
 
 func Test_ObjectStatuses_backoffBehavior(t *testing.T) {
