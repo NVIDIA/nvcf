@@ -37,7 +37,20 @@
       "tag_format": "deploy/stacks/nvcf-compute-plane/v${version}",
       "version_file": "VERSION",
       "release_branch_only": true,
-      "resolved_inventory_asset": "nvcf-compute-plane-stack-inventory.json"
+      "resolved_inventory_asset": "nvcf-compute-plane-stack-inventory.json",
+      "deploys": [
+        {
+          "service": "byoo-otel-collector",
+          "values_files": [
+            {
+              "file": "environments/base.yaml",
+              "paths": [
+                "global.nvcaOperator.selfManaged.otelCollector.imageTag"
+              ]
+            }
+          ]
+        }
+      ]
     },
     {
       "id": "nvcf-self-managed-stack",
