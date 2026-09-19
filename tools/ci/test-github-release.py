@@ -32,6 +32,13 @@ def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
+def git_out(root, *args):
+    """git, returning stdout. The plain helper above discards it."""
+    return subprocess.run(
+        ["git", *args], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    ).stdout
+
+
 class SubprocessShim:
     """Stands in for the module's `subprocess`, intercepting only `gh` calls.
 
@@ -2401,6 +2408,226 @@ class SuccessCommentTest(unittest.TestCase):
             "${issue.pull_request ? 'PR is included' : 'issue has been resolved'}",
             self.github_plugin_options()["successComment"],
         )
+
+
+class MultiPathReleaseTest(unittest.TestCase):
+    """One release version covering a service directory and a path outside it."""
+
+    setUp = GithubReleaseTest.setUp
+    init_repo = GithubReleaseTest.init_repo
+    seed_nvca_service = GithubReleaseTest.seed_nvca_service
+    commit_all = GithubReleaseTest.commit_all
+
+    CHART_PATH = "deploy/helm/nvca-operator/nvca-operator"
+
+    def nvca_metadata(self, owns_paths=True):
+        service = {
+            "id": "nvca",
+            "path": "src/compute-plane-services/nvca",
+            "service_name": "nvca",
+        }
+        if owns_paths:
+            service["owns_paths"] = [{"path": self.CHART_PATH, "packaged": True}]
+        return service
+
+    def seed_chart(self, root):
+        chart_dir = root / self.CHART_PATH
+        chart_dir.mkdir(parents=True, exist_ok=True)
+        (chart_dir / "Chart.yaml").write_text("name: helm-nvca-operator\n")
+
+    def init_multi_path_repo(self, root, remote=None):
+        self.init_repo(root)
+        self.seed_nvca_service(root)
+        self.seed_chart(root)
+        self.commit_all(root, "seed")
+        git(root, "tag", "src/compute-plane-services/nvca/v3.12.1")
+        if remote is not None:
+            subprocess.run(
+                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            git(root, "remote", "add", "origin", str(remote))
+            git(root, "push", "origin", "HEAD")
+        self.github_release.create_release = lambda tag, title, notes, draft, dry_run: None
+
+    def touch(self, root, relative, message):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(target.read_text() + "x\n" if target.exists() else "x\n")
+        self.commit_all(root, message)
+
+    def test_release_level_follows_the_configured_rules(self):
+        level = self.github_release.release_level
+        self.assertEqual(level("feat(nvca): add a thing"), "minor")
+        self.assertEqual(level("fix(nvca): correct a thing"), "patch")
+        self.assertEqual(level("perf(nvca): speed a thing"), "patch")
+        self.assertIsNone(level("chore(nvca): tidy"))
+        self.assertIsNone(level("docs: explain"))
+        self.assertEqual(level("fix(nvca)!: break a thing"), "major")
+        self.assertEqual(level("feat!: break a thing"), "major")
+        # Not a Conventional Commit, so it releases nothing, the same as it
+        # would inside a service directory.
+        self.assertIsNone(level("Merge branch 'main' into topic"))
+
+    def test_releases_a_version_still_agrees_with_release_level(self):
+        for subject in ("feat: a", "fix: b", "chore: c", "docs!: d", "not conventional"):
+            self.assertEqual(
+                self.github_release.releases_a_version(subject),
+                self.github_release.release_level(subject) is not None,
+                subject,
+            )
+
+    def test_bump_version_applies_the_level(self):
+        bump = self.github_release.bump_version
+        self.assertEqual(bump("3.12.1", "patch"), "3.12.2")
+        self.assertEqual(bump("3.12.1", "minor"), "3.13.0")
+        self.assertEqual(bump("3.12.1", "major"), "4.0.0")
+        self.assertIsNone(bump("3.12.1", None))
+
+    def test_packaged_path_applies_a_patch_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_multi_path_repo(root)
+            # A chore releases nothing on its own, but it changed bytes that
+            # enter the published artifact, so it must still ship.
+            self.touch(root, f"{self.CHART_PATH}/values.yaml", "chore(chart): retune a default")
+            level, reasons = self.github_release.owned_paths_release_level(
+                root, self.nvca_metadata(), "src/compute-plane-services/nvca/v3.12.1"
+            )
+            self.assertEqual(level, "patch")
+            self.assertEqual(len(reasons), 1)
+
+    def test_unpackaged_path_gets_no_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_multi_path_repo(root)
+            service = self.nvca_metadata()
+            service["owns_paths"] = [{"path": self.CHART_PATH, "packaged": False}]
+            self.touch(root, f"{self.CHART_PATH}/values.yaml", "chore(chart): retune a default")
+            level, _ = self.github_release.owned_paths_release_level(
+                root, service, "src/compute-plane-services/nvca/v3.12.1"
+            )
+            self.assertIsNone(level)
+
+    def test_owned_path_feat_outranks_a_service_fix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_multi_path_repo(root)
+            self.touch(root, f"{self.CHART_PATH}/values.yaml", "feat(chart): expose a setting")
+            version, source = self.github_release.multi_path_release_version(
+                root, self.nvca_metadata(), "3.12.2"
+            )
+            # semantic-release saw only a patch in the service directory; the
+            # chart's feat is the higher level and wins.
+            self.assertEqual(version, "3.13.0")
+            self.assertEqual(source, "owned-paths")
+
+    def test_service_level_wins_when_it_is_higher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_multi_path_repo(root)
+            self.touch(root, f"{self.CHART_PATH}/values.yaml", "fix(chart): correct a default")
+            version, source = self.github_release.multi_path_release_version(
+                root, self.nvca_metadata(), "3.13.0"
+            )
+            self.assertEqual(version, "3.13.0")
+            self.assertEqual(source, "semantic-release")
+
+    def test_no_owned_paths_leaves_semantic_release_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_multi_path_repo(root)
+            self.touch(root, f"{self.CHART_PATH}/values.yaml", "feat(chart): expose a setting")
+            version, source = self.github_release.multi_path_release_version(
+                root, self.nvca_metadata(owns_paths=False), "3.12.2"
+            )
+            self.assertEqual(version, "3.12.2")
+            self.assertEqual(source, "semantic-release")
+
+
+class FollowerReleaseTest(unittest.TestCase):
+    """A follower tag lands on the leader's commit, not on HEAD."""
+
+    setUp = GithubReleaseTest.setUp
+    init_repo = GithubReleaseTest.init_repo
+    seed_nvca_service = GithubReleaseTest.seed_nvca_service
+    commit_all = GithubReleaseTest.commit_all
+
+    CHART_PATH = MultiPathReleaseTest.CHART_PATH
+    nvca_metadata = MultiPathReleaseTest.nvca_metadata
+    seed_chart = MultiPathReleaseTest.seed_chart
+    init_multi_path_repo = MultiPathReleaseTest.init_multi_path_repo
+    touch = MultiPathReleaseTest.touch
+
+    def follower_metadata(self):
+        return {
+            "id": "nvca-operator",
+            "path": "deploy/helm/nvca-operator",
+            "service_name": "helm-nvca-operator",
+            "version_follows": "nvca",
+        }
+
+    def metadata(self):
+        return {"services": [self.nvca_metadata(), self.follower_metadata()]}
+
+    def test_follower_tags_the_leaders_commit_after_main_advances(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            self.touch(root, "src/compute-plane-services/nvca/a.go", "fix(nvca): correct a thing")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.12.2")
+            leader_commit = git_out(root, "rev-parse", "HEAD").strip()
+
+            # main moves on before the follower is created. Tagging HEAD here
+            # would put one release on two different trees.
+            self.touch(root, "unrelated.txt", "docs: something else entirely")
+            self.assertNotEqual(git_out(root, "rev-parse", "HEAD").strip(), leader_commit)
+
+            self.github_release.publish_follower_release(
+                root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
+            )
+
+            tag = "deploy/helm/nvca-operator/v3.12.2"
+            self.assertEqual(git_out(root, "rev-parse", f"{tag}^{{commit}}").strip(), leader_commit)
+
+    def test_follower_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.12.2")
+            for _ in range(2):
+                self.github_release.publish_follower_release(
+                    root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
+                )
+            tags = git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v*").split()
+            self.assertEqual(tags, ["deploy/helm/nvca-operator/v3.12.2"])
+
+    def test_follower_refuses_a_conflicting_existing_tag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.12.2")
+            # Someone already created the follower tag somewhere else.
+            self.touch(root, "unrelated.txt", "docs: elsewhere")
+            git(root, "tag", "deploy/helm/nvca-operator/v3.12.2")
+            with self.assertRaises(SystemExit):
+                self.github_release.publish_follower_release(
+                    root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
+                )
+
+    def test_follower_skips_a_prerelease_leader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0-rc.1")
+            self.github_release.publish_follower_release(
+                root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
+            )
+            self.assertEqual(git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v*").split(), [])
 
 
 if __name__ == "__main__":

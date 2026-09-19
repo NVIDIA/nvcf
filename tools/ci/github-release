@@ -1229,14 +1229,21 @@ def comment_release_on_pull_requests(root, service, tag, version, since_tag):
     return commented
 
 
-def publish_tag_for_version(root, service, version, dry_run, draft, reason):
+def publish_tag_for_version(root, service, version, dry_run, draft, reason, at_commit=None):
+    """Create and publish a release tag.
+
+    `at_commit` pins the tag to a specific commit instead of HEAD. A follower tag
+    must land on the commit its leader tag already points at: the default branch
+    can advance between the two, and tagging HEAD would put them on different
+    trees for the same release.
+    """
     tag = tag_for_version(service, version, root)
-    head = run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=root, capture=True).strip()
+    head = at_commit or run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=root, capture=True).strip()
     current = run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], cwd=root, capture=True, check=False).strip()
     if current:
         existing_sha = tag_sha(root, tag)
         if existing_sha == head:
-            print(f"[github-release] {service['id']}: {tag} already points at HEAD; skipping")
+            print(f"[github-release] {service['id']}: {tag} already points at {head[:9]}; skipping")
             return
         raise SystemExit(f"{service['id']}: {tag} already exists at {existing_sha}, not {head}")
     for prefix in tag_prefixes(service, root):
@@ -1250,12 +1257,12 @@ def publish_tag_for_version(root, service, version, dry_run, draft, reason):
             print(f"[github-release] {service['id']}: legacy anchor {existing} points at HEAD; creating current tag {tag}")
     notes = f"Release {tag}\n\nPackage version: {version}\nSource: {reason}"
     if dry_run:
-        print(f"[github-release] {service['id']}: would create {tag} at HEAD")
+        print(f"[github-release] {service['id']}: would create {tag} at {head[:9]}")
         print(notes)
         return
     # Resolved before tagging so HEAD's own tag cannot bound the range.
     since_tag = ancestor_service_tag(root, service)
-    run(["git", "tag", tag, "HEAD"], cwd=root)
+    run(["git", "tag", tag, head], cwd=root)
     run(["git", "push", "origin", f"refs/tags/{tag}"], cwd=root)
     created = create_release(tag, tag, notes, draft, dry_run=False)
     # Only for a release this run actually created, so a re-run does not comment
@@ -1312,22 +1319,101 @@ def next_patch_version(version):
     return f"{major}.{minor}.{patch + 1}"
 
 
-def releases_a_version(subject):
-    """Whether a commit subject releases a version under RELEASE_RULES.
+# Release levels, ordered. `None` is "releases nothing"; comparing by rank is how
+# levels from two owned paths are aggregated.
+RELEASE_LEVEL_RANK = {None: 0, "patch": 1, "minor": 2, "major": 3}
 
-    Derived from RELEASE_RULES so the fan-out applies exactly the rules
-    semantic-release is configured with: `feat`, `fix`, and `perf` release, the
-    other declared types do not, and a `!` breaking marker always releases. A
-    subject that is not a Conventional Commit releases nothing, the same as it
-    would inside a service directory.
+
+def release_level(subject):
+    """The release level of a commit subject under RELEASE_RULES.
+
+    Returns None, "patch", "minor" or "major". Derived from RELEASE_RULES so it
+    applies exactly the rules semantic-release is configured with: `feat` is a
+    minor, `fix` and `perf` are patches, the other declared types release
+    nothing, and a `!` breaking marker is always a major. A subject that is not a
+    Conventional Commit releases nothing, the same as it would inside a service
+    directory.
     """
     match = COMMIT_SUBJECT_PATTERN.match(subject)
     if not match:
-        return False
+        return None
     if match.group("breaking"):
-        return True
-    releasing = {rule["type"] for rule in RELEASE_RULES if rule["release"]}
-    return match.group("type").lower() in releasing
+        return "major"
+    by_type = {rule["type"]: rule["release"] for rule in RELEASE_RULES}
+    return by_type.get(match.group("type").lower()) or None
+
+
+def higher_release_level(left, right):
+    return left if RELEASE_LEVEL_RANK[left] >= RELEASE_LEVEL_RANK[right] else right
+
+
+def bump_version(version, level):
+    """Apply a release level to a stable X.Y.Z version."""
+    if not level:
+        return None
+    major, minor, patch = (int(part) for part in version.split("."))
+    if level == "major":
+        return f"{major + 1}.0.0"
+    if level == "minor":
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def releases_a_version(subject):
+    """Whether a commit subject releases a version under RELEASE_RULES.
+
+    Expressed through release_level so the rules live in exactly one place.
+    """
+    return release_level(subject) is not None
+
+
+def owned_release_paths(service):
+    """Extra paths this service cuts releases for, beyond its own directory.
+
+    semantic-release is scoped to the service directory by
+    semantic-release-monorepo, so a path outside it is invisible to the version
+    calculation. Declaring it here is what lets one release cover both.
+    """
+    return list(service.get("owns_paths") or [])
+
+
+def owned_paths_release_level(root, service, since_tag, end="HEAD"):
+    """Highest release level from commits touching the service's extra owned paths.
+
+    An entry marked `packaged` applies a patch floor: bytes that enter a
+    published artifact have to ship, even when the commit subject would release
+    nothing on its own (`chore`, `docs`, or a subject that is not a Conventional
+    Commit). Paths that only carry tooling or tests around the artifact get no
+    floor, so touching them alone does not cut a product release.
+
+    Commits touching both this path and the service directory are not
+    deduplicated because levels aggregate by maximum, which is idempotent.
+    """
+    level = None
+    reasons = []
+    for entry in owned_release_paths(service):
+        path = entry.get("path")
+        if not path:
+            raise SystemExit(f"{service['id']}: owns_paths entry is missing a path")
+        raw = run(
+            ["git", "log", "--format=%h %s", f"{since_tag}..{end}", "--", path],
+            cwd=root,
+            capture=True,
+        )
+        for line in raw.splitlines():
+            commit = line.strip()
+            if not commit:
+                continue
+            sha, _, subject = commit.partition(" ")
+            commit_level = release_level(subject)
+            if commit_level is None and entry.get("packaged"):
+                commit_level = "patch"
+            if commit_level is None:
+                continue
+            if RELEASE_LEVEL_RANK[commit_level] > RELEASE_LEVEL_RANK[level]:
+                level = commit_level
+            reasons.append(f"{sha} {commit_level}: {subject}")
+    return level, reasons
 
 
 def release_worthy_framework_commits_since(root, framework_paths, since_tag):
@@ -1430,6 +1516,92 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
         framework_dependency_reason(service, framework_paths, last_tag, commits),
     )
     return True
+
+
+def multi_path_release_version(root, service, semantic_version):
+    """The version to cut once the service's extra owned paths are accounted for.
+
+    semantic-release is scoped to the service directory, so it never sees the
+    owned paths. This compares the level it computed against the level those
+    paths demand and returns whichever is higher.
+
+    Returns (version, source):
+      ("3.13.0", "semantic-release")  semantic-release already covers it, let it publish
+      ("3.12.2", "owned-paths")       the owned paths demand a release it did not cut
+      (None, "")                      nothing to release
+    """
+    owned_level, reasons = owned_paths_release_level(root, service, ancestor_service_tag(root, service))
+    if not owned_level:
+        return (semantic_version, "semantic-release") if semantic_version else (None, "")
+
+    last_tag = latest_service_tag(service, root)
+    if not last_tag:
+        # No baseline to bump from. semantic-release owns the first release.
+        return (semantic_version, "semantic-release") if semantic_version else (None, "")
+    current = version_from_tag(service, last_tag, root)
+    if not re.fullmatch(STABLE_SEMVER_PATTERN, current):
+        return (semantic_version, "semantic-release") if semantic_version else (None, "")
+
+    owned_version = bump_version(current, owned_level)
+    if not semantic_version:
+        print(
+            f"[github-release] {service['id']}: owned paths require a {owned_level} "
+            f"release that semantic-release did not cut; {len(reasons)} commit(s)"
+        )
+        for reason in reasons[:MAX_QUOTED_FRAMEWORK_COMMITS]:
+            print(f"[github-release]   {reason}")
+        return owned_version, "owned-paths"
+
+    # Both want a release. Compare by resulting version rather than by level:
+    # semantic-release reports a version, not a level, and the two must not
+    # disagree about the baseline.
+    if semverish_sort_key(owned_version) > semverish_sort_key(semantic_version):
+        print(
+            f"[github-release] {service['id']}: owned paths require {owned_version}, "
+            f"above the {semantic_version} semantic-release computed"
+        )
+        return owned_version, "owned-paths"
+    return semantic_version, "semantic-release"
+
+
+def publish_follower_release(root, service, metadata, dry_run, draft):
+    """Tag a service at the version and commit its leader already released.
+
+    A follower computes nothing. It reads the leader's newest tag, takes that
+    version, and creates its own tag on the very commit the leader tag points
+    at. Tagging HEAD instead would let the default branch advance between the
+    two and put one release on two different trees.
+    """
+    leader_id = service["version_follows"]
+    leader = find_service(metadata, leader_id)
+    leader_tag = latest_service_tag(leader, root)
+    if not leader_tag:
+        print(
+            f"[github-release] {service['id']}: {leader_id} has no release tag to follow; "
+            "nothing to do"
+        )
+        return
+    version = version_from_tag(leader, leader_tag, root)
+    if not re.fullmatch(STABLE_SEMVER_PATTERN, version):
+        print(
+            f"[github-release] {service['id']}: {leader_tag} is not a stable X.Y.Z; "
+            "not following a prerelease"
+        )
+        return
+    commit = tag_sha(root, leader_tag)
+    print(
+        f"[github-release] {service['id']}: following {leader_id} {version} "
+        f"at {commit[:9]}"
+    )
+    publish_tag_for_version(
+        root,
+        service,
+        version,
+        dry_run,
+        draft,
+        f"follows {leader_id} release {leader_tag}",
+        at_commit=commit,
+    )
 
 
 def resolve_release_outcome(exit_code, output):
@@ -1802,8 +1974,16 @@ def auto_release(args):
     # hide that.
     stale_checkouts = []
 
+    # Followers are held back until every leader has run. Their version comes
+    # from the leader's tag, so processing them in declaration order would make
+    # the result depend on where they sit in the metadata file.
+    followers = []
+
     for service in metadata.get("services", []):
         if not should_process_auto_service(service, service_filter, branch, default_branch, root):
+            continue
+        if service.get("version_follows"):
+            followers.append(service)
             continue
         service_dir = root / service["path"]
         if not service_dir.is_dir():
@@ -1858,6 +2038,40 @@ def auto_release(args):
                     print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
                     dry_run_failures.append((service["id"], reason))
             else:
+                if owned_release_paths(service):
+                    # semantic-release publishes as soon as it computes a
+                    # version, so a service that also owns paths outside its
+                    # directory has to be previewed first. Otherwise a chart-only
+                    # change that demands a larger bump arrives after the smaller
+                    # one is already tagged.
+                    preview_cmd = ["npx", "semantic-release", "--dry-run", "--no-ci"]
+                    preview_code, preview_output = stream(preview_cmd, cwd=service_dir)
+                    preview = resolve_release_outcome(preview_code, preview_output)
+                    if preview == "stale-checkout":
+                        print(
+                            f"[github-release] {service['id']}: preview saw a checkout behind "
+                            "main; not releasing"
+                        )
+                        stale_checkouts.append(service["id"])
+                        continue
+                    previewed = parse_next_version(preview_output) if preview == "released" else ""
+                    version, source = multi_path_release_version(root, service, previewed)
+                    if source == "owned-paths":
+                        # semantic-release would under-release. Cut the tag here
+                        # instead, the same way the framework fan-out does.
+                        publish_tag_for_version(
+                            root,
+                            service,
+                            version,
+                            dry_run=False,
+                            draft=draft,
+                            reason=f"owned release paths under {service['path']}",
+                        )
+                        continue
+                    if not version:
+                        print(f"[github-release] {service['id']}: no release-worthy commits")
+                        continue
+
                 # Streamed rather than run() so the result is readable: a
                 # dependency fan-out must only fire when semantic-release itself
                 # released nothing.
@@ -1875,6 +2089,13 @@ def auto_release(args):
                         f"[github-release] WARNING: {service['id']}: semantic-release reported "
                         "neither a version nor a no-release result; not cutting a dependency release"
                     )
+        finally:
+            print("::endgroup::")
+
+    for service in followers:
+        print(f"::group::github-release {service['id']} (follower)")
+        try:
+            publish_follower_release(root, service, metadata, dry_run=dry_run, draft=draft)
         finally:
             print("::endgroup::")
 

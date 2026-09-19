@@ -223,7 +223,13 @@
       "path": "src/compute-plane-services/nvca",
       "service_name": "nvca",
       "legacy_tag_prefix": "nvca-v",
-      "initial_version": "3.3.0"
+      "initial_version": "3.3.0",
+      "owns_paths": [
+        {
+          "path": "deploy/helm/nvca-operator/nvca-operator",
+          "packaged": true
+        }
+      ]
     },
     {
       "id": "container-cache",
@@ -366,7 +372,6 @@
       "service_name": "helm-nvca-operator",
       "legacy_tag_prefix": "helm-nvca-operator-v",
       "deploys": [
-        "nvca",
         {
           "service": "byoo-otel-collector",
           "values_paths": [
@@ -376,7 +381,8 @@
             "selfManaged.otelCollector.imageTag"
           ]
         }
-      ]
+      ],
+      "version_follows": "nvca"
     },
     {
       "id": "cassandra-migrations",
