@@ -155,24 +155,31 @@ public class IcmsConfigurationPropertiesTest extends IntegrationTest {
         Assertions.assertEquals("dgpu5", icmsConfigurationProperties.getGpuNameForQueues("DUMMY_GPU_5"));
     }
 
+    /**
+     * Queue URLs are not asserted verbatim: AWS specifies a queue URL as the SQS endpoint
+     * followed by "/{account-id}/{queue-name}", so the host part depends on the endpoint in
+     * use and only the queue name is a stable identifier. See
+     * https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-queue-message-identifiers.html
+     */
+    private static void assertQueueUrlFor(String expectedQueueName, String actualQueueUrl) {
+        Assertions.assertNotNull(actualQueueUrl);
+        Assertions.assertEquals(expectedQueueName,
+                                actualQueueUrl.substring(actualQueueUrl.lastIndexOf('/') + 1));
+    }
+
     @Test
     void test_getCreationQueueUrlForGpu_withTaskEnabled() {
         // Valid GPUs
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-tasks-dgpu4.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_4", true));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-tasks-dgpu2.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_2", true));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-tasks-dgpu3.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_3", true));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-tasks-dgpu1.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_1", true));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-tasks-dgpu5.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_5", true));
+        assertQueueUrlFor("gdn-spot-instance-requests-tasks-dgpu4.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_4", true));
+        assertQueueUrlFor("gdn-spot-instance-requests-tasks-dgpu2.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_2", true));
+        assertQueueUrlFor("gdn-spot-instance-requests-tasks-dgpu3.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_3", true));
+        assertQueueUrlFor("gdn-spot-instance-requests-tasks-dgpu1.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_1", true));
+        assertQueueUrlFor("gdn-spot-instance-requests-tasks-dgpu5.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_5", true));
 
         // Invalid GPU
         Assertions.assertNull(
@@ -181,21 +188,16 @@ public class IcmsConfigurationPropertiesTest extends IntegrationTest {
 
     @Test
     void test_getCreationQueueUrlForGpu_withoutTaskEnabled() {
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-dgpu4.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_4", false));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-dgpu2.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_2", false));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-dgpu3.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_3", false));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-dgpu1.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_1", false));
-        Assertions.assertEquals(
-                "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/gdn-spot-instance-requests-dgpu5.fifo",
-                icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_5", false));
+        assertQueueUrlFor("gdn-spot-instance-requests-dgpu4.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_4", false));
+        assertQueueUrlFor("gdn-spot-instance-requests-dgpu2.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_2", false));
+        assertQueueUrlFor("gdn-spot-instance-requests-dgpu3.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_3", false));
+        assertQueueUrlFor("gdn-spot-instance-requests-dgpu1.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_1", false));
+        assertQueueUrlFor("gdn-spot-instance-requests-dgpu5.fifo",
+                          icmsConfigurationProperties.getCreationQueueUrlForGpu("DUMMY_GPU_5", false));
 
         // Invalid GPU
         Assertions.assertNull(
