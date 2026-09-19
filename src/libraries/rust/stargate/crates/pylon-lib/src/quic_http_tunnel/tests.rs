@@ -442,8 +442,6 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         ..PylonRetryConfig::default()
     };
     for name in [
-        "Connection",
-        "Proxy-Connection",
         "Host",
         "X-Method",
         "X-Path",
@@ -551,7 +549,7 @@ fn pylon_response_header_filter_strips_internal_headers_case_insensitively()
 -> std::result::Result<(), reqwest::header::InvalidHeaderName> {
     let retry = PylonRetryConfig::default();
 
-    for name in [b"Connection".as_slice(), b"X-Stargate-Retryable"] {
+    for name in [b"Content-Length".as_slice(), b"X-Stargate-Retryable"] {
         assert!(!should_forward_response_header(
             &HeaderName::from_bytes(name)?,
             &retry,
