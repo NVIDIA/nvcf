@@ -131,10 +131,6 @@ const (
 	agentConfigVolumeName            = "agent-config"
 	legacyFirstClassConfigAnnotation = "nvcf.nvidia.com/legacy-first-class-config"
 
-	// ReVal config.
-	ReValCacheVolumeName = "reval-rendered-helmcharts"
-	ReValCacheDir        = agentConfigDir + "/" + ReValCacheVolumeName
-
 	// New preferred secret names for OAuth2/OIDC authentication
 	//nolint:gosec
 	OAuthClientKeySecretName = "oauth-client-secret-key"
@@ -2027,20 +2023,6 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 			},
 		},
 	)
-
-	msCfg := nb.Spec.ClusterConfig.MiniService.Complete(bc.envType)
-	volumes = append(volumes, corev1.Volume{
-		Name: ReValCacheVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			EmptyDir: &corev1.EmptyDirVolumeSource{
-				SizeLimit: msCfg.CacheDirSize,
-			},
-		},
-	})
-	nvcaContainer.VolumeMounts = append(nvcaContainer.VolumeMounts, corev1.VolumeMount{
-		Name:      ReValCacheVolumeName,
-		MountPath: ReValCacheDir,
-	})
 
 	// Tell the agent which namespace the cluster-validator writes its
 	// summary ConfigMap to (the operator/validator namespace), so the

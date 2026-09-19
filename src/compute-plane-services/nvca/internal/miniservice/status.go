@@ -135,12 +135,25 @@ func (r *Reconciler) collectObjectStatuses(
 		return nil, nil, err
 	}
 	if !isRendered {
+		// The persisted render is missing (e.g. too large to store), so ReVal is the last resort.
+		// A running instance must never be torn down because a re-render failed or came back
+		// invalid, so terminal render errors are downgraded to retryable errors here and the
+		// install condition set by render is left untouched.
+		conditions := slices.Clone(ms.Status.Conditions)
 		if objsData, err = r.render(ctx, ms, icmsReq); err != nil {
+			if isTerminal(err) {
+				err = unwrapTerminalError(err)
+				ms.Status.Conditions = conditions
+				log.Error(err, "Failed to re-render Helm Chart for status checks, will retry without failing the MiniService")
+			}
 			return nil, nil, err
 		}
-		if err := r.saveRenderedData(ctx, ms, objsData); err != nil {
-			return nil, nil, err
-		}
+		r.saveRenderedData(ctx, ms, objsData)
+	}
+	// Keep the rendered Secret in sync (no-op when already stored). A Secret write problem must not
+	// block health checks, so it is logged and retried on the next status reconcile.
+	if err := r.persistRenderedData(ctx, ms, objsData); err != nil {
+		log.Error(err, "Failed to persist rendered Helm Chart data, will retry on next status reconcile")
 	}
 
 	objs, resources, _, err := decodeObjects(ctx, r.Decoder, objsData)
