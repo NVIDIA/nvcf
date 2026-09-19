@@ -349,6 +349,15 @@ public class AuthManagerResolver {
      * and audience (nvcf-icms:{clusterId} format).</p>
      */
     public JwtDecoder buildJwtDecoderFromJwks(String jwksJson) throws ParseException {
+        return buildJwtDecoderFromJwks(jwksJson, nvcaSubjectValidator());
+    }
+
+    /**
+     * Same as {@link #buildJwtDecoderFromJwks(String)} but with a caller-supplied subject
+     * validator, so worker tokens can be verified without widening the NVCA validator.
+     */
+    public JwtDecoder buildJwtDecoderFromJwks(String jwksJson,
+            OAuth2TokenValidator<Jwt> subjectValidator) throws ParseException {
         JWKSet jwkSet = JWKSet.parse(jwksJson);
         ImmutableJWKSet<SecurityContext> jwkSource = new ImmutableJWKSet<>(jwkSet);
 
@@ -360,11 +369,37 @@ public class AuthManagerResolver {
         NimbusJwtDecoder decoder = new NimbusJwtDecoder(jwtProcessor);
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
                 new JwtTimestampValidator(),
-                nvcaSubjectValidator(),
+                subjectValidator,
                 nvcaAudienceValidator()
         ));
         return decoder;
     }
+
+    /**
+     * Subject validator for delegated worker tokens: exactly
+     * {@code system:serviceaccount:<namespace>:nvcf-worker} (PSAT) or a SPIFFE ID carrying
+     * {@code /instance/<id>/worker/<id>} (SPIFFE). Distinct from {@link #nvcaSubjectValidator()},
+     * which stays pinned to the {@code nvca} ServiceAccount.
+     */
+    public static OAuth2TokenValidator<Jwt> workerSubjectValidator() {
+        return jwt -> {
+            String sub = jwt.getSubject();
+            if (sub == null) {
+                return OAuth2TokenValidatorResult.failure(
+                        new OAuth2Error("invalid_token", "Missing sub claim", null));
+            }
+            boolean ok = AuthUtils.isValidWorkerPsatSubject(sub)
+                    || (sub.startsWith("spiffe://") && WORKER_SPIFFE_SEGMENTS.matcher(sub).find());
+            if (!ok) {
+                return OAuth2TokenValidatorResult.failure(
+                        new OAuth2Error("invalid_token", "Unauthorized worker subject", null));
+            }
+            return OAuth2TokenValidatorResult.success();
+        };
+    }
+
+    private static final java.util.regex.Pattern WORKER_SPIFFE_SEGMENTS =
+            java.util.regex.Pattern.compile("/instance/[^/]+/worker/[^/]+");
 
     /**
      * Validates that the JWT audience claim contains a cluster-specific NVCF-ICMS audience.
@@ -403,7 +438,7 @@ public class AuthManagerResolver {
      *       {@code /nvcf/nvca}.</li>
      * </ul>
      */
-    static OAuth2TokenValidator<Jwt> nvcaSubjectValidator() {
+    public static OAuth2TokenValidator<Jwt> nvcaSubjectValidator() {
         return jwt -> {
             String sub = jwt.getSubject();
             if (sub == null) {

@@ -29,7 +29,7 @@ import com.nvidia.icms.inbound.rest.model.nvca.TokenIntrospectRequest;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
 import com.nvidia.icms.service.byoc.nvca.NvcaNatsAuthorizationService;
-import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
+import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
 import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.util.Base64;
@@ -131,7 +131,7 @@ class NvcaControllerUnitTest {
         NvcaController controller = new NvcaController();
         ReflectionTestUtils.setField(controller, "nvcaConfig", config);
         ReflectionTestUtils.setField(controller, "nvcaTokenVerificationService",
-                new NvcaTokenVerificationService(authManagerResolver, clusterOidcIdentityService));
+                new ClusterOIDCTokenVerificationService(authManagerResolver, clusterOidcIdentityService));
         return controller;
     }
 
