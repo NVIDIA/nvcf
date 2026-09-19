@@ -32,6 +32,7 @@ test:
 	@tests/nats-auth-callout-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
+	@tests/ha-value-wiring.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
