@@ -31,6 +31,9 @@ import (
 const (
 	day  = 24 * time.Hour
 	week = 7 * day
+	// month approximates a calendar month as a fixed 30 days. This is a duration-based
+	// rate limit, not a calendar-aligned billing quota, so it does not reset on the 1st.
+	month = 30 * day
 )
 
 type LimitDimension string
@@ -52,8 +55,19 @@ const (
 	TokensPerHour         LimitDimension = "tokens_hour"
 	TokensPerDay          LimitDimension = "tokens_day"
 	TokensPerWeek         LimitDimension = "tokens_week"
+	TokensPerMonth        LimitDimension = "tokens_month"
+	InputTokensPerSecond  LimitDimension = "input_tokens_second"
 	InputTokensPerMinute  LimitDimension = "input_tokens_minute"
+	InputTokensPerHour    LimitDimension = "input_tokens_hour"
+	InputTokensPerDay     LimitDimension = "input_tokens_day"
+	InputTokensPerWeek    LimitDimension = "input_tokens_week"
+	InputTokensPerMonth   LimitDimension = "input_tokens_month"
+	OutputTokensPerSecond LimitDimension = "output_tokens_second"
 	OutputTokensPerMinute LimitDimension = "output_tokens_minute"
+	OutputTokensPerHour   LimitDimension = "output_tokens_hour"
+	OutputTokensPerDay    LimitDimension = "output_tokens_day"
+	OutputTokensPerWeek   LimitDimension = "output_tokens_week"
+	OutputTokensPerMonth  LimitDimension = "output_tokens_month"
 )
 
 var allLimitDimensions = []LimitDimension{
@@ -64,8 +78,19 @@ var allLimitDimensions = []LimitDimension{
 	TokensPerHour,
 	TokensPerDay,
 	TokensPerWeek,
+	TokensPerMonth,
+	InputTokensPerSecond,
 	InputTokensPerMinute,
+	InputTokensPerHour,
+	InputTokensPerDay,
+	InputTokensPerWeek,
+	InputTokensPerMonth,
+	OutputTokensPerSecond,
 	OutputTokensPerMinute,
+	OutputTokensPerHour,
+	OutputTokensPerDay,
+	OutputTokensPerWeek,
+	OutputTokensPerMonth,
 }
 
 type ResourceLimit struct {
@@ -80,8 +105,19 @@ type ResourceLimit struct {
 	TokensPerHour         int64
 	TokensPerDay          int64
 	TokensPerWeek         int64
+	TokensPerMonth        int64
+	InputTokensPerSecond  int64
 	InputTokensPerMinute  int64
+	InputTokensPerHour    int64
+	InputTokensPerDay     int64
+	InputTokensPerWeek    int64
+	InputTokensPerMonth   int64
+	OutputTokensPerSecond int64
 	OutputTokensPerMinute int64
+	OutputTokensPerHour   int64
+	OutputTokensPerDay    int64
+	OutputTokensPerWeek   int64
+	OutputTokensPerMonth  int64
 }
 
 type OrgLimit struct {
@@ -97,8 +133,19 @@ type OrgLimit struct {
 	TokensPerHour         int64
 	TokensPerDay          int64
 	TokensPerWeek         int64
+	TokensPerMonth        int64
+	InputTokensPerSecond  int64
 	InputTokensPerMinute  int64
+	InputTokensPerHour    int64
+	InputTokensPerDay     int64
+	InputTokensPerWeek    int64
+	InputTokensPerMonth   int64
+	OutputTokensPerSecond int64
 	OutputTokensPerMinute int64
+	OutputTokensPerHour   int64
+	OutputTokensPerDay    int64
+	OutputTokensPerWeek   int64
+	OutputTokensPerMonth  int64
 }
 
 type ProjectLimit struct {
@@ -115,8 +162,19 @@ type ProjectLimit struct {
 	TokensPerHour         int64
 	TokensPerDay          int64
 	TokensPerWeek         int64
+	TokensPerMonth        int64
+	InputTokensPerSecond  int64
 	InputTokensPerMinute  int64
+	InputTokensPerHour    int64
+	InputTokensPerDay     int64
+	InputTokensPerWeek    int64
+	InputTokensPerMonth   int64
+	OutputTokensPerSecond int64
 	OutputTokensPerMinute int64
+	OutputTokensPerHour   int64
+	OutputTokensPerDay    int64
+	OutputTokensPerWeek   int64
+	OutputTokensPerMonth  int64
 }
 
 type APIKeyLimit struct {
@@ -133,8 +191,19 @@ type APIKeyLimit struct {
 	TokensPerHour         int64
 	TokensPerDay          int64
 	TokensPerWeek         int64
+	TokensPerMonth        int64
+	InputTokensPerSecond  int64
 	InputTokensPerMinute  int64
+	InputTokensPerHour    int64
+	InputTokensPerDay     int64
+	InputTokensPerWeek    int64
+	InputTokensPerMonth   int64
+	OutputTokensPerSecond int64
 	OutputTokensPerMinute int64
+	OutputTokensPerHour   int64
+	OutputTokensPerDay    int64
+	OutputTokensPerWeek   int64
+	OutputTokensPerMonth  int64
 }
 
 func (r ResourceLimit) Empty() bool {
@@ -240,14 +309,58 @@ func doResourceLimit(
 				units = resourceRequest.InputTokens + resourceRequest.OutputTokens
 				limit = resourceLimit.TokensPerWeek
 				period = week
+			case TokensPerMonth:
+				units = resourceRequest.InputTokens + resourceRequest.OutputTokens
+				limit = resourceLimit.TokensPerMonth
+				period = month
+			case InputTokensPerSecond:
+				units = resourceRequest.InputTokens
+				limit = resourceLimit.InputTokensPerSecond
+				period = time.Second
 			case InputTokensPerMinute:
 				units = resourceRequest.InputTokens
 				limit = resourceLimit.InputTokensPerMinute
 				period = time.Minute
+			case InputTokensPerHour:
+				units = resourceRequest.InputTokens
+				limit = resourceLimit.InputTokensPerHour
+				period = time.Hour
+			case InputTokensPerDay:
+				units = resourceRequest.InputTokens
+				limit = resourceLimit.InputTokensPerDay
+				period = day
+			case InputTokensPerWeek:
+				units = resourceRequest.InputTokens
+				limit = resourceLimit.InputTokensPerWeek
+				period = week
+			case InputTokensPerMonth:
+				units = resourceRequest.InputTokens
+				limit = resourceLimit.InputTokensPerMonth
+				period = month
+			case OutputTokensPerSecond:
+				units = resourceRequest.OutputTokens
+				limit = resourceLimit.OutputTokensPerSecond
+				period = time.Second
 			case OutputTokensPerMinute:
 				units = resourceRequest.OutputTokens
 				limit = resourceLimit.OutputTokensPerMinute
 				period = time.Minute
+			case OutputTokensPerHour:
+				units = resourceRequest.OutputTokens
+				limit = resourceLimit.OutputTokensPerHour
+				period = time.Hour
+			case OutputTokensPerDay:
+				units = resourceRequest.OutputTokens
+				limit = resourceLimit.OutputTokensPerDay
+				period = day
+			case OutputTokensPerWeek:
+				units = resourceRequest.OutputTokens
+				limit = resourceLimit.OutputTokensPerWeek
+				period = week
+			case OutputTokensPerMonth:
+				units = resourceRequest.OutputTokens
+				limit = resourceLimit.OutputTokensPerMonth
+				period = month
 			default:
 				return fmt.Errorf("unknown limit dimension: %s", dimension)
 			}
@@ -325,8 +438,19 @@ func ResourceLimitFromOrgLimit(orgLimit OrgLimit) ResourceLimit {
 		TokensPerHour:         orgLimit.TokensPerHour,
 		TokensPerDay:          orgLimit.TokensPerDay,
 		TokensPerWeek:         orgLimit.TokensPerWeek,
+		TokensPerMonth:        orgLimit.TokensPerMonth,
+		InputTokensPerSecond:  orgLimit.InputTokensPerSecond,
 		InputTokensPerMinute:  orgLimit.InputTokensPerMinute,
+		InputTokensPerHour:    orgLimit.InputTokensPerHour,
+		InputTokensPerDay:     orgLimit.InputTokensPerDay,
+		InputTokensPerWeek:    orgLimit.InputTokensPerWeek,
+		InputTokensPerMonth:   orgLimit.InputTokensPerMonth,
+		OutputTokensPerSecond: orgLimit.OutputTokensPerSecond,
 		OutputTokensPerMinute: orgLimit.OutputTokensPerMinute,
+		OutputTokensPerHour:   orgLimit.OutputTokensPerHour,
+		OutputTokensPerDay:    orgLimit.OutputTokensPerDay,
+		OutputTokensPerWeek:   orgLimit.OutputTokensPerWeek,
+		OutputTokensPerMonth:  orgLimit.OutputTokensPerMonth,
 	}
 }
 
@@ -380,8 +504,19 @@ func ResourceLimitFromProjectLimit(projectLimit ProjectLimit) ResourceLimit {
 		TokensPerHour:         projectLimit.TokensPerHour,
 		TokensPerDay:          projectLimit.TokensPerDay,
 		TokensPerWeek:         projectLimit.TokensPerWeek,
+		TokensPerMonth:        projectLimit.TokensPerMonth,
+		InputTokensPerSecond:  projectLimit.InputTokensPerSecond,
 		InputTokensPerMinute:  projectLimit.InputTokensPerMinute,
+		InputTokensPerHour:    projectLimit.InputTokensPerHour,
+		InputTokensPerDay:     projectLimit.InputTokensPerDay,
+		InputTokensPerWeek:    projectLimit.InputTokensPerWeek,
+		InputTokensPerMonth:   projectLimit.InputTokensPerMonth,
+		OutputTokensPerSecond: projectLimit.OutputTokensPerSecond,
 		OutputTokensPerMinute: projectLimit.OutputTokensPerMinute,
+		OutputTokensPerHour:   projectLimit.OutputTokensPerHour,
+		OutputTokensPerDay:    projectLimit.OutputTokensPerDay,
+		OutputTokensPerWeek:   projectLimit.OutputTokensPerWeek,
+		OutputTokensPerMonth:  projectLimit.OutputTokensPerMonth,
 	}
 }
 
@@ -417,7 +552,18 @@ func ResourceLimitFromAPIKeyLimit(apiKeyLimit APIKeyLimit) ResourceLimit {
 		TokensPerHour:         apiKeyLimit.TokensPerHour,
 		TokensPerDay:          apiKeyLimit.TokensPerDay,
 		TokensPerWeek:         apiKeyLimit.TokensPerWeek,
+		TokensPerMonth:        apiKeyLimit.TokensPerMonth,
+		InputTokensPerSecond:  apiKeyLimit.InputTokensPerSecond,
 		InputTokensPerMinute:  apiKeyLimit.InputTokensPerMinute,
+		InputTokensPerHour:    apiKeyLimit.InputTokensPerHour,
+		InputTokensPerDay:     apiKeyLimit.InputTokensPerDay,
+		InputTokensPerWeek:    apiKeyLimit.InputTokensPerWeek,
+		InputTokensPerMonth:   apiKeyLimit.InputTokensPerMonth,
+		OutputTokensPerSecond: apiKeyLimit.OutputTokensPerSecond,
 		OutputTokensPerMinute: apiKeyLimit.OutputTokensPerMinute,
+		OutputTokensPerHour:   apiKeyLimit.OutputTokensPerHour,
+		OutputTokensPerDay:    apiKeyLimit.OutputTokensPerDay,
+		OutputTokensPerWeek:   apiKeyLimit.OutputTokensPerWeek,
+		OutputTokensPerMonth:  apiKeyLimit.OutputTokensPerMonth,
 	}
 }

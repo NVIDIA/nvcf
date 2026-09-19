@@ -207,14 +207,15 @@ func TestValidateLLMTokenRateLimit(t *testing.T) {
 		"25000-H",
 		"100000-D",
 		"500000-W",
-		"100-S,9000-M,25000-H,100000-D,500000-W",
+		"2000000-MO",
+		"100-S,9000-M,25000-H,100000-D,500000-W,2000000-MO",
 	}
 	for _, value := range valid {
 		value := value
 		t.Run("valid_"+value, func(t *testing.T) {
 			t.Parallel()
 
-			if err := validateLLMTokenRateLimit(value); err != nil {
+			if err := validateLLMTokenRateLimit("tokenRateLimit", value); err != nil {
 				t.Fatalf("validate tokenRateLimit %q: %v", value, err)
 			}
 		})
@@ -235,7 +236,7 @@ func TestValidateLLMTokenRateLimit(t *testing.T) {
 		t.Run("invalid_"+value, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateLLMTokenRateLimit(value)
+			err := validateLLMTokenRateLimit("tokenRateLimit", value)
 			assertTokenRateLimitError(t, err)
 		})
 	}
