@@ -48,7 +48,7 @@ filegroup(
         "deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json",
         "deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml",
     ],
-    visibility = ["//src/compute-plane-services/nvca:__pkg__"],
+    visibility = ["//visibility:public"],
 )
 
 # Gazelle manages only the native Go subtrees listed in go.work.bazel.
@@ -70,7 +70,7 @@ filegroup(
 # gazelle:exclude bazel-out
 # gazelle:exclude bazel-testlogs
 # gazelle:exclude ci
-# gazelle:exclude deploy
+# gazelle:exclude deploy  # keeps gazelle out; .bazelignore deliberately does not ignore it
 # gazelle:exclude docs
 # gazelle:exclude examples
 # gazelle:exclude fern
