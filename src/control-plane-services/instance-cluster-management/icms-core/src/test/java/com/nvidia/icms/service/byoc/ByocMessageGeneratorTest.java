@@ -69,6 +69,7 @@ class ByocMessageGeneratorTest {
                 .gpu("A100")
                 .containerImage(DUMMY_CONTAINER_IMAGE)
                 .environment(DUMMY_ENVIRONMENT_VALUE)
+                .maxRequestConcurrency(37)
                 .models("[{\"name\":\"model-1\"}]")
                 .functionType(FunctionType.LLM)
                 .functionId(UUID.randomUUID())
@@ -91,6 +92,7 @@ class ByocMessageGeneratorTest {
                 "request-id", 1, instanceRequest, destination, "customer");
 
         assertEquals(instanceRequest.getModels(), message.getLaunchSpecification().getModels());
+        assertEquals(37, message.getLaunchSpecification().getMaxRequestConcurrency());
     }
 
     @Test
