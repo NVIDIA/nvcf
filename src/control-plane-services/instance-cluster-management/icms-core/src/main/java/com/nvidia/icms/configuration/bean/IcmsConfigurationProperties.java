@@ -20,6 +20,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.nvidia.icms.configuration.aws.AwsConfigurationProperties;
 import com.nvidia.icms.configuration.aws.AwsQueueProperties;
 import com.nvidia.icms.outbound.sqs.QueueManager;
+import com.nvidia.icms.service.scheduled.InstanceLookupBackfillMode;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.annotation.Nullable;
 import jakarta.annotation.PostConstruct;
@@ -129,6 +130,11 @@ public class IcmsConfigurationProperties {
     private boolean gpuV5PopulationTaskEnabled;
 
     private int databaseReadPageSize;
+
+    private InstanceLookupBackfillMode instanceLookupBackfillTaskMode =
+            InstanceLookupBackfillMode.DISABLED;
+    private int instanceLookupBackfillTaskLockTtlInSeconds;
+    private int instanceLookupBackfillTaskPauseBetweenPagesInMs;
 
     private boolean shuttingDownInstanceTerminationTaskEnabled;
     private int shuttingDownInstanceTerminationTaskLockTtlInSeconds;
