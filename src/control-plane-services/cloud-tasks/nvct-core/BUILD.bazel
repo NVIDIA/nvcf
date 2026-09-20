@@ -197,6 +197,7 @@ NVCT_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_test_autoconfigure",
     "@nv_third_party_deps//:org_slf4j_slf4j_api",
     "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
+    "@nv_third_party_deps//:org_springframework_data_spring_data_commons",
     "@nv_third_party_deps//:org_springframework_spring_beans",
     "@nv_third_party_deps//:org_springframework_spring_context",
     "@nv_third_party_deps//:org_springframework_spring_core",
@@ -243,6 +244,14 @@ nvcf_java_test(
         "requires-docker",
     ],
     timeout = "long",
+)
+
+nvcf_java_test(
+    name = "health_backfill_unit_test",
+    srcs = ["src/test/java/com/nvidia/nvct/service/scheduler/HealthBackfillRoutineTest.java"],
+    deps = NVCT_CORE_TEST_DEPS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
+    size = "small",
 )
 
 nvcf_java_coverage_test(

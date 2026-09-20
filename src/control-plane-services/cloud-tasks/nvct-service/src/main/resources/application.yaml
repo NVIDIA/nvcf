@@ -225,6 +225,10 @@ nvct:
   scheduled-routines:
     enabled: true
     lock-consistency: LOCAL_QUORUM
+    health-backfill-routine:
+      mode: DISABLED
+      initial-delay: PT10S
+      fixed-delay: PT1M
   notary:
     jwt:
       issuer-uri: ${nvct.notary.base-url}

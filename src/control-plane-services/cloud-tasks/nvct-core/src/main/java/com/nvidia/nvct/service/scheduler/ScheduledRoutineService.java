@@ -47,21 +47,26 @@ public class ScheduledRoutineService implements ApplicationListener<ApplicationR
             "monitor-queued-tasks-routine";
     private static final String MONITOR_WORKER_HEARTBEAT_ROUTINE =
             "monitor-worker-heartbeat-routine";
+    private static final String HEALTH_BACKFILL_ROUTINE =
+            "health-backfill-routine";
     private final CountDownLatch initialised;
     private final MonitorQueuedTasksRoutine monitorQueuedTasksRoutine;
     private final MonitorLaunchedTasksRoutine monitorLaunchedTasksRoutine;
     private final CleanTerminalTasksRoutine cleanTerminalTasksRoutine;
     private final MonitorWorkerHeartbeatRoutine monitorWorkerHeartbeatRoutine;
+    private final HealthBackfillRoutine healthBackfillRoutine;
 
     public ScheduledRoutineService(
             MonitorQueuedTasksRoutine monitorQueuedTasksRoutine,
             MonitorLaunchedTasksRoutine monitorLaunchedTasksRoutine,
             CleanTerminalTasksRoutine cleanTerminalTasksRoutine,
-            MonitorWorkerHeartbeatRoutine monitorWorkerHeartbeatRoutine) {
+            MonitorWorkerHeartbeatRoutine monitorWorkerHeartbeatRoutine,
+            HealthBackfillRoutine healthBackfillRoutine) {
         this.monitorQueuedTasksRoutine = monitorQueuedTasksRoutine;
         this.monitorLaunchedTasksRoutine = monitorLaunchedTasksRoutine;
         this.cleanTerminalTasksRoutine = cleanTerminalTasksRoutine;
         this.monitorWorkerHeartbeatRoutine = monitorWorkerHeartbeatRoutine;
+        this.healthBackfillRoutine = healthBackfillRoutine;
         this.initialised = new CountDownLatch(1);
     }
 
@@ -120,6 +125,18 @@ public class ScheduledRoutineService implements ApplicationListener<ApplicationR
         log.debug("Begin Routine: " + MONITOR_WORKER_HEARTBEAT_ROUTINE);
         monitorWorkerHeartbeatRoutine.run();
         log.debug("End Routine: " + MONITOR_WORKER_HEARTBEAT_ROUTINE);
+    }
+
+    @SchedulerLock(name = HEALTH_BACKFILL_ROUTINE,
+            lockAtMostFor = "PT30M")
+    @Scheduled(
+            initialDelayString = "${nvct.scheduled-routines.health-backfill-routine.initial-delay:PT10S}",
+            fixedDelayString = "${nvct.scheduled-routines.health-backfill-routine.fixed-delay:PT1M}")
+    @Observed(name = "health-backfill")
+    void backfillHealth() throws InterruptedException {
+        initialised.await();
+        LockAssert.assertLocked();
+        healthBackfillRoutine.run();
     }
 
 }
