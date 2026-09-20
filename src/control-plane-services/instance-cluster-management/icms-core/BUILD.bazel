@@ -208,6 +208,19 @@ nvcf_java_test(
     timeout = "long",
 )
 
+nvcf_java_test(
+    name = "instance_lookup_backfill_unit_test",
+    srcs = ["src/test/java/com/nvidia/icms/service/scheduled/InstanceLookupBackfillTaskTest.java"],
+    deps = ICMS_CORE_DEPS + [
+        ":icms_core",
+        "@nv_third_party_deps//:org_assertj_assertj_core",
+        "@nv_third_party_deps//:org_junit_jupiter_junit_jupiter_api",
+        "@nv_third_party_deps//:org_mockito_mockito_core",
+        "@nv_third_party_deps//:org_mockito_mockito_junit_jupiter",
+    ],
+    size = "small",
+)
+
 nvcf_java_coverage_test(
     name = "tests_coverage",
     coverage_target = ":icms_core",

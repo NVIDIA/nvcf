@@ -407,6 +407,12 @@ icms:
 
   database-read-page-size: 500
 
+  instance-lookup-backfill-task-mode: DISABLED
+  instance-lookup-backfill-task-lock-ttl-in-seconds: 300
+  instance-lookup-backfill-task-pause-between-pages-in-ms: 100
+  instance-lookup-backfill-task-schedule-initial-delay: PT10S
+  instance-lookup-backfill-task-schedule-duration: PT1M
+
   fnds_messages_enabled: true
   #feature flags for migration to v2
   fnds_messages_v1_enabled: true
