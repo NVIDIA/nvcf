@@ -21,7 +21,8 @@ run_lint() {
   local values_file="${repo_root}/../../../deploy/helm/nvca-operator/${chart_name}/values.yaml"
   # The chart ships no default NGC service key. An ngc-managed install supplies
   # one, and the generated image pull secret requires it, so lint renders the
-  # way a real install does. Callers that disable the pull secret override this.
+  # way a real install does. Helm applies --set-string after --set, so a caller
+  # cannot replace this with --set; pass --set-string to override it.
   local args=(--set-string "ngcConfig.serviceKey=lint-service-key")
 
   # Process arguments
@@ -102,8 +103,7 @@ assert_pre_delete_cleanup_rbac() {
 }
 
 assert_storage_capability_catalog() (
-  local service_chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
-  local release_chart="${service_chart}"
+  local chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
   local catalog="files/nvcf-storage-capabilities-v1alpha1.yaml"
   local schema="files/nvcf-storage-capabilities-v1alpha1.schema.json"
   local template="templates/storage-capabilities-configmap.yaml"
@@ -118,27 +118,26 @@ assert_storage_capability_catalog() (
   schema_check='import json,sys,yaml,jsonschema; schema=json.load(open(sys.argv[1])); jsonschema.Draft202012Validator.check_schema(schema); jsonschema.Draft202012Validator(schema).validate(yaml.safe_load(open(sys.argv[2])))'
 
   rendered="${tmpdir}/rendered.yaml"
-  helm template test-release "${service_chart}" --namespace nvca-system \
+  helm template test-release "${chart}" --namespace nvca-system \
     --set-string "ngcConfig.serviceKey=lint-service-key" \
-    --set "ngcConfig.serviceKey=fakekey" \
     --show-only "${template}" >"${rendered}"
   assert_eq "nvcf-storage-capabilities" "$(yq -r ".metadata.name" "${rendered}")" \
     "storage capability ConfigMap uses the stable name"
   assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
     "storage capability ConfigMap is owned by the chart release namespace"
-  assert_eq "$(<"${service_chart}/${catalog}")" \
+  assert_eq "$(<"${chart}/${catalog}")" \
     "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
     "storage capability ConfigMap embeds the exact catalog payload"
   "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${service_chart}/${catalog}"
+    "${chart}/${schema}" "${chart}/${catalog}"
 
   invalid_catalog="${tmpdir}/invalid-catalog.yaml"
   for mutation in \
     'del((.drivers[] | select(.name == "csi.weka.io")).accessModes)' \
     '(.drivers[] | select(.name == "csi.weka.io")).accessModes = null'; do
-    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    yq "${mutation}" "${chart}/${catalog}" >"${invalid_catalog}"
     if "${schema_python}" -c "${schema_check}" \
-      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
       echo "Expected schema to reject missing or null accessModes" >&2
       return 1
     fi
@@ -148,9 +147,9 @@ assert_storage_capability_catalog() (
   for mutation in \
     'del((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions)' \
     '(.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = null'; do
-    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    yq "${mutation}" "${chart}/${catalog}" >"${invalid_catalog}"
     if "${schema_python}" -c "${schema_check}" \
-      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
       echo "Expected schema to reject missing or null readerMountOptions" >&2
       return 1
     fi
@@ -158,18 +157,18 @@ assert_storage_capability_catalog() (
   echo "PASS: schema rejects missing and null readerMountOptions"
 
   yq '(.drivers[] | select(.name == "nvmesh-csi.excelero.com")).readerMountOptions = ["ro", " norecovery", "nouuid"]' \
-    "${service_chart}/${catalog}" >"${invalid_catalog}"
+    "${chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
     echo "Expected schema to reject readerMountOptions with surrounding whitespace" >&2
     return 1
   fi
   echo "PASS: schema rejects readerMountOptions with surrounding whitespace"
 
   yq '(.drivers[] | select(.name == "csi.weka.io")).transitions.regularModelCache = "roxReadOnly"' \
-    "${service_chart}/${catalog}" >"${invalid_catalog}"
+    "${chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
     echo "Expected schema to reject a declared transition" >&2
     return 1
   fi
@@ -180,9 +179,9 @@ assert_storage_capability_catalog() (
     '["ro", "recovery", "norecovery", "nouuid"]' \
     '["ro", "norecovery", "uuid", "nouuid"]'; do
     yq "(.drivers[] | select(.name == \"nvmesh-csi.excelero.com\")).readerMountOptions = ${options}" \
-      "${service_chart}/${catalog}" >"${invalid_catalog}"
+      "${chart}/${catalog}" >"${invalid_catalog}"
     if "${schema_python}" -c "${schema_check}" \
-      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
       echo "Expected schema to reject conflicting readerMountOptions" >&2
       return 1
     fi
@@ -191,68 +190,59 @@ assert_storage_capability_catalog() (
 
   yq '((.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
       ((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = [])' \
-    "${service_chart}/${catalog}" >"${invalid_catalog}"
+    "${chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
     echo "Expected schema to reject a ReadOnlyMany reader shape without ro" >&2
     return 1
   fi
   echo "PASS: schema rejects a ReadOnlyMany reader shape without a read-only mount"
 
   yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadOnlyMany"]' \
-    "${service_chart}/${catalog}" >"${invalid_catalog}"
+    "${chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
     echo "Expected schema to reject ReadOnlyMany with no writer mode" >&2
     return 1
   fi
   echo "PASS: schema rejects ReadOnlyMany with no writer mode"
 
   yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteMany"]' \
-    "${service_chart}/${catalog}" >"${invalid_catalog}"
+    "${chart}/${catalog}" >"${invalid_catalog}"
   if ! "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${invalid_catalog}"; then
+    "${chart}/${schema}" "${invalid_catalog}"; then
     echo "Expected schema to accept a shared claim driver with no reader options" >&2
     return 1
   fi
   echo "PASS: schema accepts a shared claim driver with no reader options"
 
   yq 'del((.drivers[] | select(.name == "csi.weka.io")).name)' \
-    "${service_chart}/${catalog}" >"${invalid_catalog}"
+    "${chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
     echo "Expected schema to reject a driver with no name" >&2
     return 1
   fi
   echo "PASS: schema rejects a driver with no name"
 
   yq '(.drivers[] | select(.name == "csi.weka.io")).unexpected = true' \
-    "${service_chart}/${catalog}" >"${invalid_catalog}"
+    "${chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
-    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    "${chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
     echo "Expected schema to reject an unknown driver field" >&2
     return 1
   fi
   echo "PASS: schema rejects an unknown driver field"
 
-  helm template test-release "${release_chart}" --namespace nvca-system \
-    --set-string "ngcConfig.serviceKey=lint-service-key" \
-    --show-only "${template}" >"${rendered}"
-  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
-    "release-chart storage capability ConfigMap is owned by the release namespace"
-  assert_eq "$(<"${service_chart}/${catalog}")" \
-    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
-    "release chart embeds the exact catalog payload"
-
   mkdir -p "${missing_chart}"
-  cp -a "${service_chart}/." "${missing_chart}/"
+  cp -a "${chart}/." "${missing_chart}/"
   rm -f "${missing_chart}/${catalog}"
   if helm template test-release "${missing_chart}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}" 2>&1; then
     echo "Expected rendering without the storage capability catalog to fail" >&2
     return 1
   fi
   grep -q "required NVCF storage capability catalog" "${rendered}"
-  echo "PASS: storage capability catalog schema, render, payload, and chart parity"
+  echo "PASS: storage capability catalog schema, render, and payload"
 )
 
 assert_storage_capability_catalog
@@ -283,8 +273,30 @@ assert_distroless_operator_commands() {
 assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 install_kubeconform
 assert_pre_delete_cleanup_rbac
-run_lint nvca-operator --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator
 run_lint nvca-operator --set "generateImagePullSecret=false" --set "imagePullSecretName=foo-bar-image-pull"
+
+# The chart ships no default service key, so generating the pull secret has
+# nothing to authenticate with. Refusing to render is what keeps a placeholder
+# from reaching a cluster as a pull secret that fails at image pull instead.
+echo -e "\nTesting NGC service key validation..."
+missing_key_output="$(mktemp)"
+if helm template test-release "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=" \
+  > "${missing_key_output}" 2>&1; then
+  echo "Expected render without an NGC service key to fail"
+  cat "${missing_key_output}"
+  rm -f "${missing_key_output}"
+  exit 1
+fi
+if ! grep -q "NGC service key is required to create a pull secret" "${missing_key_output}"; then
+  echo "Expected the missing service key to be reported by name"
+  cat "${missing_key_output}"
+  rm -f "${missing_key_output}"
+  exit 1
+fi
+rm -f "${missing_key_output}"
+echo -e "Test passed"
 
 echo -e "\nTesting self-managed endpoint validation..."
 missing_endpoint_output="$(mktemp)"
@@ -472,26 +484,25 @@ bash "${repo_root}/scripts/test_transport_trust_validation.sh"
 
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)
-run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns"
 
 # Test with both source namespace and label selector (should add args)
-run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "agent.secretMirror.labelSelector=mirror=true" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "agent.secretMirror.labelSelector=mirror=true"
 
 # Test custom annotations feature
-run_lint nvca-operator --values "${repo_root}/test/test-custom-annotations.yaml" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --values "${repo_root}/test/test-custom-annotations.yaml"
 
 # Test both features together
 run_lint nvca-operator \
   --set "agent.secretMirror.sourceNamespace=custom-ns" \
   --set "agent.secretMirror.labelSelector=mirror=true" \
-  --values "${repo_root}/test/test-custom-annotations.yaml" \
-  --set "ngcConfig.serviceKey=fakekey"
+  --values "${repo_root}/test/test-custom-annotations.yaml"
 
 # Test network policies feature
-run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml"
 
 # Test network policies with annotations
-run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml" --values "${repo_root}/test/test-custom-annotations.yaml" --set "ngcConfig.serviceKey=fakekey"
+run_lint nvca-operator --values "${repo_root}/test/test-network-policies.yaml" --values "${repo_root}/test/test-custom-annotations.yaml"
 
 # Test ConfigMaps contain expected structure when custom values provided
 echo "Testing ConfigMap structure with custom values..."
