@@ -1429,9 +1429,24 @@ Per-check status from the latest run. The check set is fixed (~10 entries; see `
 > distinguishable from "ran and failed"). Write alerts on these three with an
 > `absent()` guard, not a bare `== 0`, e.g.
 > `absent(nvca_cluster_validator_check_status{check="endpoint_reachability"}) or nvca_cluster_validator_check_status{check="endpoint_reachability"} == 0`.
-> The seven always-run checks (control_plane, worker_nodes_all_ready, webhooks,
-> network_policies_supported, smb_csi, gpu_resources, gpu_operator) are always
+> Four checks (control_plane, worker_nodes_all_ready, webhooks,
+> network_policies_supported) run under both validator roles, so they are always
 > present and safe to alert on with `== 0`.
+>
+> The three GPU and storage checks (smb_csi, gpu_resources, gpu_operator) run
+> only under the compute-plane role. A control-plane run omits them, so they are
+> pruned after its first summary and go absent. They are still pre-initialized
+> to `0` in the init-to-zero baseline, which means a control-plane cluster
+> reports `gpu_resources 0` from process start until its first summary lands.
+> Alert on these three with an `absent()` guard, as for the conditional checks
+> above, and scope the alert to compute-plane clusters.
+>
+> The control-plane-only checks (default_storage_class, gateway_api_crds,
+> envoy_gateway, gateway_routes, external_lb, node_to_node, tier1_deployments,
+> tier2_statefulsets) are the mirror image: present only on a control-plane run,
+> and absent when the check could not be observed at all (an RBAC denial or an
+> apiserver error). Absent means "not observed", which is not the same as `0`
+> ("observed and failing"), so these also need an `absent()` guard.
 
 ### `nvca_cluster_validator_endpoint_reachable`
 

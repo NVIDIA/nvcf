@@ -58,8 +58,15 @@ rules:
     resourceNames: ["cluster-validator-summary"]
     verbs: ["update"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "daemonsets"]
+    resources: ["deployments", "statefulsets"]
+    # statefulsets: the Tier-2 quorum and placement check. Without it every
+    # control-plane namespace 403s and the critical row is permanently unknown.
     verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    # create/delete: the node-to-node overlay probe runs a short-lived
+    # DaemonSet in a per-run namespace and deletes it in the same run.
+    verbs: ["get", "list", "create", "delete"]
   - apiGroups: ["admissionregistration.k8s.io"]
     resources:
       - mutatingwebhookconfigurations
@@ -69,7 +76,9 @@ rules:
     resources: ["networkpolicies"]
     verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: ["storage.k8s.io"]
-    resources: ["csidrivers"]
+    # storageclasses: the default-StorageClass check. Without it the critical
+    # row is permanently unknown on every run.
+    resources: ["csidrivers", "storageclasses"]
     verbs: ["get", "list"]
   - apiGroups: ["nvidia.com"]
     resources: ["clusterpolicies"]

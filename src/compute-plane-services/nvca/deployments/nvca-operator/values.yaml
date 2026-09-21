@@ -537,6 +537,14 @@ networkPolicy:
 ## @param clusterValidator.networkChecks [object] Network check configuration (creates the ConfigMap automatically when set)
 clusterValidator:
   enabled: false
+  # Which check set the validator runs. "control-plane" enables the gateway,
+  # StorageClass, node-to-node overlay and Tier-1/Tier-2 HA checks and skips
+  # the GPU checks. Any other value (including "") runs the compute-plane set.
+  role: ""
+  # Set when OpenBao or Envoy Gateway are installed outside their default
+  # namespaces, so the control-plane checks look in the right place.
+  openBaoNamespace: ""
+  envoyGatewayNamespace: ""
   image:
     repository: ""
     tag: ""  # defaults to .Chart.AppVersion (same as nvca-operator)

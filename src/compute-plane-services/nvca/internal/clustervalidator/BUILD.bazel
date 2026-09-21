@@ -46,6 +46,7 @@ go_test(
         "checks_controlplane_test.go",
         "checks_test.go",
         "config_test.go",
+        "connectivity_test.go",
         "enforcement_test.go",
         "netpol_test.go",
         "output_test.go",

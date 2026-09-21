@@ -359,12 +359,20 @@ func printSummary(state *ValidationState) error {
 		})
 	}
 
+	var unknownCritical []string
 	for _, c := range checks {
 		switch {
 		case c.Unknown:
-			// Surfaced, not silently dropped, but it does not fail the verdict:
-			// "we could not observe this" is not "this is broken".
+			// A critical check we could not observe cannot be certified as
+			// ready. Logging it while still publishing verdict=NVCF-Ready and
+			// VerdictReady=true would export a perfect green SLI for a
+			// precondition nothing looked at, and the check key is pruned from
+			// the metric, so there is no series left to alert on either.
 			printWarning(log, fmt.Sprintf("  %s", c.UnknownMsg))
+			if c.Critical {
+				unknownCritical = append(unknownCritical, c.UnknownMsg)
+				isReady = false
+			}
 		case c.Passed:
 			printSuccess(log, fmt.Sprintf("  %s", c.PassMsg))
 		case c.Critical:
@@ -405,6 +413,16 @@ func printSummary(state *ValidationState) error {
 		log.Infof("%s║              %s  Cluster is NVCF-Not-Ready  %s              ║%s", colorRed, iconCross, iconCross, colorReset)
 		log.Infof("%s╚═══════════════════════════════════════════════════════════╝%s", colorRed, colorReset)
 		log.Info("")
+		if len(unknownCritical) > 0 {
+			// Distinguish "could not check" from "checked and broken": the
+			// operator's next step is to fix access or re-run, not to go
+			// looking for a fault that was never observed.
+			printError(log, fmt.Sprintf(
+				"%d critical check(s) could not be observed, so readiness cannot be confirmed", len(unknownCritical)))
+			for _, m := range unknownCritical {
+				printInfo(log, "  "+m)
+			}
+		}
 		printError(log, "Your cluster does not meet all requirements for NVCF workloads")
 	}
 

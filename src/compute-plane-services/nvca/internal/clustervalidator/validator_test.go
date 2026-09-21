@@ -171,8 +171,13 @@ func TestPrintSummary_ControlPlaneRole(t *testing.T) {
 			EnvoyGatewayOK:        &ok,
 			GatewayRoutesOK:       &ok,
 			ExternalLBOK:          &ok,
-			K8sVersion:            "v1.30.0",
-			TotalNodes:            "2",
+			// The remaining critical control-plane rows have to be set too:
+			// leaving them nil is UNKNOWN, which is not "all checks passing".
+			NodeToNodeOK:        &ok,
+			Tier1DeploymentsOK:  &ok,
+			Tier2StatefulSetsOK: &ok,
+			K8sVersion:          "v1.30.0",
+			TotalNodes:          "2",
 		}
 		err := printSummary(state)
 		assert.NoError(t, err, "all control-plane checks passing must yield NVCF-Ready")
@@ -202,6 +207,60 @@ func TestPrintSummary_ControlPlaneRole(t *testing.T) {
 		}
 		err := printSummary(state)
 		assert.Error(t, err, "missing default StorageClass must block control-plane readiness")
+	})
+
+	t.Run("unknown critical check blocks readiness", func(t *testing.T) {
+		// A critical check nothing could observe must not publish a green
+		// verdict: that exports a perfect SLI for a precondition that was
+		// never looked at, and the pruned metric leaves nothing to alert on.
+		ok := true
+		buf := &bytes.Buffer{}
+		l := logrus.New()
+		l.SetOutput(buf)
+		state := &ValidationState{
+			Log:                      logrus.NewEntry(l),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			DefaultStorageClassOK:    &ok,
+			GatewayAPICRDsOK:         &ok,
+			EnvoyGatewayOK:           &ok,
+			GatewayRoutesOK:          &ok,
+			ExternalLBOK:             &ok,
+			NodeToNodeOK:             &ok,
+			Tier1DeploymentsOK:       &ok,
+			// Tier2StatefulSetsOK left nil: RBAC denied the StatefulSet list.
+			K8sVersion: "v1.30.0",
+			TotalNodes: "2",
+		}
+		err := printSummary(state)
+		assert.Error(t, err, "an unobserved critical check cannot be certified ready")
+		assert.Contains(t, buf.String(), "could not be observed",
+			"the operator must be told this is unobserved, not broken")
+	})
+
+	t.Run("unknown non-critical check does not block readiness", func(t *testing.T) {
+		ok := true
+		state := &ValidationState{
+			Log:                      testLog(),
+			Role:                     RoleControlPlane,
+			ControlPlaneHealthy:      true,
+			NodesAllReady:            true,
+			WebhooksSupported:        true,
+			NetworkPoliciesSupported: true,
+			DefaultStorageClassOK:    &ok,
+			GatewayAPICRDsOK:         &ok,
+			NodeToNodeOK:             &ok,
+			Tier1DeploymentsOK:       &ok,
+			Tier2StatefulSetsOK:      &ok,
+			// EnvoyGatewayOK / GatewayRoutesOK / ExternalLBOK nil: all
+			// non-critical, so they stay out of the verdict entirely.
+			K8sVersion: "v1.30.0",
+			TotalNodes: "2",
+		}
+		assert.NoError(t, printSummary(state))
 	})
 
 	t.Run("compute-plane role (default) still includes GPU rows", func(t *testing.T) {
