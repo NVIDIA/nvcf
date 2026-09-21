@@ -1288,11 +1288,6 @@ func createNodeToNodeNamespace(ctx context.Context, client kubernetes.Interface,
 	return err
 }
 
-// sweepOrphanN2NNamespaces deletes any nvcf-n2n-validation-* namespaces older
-// than ttl, taking the DaemonSet and checker pod inside with them. These are
-// left behind when the validator process is killed with SIGKILL (OOM,
-// force-delete, node failure) before the deferred cleanup fires. Namespaces
-// younger than ttl are skipped in case they belong to a concurrent run.
 // legacyNodeToNodeNamespace is where validator versions before the per-run
 // probe namespace created their DaemonSet. Kept so an orphan left by a
 // currently deployed validator is still reclaimable; remove once those
@@ -1329,7 +1324,10 @@ func sweepLegacyOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, clie
 		ds := &dsList.Items[i]
 		// Require the name too, as the namespace sweep does: these labels are
 		// public constants and this deletes objects in a shared namespace.
-		if ds.Name != nodeToNodeDSName {
+		// Prefix, not equality: every version that created these named them
+		// nodeToNodeDSName + "-" + suffix, so an equality check matches nothing
+		// and the sweep silently reclaims none of the orphans it exists for.
+		if !strings.HasPrefix(ds.Name, nodeToNodeDSName+"-") {
 			continue
 		}
 		if ds.CreationTimestamp.After(cutoff) {
@@ -1351,6 +1349,11 @@ func sweepLegacyOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, clie
 	}
 }
 
+// sweepOrphanN2NNamespaces deletes any nvcf-n2n-validation-* namespaces older
+// than ttl, taking the DaemonSet and checker pod inside with them. These are
+// left behind when the validator process is killed with SIGKILL (OOM,
+// force-delete, node failure) before the deferred cleanup fires. Namespaces
+// younger than ttl are skipped in case they belong to a concurrent run.
 func sweepOrphanN2NNamespaces(ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration) {
 	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -1690,10 +1693,6 @@ func waitForDaemonSetPods(
 	}
 }
 
-// nodeToNodeTolerations mirrors the validator CronJob's own tolerations. The
-// DaemonSet controller auto-tolerates the not-ready and unschedulable taints
-// but not the control-plane one, so without these a dedicated control plane
-// reports DesiredNumberScheduled=0 and the overlay is never probed at all.
 // distinctNodeCount counts how many different nodes a pod set covers.
 func distinctNodeCount(pods []corev1.Pod) int {
 	nodes := make(map[string]struct{}, len(pods))
@@ -1705,6 +1704,10 @@ func distinctNodeCount(pods []corev1.Pod) int {
 	return len(nodes)
 }
 
+// nodeToNodeTolerations mirrors the validator CronJob's own tolerations. The
+// DaemonSet controller auto-tolerates the not-ready and unschedulable taints
+// but not the control-plane one, so without these a dedicated control plane
+// reports DesiredNumberScheduled=0 and the overlay is never probed at all.
 func nodeToNodeTolerations() []corev1.Toleration {
 	return []corev1.Toleration{
 		{Key: "node-role.kubernetes.io/control-plane", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
@@ -2023,7 +2026,7 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			checkedCount, rollingCount))
 	}
 
-	printSuccess(log, fmt.Sprintf("All %d Deployments in control-plane namespaces are fully ready", checkedCount))
+	printSuccess(log, fmt.Sprintf("All %d assessed Deployment(s) in control-plane namespaces are fully ready", checkedCount))
 	ok := true
 	state.Tier1DeploymentsOK = &ok
 }

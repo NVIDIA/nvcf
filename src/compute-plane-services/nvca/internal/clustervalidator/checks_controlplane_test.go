@@ -1068,25 +1068,25 @@ func TestSweepLegacyOrphanN2NDaemonSets_DeletesStaleOnly(t *testing.T) {
 	fresh := metav1.NewTime(time.Now())
 	client := fake.NewSimpleClientset(
 		&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{
-			Name: nodeToNodeDSName, Namespace: "default",
+			Name: nodeToNodeDSName + "-ab12cd", Namespace: "default",
 			Labels: labels, CreationTimestamp: old,
 		}},
 	)
 	sweepLegacyOrphanN2NDaemonSets(context.Background(), testLog(), client, orphanN2NNamespaceTTL)
 	_, err := client.AppsV1().DaemonSets("default").Get(
-		context.Background(), nodeToNodeDSName, metav1.GetOptions{})
+		context.Background(), nodeToNodeDSName+"-ab12cd", metav1.GetOptions{})
 	assert.True(t, apierrors.IsNotFound(err), "a stale legacy DaemonSet must be reclaimed")
 
 	// A DaemonSet inside the TTL may belong to a concurrent run.
 	client2 := fake.NewSimpleClientset(
 		&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{
-			Name: nodeToNodeDSName, Namespace: "default",
+			Name: nodeToNodeDSName + "-ef34gh", Namespace: "default",
 			Labels: labels, CreationTimestamp: fresh,
 		}},
 	)
 	sweepLegacyOrphanN2NDaemonSets(context.Background(), testLog(), client2, orphanN2NNamespaceTTL)
 	_, err = client2.AppsV1().DaemonSets("default").Get(
-		context.Background(), nodeToNodeDSName, metav1.GetOptions{})
+		context.Background(), nodeToNodeDSName+"-ef34gh", metav1.GetOptions{})
 	assert.NoError(t, err, "a DaemonSet inside the TTL must be left alone")
 }
 
