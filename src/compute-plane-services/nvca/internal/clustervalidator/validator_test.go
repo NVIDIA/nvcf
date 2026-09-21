@@ -1213,3 +1213,56 @@ func init() {
 		&corev1.Namespace{},
 	}
 }
+
+// A check the cluster shape cannot exercise is neither a pass nor a hidden
+// failure. It must not block the verdict, and it must not be rendered as
+// Verified or exported as a passing check.
+func TestPrintSummary_NotApplicableIsNeitherPassNorUnknown(t *testing.T) {
+	ok := true
+	buf := &bytes.Buffer{}
+	l := logrus.New()
+	l.SetOutput(buf)
+	state := &ValidationState{
+		Log:                      logrus.NewEntry(l),
+		Role:                     RoleControlPlane,
+		ControlPlaneHealthy:      true,
+		NodesAllReady:            true,
+		WebhooksSupported:        true,
+		NetworkPoliciesSupported: true,
+		DefaultStorageClassOK:    &ok,
+		GatewayAPICRDsOK:         &ok,
+		EnvoyGatewayOK:           &ok,
+		GatewayRoutesOK:          &ok,
+		ExternalLBOK:             &ok,
+		Tier1DeploymentsOK:       &ok,
+		Tier2StatefulSetsOK:      &ok,
+		// NodeToNodeOK deliberately nil, with a not-applicable reason.
+		NodeToNodeNotApplicable: "single schedulable node, no cross-node path",
+		K8sVersion:              "v1.30.0",
+		TotalNodes:              "1",
+	}
+	assert.NoError(t, printSummary(state),
+		"a not-applicable check must not block readiness")
+
+	out := buf.String()
+	assert.Contains(t, out, "Node-to-Node Communication: Not Applicable")
+	assert.NotContains(t, out, "Node-to-Node Communication: Verified",
+		"nothing was probed, so it cannot be reported as Verified")
+	assert.NotContains(t, out, "Node-to-Node Communication: Status Unknown",
+		"the cluster shape is known; it is not an unobserved check")
+}
+
+// The metrics pipeline must not see a not-applicable check as a pass.
+func TestBuildSummary_OmitsNotApplicableCheck(t *testing.T) {
+	ok := true
+	state := &ValidationState{
+		Log:                     testLog(),
+		Role:                    RoleControlPlane,
+		DefaultStorageClassOK:   &ok,
+		NodeToNodeNotApplicable: "single schedulable node, no cross-node path",
+	}
+	s := buildSummary(state, time.Now(), true, "NVCF-Ready")
+	_, present := s.Checks[CheckKeyNodeToNode]
+	assert.False(t, present,
+		"an unexercised check must be absent, not exported as node_to_node=1")
+}

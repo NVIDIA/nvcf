@@ -39,6 +39,13 @@ const (
 // ValidationState captures the results of every validation check.
 type ValidationState struct {
 	Log *logrus.Entry
+	// NodeToNodeNotApplicable holds the reason the overlay probe could not
+	// apply (for example a single schedulable node). Non-empty means the check
+	// is reported as Not Applicable rather than Verified or Unknown, and is
+	// left out of the summary map so it is neither alerted on nor counted as
+	// a pass.
+	NodeToNodeNotApplicable string
+
 	// Role is "control-plane" or "compute-plane" (empty = compute-plane default).
 	// printSummary uses it to include only the checks relevant to the role.
 	Role                Role
@@ -248,6 +255,13 @@ func printSummary(state *ValidationState) error {
 		// otherwise make a throttled API call look better than a clean run.
 		Unknown    bool
 		UnknownMsg string
+		// NotApplicable marks a check this cluster's shape cannot exercise, as
+		// distinct from one we failed to observe. Both are non-passes, but
+		// only Unknown means something is hidden, so only Unknown blocks the
+		// verdict. Reporting a not-applicable check as Passed would claim a
+		// result the run never produced.
+		NotApplicable bool
+		NAMsg         string
 	}
 
 	// Distinguish "we listed nodes and found N not-ready" (NotReadyNodes>0)
@@ -318,7 +332,15 @@ func printSummary(state *ValidationState) error {
 		addCP(state.EnvoyGatewayOK, "Envoy Gateway", "Installed and Running", "Not Found or Not Running", false)
 		addCP(state.GatewayRoutesOK, "Gateway Route CR Types", "Registered", "Not Registered", false)
 		addCP(state.ExternalLBOK, "External Load Balancer", "IP Assigned", "No IP Assigned", false)
-		addCP(state.NodeToNodeOK, "Node-to-Node Communication", "Verified", "Failed", true)
+		if state.NodeToNodeNotApplicable != "" {
+			// Non-blocking, but not "Verified": no cross-node packet was sent.
+			checks = append(checks, check{
+				NotApplicable: true,
+				NAMsg:         "Node-to-Node Communication: Not Applicable (" + state.NodeToNodeNotApplicable + ")",
+			})
+		} else {
+			addCP(state.NodeToNodeOK, "Node-to-Node Communication", "Verified", "Failed", true)
+		}
 		addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Under-replicated", true)
 		addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets",
 			"Quorum and Placement OK", "Quorum or Placement Failed", true)
@@ -362,6 +384,9 @@ func printSummary(state *ValidationState) error {
 	var unknownCritical []string
 	for _, c := range checks {
 		switch {
+		case c.NotApplicable:
+			// Neither pass nor failure: the cluster shape made the check moot.
+			printInfo(log, fmt.Sprintf("  %s", c.NAMsg))
 		case c.Unknown:
 			// A critical check we could not observe cannot be certified as
 			// ready. Logging it while still publishing verdict=NVCF-Ready and

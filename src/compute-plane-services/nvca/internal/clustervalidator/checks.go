@@ -1449,10 +1449,7 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	}
 	if len(schedulable) == 1 {
 		printInfo(log, "  1 schedulable node; node-to-node check not applicable")
-		state.Warnings = append(state.Warnings,
-			"Node-to-Node: not exercised (single schedulable node, no cross-node path)")
-		ok := true
-		state.NodeToNodeOK = &ok
+		state.NodeToNodeNotApplicable = "single schedulable node, no cross-node path"
 		return
 	}
 
@@ -1522,19 +1519,12 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 			"Node-to-Node: status unknown (DaemonSet status never reported a scheduling target)")
 		return
 	}
-	// Same split as the schedulable-node check above.
-	if wantPods == 0 {
-		printWarning(log, "Probe DaemonSet scheduled on no nodes; overlay not observed")
-		state.Warnings = append(state.Warnings,
-			"Node-to-Node: status unknown (probe DaemonSet scheduled on no nodes)")
-		return
-	}
+	// wantPods is >= 1 here: waitForDaemonSetDesiredCount only returns a nil
+	// error once DesiredNumberScheduled is positive, so a zero target arrives
+	// as the error above rather than reaching this branch.
 	if wantPods < 2 {
 		printInfo(log, "  Probe DaemonSet schedulable on 1 node; node-to-node check not applicable")
-		state.Warnings = append(state.Warnings,
-			"Node-to-Node: not exercised (probe DaemonSet schedulable on a single node)")
-		ok := true
-		state.NodeToNodeOK = &ok
+		state.NodeToNodeNotApplicable = "probe DaemonSet schedulable on a single node"
 		return
 	}
 

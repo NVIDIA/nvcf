@@ -286,6 +286,7 @@ func TestCheckNodeToNode_NoNodes(t *testing.T) {
 		"zero schedulable nodes exercised no overlay path, so the result must be unknown, not Verified")
 	assert.NotEmpty(t, state.Warnings, "skip must add a warning so the banner is qualified")
 }
+
 func TestCheckNodeToNode_UnschedulableNodesSkipped(t *testing.T) {
 	// Two nodes but both unschedulable — should also skip.
 	n1 := makeNode("node-1", true, 0)
@@ -953,6 +954,7 @@ func TestCheckTier1Deployments_RollingAndUnderReplicatedIsUnknown(t *testing.T) 
 		"a rollout below its replica target leaves the tier assessment partial")
 	require.NotEmpty(t, state.Warnings)
 }
+
 func TestControlPlaneNamespaceSet_HonoursOpenBaoOverride(t *testing.T) {
 	t.Setenv(openBaoNamespaceEnv, "vault-system-dev")
 	assert.Contains(t, controlPlaneNamespaceSet(), "vault-system-dev")
@@ -1431,10 +1433,12 @@ func TestCheckNodeToNode_SingleNodeIsNotApplicableNotUnknown(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), client, state, "busybox:1.36")
 
-	require.NotNil(t, state.NodeToNodeOK,
+	// Not a pass: no cross-node packet was sent. Reporting Verified here is
+	// the regression Vaibhav's "sets NodeToNodeOK = true having sent zero
+	// packets" thread already closed once.
+	assert.Nil(t, state.NodeToNodeOK, "an unexercised check must not be reported as passed")
+	assert.NotEmpty(t, state.NodeToNodeNotApplicable,
 		"one schedulable node is not applicable, not unobserved")
-	assert.True(t, *state.NodeToNodeOK)
-	assert.Contains(t, strings.Join(state.Warnings, "; "), "not exercised")
 }
 
 // A cordoned second node leaves one schedulable node: same reasoning.
@@ -1449,8 +1453,8 @@ func TestCheckNodeToNode_AllButOneCordonedIsNotApplicable(t *testing.T) {
 	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), client, state, "busybox:1.36")
 
-	require.NotNil(t, state.NodeToNodeOK)
-	assert.True(t, *state.NodeToNodeOK)
+	assert.Nil(t, state.NodeToNodeOK)
+	assert.NotEmpty(t, state.NodeToNodeNotApplicable)
 }
 
 // An RBAC denial on the probe DaemonSet is genuinely unobserved, so it must
