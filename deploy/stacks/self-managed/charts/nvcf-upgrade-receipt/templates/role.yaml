@@ -10,9 +10,17 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 rules:
-  # get and patch are for the upgrade case where a receipt already exists;
-  # create is for the first install. Nothing here needs to read or write any
-  # other resource.
+  # Scoped to the receipt itself. get and patch cover the upgrade case where a
+  # receipt already exists, and naming the resource keeps this identity from
+  # reaching any other ConfigMap in the namespace.
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "create", "patch"]
+    resourceNames: [{{ .Values.configMapName | quote }}]
+    verbs: ["get", "patch"]
+  # create cannot be scoped: RBAC matches resourceNames against an object that
+  # does not exist yet, so a create rule naming one is never satisfied. It is
+  # kept in its own rule so the unscoped verb is visible rather than buried
+  # alongside the scoped ones, and it is only reachable on a first install.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]

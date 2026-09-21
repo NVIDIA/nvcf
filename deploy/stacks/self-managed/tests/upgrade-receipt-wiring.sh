@@ -33,8 +33,15 @@ grep -q 'value: "nvcf-upgrade-receipt"' <<<"$rendered" \
 for kind in ServiceAccount Role RoleBinding; do
   grep -q "kind: ${kind}" <<<"$rendered" || fail "missing ${kind}; the Job cannot write the ConfigMap without it"
 done
-grep -qE '^\s+verbs: \["get", "create", "patch"\]' <<<"$rendered" \
-  || fail "Role must allow get/create/patch on configmaps and nothing more"
+# get and patch are scoped to the receipt by name so this identity cannot
+# reach any other ConfigMap. create cannot be scoped -- RBAC matches
+# resourceNames against an object that does not exist yet.
+grep -qE '^\s+resourceNames: \["nvcf-upgrade-receipt"\]' <<<"$rendered" \
+  || fail "get/patch are not scoped to the receipt ConfigMap by name"
+grep -qE '^\s+verbs: \["get", "patch"\]' <<<"$rendered" \
+  || fail "scoped rule should carry only get and patch"
+grep -qE '^\s+verbs: \["create"\]' <<<"$rendered" \
+  || fail "create must remain, in its own rule, for the first install"
 
 # The stage number is the ordering guarantee. needs: is deliberately not used
 # here; see the comment in the stage file.
