@@ -1504,6 +1504,27 @@ func validateAgentConfigToMerge(cfg nvcaconfig.Config) error {
 	return transporttls.ValidateConfig(transporttls.NormalizeConfig(*cfg.Workload.TransportTLS))
 }
 
+type invalidAgentConfigError struct {
+	err error
+}
+
+func (e *invalidAgentConfigError) Error() string {
+	return e.err.Error()
+}
+
+func (e *invalidAgentConfigError) Unwrap() error {
+	return e.err
+}
+
+func isInvalidAgentConfigError(err error) bool {
+	var target *invalidAgentConfigError
+	return errors.As(err, &target)
+}
+
+func isResourceQuantityDecodeError(err error) bool {
+	return strings.Contains(err.Error(), "decode resource ")
+}
+
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
@@ -1521,8 +1542,11 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
 	if err != nil {
-		return nvcaconfig.Config{}, false,
-			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+		wrappedErr := fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err)
+		if isResourceQuantityDecodeError(err) {
+			return nvcaconfig.Config{}, false, &invalidAgentConfigError{err: wrappedErr}
+		}
+		return nvcaconfig.Config{}, false, nvcaoperatorerrors.FatalError(wrappedErr)
 	}
 	if bc.shouldWarnForLegacyFirstClassConfig(cm) {
 		log.WithFields(logrus.Fields{

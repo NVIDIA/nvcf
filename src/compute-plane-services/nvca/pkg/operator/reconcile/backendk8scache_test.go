@@ -1877,6 +1877,39 @@ func Test_shouldUpdateNVCFStatus(t *testing.T) {
 	}
 }
 
+func TestMarkNVCFBackendUnhealthy(t *testing.T) {
+	ctx := newTestContext()
+	nb := &nvidiaiov1.NVCFBackend{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backend",
+			Namespace: NVCAOperatorNamespace,
+		},
+		Status: nvidiaiov1.NVCFBackendStatus{
+			AgentStatus: nvidiaiov1.AgentStatusHealthy,
+		},
+	}
+	bc := &BackendK8sCache{
+		clients: &kubeclients.KubeClients{
+			NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+		},
+		operatorNamespace: NVCAOperatorNamespace,
+		eventRecorder:     record.NewFakeRecorder(1),
+	}
+
+	require.NoError(t, bc.markNVCFBackendUnhealthy(ctx, nb))
+	got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+	require.NotNil(t, got.Status.LastUpdatedAgentStatus)
+	lastUpdated := got.Status.LastUpdatedAgentStatus.DeepCopy()
+
+	// Repeated failures should not churn status updates or health events.
+	require.NoError(t, bc.markNVCFBackendUnhealthy(ctx, got))
+	got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.True(t, got.Status.LastUpdatedAgentStatus.Equal(lastUpdated))
+}
+
 func TestSyncNVCFBackendHealth(t *testing.T) {
 	ctx := newTestContext()
 

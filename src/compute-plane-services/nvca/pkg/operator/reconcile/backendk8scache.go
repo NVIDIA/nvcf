@@ -1057,13 +1057,59 @@ func (bc *BackendK8sCache) SyncNVCFCurrentBackend(ctx context.Context, forceRoll
 }
 
 func (bc *BackendK8sCache) SyncNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend, forceRollout bool) error {
-	return cmnotel.InvokeWithSpan(ctx, bc.tracer,
+	err := cmnotel.InvokeWithSpan(ctx, bc.tracer,
 		"nvca-operator.BackendK8sCache.SyncNVCFBackend",
 		func(ctx context.Context) error {
 			return bc.syncNVCFBackend(ctx, nb, forceRollout)
 		},
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 		oteltrace.WithAttributes(nvcaopotel.GetOTelAttributesFromNVCFBackend(nb)...))
+	if err == nil || !isInvalidAgentConfigError(err) {
+		return err
+	}
+
+	if statusErr := bc.markNVCFBackendUnhealthy(ctx, nb); statusErr != nil {
+		core.GetLogger(ctx).WithError(statusErr).Errorf(
+			"failed to mark NVCFBackend %v/%v unhealthy after invalid agent configuration",
+			nb.Namespace, nb.Name,
+		)
+	}
+	return err
+}
+
+func (bc *BackendK8sCache) markNVCFBackendUnhealthy(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+	if !nb.ObjectMeta.DeletionTimestamp.IsZero() {
+		return nil
+	}
+
+	updated := false
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		nbLatest, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(bc.operatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get latest version of backend: %w", err)
+		}
+		if nbLatest.Status.AgentStatus == nvidiaiov1.AgentStatusUnhealthy {
+			return nil
+		}
+
+		nbLatest.Status.AgentStatus = nvidiaiov1.AgentStatusUnhealthy
+		nbLatest.Status.LastUpdatedAgentStatus = &metav1.Time{Time: core.GetCurrentTime(ctx)}
+		if _, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(bc.operatorNamespace).UpdateStatus(ctx, nbLatest, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	if retryErr != nil {
+		return fmt.Errorf("failed to update health status for %v/%v: %w", nb.Namespace, nb.Name, retryErr)
+	}
+	if updated && bc.eventRecorder != nil {
+		bc.eventRecorder.Eventf(nb, corev1.EventTypeWarning,
+			string(nvcaoptypes.EventCategoryHealth),
+			"%v health changed to '%v' because the agent configuration is invalid",
+			AgentName, nvidiaiov1.AgentStatusUnhealthy)
+	}
+	return nil
 }
 
 func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend, forceRollout bool) error {
