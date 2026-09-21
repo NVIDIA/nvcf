@@ -1435,10 +1435,24 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	// Leave the pointer nil rather than reporting Verified: there is no second
 	// node to reach, so the overlay was not exercised. The summary renders this
 	// as an explicit UNKNOWN row.
-	if len(schedulable) < 2 {
-		printInfo(log, fmt.Sprintf("  %d schedulable node(s); node-to-node check skipped", len(schedulable)))
+	// Zero and one are different answers. No schedulable node at all means the
+	// cluster cannot place work and we observed nothing, so the result stays
+	// unknown. Exactly one means there is no cross-node path to exercise, so
+	// the requirement is vacuously met: reporting that as a critical UNKNOWN
+	// would leave every single-node or k3d control plane permanently
+	// NVCF-Not-Ready once an unobserved critical check fails the verdict.
+	if len(schedulable) == 0 {
+		printWarning(log, "No schedulable nodes; node-to-node overlay not observed")
 		state.Warnings = append(state.Warnings,
-			"Node-to-Node: skipped (fewer than 2 schedulable nodes)")
+			"Node-to-Node: status unknown (no schedulable nodes)")
+		return
+	}
+	if len(schedulable) == 1 {
+		printInfo(log, "  1 schedulable node; node-to-node check not applicable")
+		state.Warnings = append(state.Warnings,
+			"Node-to-Node: not exercised (single schedulable node, no cross-node path)")
+		ok := true
+		state.NodeToNodeOK = &ok
 		return
 	}
 
@@ -1508,10 +1522,19 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 			"Node-to-Node: status unknown (DaemonSet status never reported a scheduling target)")
 		return
 	}
-	if wantPods < 2 {
-		printInfo(log, fmt.Sprintf("  DaemonSet schedulable on %d node(s); node-to-node check skipped", wantPods))
+	// Same split as the schedulable-node check above.
+	if wantPods == 0 {
+		printWarning(log, "Probe DaemonSet scheduled on no nodes; overlay not observed")
 		state.Warnings = append(state.Warnings,
-			"Node-to-Node: skipped (probe DaemonSet schedulable on fewer than 2 nodes)")
+			"Node-to-Node: status unknown (probe DaemonSet scheduled on no nodes)")
+		return
+	}
+	if wantPods < 2 {
+		printInfo(log, "  Probe DaemonSet schedulable on 1 node; node-to-node check not applicable")
+		state.Warnings = append(state.Warnings,
+			"Node-to-Node: not exercised (probe DaemonSet schedulable on a single node)")
+		ok := true
+		state.NodeToNodeOK = &ok
 		return
 	}
 

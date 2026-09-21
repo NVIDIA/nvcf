@@ -286,17 +286,6 @@ func TestCheckNodeToNode_NoNodes(t *testing.T) {
 		"zero schedulable nodes exercised no overlay path, so the result must be unknown, not Verified")
 	assert.NotEmpty(t, state.Warnings, "skip must add a warning so the banner is qualified")
 }
-
-func TestCheckNodeToNode_SingleNode_Skip(t *testing.T) {
-	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
-	state := &ValidationState{Log: testLog()}
-	checkNodeToNode(context.Background(), client, state, enforcementDefaultImg)
-
-	assert.Nil(t, state.NodeToNodeOK,
-		"a single-node cluster has no second node to reach, so the result must be unknown")
-	assert.NotEmpty(t, state.Warnings)
-}
-
 func TestCheckNodeToNode_UnschedulableNodesSkipped(t *testing.T) {
 	// Two nodes but both unschedulable — should also skip.
 	n1 := makeNode("node-1", true, 0)
@@ -1428,4 +1417,57 @@ func TestWaitForDaemonSetPods_ForbiddenIsTerminal(t *testing.T) {
 	_, err := waitForDaemonSetPods(context.Background(), client, "probe", "app=n2n", 2, 2, 30*time.Second)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "a denial must return immediately")
+}
+
+// Supersedes TestCheckNodeToNode_SingleNode_Skip, which asserted the opposite.
+// A single-node control plane has no cross-node path to exercise, so the
+// overlay requirement is vacuously met. Leaving the pointer nil would make it
+// a critical UNKNOWN, which fails the verdict, so a k3d or single-node control
+// plane would report NVCF-Not-Ready on every tick.
+func TestCheckNodeToNode_SingleNodeIsNotApplicableNotUnknown(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "only-node"}},
+	)
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), client, state, "busybox:1.36")
+
+	require.NotNil(t, state.NodeToNodeOK,
+		"one schedulable node is not applicable, not unobserved")
+	assert.True(t, *state.NodeToNodeOK)
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "not exercised")
+}
+
+// A cordoned second node leaves one schedulable node: same reasoning.
+func TestCheckNodeToNode_AllButOneCordonedIsNotApplicable(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-2"},
+			Spec:       corev1.NodeSpec{Unschedulable: true},
+		},
+	)
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), client, state, "busybox:1.36")
+
+	require.NotNil(t, state.NodeToNodeOK)
+	assert.True(t, *state.NodeToNodeOK)
+}
+
+// An RBAC denial on the probe DaemonSet is genuinely unobserved, so it must
+// stay UNKNOWN. This is the case the operator ClusterRole now grants for.
+func TestCheckNodeToNode_DaemonSetDenialStaysUnknown(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}},
+	)
+	client.PrependReactor("create", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "apps", Resource: "daemonsets"}, "", fmt.Errorf("denied"))
+	})
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), client, state, "busybox:1.36")
+
+	assert.Nil(t, state.NodeToNodeOK,
+		"a denial is not evidence the overlay works, so it must not pass")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "RBAC denied")
 }
