@@ -44,3 +44,33 @@ CREATE TABLE IF NOT EXISTS nvcf_api.functions_v3 (id uuid PRIMARY KEY);`
 		t.Fatalf("Classify() = %v, want Additive", got)
 	}
 }
+
+// CodeRabbit on #1983: stripComments only handled `--`, so a block comment
+// containing DROP made an additive migration look destructive and would have
+// failed a legitimate non-major release.
+func TestClassifyIgnoresKeywordsInBlockComments(t *testing.T) {
+	sql := `/* DROP TABLE old_data; superseded, see NVCF-1234 */
+CREATE TABLE IF NOT EXISTS nvcf_api.new_data (id uuid PRIMARY KEY);`
+	if got := Classify(sql); got != Additive {
+		t.Fatalf("Classify() = %v, want Additive", got)
+	}
+}
+
+// CQL carries table options as string literals, and a table whose comment
+// mentions dropping rows is not a destructive migration.
+func TestClassifyIgnoresKeywordsInStringLiterals(t *testing.T) {
+	sql := "CREATE TABLE nvcf_api.t (id uuid PRIMARY KEY) WITH comment = 'we never delete or drop here';"
+	if got := Classify(sql); got != Additive {
+		t.Fatalf("Classify() = %v, want Additive", got)
+	}
+}
+
+// The doubled-quote escape must not leave the scanner stuck inside a string,
+// or every statement after one would be skipped and a real DROP missed.
+func TestClassifyHandlesEscapedQuotesAndStillSeesRealDrops(t *testing.T) {
+	sql := `CREATE TABLE nvcf_api.t (id uuid PRIMARY KEY) WITH comment = 'it''s fine';
+DROP TABLE IF EXISTS nvcf_api.old;`
+	if got := Classify(sql); got != Destructive {
+		t.Fatalf("Classify() = %v, want Destructive", got)
+	}
+}

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -143,5 +144,28 @@ func TestRunRejectsAnUnknownStack(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if _, err := run(dir, "not-a-stack", "fix", false, &out, &errOut); err == nil {
 		t.Fatal("err = nil, want an error naming the unknown stack")
+	}
+}
+
+// CodeRabbit on #1983: the no-migration-paths early return printed text before
+// the JSON branch, so --json emitted non-JSON for the compute-plane and
+// observability stacks and broke any consumer parsing it.
+func TestRunEmitsJSONForAStackWithNoMigrationPaths(t *testing.T) {
+	dir := fullFixture(t)
+	write(t, dir, MetadataPath, `{"version":1,"services":[
+      {"id":"nvcf-observability-stack","path":"deploy/stacks/observability"}]}`)
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-qm", "observability only")
+
+	var out, errOut bytes.Buffer
+	if _, err := run(dir, "nvcf-observability-stack", "fix", true, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("--json did not emit JSON: %v\ngot: %s", err, out.String())
+	}
+	if parsed["stack"] != "nvcf-observability-stack" {
+		t.Errorf("stack = %v", parsed["stack"])
 	}
 }

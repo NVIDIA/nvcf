@@ -141,3 +141,36 @@ func TestGatherEvidenceClassifiesAnAddedAdditiveMigration(t *testing.T) {
 		t.Fatalf("Class = %v, want Additive", ev.Changes[0].Class)
 	}
 }
+
+// CodeRabbit on #1983: a rename was recorded only as Modified on the new path,
+// so renaming a migration away produced no Deleted change and Decide would
+// permit a non-major release even though the old migration no longer ships.
+func TestGatherEvidenceTreatsARenameAsDeletingTheOldPath(t *testing.T) {
+	dir := fixture(t)
+	git(t, dir, "mv",
+		"migrations/cassandra/keyspaces/nvcf_api/03_init_tables.up.sql",
+		"migrations/cassandra/keyspaces/nvcf_api/03_init_tables_renamed.up.sql")
+	git(t, dir, "commit", "-qm", "rename the migration")
+
+	ev, err := GatherEvidence(dir, "deploy/stacks/self-managed/v1.0.0", []string{"migrations/cassandra"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deleted, present int
+	for _, c := range ev.Changes {
+		if c.Status == Deleted {
+			deleted++
+			if c.Path != "migrations/cassandra/keyspaces/nvcf_api/03_init_tables.up.sql" {
+				t.Errorf("deleted path = %q, want the original name", c.Path)
+			}
+			continue
+		}
+		present++
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted count = %d, want 1 (changes: %+v)", deleted, ev.Changes)
+	}
+	if present != 1 {
+		t.Fatalf("non-deleted count = %d, want 1 for the new path (changes: %+v)", present, ev.Changes)
+	}
+}

@@ -85,6 +85,7 @@ type report struct {
 	Bump       string         `json:"bump"`
 	Qualifying bool           `json:"qualifying"`
 	OK         bool           `json:"ok"`
+	Checked    bool           `json:"checked"`
 	Changes    []reportChange `json:"changes"`
 }
 
@@ -98,7 +99,7 @@ func run(root, stackID, bumpType string, asJSON bool, out, errOut io.Writer) (in
 		return 1, err
 	}
 	if len(stack.MigrationPaths) == 0 {
-		fmt.Fprintf(out, "%s declares no migration paths; nothing to check.\n", stack.ID)
+		emit(out, asJSON, report{Stack: stack.ID, Bump: bump.String(), OK: true})
 		return 0, nil
 	}
 
@@ -112,7 +113,7 @@ func run(root, stackID, bumpType string, asJSON bool, out, errOut io.Writer) (in
 	}
 	decision := Decide(ev, bump)
 
-	rep := report{Stack: stack.ID, BaseTag: baseTag, Bump: bump.String(), Qualifying: decision.Qualifying, OK: decision.OK}
+	rep := report{Stack: stack.ID, BaseTag: baseTag, Bump: bump.String(), Qualifying: decision.Qualifying, OK: decision.OK, Checked: true}
 	for _, c := range ev.Changes {
 		rc := reportChange{Path: c.Path, Status: c.Status.String(), Class: c.Class.String()}
 		if c.Status == Deleted {
@@ -121,15 +122,7 @@ func run(root, stackID, bumpType string, asJSON bool, out, errOut io.Writer) (in
 		rep.Changes = append(rep.Changes, rc)
 	}
 
-	if asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(rep); err != nil {
-			return 1, err
-		}
-	} else {
-		writeText(out, rep)
-	}
+	emit(out, asJSON, rep)
 	if !decision.OK {
 		fmt.Fprintln(errOut, decision.Reason)
 		return 1, nil
@@ -137,7 +130,21 @@ func run(root, stackID, bumpType string, asJSON bool, out, errOut io.Writer) (in
 	return 0, nil
 }
 
+func emit(out io.Writer, asJSON bool, rep report) {
+	if asJSON {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(rep)
+		return
+	}
+	writeText(out, rep)
+}
+
 func writeText(out io.Writer, rep report) {
+	if !rep.Checked {
+		fmt.Fprintf(out, "%s declares no migration paths; nothing to check.\n", rep.Stack)
+		return
+	}
 	fmt.Fprintf(out, "%s: %d migration change(s) since %s (proposed bump: %s)\n",
 		rep.Stack, len(rep.Changes), rep.BaseTag, rep.Bump)
 	for _, c := range rep.Changes {

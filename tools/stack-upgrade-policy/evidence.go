@@ -60,28 +60,53 @@ func GatherEvidence(root, baseRef string, paths []string) (Evidence, error) {
 	}
 
 	var ev Evidence
+	add := func(path string, status Status) error {
+		if !strings.HasSuffix(path, ".sql") {
+			return nil
+		}
+		if status == Deleted {
+			ev.Changes = append(ev.Changes, Change{Path: path, Status: Deleted})
+			return nil
+		}
+		sql, err := runGit(root, "show", "HEAD:"+path)
+		if err != nil {
+			return err
+		}
+		ev.Changes = append(ev.Changes, Change{Path: path, Status: status, Class: Classify(sql)})
+		return nil
+	}
+
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Split(strings.TrimSpace(line), "\t")
 		if len(fields) < 2 || fields[0] == "" {
 			continue
 		}
-		path := fields[len(fields)-1]
-		if !strings.HasSuffix(path, ".sql") {
-			continue
-		}
+		var err error
 		switch fields[0][0] {
 		case 'D':
-			ev.Changes = append(ev.Changes, Change{Path: path, Status: Deleted})
-		case 'A', 'M', 'R', 'C':
-			status := Modified
-			if fields[0][0] == 'A' {
-				status = Added
+			err = add(fields[1], Deleted)
+		case 'R':
+			// A rename stops shipping the old path. Recording only the new one
+			// would hide a migration being renamed away.
+			if len(fields) < 3 {
+				continue
 			}
-			sql, err := runGit(root, "show", "HEAD:"+path)
-			if err != nil {
-				return Evidence{}, err
+			if err = add(fields[1], Deleted); err == nil {
+				err = add(fields[2], Modified)
 			}
-			ev.Changes = append(ev.Changes, Change{Path: path, Status: status, Class: Classify(sql)})
+		case 'C':
+			// A copy leaves its source in place, so nothing is deleted.
+			if len(fields) < 3 {
+				continue
+			}
+			err = add(fields[2], Added)
+		case 'A':
+			err = add(fields[1], Added)
+		case 'M':
+			err = add(fields[1], Modified)
+		}
+		if err != nil {
+			return Evidence{}, err
 		}
 	}
 	return ev, nil
