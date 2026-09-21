@@ -4,8 +4,6 @@
 
 This guide provides information for deploying and operating NVCF in self-managed environments.
 
-## Documentation by stack
-
 NVCF ships as three independently versioned Helm stacks. Each stack has its
 own documentation set and version menu.
 
@@ -30,5 +28,3 @@ own documentation set and version menu.
   : Configure gateway routing, registries, and optional enhancements.
 - [Using Cloud Functions](/nvcf/self-managed/api)
   : Create and invoke functions using the NVCF API and CLI.
-- [Managed (Legacy)](../ngc-managed/cluster-management/ngc-managed.md)
-  : Documentation for the legacy NGC-managed NVCF platform (BYOC).
