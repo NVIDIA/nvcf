@@ -112,6 +112,7 @@ class AuthzControllerIntegrationTest extends BaseIntegrationTest {
                 """
                         {"namespace":"nvcf","result":{"allowed":true,\
                         "ncaId":"test-nca-id",\
+                        "ownerNcaId":"test-nca-id",\
                         "ownerId":"yreDV0J-umh_ZWUVuJ2aBgtFCfvZeRjMw9hF6dvurUs",\
                         "policy":{"aud":"nvidia-cloud-functions-ncp-service-id-aketm",\
                         "policy":"test-policy-one"}\
