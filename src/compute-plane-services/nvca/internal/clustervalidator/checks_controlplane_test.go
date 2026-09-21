@@ -125,7 +125,7 @@ func makeEnvoyControllerPod(name string, ready bool) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: envoyGatewayNamespace,
+			Namespace: envoyGatewayNamespaceName(),
 			Labels:    map[string]string{"control-plane": "envoy-gateway"},
 		},
 		Status: corev1.PodStatus{
@@ -137,7 +137,7 @@ func makeEnvoyControllerPod(name string, ready bool) *corev1.Pod {
 
 func TestCheckEnvoyGateway_ReadyControllerPod(t *testing.T) {
 	client := fake.NewSimpleClientset(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespaceName()}},
 		makeEnvoyControllerPod("envoy-gateway-abc", true),
 	)
 	state := &ValidationState{Log: testLog()}
@@ -151,7 +151,7 @@ func TestCheckEnvoyGateway_ReadyControllerPod(t *testing.T) {
 // key on the Ready condition or a dead gateway reports healthy.
 func TestCheckEnvoyGateway_RunningButNotReadyFails(t *testing.T) {
 	client := fake.NewSimpleClientset(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespaceName()}},
 		makeEnvoyControllerPod("envoy-gateway-abc", false),
 	)
 	state := &ValidationState{Log: testLog()}
@@ -165,10 +165,10 @@ func TestCheckEnvoyGateway_RunningButNotReadyFails(t *testing.T) {
 // The data-plane proxies and the certgen Job share this namespace. Counting
 // them lets a dead controller pass, so they must be excluded by the selector.
 func TestCheckEnvoyGateway_IgnoresNonControllerPods(t *testing.T) {
-	dataPlane := makePod("envoy-envoy-gateway-system-eg-abc123", envoyGatewayNamespace, corev1.PodRunning)
+	dataPlane := makePod("envoy-envoy-gateway-system-eg-abc123", envoyGatewayNamespaceName(), corev1.PodRunning)
 	dataPlane.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
 	client := fake.NewSimpleClientset(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespaceName()}},
 		dataPlane,
 	)
 	state := &ValidationState{Log: testLog()}
@@ -191,8 +191,8 @@ func TestCheckEnvoyGateway_NamespaceAbsent(t *testing.T) {
 
 func TestCheckEnvoyGateway_NamespacePresentNoRunningPods(t *testing.T) {
 	client := fake.NewSimpleClientset(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespace}},
-		makePod("envoy-gateway-abc", envoyGatewayNamespace, corev1.PodPending),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: envoyGatewayNamespaceName()}},
+		makePod("envoy-gateway-abc", envoyGatewayNamespaceName(), corev1.PodPending),
 	)
 	state := &ValidationState{Log: testLog()}
 	checkEnvoyGateway(context.Background(), client, state)
@@ -216,7 +216,7 @@ func TestCheckGatewayRoutes_MissingCRDs(t *testing.T) {
 
 func TestCheckExternalLoadBalancer_ServiceWithIP(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway", Namespace: envoyGatewayNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway", Namespace: envoyGatewayNamespaceName()},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 		Status: corev1.ServiceStatus{
 			LoadBalancer: corev1.LoadBalancerStatus{
@@ -233,7 +233,7 @@ func TestCheckExternalLoadBalancer_ServiceWithIP(t *testing.T) {
 
 func TestCheckExternalLoadBalancer_ServiceWithHostname(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway", Namespace: envoyGatewayNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway", Namespace: envoyGatewayNamespaceName()},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 		Status: corev1.ServiceStatus{
 			LoadBalancer: corev1.LoadBalancerStatus{
@@ -250,7 +250,7 @@ func TestCheckExternalLoadBalancer_ServiceWithHostname(t *testing.T) {
 
 func TestCheckExternalLoadBalancer_NoLBServices(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-ip-svc", Namespace: envoyGatewayNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-ip-svc", Namespace: envoyGatewayNamespaceName()},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
 	})
 	state := &ValidationState{Log: testLog()}
@@ -264,7 +264,7 @@ func TestCheckExternalLoadBalancer_NoLBServices(t *testing.T) {
 func TestCheckExternalLoadBalancer_LBServicePendingNoIP(t *testing.T) {
 	// LB type but .status.loadBalancer.ingress is empty → no IP assigned yet.
 	client := fake.NewSimpleClientset(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "pending-lb", Namespace: envoyGatewayNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "pending-lb", Namespace: envoyGatewayNamespaceName()},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 		// No Status.LoadBalancer.Ingress
 	})
@@ -1176,14 +1176,14 @@ func TestCheckEnvoyGateway_NotFoundStillFails(t *testing.T) {
 // of its assigned siblings.
 func TestCheckExternalLoadBalancer_PendingServiceIsNotAPass(t *testing.T) {
 	assigned := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway-lb", Namespace: envoyGatewayNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gateway-lb", Namespace: envoyGatewayNamespaceName()},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 		Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
 			Ingress: []corev1.LoadBalancerIngress{{IP: "10.0.0.1"}},
 		}},
 	}
 	pending := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "envoy-nats-gateway-lb", Namespace: envoyGatewayNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-nats-gateway-lb", Namespace: envoyGatewayNamespaceName()},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 	}
 	client := fake.NewSimpleClientset(assigned, pending)
@@ -1200,6 +1200,9 @@ func TestCheckExternalLoadBalancer_PendingServiceIsNotAPass(t *testing.T) {
 // place Envoy outside envoy-gateway-system. Probing the wrong namespace
 // reports a live gateway as missing.
 func TestEnvoyGatewayNamespaceName_HonoursOverride(t *testing.T) {
+	// Pin the unset case explicitly: an override exported in the developer's
+	// shell would otherwise leak in and make this assert the wrong default.
+	t.Setenv(envoyGatewayNamespaceEnv, "")
 	assert.Equal(t, envoyGatewayNamespace, envoyGatewayNamespaceName())
 	t.Setenv(envoyGatewayNamespaceEnv, "gateway")
 	assert.Equal(t, "gateway", envoyGatewayNamespaceName())

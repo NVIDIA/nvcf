@@ -1416,7 +1416,12 @@ Overall verdict for the latest cluster-validator run. **This is the load-bearing
 Per-check status from the latest run. The check set is fixed (18 entries; see `CheckKey*` constants in `internal/clustervalidator/summary.go`). Which subset appears depends on the validator role and on which conditional checks ran; see the caveat below.
 
 - **Type**: Gauge
-- **Value**: 1 = passed, 0 = failed (or not-run; the `check` label is omitted entirely when a check was skipped)
+- **Value**: 1 = passed, 0 = failed. A skipped check is not reported as 0: it
+  is pruned on the next reconcile and goes absent, so `absent()` and `== 0`
+  mean different things. One exception: at process start, and after
+  `ResetClusterValidatorMetrics`, all 18 keys are emitted at 0 as an
+  init-to-zero baseline, before any run has happened. A 0 in that window means
+  "no result yet", not "failed"; it is replaced or pruned by the first summary.
 - **Labels**: default labels + `check`
 
 > **Alerting caveat — absent vs. zero for optional checks.** Three checks are
