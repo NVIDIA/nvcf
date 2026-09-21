@@ -756,12 +756,8 @@ class AuthManagerResolverTest {
 
     // --- trusted-issuers[] refresh tests ---
 
-    // A refresh rebuilds the bean by re-invoking the factory method; these call it directly to
-    // exercise what that rebuild produces. TrustedIssuerRefreshTest drives the refresh itself.
-
     @Test
     void trustedIssuers_entryAddedThenRebuilt_isTrusted() {
-        // Given: no trusted-issuers[] entries.
         TrustedJwtIssuerProperties props = new TrustedJwtIssuerProperties();
         AuthManagerResolver multi = buildResolverWithTrustedIssuers(props);
 
@@ -769,17 +765,14 @@ class AuthManagerResolverTest {
         when(req.getHeader("Authorization"))
                 .thenReturn(bearerWithIssuer("http://api.external-nvcf.example.com", "admin"));
 
-        // Initially untrusted: falls through to cluster OIDC, which throws on the missing marker.
         AuthenticationManagerResolver<HttpServletRequest> before =
                 multi.authenticationManagerResolver();
         assertThrows(AuthenticationServiceException.class, () -> before.resolve(req));
 
-        // When: an entry is added to the refresh-scoped properties and the bean is rebuilt.
         props.setTrustedIssuers(List.of(trustedIssuerEntry(
                 "http://api.external-nvcf.example.com",
                 "http://openbao.external/v1/services/nvcf-api/jwt/jwks")));
 
-        // Then: the rebuilt resolver routes the new issuer to the static resolver.
         assertNotNull(multi.authenticationManagerResolver().resolve(req),
                 "issuer added at runtime must be trusted after the bean is rebuilt");
     }
@@ -806,7 +799,6 @@ class AuthManagerResolverTest {
 
     @Test
     void trustedIssuers_primaryIssuerSurvivesRebuild() {
-        // The primary issuer is not part of trusted-issuers[]; a rebuild must not drop it.
         TrustedJwtIssuerProperties props = new TrustedJwtIssuerProperties();
         AuthManagerResolver multi = buildResolverWithTrustedIssuers(props);
 
@@ -823,8 +815,7 @@ class AuthManagerResolverTest {
 
     @Test
     void trustedIssuers_conflictingJwksOnRebuild_failsLoudly() {
-        // Re-declaring an already-trusted issuer with a different JWKS is rejected on rebuild
-        // exactly as it is at startup, rather than silently keeping stale trust.
+        // Rejected on rebuild exactly as at startup, rather than silently keeping stale trust.
         TrustedJwtIssuerProperties props = new TrustedJwtIssuerProperties();
         AuthManagerResolver multi = buildResolverWithTrustedIssuers(props);
         assertNotNull(multi.authenticationManagerResolver());
