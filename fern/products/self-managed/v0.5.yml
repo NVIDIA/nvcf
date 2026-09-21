@@ -99,22 +99,6 @@ navigation:
               - link: UCC TLS
                 href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/tls.html
 
-  - section: Using Cloud Functions
-    skip-slug: true
-    contents:
-      - page: API
-        path: ../../../docs/v0.5/api.md
-      - page: Function Creation
-        path: ../../../docs/v0.5/function-creation.md
-      - page: Container Functions
-        path: ../../../docs/v0.5/container-functions.md
-      - page: Helm Functions
-        path: ../../../docs/v0.5/helm-functions.md
-      - page: Streaming Functions
-        path: ../../../docs/v0.5/streaming-functions.md
-      - page: CLI
-        path: ../../../docs/v0.5/cli.md
-
   - section: Observability
     skip-slug: true
     contents:
@@ -194,10 +178,6 @@ navigation:
     contents:
       - page: Cluster Reference
         path: ../../../docs/v0.5/cluster-management/reference.md
-      - page: gRPC Load Testing
-        path: ../../../docs/v0.5/grpc-load-testing.md
-      - page: HTTP Soak Testing
-        path: ../../../docs/v0.5/http-soak-testing.md
 
   - section: Development
     skip-slug: true

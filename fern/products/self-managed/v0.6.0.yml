@@ -104,36 +104,6 @@ navigation:
               - link: UCC TLS
                 href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/tls.html
 
-  - section: Using Cloud Functions
-    skip-slug: true
-    contents:
-      - page: API
-        path: ../../../docs/v0.6.0/api.md
-      - page: Function Creation
-        path: ../../../docs/v0.6.0/function-creation.md
-      - page: LLM Gateway
-        path: ../../../docs/v0.6.0/llm-gateway.md
-      - page: Generic HTTP Function Invocation
-        path: ../../../docs/v0.6.0/generic-http-function-invocation.md
-      - page: gRPC Function Invocation
-        path: ../../../docs/v0.6.0/grpc-function-invocation.md
-      - page: Container Functions
-        path: ../../../docs/v0.6.0/container-functions.md
-      - page: Helm Functions
-        path: ../../../docs/v0.6.0/helm-functions.md
-      - page: Streaming Functions
-        path: ../../../docs/v0.6.0/streaming-functions.md
-      - page: Configure Autoscaling
-        path: ../../../docs/v0.6.0/configure-autoscaling.md
-      - page: CLI
-        path: ../../../docs/v0.6.0/cli.md
-      - page: Task Creation
-        path: ../../../docs/v0.6.0/task-creation.md
-      - page: Container-Based Task Creation
-        path: ../../../docs/v0.6.0/container-tasks.md
-      - page: Helm-Based Task Creation
-        path: ../../../docs/v0.6.0/helm-tasks.md
-
   - section: Function Autoscaling
     skip-slug: true
     contents:
@@ -232,16 +202,6 @@ navigation:
     contents:
       - page: Cluster Reference
         path: ../../../docs/v0.6.0/cluster-management/reference.md
-      - page: gRPC Load Testing
-        path: ../../../docs/v0.6.0/grpc-load-testing.md
-      - page: gRPC Load Test SLI Guide
-        path: ../../../docs/v0.6.0/grpc-load-test-sli-guide.md
-      - page: HTTP Load Testing
-        path: ../../../docs/v0.6.0/http-load-testing.md
-      - page: HTTP Load Test SLI Guide
-        path: ../../../docs/v0.6.0/http-load-test-sli-guide.md
-      - page: HTTP Soak Testing
-        path: ../../../docs/v0.6.0/http-soak-testing.md
 
   - section: Development
     skip-slug: true
