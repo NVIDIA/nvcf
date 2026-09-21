@@ -99,5 +99,5 @@ After exploring, suggest the next skill when applicable:
 - `nvcf-self-managed-installation` for installing, upgrading, or tearing down the stack
 - `docs/dev/local-development.md` for k3d / local cluster work
 - `nvcf-self-managed-cli` for `nvcf-cli` usage against an installed stack
-- `docs/AGENTS.md` and `fern/products/<product>/dev.yml` for routing the user to a published docs page
+- `docs/AGENTS.md`, `fern/products/overview.yml` (Overview), and `fern/products/<stack>/dev.yml` (stack products) for routing the user to a published docs page
 - `tools/ci/check-doc-version-sync` for keeping the documentation manifest in sync with the docs version catalog
