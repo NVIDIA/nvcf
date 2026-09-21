@@ -2,16 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 navigation:
-  - section: Release Notes
-    skip-slug: true
-    contents:
-      - page: Release Notes Overview
-        path: ../../../docs/self-managed-1.0/release-notes/index.md
-      - page: "0.20.6 Release Notes"
-        path: ../../../docs/self-managed-1.0/release-notes/0.20.6.md
-      - page: "0.6.1 to 0.20.6 Upgrade"
-        path: ../../../docs/self-managed-1.0/release-notes/0.6.1-to-0.20.6-upgrade.md
-
   - section: Deployment
     skip-slug: true
     contents:
