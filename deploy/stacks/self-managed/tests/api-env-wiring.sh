@@ -120,7 +120,7 @@ assert_yaml_value "$explicit_values" '.api.remoteConfig.configData.custom.retain
 assert_yaml_value "$explicit_values" '.api.remoteConfig.configData.nvcf.sidecars.retained-setting' \
   keep-inside-sidecars "nested sidecar remote config"
 assert_yaml_value "$explicit_values" "$remote_worker_address_expression" \
-  http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071 "stack-owned worker address"
+  llm-request-router-backend-router.nvcf.svc.cluster.local:50071 "stack-owned worker address"
 assert_yaml_value "$explicit_values" '.api.env.CUSTOM_API_ENV' \
   configured "generic API env"
 assert_yaml_value "$explicit_values" '.api.env.LITERAL_TEMPLATE_VALUE' \

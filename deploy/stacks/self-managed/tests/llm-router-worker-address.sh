@@ -213,7 +213,7 @@ if assert_remote_config_address "$work_dir/wrong-owner-values.yaml" \
   fail "remote-config assertion accepted a worker address outside the API values"
 fi
 
-local_worker_address='http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071'
+local_worker_address='llm-request-router-backend-router.nvcf.svc.cluster.local:50071'
 printf '%s\n' \
   'addons:' \
   '  llm:' \
