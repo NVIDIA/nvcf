@@ -221,7 +221,19 @@ jobs:
         id: rc
         run: |
           set -euo pipefail
+          # A configured but unreachable cache must degrade to the local disk
+          # cache. Bazel fails the whole build when the capabilities query
+          # cannot connect, so probe the endpoint first.
+          reachable=0
           if [ -n "${CACHE_TOKEN:-}" ] && [ -n "${CACHE_ENDPOINT:-}" ]; then
+            hostport="${CACHE_ENDPOINT#*://}"
+            if timeout 5 bash -c "exec 3<>/dev/tcp/${hostport%%:*}/${hostport##*:}" 2>/dev/null; then
+              reachable=1
+            else
+              echo "remote cache ${CACHE_ENDPOINT} unreachable: local disk cache only"
+            fi
+          fi
+          if [ "$reachable" = 1 ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "ready=1" >> "$GITHUB_OUTPUT"
@@ -229,7 +241,7 @@ jobs:
             echo "remote cache ready (upload=$upload)"
           else
             echo "ready=0" >> "$GITHUB_OUTPUT"
-            echo "remote cache unavailable (no token/endpoint): local disk cache only"
+            echo "remote cache unavailable: local disk cache only"
           fi
 
       - name: Compute snapshot tag
