@@ -37,7 +37,7 @@ func freezeStackDocumentation(repoRoot, catalogPath, stack, train string) (strin
 		return "", fmt.Errorf("release_set %s version %s belongs to train %s, not %s; sync the catalog to a %s.x release first", stack, metadata.Version, releasedTrain, train, train)
 	}
 	if len(catalog.PublicationPending) > 0 {
-		return "", fmt.Errorf("cannot freeze %s documentation with unpublished artifacts: %s", stack, strings.Join(catalog.PublicationPending, ", "))
+		fmt.Fprintf(os.Stderr, "WARNING: freezing %s documentation while artifacts are publication pending: %s\n", stack, strings.Join(catalog.PublicationPending, ", "))
 	}
 	if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
 		return "", fmt.Errorf("validate stack source snapshot: %w", err)

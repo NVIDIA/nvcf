@@ -155,8 +155,9 @@ go run -C tools/docs-version-sync . --target main
 
 The cut script runs `--freeze-stack <release_set stack> --freeze-train X.Y`,
 which checks that the stack's current release in `release_set.stacks` belongs
-to train `X.Y`, refuses to freeze while `publication_pending` is non-empty,
-and writes `docs/version-catalog/<stack>-X.Y.yaml` with that one stack marked
+to train `X.Y`, warns when `publication_pending` is non-empty (the frozen
+manifest keeps the pending markers), and writes
+`docs/version-catalog/<stack>-X.Y.yaml` with that one stack marked
 `qualified`. `main.yaml` stays in development state. The script then copies
 `docs/<stack>/` to `docs/<stack>-X.Y/`, generates
 `fern/products/<stack>/X.Y.yml`, and prints the `versions:` entry to add to

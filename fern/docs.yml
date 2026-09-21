@@ -57,8 +57,11 @@ products:
   - display-name: Compute Plane Stack
     subtitle: GPU cluster setup and scheduling
     slug: compute-plane
-    path: products/compute-plane/dev.yml
+    path: products/compute-plane/1.0.yml
     versions:
+      - display-name: "1.0"
+        path: products/compute-plane/1.0.yml
+        slug: "1.0"
       - display-name: dev
         path: products/compute-plane/dev.yml
         slug: dev
@@ -66,8 +69,11 @@ products:
   - display-name: Observability Stack
     subtitle: Metrics, dashboards, and alerting
     slug: observability
-    path: products/observability/dev.yml
+    path: products/observability/1.0.yml
     versions:
+      - display-name: "1.0"
+        path: products/observability/1.0.yml
+        slug: "1.0"
       - display-name: dev
         path: products/observability/dev.yml
         slug: dev

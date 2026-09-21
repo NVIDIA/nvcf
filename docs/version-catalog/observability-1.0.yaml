@@ -933,8 +933,8 @@ release_set:
       source_tag: deploy/stacks/nvcf-compute-plane/v1.0.0
       source_commit: 63ac4456d3422508f2ff4b219c7dff8fba1c21c0
       inventory_asset: nvcf-compute-plane-stack-inventory.json
-      documentation_version: "1.0"
-      status: qualified
+      documentation_version: dev
+      status: development
     observability:
       version: 1.0.0
       source_tag: deploy/stacks/observability/v1.0.0

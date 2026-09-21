@@ -1029,7 +1029,7 @@ func TestFreezeStackDocumentationWritesQualifiedSnapshotForOneStack(t *testing.T
 	}
 }
 
-func TestFreezeStackDocumentationRejectsTrainMismatchAndPendingPublications(t *testing.T) {
+func TestFreezeStackDocumentationRejectsTrainMismatch(t *testing.T) {
 	tmp := t.TempDir()
 	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
 	catalog := testCatalogWithReleaseSet()
@@ -1047,12 +1047,26 @@ func TestFreezeStackDocumentationRejectsTrainMismatchAndPendingPublications(t *t
 		t.Fatalf("freeze error = %v, want unknown stack rejection", err)
 	}
 
+}
+
+func TestFreezeStackDocumentationAllowsPendingPublications(t *testing.T) {
+	tmp := t.TempDir()
+	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
+	catalog := testCatalogWithReleaseSet()
 	catalog.PublicationPending = []string{"llm-api-gateway"}
 	if err := WriteCatalog(catalogPath, catalog); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2"); err == nil || !strings.Contains(err.Error(), "unpublished artifacts: llm-api-gateway") {
-		t.Fatalf("freeze error = %v, want pending publication rejection", err)
+	snapshot, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2")
+	if err != nil {
+		t.Fatalf("freeze with pending publications failed: %v", err)
+	}
+	frozen, err := LoadCatalog(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frozen.PublicationPending) != 1 || frozen.PublicationPending[0] != "llm-api-gateway" {
+		t.Fatalf("frozen snapshot lost publication_pending: %#v", frozen.PublicationPending)
 	}
 }
 

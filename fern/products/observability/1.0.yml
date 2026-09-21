@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+  - page: Observability
+    path: ../../../docs/observability-1.0/observability.md
+  - page: Example Dashboards
+    path: ../../../docs/observability-1.0/example-dashboards.md
+
+  - section: Metrics
+    skip-slug: true
+    contents:
+      - page: Metrics Overview
+        path: ../../../docs/observability-1.0/metrics/metrics-index.md
+      - page: Autoscaler
+        path: ../../../docs/observability-1.0/metrics/function-autoscaler/metrics.md
+        slug: autoscaler
+      - page: Cassandra
+        path: ../../../docs/observability-1.0/metrics/cassandra/metrics.md
+      - page: ESS
+        path: ../../../docs/observability-1.0/metrics/ess/metrics.md
+      - page: Init Container
+        path: ../../../docs/observability-1.0/metrics/init-container/metrics.md
+      - page: Invocation Service
+        path: ../../../docs/observability-1.0/metrics/invocation-service/metrics.md
+      - page: LLM API Gateway
+        path: ../../../docs/observability-1.0/metrics/llm-api-gateway/metrics.md
+      - page: LLM Function Invocation Metrics Report
+        path: ../../../docs/observability-1.0/metrics/llm-function-invocation-path.md
+      - page: LLM Request Router
+        path: ../../../docs/observability-1.0/metrics/llm-request-router/metrics.md
+      - page: NVCF API
+        path: ../../../docs/observability-1.0/metrics/nvcf-api/metrics.md
+      - page: SIS/Spot
+        path: ../../../docs/observability-1.0/metrics/sis-spot/metrics.md
+      - page: State Metrics
+        path: ../../../docs/observability-1.0/metrics/state-metrics/metrics.md
+      - page: Utils Container
+        path: ../../../docs/observability-1.0/metrics/utils-container/metrics.md
+      - page: Vault/OpenBao
+        path: ../../../docs/observability-1.0/metrics/vault-openbao/metrics.md

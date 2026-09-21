@@ -940,8 +940,8 @@ release_set:
       source_tag: deploy/stacks/observability/v1.0.0
       source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
       inventory_asset: nvcf-observability-stack-inventory.json
-      documentation_version: "1.0"
-      status: qualified
+      documentation_version: dev
+      status: development
 compatibility:
   - stack: control-plane
     train: "1.0"
