@@ -356,8 +356,9 @@ ingress:
 
 When `addons.llm` is enabled, the stack defaults
 `global.workerEndpoints.llmRequestRouterAddress` to
-`llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
-additional configuration. For a split deployment, this address alone is not
+`llm-request-router-backend-router.nvcf.svc.cluster.local:50071` when backend
+routing is enabled, otherwise `llm-request-router.nvcf.svc.cluster.local:50071`.
+For a split deployment, this address alone is not
 enough. Configure the paired backend-router gRPC and reverse QUIC dial
 addresses, Gateway routes, DNS, and trust described in
 [Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions).

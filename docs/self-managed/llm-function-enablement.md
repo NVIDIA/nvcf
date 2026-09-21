@@ -76,11 +76,12 @@ pod SANs.
 
 The QUIC identity remains separate. The request router presents a certificate
 issued by cert-manager, or one you issue and supply in a pre-created Secret.
-For a single-cluster deployment, workers dial
-`llm-request-router.nvcf.svc.cluster.local:50071`. For remote workers, the
-backend router preserves the advertised request-router pod hostname as the
-QUIC SNI while it sends traffic through an external UDP endpoint. The QUIC
-certificate must cover that advertised hostname. The default wildcard SAN is
+For a single-cluster deployment, initial gRPC discovery defaults to
+`llm-request-router-backend-router.nvcf.svc.cluster.local:50071`. For remote
+workers, the backend router preserves the advertised request-router pod
+hostname as the QUIC SNI while it sends traffic through an external UDP
+endpoint. The QUIC certificate must cover that advertised hostname. The
+default wildcard SAN is
 `*.llm-request-router-headless.nvcf.svc.cluster.local`. It does not need the
 external UDP load-balancer hostname. Do not reuse the gRPC NLB leaf certificate
 as the QUIC leaf certificate.
@@ -182,10 +183,10 @@ constraint in the external issuer's own configuration.
 
 When `addons.llm.enabled` is `true`, the stack defaults
 `global.workerEndpoints.llmRequestRouterAddress` to
-`llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
-additional configuration. For a split control-plane and compute-plane
-deployment, override this value with a host and port that worker pods can
-reach.
+`llm-request-router-backend-router.nvcf.svc.cluster.local:50071` when backend
+routing is enabled, otherwise `llm-request-router.nvcf.svc.cluster.local:50071`.
+For a split control-plane and compute-plane deployment, override this value
+with a host and port that worker pods can reach.
 
 The stack maps the configured or default address to
 `api.remoteConfig.configData.nvcf.llm-request-router.worker-address`. The NVCF
@@ -709,11 +710,11 @@ kubectl -n nvcf-backend get pod <function-pod> \
 ```
 
 The worker args must contain
-`--stargate-address=llm-request-router.nvcf.svc.cluster.local:50071`, or the
-configured routable DNS name, and must not contain `--quic-insecure`. The
-external address is the initial gRPC dial endpoint. The reverse tunnel verifies
-the advertised request-router pod hostname instead. The environment must
-contain:
+`--stargate-address=llm-request-router-backend-router.nvcf.svc.cluster.local:50071`
+with default backend routing, or the configured routable endpoint, and must
+not contain `--quic-insecure`. The external address is the initial gRPC dial
+endpoint. The reverse tunnel verifies the advertised request-router pod
+hostname instead. The environment must contain:
 
 ```text
 STARGATE_TLS_CERT_PATH=/etc/ssl/certs/ca-certificates.crt

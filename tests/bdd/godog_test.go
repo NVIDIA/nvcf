@@ -682,7 +682,8 @@ func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
 			Stdout: "data:\n  nvcf-api.yaml: |\n    nvcf:\n" +
-				"      llm-request-router:\n        worker-address: llm-request-router.nvcf.svc.cluster.local:50071\n" +
+				"      llm-request-router:\n" +
+				"        worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071\n" +
 				"      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
 		},
 		"helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml": {
@@ -2099,6 +2100,7 @@ metadata:
 spec:
   dnsNames:
     - llm-request-router.nvcf.svc.cluster.local
+worker-address: llm-request-router-backend-router.nvcf.svc.cluster.local:50071
 env:
   - name: ADDONS_LLM_ENABLED
     value: "true"
