@@ -180,6 +180,24 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 	}
 }
 
+func TestCatalogRefreshPreservesCompatibility(t *testing.T) {
+	base := testCatalog()
+	base.Compatibility = []CompatibilityEntry{
+		{Stack: "control-plane", Train: "1.0", CompatibleWith: map[string]string{"compute-plane": "1.0+", "observability": "1.0+"}},
+	}
+
+	updated := refreshCatalogFromArtifacts("1.0.0", []Artifact{{
+		Name:     "nvcf-grpc-proxy",
+		Type:     ArtifactTypeImage,
+		Registry: defaultImageRegistry,
+		Version:  "1.30.0",
+	}}, base)
+
+	if len(updated.Compatibility) != 1 || updated.Compatibility[0].CompatibleWith["compute-plane"] != "1.0+" {
+		t.Fatalf("compatibility = %#v, want the base entries preserved across a refresh", updated.Compatibility)
+	}
+}
+
 func TestCatalogConstructionWithoutBaseRendersUnverifiedArtifactsAsPending(t *testing.T) {
 	catalog := refreshCatalogFromArtifacts("0.9.1", []Artifact{
 		{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: defaultChartRegistry, Version: "1.21.3"},
@@ -1067,6 +1085,35 @@ func TestValidateCatalogRejectsMalformedCompatibility(t *testing.T) {
 		if err := ValidateCatalog(catalog); err == nil {
 			t.Fatalf("ValidateCatalog accepted %s compatibility", name)
 		}
+	}
+}
+
+func TestPreserveQualifiedDocumentationAcrossRefresh(t *testing.T) {
+	base := testCatalogWithReleaseSet().ReleaseSet
+	base.Stacks.ControlPlane.DocumentationVersion = "1.2"
+	base.Stacks.ControlPlane.Status = ReleaseSetQualified
+	base.Stacks.Observability.DocumentationVersion = "3.4"
+	base.Stacks.Observability.Status = ReleaseSetQualified
+
+	refreshed := testCatalogWithReleaseSet().ReleaseSet
+	refreshed.Stacks.ControlPlane.Version = "1.2.9"
+	refreshed.Stacks.Observability.Version = "3.5.0"
+
+	if err := preserveQualifiedDocumentation(&refreshed, base); err != nil {
+		t.Fatalf("preserveQualifiedDocumentation failed: %v", err)
+	}
+	if refreshed.Stacks.ControlPlane.Status != ReleaseSetQualified || refreshed.Stacks.ControlPlane.DocumentationVersion != "1.2" {
+		t.Fatalf("control plane patch release lost its qualified train: %#v", refreshed.Stacks.ControlPlane)
+	}
+	if refreshed.Stacks.Observability.Status != ReleaseSetDevelopment || refreshed.Stacks.Observability.DocumentationVersion != "dev" {
+		t.Fatalf("observability release on a new train should fall back to dev: %#v", refreshed.Stacks.Observability)
+	}
+	if refreshed.Stacks.ComputePlane.Status != ReleaseSetDevelopment {
+		t.Fatalf("compute plane was never qualified and should stay dev: %#v", refreshed.Stacks.ComputePlane)
+	}
+
+	if err := preserveQualifiedDocumentation(&refreshed, ReleaseSetMetadata{}); err != nil {
+		t.Fatalf("empty base should be a no-op, got %v", err)
 	}
 }
 

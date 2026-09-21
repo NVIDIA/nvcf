@@ -7,13 +7,13 @@ vendor/
 third_party/
 
 # Frozen versioned documentation. docs/AGENTS.md states that docs/v*/ and
-# docs/cp-*/ must not be edited without an explicit request for a historical
-# docs fix, so linting these trees can only produce findings that must never be
-# acted on.
+# docs/<stack>-<train>/ must not be edited without an explicit request for a
+# historical docs fix, so linting these trees can only produce findings that
+# must never be acted on.
 #
 # The [0-9] keeps docs/version-catalog/, which is not frozen, in scope.
 docs/v[0-9]*/
-docs/cp-*/
+docs/*-[0-9]*/
 
 # Vendored Helm subcharts. Same rationale as vendor/: upstream chart content
 # this repository redistributes rather than authors.

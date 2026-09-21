@@ -67,6 +67,11 @@ func updateCatalogFromGitHubInventories(repoRoot string, sourceRefs map[string]s
 	if err != nil {
 		return nil, err
 	}
+	if base != nil {
+		if err := preserveQualifiedDocumentation(&releaseSet, base.ReleaseSet); err != nil {
+			return nil, err
+		}
+	}
 	catalog.ReleaseSet = releaseSet
 	for _, spec := range stackInventorySpecs[1:] {
 		version := inventories[spec.Key].Source.Version

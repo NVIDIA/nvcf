@@ -77,6 +77,35 @@ func stackKeyForPlane(plane string) (string, error) {
 	}
 }
 
+// preserveQualifiedDocumentation keeps a stack's frozen documentation train
+// across a refresh while the released version stays on that train. A release
+// on a new train falls back to development documentation until it is frozen.
+func preserveQualifiedDocumentation(refreshed *ReleaseSetMetadata, base ReleaseSetMetadata) error {
+	if base == (ReleaseSetMetadata{}) {
+		return nil
+	}
+	for _, stack := range releaseSetStackNames {
+		previous, err := base.Stacks.byName(stack)
+		if err != nil {
+			return err
+		}
+		if previous.Status != ReleaseSetQualified {
+			continue
+		}
+		current, err := refreshed.Stacks.byName(stack)
+		if err != nil {
+			return err
+		}
+		train, ok := releaseTrain(current.Version)
+		if !ok || train != previous.DocumentationVersion {
+			continue
+		}
+		current.DocumentationVersion = previous.DocumentationVersion
+		current.Status = ReleaseSetQualified
+	}
+	return nil
+}
+
 // releaseSetFromInventories records the current release of each stack as
 // development documentation. Freezing a stack train marks that stack qualified.
 func releaseSetFromInventories(inventories map[string]resolvedStackInventory) (ReleaseSetMetadata, error) {

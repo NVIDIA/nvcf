@@ -318,14 +318,6 @@ publications:
     type: resource
     version: 1.16.2
     registry: public-resources
-  - name: nvcf-compute-plane-stack
-    type: resource
-    version: 0.4.4
-    registry: public-resources
-  - name: nvcf-observability-stack
-    type: resource
-    version: 0.2.2
-    registry: public-resources
 version_overrides:
   - name: nvcf-cli
     type: resource
@@ -333,6 +325,8 @@ version_overrides:
     source: independent source release; not pinned by stack
 publication_pending:
   - helm-nvcf-state-metrics
+  - nvcf-compute-plane-stack
+  - nvcf-observability-stack
   - nvcf-self-managed-stack
   - nvcf-state-metrics-service
 manifest:
@@ -928,22 +922,22 @@ manifest:
 release_set:
   stacks:
     control-plane:
-      version: 0.20.7
-      source_tag: deploy/stacks/self-managed/v0.20.7
-      source_commit: c1dd7c6db3eb89c6ff1664b1094a97d7c8e03914
+      version: 1.0.0
+      source_tag: deploy/stacks/self-managed/v1.0.0
+      source_commit: 98c440f90a9df76b82be84791a574732b712bce9
       inventory_asset: nvcf-self-managed-stack-inventory.json
-      documentation_version: dev
-      status: development
+      documentation_version: "1.0"
+      status: qualified
     compute-plane:
-      version: 0.4.4
-      source_tag: deploy/stacks/nvcf-compute-plane/v0.4.4
+      version: 1.0.0
+      source_tag: deploy/stacks/nvcf-compute-plane/v1.0.0
       source_commit: 63ac4456d3422508f2ff4b219c7dff8fba1c21c0
       inventory_asset: nvcf-compute-plane-stack-inventory.json
       documentation_version: dev
       status: development
     observability:
-      version: 0.2.2
-      source_tag: deploy/stacks/observability/v0.2.2
+      version: 1.0.0
+      source_tag: deploy/stacks/observability/v1.0.0
       source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
       inventory_asset: nvcf-observability-stack-inventory.json
       documentation_version: dev
@@ -952,24 +946,24 @@ compatibility:
   - stack: control-plane
     train: "1.0"
     compatible_with:
-      compute-plane: "1.0+"
-      observability: "1.0+"
+      compute-plane: 1.0+
+      observability: 1.0+
   - stack: compute-plane
     train: "1.0"
     compatible_with:
-      control-plane: "1.0+"
-      observability: "1.0+"
+      control-plane: 1.0+
+      observability: 1.0+
   - stack: observability
     train: "1.0"
     compatible_with:
-      control-plane: "1.0+"
-      compute-plane: "1.0+"
+      compute-plane: 1.0+
+      control-plane: 1.0+
 stack:
   name: nvcf-self-managed-stack
-  version: 0.20.7
+  version: 1.0.0
   registry: public-resources
-  source_tag: deploy/stacks/self-managed/v0.20.7
-  source_commit: c1dd7c6db3eb89c6ff1664b1094a97d7c8e03914
+  source_tag: deploy/stacks/self-managed/v1.0.0
+  source_commit: 98c440f90a9df76b82be84791a574732b712bce9
   pin_sources:
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
@@ -1284,7 +1278,7 @@ artifacts:
   - name: nvcf-state-metrics-service
     type: image
     registry: public-images
-    version: 1.24.1
+    version: 1.23.7
     stacks:
       - self-managed
     requirement: required
@@ -1532,7 +1526,7 @@ artifacts:
   - name: helm-nvcf-state-metrics
     type: chart
     registry: public-helm
-    version: 1.0.6
+    version: 1.0.2
     stacks:
       - self-managed
     requirement: required
@@ -1617,13 +1611,13 @@ supplemental_artifacts:
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
-    version: 0.4.4
+    version: 1.0.0
     stacks:
       - compute-plane
   - name: nvcf-observability-stack
     type: resource
     registry: public-resources
-    version: 0.2.2
+    version: 1.0.0
     stacks:
       - observability
   - name: nvcf-observability-reference-stack

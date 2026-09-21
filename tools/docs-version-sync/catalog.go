@@ -948,6 +948,7 @@ func refreshCatalogFromArtifacts(stackVersion string, artifacts []Artifact, base
 	catalog.PublicationPending = append(catalog.PublicationPending, base.PublicationPending...)
 	catalog.Denylist = append(catalog.Denylist, base.Denylist...)
 	catalog.Manifest = base.Manifest
+	catalog.Compatibility = append(catalog.Compatibility, base.Compatibility...)
 	resolvedArtifacts := make(map[string]struct{}, len(catalog.Artifacts))
 	for _, artifact := range catalog.Artifacts {
 		resolvedArtifacts[artifactNameAndTypeKey(artifact)] = struct{}{}

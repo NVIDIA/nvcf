@@ -4,100 +4,100 @@
 navigation:
   # No-op docs preview trigger for Fern bot alias validation.
   - page: Overview
-    path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/index.md
+    path: ../../../docs/self-managed-1.0/index.md
   - page: Quickstart
-    path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/quickstart.md
+    path: ../../../docs/self-managed-1.0/quickstart.md
 
   - section: Release Notes
     skip-slug: true
     contents:
       - page: Release Notes Overview
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/release-notes/index.md
+        path: ../../../docs/self-managed-1.0/release-notes/index.md
       - page: "0.20.6 Release Notes"
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/release-notes/0.20.6.md
+        path: ../../../docs/self-managed-1.0/release-notes/0.20.6.md
       - page: "0.6.1 to 0.20.6 Upgrade"
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/release-notes/0.6.1-to-0.20.6-upgrade.md
+        path: ../../../docs/self-managed-1.0/release-notes/0.6.1-to-0.20.6-upgrade.md
 
   - section: Before You Deploy
     skip-slug: true
     contents:
       - page: Infrastructure Sizing
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/infrastructure-sizing.md
+        path: ../../../docs/self-managed-1.0/infrastructure-sizing.md
       - page: Manifest
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/manifest.md
+        path: ../../../docs/self-managed-1.0/manifest.md
 
   - section: Deployment
     skip-slug: true
     contents:
       - page: Installation Overview
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/installation.md
+        path: ../../../docs/self-managed-1.0/installation.md
       - page: Image Mirroring
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/image-mirroring.md
+        path: ../../../docs/self-managed-1.0/image-mirroring.md
       - page: Helmfile Installation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/helmfile-installation.md
+        path: ../../../docs/self-managed-1.0/helmfile-installation.md
       - page: CSP End-to-End Example
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/csp-end-to-end-example-installation.md
+        path: ../../../docs/self-managed-1.0/csp-end-to-end-example-installation.md
 
   - section: GPU Cluster Setup
     skip-slug: true
     contents:
       - page: GPU Cluster Setup
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/index.md
+        path: ../../../docs/self-managed-1.0/cluster-management/index.md
       - page: Self-Managed Clusters
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/self-managed.md
+        path: ../../../docs/self-managed-1.0/cluster-management/self-managed.md
       - page: Nsight Profiling
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/nsight-profiling.md
+        path: ../../../docs/self-managed-1.0/cluster-management/nsight-profiling.md
 
   - section: Configuration
     skip-slug: true
     contents:
       - page: NVCF UI
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/nvcf-ui.md
+        path: ../../../docs/self-managed-1.0/nvcf-ui.md
       - page: Optional Enhancements
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/optional-enhancements.md
+        path: ../../../docs/self-managed-1.0/optional-enhancements.md
       - page: Pod Disruption Budgets
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/pod-disruption-budgets.md
+        path: ../../../docs/self-managed-1.0/pod-disruption-budgets.md
       - page: gRPC Invocation Enablement
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/grpc-invocation-enablement.md
+        path: ../../../docs/self-managed-1.0/grpc-invocation-enablement.md
       - page: LLM Function Enablement
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/llm-function-enablement.md
+        path: ../../../docs/self-managed-1.0/llm-function-enablement.md
       - page: LLM Request Router Load Balancing
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/llm-request-router-load-balancing.md
+        path: ../../../docs/self-managed-1.0/llm-request-router-load-balancing.md
       - page: Gateway Routing
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/gateway-routing.md
+        path: ../../../docs/self-managed-1.0/gateway-routing.md
       - page: Third-Party Registries
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/third-party-registries.md
+        path: ../../../docs/self-managed-1.0/third-party-registries.md
       - page: Registry Allowlist
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/registry-allowlist.md
+        path: ../../../docs/self-managed-1.0/registry-allowlist.md
       - page: Cluster Configuration
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/configuration.md
+        path: ../../../docs/self-managed-1.0/cluster-management/configuration.md
       - page: Multi-Tenancy
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/multi-tenancy.md
+        path: ../../../docs/self-managed-1.0/cluster-management/multi-tenancy.md
       - page: KAI Scheduler
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/kai-scheduler.md
+        path: ../../../docs/self-managed-1.0/cluster-management/kai-scheduler.md
       - page: Gang Scheduling
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/gang-scheduling.md
+        path: ../../../docs/self-managed-1.0/cluster-management/gang-scheduling.md
       - page: Topology-Aware Scheduling
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/topology-aware-scheduling.md
+        path: ../../../docs/self-managed-1.0/cluster-management/topology-aware-scheduling.md
       - section: Low Latency Streaming
         skip-slug: true
         contents:
           - page: LLS Installation
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/lls-installation.md
+            path: ../../../docs/self-managed-1.0/lls-installation.md
       - section: NVCF Caches
         skip-slug: true
         contents:
           - page: Helm Model Caching
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/model-cache.md
+            path: ../../../docs/self-managed-1.0/cluster-management/model-cache.md
           - page: Container Cache
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/container-cache.md
+            path: ../../../docs/self-managed-1.0/cluster-management/container-cache.md
           - page: GXCache
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/gxcache.md
+            path: ../../../docs/self-managed-1.0/cluster-management/gxcache.md
       - section: Physical Simulation Caches
         skip-slug: true
         contents:
           - page: Simulation Caches
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/caches.md
+            path: ../../../docs/self-managed-1.0/caches.md
           - section: DDCS
             skip-slug: true
             contents:
@@ -125,106 +125,106 @@ navigation:
     skip-slug: true
     contents:
       - page: API
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/api.md
+        path: ../../../docs/self-managed-1.0/api.md
       - page: Function Creation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/function-creation.md
+        path: ../../../docs/self-managed-1.0/function-creation.md
       - page: LLM Gateway
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/llm-gateway.md
+        path: ../../../docs/self-managed-1.0/llm-gateway.md
       - page: Generic HTTP Function Invocation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/generic-http-function-invocation.md
+        path: ../../../docs/self-managed-1.0/generic-http-function-invocation.md
       - page: gRPC Function Invocation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/grpc-function-invocation.md
+        path: ../../../docs/self-managed-1.0/grpc-function-invocation.md
       - page: Container Functions
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/container-functions.md
+        path: ../../../docs/self-managed-1.0/container-functions.md
       - page: Helm Functions
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/helm-functions.md
+        path: ../../../docs/self-managed-1.0/helm-functions.md
       - page: Streaming Functions
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/streaming-functions.md
+        path: ../../../docs/self-managed-1.0/streaming-functions.md
       - page: Configure Autoscaling
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/configure-autoscaling.md
+        path: ../../../docs/self-managed-1.0/configure-autoscaling.md
       - page: CLI
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cli.md
+        path: ../../../docs/self-managed-1.0/cli.md
       - page: Task Creation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/task-creation.md
+        path: ../../../docs/self-managed-1.0/task-creation.md
       - page: Container-Based Task Creation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/container-tasks.md
+        path: ../../../docs/self-managed-1.0/container-tasks.md
       - page: Helm-Based Task Creation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/helm-tasks.md
+        path: ../../../docs/self-managed-1.0/helm-tasks.md
 
   - section: Function Autoscaling
     skip-slug: true
     contents:
       - page: Function Autoscaling Overview
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/autoscaling/index.md
+        path: ../../../docs/self-managed-1.0/autoscaling/index.md
       - page: Architecture
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/autoscaling/architecture.md
+        path: ../../../docs/self-managed-1.0/autoscaling/architecture.md
       - page: Operations
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/autoscaling/operations.md
+        path: ../../../docs/self-managed-1.0/autoscaling/operations.md
       - page: Observability
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/autoscaling/observability.md
+        path: ../../../docs/self-managed-1.0/autoscaling/observability.md
         slug: autoscaler-observability
 
   - section: Observability
     skip-slug: true
     contents:
       - page: Observability
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/observability.md
+        path: ../../../docs/self-managed-1.0/observability.md
       - page: Example Dashboards
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/example-dashboards.md
+        path: ../../../docs/self-managed-1.0/example-dashboards.md
       - section: Metrics
         skip-slug: true
         contents:
           - page: Metrics Overview
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/metrics-index.md
+            path: ../../../docs/self-managed-1.0/metrics/metrics-index.md
           - page: Cassandra
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/cassandra/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/cassandra/metrics.md
           - page: ESS
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/ess/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/ess/metrics.md
           - page: Init Container
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/init-container/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/init-container/metrics.md
           - page: Invocation Service
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/invocation-service/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/invocation-service/metrics.md
           - page: LLM API Gateway
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/llm-api-gateway/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/llm-api-gateway/metrics.md
           - page: LLM Function Invocation Metrics Report
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/llm-function-invocation-path.md
+            path: ../../../docs/self-managed-1.0/metrics/llm-function-invocation-path.md
           - page: LLM Request Router
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/llm-request-router/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/llm-request-router/metrics.md
           - page: NVCF API
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/nvcf-api/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/nvcf-api/metrics.md
           - page: SIS/Spot
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/sis-spot/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/sis-spot/metrics.md
           - page: State Metrics
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/state-metrics/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/state-metrics/metrics.md
           - page: Utils Container
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/utils-container/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/utils-container/metrics.md
           - page: Vault/OpenBao
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/metrics/vault-openbao/metrics.md
+            path: ../../../docs/self-managed-1.0/metrics/vault-openbao/metrics.md
 
   - section: Operations
     skip-slug: true
     contents:
       - page: Control Plane Operations
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/control-plane-operations.md
+        path: ../../../docs/self-managed-1.0/control-plane-operations.md
       - page: Cluster Monitoring
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/monitoring.md
+        path: ../../../docs/self-managed-1.0/cluster-management/monitoring.md
       - page: Troubleshooting
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/troubleshooting.md
+        path: ../../../docs/self-managed-1.0/troubleshooting.md
 
   - section: Runbooks
     skip-slug: true
     contents:
       - page: Runbooks
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/runbooks/index.md
+        path: ../../../docs/self-managed-1.0/runbooks/index.md
       - page: Key Rotation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/runbooks/control-plane-key-rotation-mek.md
+        path: ../../../docs/self-managed-1.0/runbooks/control-plane-key-rotation-mek.md
       - page: Transport TLS Rotation
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/runbooks/transport-tls-rotation.md
+        path: ../../../docs/self-managed-1.0/runbooks/transport-tls-rotation.md
       - section: Cache Runbooks
         skip-slug: true
         contents:
           - page: Caches Overview
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/runbooks/caches.md
+            path: ../../../docs/self-managed-1.0/runbooks/caches.md
           - link: DDCS Cache Misses
             href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/cache-misses.html
           - link: DDCS Client Sharding
@@ -246,22 +246,22 @@ navigation:
           - link: UCC Upstream S3 Connections
             href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/upstream-s3-connections.html
       - page: Quota Management
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/runbooks/update-nvcf-account-quota-limits.md
+        path: ../../../docs/self-managed-1.0/runbooks/update-nvcf-account-quota-limits.md
   - section: Reference
     skip-slug: true
     contents:
       - page: Cluster Reference
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/cluster-management/reference.md
+        path: ../../../docs/self-managed-1.0/cluster-management/reference.md
       - page: gRPC Load Testing
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/grpc-load-testing.md
+        path: ../../../docs/self-managed-1.0/grpc-load-testing.md
       - page: gRPC Load Test SLI Guide
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/grpc-load-test-sli-guide.md
+        path: ../../../docs/self-managed-1.0/grpc-load-test-sli-guide.md
       - page: HTTP Load Testing
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/http-load-testing.md
+        path: ../../../docs/self-managed-1.0/http-load-testing.md
       - page: HTTP Load Test SLI Guide
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/http-load-test-sli-guide.md
+        path: ../../../docs/self-managed-1.0/http-load-test-sli-guide.md
       - page: HTTP Soak Testing
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/http-soak-testing.md
+        path: ../../../docs/self-managed-1.0/http-soak-testing.md
 
   - section: Development
     skip-slug: true
@@ -274,17 +274,17 @@ navigation:
         skip-slug: true
         contents:
           - page: Local Development
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/local-development.md
+            path: ../../../docs/self-managed-1.0/local-development.md
           - page: Single-cluster (CLI)
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/local-development/single-cluster-cli.md
+            path: ../../../docs/self-managed-1.0/local-development/single-cluster-cli.md
           - page: Single-cluster (Helmfile)
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/local-development/single-cluster-helmfile.md
+            path: ../../../docs/self-managed-1.0/local-development/single-cluster-helmfile.md
           - page: Multi-cluster (CLI)
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/local-development/multi-cluster-cli.md
+            path: ../../../docs/self-managed-1.0/local-development/multi-cluster-cli.md
           - page: Multi-cluster (Helmfile)
-            path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/local-development/multi-cluster-helmfile.md
+            path: ../../../docs/self-managed-1.0/local-development/multi-cluster-helmfile.md
       - page: Fake GPU Operator
-        path: ../../../docs/cp-0.20.6-compute-0.4.4-obs-0.2.2/fake-gpu-operator.md
+        path: ../../../docs/self-managed-1.0/fake-gpu-operator.md
       - page: Release Process
         path: ../../../docs/dev/release-process.md
 

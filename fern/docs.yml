@@ -36,14 +36,14 @@ products:
   - display-name: Self-Managed Stack
     subtitle: Control plane installation and operations
     slug: self-managed
-    path: products/self-managed/dev.yml
+    path: products/self-managed/1.0.yml
     versions:
+      - display-name: "1.0"
+        path: products/self-managed/1.0.yml
+        slug: "1.0"
       - display-name: dev
         path: products/self-managed/dev.yml
         slug: dev
-      - display-name: "0.20.6 (legacy, CP 0.20.6 / Compute 0.4.4 / Obs 0.2.2)"
-        path: products/self-managed/cp-0.20.6-compute-0.4.4-obs-0.2.2.yml
-        slug: "cp-0.20.6-compute-0.4.4-obs-0.2.2"
       - display-name: "0.6.1 (legacy)"
         path: products/self-managed/v0.6.1.yml
         slug: "v0.6.1"
@@ -94,7 +94,9 @@ redirects:
   - source: "/nvcf/v0.5/:slug*"
     destination: "/nvcf/self-managed/v0.5/:slug*"
   - source: "/nvcf/cp-0.20.6-compute-0.4.4-obs-0.2.2/:slug*"
-    destination: "/nvcf/self-managed/cp-0.20.6-compute-0.4.4-obs-0.2.2/:slug*"
+    destination: "/nvcf/self-managed/1.0/:slug*"
+  - source: "/nvcf/self-managed/cp-0.20.6-compute-0.4.4-obs-0.2.2/:slug*"
+    destination: "/nvcf/self-managed/1.0/:slug*"
   # Pages moved from the flat dev tree into products. Old default-version
   # URLs (/nvcf/<slug>) and dev URLs (/nvcf/dev/<slug>) both redirect.
   - source: "/nvcf/overview"
