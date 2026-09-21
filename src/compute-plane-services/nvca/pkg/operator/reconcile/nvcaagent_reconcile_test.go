@@ -3050,6 +3050,16 @@ func TestSetupNVCADeployment_SecurityContext(t *testing.T) {
 	}
 }
 
+func TestVendoredNVCAConfigDecodeSharedStorageCapacity(t *testing.T) {
+	cfg, err := nvcaconfig.DecodeConfig([]byte(`agent:
+  sharedStorage:
+    taskData:
+      storageCapacity: 20Gi
+`))
+	require.NoError(t, err)
+	assert.Equal(t, resource.MustParse("20Gi"), cfg.Agent.SharedStorage.TaskData.StorageCapacity)
+}
+
 func TestNewAgentConfig_IncludesAgentAndWorkloadTolerations(t *testing.T) {
 	ctx := newTestContext()
 	bc := &BackendK8sCache{
