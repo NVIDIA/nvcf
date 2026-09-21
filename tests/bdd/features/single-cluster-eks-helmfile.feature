@@ -71,7 +71,7 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
   @gateway-setup
   Scenario: Install gateway, capture ELB address, and author the EKS env file
     # Captures the user's manual setup steps per
-    # docs/user/gateway-routing.md. Installs the
+    # docs/self-managed/gateway-routing.md. Installs the
     # envoy-gateway controller, applies the nvcf-gateway Gateway,
     # waits for AWS to provision the NLB, captures the assigned
     # hostname into EKS_GATEWAY_ADDR, and patches eks-bdd.yaml with

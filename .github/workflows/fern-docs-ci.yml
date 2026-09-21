@@ -63,3 +63,10 @@ jobs:
 
       - name: Fern check
         run: fern check
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Check generated documentation blocks match the version catalog
+        run: ./tools/ci/check-doc-version-sync

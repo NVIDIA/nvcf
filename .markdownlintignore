@@ -34,13 +34,13 @@ CLAUDE.md
 # the heading and MD041 can never pass. An inline disable is not an option
 # either: docs/ is rendered as MDX, where an HTML comment is a parse error, and
 # MDX's own {/* */} comment is not a markdownlint directive. MD041 is their only
-# violation. docs/user/ copies are symlinks to the docs/dev/ originals.
+# violation. docs/self-managed/ copies are symlinks to the docs/dev/ originals.
 docs/dev/grpc-load-test-sli-guide.md
 docs/dev/http-load-test-sli-guide.md
 docs/dev/http-load-testing.md
-docs/user/grpc-load-test-sli-guide.md
-docs/user/http-load-test-sli-guide.md
-docs/user/http-load-testing.md
+docs/self-managed/grpc-load-test-sli-guide.md
+docs/self-managed/http-load-test-sli-guide.md
+docs/self-managed/http-load-testing.md
 
 # Generated file. tools/collect-dependencies writes dependencies.md and CI
 # fails if it differs from the generator's output, so it cannot be edited to

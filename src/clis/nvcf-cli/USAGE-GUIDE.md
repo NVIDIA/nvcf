@@ -1021,7 +1021,7 @@ curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
   -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
 ```
 
-For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/user/llm-gateway.md).
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/self-managed/llm-gateway.md).
 
 #### Sample Invocation JSON (`examples/invoke-function.json`)
 

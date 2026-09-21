@@ -404,7 +404,7 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 }
 
 // Required minimum inotify limits per
-// docs/user/cluster-management/self-managed.md#node-inotify-limits.
+// docs/compute-plane/cluster-management/self-managed.md#node-inotify-limits.
 // NVCA bootstrap fails with "too many open files" when these are too low,
 // which surfaces downstream as opaque errors like empty clusterGroups or
 // "Invalid GPU specified" on function deploy.

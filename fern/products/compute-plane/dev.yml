@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+  - section: GPU Cluster Setup
+    skip-slug: true
+    contents:
+      - page: GPU Cluster Setup
+        path: ../../../docs/compute-plane/cluster-management/index.md
+      - page: Self-Managed Clusters
+        path: ../../../docs/compute-plane/cluster-management/self-managed.md
+      - page: Nsight Profiling
+        path: ../../../docs/compute-plane/cluster-management/nsight-profiling.md
+      - page: Fake GPU Operator
+        path: ../../../docs/compute-plane/fake-gpu-operator.md
+
+  - section: Configuration
+    skip-slug: true
+    contents:
+      - page: Cluster Configuration
+        path: ../../../docs/compute-plane/cluster-management/configuration.md
+      - page: Multi-Tenancy
+        path: ../../../docs/compute-plane/cluster-management/multi-tenancy.md
+      - page: KAI Scheduler
+        path: ../../../docs/compute-plane/cluster-management/kai-scheduler.md
+      - page: Gang Scheduling
+        path: ../../../docs/compute-plane/cluster-management/gang-scheduling.md
+      - page: Topology-Aware Scheduling
+        path: ../../../docs/compute-plane/cluster-management/topology-aware-scheduling.md
+      - section: NVCF Caches
+        skip-slug: true
+        contents:
+          - page: Helm Model Caching
+            path: ../../../docs/compute-plane/cluster-management/model-cache.md
+          - page: Container Cache
+            path: ../../../docs/compute-plane/cluster-management/container-cache.md
+          - page: GXCache
+            path: ../../../docs/compute-plane/cluster-management/gxcache.md
+      - section: Physical Simulation Caches
+        skip-slug: true
+        contents:
+          - page: Simulation Caches
+            path: ../../../docs/compute-plane/caches.md
+          - section: DDCS
+            skip-slug: true
+            contents:
+              - link: DDCS
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/
+              - link: DDCS Configuration
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/configure.html
+              - link: DDCS Deployment
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/deploy.html
+              - link: DDCS TLS
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/tls.html
+          - section: UCC
+            skip-slug: true
+            contents:
+              - link: UCC
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/
+              - link: UCC Configuration
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/configure.html
+              - link: UCC Deployment
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/deploy.html
+              - link: UCC TLS
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/tls.html
+
+  - section: Operations
+    skip-slug: true
+    contents:
+      - page: Cluster Monitoring
+        path: ../../../docs/compute-plane/cluster-management/monitoring.md
+
+  - section: Reference
+    skip-slug: true
+    contents:
+      - page: Cluster Reference
+        path: ../../../docs/compute-plane/cluster-management/reference.md

@@ -895,7 +895,7 @@ curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
   -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
 ```
 
-For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/user/llm-gateway.md).
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/self-managed/llm-gateway.md).
 
 **New Features:**
 
@@ -1637,7 +1637,7 @@ Sample configs live under [`examples/`](./examples):
 `gpuSpecification.instanceType`. When `resultHandlingStrategy=UPLOAD`,
 `resultsLocation` becomes required and the user must supply an `NGC_API_KEY`
 secret with write privileges to that location. See the
-[OpenAPI specification](../../../docs/user/api.md#openapi-specification) for
+[OpenAPI specification](../../../docs/self-managed/api.md#openapi-specification) for
 the full field reference.
 
 ---

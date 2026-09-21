@@ -5,8 +5,8 @@
 ### Self-hosted CLI
 
 You need a working `nvcf-cli` configured against your self-managed cluster.
-If you have not set this up yet, follow the [self-hosted-cli](../user/cli.md) guide to
-install the binary and the [cli-configuration](../user/cli.md) section to point it at your
+If you have not set this up yet, follow the [self-hosted-cli](/nvcf/self-managed/cli) guide to
+install the binary and the [cli-configuration](/nvcf/self-managed/cli) section to point it at your
 gateway.
 
 Verify the CLI can reach the cluster before continuing:

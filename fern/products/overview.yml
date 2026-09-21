@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+  - page: Overview
+    path: ../../docs/overview/index.md
+  - page: Compatibility Matrix
+    path: ../../docs/overview/compatibility-matrix.md
+  - page: Quickstart
+    path: ../../docs/overview/quickstart.md
+
+  - section: Release Notes
+    skip-slug: true
+    contents:
+      - page: Release Notes Overview
+        path: ../../docs/overview/release-notes/index.md
+
+  - section: Before You Deploy
+    skip-slug: true
+    contents:
+      - page: Infrastructure Sizing
+        path: ../../docs/overview/infrastructure-sizing.md
+      - page: Manifest
+        path: ../../docs/overview/manifest.md
+      - page: Image Mirroring
+        path: ../../docs/overview/image-mirroring.md
+
+  - section: Development
+    skip-slug: true
+    contents:
+      - page: Architecture Overview
+        path: ../../docs/dev/architecture.md
+      - page: Storage-Agnostic Cache Architecture
+        path: ../../docs/dev/sdd-storage-agnostic-cache-architecture.md
+      - section: Local Development
+        skip-slug: true
+        contents:
+          - page: Local Development
+            path: ../../docs/overview/local-development.md
+          - page: Single-cluster (CLI)
+            path: ../../docs/overview/local-development/single-cluster-cli.md
+          - page: Single-cluster (Helmfile)
+            path: ../../docs/overview/local-development/single-cluster-helmfile.md
+          - page: Multi-cluster (CLI)
+            path: ../../docs/overview/local-development/multi-cluster-cli.md
+          - page: Multi-cluster (Helmfile)
+            path: ../../docs/overview/local-development/multi-cluster-helmfile.md
+      - page: Release Process
+        path: ../../docs/dev/release-process.md
+
+  - section: Managed (Legacy)
+    skip-slug: true
+    contents:
+      - section: Cluster Management
+        skip-slug: true
+        contents:
+          - page: NGC-Managed Clusters
+            path: ../../docs/ngc-managed/cluster-management/ngc-managed.md
+          - page: Helm-Managed Clusters
+            path: ../../docs/ngc-managed/cluster-management/helm-managed.md
+          - page: GitOps Cluster Registration
+            path: ../../docs/ngc-managed/cluster-management/gitops-registration.md
+          - page: Configuration
+            path: ../../docs/ngc-managed/cluster-management/configuration.md
+          - page: Monitoring
+            path: ../../docs/ngc-managed/cluster-management/monitoring.md
+          - page: Reference
+            path: ../../docs/ngc-managed/cluster-management/reference.md
+          - page: Container Cache
+            path: ../../docs/ngc-managed/cluster-management/container-cache.md
+          - page: GXCache
+            path: ../../docs/ngc-managed/cluster-management/gxcache.md
+          - page: KAI Scheduler
+            path: ../../docs/ngc-managed/cluster-management/kai-scheduler.md
+      - page: Function Lifecycle
+        path: ../../docs/ngc-managed/function-lifecycle.md
+      - page: Service Keys
+        path: ../../docs/ngc-managed/service-keys.md
+      - page: Observability
+        slug: managed-observability
+        path: ../../docs/ngc-managed/observability.md

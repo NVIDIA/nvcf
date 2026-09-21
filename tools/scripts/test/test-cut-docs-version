@@ -6,83 +6,119 @@ script="${repo_root}/tools/scripts/cut-docs-version.sh"
 workdir="$(mktemp -d)"
 trap 'rm -rf "${workdir}"' EXIT
 
-mkdir -p "${workdir}/tools/scripts" "${workdir}/docs/user" "${workdir}/docs/version-catalog" "${workdir}/fern/versions"
+mkdir -p "${workdir}/tools/scripts" "${workdir}/docs/observability" "${workdir}/docs/version-catalog" "${workdir}/fern/products/observability"
 cp "${script}" "${workdir}/tools/scripts/cut-docs-version.sh"
 
-cat > "${workdir}/docs/user/overview.md" <<'EOF'
-# Overview
+cat > "${workdir}/docs/observability/overview.md" <<'EOF'
+# Observability
 EOF
 
-cat > "${workdir}/fern/versions/dev.yml" <<'EOF'
+cat > "${workdir}/fern/products/observability/dev.yml" <<'EOF'
 navigation:
-  - page: Overview
-    path: ../../docs/user/overview.md
+  - page: Observability
+    path: ../../../docs/observability/overview.md
 EOF
 
 cat > "${workdir}/fern/docs.yml" <<'EOF'
-versions:
-- display-name: "Latest (0.5.0)"
-  path: versions/v0.5.yml
-  slug: ""
-- display-name: dev
-  path: versions/dev.yml
-  slug: dev
-- display-name: "0.5.0"
-  path: versions/v0.5.yml
-  slug: "v0.5"
-
-redirects:
-  - source: "/nvcf/index.html"
-    destination: "/nvcf/"
-  - source: "/nvcf/v0.5/index.html"
-    destination: "/nvcf/v0.5/"
+products:
+  - display-name: Observability Stack
+    slug: observability
+    path: products/observability/dev.yml
+    versions:
+      - display-name: dev
+        path: products/observability/dev.yml
+        slug: dev
 EOF
 
-cat > "${workdir}/docs/version-catalog/main.yaml" <<'EOF'
-release_set:
-  documentation_version: cp-1.2.3-compute-1.1.0-obs-1.0.4
-  status: qualified
-  stacks:
-    control-plane:
-      version: 1.2.3
-    compute-plane:
-      version: 1.1.0
-    observability:
-      version: 1.0.4
+# Stand in for the Go freeze command: record its arguments and write the
+# catalog snapshot the script expects. The Go tool has its own freeze tests.
+cat > "${workdir}/fake-freeze" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" > "${FAKE_FREEZE_ARGS}"
+[[ "${FAKE_FREEZE_FAIL:-0}" == "1" ]] && exit 1
+stack=""; train=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --freeze-stack) stack="$2"; shift 2 ;;
+    --freeze-train) train="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+echo "release_set: {stacks: {${stack}: {version: ${train}.0}}}" > "${FAKE_FREEZE_OUT}"
 EOF
+chmod +x "${workdir}/fake-freeze"
 
-"${workdir}/tools/scripts/cut-docs-version.sh" cp-1.2.3-compute-1.1.0-obs-1.0.4 > "${workdir}/output.txt"
+export DOCS_VERSION_SYNC_CMD="${workdir}/fake-freeze"
+export FAKE_FREEZE_ARGS="${workdir}/freeze-args.txt"
+export FAKE_FREEZE_OUT="${workdir}/docs/version-catalog/observability-1.3.yaml"
 
-if ! grep -q 'source: "/nvcf/cp-1.2.3-compute-1.1.0-obs-1.0.4/index.html"' "${workdir}/fern/docs.yml"; then
-  echo "expected generated docs.yml to include the new version index redirect"
-  cat "${workdir}/fern/docs.yml"
+"${workdir}/tools/scripts/cut-docs-version.sh" --stack observability --train 1.3 > "${workdir}/output.txt"
+
+if ! grep -qx -- '--freeze-stack' "${FAKE_FREEZE_ARGS}" || ! grep -qx 'observability' "${FAKE_FREEZE_ARGS}" || ! grep -qx '1.3' "${FAKE_FREEZE_ARGS}"; then
+  echo "expected the freeze command to receive the stack and train"
+  cat "${FAKE_FREEZE_ARGS}"
   exit 1
 fi
 
-if ! grep -q 'destination: "/nvcf/cp-1.2.3-compute-1.1.0-obs-1.0.4/"' "${workdir}/fern/docs.yml"; then
-  echo "expected generated docs.yml to redirect the new version index to the version root"
-  cat "${workdir}/fern/docs.yml"
+if [[ ! -f "${workdir}/docs/observability-1.3/overview.md" ]]; then
+  echo "expected docs/observability to be snapshotted into docs/observability-1.3"
   exit 1
 fi
 
-if ! grep -q 'Latest (cp-1.2.3-compute-1.1.0-obs-1.0.4)' "${workdir}/fern/docs.yml"; then
-  echo "expected generated docs.yml to identify all three qualified stack versions"
-  cat "${workdir}/fern/docs.yml"
+if ! grep -q 'path: ../../../docs/observability-1.3/overview.md' "${workdir}/fern/products/observability/1.3.yml"; then
+  echo "expected the frozen product version file to point at the snapshot tree"
+  cat "${workdir}/fern/products/observability/1.3.yml"
   exit 1
 fi
 
-if ! cmp -s "${workdir}/docs/version-catalog/main.yaml" "${workdir}/docs/version-catalog/cp-1.2.3-compute-1.1.0-obs-1.0.4.yaml"; then
-  echo "expected an immutable catalog snapshot for the docs version"
+if ! grep -q 'path: products/observability/1.3.yml' "${workdir}/output.txt"; then
+  echo "expected the script to print the fern/docs.yml versions entry"
+  cat "${workdir}/output.txt"
   exit 1
 fi
 
-sed -i.bak 's/status: qualified/status: development/' "${workdir}/docs/version-catalog/main.yaml"
-if "${workdir}/tools/scripts/cut-docs-version.sh" cp-1.2.4-compute-1.1.0-obs-1.0.4 > "${workdir}/invalid-output.txt" 2>&1; then
-  echo "expected an unqualified release set to be rejected"
+if grep -q 'observability-1.3' "${workdir}/fern/docs.yml"; then
+  echo "expected fern/docs.yml to be left for the maintainer to edit"
   exit 1
 fi
-if [[ -e "${workdir}/docs/cp-1.2.4-compute-1.1.0-obs-1.0.4" || -e "${workdir}/fern/versions/cp-1.2.4-compute-1.1.0-obs-1.0.4.yml" || -e "${workdir}/docs/version-catalog/cp-1.2.4-compute-1.1.0-obs-1.0.4.yaml" ]]; then
-  echo "unqualified release set created a partial documentation snapshot"
+
+if "${workdir}/tools/scripts/cut-docs-version.sh" --stack observability --train 1.3 > /dev/null 2>&1; then
+  echo "expected a second cut of the same train to be refused"
+  exit 1
+fi
+
+if "${workdir}/tools/scripts/cut-docs-version.sh" --stack observability --train 1.3.0 > /dev/null 2>&1; then
+  echo "expected a patch version to be rejected as a train"
+  exit 1
+fi
+
+if "${workdir}/tools/scripts/cut-docs-version.sh" --stack overview --train 1.4 > /dev/null 2>&1; then
+  echo "expected the unversioned overview product to be rejected"
+  exit 1
+fi
+
+# self-managed maps to the control-plane release set key.
+mkdir -p "${workdir}/docs/self-managed" "${workdir}/fern/products/self-managed"
+echo "# Self-managed" > "${workdir}/docs/self-managed/overview.md"
+printf 'navigation:\n  - page: Overview\n    path: ../../../docs/self-managed/overview.md\n' > "${workdir}/fern/products/self-managed/dev.yml"
+export FAKE_FREEZE_OUT="${workdir}/docs/version-catalog/self-managed-1.1.yaml"
+"${workdir}/tools/scripts/cut-docs-version.sh" --stack self-managed --train 1.1 > /dev/null
+if ! grep -qx 'control-plane' "${FAKE_FREEZE_ARGS}"; then
+  echo "expected self-managed to freeze the control-plane release set entry"
+  cat "${FAKE_FREEZE_ARGS}"
+  exit 1
+fi
+
+# A failed freeze must not leave a partial snapshot behind.
+export FAKE_FREEZE_FAIL=1
+export FAKE_FREEZE_OUT="${workdir}/docs/version-catalog/observability-1.4.yaml"
+if "${workdir}/tools/scripts/cut-docs-version.sh" --stack observability --train 1.4 > /dev/null 2>&1; then
+  echo "expected a failed freeze to abort the cut"
+  exit 1
+fi
+if [[ -e "${workdir}/docs/observability-1.4" || -e "${workdir}/fern/products/observability/1.4.yml" ]]; then
+  echo "failed freeze created a partial documentation snapshot"
   exit 1
 fi
 

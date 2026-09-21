@@ -179,19 +179,19 @@ func renderManifestArtifactRegistryPaths(catalog *Catalog) (string, error) {
 }
 
 func renderReleaseSetSummary(releaseSet ReleaseSetMetadata) string {
-	if releaseSet.DocumentationVersion == "" {
+	if releaseSet == (ReleaseSetMetadata{}) {
 		return ""
 	}
-	return fmt.Sprintf("### Stack release set\n\nDocumentation: `%s` (%s)\n\n| Stack | Version | Source tag |\n| --- | --- | --- |\n| Control plane | `%s` | `%s` |\n| Compute plane | `%s` | `%s` |\n| Observability | `%s` | `%s` |\n\n",
-		releaseSet.DocumentationVersion,
-		releaseSet.Status,
-		releaseSet.Stacks.ControlPlane.Version,
-		releaseSet.Stacks.ControlPlane.SourceTag,
-		releaseSet.Stacks.ComputePlane.Version,
-		releaseSet.Stacks.ComputePlane.SourceTag,
-		releaseSet.Stacks.Observability.Version,
-		releaseSet.Stacks.Observability.SourceTag,
-	)
+	var b strings.Builder
+	b.WriteString("### Stack releases\n\n")
+	b.WriteString("| Stack | Version | Source tag | Documentation |\n| --- | --- | --- | --- |\n")
+	for _, stack := range releaseSetStackNames {
+		metadata, _ := releaseSet.Stacks.byName(stack)
+		b.WriteString(fmt.Sprintf("| %s | `%s` | `%s` | `%s` (%s) |\n",
+			documentationStackDisplayName(stack), metadata.Version, metadata.SourceTag, metadata.DocumentationVersion, metadata.Status))
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func renderManifestTables(entries []resolvedManifestEntry) string {

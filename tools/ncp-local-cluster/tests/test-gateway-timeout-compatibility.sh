@@ -70,7 +70,7 @@ export TEST_CALL_LOG="$call_log"
 export MOCK_CRD_MARKER="$test_dir/crd-seen"
 
 setup_script="$local_cluster_dir/scripts/setup-gateway-api.sh"
-docs_file="$repo_dir/docs/user/gateway-routing.md"
+docs_file="$repo_dir/docs/self-managed/gateway-routing.md"
 setup_version="$(sed -n 's/^ENVOY_GATEWAY_VERSION="\([^"]*\)"$/\1/p' "$setup_script")"
 docs_version="$(
   awk '

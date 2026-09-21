@@ -637,7 +637,7 @@ func TestSyncInlineSelfManagedNVCAOperatorVersionTable(t *testing.T) {
 	content := "| Chart | `helm-nvca-operator` |\n| --- | --- |\n| Version | `1.6.7` |\n\n" +
 		"The compute-plane Helmfile installs the operator.\n"
 
-	got, changed, err := SyncInlineVersions("docs/user/cluster-management/self-managed.md", content, catalog)
+	got, changed, err := SyncInlineVersions("docs/compute-plane/cluster-management/self-managed.md", content, catalog)
 	if err != nil {
 		t.Fatalf("SyncInlineVersions failed: %v", err)
 	}
@@ -662,7 +662,7 @@ func TestSyncInlineImageMirroringNVCAOperatorChartVersions(t *testing.T) {
 		"# This creates: nvca-operator-1.2.9.tgz\n" +
 		"helm push nvca-operator-1.2.9.tgz oci://example.test/repo\n"
 
-	got, changed, err := SyncInlineVersions("docs/user/image-mirroring.md", content, catalog)
+	got, changed, err := SyncInlineVersions("docs/overview/image-mirroring.md", content, catalog)
 	if err != nil {
 		t.Fatalf("SyncInlineVersions failed: %v", err)
 	}
@@ -706,7 +706,7 @@ func TestSyncInlineImageMirroringUsesTraditionalPublicHelmChart(t *testing.T) {
 		"# This creates: helm-nvca-operator-1.12.6.tgz\n" +
 		"helm push helm-nvca-operator-1.12.6.tgz oci://example.test/repo\n"
 
-	got, changed, err := SyncInlineVersions("docs/user/image-mirroring.md", content, catalog)
+	got, changed, err := SyncInlineVersions("docs/overview/image-mirroring.md", content, catalog)
 	if err != nil {
 		t.Fatalf("SyncInlineVersions failed: %v", err)
 	}
@@ -740,7 +740,7 @@ func TestSyncInlineImageMirroringUsesTraditionalUpstreamHelmChart(t *testing.T) 
 		"# This creates: helm-nvca-operator-1.12.6.tgz\n" +
 		"helm push helm-nvca-operator-1.12.6.tgz oci://example.test/repo\n"
 
-	got, changed, err := SyncInlineVersions("docs/user/image-mirroring.md", content, catalog)
+	got, changed, err := SyncInlineVersions("docs/overview/image-mirroring.md", content, catalog)
 	if err != nil {
 		t.Fatalf("SyncInlineVersions failed: %v", err)
 	}
@@ -752,7 +752,7 @@ func TestSyncInlineImageMirroringUsesTraditionalUpstreamHelmChart(t *testing.T) 
 		t.Fatalf("updated content missing %q:\n%s", want, got)
 	}
 
-	gotAgain, changedAgain, err := SyncInlineVersions("docs/user/image-mirroring.md", got, catalog)
+	gotAgain, changedAgain, err := SyncInlineVersions("docs/overview/image-mirroring.md", got, catalog)
 	if err != nil {
 		t.Fatalf("second SyncInlineVersions failed: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestSyncInlineImageMirroringUsesTraditionalUpstreamHelmChart(t *testing.T) 
 
 func TestSyncDocsCheckModeDetectsDiff(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "docs/user/manifest.md"), `before
+	writeFile(t, filepath.Join(tmp, "docs/overview/manifest.md"), `before
 {/* docs-version-sync:BEGIN manifest-artifact-registry-paths */}
 stale
 {/* docs-version-sync:END manifest-artifact-registry-paths */}
@@ -772,7 +772,7 @@ after
 
 	catalog := testCatalog()
 	catalog.Outputs = []OutputFile{{
-		Path: "docs/user/manifest.md",
+		Path: "docs/overview/manifest.md",
 		Blocks: []OutputBlock{{
 			Marker:   "manifest-artifact-registry-paths",
 			Renderer: "manifest-artifact-registry-paths",
@@ -784,7 +784,7 @@ after
 		t.Fatalf("SyncDocs error = %v, want ErrCheckFailed", err)
 	}
 
-	got, err := os.ReadFile(filepath.Join(tmp, "docs/user/manifest.md"))
+	got, err := os.ReadFile(filepath.Join(tmp, "docs/overview/manifest.md"))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
@@ -871,11 +871,11 @@ func TestFindRepoRootFromRequiresBothPublicCheckoutSentinels(t *testing.T) {
 
 func TestSyncDocsRejectsMissingMarker(t *testing.T) {
 	tmp := t.TempDir()
-	writeFile(t, filepath.Join(tmp, "docs/user/manifest.md"), "no generated marker\n")
+	writeFile(t, filepath.Join(tmp, "docs/overview/manifest.md"), "no generated marker\n")
 
 	catalog := testCatalog()
 	catalog.Outputs = []OutputFile{{
-		Path: "docs/user/manifest.md",
+		Path: "docs/overview/manifest.md",
 		Blocks: []OutputBlock{{
 			Marker:   "manifest-artifact-registry-paths",
 			Renderer: "manifest-artifact-registry-paths",
@@ -924,8 +924,32 @@ func TestValidateCatalogRejectsOutputOutsideDocsUser(t *testing.T) {
 	if err == nil {
 		t.Fatal("ValidateCatalog succeeded, want path rejection")
 	}
-	if !strings.Contains(err.Error(), "outside docs/user") {
-		t.Fatalf("error = %q, want outside docs/user", err)
+	if !strings.Contains(err.Error(), "outside the documentation product trees") {
+		t.Fatalf("error = %q, want outside product trees", err)
+	}
+}
+
+func TestValidateCatalogAcceptsEveryProductTreeOutput(t *testing.T) {
+	for _, path := range []string{
+		"docs/overview/compatibility-matrix.md",
+		"docs/self-managed/installation.md",
+		"docs/compute-plane/cluster-management/reference.md",
+		"docs/observability/observability.md",
+	} {
+		catalog := testCatalog()
+		catalog.Outputs = []OutputFile{{Path: path}}
+		if err := ValidateCatalog(catalog); err != nil {
+			t.Fatalf("ValidateCatalog rejected %s: %v", path, err)
+		}
+	}
+}
+
+func TestValidateCatalogRejectsFrozenProductTreeOutput(t *testing.T) {
+	catalog := testCatalog()
+	catalog.Outputs = []OutputFile{{Path: "docs/observability-1.3/observability.md"}}
+	err := ValidateCatalog(catalog)
+	if err == nil || !strings.Contains(err.Error(), "frozen docs are generated from the product trees") {
+		t.Fatalf("ValidateCatalog error = %v, want frozen tree rejection", err)
 	}
 }
 
@@ -938,21 +962,172 @@ func TestValidateTargetRejectsNonMainTargets(t *testing.T) {
 	}
 }
 
-func TestRunRejectsInvalidReleaseSetQualificationVersion(t *testing.T) {
-	err := run([]string{"--update-catalog", "--qualification-version", "1.2.3"})
-	if err == nil || !strings.Contains(err.Error(), "must use "+releaseSetVersionFormat) {
-		t.Fatalf("run error = %v, want release-set version format rejection", err)
+func TestRunRejectsFreezeFlagsWithoutEachOther(t *testing.T) {
+	err := run([]string{"--freeze-stack", "observability"})
+	if err == nil || !strings.Contains(err.Error(), "must be used together") {
+		t.Fatalf("run error = %v, want paired flag rejection", err)
+	}
+	err = run([]string{"--freeze-stack", "observability", "--freeze-train", "1.1", "--update-catalog"})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("run error = %v, want combination rejection", err)
+	}
+}
+
+func TestFreezeStackDocumentationWritesQualifiedSnapshotForOneStack(t *testing.T) {
+	tmp := t.TempDir()
+	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
+	catalog := testCatalogWithReleaseSet()
+	if err := WriteCatalog(catalogPath, catalog); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshotPath, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4")
+	if err != nil {
+		t.Fatalf("freezeStackDocumentation failed: %v", err)
+	}
+	if filepath.Base(snapshotPath) != "observability-3.4.yaml" {
+		t.Fatalf("snapshot path = %s, want observability-3.4.yaml", snapshotPath)
+	}
+	snapshot, err := LoadCatalog(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ReleaseSet.Stacks.Observability.Status != ReleaseSetQualified || snapshot.ReleaseSet.Stacks.Observability.DocumentationVersion != "3.4" {
+		t.Fatalf("snapshot observability = %#v, want qualified 3.4", snapshot.ReleaseSet.Stacks.Observability)
+	}
+	if snapshot.ReleaseSet.Stacks.ControlPlane.Status != ReleaseSetDevelopment || snapshot.ReleaseSet.Stacks.ComputePlane.Status != ReleaseSetDevelopment {
+		t.Fatalf("snapshot froze other stacks: %#v", snapshot.ReleaseSet.Stacks)
+	}
+	main, err := LoadCatalog(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if main.ReleaseSet.Stacks.Observability.Status != ReleaseSetDevelopment {
+		t.Fatalf("main catalog was modified by freeze: %#v", main.ReleaseSet.Stacks.Observability)
+	}
+
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4"); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
+		t.Fatalf("second freeze error = %v, want overwrite refusal", err)
+	}
+}
+
+func TestFreezeStackDocumentationRejectsTrainMismatchAndPendingPublications(t *testing.T) {
+	tmp := t.TempDir()
+	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
+	catalog := testCatalogWithReleaseSet()
+	if err := WriteCatalog(catalogPath, catalog); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "compute-plane", "2.4"); err == nil || !strings.Contains(err.Error(), "belongs to train 2.3, not 2.4") {
+		t.Fatalf("freeze error = %v, want train mismatch", err)
+	}
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2.3"); err == nil || !strings.Contains(err.Error(), "must use "+documentationTrainFormat) {
+		t.Fatalf("freeze error = %v, want train format rejection", err)
+	}
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "self-managed", "1.2"); err == nil || !strings.Contains(err.Error(), "unknown release_set stack") {
+		t.Fatalf("freeze error = %v, want unknown stack rejection", err)
+	}
+
+	catalog.PublicationPending = []string{"llm-api-gateway"}
+	if err := WriteCatalog(catalogPath, catalog); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2"); err == nil || !strings.Contains(err.Error(), "unpublished artifacts: llm-api-gateway") {
+		t.Fatalf("freeze error = %v, want pending publication rejection", err)
 	}
 }
 
 func TestValidateCatalogRejectsPartiallyPopulatedReleaseSet(t *testing.T) {
-	catalog := testCatalog()
-	catalog.ReleaseSet.Status = ReleaseSetDevelopment
+	catalog := testCatalogWithReleaseSet()
+	catalog.ReleaseSet.Stacks.ComputePlane.DocumentationVersion = ""
 
 	err := ValidateCatalog(catalog)
-	if err == nil || !strings.Contains(err.Error(), "documentation_version must be non-empty") {
+	if err == nil || !strings.Contains(err.Error(), "compute-plane documentation_version must be non-empty") {
 		t.Fatalf("ValidateCatalog error = %v, want partial release_set rejection", err)
 	}
+}
+
+func TestValidateCatalogRejectsMalformedCompatibility(t *testing.T) {
+	for name, entries := range map[string][]CompatibilityEntry{
+		"unknown stack": {{Stack: "self-managed", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}, "observability": {"1.1"}}}},
+		"full version":  {{Stack: "control-plane", Train: "1.1.0", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}, "observability": {"1.1"}}}},
+		"own stack":     {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"control-plane": {"1.1"}, "observability": {"1.1"}}}},
+		"missing stack": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}}}},
+		"empty trains":  {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {}, "observability": {"1.1"}}}},
+		"duplicate": {
+			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}, "observability": {"1.1"}}},
+			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.0"}, "observability": {"1.0"}}},
+		},
+	} {
+		catalog := testCatalog()
+		catalog.Compatibility = entries
+		if err := ValidateCatalog(catalog); err == nil {
+			t.Fatalf("ValidateCatalog accepted %s compatibility", name)
+		}
+	}
+}
+
+func TestRenderCompatibilityMatrix(t *testing.T) {
+	catalog := testCatalogWithReleaseSet()
+	catalog.ReleaseSet.Stacks.Observability.DocumentationVersion = "3.4"
+	catalog.ReleaseSet.Stacks.Observability.Status = ReleaseSetQualified
+	catalog.Compatibility = []CompatibilityEntry{
+		{Stack: "observability", Train: "3.3", CompatibleWith: map[string][]string{"control-plane": {"1.2"}, "compute-plane": {"2.3"}}},
+		{Stack: "observability", Train: "3.4", CompatibleWith: map[string][]string{"control-plane": {"1.1", "1.2"}, "compute-plane": {"2.3"}}},
+		{Stack: "control-plane", Train: "1.2", CompatibleWith: map[string][]string{"compute-plane": {"2.3"}, "observability": {"3.3", "3.4"}}},
+	}
+	got, err := Render("compatibility-matrix", catalog)
+	if err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+	for _, want := range []string{
+		"### Current stack releases",
+		"| Self-managed (control plane) | `1.2.3` | `deploy/stacks/self-managed/v1.2.3` | [dev](/nvcf/self-managed/) |",
+		"| Compute plane | `2.3.4` | `deploy/stacks/nvcf-compute-plane/v2.3.4` | [dev](/nvcf/compute-plane/) |",
+		"| Observability | `3.4.5` | `deploy/stacks/observability/v3.4.5` | [3.4](/nvcf/observability/) |",
+		"### Qualified trains",
+		"| Stack | Train | Self-managed trains | Compute plane trains | Observability trains |",
+		"| Self-managed (control plane) | `1.2` | this stack | `2.3` | `3.4`, `3.3` |",
+		"| Observability | `3.4` | `1.2`, `1.1` | `2.3` | this stack |",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered matrix missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "| Self-managed (control plane) | `1.2` |") > strings.Index(got, "| Observability | `3.4` |") {
+		t.Fatalf("rows are not ordered by stack:\n%s", got)
+	}
+	if strings.Index(got, "| Observability | `3.4` |") > strings.Index(got, "| Observability | `3.3` |") {
+		t.Fatalf("trains are not ordered newest first:\n%s", got)
+	}
+
+	catalog.Compatibility = nil
+	if _, err := Render("compatibility-matrix", catalog); err == nil {
+		t.Fatal("Render succeeded without compatibility entries")
+	}
+}
+
+func testCatalogWithReleaseSet() *Catalog {
+	catalog := testCatalog()
+	catalog.ReleaseSet = ReleaseSetMetadata{Stacks: ReleaseSetStacks{
+		ControlPlane: StackReleaseMetadata{
+			Version: "1.2.3", SourceTag: stackInventorySpecs[0].TagPrefix + "1.2.3",
+			SourceCommit: strings.Repeat("a", 40), InventoryAsset: stackInventorySpecs[0].AssetName,
+			DocumentationVersion: "dev", Status: ReleaseSetDevelopment,
+		},
+		ComputePlane: StackReleaseMetadata{
+			Version: "2.3.4", SourceTag: stackInventorySpecs[1].TagPrefix + "2.3.4",
+			SourceCommit: strings.Repeat("b", 40), InventoryAsset: stackInventorySpecs[1].AssetName,
+			DocumentationVersion: "dev", Status: ReleaseSetDevelopment,
+		},
+		Observability: StackReleaseMetadata{
+			Version: "3.4.5", SourceTag: stackInventorySpecs[2].TagPrefix + "3.4.5",
+			SourceCommit: strings.Repeat("c", 40), InventoryAsset: stackInventorySpecs[2].AssetName,
+			DocumentationVersion: "dev", Status: ReleaseSetDevelopment,
+		},
+	}}
+	return catalog
 }
 
 func testCatalog() *Catalog {

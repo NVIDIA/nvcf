@@ -926,24 +926,59 @@ manifest:
       description: Manages functions, deployments, and clusters from the command line.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli
 release_set:
-  documentation_version: dev
-  status: development
   stacks:
     control-plane:
       version: 0.20.7
       source_tag: deploy/stacks/self-managed/v0.20.7
       source_commit: c1dd7c6db3eb89c6ff1664b1094a97d7c8e03914
       inventory_asset: nvcf-self-managed-stack-inventory.json
+      documentation_version: dev
+      status: development
     compute-plane:
       version: 0.4.4
       source_tag: deploy/stacks/nvcf-compute-plane/v0.4.4
       source_commit: 63ac4456d3422508f2ff4b219c7dff8fba1c21c0
       inventory_asset: nvcf-compute-plane-stack-inventory.json
+      documentation_version: dev
+      status: development
     observability:
       version: 0.2.2
       source_tag: deploy/stacks/observability/v0.2.2
       source_commit: b77e96a3f8c18e9318b93e697e33e596c4ede7d7
       inventory_asset: nvcf-observability-stack-inventory.json
+      documentation_version: dev
+      status: development
+compatibility:
+  - stack: control-plane
+    train: "1.1"
+    compatible_with:
+      compute-plane: ["1.0", "1.1"]
+      observability: ["1.0", "1.1"]
+  - stack: control-plane
+    train: "1.0"
+    compatible_with:
+      compute-plane: ["1.0", "1.1"]
+      observability: ["1.0", "1.1"]
+  - stack: compute-plane
+    train: "1.1"
+    compatible_with:
+      control-plane: ["1.0", "1.1"]
+      observability: ["1.0", "1.1"]
+  - stack: compute-plane
+    train: "1.0"
+    compatible_with:
+      control-plane: ["1.0", "1.1"]
+      observability: ["1.0", "1.1"]
+  - stack: observability
+    train: "1.1"
+    compatible_with:
+      control-plane: ["1.0", "1.1"]
+      compute-plane: ["1.0", "1.1"]
+  - stack: observability
+    train: "1.0"
+    compatible_with:
+      control-plane: ["1.0", "1.1"]
+      compute-plane: ["1.0", "1.1"]
 stack:
   name: nvcf-self-managed-stack
   version: 0.20.7
@@ -1629,11 +1664,15 @@ supplemental_artifacts:
     registry: public-images
     version: v1.2.10
 outputs:
-  - path: docs/user/manifest.md
+  - path: docs/overview/compatibility-matrix.md
+    blocks:
+      - marker: compatibility-matrix
+        renderer: compatibility-matrix
+  - path: docs/overview/manifest.md
     blocks:
       - marker: manifest-artifact-registry-paths
         renderer: manifest-artifact-registry-paths
-  - path: docs/user/image-mirroring.md
+  - path: docs/overview/image-mirroring.md
     blocks:
       - marker: image-mirroring-resource-examples
         renderer: image-mirroring-resource-examples
@@ -1645,5 +1684,5 @@ outputs:
         renderer: image-mirroring-observability-stack-snippet
       - marker: image-mirroring-cli-snippet
         renderer: image-mirroring-cli-snippet
-  - path: docs/user/cluster-management/self-managed.md
-  - path: docs/user/cluster-management/reference.md
+  - path: docs/compute-plane/cluster-management/self-managed.md
+  - path: docs/compute-plane/cluster-management/reference.md

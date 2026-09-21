@@ -41,7 +41,7 @@ func TestReleaseSetRecordsAllThreeImmutableSources(t *testing.T) {
 			Commit:  strings.Repeat(string(rune('a'+index)), 40),
 		}}
 	}
-	releaseSet, err := releaseSetFromInventories(inventories, "cp-1.0.0-compute-1.1.0-obs-1.2.0", ReleaseSetQualified)
+	releaseSet, err := releaseSetFromInventories(inventories)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,36 +53,55 @@ func TestReleaseSetRecordsAllThreeImmutableSources(t *testing.T) {
 		releaseSet.Stacks.Observability.InventoryAsset != stackInventorySpecs[2].AssetName {
 		t.Fatalf("release set assets = %#v", releaseSet.Stacks)
 	}
-
-	releaseSet.DocumentationVersion = "cp-1.0.1-compute-1.1.0-obs-1.2.0"
-	if err := validateReleaseSet(releaseSet); err == nil || !strings.Contains(err.Error(), "must be cp-1.0.0-compute-1.1.0-obs-1.2.0") {
-		t.Fatalf("validateReleaseSet error = %v, want stack version mismatch", err)
+	if releaseSet.Stacks.Observability.DocumentationVersion != "dev" || releaseSet.Stacks.Observability.Status != ReleaseSetDevelopment {
+		t.Fatalf("release set observability = %#v, want development docs", releaseSet.Stacks.Observability)
 	}
 }
 
-func TestReleaseSetStackComparisonIncludesImmutableSourceMetadata(t *testing.T) {
+func TestValidateReleaseSetChecksPerStackDocumentationTrain(t *testing.T) {
 	releaseSet := ReleaseSetMetadata{Stacks: ReleaseSetStacks{
 		ControlPlane: StackReleaseMetadata{
 			Version: "1.2.3", SourceTag: stackInventorySpecs[0].TagPrefix + "1.2.3",
 			SourceCommit: strings.Repeat("a", 40), InventoryAsset: stackInventorySpecs[0].AssetName,
+			DocumentationVersion: "dev", Status: ReleaseSetDevelopment,
 		},
 		ComputePlane: StackReleaseMetadata{
 			Version: "2.3.4", SourceTag: stackInventorySpecs[1].TagPrefix + "2.3.4",
 			SourceCommit: strings.Repeat("b", 40), InventoryAsset: stackInventorySpecs[1].AssetName,
+			DocumentationVersion: "dev", Status: ReleaseSetDevelopment,
 		},
 		Observability: StackReleaseMetadata{
 			Version: "3.4.5", SourceTag: stackInventorySpecs[2].TagPrefix + "3.4.5",
 			SourceCommit: strings.Repeat("c", 40), InventoryAsset: stackInventorySpecs[2].AssetName,
+			DocumentationVersion: "3.4", Status: ReleaseSetQualified,
 		},
 	}}
-	if !releaseSet.sameStackReleases(releaseSet) {
-		t.Fatal("identical stack metadata did not match")
+	if err := validateReleaseSet(releaseSet); err != nil {
+		t.Fatalf("validateReleaseSet rejected a qualified observability train: %v", err)
 	}
 
-	changed := releaseSet
-	changed.Stacks.Observability.SourceCommit = strings.Repeat("d", 40)
-	if releaseSet.sameStackReleases(changed) {
-		t.Fatal("release sets with different immutable source commits matched")
+	wrongTrain := releaseSet
+	wrongTrain.Stacks.Observability.DocumentationVersion = "3.5"
+	if err := validateReleaseSet(wrongTrain); err == nil || !strings.Contains(err.Error(), "must be 3.4 for version 3.4.5") {
+		t.Fatalf("validateReleaseSet error = %v, want train mismatch", err)
+	}
+
+	fullVersion := releaseSet
+	fullVersion.Stacks.Observability.DocumentationVersion = "3.4.5"
+	if err := validateReleaseSet(fullVersion); err == nil || !strings.Contains(err.Error(), "must use "+documentationTrainFormat) {
+		t.Fatalf("validateReleaseSet error = %v, want train format rejection", err)
+	}
+
+	devWithTrain := releaseSet
+	devWithTrain.Stacks.ControlPlane.DocumentationVersion = "1.2"
+	if err := validateReleaseSet(devWithTrain); err == nil || !strings.Contains(err.Error(), "documentation_version must be dev") {
+		t.Fatalf("validateReleaseSet error = %v, want development docs rejection", err)
+	}
+
+	missing := releaseSet
+	missing.Stacks.ComputePlane.DocumentationVersion = ""
+	if err := validateReleaseSet(missing); err == nil || !strings.Contains(err.Error(), "documentation_version must be non-empty") {
+		t.Fatalf("validateReleaseSet error = %v, want missing documentation version rejection", err)
 	}
 }
 
