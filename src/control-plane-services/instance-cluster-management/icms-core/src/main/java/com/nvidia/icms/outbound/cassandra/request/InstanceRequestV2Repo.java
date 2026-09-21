@@ -17,13 +17,10 @@
 package com.nvidia.icms.outbound.cassandra.request;
 
 import com.nvidia.icms.outbound.cassandra.IcmsDatabaseRepository;
-import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.springframework.data.cassandra.repository.CassandraRepository;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -35,4 +32,3 @@ public interface InstanceRequestV2Repo extends
 
     Stream<InstanceRequestV2Entity> findAllByNcaId(String ncaId);
 }
-

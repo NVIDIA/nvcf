@@ -76,6 +76,7 @@ public class InstanceRequestV2Repository {
             if (entity.getCreateTimeuuid() == null) {
                 entity.setCreateTimeuuid(TimeUtils.getTimeUuidNow());
             }
+            populateCreationBucket(entity);
 
             if (!instanceRequestV2Repo.isInserted(entity) ||
                     !instanceRequestV2ByDayRepo.isInserted(InstanceRequestConverter.toInstanceRequest2ByDayEntity(entity)))
@@ -139,6 +140,7 @@ public class InstanceRequestV2Repository {
     @Observed
     public void restore(InstanceRequestV2Entity entity) {
         try {
+            populateCreationBucket(entity);
             // Update: Update existing entry if present else insert
             instanceRequestV2Repo.update(entity);
             instanceRequestV2ByDayRepo.update(InstanceRequestConverter.toInstanceRequest2ByDayEntity(entity));
@@ -446,6 +448,13 @@ public class InstanceRequestV2Repository {
             }
         }
 
+    }
+
+    private void populateCreationBucket(InstanceRequestV2Entity entity) {
+        if (entity.getCreationBucket() == null && entity.getCreateTimeuuid() != null) {
+            entity.setCreationBucket(TimeUtils.getDateFromInstant(
+                    TimeUtils.getInstantFromUuid(entity.getCreateTimeuuid())));
+        }
     }
 
 

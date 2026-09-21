@@ -128,6 +128,9 @@ public class IcmsConfigurationProperties {
     private int gpusV5PopulationTaskLockTtlInSeconds;
     private boolean gpuV5PopulationTaskEnabled;
 
+    private boolean creationBucketPopulationTaskEnabled = true;
+    private int creationBucketPopulationTaskLockTtlInSeconds = 1800;
+
     private int databaseReadPageSize;
 
     private boolean shuttingDownInstanceTerminationTaskEnabled;
