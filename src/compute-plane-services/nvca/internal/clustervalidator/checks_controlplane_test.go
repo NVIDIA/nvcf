@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 )
@@ -1221,4 +1222,207 @@ func TestBuildNodeToNodeDaemonSet_ToleratesControlPlaneTaint(t *testing.T) {
 	pod := buildNodeToNodeCheckerPod("checker", "ns", "node-1", []string{"10.0.0.1"}, "img")
 	assert.NotEmpty(t, pod.Spec.Tolerations,
 		"NodeName bypasses the scheduler but not taint admission")
+}
+
+// gatewayDiscoveryClient returns a fake clientset whose discovery surface
+// serves exactly the given "<groupVersion>/<resource>" pairs. Until this
+// existed no test in the package populated a discovery surface at all, so
+// every pinned route pair and the hasPair lookup itself were uncovered: the
+// Gateway tests passed identically against a bare fake, which serves nothing.
+func gatewayDiscoveryClient(pairs ...string) *fake.Clientset {
+	client := fake.NewSimpleClientset()
+	byGV := map[string][]metav1.APIResource{}
+	for _, p := range pairs {
+		i := strings.LastIndex(p, "/")
+		gv, res := p[:i], p[i+1:]
+		byGV[gv] = append(byGV[gv], metav1.APIResource{Name: res})
+	}
+	disco := client.Discovery().(*fakediscovery.FakeDiscovery)
+	for gv, resources := range byGV {
+		disco.Resources = append(disco.Resources, &metav1.APIResourceList{
+			GroupVersion: gv,
+			APIResources: resources,
+		})
+	}
+	return client
+}
+
+// The full set the charts actually apply, at the versions the manifests pin.
+func gatewayRequiredPairs() []string {
+	return []string{
+		gatewayAPIGroup + "/v1/gatewayclasses",
+		gatewayAPIGroup + "/v1/gateways",
+		gatewayAPIGroup + "/v1/httproutes",
+		gatewayAPIGroup + "/v1/grpcroutes",
+		gatewayAPIGroup + "/v1alpha2/tcproutes",
+		gatewayAPIGroup + "/v1beta1/referencegrants",
+	}
+}
+
+func TestCheckGatewayAPICRDs_AllRequiredPairsPresent(t *testing.T) {
+	client := gatewayDiscoveryClient(gatewayRequiredPairs()...)
+	state := &ValidationState{Log: testLog()}
+	checkGatewayAPICRDs(context.Background(), client, state)
+
+	require.NotNil(t, state.GatewayAPICRDsOK)
+	assert.True(t, *state.GatewayAPICRDsOK)
+}
+
+// TCPRoute ships only in the experimental channel, and the chart renders one by
+// default, so a standard-channel cluster genuinely cannot apply the stack.
+func TestCheckGatewayAPICRDs_StandardChannelMissingTCPRouteFails(t *testing.T) {
+	var pairs []string
+	for _, p := range gatewayRequiredPairs() {
+		if !strings.HasSuffix(p, "/tcproutes") {
+			pairs = append(pairs, p)
+		}
+	}
+	client := gatewayDiscoveryClient(pairs...)
+	state := &ValidationState{Log: testLog()}
+	checkGatewayAPICRDs(context.Background(), client, state)
+
+	require.NotNil(t, state.GatewayAPICRDsOK)
+	assert.False(t, *state.GatewayAPICRDsOK)
+	assert.Contains(t, strings.Join(state.Recommendations, "; "), "experimental-install.yaml",
+		"the remediation must name the channel, not point back at the installer that just failed")
+}
+
+// The version is part of the requirement: a CRD served only under some other
+// version still fails the Helm apply.
+func TestCheckGatewayAPICRDs_WrongVersionForPinnedRouteFails(t *testing.T) {
+	var pairs []string
+	for _, p := range gatewayRequiredPairs() {
+		if strings.HasSuffix(p, "/httproutes") {
+			p = gatewayAPIGroup + "/v1beta1/httproutes" // charts pin v1
+		}
+		pairs = append(pairs, p)
+	}
+	client := gatewayDiscoveryClient(pairs...)
+	state := &ValidationState{Log: testLog()}
+	checkGatewayAPICRDs(context.Background(), client, state)
+
+	require.NotNil(t, state.GatewayAPICRDsOK)
+	assert.False(t, *state.GatewayAPICRDsOK,
+		"httproutes served only at v1beta1 does not satisfy a v1 pin")
+}
+
+// UDPRoute is rendered only when routes.llmWorker.enabled, which defaults to
+// false, so its absence must not fail the critical CRD check. It still has to
+// be reported somewhere, which is the non-critical route row's job.
+func TestCheckGatewayRoutes_OptionalUDPRouteAbsentIsNonCritical(t *testing.T) {
+	client := gatewayDiscoveryClient(gatewayRequiredPairs()...)
+
+	crdState := &ValidationState{Log: testLog()}
+	checkGatewayAPICRDs(context.Background(), client, crdState)
+	require.NotNil(t, crdState.GatewayAPICRDsOK)
+	assert.True(t, *crdState.GatewayAPICRDsOK,
+		"a missing opt-in route type must not fail the critical check")
+
+	routeState := &ValidationState{Log: testLog()}
+	checkGatewayRoutes(context.Background(), client, routeState)
+	require.NotNil(t, routeState.GatewayRoutesOK)
+	assert.False(t, *routeState.GatewayRoutesOK)
+	assert.Contains(t, strings.Join(routeState.Warnings, "; "), "udproutes",
+		"UDPRoute is applied by udproute-llm-worker.yaml and must still be surfaced")
+}
+
+func TestCheckGatewayRoutes_OptionalUDPRoutePresentPasses(t *testing.T) {
+	client := gatewayDiscoveryClient(
+		append(gatewayRequiredPairs(), gatewayAPIGroup+"/v1alpha2/udproutes")...)
+	state := &ValidationState{Log: testLog()}
+	checkGatewayRoutes(context.Background(), client, state)
+
+	require.NotNil(t, state.GatewayRoutesOK)
+	assert.True(t, *state.GatewayRoutesOK)
+}
+
+// An RBAC gap on pods must not be reported as a broken quorum, which is what
+// appending it to failures did, while the identical gap on statefulsets is
+// correctly reported as unknown.
+func TestCheckTier2StatefulSets_PodListDenialIsUnknownNotFailure(t *testing.T) {
+	objs := makeQuorumSTS("nats", "nats-system", 3, 3,
+		[]string{"node-1", "node-2", "node-3"})
+	client := fake.NewSimpleClientset(objs...)
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("denied"))
+	})
+	state := &ValidationState{Log: testLog()}
+	checkTier2StatefulSets(context.Background(), client, state)
+
+	assert.Nil(t, state.Tier2StatefulSetsOK,
+		"an unreadable pod list is not evidence of a broken quorum")
+	assert.Contains(t, strings.Join(state.Warnings, "; "), "placement check")
+}
+
+// wantCount comes from DesiredNumberScheduled, which counts NotReady and
+// cordoned nodes, so requiring every pod fails the check on one NotReady node.
+// Two nodes is enough to prove the overlay carries cross-node traffic.
+func TestWaitForDaemonSetPods_ReturnsPartialCoverageOnTimeout(t *testing.T) {
+	labels := map[string]string{"app": "n2n"}
+	mk := func(name, node string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "probe", Labels: labels},
+			Spec:       corev1.PodSpec{NodeName: node},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0." + node[len(node)-1:]},
+		}
+	}
+	client := fake.NewSimpleClientset(mk("a", "node-1"), mk("b", "node-2"))
+	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
+
+	// Three scheduled (one node NotReady), two Running, minNodes=2.
+	pods, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 3, 2, time.Second)
+	require.NoError(t, err, "two nodes is enough to exercise the overlay")
+	assert.Len(t, pods, 2)
+
+	// One node is not enough: there is no cross-node path to probe.
+	client2 := fake.NewSimpleClientset(mk("a", "node-1"))
+	_, err = waitForDaemonSetPods(context.Background(), client2, "probe", selector, 3, 2, time.Second)
+	assert.Error(t, err, "a single node cannot demonstrate cross-node connectivity")
+}
+
+// A transient error must not burn the whole deadline budget: client-go defaults
+// to 5 QPS and this run issues ~22 namespaced LISTs, so a 429 early in the
+// window would otherwise fail a critical check with most of its budget unspent.
+func TestWaitForDaemonSetPods_RetriesTransientErrors(t *testing.T) {
+	labels := map[string]string{"app": "n2n"}
+	client := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "probe", Labels: labels},
+			Spec:       corev1.PodSpec{NodeName: "node-1"},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "probe", Labels: labels},
+			Spec:       corev1.PodSpec{NodeName: "node-2"},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
+		},
+	)
+	calls := 0
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
+
+	pods, err := waitForDaemonSetPods(context.Background(), client, "probe", selector, 2, 2, 30*time.Second)
+	require.NoError(t, err, "a single 429 must not abort a 30s wait")
+	assert.Len(t, pods, 2)
+	assert.Greater(t, calls, 1, "the loop must have retried")
+}
+
+// A permission error is terminal: retrying it just burns the deadline.
+func TestWaitForDaemonSetPods_ForbiddenIsTerminal(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("list", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Resource: "pods"}, "", fmt.Errorf("denied"))
+	})
+	start := time.Now()
+	_, err := waitForDaemonSetPods(context.Background(), client, "probe", "app=n2n", 2, 2, 30*time.Second)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second, "a denial must return immediately")
 }
