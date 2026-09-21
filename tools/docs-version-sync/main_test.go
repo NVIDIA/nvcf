@@ -1082,11 +1082,11 @@ func TestRenderCompatibilityMatrix(t *testing.T) {
 		t.Fatalf("Render failed: %v", err)
 	}
 	for _, want := range []string{
-		"### Current stack releases",
+		"## Current stack releases",
 		"| Self-managed (control plane) | `1.2.3` | `deploy/stacks/self-managed/v1.2.3` | [dev](/nvcf/self-managed/) |",
 		"| Compute plane | `2.3.4` | `deploy/stacks/nvcf-compute-plane/v2.3.4` | [dev](/nvcf/compute-plane/) |",
 		"| Observability | `3.4.5` | `deploy/stacks/observability/v3.4.5` | [3.4](/nvcf/observability/) |",
-		"### Qualified trains",
+		"## Qualified trains",
 		"| Stack | Train | Self-managed trains | Compute plane trains | Observability trains |",
 		"| Self-managed (control plane) | `1.2` | this stack | `2.3` | `3.4`, `3.3` |",
 		"| Observability | `3.4` | `1.2`, `1.1` | `2.3` | this stack |",

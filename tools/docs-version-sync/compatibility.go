@@ -19,7 +19,7 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		return "", fmt.Errorf("compatibility matrix requires at least one compatibility entry")
 	}
 	var b strings.Builder
-	b.WriteString("### Current stack releases\n\n")
+	b.WriteString("## Current stack releases\n\n")
 	b.WriteString("| Stack | Latest release | Source tag | Documentation |\n| --- | --- | --- | --- |\n")
 	for _, stack := range releaseSetStackNames {
 		metadata, err := catalog.ReleaseSet.Stacks.byName(stack)
@@ -33,7 +33,7 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		b.WriteString(fmt.Sprintf("| %s | `%s` | `%s` | [%s](/nvcf/%s/) |\n",
 			documentationStackDisplayName(stack), metadata.Version, metadata.SourceTag, documentationVersionLabel(*metadata), slug))
 	}
-	b.WriteString("\n### Qualified trains\n\n")
+	b.WriteString("\n## Qualified trains\n\n")
 	b.WriteString("| Stack | Train | Self-managed trains | Compute plane trains | Observability trains |\n| --- | --- | --- | --- | --- |\n")
 	entries := append([]CompatibilityEntry(nil), catalog.Compatibility...)
 	sort.SliceStable(entries, func(i, j int) bool {
