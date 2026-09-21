@@ -245,7 +245,7 @@ assert_llm_request_router_grpc_port "$work_dir/custom-port-api-values.yaml" \
   "$custom_router_grpc_port" ||
   fail "enabled LLM did not pass the configured gRPC port to the request-router chart"
 
-backend_worker_address='llm-request-router-backend-router.nvcf.svc.cluster.local:50071'
+backend_router_address='llm-request-router-backend-router.nvcf.svc.cluster.local:50071'
 printf '%s\n' \
   'addons:' \
   '  llm:' \
@@ -253,7 +253,7 @@ printf '%s\n' \
   >"$environment_file"
 render_api_values "$work_dir/backend-api-values.yaml" >/dev/null
 assert_remote_config_address "$work_dir/backend-api-values.yaml" \
-  "$backend_worker_address" ||
+  "$backend_router_address" ||
   fail "enabled backend routing did not use the backend-router address"
 
 render_api_values \
@@ -262,7 +262,7 @@ render_api_values \
   "addons.llm.requestRouter.service.grpcPort=$custom_router_grpc_port" \
   >/dev/null
 assert_remote_config_address "$work_dir/backend-custom-port-api-values.yaml" \
-  "$backend_worker_address" ||
+  "$backend_router_address" ||
   fail "request-router gRPC port changed the backend-router bootstrap address"
 assert_llm_request_router_grpc_port "$work_dir/backend-custom-port-api-values.yaml" \
   "$custom_router_grpc_port" ||
@@ -338,7 +338,7 @@ assert_remote_config_address "$work_dir/maximum-port-api-values.yaml" \
 write_environment true ''
 render_api_values "$work_dir/default-api-values.yaml" >/dev/null
 assert_remote_config_address "$work_dir/default-api-values.yaml" \
-  "$backend_worker_address" ||
+  "$backend_router_address" ||
   fail "enabled LLM did not default the worker address to the backend-router service"
 
 invalid_address_cases=(
