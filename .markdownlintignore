@@ -12,10 +12,10 @@ third_party/
 # must never be acted on.
 #
 # The [0-9] keeps docs/version-catalog/, which is not frozen, in scope. The
-# per-stack pattern needs the /** suffix: markdownlint-cli does not apply a
-# bare directory glob to files passed explicitly on the command line.
+# per-stack pattern has no trailing slash on purpose: markdownlint-cli 0.49
+# does not match docs/<stack>-<train>/ files against "docs/*-[0-9]*/".
 docs/v[0-9]*/
-docs/*-[0-9]*/**
+docs/*-[0-9]*
 
 # Vendored Helm subcharts. Same rationale as vendor/: upstream chart content
 # this repository redistributes rather than authors.

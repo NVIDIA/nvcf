@@ -145,11 +145,11 @@ The following tables list the complete artifact inventory.
 
 ### Stack releases
 
-| Stack | Version | Source tag | Documentation |
-| --- | --- | --- | --- |
-| Self-managed (control plane) | `1.0.0` | `deploy/stacks/self-managed/v1.0.0` | `1.0` (qualified) |
-| Compute plane | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` | `dev` (development) |
-| Observability | `1.0.0` | `deploy/stacks/observability/v1.0.0` | `dev` (development) |
+| Stack | Version | Source tag |
+| --- | --- | --- |
+| [Self-managed (control plane)](/nvcf/self-managed/) | `1.0.0` | `deploy/stacks/self-managed/v1.0.0` |
+| [Compute plane](/nvcf/compute-plane/) | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` |
+| [Observability](/nvcf/observability/) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 ### Control plane Helm charts
 

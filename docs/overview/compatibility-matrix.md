@@ -15,11 +15,11 @@ upgrade to a maintained train before moving further.
 
 ## Current stack releases
 
-| Stack | Latest release | Source tag | Documentation |
-| --- | --- | --- | --- |
-| Self-managed (control plane) | `1.0.0` | `deploy/stacks/self-managed/v1.0.0` | [1.0](/nvcf/self-managed/) |
-| Compute plane | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` | [dev](/nvcf/compute-plane/) |
-| Observability | `1.0.0` | `deploy/stacks/observability/v1.0.0` | [dev](/nvcf/observability/) |
+| Stack | Latest release | Source tag |
+| --- | --- | --- |
+| [Self-managed (control plane)](/nvcf/self-managed/) | `1.0.0` | `deploy/stacks/self-managed/v1.0.0` |
+| [Compute plane](/nvcf/compute-plane/) | `1.0.0` | `deploy/stacks/nvcf-compute-plane/v1.0.0` |
+| [Observability](/nvcf/observability/) | `1.0.0` | `deploy/stacks/observability/v1.0.0` |
 
 ## Compatible stack versions
 

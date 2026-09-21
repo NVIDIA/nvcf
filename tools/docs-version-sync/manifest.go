@@ -184,11 +184,12 @@ func renderReleaseSetSummary(releaseSet ReleaseSetMetadata) string {
 	}
 	var b strings.Builder
 	b.WriteString("### Stack releases\n\n")
-	b.WriteString("| Stack | Version | Source tag | Documentation |\n| --- | --- | --- | --- |\n")
+	b.WriteString("| Stack | Version | Source tag |\n| --- | --- | --- |\n")
 	for _, stack := range releaseSetStackNames {
 		metadata, _ := releaseSet.Stacks.byName(stack)
-		b.WriteString(fmt.Sprintf("| %s | `%s` | `%s` | `%s` (%s) |\n",
-			documentationStackDisplayName(stack), metadata.Version, metadata.SourceTag, metadata.DocumentationVersion, metadata.Status))
+		slug, _ := documentationProductSlug(stack)
+		b.WriteString(fmt.Sprintf("| [%s](/nvcf/%s/) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), slug, metadata.Version, metadata.SourceTag))
 	}
 	b.WriteString("\n")
 	return b.String()

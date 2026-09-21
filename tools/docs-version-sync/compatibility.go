@@ -20,7 +20,7 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("## Current stack releases\n\n")
-	b.WriteString("| Stack | Latest release | Source tag | Documentation |\n| --- | --- | --- | --- |\n")
+	b.WriteString("| Stack | Latest release | Source tag |\n| --- | --- | --- |\n")
 	for _, stack := range releaseSetStackNames {
 		metadata, err := catalog.ReleaseSet.Stacks.byName(stack)
 		if err != nil {
@@ -30,8 +30,8 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		b.WriteString(fmt.Sprintf("| %s | `%s` | `%s` | [%s](/nvcf/%s/) |\n",
-			documentationStackDisplayName(stack), metadata.Version, metadata.SourceTag, documentationVersionLabel(*metadata), slug))
+		b.WriteString(fmt.Sprintf("| [%s](/nvcf/%s/) | `%s` | `%s` |\n",
+			documentationStackDisplayName(stack), slug, metadata.Version, metadata.SourceTag))
 	}
 	b.WriteString("\n## Compatible stack versions\n\n")
 	b.WriteString("| Stack | Release | Works with |\n| --- | --- | --- |\n")
@@ -53,13 +53,6 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		b.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", documentationStackDisplayName(entry.Stack), entry.Train, strings.Join(worksWith, ", ")))
 	}
 	return b.String(), nil
-}
-
-func documentationVersionLabel(metadata StackReleaseMetadata) string {
-	if metadata.Status == ReleaseSetQualified {
-		return metadata.DocumentationVersion
-	}
-	return "dev"
 }
 
 func stackOrder(stack string) int {

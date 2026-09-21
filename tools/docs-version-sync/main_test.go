@@ -1132,9 +1132,10 @@ func TestRenderCompatibilityMatrix(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## Current stack releases",
-		"| Self-managed (control plane) | `1.2.3` | `deploy/stacks/self-managed/v1.2.3` | [dev](/nvcf/self-managed/) |",
-		"| Compute plane | `2.3.4` | `deploy/stacks/nvcf-compute-plane/v2.3.4` | [dev](/nvcf/compute-plane/) |",
-		"| Observability | `3.4.5` | `deploy/stacks/observability/v3.4.5` | [3.4](/nvcf/observability/) |",
+		"| Stack | Latest release | Source tag |",
+		"| [Self-managed (control plane)](/nvcf/self-managed/) | `1.2.3` | `deploy/stacks/self-managed/v1.2.3` |",
+		"| [Compute plane](/nvcf/compute-plane/) | `2.3.4` | `deploy/stacks/nvcf-compute-plane/v2.3.4` |",
+		"| [Observability](/nvcf/observability/) | `3.4.5` | `deploy/stacks/observability/v3.4.5` |",
 		"## Compatible stack versions",
 		"| Stack | Release | Works with |",
 		"| Self-managed (control plane) | `1.2` | Compute plane `2.3` or later, Observability `3.3` or later |",
