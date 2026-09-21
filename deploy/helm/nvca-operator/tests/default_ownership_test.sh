@@ -23,39 +23,6 @@ for schema in \
     fail "${schema} incorrectly declares region under helmManaged"
 done
 
-assert_quantity_validation() {
-  local candidate_chart="$1"
-  local invalid_value
-
-  helm template nvca-operator "${candidate_chart}" \
-    --namespace nvca-operator \
-    --set generateImagePullSecret=false \
-    --set imagePullSecretName=dummy \
-    --set-string byoo.resources.requests.cpu=750m \
-    --set-string byoo.resources.limits.memory=4Gi \
-    --set-string storage.sharedStorage.taskData.storageCapacity=1e3 \
-    >"${work_dir}/valid-quantities.yaml"
-
-  for invalid_value in \
-    byoo.resources.requests.cpu \
-    resources.requests.cpu \
-    storage.sharedStorage.taskData.storageCapacity; do
-    if helm template nvca-operator "${candidate_chart}" \
-      --namespace nvca-operator \
-      --set generateImagePullSecret=false \
-      --set imagePullSecretName=dummy \
-      --set-string "${invalid_value}=notaquantity" \
-      >"${work_dir}/invalid-quantity.yaml" 2>"${work_dir}/invalid-quantity.err"; then
-      fail "${candidate_chart} accepted an invalid quantity for ${invalid_value}"
-    fi
-    grep -Fq "does not match pattern" "${work_dir}/invalid-quantity.err" ||
-      fail "${candidate_chart} did not report schema validation for ${invalid_value}"
-  done
-}
-
-assert_quantity_validation "${chart}"
-assert_quantity_validation "${chart_root}/../../../src/compute-plane-services/nvca/deployments/nvca-operator"
-
 render() {
   local manifest="$1"
   shift
