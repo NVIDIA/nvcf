@@ -4,8 +4,12 @@
 navigation:
   - page: Overview
     path: ../../docs/overview/index.md
-  - page: Compatibility Matrix
-    path: ../../docs/overview/compatibility-matrix.md
+  - link: Self-Managed Stack
+    href: /nvcf/self-managed/
+  - link: Compute Plane Stack
+    href: /nvcf/compute-plane/
+  - link: Observability Stack
+    href: /nvcf/observability/
   - page: Quickstart
     path: ../../docs/overview/quickstart.md
 
@@ -14,6 +18,8 @@ navigation:
     contents:
       - page: Release Notes Overview
         path: ../../docs/overview/release-notes/index.md
+      - page: Compatibility Matrix
+        path: ../../docs/overview/compatibility-matrix.md
 
   - section: Before You Deploy
     skip-slug: true
