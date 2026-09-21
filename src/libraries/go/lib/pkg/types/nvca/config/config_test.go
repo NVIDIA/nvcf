@@ -157,6 +157,29 @@ workload:
 	assert.Equal(t, expCfg, gotDecodedCfg)
 }
 
+func TestConfig_DecodeSharedStorageCapacity(t *testing.T) {
+	t.Run("valid quantity", func(t *testing.T) {
+		cfg, err := DecodeConfig([]byte(`agent:
+  sharedStorage:
+    taskData:
+      storageCapacity: 20Gi
+`))
+		require.NoError(t, err)
+		assert.Equal(t, resource.MustParse("20Gi"), cfg.Agent.SharedStorage.TaskData.StorageCapacity)
+	})
+
+	t.Run("invalid quantity", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`agent:
+  sharedStorage:
+    taskData:
+      storageCapacity: invalid
+`))
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "Agent.SharedStorage.TaskData.StorageCapacity")
+		assert.ErrorContains(t, err, "quantities must match the regular expression")
+	})
+}
+
 func TestConfig_EncodeDecode_ServiceOAuthEndpoints(t *testing.T) {
 	cfg := Config{
 		Agent: AgentConfig{
