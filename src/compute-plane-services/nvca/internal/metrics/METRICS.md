@@ -1413,7 +1413,7 @@ Overall verdict for the latest cluster-validator run. **This is the load-bearing
 
 ### `nvca_cluster_validator_check_status`
 
-Per-check status from the latest run. The check set is fixed (~10 entries; see `CheckKey*` constants in `internal/clustervalidator/summary.go`).
+Per-check status from the latest run. The check set is fixed (18 entries; see `CheckKey*` constants in `internal/clustervalidator/summary.go`). Which subset appears depends on the validator role and on which conditional checks ran; see the caveat below.
 
 - **Type**: Gauge
 - **Value**: 1 = passed, 0 = failed (or not-run; the `check` label is omitted entirely when a check was skipped)

@@ -1310,7 +1310,15 @@ func sweepLegacyOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, clie
 	dsList, err := client.AppsV1().DaemonSets(legacyNodeToNodeNamespace).List(listCtx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/managed-by=nvcf-cluster-validator,app.kubernetes.io/component=n2n-server",
 	})
-	if err != nil || len(dsList.Items) == 0 {
+	if err != nil {
+		// Say so: a silent return here leaves legacy probe DaemonSets running
+		// one pod per node until some later sweep happens to succeed, with
+		// nothing in the log to explain why. Matches sweepOrphanN2NNamespaces.
+		log.Warnf("N2N legacy orphan sweep: failed to list DaemonSets in %s: %v",
+			legacyNodeToNodeNamespace, err)
+		return
+	}
+	if len(dsList.Items) == 0 {
 		return
 	}
 

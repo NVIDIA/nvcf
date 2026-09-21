@@ -250,7 +250,7 @@ func TestCheckExternalLoadBalancer_ServiceWithHostname(t *testing.T) {
 
 func TestCheckExternalLoadBalancer_NoLBServices(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-ip-svc", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster-ip-svc", Namespace: envoyGatewayNamespace},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP},
 	})
 	state := &ValidationState{Log: testLog()}
@@ -264,7 +264,7 @@ func TestCheckExternalLoadBalancer_NoLBServices(t *testing.T) {
 func TestCheckExternalLoadBalancer_LBServicePendingNoIP(t *testing.T) {
 	// LB type but .status.loadBalancer.ingress is empty → no IP assigned yet.
 	client := fake.NewSimpleClientset(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "pending-lb", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pending-lb", Namespace: envoyGatewayNamespace},
 		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
 		// No Status.LoadBalancer.Ingress
 	})
