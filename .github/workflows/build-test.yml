@@ -189,8 +189,19 @@ jobs:
 
   stack-upgrade-policy:
     name: stack upgrade policy
-    # Only a pull request has a baseline to measure a proposed bump against. On
-    # a push to main the candidate and the baseline are the same commit.
+    # Pull requests only. The check weighs the migrations a candidate
+    # introduces against the version bump its commits imply, which needs two
+    # sides: a baseline to measure from, and a proposal to measure. A pull
+    # request has both -- origin/main is the baseline and the branch is the
+    # proposal. A push to main has already merged, so origin/main..HEAD is
+    # empty and there is no proposal left to judge.
+    #
+    # Concretely: a branch that adds
+    # migrations/cassandra/keyspaces/nvct_api/05_drop_health_info.up.sql and
+    # carries only `fix:` commits fails this job, because dropping a column
+    # cannot be skipped past and so needs a major, while `fix` asks for a
+    # patch. Once those same commits are on main, running here would compare
+    # main against itself and find nothing to report.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     strategy:
