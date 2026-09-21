@@ -1050,14 +1050,16 @@ func TestValidateCatalogRejectsPartiallyPopulatedReleaseSet(t *testing.T) {
 
 func TestValidateCatalogRejectsMalformedCompatibility(t *testing.T) {
 	for name, entries := range map[string][]CompatibilityEntry{
-		"unknown stack": {{Stack: "self-managed", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}, "observability": {"1.1"}}}},
-		"full version":  {{Stack: "control-plane", Train: "1.1.0", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}, "observability": {"1.1"}}}},
-		"own stack":     {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"control-plane": {"1.1"}, "observability": {"1.1"}}}},
-		"missing stack": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}}}},
-		"empty trains":  {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {}, "observability": {"1.1"}}}},
+		"unknown stack":     {{Stack: "self-managed", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1+", "observability": "1.1+"}}},
+		"full version":      {{Stack: "control-plane", Train: "1.1.0", CompatibleWith: map[string]string{"compute-plane": "1.1+", "observability": "1.1+"}}},
+		"own stack":         {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"control-plane": "1.1+", "observability": "1.1+"}}},
+		"missing stack":     {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1+"}}},
+		"empty requirement": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "", "observability": "1.1+"}}},
+		"patch requirement": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1.0+", "observability": "1.1+"}}},
+		"range requirement": {{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": ">=1.1", "observability": "1.1+"}}},
 		"duplicate": {
-			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.1"}, "observability": {"1.1"}}},
-			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string][]string{"compute-plane": {"1.0"}, "observability": {"1.0"}}},
+			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.1+", "observability": "1.1+"}},
+			{Stack: "control-plane", Train: "1.1", CompatibleWith: map[string]string{"compute-plane": "1.0+", "observability": "1.0+"}},
 		},
 	} {
 		catalog := testCatalog()
@@ -1073,9 +1075,9 @@ func TestRenderCompatibilityMatrix(t *testing.T) {
 	catalog.ReleaseSet.Stacks.Observability.DocumentationVersion = "3.4"
 	catalog.ReleaseSet.Stacks.Observability.Status = ReleaseSetQualified
 	catalog.Compatibility = []CompatibilityEntry{
-		{Stack: "observability", Train: "3.3", CompatibleWith: map[string][]string{"control-plane": {"1.2"}, "compute-plane": {"2.3"}}},
-		{Stack: "observability", Train: "3.4", CompatibleWith: map[string][]string{"control-plane": {"1.1", "1.2"}, "compute-plane": {"2.3"}}},
-		{Stack: "control-plane", Train: "1.2", CompatibleWith: map[string][]string{"compute-plane": {"2.3"}, "observability": {"3.3", "3.4"}}},
+		{Stack: "observability", Train: "3.3", CompatibleWith: map[string]string{"control-plane": "1.2", "compute-plane": "2.3+"}},
+		{Stack: "observability", Train: "3.4", CompatibleWith: map[string]string{"control-plane": "1.1+", "compute-plane": "2.3+"}},
+		{Stack: "control-plane", Train: "1.2", CompatibleWith: map[string]string{"compute-plane": "2.3+", "observability": "3.3+"}},
 	}
 	got, err := Render("compatibility-matrix", catalog)
 	if err != nil {
@@ -1086,10 +1088,11 @@ func TestRenderCompatibilityMatrix(t *testing.T) {
 		"| Self-managed (control plane) | `1.2.3` | `deploy/stacks/self-managed/v1.2.3` | [dev](/nvcf/self-managed/) |",
 		"| Compute plane | `2.3.4` | `deploy/stacks/nvcf-compute-plane/v2.3.4` | [dev](/nvcf/compute-plane/) |",
 		"| Observability | `3.4.5` | `deploy/stacks/observability/v3.4.5` | [3.4](/nvcf/observability/) |",
-		"## Qualified trains",
-		"| Stack | Train | Self-managed trains | Compute plane trains | Observability trains |",
-		"| Self-managed (control plane) | `1.2` | this stack | `2.3` | `3.4`, `3.3` |",
-		"| Observability | `3.4` | `1.2`, `1.1` | `2.3` | this stack |",
+		"## Compatible stack versions",
+		"| Stack | Release | Works with |",
+		"| Self-managed (control plane) | `1.2` | Compute plane `2.3` or later, Observability `3.3` or later |",
+		"| Observability | `3.4` | Self-managed (control plane) `1.1` or later, Compute plane `2.3` or later |",
+		"| Observability | `3.3` | Self-managed (control plane) `1.2` only, Compute plane `2.3` or later |",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered matrix missing %q:\n%s", want, got)

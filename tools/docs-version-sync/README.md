@@ -54,14 +54,17 @@ compatibility:
   - stack: observability
     train: "1.1"
     compatible_with:
-      control-plane: ["1.0", "1.1"]
-      compute-plane: ["1.0", "1.1"]
+      control-plane: "1.0+"
+      compute-plane: "1.0+"
 ```
 
-Each entry names one stack train and the trains of the other two stacks that
-are qualified to run with it. Stack names use the `release_set` keys
-(`control-plane`, `compute-plane`, `observability`). Update the block when QA
-qualifies a new train combination, then regenerate the documentation.
+Each entry names one stack train and the minimum train of the other two
+stacks it works with: `X.Y+` means that train or later, `X.Y` means that
+train only. The example renders as "Observability 1.1 works with Self-managed
+1.0 or later, Compute plane 1.0 or later". Stack names use the `release_set` keys
+(`control-plane`, `compute-plane`, `observability`). Add an entry when a stack
+opens a new train, and raise a minimum when a release stops working with an
+older train of another stack. Then regenerate the documentation.
 
 Each registered stack publishes its own inventory:
 

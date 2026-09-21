@@ -32,9 +32,10 @@ For every dependency change:
 4. Add registry and repository overrides for images that customers must mirror.
 5. Record images that do not appear in rendered Kubernetes `image` fields.
 6. Update the artifact classification in `docs/version-catalog/main.yaml`.
-7. If the change alters which trains of the other stacks this stack runs
+7. If the change raises the minimum train of another stack this stack works
    with, update the `compatibility:` block in `docs/version-catalog/main.yaml`
-   in the same change. It generates `docs/overview/compatibility-matrix.md`.
+   in the same change (for example `compute-plane: "1.2+"`). It generates
+   `docs/overview/compatibility-matrix.md`.
 8. Run the stack tests and the inventory and documentation checks described in
    [`INVENTORY.md`](INVENTORY.md).
 9. After the stack release publishes its inventory asset, update the catalog

@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// renderCompatibilityMatrix renders the current release of each stack and the
-// declared compatible trains between stacks.
+// renderCompatibilityMatrix renders the current release of each stack and, for
+// each stack train, the minimum train of the other stacks it works with.
 func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 	if catalog.ReleaseSet == (ReleaseSetMetadata{}) {
 		return "", fmt.Errorf("compatibility matrix requires release_set stack releases")
@@ -33,8 +33,8 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		b.WriteString(fmt.Sprintf("| %s | `%s` | `%s` | [%s](/nvcf/%s/) |\n",
 			documentationStackDisplayName(stack), metadata.Version, metadata.SourceTag, documentationVersionLabel(*metadata), slug))
 	}
-	b.WriteString("\n## Qualified trains\n\n")
-	b.WriteString("| Stack | Train | Self-managed trains | Compute plane trains | Observability trains |\n| --- | --- | --- | --- | --- |\n")
+	b.WriteString("\n## Compatible stack versions\n\n")
+	b.WriteString("| Stack | Release | Works with |\n| --- | --- | --- |\n")
 	entries := append([]CompatibilityEntry(nil), catalog.Compatibility...)
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].Stack != entries[j].Stack {
@@ -43,15 +43,14 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		return compareTrains(entries[i].Train, entries[j].Train) > 0
 	})
 	for _, entry := range entries {
-		cells := make([]string, 0, len(releaseSetStackNames))
+		worksWith := make([]string, 0, len(releaseSetStackNames)-1)
 		for _, other := range releaseSetStackNames {
 			if other == entry.Stack {
-				cells = append(cells, "this stack")
 				continue
 			}
-			cells = append(cells, formatTrains(entry.CompatibleWith[other]))
+			worksWith = append(worksWith, formatRequirement(other, entry.CompatibleWith[other]))
 		}
-		b.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", documentationStackDisplayName(entry.Stack), entry.Train, strings.Join(cells, " | ")))
+		b.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", documentationStackDisplayName(entry.Stack), entry.Train, strings.Join(worksWith, ", ")))
 	}
 	return b.String(), nil
 }
@@ -72,13 +71,14 @@ func stackOrder(stack string) int {
 	return len(releaseSetStackNames)
 }
 
-func formatTrains(trains []string) string {
-	sorted := append([]string(nil), trains...)
-	sort.SliceStable(sorted, func(i, j int) bool { return compareTrains(sorted[i], sorted[j]) > 0 })
-	for index, train := range sorted {
-		sorted[index] = "`" + train + "`"
+// formatRequirement turns "1.0+" into "Compute plane 1.0 or later" and "1.0"
+// into "Compute plane 1.0 only".
+func formatRequirement(stack, requirement string) string {
+	name := documentationStackDisplayName(stack)
+	if train, open := strings.CutSuffix(requirement, "+"); open {
+		return fmt.Sprintf("%s `%s` or later", name, train)
 	}
-	return strings.Join(sorted, ", ")
+	return fmt.Sprintf("%s `%s` only", name, requirement)
 }
 
 // compareTrains orders X.Y trains numerically; inputs are validated by the catalog.

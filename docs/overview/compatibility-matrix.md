@@ -6,10 +6,10 @@ releases from its own release train and publishes its own documentation
 version. Use this page to pick stack versions that are qualified to run
 together.
 
-Versions are listed as trains (`X.Y`). Any patch release on a train is
-compatible with any patch release on the trains listed alongside it. Only the
-latest train and the one before it are maintained; upgrade to a maintained
-train before moving further.
+Releases are listed as trains (`X.Y`); any patch release on a train counts.
+A requirement such as `1.0 or later` means that train and every later
+maintained train. Only the latest train and the one before it are maintained;
+upgrade to a maintained train before moving further.
 
 {/*docs-version-sync:BEGIN compatibility-matrix*/}
 
@@ -21,16 +21,16 @@ train before moving further.
 | Compute plane | `0.4.4` | `deploy/stacks/nvcf-compute-plane/v0.4.4` | [dev](/nvcf/compute-plane/) |
 | Observability | `0.2.2` | `deploy/stacks/observability/v0.2.2` | [dev](/nvcf/observability/) |
 
-## Qualified trains
+## Compatible stack versions
 
-| Stack | Train | Self-managed trains | Compute plane trains | Observability trains |
-| --- | --- | --- | --- | --- |
-| Self-managed (control plane) | `1.1` | this stack | `1.1`, `1.0` | `1.1`, `1.0` |
-| Self-managed (control plane) | `1.0` | this stack | `1.1`, `1.0` | `1.1`, `1.0` |
-| Compute plane | `1.1` | `1.1`, `1.0` | this stack | `1.1`, `1.0` |
-| Compute plane | `1.0` | `1.1`, `1.0` | this stack | `1.1`, `1.0` |
-| Observability | `1.1` | `1.1`, `1.0` | `1.1`, `1.0` | this stack |
-| Observability | `1.0` | `1.1`, `1.0` | `1.1`, `1.0` | this stack |
+| Stack | Release | Works with |
+| --- | --- | --- |
+| Self-managed (control plane) | `1.1` | Compute plane `1.0` or later, Observability `1.0` or later |
+| Self-managed (control plane) | `1.0` | Compute plane `1.0` or later, Observability `1.0` or later |
+| Compute plane | `1.1` | Self-managed (control plane) `1.0` or later, Observability `1.0` or later |
+| Compute plane | `1.0` | Self-managed (control plane) `1.0` or later, Observability `1.0` or later |
+| Observability | `1.1` | Self-managed (control plane) `1.0` or later, Compute plane `1.0` or later |
+| Observability | `1.0` | Self-managed (control plane) `1.0` or later, Compute plane `1.0` or later |
 
 {/*docs-version-sync:END compatibility-matrix*/}
 

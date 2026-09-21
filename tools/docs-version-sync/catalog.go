@@ -137,12 +137,13 @@ type StackReleaseMetadata struct {
 	Status               ReleaseSetStatus `yaml:"status"`
 }
 
-// CompatibilityEntry declares which trains of the other stacks are qualified
-// to run with one train of a stack. Keys use the release_set stack names.
+// CompatibilityEntry declares the minimum train of each other stack that one
+// train of a stack works with. Keys use the release_set stack names. Values
+// are "X.Y+" (that train or later) or "X.Y" (that train only).
 type CompatibilityEntry struct {
-	Stack          string              `yaml:"stack"`
-	Train          string              `yaml:"train"`
-	CompatibleWith map[string][]string `yaml:"compatible_with"`
+	Stack          string            `yaml:"stack"`
+	Train          string            `yaml:"train"`
+	CompatibleWith map[string]string `yaml:"compatible_with"`
 }
 
 const (
@@ -611,30 +612,24 @@ func validateCompatibility(entries []CompatibilityEntry) error {
 		if len(entry.CompatibleWith) != len(releaseSetStackNames)-1 {
 			return fmt.Errorf("compatibility %s %s must list exactly the other %d stacks", entry.Stack, entry.Train, len(releaseSetStackNames)-1)
 		}
-		for other, trains := range entry.CompatibleWith {
+		for other, requirement := range entry.CompatibleWith {
 			if _, err := documentationProductSlug(other); err != nil {
 				return fmt.Errorf("compatibility %s %s: %w", entry.Stack, entry.Train, err)
 			}
 			if other == entry.Stack {
 				return fmt.Errorf("compatibility %s %s cannot list its own stack", entry.Stack, entry.Train)
 			}
-			if len(trains) == 0 {
-				return fmt.Errorf("compatibility %s %s lists no %s trains", entry.Stack, entry.Train, other)
-			}
-			seenTrains := map[string]struct{}{}
-			for _, train := range trains {
-				if !documentationTrainRe.MatchString(train) {
-					return fmt.Errorf("compatibility %s %s: %s train %q must use %s", entry.Stack, entry.Train, other, train, documentationTrainFormat)
-				}
-				if _, exists := seenTrains[train]; exists {
-					return fmt.Errorf("compatibility %s %s: duplicate %s train %s", entry.Stack, entry.Train, other, train)
-				}
-				seenTrains[train] = struct{}{}
+			if !compatibilityRequirementRe.MatchString(requirement) {
+				return fmt.Errorf("compatibility %s %s: %s requirement %q must use %s", entry.Stack, entry.Train, other, requirement, compatibilityRequirementFormat)
 			}
 		}
 	}
 	return nil
 }
+
+const compatibilityRequirementFormat = "X.Y+ (that train or later) or X.Y (that train only)"
+
+var compatibilityRequirementRe = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\+?$`)
 
 func validateManifestMetadata(metadata ManifestMetadata) error {
 	seen := map[string]struct{}{}

@@ -952,33 +952,33 @@ compatibility:
   - stack: control-plane
     train: "1.1"
     compatible_with:
-      compute-plane: ["1.0", "1.1"]
-      observability: ["1.0", "1.1"]
+      compute-plane: "1.0+"
+      observability: "1.0+"
   - stack: control-plane
     train: "1.0"
     compatible_with:
-      compute-plane: ["1.0", "1.1"]
-      observability: ["1.0", "1.1"]
+      compute-plane: "1.0+"
+      observability: "1.0+"
   - stack: compute-plane
     train: "1.1"
     compatible_with:
-      control-plane: ["1.0", "1.1"]
-      observability: ["1.0", "1.1"]
+      control-plane: "1.0+"
+      observability: "1.0+"
   - stack: compute-plane
     train: "1.0"
     compatible_with:
-      control-plane: ["1.0", "1.1"]
-      observability: ["1.0", "1.1"]
+      control-plane: "1.0+"
+      observability: "1.0+"
   - stack: observability
     train: "1.1"
     compatible_with:
-      control-plane: ["1.0", "1.1"]
-      compute-plane: ["1.0", "1.1"]
+      control-plane: "1.0+"
+      compute-plane: "1.0+"
   - stack: observability
     train: "1.0"
     compatible_with:
-      control-plane: ["1.0", "1.1"]
-      compute-plane: ["1.0", "1.1"]
+      control-plane: "1.0+"
+      compute-plane: "1.0+"
 stack:
   name: nvcf-self-managed-stack
   version: 0.20.7

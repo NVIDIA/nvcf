@@ -77,7 +77,7 @@ sequenceDiagram
     Sync->>Catalog: Open reviewable development docs update
     Catalog->>Manifest: Generate ownership and optionality
 
-    QA->>QA: Qualify a stack train against the maintained trains of the others
+    QA->>QA: Confirm the minimum train of each other stack this train works with
     QA->>Catalog: Update the compatibility block
     Catalog->>Stable: Freeze that stack's docs and catalog for the train
     Stable->>Stable: Make the train the stack's default docs version
