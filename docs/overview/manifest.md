@@ -201,6 +201,7 @@ The following tables list the complete artifact inventory.
 | `nats-server` | `2.14.6-alpine3.22` | `self-managed` | Required | Provides messaging for function deployment and invocation. | `nvcr.io/nvidia/nvcf/nats-server:2.14.6-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nvcf-ai-api-gateway-service` | `1.35.1` | `self-managed` | Optional | Serves the optional vanity hostname gateway. | `nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service:1.35.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway) |
 | `nvcf-api-keys-service` | `1.9.1` | `self-managed` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.9.1` |  |
+| `nvcf-cassandra-migrations` | `0.17.6` | `self-managed` | Required | Applies the Cassandra schemas required by NVCF services. | `nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations:0.17.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
 | `nvcf-ess` | `0.5.0` | `self-managed` | Required | Provides encrypted application secrets to NVCF workloads. | `nvcr.io/nvidia/nvcf/nvcf-ess:0.5.0` |  |
 | `nvcf-function-autoscaler` | `1.21.8` | `self-managed` | Required | Scales functions from NVCF workload metrics. | `nvcr.io/nvidia/nvcf/nvcf-function-autoscaler:1.21.8` |  |
 | `nvcf-grpc-proxy` | `1.33.5` | `self-managed` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.33.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
@@ -284,14 +285,6 @@ The following tables list the complete artifact inventory.
 | Artifact | Version | Stack | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- | --- |
 | `nats-server-config-reloader` | `0.24.0` | `compute-plane` / `self-managed` | Required | Reloads NATS configuration for the control plane and optional NVIDIA Dynamo deployment. | `docker.io/natsio/nats-server-config-reloader:0.24.0` | [Upstream](https://github.com/nats-io/k8s) |
-
-### EA-only CVE-impacted artifacts
-
-These Early Access artifacts have known CVE impact. Use only the QA-qualified versions listed for this EA stack.
-
-| Artifact | Version | Stack | Required | Description | Distribution | Source code |
-| --- | --- | --- | --- | --- | --- | --- |
-| `nvcf-cassandra-migrations` | `0.17.6` | `self-managed` | Required | Applies the Cassandra schemas required by Early Access NVCF services. | `nvcr.io/nvidia/nvcf/nvcf-cassandra-migrations:0.17.6` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
 
 ### Tools and deployment resources
 

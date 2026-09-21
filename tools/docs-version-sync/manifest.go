@@ -198,11 +198,14 @@ func renderReleaseSetSummary(releaseSet ReleaseSetMetadata) string {
 func renderManifestTables(entries []resolvedManifestEntry) string {
 	var b strings.Builder
 	for _, section := range manifestSections {
+		sectionEntries := manifestEntriesForSection(entries, section)
+		if section.Kind == ManifestKindEACVE && len(sectionEntries) == 0 {
+			continue
+		}
 		b.WriteString("### " + section.Heading + "\n\n")
 		if section.Description != "" {
 			b.WriteString(section.Description + "\n\n")
 		}
-		sectionEntries := manifestEntriesForSection(entries, section)
 		if section.Kind == ManifestKindResource {
 			b.WriteString("| Artifact | Version | Stack | Description | Distribution | Source code |\n")
 			b.WriteString("| --- | --- | --- | --- | --- | --- |\n")

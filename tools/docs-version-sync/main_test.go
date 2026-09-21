@@ -71,7 +71,7 @@ func TestRenderManifestHandlesNewNVCAAndNVCTImageAndHelmArtifacts(t *testing.T) 
 		t.Fatalf("Render failed: %v", err)
 	}
 
-	computeServices := sectionBetween(t, got, "### Compute plane services and images", "### EA-only CVE-impacted artifacts")
+	computeServices := sectionBetween(t, got, "### Compute plane services and images", "### Observability Helm charts")
 	for _, want := range []string{
 		"| `nvca` | `3.0.0-rc.13` | `compute-plane` | Required |",
 		"| `nvca-operator` | `3.0.0-rc.13` | `compute-plane` | Required |",

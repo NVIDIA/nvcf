@@ -709,9 +709,9 @@ manifest:
       upstream_url: https://github.com/apache/cassandra
     - artifact_id: nvcf-cassandra-migrations
       plane: control
-      kind: ea-cve
+      kind: service-image
       requirement: required
-      description: Applies the Cassandra schemas required by Early Access NVCF services.
+      description: Applies the Cassandra schemas required by NVCF services.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra
     - artifact_id: helm-nvca-operator
       plane: compute
