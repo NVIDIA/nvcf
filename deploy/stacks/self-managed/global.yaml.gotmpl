@@ -362,11 +362,12 @@ natsAuthCalloutService:
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
+{{- $llmRequestRouterBackendGrpcPort := dig "addons" "llm" "requestRouter" "backendRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
 {{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
 {{- if $backendRouterEnabled }}
-{{- $llmRequestRouterDefaultAddress = "llm-request-router-backend-router.nvcf.svc.cluster.local:50071" }}
+{{- $llmRequestRouterDefaultAddress = printf "llm-request-router-backend-router.nvcf.svc.cluster.local:%v" $llmRequestRouterBackendGrpcPort }}
 {{- end }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
 {{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
@@ -1132,6 +1133,8 @@ llmRequestRouter:
   */}}
   backendRouter:
     enabled: {{ $backendRouterEnabled }}
+    service:
+      grpcPort: {{ $llmRequestRouterBackendGrpcPort }}
     {{- $backendRouterValues := dig "addons" "llm" "requestRouter" "backendRouter" dict .Values }}
     {{- if hasKey $backendRouterValues "replicaCount" }}
     replicaCount: {{ index $backendRouterValues "replicaCount" }}

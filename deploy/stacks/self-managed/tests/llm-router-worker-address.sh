@@ -160,6 +160,14 @@ assert_llm_request_router_grpc_port() {
   test "$actual_port" = "$expected_port"
 }
 
+assert_backend_router_grpc_port() {
+  local values_file="$1"
+  local expected_port="$2"
+
+  test "$(yq -r '.llmRequestRouter.backendRouter.service.grpcPort' "$values_file")" = \
+    "$expected_port"
+}
+
 invalid_worker_address_error='global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535'
 
 assert_worker_address_rejected() {
@@ -255,18 +263,22 @@ render_api_values "$work_dir/backend-api-values.yaml" >/dev/null
 assert_remote_config_address "$work_dir/backend-api-values.yaml" \
   "$backend_router_address" ||
   fail "enabled backend routing did not use the backend-router address"
+assert_backend_router_grpc_port "$work_dir/backend-api-values.yaml" 50071 ||
+  fail "enabled backend routing did not pass the default gRPC port to the chart"
 
+custom_backend_router_grpc_port='51072'
+custom_backend_router_address="llm-request-router-backend-router.nvcf.svc.cluster.local:$custom_backend_router_grpc_port"
 render_api_values \
   "$work_dir/backend-custom-port-api-values.yaml" \
   --state-values-set \
-  "addons.llm.requestRouter.service.grpcPort=$custom_router_grpc_port" \
+  "addons.llm.requestRouter.backendRouter.service.grpcPort=$custom_backend_router_grpc_port" \
   >/dev/null
 assert_remote_config_address "$work_dir/backend-custom-port-api-values.yaml" \
-  "$backend_router_address" ||
-  fail "request-router gRPC port changed the backend-router bootstrap address"
-assert_llm_request_router_grpc_port "$work_dir/backend-custom-port-api-values.yaml" \
-  "$custom_router_grpc_port" ||
-  fail "enabled LLM did not pass the configured gRPC port to the request-router chart"
+  "$custom_backend_router_address" ||
+  fail "enabled backend routing did not use the configured backend-router gRPC port"
+assert_backend_router_grpc_port "$work_dir/backend-custom-port-api-values.yaml" \
+  "$custom_backend_router_grpc_port" ||
+  fail "enabled LLM did not pass the configured backend-router gRPC port to the chart"
 
 external_worker_address='router.example.com:443'
 render_api_values \
