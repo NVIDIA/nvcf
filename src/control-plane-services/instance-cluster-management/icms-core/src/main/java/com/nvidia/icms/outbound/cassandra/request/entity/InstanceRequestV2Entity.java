@@ -69,6 +69,7 @@ public class InstanceRequestV2Entity {
     public static final String COLUMN_GPU_SPECIFICATION_ID = "gpu_specification_id";
     public static final String COLUMN_NCA_ID = "nca_id";
     public static final String COLUMN_GPU_COUNT_PER_INSTANCE = "gpu_count_per_instance";
+    public static final String COLUMN_CREATION_BUCKET = "creation_bucket";
 
     @NonNull
     @PrimaryKey
@@ -78,6 +79,9 @@ public class InstanceRequestV2Entity {
 
     @Column(COLUMN_CREATE_TIME_UUID)
     private UUID createTimeuuid;
+
+    @Column(COLUMN_CREATION_BUCKET)
+    private Instant creationBucket;
 
     @Column(COLUMN_CUSTOMER)
     private String customer;

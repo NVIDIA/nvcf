@@ -143,6 +143,8 @@ public enum Events {
 
     GPUS_V5_POPULATION_EVENT("GpusV5PopulationTask"),
 
+    CREATION_BUCKET_POPULATION_TASK("CreationBucketPopulationTask"),
+
     ERROR_EVENT("ErrorEvent"),
 
     FUNCTION_DEPLOYMENT_STAGE("FunctionDeploymentStage"),

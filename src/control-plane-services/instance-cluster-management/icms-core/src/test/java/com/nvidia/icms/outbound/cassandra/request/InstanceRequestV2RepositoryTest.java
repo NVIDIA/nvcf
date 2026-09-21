@@ -135,6 +135,8 @@ public class InstanceRequestV2RepositoryTest  extends InstanceRequestTestBase {
         assertEquals(SpotRequestStatusCode.FULFILLED.toString(),
                      instanceRequestV2Entity.get().getStatusCode());
         assertEquals(statusMessage, instanceRequestV2Entity.get().getStatusMessage());
+        assertEquals(createTime.truncatedTo(ChronoUnit.DAYS),
+                instanceRequestV2Entity.get().getCreationBucket());
 
     }
 
@@ -195,9 +197,10 @@ public class InstanceRequestV2RepositoryTest  extends InstanceRequestTestBase {
                      requestByDay.get().getKey().getTruncatedTsByDay());
         assertEquals(requestId, requestByDay.get().getKey().getRequestId());
         assertEquals(instanceRequestV2Entity.get().getCreateTimeuuid(),
-                     requestByDay.get().getCreateTimeuuid());
+                      requestByDay.get().getCreateTimeuuid());
+        assertEquals(createTime.truncatedTo(ChronoUnit.DAYS),
+                instanceRequestV2Entity.get().getCreationBucket());
     }
-
 
     @Test
     void findByRequestId_findRecord() {

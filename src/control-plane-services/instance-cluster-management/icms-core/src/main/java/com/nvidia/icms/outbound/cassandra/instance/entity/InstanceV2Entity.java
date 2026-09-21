@@ -84,6 +84,7 @@ public class InstanceV2Entity {
     public static final String COLUMN_BACKUP_TO_PRIMARY_ZONE_MIGRATION_SCHEDULED = "backup_to_primary_migration_scheduled";
     public static final String COLUMN_DEPLOYMENT_ID = "deployment_id";
     public static final String COLUMN_GPU_SPECIFICATION_ID = "gpu_specification_id";
+    public static final String COLUMN_CREATION_BUCKET = "creation_bucket";
 
 
     @NotNull
@@ -97,6 +98,9 @@ public class InstanceV2Entity {
 
     @Column(COLUMN_CREATE_TIMEUUID)
     private UUID createTimeuuid;
+
+    @Column(COLUMN_CREATION_BUCKET)
+    private Instant creationBucket;
 
     @Column(COLUMN_CUSTOMER)
     private String customer;

@@ -150,9 +150,10 @@ class InstanceV2RepositoryTest extends InstanceTestBase {
         assertEquals(SpotInstanceInternalState.RUNNING, instanceV2Entity.get().getInstanceStateName());
         assertEquals(SpotInstanceRequestState.ACTIVE, instanceV2Entity.get().getRequestState());
         assertEquals(SpotInstanceStatus.FULFILLED, instanceV2Entity.get().getRequestStatusCode());
+        assertEquals(createdDate.truncatedTo(ChronoUnit.DAYS),
+                instanceV2Entity.get().getCreationBucket());
 
     }
-
 
     @ParameterizedTest
     @ValueSource(ints = {1, 0, -1})
