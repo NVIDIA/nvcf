@@ -18,6 +18,7 @@ package nvcaconfig
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +179,62 @@ func TestConfig_DecodeSharedStorageCapacity(t *testing.T) {
 		assert.ErrorContains(t, err, "Agent.SharedStorage.TaskData.StorageCapacity")
 		assert.ErrorContains(t, err, "quantities must match the regular expression")
 	})
+}
+
+func TestStringToResourceQuantityHookFunc_IgnoresUnsupportedTypes(t *testing.T) {
+	quantityType := reflect.TypeFor[resource.Quantity]()
+	tests := []struct {
+		name string
+		from reflect.Type
+		to   reflect.Type
+		data any
+	}{
+		{
+			name: "string for another destination type",
+			from: reflect.TypeFor[string](),
+			to:   reflect.TypeFor[string](),
+			data: "20Gi",
+		},
+		{
+			name: "string slice",
+			from: reflect.TypeFor[[]string](),
+			to:   quantityType,
+			data: []string{"20Gi"},
+		},
+		{
+			name: "interface slice",
+			from: reflect.TypeFor[[]any](),
+			to:   quantityType,
+			data: []any{"20Gi"},
+		},
+		{
+			name: "map",
+			from: reflect.TypeFor[map[string]any](),
+			to:   quantityType,
+			data: map[string]any{"value": "20Gi"},
+		},
+		{
+			name: "integer",
+			from: reflect.TypeFor[int](),
+			to:   quantityType,
+			data: 20,
+		},
+		{
+			name: "already parsed quantity",
+			from: quantityType,
+			to:   quantityType,
+			data: resource.MustParse("20Gi"),
+		},
+	}
+
+	hook := stringToResourceQuantityHookFunc()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := hook(tt.from, tt.to, tt.data)
+			require.NoError(t, err)
+			assert.Equal(t, tt.data, got)
+		})
+	}
 }
 
 func TestConfig_EncodeDecode_ServiceOAuthEndpoints(t *testing.T) {
