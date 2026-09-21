@@ -48,7 +48,7 @@ Every installation path follows the same high-level sequence:
 
 6. Install Low Latency Streaming if needed for streaming workloads. See [LLS Installation](./lls-installation.md).
 
-7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing, NVCF UI when your stack package includes that addon. See [Optional Enhancements](./optional-enhancements.md).
+7. Install optional enhancements, such as caches, low latency streaming, or Vanity Gateway routing, NVCF UI when your stack package includes that addon. See [Simulation Caches](/nvcf/compute-plane/simulation-caches), [LLS Installation](./lls-installation.md), [Gateway Routing](./gateway-routing.md), and [NVCF UI](./nvcf-ui.md).
 
 ## Kubernetes Cluster Requirements
 

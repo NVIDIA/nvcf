@@ -40,9 +40,9 @@ CLAUDE.md
 docs/dev/grpc-load-test-sli-guide.md
 docs/dev/http-load-test-sli-guide.md
 docs/dev/http-load-testing.md
-docs/self-managed/grpc-load-test-sli-guide.md
-docs/self-managed/http-load-test-sli-guide.md
-docs/self-managed/http-load-testing.md
+docs/overview/grpc-load-test-sli-guide.md
+docs/overview/http-load-test-sli-guide.md
+docs/overview/http-load-testing.md
 
 # Generated file. tools/collect-dependencies writes dependencies.md and CI
 # fails if it differs from the generator's output, so it cannot be edited to

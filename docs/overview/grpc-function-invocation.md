@@ -5,16 +5,16 @@ gRPC service. gRPC functions use the gRPC proxy instead of the HTTP invocation
 route.
 
 In self-hosted deployments, the gRPC route is exposed on the Gateway TCP
-listener. See [Gateway Routing](./gateway-routing.md) for listener and DNS
+listener. See [Gateway Routing](/nvcf/self-managed/gateway-routing) for listener and DNS
 configuration.
 
 Self-hosted split or multi-cluster deployments require additional enablement
 before workers can reach the grpc-proxy callback endpoint. See
-[gRPC Invocation Enablement](./grpc-invocation-enablement.md).
+[gRPC Invocation Enablement](/nvcf/self-managed/g-rpc-invocation-enablement).
 
 ## Invocation Path
 
-![gRPC invocation path](../overview/images/nvcf-grpc-invocation-path.svg)
+![gRPC invocation path](images/nvcf-grpc-invocation-path.svg)
 
 ```bash
 export GRPC_GATEWAY_ADDR=<grpc-gateway-address>
@@ -30,7 +30,7 @@ keeps its own gRPC Proxy, NVCF API and NATS stateful request path, worker CONNEC
 registration, and customer gRPC service placement. The cross-cluster line shows
 NATS chatter for regional stateful request-path coordination when configured.
 
-![gRPC multi-cluster invocation path](../overview/images/nvcf-grpc-multicluster-invocation.svg)
+![gRPC multi-cluster invocation path](images/nvcf-grpc-multicluster-invocation.svg)
 
 ## Metadata
 
@@ -93,9 +93,9 @@ clients that ignore cookie headers. This matters when an intermediary proxy for
 streaming, such as Kit streaming or Low Latency Streaming (LLS), uses HTTP/2 and
 reuses connections.
 
-![Single-client flow](../overview/images/grpc-single-client.png)
+![Single-client flow](images/grpc-single-client.png)
 
-![Reconnect flow](../overview/images/grpc-reconnect-flow.png)
+![Reconnect flow](images/grpc-reconnect-flow.png)
 
 <Warning>
 Do not pre-allocate streaming sessions with `POST` plus `X-NVCF-ABSORB` when a
@@ -160,5 +160,5 @@ gRPC responses. This error does not indicate a control-plane problem. The
 client should discard the stale request ID and reconnect without it to start a
 new session.
 
-See [Troubleshooting](./troubleshooting.md#grpc-session-resumption-fails)
+See [Troubleshooting](/nvcf/self-managed/troubleshooting#grpc-session-resumption-fails)
 for diagnosis steps.

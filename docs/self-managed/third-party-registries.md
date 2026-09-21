@@ -11,7 +11,7 @@ In NVCF, **third-party registries** refer to container registries used for hosti
 
 When a function is created or deployed, these credentials are used by different components:
 
-1. **NVCF API** - Stores and manages registry credentials, validates that images exist during function creation. See [self-hosted-api](./api.md) for the full API specification.
+1. **NVCF API** - Stores and manages registry credentials, validates that images exist during function creation. See [self-hosted-api](/nvcf/overview/api) for the full API specification.
 2. **NVCA (Cluster Agent)** - Renders Helm charts or pod specs for container functions and handles deployment lifecycle. Generates image pull credentials based on the registry type.
 3. **Worker init container** - Responsible for pulling the function container images during deployment.
 

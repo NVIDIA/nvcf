@@ -49,7 +49,7 @@ sequence and bucket model.
 ## See Also
 
 - [Architecture](./architecture.md) for components, data flow, and the Cassandra LWT lock behavior that elects the discovery leader.
-- [Configure Autoscaling](../configure-autoscaling.md) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
+- [Configure Autoscaling](/nvcf/overview/configure-autoscaling) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
 - [Function Autoscaler Operations](./operations.md) for health endpoints and operational guidance.
-- [Function Autoscaler Observability](./observability.md) for the metrics, traces, and logs emitted by the service.
+- [Autoscaler Metrics](/nvcf/observability/autoscaler) for the metrics, traces, and logs emitted by the service.
 - [Observability Configuration](/nvcf/observability/observability) for profiles and metrics backend configuration.

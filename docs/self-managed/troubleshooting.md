@@ -757,7 +757,7 @@ allows UDP, the NIC NSG blocks it by default.
    done
    ```
 
-See [Cloud Provider Network Requirements](./streaming-functions.md#cloud-provider-network-requirements)
+See [Cloud Provider Network Requirements](/nvcf/overview/streaming-functions#cloud-provider-network-requirements)
 for the full CSP networking checklist.
 
 ### gRPC Session Resumption Fails
@@ -804,7 +804,7 @@ creates a new session and returns a fresh request ID. Update the client to
 handle gRPC NotFound by discarding the stored request ID and retrying without
 it.
 
-See [Session Resumption](./grpc-function-invocation.md#session-resumption) for
+See [Session Resumption](/nvcf/overview/g-rpc-function-invocation#session-resumption) for
 the full request ID lifecycle.
 
 ## Getting Help

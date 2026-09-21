@@ -456,7 +456,7 @@ For shared stack or Function Autoscaler issues, see
 ## Related Documentation
 
 - [Function Autoscaling](/nvcf/self-managed/function-autoscaling-overview)
-- [Function Autoscaler Observability](/nvcf/self-managed/autoscaler-observability)
+- [Function Autoscaler Observability](./metrics/function-autoscaler/metrics.md)
 - [Cluster Monitoring](/nvcf/compute-plane/cluster-monitoring)
 - [OpenTelemetry documentation](https://opentelemetry.io/docs/)
 - [Prometheus documentation](https://prometheus.io/docs/)

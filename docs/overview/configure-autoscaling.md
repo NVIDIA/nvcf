@@ -1,6 +1,6 @@
 # Configure Function Autoscaling
 
-This page explains how to configure autoscaling on a deployed function using the NVCF API. For background on how the function autoscaler decides on instance counts, see the [Function Autoscaling Overview](./autoscaling/index.md). For the full schema of the request and response bodies referenced below, see the [NVCF OpenAPI specification](https://api.nvcf.nvidia.com/v3/openapi).
+This page explains how to configure autoscaling on a deployed function using the NVCF API. For background on how the function autoscaler decides on instance counts, see the [Function Autoscaling Overview](/nvcf/self-managed/function-autoscaling-overview). For the full schema of the request and response bodies referenced below, see the [NVCF OpenAPI specification](https://api.nvcf.nvidia.com/v3/openapi).
 
 Use these two endpoints:
 
@@ -164,6 +164,6 @@ The function version uses the platform's autoscaling policy after the policy cac
 
 ## See Also
 
-- [Function Autoscaling Overview](./autoscaling/index.md) for what the function autoscaler does and what it depends on.
+- [Function Autoscaling Overview](/nvcf/self-managed/function-autoscaling-overview) for what the function autoscaler does and what it depends on.
 - [CLI](./cli.md) for `nvcf-cli function deploy create` and `nvcf-cli function deploy update`, which wrap the same API surface.
 - [NVCF OpenAPI specification](https://api.nvcf.nvidia.com/v3/openapi) for the full request and response schema of the endpoints used on this page.

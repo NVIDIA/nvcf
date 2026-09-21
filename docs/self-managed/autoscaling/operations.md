@@ -61,7 +61,7 @@ failures change readiness instead.
 
 ## See also
 
-- [Function Autoscaler Observability](./observability.md) for the metrics and traces referenced in the symptoms above.
-- [Configure Autoscaling](../configure-autoscaling.md) for setting per-function scaling bounds and policy via the NVCF API.
+- [Autoscaler Metrics](/nvcf/observability/autoscaler) for the metrics and traces referenced in the symptoms above.
+- [Configure Autoscaling](/nvcf/overview/configure-autoscaling) for setting per-function scaling bounds and policy via the NVCF API.
 - [Architecture](./architecture.md) for the component layout these symptoms map to.
 - [Observability Configuration](/nvcf/observability/observability) for shared stack settings.

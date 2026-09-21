@@ -110,7 +110,7 @@ For self-hosted deployments, the CLI must be configured to communicate with
 your gateway. The gateway uses hostname-based routing for HTTP services.
 
 <Note>
-For Gateway routing details, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](./gateway-routing.md).
+For Gateway routing details, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](/nvcf/self-managed/gateway-routing).
 
 </Note>
 
@@ -121,7 +121,7 @@ the CLI. The CLI calls the configured API, API Keys,
 invocation, and gRPC endpoints during token minting, cluster registration,
 health checks, and function operations.
 
-Complete [Gateway quickstart](./gateway-routing.md#gateway-quickstart) before you
+Complete [Gateway quickstart](/nvcf/self-managed/gateway-routing#gateway-quickstart) before you
 configure the CLI. That procedure installs the Gateway API CRDs, creates and
 labels the required namespaces, installs Envoy Gateway, creates the GatewayClass
 and Gateway, waits for the Gateway to be programmed, and exports:
@@ -305,7 +305,7 @@ api_keys_service_url: "https://api-keys.nvcf.example.com"
 ```
 
 <Note>
-For complete instructions on setting up DNS records and TLS certificates, see [production-dns-https](./gateway-routing.md) in the Gateway Routing guide.
+For complete instructions on setting up DNS records and TLS certificates, see [production-dns-https](/nvcf/self-managed/gateway-routing) in the Gateway Routing guide.
 
 </Note>
 
@@ -1054,7 +1054,7 @@ Additional `function invoke` flags:
 
 ### Registry Credentials Commands
 
-Manage container registry credentials for function images and Helm charts. For comprehensive setup instructions including IAM configuration for AWS ECR, see [third-party-registries-self-hosted](./third-party-registries.md).
+Manage container registry credentials for function images and Helm charts. For comprehensive setup instructions including IAM configuration for AWS ECR, see [third-party-registries-self-hosted](/nvcf/self-managed/third-party-registries).
 
 | Command | Description |
 | --- | --- |
@@ -1102,7 +1102,7 @@ Manage container registry credentials for function images and Helm charts. For c
 ```
 
 <Note>
-Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](./third-party-registries.md).
+Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](/nvcf/self-managed/third-party-registries).
 </Note>
 
 ## Troubleshooting
@@ -1179,4 +1179,4 @@ Registry credential changes take up to about 5 minutes to take effect for task c
 | `task results` | `NVCF_NVCT_API_KEY` | `list_results` | `NVCF_NVCT_API_KEY` |
 | `task update-secrets` | `NVCF_NVCT_API_KEY` | `update_secrets` | `NVCF_NVCT_API_KEY` |
 
-For additional troubleshooting, see [self-hosted-troubleshooting](./troubleshooting.md).
+For additional troubleshooting, see [self-hosted-troubleshooting](/nvcf/self-managed/troubleshooting).

@@ -2,7 +2,7 @@
 
 Cloud Functions supports the ability to stream video, audio, and other data using WebRTC.
 
-![Low Latency Streaming Diagram](../overview/images/low-latency-streaming.png)
+![Low Latency Streaming Diagram](images/low-latency-streaming.png)
 
 For complete examples of LLS streaming functions, contact your NVIDIA representative for access to sample function containers.
 
@@ -58,13 +58,13 @@ done
 
 If the NIC NSG rule is missing, WebRTC clients receive
 `NVST_R_GENERIC_ERROR` while the function remains ACTIVE. See
-[streaming-troubleshooting](./troubleshooting.md#webrtc-streaming-fails-after-function-shows-active)
+[streaming-troubleshooting](/nvcf/self-managed/troubleshooting#webrtc-streaming-fails-after-function-shows-active)
 for diagnosis steps.
 
 ### AWS (EKS)
 
 For LLS streaming on EKS, security group and NLB configuration is covered
-in [LLS Installation](./lls-installation.md#security-group).
+in [LLS Installation](/nvcf/self-managed/lls-installation#security-group).
 
 ## Building the Streaming Server Application
 
@@ -205,7 +205,7 @@ This example focuses on NVCF integration. In production, you should also impleme
 
 For certain applications, TLS/SSL support is required. The proxy can be configured to use self-signed certificates for development and testing purposes by setting `PROXY_SSL_INSECURE=true`.
 
-Update `NVCF_SERVER` to point to your gateway address. See [gateway-routing](./gateway-routing.md) for details.
+Update `NVCF_SERVER` to point to your gateway address. See [gateway-routing](/nvcf/self-managed/gateway-routing) for details.
 
 </Note>
 

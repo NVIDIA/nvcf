@@ -25,7 +25,7 @@ Requests must already be OpenAI-compatible when they reach the LLM invocation ro
 
 The LLM Gateway path has these runtime components:
 
-![LLM invocation path](../overview/images/nvcf-llm-invocation-path.svg)
+![LLM invocation path](images/nvcf-llm-invocation-path.svg)
 
 1. Client sends an OpenAI-compatible request to the LLM invocation route.
 2. LLM API Gateway extracts the routing key from the `model` field, validates authorization, applies request and token rate limits, and validates endpoint-specific request fields.
@@ -45,7 +45,7 @@ request router and worker gateway path, not NATS worker streams. The
 worker-gateway arrows show that routers can target local or remote worker
 gateways when those workers are registered into the router mesh.
 
-![LLM multi-cluster invocation path](../overview/images/nvcf-llm-multicluster-invocation.svg)
+![LLM multi-cluster invocation path](images/nvcf-llm-multicluster-invocation.svg)
 
 ## Function Configuration
 
@@ -95,7 +95,7 @@ gateway does not wrap it in a second NVCF envelope.
 `pulsar`, or `random` for `llmConfig.routingMethod`.
 
 For the mapping to Stargate algorithms and the request-router allowlist, see
-[LLM Request Router Load Balancing](./llm-request-router-load-balancing.md).
+[LLM Request Router Load Balancing](/nvcf/self-managed/llm-request-router-load-balancing).
 
 `llmConfig.tokenRateLimit` applies a per-model token limit. Use one or more comma-separated limits in `<value>-<unit>` format, where `<value>` is a positive integer and `<unit>` is one of `S` (seconds), `M` (minutes), `H` (hours), `D` (days), or `W` (weeks). A single limit is one token budget over one time window, such as `1000-S`. A combined limit is multiple token budgets over distinct time windows, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`; do not repeat a unit in the same value.
 

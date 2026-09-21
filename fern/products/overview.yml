@@ -24,14 +24,58 @@ navigation:
         path: ../../docs/overview/manifest.md
       - page: Image Mirroring
         path: ../../docs/overview/image-mirroring.md
+      - page: Multi-Tenancy
+        path: ../../docs/overview/multi-tenancy.md
+
+  - section: Using Cloud Functions
+    skip-slug: true
+    contents:
+      - page: API
+        path: ../../docs/overview/api.md
+      - page: Function Creation
+        path: ../../docs/overview/function-creation.md
+      - page: LLM Gateway
+        path: ../../docs/overview/llm-gateway.md
+      - page: Generic HTTP Function Invocation
+        path: ../../docs/overview/generic-http-function-invocation.md
+      - page: gRPC Function Invocation
+        path: ../../docs/overview/grpc-function-invocation.md
+      - page: Container Functions
+        path: ../../docs/overview/container-functions.md
+      - page: Helm Functions
+        path: ../../docs/overview/helm-functions.md
+      - page: Streaming Functions
+        path: ../../docs/overview/streaming-functions.md
+      - page: Configure Autoscaling
+        path: ../../docs/overview/configure-autoscaling.md
+      - page: CLI
+        path: ../../docs/overview/cli.md
+      - page: Task Creation
+        path: ../../docs/overview/task-creation.md
+      - page: Container-Based Task Creation
+        path: ../../docs/overview/container-tasks.md
+      - page: Helm-Based Task Creation
+        path: ../../docs/overview/helm-tasks.md
+
+  - section: Load Testing
+    skip-slug: true
+    contents:
+      - page: gRPC Load Testing
+        path: ../../docs/overview/grpc-load-testing.md
+      - page: gRPC Load Test SLI Guide
+        path: ../../docs/overview/grpc-load-test-sli-guide.md
+      - page: HTTP Load Testing
+        path: ../../docs/overview/http-load-testing.md
+      - page: HTTP Load Test SLI Guide
+        path: ../../docs/overview/http-load-test-sli-guide.md
+      - page: HTTP Soak Testing
+        path: ../../docs/overview/http-soak-testing.md
 
   - section: Development
     skip-slug: true
     contents:
       - page: Architecture Overview
         path: ../../docs/dev/architecture.md
-      - page: Storage-Agnostic Cache Architecture
-        path: ../../docs/dev/sdd-storage-agnostic-cache-architecture.md
       - section: Local Development
         skip-slug: true
         contents:
@@ -45,8 +89,6 @@ navigation:
             path: ../../docs/overview/local-development/multi-cluster-cli.md
           - page: Multi-cluster (Helmfile)
             path: ../../docs/overview/local-development/multi-cluster-helmfile.md
-      - page: Release Process
-        path: ../../docs/dev/release-process.md
 
   - section: Managed (Legacy)
     skip-slug: true

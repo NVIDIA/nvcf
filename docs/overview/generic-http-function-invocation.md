@@ -23,7 +23,7 @@ HTTP invocation enters through the public invocation endpoint and is handled by
 Invocation Service. The worker request path delivers the request to the
 selected customer function and returns the response through Invocation Service.
 
-![HTTP invocation path](../overview/images/nvcf-http-invocation-path.svg)
+![HTTP invocation path](images/nvcf-http-invocation-path.svg)
 
 ### Multi-Cluster View
 
@@ -32,7 +32,7 @@ invocation endpoint. Each region keeps its own Invocation Service, NATS worker
 request path, and customer HTTP function placement. The cross-cluster line shows
 the NATS chatter that supports regional request-path state when configured.
 
-![HTTP multi-cluster invocation path](../overview/images/nvcf-http-multicluster-invocation.svg)
+![HTTP multi-cluster invocation path](images/nvcf-http-multicluster-invocation.svg)
 
 ## HTTP Invocation
 
@@ -250,7 +250,7 @@ can still use the platform error response format. For platform API behavior, see
 
 <Warning>
 Emit logs from your inference container so invocation failures can be diagnosed.
-See [Observability](/nvcf/observability/observability) and [Troubleshooting](./troubleshooting.md)
+See [Observability](/nvcf/observability/observability) and [Troubleshooting](/nvcf/self-managed/troubleshooting)
 for logging and debugging guidance.
 
 </Warning>

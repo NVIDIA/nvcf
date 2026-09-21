@@ -631,9 +631,9 @@ When the LLM invocation route is enabled in self-managed deployments, send OpenA
 ### Invocation Path Diagrams
 
 For local and multi-cluster invocation-path diagrams, see
-[Generic HTTP Function Invocation](./generic-http-function-invocation.md),
-[gRPC Function Invocation](./grpc-function-invocation.md), and
-[LLM Gateway](./llm-gateway.md).
+[Generic HTTP Function Invocation](/nvcf/overview/generic-http-function-invocation),
+[gRPC Function Invocation](/nvcf/overview/g-rpc-function-invocation), and
+[LLM Gateway](/nvcf/overview/llm-gateway).
 
 ### Vanity Gateway (Optional)
 
@@ -863,7 +863,7 @@ api_host: "api.a1b2c3d4.us-west-2.elb.amazonaws.com"
 invoke_host: "invocation.a1b2c3d4.us-west-2.elb.amazonaws.com"
 ```
 
-See [cli-configuration](./cli.md) for complete CLI configuration documentation.
+See [cli-configuration](/nvcf/overview/cli) for complete CLI configuration documentation.
 
 ## Production: DNS and HTTPS
 
@@ -1114,6 +1114,6 @@ For gRPC connection problems:
 ## Related Documentation
 
 - [helmfile-installation](./helmfile-installation.md) - Helmfile values that consume Gateway quickstart outputs
-- [cli-configuration](./cli.md) - CLI configuration including Host header settings
+- [cli-configuration](/nvcf/overview/cli) - CLI configuration including Host header settings
 - [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/)
 - [Envoy Gateway](https://gateway.envoyproxy.io/)

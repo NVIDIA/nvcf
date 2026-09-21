@@ -24,7 +24,7 @@ own documentation set and version menu.
   : Compare the one-click and Helmfile installation paths.
 - [GPU Cluster Setup](/nvcf/compute-plane/gpu-cluster-setup)
   : Connect GPU clusters to the NVCF control plane.
-- [Configuration](/nvcf/self-managed/optional-enhancements)
-  : Configure gateway routing, registries, and optional enhancements.
-- [Using Cloud Functions](/nvcf/self-managed/api)
+- [Configuration](/nvcf/self-managed/gateway-routing)
+  : Configure gateway routing, registries, and invocation options.
+- [Using Cloud Functions](./api.md)
   : Create and invoke functions using the NVCF API and CLI.

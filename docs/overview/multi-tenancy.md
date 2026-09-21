@@ -17,7 +17,7 @@ A function is deployed with a private or access-controlled endpoint. Each invoki
 **Characteristics:**
 
 - Helm-deployed functions run in a dedicated Kubernetes namespace, isolated from other functions at the namespace boundary. Custom container functions run in the shared `nvcf-backend` namespace and do not receive namespace-level isolation.
-- When [Account Isolation](./configuration.md#account-isolated-clusters) is enabled on the cluster, workload pods are scheduled on nodes exclusively reserved for that NCA account — no other account's pods share those nodes.
+- When [Account Isolation](/nvcf/compute-plane/cluster-configuration#account-isolated-clusters) is enabled on the cluster, workload pods are scheduled on nodes exclusively reserved for that NCA account — no other account's pods share those nodes.
 - Network policies restrict pod-to-pod communication across namespaces (subject to the cluster's CNI supporting Kubernetes NetworkPolicy).
 
 **Best for:** Tenants with strict data separation requirements who can accept higher resource cost in exchange for stronger isolation.
@@ -45,10 +45,10 @@ The table below summarizes the isolation available at each layer and how to enab
 | Layer | Default Behavior | Stronger Option | How to Enable |
 |---|---|---|---|
 | **Namespace** | Helm-deployed functions run in a dedicated Kubernetes namespace; custom container functions run in the shared `nvcf-backend` namespace | — | Namespace isolation is automatic for helm deployments; not available for custom container deployments |
-| **Network** | Egress and cross-namespace traffic controlled by NetworkPolicy | Custom policies via `nvca-namespace-networkpolicies` configmap | See [Network Configuration](./configuration.md#network-configuration) |
-| **Node (function-level)** | Functions and tasks may share nodes | One active workload instance per node via k8s scheduling constraints | Enable `HostIsolation` cluster attribute — see [Host-Isolated Clusters](./configuration.md#host-isolated-clusters) |
-| **Node (account-level)** | Multiple NCA accounts may share nodes | Hard anti-affinity: pods from different NCA accounts are never co-located via k8s scheduling constraints | Enable `AccountIsolation` cluster attribute — see [Account-Isolated Clusters](./configuration.md#account-isolated-clusters) |
-| **Container runtime** | Standard container runtime (runc) | Kata Containers — each pod runs inside a lightweight VM | Enable `KataRuntimeIsolation` cluster attribute — see [Kata Container-Isolated Workloads](./configuration.md#kata-container-isolated-workloads) |
+| **Network** | Egress and cross-namespace traffic controlled by NetworkPolicy | Custom policies via `nvca-namespace-networkpolicies` configmap | See [Network Configuration](/nvcf/compute-plane/cluster-configuration#network-configuration) |
+| **Node (function-level)** | Functions and tasks may share nodes | One active workload instance per node via k8s scheduling constraints | Enable `HostIsolation` cluster attribute — see [Host-Isolated Clusters](/nvcf/compute-plane/cluster-configuration#host-isolated-clusters) |
+| **Node (account-level)** | Multiple NCA accounts may share nodes | Hard anti-affinity: pods from different NCA accounts are never co-located via k8s scheduling constraints | Enable `AccountIsolation` cluster attribute — see [Account-Isolated Clusters](/nvcf/compute-plane/cluster-configuration#account-isolated-clusters) |
+| **Container runtime** | Standard container runtime (runc) | Kata Containers — each pod runs inside a lightweight VM | Enable `KataRuntimeIsolation` cluster attribute — see [Kata Container-Isolated Workloads](/nvcf/compute-plane/cluster-configuration#kata-container-isolated-workloads) |
 | **Hardware (GPU)** | Shared GPU; no hardware isolation | **Not supported by NVCF** — hardware-level GPU isolation is the infrastructure provider's responsibility | — |
 
 <Warning>

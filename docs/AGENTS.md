@@ -13,7 +13,7 @@ external workspace index.
 The published site is one Fern site with four products. Each stack product
 has its own version menu. Overview is unversioned.
 
-- `docs/overview/`: unversioned shared documentation: compatibility matrix, quickstart, manifest, image mirroring, release-notes index, local development, and shared assets under `images/` and `samples/`.
+- `docs/overview/`: unversioned shared documentation: compatibility matrix, quickstart, manifest, image mirroring, multi-tenancy, function usage (API, CLI, function and task creation, invocation, LLM gateway), load testing, release-notes index, local development, and shared assets under `images/` and `samples/`.
 - `docs/self-managed/`: top-of-tree Self-Managed Stack (control plane) documentation published as `dev`.
 - `docs/compute-plane/`: top-of-tree Compute Plane Stack documentation published as `dev`.
 - `docs/observability/`: top-of-tree Observability Stack documentation published as `dev`.

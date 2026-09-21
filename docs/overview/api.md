@@ -1,6 +1,6 @@
 # API
 
-This page provides a brief overview of the NVCF API. All API endpoints are served through your gateway. See [gateway-routing](./gateway-routing.md) for details on configuring your gateway domain and DNS.
+This page provides a brief overview of the NVCF API. All API endpoints are served through your gateway. See [gateway-routing](/nvcf/self-managed/gateway-routing) for details on configuring your gateway domain and DNS.
 
 ## OpenAPI Specification
 
@@ -9,7 +9,7 @@ This page does not cover all endpoints.
 Please refer to the [OpenAPI Spec](https://api.nvcf.nvidia.com/v3/openapi) for the latest API information.
 
 <Note>
-The OpenAPI spec linked above documents the full NVCF API surface. Replace the hosted domain with your own gateway domain when making requests. See [gateway-routing](./gateway-routing.md) for your deployment's base URL.
+The OpenAPI spec linked above documents the full NVCF API surface. Replace the hosted domain with your own gateway domain when making requests. See [gateway-routing](/nvcf/self-managed/gateway-routing) for your deployment's base URL.
 
 </Note>
 

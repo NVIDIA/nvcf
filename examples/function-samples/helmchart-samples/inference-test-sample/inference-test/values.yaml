@@ -31,5 +31,5 @@ resources:
     memory: 1Gi
 
 # When true, render nvcf-workload-config so NVCA uses worker container readiness
-# for instance health instead of all chart objects. See docs/self-managed/helm-functions.md.
+# for instance health instead of all chart objects. See docs/overview/helm-functions.md.
 statusByWorkerReadiness: false

@@ -3,7 +3,7 @@
 
 [![bazel](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml/badge.svg?branch=main)](https://github.com/NVIDIA/nvcf/actions/workflows/bazel.yml?query=branch%3Amain)
 
-[Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/self-managed/installation.md) | [API Reference](docs/self-managed/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
+[Docs](https://docs.nvidia.com/nvcf/overview) | [Roadmap](#roadmap) | [Installation](docs/self-managed/installation.md) | [API Reference](docs/overview/api.md) | [Contributing](CONTRIBUTING.md) | [License](#license) | [build.nvidia.com Powered By NVCF](https://build.nvidia.com/)
 
 > **Repository move in progress.** This repo is transferring from `NVIDIA/nvcf` to
 > `dsx-ai-factory/nvcf`. Now targeted for **after 2026-09-27** — exact date and
@@ -90,7 +90,7 @@ nvcf-cli function invoke --request-body '{"message": "hello world"}'
 ```
 
 For the full setup, cleanup, and configuration flow, see
-[`docs/self-managed/cli.md`](docs/self-managed/cli.md) and
+[`docs/overview/cli.md`](docs/overview/cli.md) and
 [`docs/overview/quickstart.md`](docs/overview/quickstart.md).
 
 ## Repository map
