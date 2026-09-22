@@ -34,6 +34,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterByGroupIdAndIdKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterGroupsByAuthorizedAccountsKey;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
+import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.ClusterAuthorizationService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
@@ -67,6 +68,7 @@ class ClustersServiceTest {
     private static final String OTHER_GPU = "dummy-gpu";
     private static final String ALLOWED_NCA = "allowed-nca";
     private static final String DISALLOWED_NCA = "disallowed-nca";
+    private static final String GATED_NCA = "GatedNca1aBcDeF";
     private static final String WILDCARD = ClusterRepository.WILDCARD;
 
     @Mock
@@ -156,6 +158,65 @@ class ClustersServiceTest {
         assertEquals(Set.of(RESTRICTED_GPU, OTHER_GPU), gpuNames(byocGroup), "BYOC groups are never gated");
     }
 
+    @Test
+    void getRegisteredClustersForNcaId_dropsGatedGpusAndInstanceTypes_forGatedNca() {
+        icmsConfigurationProperties.setGpuGating(Map.of(
+                GATED_NCA, Map.of(OTHER_GPU, List.of(instanceTypeName(OTHER_GPU, 0)))));
+        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), GATED_NCA);
+
+        ClusterGroupResponse response =
+                clustersService.getRegisteredClustersForNcaId(GATED_NCA, InstanceTypeUsageEnum.DEFAULT);
+
+        ClusterGroups byocGroup = findGroup(response, BYOC_GROUP_NAME);
+        assertEquals(Set.of(OTHER_GPU), gpuNames(byocGroup),
+                "gpu gating applies to BYOC groups, unlike gpu-allowed-nca-ids");
+        assertEquals(Set.of(instanceTypeName(OTHER_GPU, 0)), instanceTypeNames(byocGroup, OTHER_GPU),
+                "only the allowed instance type of the allowed GPU survives");
+    }
+
+    @Test
+    void getRegisteredClustersForNcaId_dropsWholeGroup_whenGatingRemovesEveryGpu() {
+        icmsConfigurationProperties.setGpuGating(Map.of(
+                GATED_NCA, Map.of("dummy-gpu-not-in-any-group", List.of("dummy-instance-type"))));
+        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), GATED_NCA);
+
+        ClusterGroupResponse response =
+                clustersService.getRegisteredClustersForNcaId(GATED_NCA, InstanceTypeUsageEnum.DEFAULT);
+
+        assertTrue(response.getClusterGroup().isEmpty(),
+                "cluster group must be dropped entirely when gating removes all of its GPUs");
+    }
+
+    /** A GPU whose every instance type is gated out is dropped, not returned empty. */
+    @Test
+    void getRegisteredClustersForNcaId_dropsGpu_whenAllItsInstanceTypesAreGatedOut() {
+        icmsConfigurationProperties.setGpuGating(Map.of(
+                GATED_NCA, Map.of(OTHER_GPU, List.of("dummy-instance-type-not-on-this-gpu"))));
+        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(OTHER_GPU), GATED_NCA);
+
+        ClusterGroupResponse response =
+                clustersService.getRegisteredClustersForNcaId(GATED_NCA, InstanceTypeUsageEnum.DEFAULT);
+
+        assertTrue(response.getClusterGroup().isEmpty(),
+                "a GPU left with no instance types must be dropped, taking the empty group with it");
+    }
+
+    @Test
+    void getRegisteredClustersForNcaId_leavesUngatedNcaUntouched() {
+        icmsConfigurationProperties.setGpuGating(Map.of(
+                GATED_NCA, Map.of(OTHER_GPU, List.of(instanceTypeName(OTHER_GPU, 0)))));
+        stubBartGroup(BYOC_GROUP_ID, BYOC_GROUP_NAME, Set.of(RESTRICTED_GPU, OTHER_GPU), ALLOWED_NCA);
+
+        ClusterGroupResponse response =
+                clustersService.getRegisteredClustersForNcaId(ALLOWED_NCA, InstanceTypeUsageEnum.DEFAULT);
+
+        ClusterGroups byocGroup = findGroup(response, BYOC_GROUP_NAME);
+        assertEquals(Set.of(RESTRICTED_GPU, OTHER_GPU), gpuNames(byocGroup),
+                "an account without a gating entry is unaffected");
+        assertEquals(Set.of(instanceTypeName(OTHER_GPU, 0), instanceTypeName(OTHER_GPU, 1)),
+                instanceTypeNames(byocGroup, OTHER_GPU));
+    }
+
     /** Wires the BART repository calls so the WILDCARD account exposes a single group with a READY cluster. */
     private void stubBartGroup(String groupId, String groupName, Set<String> gpuNames, String requestingNcaId) {
         ClusterGroupsByAuthorizedAccountsEntity groupEntity = ClusterGroupsByAuthorizedAccountsEntity.builder()
@@ -167,7 +228,11 @@ class ClustersServiceTest {
                 .ncaId(WILDCARD)
                 .authorizedNcaIds(Set.of())
                 .gpus(gpuNames.stream()
-                        .map(name -> GpuUdt.builder().name(name).instanceTypes(Set.of()).build())
+                        .map(name -> GpuUdt.builder().name(name)
+                                .instanceTypes(Set.of(
+                                        InstanceTypeUdt.builder().name(instanceTypeName(name, 0)).build(),
+                                        InstanceTypeUdt.builder().name(instanceTypeName(name, 1)).build()))
+                                .build())
                         .collect(Collectors.toSet()))
                 .build();
 
@@ -202,5 +267,17 @@ class ClustersServiceTest {
         return clusterGroup.getGpus().stream()
                 .map(GpuResponse::getName)
                 .collect(Collectors.toSet());
+    }
+
+    private Set<String> instanceTypeNames(ClusterGroups clusterGroup, String gpuName) {
+        return clusterGroup.getGpus().stream()
+                .filter(gpu -> gpuName.equals(gpu.getName()))
+                .flatMap(gpu -> gpu.getInstanceTypes().stream())
+                .map(ClusterGroups.InstanceTypeResponse::getName)
+                .collect(Collectors.toSet());
+    }
+
+    private static String instanceTypeName(String gpuName, int index) {
+        return gpuName + ".instance-type-" + index;
     }
 }

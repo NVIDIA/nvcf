@@ -271,7 +271,45 @@ public class AccountInfoService {
                 }
             }
         }
+
+        // Applied last, once every region, cluster, capacity and instance type filter has run,
+        // so a gating removal is never confused with an unrelated reason for an empty response.
+        applyGpuGating(result, ncaId);
+
         return result;
+    }
+
+
+    /**
+     * Removes GPUs and instance types withheld from this NCA ID by {@code icms.gpu-gating}.
+     * No-op for accounts without gating, which keeps the existing behavior everywhere the
+     * property is unset. A GPU left with no instance types is dropped entirely.
+     */
+    private void applyGpuGating(@NotNull InstanceTypeAvailabilityResponse result,
+                                @NotNull String ncaId) {
+        if (!icmsConfigurationProperties.hasGpuGating(ncaId) || result.getGpus() == null) {
+            return;
+        }
+
+        result.getGpus().removeIf(gpu -> {
+            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getGpuName())) {
+                return true;
+            }
+
+            if (gpu.getInstanceTypes() != null) {
+                gpu.getInstanceTypes().removeIf(
+                        instanceType -> !icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                                ncaId, gpu.getGpuName(), instanceType.getInstanceName()));
+            }
+
+            boolean noInstanceTypesLeft =
+                    gpu.getInstanceTypes() == null || gpu.getInstanceTypes().isEmpty();
+            if (noInstanceTypesLeft) {
+                log.info("NcaId {}: GPU {} removed from account info response because gpu gating "
+                                 + "left it with no instance types", ncaId, gpu.getGpuName());
+            }
+            return noInstanceTypesLeft;
+        });
     }
 
 

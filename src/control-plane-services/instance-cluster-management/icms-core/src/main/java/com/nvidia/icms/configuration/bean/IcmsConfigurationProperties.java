@@ -24,9 +24,13 @@ import io.micrometer.observation.annotation.Observed;
 import jakarta.annotation.Nullable;
 import jakarta.annotation.PostConstruct;
 import jakarta.validation.constraints.NotNull;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -171,11 +175,30 @@ public class IcmsConfigurationProperties {
     // capacity to dedicated orgs. Empty by default = existing behavior.
     private Map<String, List<String>> gpuAllowedNcaIds = new HashMap<>();
 
+    // Per-NCA allowlist of GPUs and their instance types: ncaId -> gpuName -> instanceTypes.
+    // Empty by default = existing behavior. See getSanitizedGpuGating() for malformed entries.
+    private Map<String, Map<String, List<String>>> gpuGating = new HashMap<>();
+
+    // Lazily built, validated view of gpuGating: ncaId -> gpuName -> instanceTypes.
+    // Rebuilt per bean instance, so @RefreshScope gives a fresh view after each remote refresh.
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
+    @EqualsAndHashCode.Exclude
+    private volatile Map<String, Map<String, Set<String>>> sanitizedGpuGating;
+
     private Set<String> supportedInstanceTypes = new HashSet<>();
     private Set<String> supportedGpus = new HashSet<>();
 
     private static final String MESG_REMOTE_CONFIG_REFRESH =
             "Remote config refresh observed: icms.instance-batch-count = %s";
+
+    private static final String MESG_GPU_GATING_NO_GPUS =
+            "icms.gpu-gating lists ncaId {} with no GPUs, ignoring the entry and leaving the " +
+                    "account ungated";
+
+    private static final String MESG_GPU_GATING_NO_INSTANCE_TYPES =
+            "icms.gpu-gating lists GPU {} for ncaId {} with no instance types, denying the GPU " +
+                    "for this account";
 
     // Temporary verification hook; remove after remote config support is complete.
     @EventListener(RefreshScopeRefreshedEvent.class)
@@ -303,6 +326,130 @@ public class IcmsConfigurationProperties {
             return true;
         }
         return allowed.contains("*") || allowed.contains(ncaId);
+    }
+
+    public boolean hasGpuGating(@Nullable String ncaId) {
+        return allowedGpusFor(ncaId) != null;
+    }
+
+    /**
+     * Whether {@code icms.gpu-gating} lets the NCA ID see and allocate the given GPU.
+     *
+     * @param ncaId   the NGC org / NCA ID
+     * @param gpuName the GPU type
+     * @return {@code true} if allowed, including when the NCA ID has no gating entry
+     */
+    public boolean isGpuAllowedForNca(@Nullable String ncaId, @Nullable String gpuName) {
+        Map<String, Set<String>> allowedByGpu = allowedGpusFor(ncaId);
+        return allowedByGpu == null || allowedByGpu.containsKey(gpuName);
+    }
+
+    /**
+     * Whether {@code icms.gpu-gating} lets the NCA ID see and allocate the given instance type.
+     * An instance type on a GPU that is itself gated out is never allowed.
+     *
+     * @param ncaId        the NGC org / NCA ID
+     * @param gpuName      the GPU type the instance type belongs to
+     * @param instanceType the instance type name
+     * @return {@code true} if allowed, including when the NCA ID has no gating entry
+     */
+    public boolean isInstanceTypeAllowedForNca(@Nullable String ncaId, @Nullable String gpuName,
+                                               @Nullable String instanceType) {
+        Map<String, Set<String>> allowedByGpu = allowedGpusFor(ncaId);
+        if (allowedByGpu == null) {
+            return true;
+        }
+        Set<String> allowedInstanceTypes = allowedByGpu.get(gpuName);
+        return allowedInstanceTypes != null && allowedInstanceTypes.contains(instanceType);
+    }
+
+    @Nullable
+    private Map<String, Set<String>> allowedGpusFor(@Nullable String ncaId) {
+        if (ncaId == null) {
+            return null;
+        }
+        return getSanitizedGpuGating().get(ncaId);
+    }
+
+    /**
+     * Resets the cached gating view so the next read re-reads {@link #gpuGating}. Declared
+     * explicitly so Lombok does not generate a setter that would leave the cache stale.
+     */
+    public void setGpuGating(@Nullable Map<String, Map<String, List<String>>> gpuGating) {
+        this.gpuGating = gpuGating;
+        this.sanitizedGpuGating = null;
+    }
+
+    /**
+     * Validated view of {@code icms.gpu-gating}, built once per bean instance. Validation lives
+     * here so a malformed remote config can never fail startup or a {@code @RefreshScope} rebind; 
+     * a bad entry is logged and dropped instead.
+     *
+     * <p>Malformed entries are handled asymmetrically on purpose:
+     * <ul>
+     *   <li>An NCA ID with no GPUs configured at all is treated as ungated</li>
+     *   <li>A GPU with no instance types is dropped, which denies that GPU. Reading it as
+     *       "all instance types" would let a truncated config silently widen access, so the
+     *       blast radius is kept to one GPU instead.</li>
+     * </ul>
+     */
+    private Map<String, Map<String, Set<String>>> getSanitizedGpuGating() {
+        Map<String, Map<String, Set<String>>> sanitized = sanitizedGpuGating;
+        if (sanitized == null) {
+            synchronized (this) {
+                sanitized = sanitizedGpuGating;
+                if (sanitized == null) {
+                    sanitized = sanitizeGpuGating();
+                    sanitizedGpuGating = sanitized;
+                }
+            }
+        }
+        return sanitized;
+    }
+
+    private Map<String, Map<String, Set<String>>> sanitizeGpuGating() {
+        if (gpuGating == null || gpuGating.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, Map<String, Set<String>>> sanitized = new HashMap<>();
+        for (Map.Entry<String, Map<String, List<String>>> ncaEntry : gpuGating.entrySet()) {
+            String ncaId = ncaEntry.getKey();
+            Map<String, List<String>> configuredGpus = ncaEntry.getValue();
+
+            if (configuredGpus == null || configuredGpus.isEmpty()) {
+                log.error(MESG_GPU_GATING_NO_GPUS, ncaId);
+                continue;
+            }
+
+            Map<String, Set<String>> allowedByGpu = new HashMap<>();
+            for (Map.Entry<String, List<String>> gpuEntry : configuredGpus.entrySet()) {
+                Set<String> instanceTypes = toNonBlankSet(gpuEntry.getValue());
+                if (instanceTypes.isEmpty()) {
+                    log.error(MESG_GPU_GATING_NO_INSTANCE_TYPES, gpuEntry.getKey(), ncaId);
+                    continue;
+                }
+                allowedByGpu.put(gpuEntry.getKey(), instanceTypes);
+            }
+
+            // Kept even when every GPU was dropped: the org asked to be gated, so denying its
+            // malformed GPUs is safer than silently reverting it to unrestricted access.
+            sanitized.put(ncaId, allowedByGpu);
+        }
+        return sanitized;
+    }
+
+    private static Set<String> toNonBlankSet(@Nullable List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> result = new HashSet<>();
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                result.add(value);
+            }
+        }
+        return result;
     }
 
     /**

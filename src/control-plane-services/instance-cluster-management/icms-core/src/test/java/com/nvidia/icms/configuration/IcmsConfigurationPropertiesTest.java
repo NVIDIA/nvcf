@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.integration.IntegrationTest;
 import com.nvidia.icms.outbound.sqs.QueueManager;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Assertions;
@@ -31,6 +32,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 public class IcmsConfigurationPropertiesTest extends IntegrationTest {
 
     private static final String qNameFormat = "gdn-spot-instance-requests-%s.fifo";
+
+    // Declared under icms.gpu-gating in application-test.yaml.
+    private static final String GATED_NCA_ID = "DummyGatedNcaId1aBcDeF";
 
     @Autowired
     private QueueManager queueManager;
@@ -144,6 +148,182 @@ public class IcmsConfigurationPropertiesTest extends IntegrationTest {
         // Empty list for the GPU -> treated as unrestricted.
         props.setGpuAllowedNcaIds(Map.of("dummy-restricted-gpu", List.of()));
         assertTrue(props.isNcaAllowedForGpu("dummy-restricted-gpu", "other-nca"));
+    }
+
+    /**
+     * Binding regression guard. Relaxed binding must not normalize the mixed-case NCA ID key
+     * declared under icms.gpu-gating in application-test.yaml, or every gated account silently
+     * becomes ungated.
+     */
+    @Test
+    void test_gpuGating_bindsMixedCaseNcaIdKeyVerbatim() {
+        assertTrue(icmsConfigurationProperties.hasGpuGating(GATED_NCA_ID));
+        assertFalse(icmsConfigurationProperties.hasGpuGating(GATED_NCA_ID.toLowerCase()));
+
+        assertTrue(icmsConfigurationProperties.isGpuAllowedForNca(GATED_NCA_ID, "DUMMY_GPU_1"));
+        assertTrue(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                GATED_NCA_ID, "DUMMY_GPU_1", "dummy_gpu_1.large"));
+        assertFalse(icmsConfigurationProperties.isInstanceTypeAllowedForNca(
+                GATED_NCA_ID, "DUMMY_GPU_1", "dummy_gpu_1.2xlarge"));
+        assertFalse(icmsConfigurationProperties.isGpuAllowedForNca(GATED_NCA_ID, "DUMMY_GPU_2"));
+    }
+
+    @Test
+    void test_gpuGating_allowsAndDenies() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+        props.setGpuGating(Map.of("gated-nca", Map.of(
+                "DUMMY_GPU_1", List.of("dummy_gpu_1.large", "dummy_gpu_1.xlarge"),
+                "DUMMY_GPU_2", List.of("dummy_gpu_2.large"))));
+
+        assertTrue(props.hasGpuGating("gated-nca"));
+        assertTrue(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_1"));
+        assertTrue(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_1", "dummy_gpu_1.large"));
+
+        // Instance type not on the allowlist for an allowed GPU.
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_1", "dummy_gpu_1.4xlarge"));
+        // GPU not on the allowlist at all, and every instance type under it.
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_3"));
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_3", "dummy_gpu_3.large"));
+
+        // A different NCA ID is untouched by another account's gating.
+        assertFalse(props.hasGpuGating("other-nca"));
+        assertTrue(props.isGpuAllowedForNca("other-nca", "DUMMY_GPU_3"));
+        assertTrue(props.isInstanceTypeAllowedForNca("other-nca", "DUMMY_GPU_3", "dummy_gpu_3.large"));
+    }
+
+    /**
+     * Missing or empty config must never gate anything and must never throw, so deployments
+     * without icms.gpu-gating keep the existing behavior.
+     */
+    @Test
+    void test_gpuGating_absentConfigIsNoOp() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+
+        // Property omitted entirely -> field initializer.
+        assertFalse(props.hasGpuGating("any-nca"));
+        assertTrue(props.isGpuAllowedForNca("any-nca", "DUMMY_GPU_1"));
+        assertTrue(props.isInstanceTypeAllowedForNca("any-nca", "DUMMY_GPU_1", "dummy_gpu_1.large"));
+
+        // "gpu-gating:" with nothing under it.
+        props.setGpuGating(Map.of());
+        assertFalse(props.hasGpuGating("any-nca"));
+        assertTrue(props.isGpuAllowedForNca("any-nca", "DUMMY_GPU_1"));
+
+        // Map set to null outright.
+        props.setGpuGating(null);
+        assertFalse(props.hasGpuGating("any-nca"));
+        assertTrue(props.isGpuAllowedForNca("any-nca", "DUMMY_GPU_1"));
+        assertTrue(props.isInstanceTypeAllowedForNca("any-nca", "DUMMY_GPU_1", "dummy_gpu_1.large"));
+
+        // NCA ID present with no GPUs: fail open, since denying everything would black-hole the
+        // whole org over one typo.
+        Map<String, List<String>> noGpus = new HashMap<>();
+        props.setGpuGating(Map.of("gated-nca", noGpus));
+        assertFalse(props.hasGpuGating("gated-nca"));
+        assertTrue(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_1"));
+
+        // NCA ID present with a null GPU map.
+        Map<String, Map<String, List<String>>> nullGpus = new HashMap<>();
+        nullGpus.put("gated-nca", null);
+        props.setGpuGating(nullGpus);
+        assertFalse(props.hasGpuGating("gated-nca"));
+        assertTrue(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_1"));
+    }
+
+    @Test
+    void test_gpuGating_nullNcaIdIsUngated() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+
+        // Unconfigured: the path every existing deployment takes.
+        assertFalse(props.hasGpuGating(null));
+        assertTrue(props.isGpuAllowedForNca(null, "DUMMY_GPU_1"));
+        assertTrue(props.isInstanceTypeAllowedForNca(null, "DUMMY_GPU_1", "dummy_gpu_1.large"));
+
+        // Configured for someone else: a null account is still nobody's gating entry.
+        props.setGpuGating(Map.of("gated-nca", Map.of("DUMMY_GPU_1", List.of("dummy_gpu_1.large"))));
+        assertFalse(props.hasGpuGating(null));
+        assertTrue(props.isGpuAllowedForNca(null, "DUMMY_GPU_2"));
+        assertTrue(props.isInstanceTypeAllowedForNca(null, "DUMMY_GPU_2", "dummy_gpu_2.large"));
+    }
+
+    @Test
+    void test_gpuGating_nullGpuOrInstanceTypeIsDeniedForGatedNca() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+        props.setGpuGating(Map.of("gated-nca", Map.of("DUMMY_GPU_1", List.of("dummy_gpu_1.large"))));
+
+        assertFalse(props.isGpuAllowedForNca("gated-nca", null));
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", null, "dummy_gpu_1.large"));
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_1", null));
+    }
+
+    /**
+     * gpu-allowed-nca-ids and gpu-gating are separate maps answering independently, so both must
+     * pass and neither rewrites the other's verdict. A deployment can run either or both.
+     */
+    @Test
+    void test_gpuGating_isIndependentOfGpuAllowedNcaIds() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+        props.setGpuAllowedNcaIds(Map.of("DUMMY_GPU_1", List.of("gated-nca")));
+        props.setGpuGating(Map.of("gated-nca", Map.of("DUMMY_GPU_2", List.of("dummy_gpu_2.large"))));
+
+        // Allowlisted for DUMMY_GPU_1 by the older gate, yet gating still withholds it.
+        assertTrue(props.isNcaAllowedForGpu("DUMMY_GPU_1", "gated-nca"));
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_1"));
+
+        // Allowed by gating, and the older gate does not restrict this GPU at all.
+        assertTrue(props.isNcaAllowedForGpu("DUMMY_GPU_2", "gated-nca"));
+        assertTrue(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_2"));
+
+        // Denied by the older gate, untouched by gating: the other account has no gating entry.
+        assertFalse(props.isNcaAllowedForGpu("DUMMY_GPU_1", "other-nca"));
+        assertTrue(props.isGpuAllowedForNca("other-nca", "DUMMY_GPU_1"));
+    }
+
+    /**
+     * A GPU listed with no instance types is a config error, not a wildcard. It must deny the
+     * GPU: reading it as "all instance types" would let a truncated config silently widen an
+     * org's access, which is the exposure gating exists to close.
+     */
+    @Test
+    void test_gpuGating_gpuWithoutInstanceTypesIsDenied() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+
+        Map<String, List<String>> gpus = new HashMap<>();
+        gpus.put("DUMMY_GPU_1", null);
+        gpus.put("DUMMY_GPU_2", List.of());
+        gpus.put("DUMMY_GPU_3", List.of(" ", ""));
+        gpus.put("DUMMY_GPU_4", List.of("dummy_gpu_4.large"));
+        props.setGpuGating(Map.of("gated-nca", gpus));
+
+        assertTrue(props.hasGpuGating("gated-nca"));
+
+        // Null, empty, and blank-only instance type lists all deny the GPU.
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_1"));
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_2"));
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_3"));
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_1", "dummy_gpu_1.large"));
+        assertFalse(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_3", "dummy_gpu_3.large"));
+
+        // The correctly configured GPU on the same account still works.
+        assertTrue(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_4"));
+        assertTrue(props.isInstanceTypeAllowedForNca("gated-nca", "DUMMY_GPU_4", "dummy_gpu_4.large"));
+    }
+
+    /**
+     * Every GPU malformed leaves the account gated with nothing allowed. The org asked to be
+     * gated, so denying its malformed GPUs beats silently reverting it to unrestricted access.
+     */
+    @Test
+    void test_gpuGating_allGpusMalformedKeepsAccountGated() {
+        IcmsConfigurationProperties props = new IcmsConfigurationProperties();
+
+        Map<String, List<String>> gpus = new HashMap<>();
+        gpus.put("DUMMY_GPU_1", List.of());
+        props.setGpuGating(Map.of("gated-nca", gpus));
+
+        assertTrue(props.hasGpuGating("gated-nca"));
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_1"));
+        assertFalse(props.isGpuAllowedForNca("gated-nca", "DUMMY_GPU_2"));
     }
 
     @Test
