@@ -36,8 +36,11 @@ products:
   - display-name: Self-Managed Stack
     subtitle: Control plane installation and operations
     slug: self-managed
-    path: products/self-managed/1.0.0.yml
+    path: products/self-managed/1.0.1.yml
     versions:
+      - display-name: "1.0.1"
+        path: products/self-managed/1.0.1.yml
+        slug: "1.0.1"
       - display-name: "1.0.0"
         path: products/self-managed/1.0.0.yml
         slug: "1.0.0"
