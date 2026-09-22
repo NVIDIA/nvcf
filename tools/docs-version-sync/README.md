@@ -2,7 +2,7 @@
 
 This tool keeps top-of-tree documentation aligned with three released stack
 inventories. It renders the cross-stack compatibility matrix and writes the
-catalog snapshot that freezes one stack's documentation train.
+catalog snapshot that freezes one stack's exact documentation version.
 
 ## Release and documentation flow
 
@@ -40,7 +40,7 @@ Documentation is split into one Fern product per stack plus a shared overview:
 | `docs/observability/` | Observability Stack | Yes |
 
 Generated blocks live only in these four trees. Frozen copies
-(`docs/<stack>-<train>/`) are never regenerated; the catalog rejects output
+(`docs/<stack>-<version>/`) are never regenerated; the catalog rejects output
 paths that point at them.
 
 ## Compatibility matrix
@@ -52,19 +52,19 @@ generated block. It renders the current release of each stack from
 ```yaml
 compatibility:
   - stack: observability
-    train: "1.1"
+    version: "1.1.3"
     compatible_with:
-      control-plane: "1.0+"
-      compute-plane: "1.0+"
+      control-plane: "1.0.0+"
+      compute-plane: "1.0.0+"
 ```
 
-Each entry names one stack train and the minimum train of the other two
-stacks it works with: `X.Y+` means that train or later, `X.Y` means that
-train only. The example renders as "Observability 1.1 works with Self-managed
-1.0 or later, Compute plane 1.0 or later". Stack names use the `release_set` keys
+Each entry names one stack release and the minimum release of the other two
+stacks it works with: `X.Y.Z+` means that release or later, and `X.Y.Z` means
+that release only. The example renders as "Observability 1.1.3 works with
+Self-managed 1.0.0 or later, Compute plane 1.0.0 or later". Stack names use the `release_set` keys
 (`control-plane`, `compute-plane`, `observability`). Add an entry when a stack
-opens a new train, and raise a minimum when a release stops working with an
-older train of another stack. Then regenerate the documentation.
+release changes compatibility, and raise a minimum when a release stops working
+with an older release of another stack. Then regenerate the documentation.
 
 Each registered stack publishes its own inventory:
 
@@ -140,27 +140,27 @@ go run -C tools/docs-version-sync . --target main
 
 A publication-only update does not require a new stack release.
 
-## Freeze a stack documentation train
+## Freeze a stack documentation version
 
 Each stack freezes documentation on its own schedule. No joint qualification
-of all three stacks is required. After QA approves a stack release on train
-`X.Y` and its artifacts are published:
+of all three stacks is required. After QA approves stack release `X.Y.Z` and
+its artifacts are published:
 
 ```bash
 git fetch --tags origin
 go run -C tools/docs-version-sync . --target main --update-catalog
 go run -C tools/docs-version-sync . --target main
-./tools/scripts/cut-docs-version.sh --stack observability --train X.Y
+./tools/scripts/cut-docs-version.sh --stack observability --version X.Y.Z
 ```
 
-The cut script runs `--freeze-stack <release_set stack> --freeze-train X.Y`,
-which checks that the stack's current release in `release_set.stacks` belongs
-to train `X.Y`, warns when `publication_pending` is non-empty (the frozen
+The cut script runs `--freeze-stack <release_set stack> --freeze-version X.Y.Z`,
+which checks that the stack's current release in `release_set.stacks` is
+`X.Y.Z`, warns when `publication_pending` is non-empty (the frozen
 manifest keeps the pending markers), and writes
-`docs/version-catalog/<stack>-X.Y.yaml` with that one stack marked
+`docs/version-catalog/<stack>-X.Y.Z.yaml` with that one stack marked
 `qualified`. `main.yaml` stays in development state. The script then copies
-`docs/<stack>/` to `docs/<stack>-X.Y/`, generates
-`fern/products/<stack>/X.Y.yml`, and prints the `versions:` entry to add to
+`docs/<stack>/` to `docs/<stack>-X.Y.Z/`, generates
+`fern/products/<stack>/X.Y.Z.yml`, and prints the `versions:` entry to add to
 `fern/docs.yml`.
 
 Stack names for `--freeze-stack` are `control-plane`, `compute-plane`, and
@@ -168,7 +168,7 @@ Stack names for `--freeze-stack` are `control-plane`, `compute-plane`, and
 `compute-plane`, and `observability` and maps them. Overview documentation is
 unversioned and is never cut.
 
-Add or adjust `compatibility` entries for the new train before regenerating so
+Add or adjust `compatibility` entries for the new release before regenerating so
 the matrix reflects the qualified combination.
 
 ## Add an artifact to the stack inventory

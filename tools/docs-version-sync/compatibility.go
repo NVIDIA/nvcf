@@ -10,7 +10,7 @@ import (
 )
 
 // renderCompatibilityMatrix renders the current release of each stack and, for
-// each stack train, the minimum train of the other stacks it works with.
+// each stack release, the minimum release of the other stacks it works with.
 func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 	if catalog.ReleaseSet == (ReleaseSetMetadata{}) {
 		return "", fmt.Errorf("compatibility matrix requires release_set stack releases")
@@ -40,7 +40,7 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 		if entries[i].Stack != entries[j].Stack {
 			return stackOrder(entries[i].Stack) < stackOrder(entries[j].Stack)
 		}
-		return compareTrains(entries[i].Train, entries[j].Train) > 0
+		return compareVersions(entries[i].Version, entries[j].Version) > 0
 	})
 	for _, entry := range entries {
 		worksWith := make([]string, 0, len(releaseSetStackNames)-1)
@@ -50,7 +50,7 @@ func renderCompatibilityMatrix(catalog *Catalog) (string, error) {
 			}
 			worksWith = append(worksWith, formatRequirement(other, entry.CompatibleWith[other]))
 		}
-		b.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", documentationStackDisplayName(entry.Stack), entry.Train, strings.Join(worksWith, ", ")))
+		b.WriteString(fmt.Sprintf("| %s | `%s` | %s |\n", documentationStackDisplayName(entry.Stack), entry.Version, strings.Join(worksWith, ", ")))
 	}
 	return b.String(), nil
 }
@@ -64,25 +64,24 @@ func stackOrder(stack string) int {
 	return len(releaseSetStackNames)
 }
 
-// formatRequirement turns "1.0+" into "Compute plane 1.0 or later" and "1.0"
-// into "Compute plane 1.0 only".
+// formatRequirement turns "1.0.0+" into "Compute plane 1.0.0 or later" and
+// "1.0.0" into "Compute plane 1.0.0 only".
 func formatRequirement(stack, requirement string) string {
 	name := documentationStackDisplayName(stack)
-	if train, open := strings.CutSuffix(requirement, "+"); open {
-		return fmt.Sprintf("%s `%s` or later", name, train)
+	if version, open := strings.CutSuffix(requirement, "+"); open {
+		return fmt.Sprintf("%s `%s` or later", name, version)
 	}
 	return fmt.Sprintf("%s `%s` only", name, requirement)
 }
 
-// compareTrains orders X.Y trains numerically; inputs are validated by the catalog.
-func compareTrains(a, b string) int {
-	var aMajor, aMinor, bMajor, bMinor int
-	fmt.Sscanf(a, "%d.%d", &aMajor, &aMinor)
-	fmt.Sscanf(b, "%d.%d", &bMajor, &bMinor)
-	switch {
-	case aMajor != bMajor:
-		return aMajor - bMajor
-	default:
-		return aMinor - bMinor
+// compareVersions orders stable semantic versions; inputs are validated by the catalog.
+func compareVersions(a, b string) int {
+	aParts := stableStackVersionRE.FindStringSubmatch(a)
+	bParts := stableStackVersionRE.FindStringSubmatch(b)
+	for index := 1; index <= 3; index++ {
+		if comparison := compareNumericIdentifier(aParts[index], bParts[index]); comparison != 0 {
+			return comparison
+		}
 	}
+	return 0
 }

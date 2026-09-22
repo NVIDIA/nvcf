@@ -391,11 +391,11 @@ a tag from `main` did before the version-file model.
 
 ### Per-stack documentation
 
-Each stack is a Fern product with its own version list. After a train's
-first release, freeze that stack's docs alone:
+Each stack is a Fern product with its own version list. After QA approves a
+release, freeze that stack's exact version alone:
 
 ```bash
-./tools/scripts/cut-docs-version.sh --stack observability --train 1.1
+./tools/scripts/cut-docs-version.sh --stack observability --version 1.1.0
 ```
 
 The other two stacks' documentation is untouched by that cut.

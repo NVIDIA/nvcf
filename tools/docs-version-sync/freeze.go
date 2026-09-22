@@ -11,15 +11,15 @@ import (
 )
 
 // freezeStackDocumentation writes the catalog snapshot that accompanies a
-// frozen documentation train for one stack. The main catalog is left in
+// frozen documentation version for one stack. The main catalog is left in
 // development state; only the snapshot marks the stack qualified.
-func freezeStackDocumentation(repoRoot, catalogPath, stack, train string) (string, error) {
+func freezeStackDocumentation(repoRoot, catalogPath, stack, version string) (string, error) {
 	slug, err := documentationProductSlug(stack)
 	if err != nil {
 		return "", err
 	}
-	if !documentationTrainRe.MatchString(train) {
-		return "", fmt.Errorf("--freeze-train must use %s", documentationTrainFormat)
+	if !validStableStackVersion(version) {
+		return "", fmt.Errorf("--freeze-version must use %s", documentationVersionFormat)
 	}
 	catalog, err := LoadCatalog(catalogPath)
 	if err != nil {
@@ -29,23 +29,19 @@ func freezeStackDocumentation(repoRoot, catalogPath, stack, train string) (strin
 	if err != nil {
 		return "", err
 	}
-	releasedTrain, ok := releaseTrain(metadata.Version)
-	if !ok {
-		return "", fmt.Errorf("release_set %s version %q is not a semantic version", stack, metadata.Version)
-	}
-	if releasedTrain != train {
-		return "", fmt.Errorf("release_set %s version %s belongs to train %s, not %s; sync the catalog to a %s.x release first", stack, metadata.Version, releasedTrain, train, train)
+	if metadata.Version != version {
+		return "", fmt.Errorf("release_set %s version is %s, not %s; sync the catalog to release %s first", stack, metadata.Version, version, version)
 	}
 	if len(catalog.PublicationPending) > 0 {
-		fmt.Fprintf(os.Stderr, "WARNING: freezing %s documentation while artifacts are publication pending: %s\n", stack, strings.Join(catalog.PublicationPending, ", "))
+		fmt.Fprintf(os.Stderr, "WARNING: freezing %s %s documentation while artifacts are publication pending: %s\n", stack, version, strings.Join(catalog.PublicationPending, ", "))
 	}
 	if err := validateStackSourceSnapshot(repoRoot, catalog); err != nil {
 		return "", fmt.Errorf("validate stack source snapshot: %w", err)
 	}
-	metadata.DocumentationVersion = train
+	metadata.DocumentationVersion = version
 	metadata.Status = ReleaseSetQualified
 
-	snapshotPath := filepath.Join(filepath.Dir(catalogPath), slug+"-"+train+".yaml")
+	snapshotPath := filepath.Join(filepath.Dir(catalogPath), slug+"-"+version+".yaml")
 	if _, err := os.Stat(snapshotPath); err == nil {
 		return "", fmt.Errorf("refusing to overwrite existing catalog snapshot %s", relOrAbs(repoRoot, snapshotPath))
 	} else if !os.IsNotExist(err) {

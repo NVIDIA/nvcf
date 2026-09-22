@@ -31,7 +31,7 @@ const (
 	controlStackResourceName       = "nvcf-self-managed-stack"
 	computeStackResourceName       = "nvcf-compute-plane-stack"
 	observabilityStackResourceName = "nvcf-observability-stack"
-	documentationTrainFormat       = "X.Y"
+	documentationVersionFormat     = "X.Y.Z"
 	defaultStackRegistry           = "public-resources"
 	defaultImageRegistry           = "public-images"
 	defaultChartRegistry           = "public-helm"
@@ -40,11 +40,10 @@ const (
 var (
 	fullLowercaseCommitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	lowercaseSHA256DigestRe  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	documentationTrainRe     = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$`)
 )
 
 // documentationProductTrees are the only documentation trees that carry generated blocks.
-// Frozen copies (docs/<product>-<train>/) are never regenerated.
+// Frozen copies (docs/<product>-<version>/) are never regenerated.
 var documentationProductTrees = []string{"docs/overview/", "docs/self-managed/", "docs/compute-plane/", "docs/observability/"}
 
 type ArtifactType string
@@ -137,12 +136,12 @@ type StackReleaseMetadata struct {
 	Status               ReleaseSetStatus `yaml:"status"`
 }
 
-// CompatibilityEntry declares the minimum train of each other stack that one
-// train of a stack works with. Keys use the release_set stack names. Values
-// are "X.Y+" (that train or later) or "X.Y" (that train only).
+// CompatibilityEntry declares the minimum release of each other stack that
+// one stack release works with. Keys use the release_set stack names. Values
+// are "X.Y.Z+" (that release or later) or "X.Y.Z" (that release only).
 type CompatibilityEntry struct {
 	Stack          string            `yaml:"stack"`
-	Train          string            `yaml:"train"`
+	Version        string            `yaml:"version"`
 	CompatibleWith map[string]string `yaml:"compatible_with"`
 }
 
@@ -189,18 +188,6 @@ func (stacks *ReleaseSetStacks) byName(stack string) (*StackReleaseMetadata, err
 	default:
 		return nil, fmt.Errorf("unknown release_set stack %q; want %s", stack, strings.Join(releaseSetStackNames, ", "))
 	}
-}
-
-// releaseTrain returns the X.Y train of a semantic version.
-func releaseTrain(version string) (string, bool) {
-	if !validStackVersion(version) {
-		return "", false
-	}
-	parts := strings.SplitN(version, ".", 3)
-	if len(parts) < 3 {
-		return "", false
-	}
-	return parts[0] + "." + parts[1], true
 }
 
 type Registry struct {
@@ -582,12 +569,11 @@ func validateStackDocumentationVersion(name string, metadata StackReleaseMetadat
 			return fmt.Errorf("development release_set %s documentation_version must be dev", name)
 		}
 	case ReleaseSetQualified:
-		if !documentationTrainRe.MatchString(metadata.DocumentationVersion) {
-			return fmt.Errorf("qualified release_set %s documentation_version must use %s", name, documentationTrainFormat)
+		if !validStableStackVersion(metadata.DocumentationVersion) {
+			return fmt.Errorf("qualified release_set %s documentation_version must use %s", name, documentationVersionFormat)
 		}
-		train, _ := releaseTrain(metadata.Version)
-		if metadata.DocumentationVersion != train {
-			return fmt.Errorf("qualified release_set %s documentation_version must be %s for version %s", name, train, metadata.Version)
+		if metadata.DocumentationVersion != metadata.Version {
+			return fmt.Errorf("qualified release_set %s documentation_version must be %s", name, metadata.Version)
 		}
 	default:
 		return fmt.Errorf("release_set %s status must be development or qualified", name)
@@ -601,35 +587,34 @@ func validateCompatibility(entries []CompatibilityEntry) error {
 		if _, err := documentationProductSlug(entry.Stack); err != nil {
 			return fmt.Errorf("compatibility: %w", err)
 		}
-		if !documentationTrainRe.MatchString(entry.Train) {
-			return fmt.Errorf("compatibility %s train %q must use %s", entry.Stack, entry.Train, documentationTrainFormat)
+		if !validStableStackVersion(entry.Version) {
+			return fmt.Errorf("compatibility %s version %q must use %s", entry.Stack, entry.Version, documentationVersionFormat)
 		}
-		key := entry.Stack + "\x00" + entry.Train
+		key := entry.Stack + "\x00" + entry.Version
 		if _, exists := seen[key]; exists {
-			return fmt.Errorf("duplicate compatibility entry for %s %s", entry.Stack, entry.Train)
+			return fmt.Errorf("duplicate compatibility entry for %s %s", entry.Stack, entry.Version)
 		}
 		seen[key] = struct{}{}
 		if len(entry.CompatibleWith) != len(releaseSetStackNames)-1 {
-			return fmt.Errorf("compatibility %s %s must list exactly the other %d stacks", entry.Stack, entry.Train, len(releaseSetStackNames)-1)
+			return fmt.Errorf("compatibility %s %s must list exactly the other %d stacks", entry.Stack, entry.Version, len(releaseSetStackNames)-1)
 		}
 		for other, requirement := range entry.CompatibleWith {
 			if _, err := documentationProductSlug(other); err != nil {
-				return fmt.Errorf("compatibility %s %s: %w", entry.Stack, entry.Train, err)
+				return fmt.Errorf("compatibility %s %s: %w", entry.Stack, entry.Version, err)
 			}
 			if other == entry.Stack {
-				return fmt.Errorf("compatibility %s %s cannot list its own stack", entry.Stack, entry.Train)
+				return fmt.Errorf("compatibility %s %s cannot list its own stack", entry.Stack, entry.Version)
 			}
-			if !compatibilityRequirementRe.MatchString(requirement) {
-				return fmt.Errorf("compatibility %s %s: %s requirement %q must use %s", entry.Stack, entry.Train, other, requirement, compatibilityRequirementFormat)
+			requiredVersion := strings.TrimSuffix(requirement, "+")
+			if !validStableStackVersion(requiredVersion) {
+				return fmt.Errorf("compatibility %s %s: %s requirement %q must use %s", entry.Stack, entry.Version, other, requirement, compatibilityRequirementFormat)
 			}
 		}
 	}
 	return nil
 }
 
-const compatibilityRequirementFormat = "X.Y+ (that train or later) or X.Y (that train only)"
-
-var compatibilityRequirementRe = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\+?$`)
+const compatibilityRequirementFormat = "X.Y.Z+ (that release or later) or X.Y.Z (that release only)"
 
 func validateManifestMetadata(metadata ManifestMetadata) error {
 	seen := map[string]struct{}{}
