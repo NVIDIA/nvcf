@@ -293,6 +293,6 @@ The following tables list the complete artifact inventory.
 | `nvcf-cli` | `1.16.2` | Independent | Manages functions, deployments, and clusters from the command line. | `nvcr.io/nvidia/nvcf/nvcf-cli:1.16.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli) |
 | `nvcf-compute-plane-stack` | `1.0.0` | `compute-plane` | Provides the Helmfile bundle for compute-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/nvcf-compute-plane) |
 | `nvcf-observability-stack` | `1.0.0` | `observability` | Provides the Helmfile bundle for standalone observability deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/observability) |
-| `nvcf-self-managed-stack` | `1.0.1` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
+| `nvcf-self-managed-stack` | `1.0.1` | `self-managed` | Provides the Helmfile bundle for control-plane deployment. | `nvcr.io/nvidia/nvcf/nvcf-self-managed-stack:1.0.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/stacks/self-managed) |
 
 {/*docs-version-sync:END manifest-artifact-registry-paths*/}

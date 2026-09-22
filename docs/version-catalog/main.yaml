@@ -318,6 +318,10 @@ publications:
     type: resource
     version: 1.16.2
     registry: public-resources
+  - name: nvcf-self-managed-stack
+    type: resource
+    version: 1.0.1
+    registry: public-resources
 version_overrides:
   - name: nvcf-cli
     type: resource
@@ -327,7 +331,6 @@ publication_pending:
   - helm-nvcf-state-metrics
   - nvcf-compute-plane-stack
   - nvcf-observability-stack
-  - nvcf-self-managed-stack
   - nvcf-state-metrics-service
 manifest:
   entries:
