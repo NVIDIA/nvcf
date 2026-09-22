@@ -31,6 +31,7 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.reservation.entity.ReservationEntity;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.byoc.ClustersService.ReadyClusterInfo;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.constraints.NotNull;
@@ -68,6 +69,8 @@ public class AccountInfoService {
     private final ClusterGpuInfoHelper clusterGpuInfoHelper;
 
     private final ComputePlatformService computePlatformService;
+
+    private final GpuGatingService gpuGatingService;
 
     @Observed
     public Map<String, Set<String>> getAllGpusForAccount(
@@ -274,43 +277,11 @@ public class AccountInfoService {
 
         // Applied last, once every region, cluster, capacity and instance type filter has run,
         // so a gating removal is never confused with an unrelated reason for an empty response.
-        applyGpuGating(result, ncaId);
+        gpuGatingService.removeGatedGpusFromAccountInfo(result, ncaId);
 
         return result;
     }
 
-
-    /**
-     * Removes GPUs and instance types withheld from this NCA ID by {@code icms.gpu-gating}.
-     * No-op for accounts without gating, which keeps the existing behavior everywhere the
-     * property is unset. A GPU left with no instance types is dropped entirely.
-     */
-    private void applyGpuGating(@NotNull InstanceTypeAvailabilityResponse result,
-                                @NotNull String ncaId) {
-        if (!icmsConfigurationProperties.hasGpuGating(ncaId) || result.getGpus() == null) {
-            return;
-        }
-
-        result.getGpus().removeIf(gpu -> {
-            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getGpuName())) {
-                return true;
-            }
-
-            if (gpu.getInstanceTypes() != null) {
-                gpu.getInstanceTypes().removeIf(
-                        instanceType -> !icmsConfigurationProperties.isInstanceTypeAllowedForNca(
-                                ncaId, gpu.getGpuName(), instanceType.getInstanceName()));
-            }
-
-            boolean noInstanceTypesLeft =
-                    gpu.getInstanceTypes() == null || gpu.getInstanceTypes().isEmpty();
-            if (noInstanceTypesLeft) {
-                log.info("NcaId {}: GPU {} removed from account info response because gpu gating "
-                                 + "left it with no instance types", ncaId, gpu.getGpuName());
-            }
-            return noInstanceTypesLeft;
-        });
-    }
 
 
     private void addInstanceTypeV5Udt(@NotNull InstanceTypeV5Udt instanceType,

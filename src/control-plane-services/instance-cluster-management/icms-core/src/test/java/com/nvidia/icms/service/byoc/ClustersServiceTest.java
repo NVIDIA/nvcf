@@ -37,6 +37,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.ClusterAuthorizationService;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.platform.ComputePlatformTestFixtures;
 import java.util.List;
@@ -100,7 +101,8 @@ class ClustersServiceTest {
                 icmsConfigurationProperties,
                 clusterTargetingHelper,
                 computePlatformService,
-                clusterAuthorizationService);
+                clusterAuthorizationService,
+                new GpuGatingService(icmsConfigurationProperties, null));
 
         // BART (legacy) flow, not detailed targeting.
         when(clusterAuthorizationService.isDetailedTargetingFlowEnabled()).thenReturn(false);

@@ -34,6 +34,7 @@ import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.platform.ComputePlatformService;
@@ -71,7 +72,7 @@ public class CreateInstanceService {
     private final ReservationProcessor reservationProcessor;
     private final ComputePlatformService computePlatformService;
     private final InstanceValidationService instanceValidationService;
-    private final UnifiedErrorReporter unifiedErrorReporter;
+    private final GpuGatingService gpuGatingService;
 
     public CreateSpotInstancesResponse processInstanceRequest(
             @NotNull String customer,
@@ -154,76 +155,9 @@ public class CreateInstanceService {
 
         // Applied last, on the destinations that would otherwise be used, so the errors above
         // still report their own cause and a gating rejection always means gating was the reason.
-        applyGpuGating(filteredDestinations, instanceRequest);
+        gpuGatingService.removeGatedDestinations(filteredDestinations, instanceRequest);
 
         return filteredDestinations;
-    }
-
-
-    /**
-     * Removes destinations whose GPU or instance type is withheld from the requesting NCA ID by
-     * {@code icms.gpu-gating}, and rejects the request when nothing survives. No-op for accounts
-     * without gating. Unlike {@code icms.gpu-allowed-nca-ids} this also covers BYOC clusters,
-     * which is what keeps a gated org out of publicly accessible BYOC capacity.
-     */
-    protected void applyGpuGating(@NotNull Set<RequestInstanceDestination> destinations,
-                                  @NotNull SpotInstanceRequestSchema instanceRequest) {
-        String ncaId = instanceRequest.getNcaId();
-        if (!icmsConfigurationProperties.hasGpuGating(ncaId)) {
-            return;
-        }
-
-        int destinationCountBeforeGating = destinations.size();
-        Set<RequestInstanceDestination> gatedOut = new HashSet<>();
-        boolean anyGpuAllowed = false;
-
-        for (RequestInstanceDestination destination : destinations) {
-            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, destination.getGpuName())) {
-                gatedOut.add(destination);
-                continue;
-            }
-
-            anyGpuAllowed = true;
-            String instanceTypeName = destination.getInstanceType() != null
-                    ? destination.getInstanceType().getName() : null;
-            if (!icmsConfigurationProperties.isInstanceTypeAllowedForNca(ncaId,
-                                                                         destination.getGpuName(),
-                                                                         instanceTypeName)) {
-                gatedOut.add(destination);
-            }
-        }
-
-        destinations.removeAll(gatedOut);
-
-        log.info("InstanceRequest: {}: NcaId {}: gpu gating kept {} of {} destinations for GPU {} "
-                         + "and instance type {}, removed clusters {}",
-                 instanceRequest.getLoggingId(), ncaId, destinations.size(),
-                 destinationCountBeforeGating, instanceRequest.getGpu(),
-                 instanceRequest.getInstanceType(),
-                 gatedOut.stream().map(RequestInstanceDestination::getClusterId).distinct().toList());
-
-        if (!destinations.isEmpty()) {
-            return;
-        }
-
-        // No GPU survived means the org has no access to the GPU at all; otherwise the GPU was
-        // allowed and the instance type is what gating withheld.
-        throwGatingError(anyGpuAllowed
-                                 ? NVCF_CUSTOMER_NO_ACCESS_TO_INSTANCE_TYPE
-                                 : NVCF_CUSTOMER_NO_ACCESS_TO_GPU, instanceRequest);
-    }
-
-
-    private void throwGatingError(@NotNull IcmsUnifiedError icmsUnifiedError,
-                                  @NotNull SpotInstanceRequestSchema instanceRequest) {
-        String message = icmsUnifiedError == NVCF_CUSTOMER_NO_ACCESS_TO_GPU
-                ? String.format(icmsUnifiedError.defaultMessageFormat(), instanceRequest.getGpu())
-                : String.format(icmsUnifiedError.defaultMessageFormat(),
-                                instanceRequest.getInstanceType(), instanceRequest.getGpu());
-
-        unifiedErrorReporter.reportAndThrow(new IcmsHttpUnifiedErrorException(
-                icmsUnifiedError, HttpStatus.CONFLICT, message,
-                toUnifiedErrorData(instanceRequest)));
     }
 
 

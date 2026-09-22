@@ -39,6 +39,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.ClusterAuthorizationService;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.util.GsonCompatMapper;
 import io.micrometer.observation.annotation.Observed;
@@ -85,6 +86,8 @@ public class ClustersService {
     private final ComputePlatformService computePlatformService;
 
     private final ClusterAuthorizationService clusterAuthorizationService;
+
+    private final GpuGatingService gpuGatingService;
 
     /**
      * This is a static class to store READY cluster information per GPU from a cluster
@@ -138,67 +141,11 @@ public class ClustersService {
         }
 
         // Applied last so every branch above (NVCA, detailed targeting, BART) is covered once.
-        applyGpuGating(clusterGroupsSet, ncaId);
+        gpuGatingService.removeGatedClusterGroups(clusterGroupsSet, ncaId);
 
         return ClusterGroupResponse.builder()
                 .clusterGroup(clusterGroupsSet)
                 .build();
-    }
-
-    /**
-     * Removes GPUs and instance types withheld from this NCA ID by {@code icms.gpu-gating},
-     * dropping cluster groups left with no GPUs. No-op for accounts without gating,
-     * it applies to BYOC groups too, which is what keeps a gated org out of publicly accessible BYOC clusters.
-     */
-    private void applyGpuGating(Set<ClusterGroups> clusterGroupsSet, String ncaId) {
-        if (!icmsConfigurationProperties.hasGpuGating(ncaId)) {
-            return;
-        }
-
-        clusterGroupsSet.removeIf(clusterGroup -> {
-            clusterGroup.setGpus(retainAllowedGpus(clusterGroup.getGpus(), ncaId));
-
-            boolean noGpusLeft = isSetEmptyOrNull(clusterGroup.getGpus());
-            if (noGpusLeft) {
-                log.info("NcaId {}: clusterGroup {} removed from response by gpu gating",
-                         ncaId, clusterGroup.getName());
-            }
-            return noGpusLeft;
-        });
-    }
-
-    /**
-     * Rebuilds the GPU set keeping only the allowed GPUs and, within them, the allowed instance types.
-     */
-    private Set<GpuResponse> retainAllowedGpus(Set<GpuResponse> gpus, String ncaId) {
-        if (isSetEmptyOrNull(gpus)) {
-            return new HashSet<>();
-        }
-
-        Set<GpuResponse> allowedGpus = new HashSet<>();
-        for (GpuResponse gpu : gpus) {
-            if (!icmsConfigurationProperties.isGpuAllowedForNca(ncaId, gpu.getName())) {
-                continue;
-            }
-
-            Set<InstanceTypeResponse> allowedInstanceTypes = Optional
-                    .ofNullable(gpu.getInstanceTypes())
-                    .orElseGet(HashSet::new)
-                    .stream()
-                    .filter(instanceType -> icmsConfigurationProperties.isInstanceTypeAllowedForNca(
-                            ncaId, gpu.getName(), instanceType.getName()))
-                    .collect(Collectors.toSet());
-
-            if (allowedInstanceTypes.isEmpty()) {
-                continue;
-            }
-
-            allowedGpus.add(GpuResponse.builder()
-                                    .name(gpu.getName())
-                                    .instanceTypes(allowedInstanceTypes)
-                                    .build());
-        }
-        return allowedGpus;
     }
 
     /**
