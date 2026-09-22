@@ -7,8 +7,9 @@ navigation:
     contents:
       - page: GPU Cluster Setup
         path: ../../../docs/compute-plane-1.0/cluster-management/index.md
-      - page: Self-Managed Clusters
+      - page: Register a GPU Cluster
         path: ../../../docs/compute-plane-1.0/cluster-management/self-managed.md
+        slug: register-gpu-cluster
       - page: Nsight Profiling
         path: ../../../docs/compute-plane-1.0/cluster-management/nsight-profiling.md
       - page: Fake GPU Operator

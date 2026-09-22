@@ -160,7 +160,7 @@ kubectl rollout status deployment nvca-operator -n nvca-operator --timeout=120s
 The operator restart will re-run the bootstrap init container, recreate the NVCFBackend
 resource, and spawn a fresh NVCA agent pod that discovers the simulated GPUs.
 
-For details on the bootstrap process, see [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters) (Manual Cluster
+For details on the bootstrap process, see [Self-Managed Clusters](/nvcf/compute-plane/register-gpu-cluster) (Manual Cluster
 Registration).
 
 ## Customization

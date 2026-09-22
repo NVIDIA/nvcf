@@ -44,7 +44,7 @@ needed.
 covered by the main install step. If your `image` registry is private and your
 cluster nodes do not have built-in credential helpers, create a
 `docker-registry` secret in that namespace. See
-[Enabling NVCF UI](./helmfile-installation.md#enabling-nvcf-ui) in the Helmfile
+[Vanity Gateway and NVCF UI addons](./helmfile-installation.md#vanity-gateway-and-nvcf-ui-addons) in the Helmfile
 Installation guide for the exact commands.
 
 ## Apply

@@ -10,8 +10,12 @@ navigation:
     href: /nvcf/compute-plane/
   - link: Observability Stack
     href: /nvcf/observability/
+  - link: Developer Guide
+    href: /nvcf/developer-guide/
   - page: Quickstart
     path: ../../docs/overview/quickstart.md
+  - page: Installation Guide
+    path: ../../docs/overview/installation-guide.md
 
   - section: Release Notes
     skip-slug: true
@@ -88,25 +92,6 @@ navigation:
         path: ../../docs/overview/http-load-test-sli-guide.md
       - page: HTTP Soak Testing
         path: ../../docs/overview/http-soak-testing.md
-
-  - section: Development
-    skip-slug: true
-    contents:
-      - page: Architecture Overview
-        path: ../../docs/dev/architecture.md
-      - section: Local Development
-        skip-slug: true
-        contents:
-          - page: Local Development
-            path: ../../docs/overview/local-development.md
-          - page: Single-cluster (CLI)
-            path: ../../docs/overview/local-development/single-cluster-cli.md
-          - page: Single-cluster (Helmfile)
-            path: ../../docs/overview/local-development/single-cluster-helmfile.md
-          - page: Multi-cluster (CLI)
-            path: ../../docs/overview/local-development/multi-cluster-cli.md
-          - page: Multi-cluster (Helmfile)
-            path: ../../docs/overview/local-development/multi-cluster-helmfile.md
 
   - section: Managed (Legacy)
     skip-slug: true

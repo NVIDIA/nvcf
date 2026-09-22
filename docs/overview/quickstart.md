@@ -8,7 +8,7 @@ This quickstart uses a single k3d cluster named `ncp-local`, fake GPUs, and
 local route hostnames. It is for local development and validation only. For a
 remote deployment, or for separate control-plane and GPU clusters, use
 [Helmfile Installation](/nvcf/self-managed/helmfile-installation) and
-[Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters).
+[Self-Managed Clusters](/nvcf/compute-plane/register-gpu-cluster).
 
 Run the commands from the NVCF repository root unless a step says otherwise.
 The `nvcf-cli self-hosted up` command runs on your workstation. It does not run
@@ -31,7 +31,7 @@ Before you start, install and prepare:
 - `helm` >= 3.14
 - `helmfile` >= 1.0. Use `helmfile` >= 1.5.0 with Helm 4.
 - `helm-diff` plugin
-- `nvcf-cli` on your `PATH`. See [Installation](/nvcf/self-managed/cli#installation) to
+- `nvcf-cli` on your `PATH`. See [Installation](/nvcf/overview/cli#installation) to
   build it from the repository or download it from NGC.
 - An NGC API key with access to the NVCF chart and image registry
 - The NGC organization and team slugs for that registry access
@@ -101,7 +101,7 @@ export PATH="${HOME}/.local/bin:${PATH}"
 nvcf-cli version
 ```
 
-For the packaged CLI release, see [Installation](/nvcf/self-managed/cli#download-from-ngc).
+For the packaged CLI release, see [Installation](/nvcf/overview/cli#download-from-ngc).
 </Accordion>
 
 `self-hosted up` defaults to `--env local` and supports only the single local
@@ -343,11 +343,11 @@ Common local k3d issues:
   ```
 
   For non-local clusters, see
-  [Node inotify limits](/nvcf/compute-plane/self-managed-clusters#node-inotify-limits).
+  [Node inotify limits](/nvcf/compute-plane/register-gpu-cluster#node-inotify-limits).
 
 ## See Also
 
-- [Local Development](../local-development) for local k3d variants and cleanup commands.
+- [Local Development](/nvcf/developer-guide/local-development) for local k3d variants and cleanup commands.
 - [Helmfile Installation](/nvcf/self-managed/helmfile-installation) for remote or manual control-plane installs.
-- [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters) for registering GPU clusters outside the local quickstart.
+- [Self-Managed Clusters](/nvcf/compute-plane/register-gpu-cluster) for registering GPU clusters outside the local quickstart.
 - `src/clis/nvcf-cli/examples/` in this repository for sample CLI input files.

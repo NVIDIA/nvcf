@@ -829,7 +829,7 @@ Without the correct `Host` header, the gateway cannot match the request to an HT
 The NVCA agent on a self-managed GPU cluster has the same requirement when it reaches the
 control plane through a load-balancer-fronted gateway. Configure its host-header overrides
 in the operator values, not the CLI config. See
-[self-managed-clusters](/nvcf/compute-plane/self-managed-clusters).
+[Register a GPU Cluster](/nvcf/compute-plane/register-gpu-cluster).
 
 </Note>
 

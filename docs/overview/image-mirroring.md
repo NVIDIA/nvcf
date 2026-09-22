@@ -326,7 +326,7 @@ The extracted directory contains:
 
 {/*docs-version-sync:END image-mirroring-cli-snippet*/}
 
-See [self-hosted-cli](/nvcf/self-managed/cli) for detailed configuration instructions
+See [self-hosted-cli](/nvcf/overview/cli) for detailed configuration instructions
 
 <Note>
 If you don't have access to this repository, contact your NVIDIA representative.

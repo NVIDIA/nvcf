@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+  - page: Architecture Overview
+    path: ../../docs/dev/architecture.md
+
+  - section: Local Development
+    skip-slug: true
+    contents:
+      - page: Local Development
+        path: ../../docs/dev/local-development.md
+      - page: Single-cluster (CLI)
+        path: ../../docs/dev/local-development/single-cluster-cli.md
+      - page: Single-cluster (Helmfile)
+        path: ../../docs/dev/local-development/single-cluster-helmfile.md
+      - page: Multi-cluster (CLI)
+        path: ../../docs/dev/local-development/multi-cluster-cli.md
+      - page: Multi-cluster (Helmfile)
+        path: ../../docs/dev/local-development/multi-cluster-helmfile.md
+
+  - page: Fake GPU Operator
+    path: ../../docs/dev/fake-gpu-operator.md

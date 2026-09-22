@@ -1,4 +1,6 @@
-# Self-Managed Clusters
+# Register a GPU Cluster
+
+The NVIDIA Cluster Agent (NVCA) connects GPU clusters to the NVCF control plane so they can act as deployment targets for Cloud Functions. NVCA registers a cluster's GPU resources, communicates with the control plane, and manages the lifecycle of function deployments on GPU nodes.
 
 GPU clusters are registered with the NVCF control plane and managed by the NVCA
 Operator. Use the compute-plane Makefile in
@@ -10,11 +12,22 @@ local ConfigMap and authenticates through the local OpenBao (Vault) instance.
 <Info>
 A running NVCF control plane (SIS, OpenBao, NATS, Cassandra, and all core
 services) is required. The [Quickstart](/nvcf/overview/quickstart) can install the
-control plane and register a GPU cluster in one flow. Use this page when you
-need to install or operate the NVCA Operator after using the Helmfile
-installation path.
-
+control plane and register a GPU cluster in one flow for local evaluation. Use
+this page to register clusters after the Helmfile installation path, to install
+the NVCA Operator on its own, and for day-two cluster operations.
 </Info>
+
+<Warning>
+If you pin NVCA separately from the recommended compute-plane stack, check the
+current NVCA version before upgrading to NVCA 3.x. Clusters running NVCA 2.51.0
+or earlier have version-specific upgrade guidance. See the
+[0.6.0 upgrade notes](https://docs.nvidia.com/nvcf/v0.6.0/0-6-0-release-notes#upgrade-notes).
+</Warning>
+
+After installing NVCA on a cluster:
+
+- The registered cluster shows as a deployment option in the `GET /v2/nvcf/clusterGroups` API response.
+- Any functions under the cluster's authorized NCA IDs can deploy on the cluster.
 
 Clone the public repository and run the compute-plane commands from its root:
 
@@ -23,13 +36,25 @@ git clone https://github.com/nvidia/nvcf.git
 cd nvcf
 ```
 
+## Authentication and Keys
+
+| Key Type | Description |
+| --- | --- |
+| NVCF API Key (NAK) | Used by NVCA to authenticate with the control plane. See [API](/nvcf/overview/api) for details on API key generation. |
+
 ## Prerequisites
+
+- The GPU cluster must run a compatible version of [Kubernetes](https://kubernetes.io/releases/). Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See the Kubernetes [version skew policy](https://kubernetes.io/releases/version-skew-policy/#supported-versions).
+
+- `kubectl` and `helm` are installed on the deployment machine, and the user registering the cluster has `cluster-admin` privileges to install the NVIDIA Cluster Agent Operator (`nvca-operator`).
+
+- If your cloud provider does not support the NVIDIA GPU Operator, [manual instance configuration](./configuration.md) is possible but not recommended. For clusters with multi-node NVLink ([MNNVL](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html#dra-docs-compute-domains)) GPUs such as [GB200](https://www.nvidia.com/en-us/data-center/gb200-nvl72/), install the [NVIDIA GPU DRA driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html). See [Cluster Configuration](./configuration.md) for details.
 
 Before installing the NVCA Operator, ensure the following prerequisites are met:
 
 - The [control plane](/nvcf/self-managed/helmfile-installation) is installed and all core services are running.
 
-- The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html) is installed on the GPU cluster. The GPU Operator manages the NVIDIA drivers, device plugin, and GPU feature discovery required for workload scheduling. For development or testing environments without physical GPUs, see [fake-gpu-operator](../fake-gpu-operator).
+- The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html) is installed on the GPU cluster. The GPU Operator manages the NVIDIA drivers, device plugin, and GPU feature discovery required for workload scheduling. For development or testing environments without physical GPUs, see [Fake GPU Operator](/nvcf/developer-guide/fake-gpu-operator).
 
 - (Optional) Install [KAI Scheduler](./kai-scheduler.md) for GPU bin-packing
   and queues. KAI is also the scheduling foundation for
@@ -40,7 +65,7 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 - `GPU Workload Components` must be available in a user-managed registry that your Kubernetes cluster can access. See `GPU Workload Components` under [self-hosted-artifact-manifest](/nvcf/overview/manifest) for necessary artifacts and [self-hosted-image-mirroring](/nvcf/overview/image-mirroring) for mirroring instructions.
 
 - `nvcf-cli` is available on the deployment machine. The compute-plane Makefile
-  calls it during cluster registration. See [self-hosted-cli](/nvcf/self-managed/cli) for
+  calls it during cluster registration. See [self-hosted-cli](/nvcf/overview/cli) for
   CLI installation and configuration.
 
 - The [SMB CSI driver](https://github.com/kubernetes-csi/csi-driver-smb) (`smb.csi.k8s.io`) must be installed on the GPU cluster. It is required for NVCA shared model cache storage (samba sidecar). Install it with:
@@ -52,6 +77,11 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
   helm install csi-driver-smb csi-driver-smb/csi-driver-smb \
     -n kube-system --version v1.17.0
   ```
+
+### Considerations
+
+- The NVIDIA Cluster Agent only supports caching when the cluster has `StorageClass` configurations. If the "Caching Support" capability is enabled, the agent detects storage during deployments on a best-effort basis and falls back to non-cached workflows.
+- Each function and task requires several infrastructure containers alongside the workload containers. These infrastructure containers together need 6 CPU cores and 8 Gi of memory. Each GPU node must have at least these resources, ideally significantly more for the workload itself.
 
 ## How It Works
 
@@ -152,8 +182,8 @@ compute-reachable endpoints from those inputs resolve from the GPU cluster. See
 Register the GPU cluster with the control plane before installing the operator.
 The `nvcf-cli` discovers the cluster's OIDC issuer and JWKS and records them
 with the control plane, then returns the Helm values the operator needs. See
-[self-hosted-cli](/nvcf/self-managed/cli) for CLI installation and configuration, and the
-[Cluster Registration](/nvcf/self-managed/cli#cluster-registration) reference for full flag
+[self-hosted-cli](/nvcf/overview/cli) for CLI installation and configuration, and the
+[Cluster Registration](/nvcf/overview/cli#cluster-registration) reference for full flag
 and output details.
 
 <Note>
@@ -586,7 +616,7 @@ The `instanceType` and `gpu` values depend on the GPU types available in your cl
 For invocation, the Host header uses wildcard subdomain routing: `<function-id>.invocation.<gateway-addr>`.
 The URL path should match the function's `inferenceUrl` (e.g., `/echo`).
 For full HTTP invocation behavior, streaming, and errors, see
-[Generic HTTP Function Invocation](/nvcf/self-managed/generic-http-function-invocation).
+[Generic HTTP Function Invocation](/nvcf/overview/generic-http-function-invocation).
 
 </Note>
 
@@ -595,7 +625,7 @@ You can also use the NVCF CLI for easier function management:
 - Create, deploy, and invoke functions with simple commands
 - Create or update registry credentials without manual API calls
 
-See [self-hosted-cli](/nvcf/self-managed/cli) for installation and usage instructions.
+See [self-hosted-cli](/nvcf/overview/cli) for installation and usage instructions.
 
 ## Re-registering a cluster
 

@@ -503,7 +503,7 @@ Bundle sources:
 `self-hosted up` supports only a single local k3d cluster. It requires
 `--env local`, a current `k3d-*` kube context, and no split-context flags. For
 separate control-plane and GPU clusters, use the explicit control-plane and
-compute-plane install primitives with [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters).
+compute-plane install primitives with [Self-Managed Clusters](/nvcf/compute-plane/register-gpu-cluster).
 
 ### Cluster Registration
 
@@ -579,7 +579,7 @@ the cluster; the NVCA Operator chart does not consume it.
 For load-balancer-fronted gateways that route by hostname, add the matching host-header
 overrides (`selfManaged.icmsServiceHostHeaderOverride`,
 `selfManaged.revalServiceHostHeaderOverride`, `selfManaged.natsHostOverride`) to these
-values. See [self-managed-clusters](/nvcf/compute-plane/self-managed-clusters) for how the
+values. See [self-managed-clusters](/nvcf/compute-plane/register-gpu-cluster) for how the
 register values feed the operator install and when host-header overrides are required.
 
 List the self-hosted cluster registrations stored in ICMS with the admin token:
@@ -1054,7 +1054,7 @@ Additional `function invoke` flags:
 
 ### Registry Credentials Commands
 
-Manage container registry credentials for function images and Helm charts. For comprehensive setup instructions including IAM configuration for AWS ECR, see [third-party-registries-self-hosted](/nvcf/self-managed/third-party-registries).
+Manage container registry credentials for function images and Helm charts. For comprehensive setup instructions including IAM configuration for AWS ECR, see [third-party-registries-self-hosted](/nvcf/self-managed/dev/registries).
 
 | Command | Description |
 | --- | --- |
@@ -1102,7 +1102,7 @@ Manage container registry credentials for function images and Helm charts. For c
 ```
 
 <Note>
-Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](/nvcf/self-managed/third-party-registries).
+Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](/nvcf/self-managed/dev/registries).
 </Note>
 
 ## Troubleshooting
