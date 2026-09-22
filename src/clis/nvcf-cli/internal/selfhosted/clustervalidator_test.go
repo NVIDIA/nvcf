@@ -1097,3 +1097,37 @@ func TestEnsureClusterValidatorConfig_NoPreserveMarkerByDefault(t *testing.T) {
 	assert.NotContains(t, cm.Labels, clusterValidatorPreserveLabel,
 		"an ordinary run must stay reclaimable")
 }
+
+// --no-cleanup has to outlast the run that set it. The run itself already skips
+// the prior-Job sweep, but without a marker on the Job the next ordinary run of
+// the same role deletes it, while its ConfigMap, RBAC and pull secret survive.
+func TestBuildClusterValidatorJob_MarksPreservedRun(t *testing.T) {
+	kept := buildClusterValidatorJob("j", "nvcr.io/x/v:1", "",
+		clusterValidatorControlPlaneRole, "runid", true)
+	assert.Equal(t, "true", kept.Labels[clusterValidatorPreserveLabel])
+
+	ordinary := buildClusterValidatorJob("j", "nvcr.io/x/v:1", "",
+		clusterValidatorControlPlaneRole, "runid", false)
+	assert.NotContains(t, ordinary.Labels, clusterValidatorPreserveLabel,
+		"an ordinary run must stay sweepable")
+}
+
+func TestSweepPriorClusterValidatorJobs_SparesPreservedJob(t *testing.T) {
+	preserved := buildClusterValidatorJob(clusterValidatorName+"-kept", "nvcr.io/x/v:1", "",
+		clusterValidatorControlPlaneRole, "runid", true)
+	preserved.Namespace = clusterValidatorNamespace
+	ordinary := buildClusterValidatorJob(clusterValidatorName+"-old", "nvcr.io/x/v:1", "",
+		clusterValidatorControlPlaneRole, "runid", false)
+	ordinary.Namespace = clusterValidatorNamespace
+
+	client := fake.NewSimpleClientset(preserved, ordinary)
+	sweepPriorClusterValidatorJobs(context.Background(), client, clusterValidatorControlPlaneRole)
+
+	_, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(
+		context.Background(), preserved.Name, metav1.GetOptions{})
+	assert.NoError(t, err, "a Job kept with --no-cleanup must survive a later run's sweep")
+
+	_, err = client.BatchV1().Jobs(clusterValidatorNamespace).Get(
+		context.Background(), ordinary.Name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "an ordinary prior Job must still be swept")
+}

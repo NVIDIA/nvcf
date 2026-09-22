@@ -543,6 +543,14 @@ func sweepPriorClusterValidatorJobs(ctx context.Context, client kubernetes.Inter
 		if !strings.HasPrefix(l.Items[i].Name, clusterValidatorName) {
 			continue
 		}
+		// A Job an operator kept with --no-cleanup survives later ordinary
+		// runs too. The current run already skips this sweep under that flag,
+		// but without the marker the next run of the same role deletes the Job
+		// while its ConfigMap, RBAC and pull secret survive, leaving the
+		// preserved artifacts pointing at a Job that no longer exists.
+		if l.Items[i].Labels[clusterValidatorPreserveLabel] == "true" {
+			continue
+		}
 		opts := deleteExactly(&l.Items[i])
 		opts.PropagationPolicy = &propagation
 		_ = jobs.Delete(ctx, l.Items[i].Name, opts)
@@ -829,7 +837,7 @@ func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCle
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: clusterValidatorNamespace,
-			Labels:    clusterValidatorRoleLabels(role),
+			Labels:    clusterValidatorRoleLabelsPreserved(role, noCleanup),
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: &backoff,
