@@ -701,6 +701,7 @@ func (r *RateLimiter) RateLimit(ctx context.Context, request *pb.RateLimitReques
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String("nca_id", request.NcaId),
+		attribute.String("owner_nca_id", request.OwnerNcaId),
 		attribute.String("function_id", request.FunctionId),
 		attribute.String("function_version_id", request.FunctionVersionId),
 		attribute.String("client_auth_subject", redactSubject(request.ClientAuthSubject)))
@@ -751,7 +752,7 @@ func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitReq
 
 	// User tier; only when caller identity is present.
 	if request.ClientAuthSubject != "" {
-		userKey := NewPerUserCacheKey(request.ClientAuthSubject, request.NcaId, request.FunctionVersionId)
+		userKey := NewPerUserCacheKey(request.ClientAuthSubject, rateLimitNcaId(request), request.FunctionVersionId)
 		userLimiters := r.Limiters.Get(userKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
 			item, err := r.loadPerUserLimiters(ctx, k, request)
 			if err != nil {
@@ -764,13 +765,13 @@ func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitReq
 			tiers = append(tiers, tierCheck{
 				name:        "user",
 				entry:       userLimiters.Value(),
-				olricPrefix: "user:" + request.ClientAuthSubject + ":" + request.NcaId,
+				olricPrefix: "user:" + request.ClientAuthSubject + ":" + rateLimitNcaId(request),
 			})
 		}
 	}
 
 	// NCA tier; per-NCA-ID config takes precedence over global.
-	perNcaIdKey := NewPerNcaIdCacheKey(request.NcaId, request.FunctionVersionId)
+	perNcaIdKey := NewPerNcaIdCacheKey(rateLimitNcaId(request), request.FunctionVersionId)
 	perNcaIdLimiters := r.Limiters.Get(perNcaIdKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
 		item, err := r.loadPerNcaIdLimiters(ctx, k, request)
 		if err != nil {
@@ -783,7 +784,7 @@ func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitReq
 		tiers = append(tiers, tierCheck{
 			name:        "nca",
 			entry:       perNcaIdLimiters.Value(),
-			olricPrefix: request.NcaId,
+			olricPrefix: rateLimitNcaId(request),
 		})
 		return tiers
 	}
@@ -801,11 +802,19 @@ func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitReq
 		tiers = append(tiers, tierCheck{
 			name:        "global",
 			entry:       globalLimiters.Value(),
-			olricPrefix: request.NcaId,
+			olricPrefix: rateLimitNcaId(request),
 		})
 	}
 
 	return tiers
+}
+
+// rateLimitNcaId is the account rate limits apply to: the key owner's, falling back to ncaId for callers that don't send it.
+func rateLimitNcaId(request *pb.RateLimitRequest) string {
+	if request.OwnerNcaId != "" {
+		return request.OwnerNcaId
+	}
+	return request.NcaId
 }
 
 // rateLimit returns allowed only if every tier allows (AND). Tiers run in
@@ -819,7 +828,7 @@ func (r *RateLimiter) rateLimit(ctx context.Context, tiers []tierCheck, request 
 		if !allowed {
 			break
 		}
-		if _, ok := t.entry.ExcludedNcaIds[request.NcaId]; ok {
+		if _, ok := t.entry.ExcludedNcaIds[rateLimitNcaId(request)]; ok {
 			continue
 		}
 		for _, rateEntry := range t.entry.Rates {
