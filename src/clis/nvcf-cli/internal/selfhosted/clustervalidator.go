@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -356,11 +357,6 @@ func validatorConfigNameForRole(role string) string {
 	return clusterValidatorNoConfigName
 }
 
-// sweepClusterValidatorRBAC removes the SA, ClusterRole, and ClusterRoleBinding
-// created by ensureClusterValidatorRBAC. Called after Job completion (when
-// --no-cleanup is not set) to close the window where the elevated ClusterRole
-// exists. The next run recreates them via ensureClusterValidatorRBAC.
-// Errors are swallowed: stale RBAC is preferable to failing the result.
 // sweepOrphanClusterValidatorRBAC removes validator RBAC left behind by a run
 // that died before its deferred cleanup (SIGKILL, OOM, lost terminal).
 //
@@ -409,6 +405,12 @@ func sweepOrphanClusterValidatorRBAC(ctx context.Context, client kubernetes.Inte
 	}
 }
 
+// sweepClusterValidatorRBAC removes the SA, ClusterRole, and ClusterRoleBinding
+// created by ensureClusterValidatorRBAC. Called after Job completion (when
+// --no-cleanup is not set) to close the window where the elevated ClusterRole
+// exists. Each run mints its own names, so nothing is reused and anything left
+// behind is reclaimed by sweepOrphanClusterValidatorRBAC instead.
+// Errors are swallowed: stale RBAC is preferable to failing the result.
 func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface, role, runID string) {
 	name := clusterValidatorRBACName(role, runID)
 
@@ -489,6 +491,10 @@ func validatorRoleSelector(role string) string {
 // when running against the control-plane cluster. Matches nvca's RoleControlPlane
 // without importing that package.
 const clusterValidatorControlPlaneRole = "control-plane"
+
+// clusterValidatorComputePlaneRole is the other VALIDATOR_ROLE value. Both are
+// named so role-scoping logic reads the same on either side.
+const clusterValidatorComputePlaneRole = "compute-plane"
 
 // clusterValidatorConfigName is the default ConfigMap name the validator binary
 // looks for when VALIDATOR_CONFIG_NAME is empty. Must stay in sync with
@@ -661,13 +667,39 @@ func parseRegistryHostPort(s string) (host string, port int) {
 // write. VALIDATOR_ROLE selects the check set (control-plane vs compute-plane).
 func buildClusterValidatorJob(name, image, pullSecret, role, runID string, noCleanup bool) *batchv1.Job {
 	backoff := int32(0)
+	// Pod shape mirrors deployments/nvca-operator/templates/cronjob.yaml, which
+	// runs this same image. Two producers of one pod spec now exist in two
+	// languages, so they are kept deliberately in step: without the security
+	// context the Job is rejected outright by a namespace enforcing the
+	// PodSecurity "restricted" profile, and without the tolerations it never
+	// schedules on a cluster whose nodes all carry the control-plane taint.
+	// Either way waitForClusterValidatorJob burns its full budget and the run
+	// leaks, so these are correctness, not hardening.
+	runAsUser := int64(65534)
+	runAsNonRoot := true
+	readOnlyRoot := true
+	allowPrivEsc := false
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: clusterValidatorRBACName(role, runID),
 		RestartPolicy:      corev1.RestartPolicyNever,
+		Tolerations:        clusterValidatorTolerations(),
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsUser:  &runAsUser,
+			RunAsGroup: &runAsUser,
+			FSGroup:    &runAsUser,
+		},
 		Containers: []corev1.Container{{
 			Name:            clusterValidatorContainer,
 			Image:           image,
 			ImagePullPolicy: corev1.PullIfNotPresent,
+			Resources:       clusterValidatorResources(),
+			SecurityContext: &corev1.SecurityContext{
+				RunAsNonRoot:             &runAsNonRoot,
+				ReadOnlyRootFilesystem:   &readOnlyRoot,
+				AllowPrivilegeEscalation: &allowPrivEsc,
+				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+				SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+			},
 			Env: []corev1.EnvVar{
 				{Name: "VALIDATOR_CONFIG_NAMESPACE", Value: clusterValidatorNamespace},
 				// Name the ConfigMap explicitly for the control-plane role and
@@ -859,4 +891,29 @@ func sweepClusterValidatorConfig(ctx context.Context, client kubernetes.Interfac
 		return
 	}
 	_ = cms.Delete(ctx, clusterValidatorConfigName, deleteExactly(cm))
+}
+
+// clusterValidatorTolerations mirrors the chart's tolerations so the Job can
+// schedule on a cluster whose nodes all carry the control-plane taint, which
+// is the normal shape for a dedicated control plane.
+func clusterValidatorTolerations() []corev1.Toleration {
+	return []corev1.Toleration{
+		{Key: "node-role.kubernetes.io/control-plane", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
+		{Key: "node-role.kubernetes.io/master", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
+	}
+}
+
+// clusterValidatorResources mirrors the chart's defaults. Without requests the
+// Job is rejected outright by a namespace carrying a LimitRange or a quota.
+func clusterValidatorResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("64Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("200m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+	}
 }

@@ -53,8 +53,16 @@ func stackReleaseNamespaces(stackDir string) []string {
 	if stackDir == "" {
 		return nil
 	}
-	entries, err := filepath.Glob(filepath.Join(stackDir, "helmfile.d", "*.yaml.gotmpl"))
-	if err != nil || len(entries) == 0 {
+	// helmfile accepts plain .yaml fragments as well as .yaml.gotmpl.
+	var entries []string
+	for _, pattern := range []string{"*.yaml.gotmpl", "*.yaml"} {
+		matches, err := filepath.Glob(filepath.Join(stackDir, "helmfile.d", pattern))
+		if err != nil {
+			return nil
+		}
+		entries = append(entries, matches...)
+	}
+	if len(entries) == 0 {
 		return nil
 	}
 
@@ -62,7 +70,13 @@ func stackReleaseNamespaces(stackDir string) []string {
 	for _, path := range entries {
 		body, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			// Bail out rather than deriving a partial list. A single
+			// unreadable fragment (a root-owned 0600 file left by "sudo
+			// helmfile", say) would otherwise silently drop a third of the
+			// namespaces, and the caller prefers any non-empty derived list
+			// over the complete static fallback. That turns a truncated scan
+			// into an affirmative all-clear.
+			return nil
 		}
 		for _, m := range helmfileNamespaceRE.FindAllStringSubmatch(string(body), -1) {
 			if ns := strings.TrimSpace(m[1]); ns != "" {
@@ -86,8 +100,8 @@ func stackReleaseNamespaces(stackDir string) []string {
 // It prefers what the stack actually declares and falls back to the static
 // list when no stack is available.
 func resolveStackNamespaces(stackDir string, fallback []string) []string {
-	if derived := stackReleaseNamespaces(stackDir); len(derived) > 0 {
-		return derived
-	}
-	return fallback
+	// Union, not replace. The derived list follows the stack, but it cannot see
+	// namespaces behind a helmfiles: include, so on its own it can still be
+	// short. Merging keeps the static list as a floor.
+	return mergeNamespaces(fallback, stackReleaseNamespaces(stackDir))
 }

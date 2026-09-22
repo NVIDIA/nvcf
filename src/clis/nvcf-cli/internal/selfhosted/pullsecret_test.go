@@ -658,3 +658,63 @@ func TestAutoCreatePullSecretFromEnv_RefusesNonNGCRegistry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, secrets.Items, "the NGC key must not reach a third-party registry")
 }
+
+// In ModeSplit both kubecontexts can resolve to one cluster. Adopting the
+// other role's managed Secret means that role's sweep deletes it while this
+// role's pod is still pulling.
+func TestScanAndMirrorPullSecret_DoesNotAdoptTheOtherRolesSecret(t *testing.T) {
+	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
+	otherRole := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+			Namespace: clusterValidatorNamespace,
+			Labels:    clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	}
+	client := fake.NewSimpleClientset(otherRole)
+
+	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
+		clusterValidatorComputePlaneRole)
+	require.NoError(t, err)
+	assert.NotEqual(t, otherRole.Name, got,
+		"the compute role must not adopt the control-plane role's managed Secret")
+}
+
+// An operator-supplied Secret carries no managed labels, so no sweep touches
+// it and adopting it is safe.
+func TestScanAndMirrorPullSecret_AdoptsOperatorSuppliedSecret(t *testing.T) {
+	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
+	operator := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "operator-pull", Namespace: clusterValidatorNamespace},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	}
+	client := fake.NewSimpleClientset(operator)
+
+	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
+		clusterValidatorComputePlaneRole)
+	require.NoError(t, err)
+	assert.Equal(t, "operator-pull", got)
+}
+
+// This role's own Secret is still adopted rather than re-minted.
+func TestScanAndMirrorPullSecret_AdoptsOwnRoleSecret(t *testing.T) {
+	cfg := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "key")
+	own := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretRoleName(clusterValidatorComputePlaneRole),
+			Namespace: clusterValidatorNamespace,
+			Labels:    clusterValidatorRoleLabels(clusterValidatorComputePlaneRole),
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: cfg},
+	}
+	client := fake.NewSimpleClientset(own)
+
+	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
+		clusterValidatorComputePlaneRole)
+	require.NoError(t, err)
+	assert.Equal(t, own.Name, got)
+}

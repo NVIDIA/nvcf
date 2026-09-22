@@ -566,6 +566,10 @@ func parseJSONLLines(t *testing.T, s string) []map[string]any {
 // the targeting predicates: --pre in ModeSplit visits both clusters for the
 // shared pre-install checks without targeting either role. Gating the split
 // dispatch on the targeting predicates alone would make --pre a no-op there.
+//
+// The mode column is kept to document that the answer is the same in both
+// modes: the predicate is mode-independent by absorption, so a table that
+// varied only the mode would be asserting a dependence that does not exist.
 func TestPlaneIsVisited(t *testing.T) {
 	t.Cleanup(func() {
 		checkPre = false
@@ -593,8 +597,8 @@ func TestPlaneIsVisited(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			checkPre, checkControlPlane, checkComputePlane, checkAll = tt.pre, tt.cp, tt.gpu, tt.all
-			assert.Equal(t, tt.wantCP, controlPlaneIsVisited(tt.mode))
-			assert.Equal(t, tt.wantComputeGP, computePlaneIsVisited(tt.mode))
+			assert.Equal(t, tt.wantCP, controlPlaneIsVisited())
+			assert.Equal(t, tt.wantComputeGP, computePlaneIsVisited())
 		})
 	}
 }

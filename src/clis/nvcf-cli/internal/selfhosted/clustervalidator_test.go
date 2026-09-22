@@ -221,58 +221,25 @@ func TestRunClusterValidator_JobFailed(t *testing.T) {
 	assert.NotEmpty(t, res.JobName, "JobName must be populated on failure for kubectl-logs follow-up")
 }
 
-func TestRunClusterValidator_RBACIdempotent(t *testing.T) {
-	// Seed the SA, ClusterRole and ClusterRoleBinding exactly as a prior run
-	// would have left them: present, and carrying our managed labels. Each
-	// Create then returns AlreadyExists and the runner must treat that as
-	// success and proceed to Job creation.
-	//
-	// Seeding real objects rather than faking AlreadyExists with a reactor
-	// matters: the runner refetches on conflict to confirm it owns what it is
-	// about to bind, so a reactor with nothing behind it is not a valid model.
-	client := fake.NewSimpleClientset(
-		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
-			Name: clusterValidatorName, Namespace: clusterValidatorNamespace,
-			Labels: clusterValidatorLabels(),
-		}},
-		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
-			Name: clusterValidatorName, Labels: clusterValidatorLabels(),
-		}},
-		&rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: clusterValidatorName, Labels: clusterValidatorLabels(),
-			},
-			Subjects: []rbacv1.Subject{{
-				Kind:      rbacv1.ServiceAccountKind,
-				Name:      clusterValidatorName,
-				Namespace: clusterValidatorNamespace,
-			}},
-			RoleRef: rbacv1.RoleRef{
-				APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterValidatorName,
-			},
-		},
-	)
-
-	var jobName atomic.Value
-	jobName.Store("")
-	client.PrependReactor("create", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
-		jobName.Store(action.(ktesting.CreateAction).GetObject().(*batchv1.Job).Name)
-		return false, nil, nil
+// Each run mints an unguessable RBAC name, so there is no idempotence left to
+// test: a name collision means something else already holds the name this run
+// is about to bind cluster-wide permissions to. That must fail, not be adopted.
+// (Replaces TestRunClusterValidator_RBACIdempotent, which seeded objects under
+// the old fixed name and so never produced the AlreadyExists it described.)
+func TestRunClusterValidator_RBACNameCollisionIsNotAdopted(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "clusterroles", func(action ktesting.Action) (bool, runtime.Object, error) {
+		name := action.(ktesting.CreateAction).GetObject().(*rbacv1.ClusterRole).Name
+		return true, nil, apierrors.NewAlreadyExists(
+			schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"}, name)
 	})
-	client.PrependReactor("get", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
-		return jobSucceededReactor(jobName.Load().(string))(action)
-	})
-	client.PrependReactor("list", "pods", podListReactor(""))
 
-	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil)
-	require.NoError(t, res.Err, "AlreadyExists on RBAC bootstrap must be treated as success")
-	assert.True(t, res.Passed)
+	res := runClusterValidator(context.Background(), client, "nvcr.io/x/validator:1",
+		"", false, clusterValidatorControlPlaneRole, nil)
+	require.Error(t, res.Err, "a pre-existing object under our generated name must not be adopted")
+	assert.Contains(t, res.Err.Error(), "bootstrapping validator RBAC")
 }
 
-// TestEnsureClusterValidatorRBAC_WritableResources verifies that the
-// bootstrapped ClusterRole grants the write verbs required by enforcement
-// checks (namespace/pod create+delete), probe log reading (pods/log get),
-// and the Gateway API checks.
 func TestEnsureClusterValidatorRBAC_WritableResources(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	ctx := context.Background()
@@ -681,23 +648,6 @@ func TestParseRegistryHostPort(t *testing.T) {
 		})
 	}
 }
-
-func alreadyExistsReactor(resource, name string) ktesting.ReactionFunc {
-	gr := schema.GroupResource{Resource: resource}
-	return func(action ktesting.Action) (bool, runtime.Object, error) {
-		createAction, ok := action.(ktesting.CreateAction)
-		if !ok {
-			return false, nil, nil
-		}
-		meta, ok := createAction.GetObject().(metav1.Object)
-		if !ok || meta.GetName() != name {
-			return false, nil, nil
-		}
-		return true, nil, apierrors.NewAlreadyExists(gr, name)
-	}
-}
-
-// The same invariant for the network-check ConfigMap.
 func TestEnsureClusterValidatorConfig_RefusesUnmanagedConfigMap(t *testing.T) {
 	ctx := context.Background()
 	client := fake.NewSimpleClientset(&corev1.ConfigMap{
@@ -904,4 +854,41 @@ func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
 	_, err = client.CoreV1().Secrets(clusterValidatorNamespace).Get(
 		context.Background(), secret.Name, metav1.GetOptions{})
 	assert.NoError(t, err, "--no-cleanup must keep the pull secret the preserved pod needs")
+}
+
+// The Job runs the same image as the chart's CronJob, so it needs the same pod
+// shape. Without the security context a namespace enforcing the PodSecurity
+// "restricted" profile rejects it at admission; without the tolerations it
+// never schedules on a cluster whose nodes all carry the control-plane taint.
+// Either way the wait burns its full budget and the run leaks.
+func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
+	job := buildClusterValidatorJob("j", "nvcr.io/x/validator:1", "",
+		clusterValidatorControlPlaneRole, "runid", false)
+	spec := job.Spec.Template.Spec
+
+	require.NotNil(t, spec.SecurityContext, "pod security context is required under restricted")
+	require.NotNil(t, spec.SecurityContext.RunAsUser)
+	assert.Equal(t, int64(65534), *spec.SecurityContext.RunAsUser, "chart runs this image as 65534")
+
+	require.Len(t, spec.Containers, 1)
+	sc := spec.Containers[0].SecurityContext
+	require.NotNil(t, sc, "container security context is required under restricted")
+	require.NotNil(t, sc.RunAsNonRoot)
+	assert.True(t, *sc.RunAsNonRoot)
+	require.NotNil(t, sc.AllowPrivilegeEscalation)
+	assert.False(t, *sc.AllowPrivilegeEscalation)
+	require.NotNil(t, sc.Capabilities)
+	assert.Equal(t, []corev1.Capability{"ALL"}, sc.Capabilities.Drop)
+	require.NotNil(t, sc.SeccompProfile)
+	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, sc.SeccompProfile.Type)
+
+	var keys []string
+	for _, tol := range spec.Tolerations {
+		keys = append(keys, tol.Key)
+	}
+	assert.Contains(t, keys, "node-role.kubernetes.io/control-plane")
+	assert.Contains(t, keys, "node-role.kubernetes.io/master")
+
+	assert.False(t, spec.Containers[0].Resources.Requests.Cpu().IsZero(),
+		"a namespace with a LimitRange or quota rejects a pod with no requests")
 }

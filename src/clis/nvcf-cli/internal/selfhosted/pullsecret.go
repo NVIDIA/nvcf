@@ -182,6 +182,17 @@ func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, r
 				continue
 			}
 			if s.Namespace == clusterValidatorNamespace {
+				// Adopt an operator-supplied Secret (no managed labels, so no
+				// sweep touches it) or this role's own. Never the other
+				// role's: in ModeSplit both kubecontexts can resolve to one
+				// cluster, and that role's deferred sweep would delete the
+				// Secret while this role's pod is still pulling, which the
+				// kubelet reports as FailedToRetrieveImagePullSecret. That is
+				// the exact failure per-role naming was introduced to prevent.
+				if hasValidatorManagedLabels(s.Labels) &&
+					s.Labels[clusterValidatorRoleLabel] != role {
+					continue
+				}
 				return s.Name, nil
 			}
 			// Mirror under the validator's well-known name rather than the
@@ -357,17 +368,6 @@ func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, n
 	return nil
 }
 
-// isManagedByValidatorCLI reports whether the secret carries the labels
-// writeDockerConfigSecret stamps on every secret it creates. Used to
-// gate the delete-then-recreate branch so we never destroy an operator-
-// or chart-owned secret that happens to share a name with one of ours.
-// refuseIfUnmanaged rejects a Secret nvcf-cli does not own. Every path in
-// writeDockerConfigSecret that mutates an existing Secret must call this:
-// overwriting an operator-owned secret replaces their registry credentials and
-// stamps our managed labels on it, after which the role sweep deletes it.
-//
-// detail is appended to the message when there is something useful to say
-// (the conflicting type, the race), otherwise "".
 func refuseIfUnmanaged(s *corev1.Secret, namespace, name, detail string) error {
 	if isManagedByValidatorCLI(s) {
 		return nil
@@ -381,6 +381,17 @@ func refuseIfUnmanaged(s *corev1.Secret, namespace, name, detail string) error {
 		namespace, name, detail)
 }
 
+// isManagedByValidatorCLI reports whether the secret carries the labels
+// writeDockerConfigSecret stamps on every secret it creates. Used to
+// gate the delete-then-recreate branch so we never destroy an operator-
+// or chart-owned secret that happens to share a name with one of ours.
+// refuseIfUnmanaged rejects a Secret nvcf-cli does not own. Every path in
+// writeDockerConfigSecret that mutates an existing Secret must call this:
+// overwriting an operator-owned secret replaces their registry credentials and
+// stamps our managed labels on it, after which the role sweep deletes it.
+//
+// detail is appended to the message when there is something useful to say
+// (the conflicting type, the race), otherwise "".
 func isManagedByValidatorCLI(s *corev1.Secret) bool {
 	return hasValidatorManagedLabels(s.Labels)
 }

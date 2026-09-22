@@ -148,7 +148,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// *IsTargeted left the validator unresolved and both probes nil, with no
 	// note explaining why.
 	anyValidatorIsTargeted := !localOnly && !skipClusterValidation &&
-		(computePlaneIsVisited(mode) || controlPlaneIsVisited(mode))
+		(computePlaneIsVisited() || controlPlaneIsVisited())
 	clusterValidatorImage := ""
 	if anyValidatorIsTargeted {
 		if img, ok := resolveClusterValidatorImage(c.Context()); ok {
@@ -189,7 +189,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// validator row" with "validator silently dropped". Print at most one
 	// reason; --skip-cluster-validation takes precedence over missing
 	// config since it's the explicit operator choice.
-	if !localOnly && (computePlaneIsVisited(mode) || controlPlaneIsVisited(mode)) {
+	if !localOnly && (computePlaneIsVisited() || controlPlaneIsVisited()) {
 		switch {
 		case skipClusterValidation:
 			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (--skip-cluster-validation)")
@@ -406,14 +406,17 @@ func controlPlaneIsTargeted(mode kubectx.Mode) bool {
 // which is broader than whether its role-specific check set runs. --pre in
 // ModeSplit visits both clusters for the shared pre-install checks (stale
 // namespaces) without targeting either role, so the targeting predicates alone
-// cannot gate the dispatch. In ModeSingle --pre already targets both roles and
-// these are equivalent to their *IsTargeted counterparts.
-func computePlaneIsVisited(mode kubectx.Mode) bool {
-	return computePlaneIsTargeted(mode) || checkPre
+// cannot gate the dispatch.
+//
+// No mode parameter, unlike *IsTargeted: "(X || (pre && single)) || pre"
+// absorbs to "X || pre", so the mode cannot change the answer. Taking one
+// would imply a mode-dependence that does not exist.
+func computePlaneIsVisited() bool {
+	return checkComputePlane || checkAll || checkPre
 }
 
-func controlPlaneIsVisited(mode kubectx.Mode) bool {
-	return controlPlaneIsTargeted(mode) || checkPre
+func controlPlaneIsVisited() bool {
+	return checkControlPlane || checkAll || checkPre
 }
 
 // withoutHostLocalChecks returns a copy of cfg with the inputs for the checks
@@ -506,7 +509,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	var inotifyProber selfhosted.NodeInotifyProber
 	// Visited, not targeted: the inotify limit is exactly what --pre exists to
 	// catch before NVCA bootstrap, so it must run for --pre in ModeSplit too.
-	if computePlaneIsVisited(mode) && !skipInotify {
+	if computePlaneIsVisited() && !skipInotify {
 		inotifyProber = newInotifyProberForSelfHosted()
 	}
 
@@ -521,7 +524,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	// still creates a ServiceAccount, cluster-wide ClusterRole/CRB, pull secret
 	// and validator Job in the compute cluster.
 	var clusterValidator selfhosted.ClusterValidator
-	if computePlaneIsVisited(mode) && clusterValidatorImage != "" {
+	if computePlaneIsVisited() && clusterValidatorImage != "" {
 		clusterValidator = newClusterValidatorForSelfHosted()
 	}
 
@@ -538,7 +541,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	// clusterValidator is nil and keying off it would drop the control-plane
 	// validator check from the run entirely.
 	var cpClusterValidator selfhosted.ClusterValidator
-	if controlPlaneIsVisited(mode) && clusterValidatorImage != "" {
+	if controlPlaneIsVisited() && clusterValidatorImage != "" {
 		cpClusterValidator = newClusterValidatorForSelfHosted()
 	}
 
@@ -546,8 +549,8 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	// operator's machine, so they belong to one invocation only. The control
 	// plane carries them when it runs; otherwise the compute plane does, so
 	// neither is silently dropped by a compute-plane-only invocation.
-	runControlPlane := controlPlaneIsVisited(mode)
-	runComputePlane := computePlaneIsVisited(mode)
+	runControlPlane := controlPlaneIsVisited()
+	runComputePlane := computePlaneIsVisited()
 	cpCfg, gpuCfg := cfg, cfg
 	if runControlPlane {
 		gpuCfg = withoutHostLocalChecks(cfg)
@@ -710,14 +713,14 @@ func emitCheckFinal(ctx context.Context, sink progress.EventSink, results []self
 	})
 }
 
-// anyFailed returns true if any check failed at error severity. Warnings do
-// not trigger non-zero exit per spec §6.3.
-// isBlockingFailure is the single definition of "this fails the run". Both the
-// exit code and the JSON verdict derive from it, so they cannot disagree.
 func isBlockingFailure(r selfhosted.CheckResult) bool {
 	return !r.Passed && r.Severity == selfhosted.SeverityError
 }
 
+// anyFailed returns true if any check failed at error severity. Warnings do
+// not trigger non-zero exit per spec §6.3.
+// isBlockingFailure is the single definition of "this fails the run". Both the
+// exit code and the JSON verdict derive from it, so they cannot disagree.
 func anyFailed(results []selfhosted.CheckResult) bool {
 	for _, r := range results {
 		if isBlockingFailure(r) {

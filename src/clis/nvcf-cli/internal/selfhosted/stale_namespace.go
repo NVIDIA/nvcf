@@ -138,6 +138,10 @@ func helmReleaseExists(
 
 func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, namespaces []string) ([]StaleNamespace, error) {
 	var stale []StaleNamespace
+	// noRelease is held back until we know the Helm storage driver keeps its
+	// state in-cluster at all; see the gate below.
+	var noRelease []string
+	anyHelmReleaseSeen := false
 	for _, name := range namespaces {
 		ns, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -167,6 +171,7 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 			return stale, fmt.Errorf("list Helm secrets in %s: %w", name, err)
 		}
 		if found {
+			anyHelmReleaseSeen = true
 			continue // healthy: active Helm release found via the secret driver
 		}
 		found, err = helmReleaseExists(
@@ -180,7 +185,19 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 		if err != nil {
 			return stale, fmt.Errorf("list Helm configmaps in %s: %w", name, err)
 		}
-		if !found {
+		if found {
+			anyHelmReleaseSeen = true
+			continue
+		}
+		noRelease = append(noRelease, name)
+	}
+
+	// Only trust the "no Helm release" signal when at least one owner=helm
+	// object was seen somewhere. HELM_DRIVER=sql keeps release state in a
+	// database with no in-cluster object at all, so without this every
+	// namespace of a healthy production install reports stale.
+	if anyHelmReleaseSeen {
+		for _, name := range noRelease {
 			stale = append(stale, StaleNamespace{Name: name, Reason: "no Helm release"})
 		}
 	}

@@ -88,12 +88,40 @@ func TestResolveStackNamespaces_FallsBackWhenNoStack(t *testing.T) {
 		"a directory with no helmfile.d must use the static list")
 }
 
-func TestResolveStackNamespaces_PrefersStack(t *testing.T) {
+// The derived list is additive, not a replacement: it cannot see namespaces
+// behind a helmfiles: include, so on its own it can still be short. The static
+// list stays as a floor.
+func TestResolveStackNamespaces_UnionsStackWithStatic(t *testing.T) {
 	dir := writeStack(t, map[string]string{
 		"01.yaml.gotmpl": "releases:\n  - name: a\n    namespace: from-stack\n",
 	})
-	assert.Equal(t, []string{"from-stack"}, resolveStackNamespaces(dir, []string{"static"}),
-		"a readable stack must win over the static list")
+	got := resolveStackNamespaces(dir, []string{"static"})
+	assert.Contains(t, got, "from-stack", "the stack's namespaces must be picked up")
+	assert.Contains(t, got, "static", "the static list must remain a floor")
+}
+
+// An unreadable fragment must not yield a truncated list that then overrides
+// the complete static one, which would report an affirmative all-clear over a
+// scan missing a third of its namespaces.
+func TestStackReleaseNamespaces_UnreadableFragmentYieldsNothing(t *testing.T) {
+	dir := writeStack(t, map[string]string{
+		"01.yaml.gotmpl": "releases:\n  - name: a\n    namespace: one\n",
+		"02.yaml.gotmpl": "releases:\n  - name: b\n    namespace: two\n",
+	})
+	unreadable := filepath.Join(dir, "helmfile.d", "02.yaml.gotmpl")
+	require.NoError(t, os.Chmod(unreadable, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+
+	assert.Nil(t, stackReleaseNamespaces(dir),
+		"a partial parse must not masquerade as the stack's full namespace set")
+}
+
+// helmfile accepts plain .yaml fragments too.
+func TestStackReleaseNamespaces_ReadsPlainYAMLFragments(t *testing.T) {
+	dir := writeStack(t, map[string]string{
+		"01.yaml": "releases:\n  - name: a\n    namespace: plain-yaml\n",
+	})
+	assert.Contains(t, stackReleaseNamespaces(dir), "plain-yaml")
 }
 
 // A `namespace:` key nested inside a release's values block is chart

@@ -704,11 +704,6 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 	}
 }
 
-// staleNamespaceCheck detects NVCF namespaces stuck Terminating or left as
-// empty shells after a partial teardown. Severity is error; prober errors
-// degrade to warning so transient kubeconfig issues don't falsely fail.
-// mergeNamespaces returns the union of two namespace lists, order-stable and
-// de-duplicated.
 func mergeNamespaces(base, extra []string) []string {
 	if len(extra) == 0 {
 		return base
@@ -727,6 +722,11 @@ func mergeNamespaces(base, extra []string) []string {
 	return out
 }
 
+// staleNamespaceCheck detects NVCF namespaces stuck Terminating or left as
+// empty shells after a partial teardown. Severity is error; prober errors
+// degrade to warning so transient kubeconfig issues don't falsely fail.
+// mergeNamespaces returns the union of two namespace lists, order-stable and
+// de-duplicated.
 func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namespaces []string) binaryCheckSpec {
 	const id = "stale-namespaces"
 	return binaryCheckSpec{
@@ -793,9 +793,22 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				}
 			}
 			if len(emptyShell) > 0 {
+				// Deliberately not a delete command. A namespace with no Helm
+				// release is not necessarily stale: the stack gates
+				// cert-manager, NATS, OpenBao and Cassandra on *.enabled, so an
+				// operator who installs one the documented upstream way, or via
+				// Argo, owns a healthy namespace with no owner=helm object.
+				// Handing them "kubectl delete namespace cert-manager" would
+				// destroy every Certificate and Issuer in the cluster.
 				hints = append(hints,
-					fmt.Sprintf("inspect and delete empty namespaces: %s delete namespace %s",
-						kctl, strings.Join(emptyShell, " ")))
+					fmt.Sprintf("inspect these and remove them only after confirming they are unused: %s get all -n %s",
+						kctl, strings.Join(emptyShell, " -n ")))
+			}
+			// Only a namespace stuck Terminating blocks the run. "No Helm
+			// release" is a heuristic over a conditionally-installed stack, so
+			// it warns rather than turning a supported install shape into exit 2.
+			if len(terminating) == 0 {
+				r.Severity = SeverityWarning
 			}
 			r.Message = fmt.Sprintf("%d stale namespace(s) detected: %s. To resolve: %s",
 				len(stale), strings.Join(parts, ", "), strings.Join(hints, "; "))
