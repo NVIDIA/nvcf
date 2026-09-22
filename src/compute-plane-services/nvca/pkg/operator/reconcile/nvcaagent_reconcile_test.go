@@ -2957,6 +2957,40 @@ func TestSetupNVCADeployment_SecurityContext(t *testing.T) {
 	}
 }
 
+// TestVendoredNVCAConfigDecodeSharedStorageCapacity verifies the production decoder path.
+func TestVendoredNVCAConfigDecodeSharedStorageCapacity(t *testing.T) {
+	cfg, err := nvcaconfig.DecodeConfig([]byte(`agent:
+  sharedStorage:
+    taskData:
+      storageCapacity: 20Gi
+`))
+	require.NoError(t, err)
+	assert.Equal(t, resource.MustParse("20Gi"), cfg.Agent.SharedStorage.TaskData.StorageCapacity)
+}
+
+// TestVendoredNVCAConfigEncodeSharedStorageCapacity verifies the production vendored round trip.
+func TestVendoredNVCAConfigEncodeSharedStorageCapacity(t *testing.T) {
+	want := resource.MustParse("20Gi")
+	cfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			SharedStorage: nvcaconfig.SharedStorageConfig{
+				TaskData: nvcaconfig.SharedStorageTaskDataConfig{
+					StorageCapacity: want,
+				},
+			},
+		},
+	}
+
+	encoded, err := nvcaconfig.EncodeConfig(cfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "storageCapacity: 20Gi")
+	assert.NotContains(t, string(encoded), "format: BinarySI")
+
+	decoded, err := nvcaconfig.DecodeConfig(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, want, decoded.Agent.SharedStorage.TaskData.StorageCapacity)
+}
+
 func TestNewAgentConfig_IncludesAgentAndWorkloadTolerations(t *testing.T) {
 	ctx := newTestContext()
 	bc := &BackendK8sCache{
