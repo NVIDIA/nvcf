@@ -292,6 +292,7 @@ pub async fn pexec(
             .check_rate_limit(
                 allowed_functions.authed_client_subject.clone(),
                 nca_id.clone(),
+                allowed_functions.authed_client_owner_nca_id.clone(),
                 function_id,
                 function_version_id,
                 sync_check,
