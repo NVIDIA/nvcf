@@ -108,9 +108,13 @@ func TestStackReleaseNamespaces_UnreadableFragmentYieldsNothing(t *testing.T) {
 		"01.yaml.gotmpl": "releases:\n  - name: a\n    namespace: one\n",
 		"02.yaml.gotmpl": "releases:\n  - name: b\n    namespace: two\n",
 	})
+	// A directory, not a chmod 000 file: root bypasses the permission bits, so
+	// a mode-based fixture passes locally and fails in CI, where tests run as
+	// root. os.ReadFile returns EISDIR for every UID, so the test means the
+	// same thing everywhere rather than being skipped where it matters most.
 	unreadable := filepath.Join(dir, "helmfile.d", "02.yaml.gotmpl")
-	require.NoError(t, os.Chmod(unreadable, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+	require.NoError(t, os.Remove(unreadable))
+	require.NoError(t, os.Mkdir(unreadable, 0o755))
 
 	assert.Nil(t, stackReleaseNamespaces(dir),
 		"a partial parse must not masquerade as the stack's full namespace set")

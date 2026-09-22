@@ -453,7 +453,9 @@ func maybeShowClusterValidatorLogs(w io.Writer, results []selfhosted.CheckResult
 		fmt.Fprintln(w, "--- cluster-validator logs ---")
 		fmt.Fprint(w, r.Logs)
 		fmt.Fprintln(w, "--- end cluster-validator logs ---")
-		return
+		// No early return: both roles produce a cluster-validator result under
+		// the same ID, so stopping at the first drops the other transcript
+		// entirely from --all --show-logs.
 	}
 }
 

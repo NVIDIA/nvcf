@@ -449,3 +449,22 @@ func TestStaleNamespaceCheck_TerminatingIsStillAnError(t *testing.T) {
 	r := staleNamespaceCheck(prober, "", []string{"nvcf"}).Run(context.Background())
 	assert.Equal(t, SeverityError, r.Severity)
 }
+
+// kubectl keeps only the last -n it is given, so a joined command inspects one
+// namespace and reports the rest as empty, which is the opposite of what an
+// operator deciding whether to delete them needs.
+func TestStaleNamespaceCheck_HintsOneCommandPerNamespace(t *testing.T) {
+	pinCurrentKubeContext(t, "")
+	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
+		return []StaleNamespace{
+			{Name: "api-keys", Reason: "no Helm release"},
+			{Name: "ess", Reason: "no Helm release"},
+		}, nil
+	}
+	r := staleNamespaceCheck(prober, "", []string{"api-keys", "ess"}).Run(context.Background())
+
+	assert.NotContains(t, r.Message, "-n api-keys -n ess",
+		"a joined namespace list silently inspects only the last one")
+	assert.Contains(t, r.Message, "get all -n api-keys")
+	assert.Contains(t, r.Message, "get all -n ess")
+}

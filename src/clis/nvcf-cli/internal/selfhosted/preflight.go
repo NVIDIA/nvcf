@@ -800,9 +800,16 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				// Argo, owns a healthy namespace with no owner=helm object.
 				// Handing them "kubectl delete namespace cert-manager" would
 				// destroy every Certificate and Issuer in the cluster.
-				hints = append(hints,
-					fmt.Sprintf("inspect these and remove them only after confirming they are unused: %s get all -n %s",
-						kctl, strings.Join(emptyShell, " -n ")))
+				// One command per namespace. kubectl takes a single
+				// namespace and keeps the last -n it sees, so joining them
+				// produces a command that silently inspects only the last one
+				// and reports the rest as empty, which is the opposite of what
+				// an operator deciding whether to delete them needs.
+				for _, ns := range emptyShell {
+					hints = append(hints, fmt.Sprintf(
+						"inspect %s and remove it only after confirming it is unused: %s get all -n %s",
+						ns, kctl, ns))
+				}
 			}
 			// Only a namespace stuck Terminating blocks the run. "No Helm
 			// release" is a heuristic over a conditionally-installed stack, so

@@ -714,3 +714,22 @@ func TestEmitCheckFinal_ErrorIsAFailure(t *testing.T) {
 	assert.Contains(t, buf.String(), `"verdict":"failed"`)
 	assert.Contains(t, buf.String(), `"success":false`)
 }
+
+// Both roles emit a cluster-validator result under the same ID, so stopping at
+// the first drops the other transcript entirely from --all --show-logs.
+func TestMaybeShowClusterValidatorLogs_PrintsBothRoles(t *testing.T) {
+	prev := checkShowLogs
+	checkShowLogs = true
+	t.Cleanup(func() { checkShowLogs = prev })
+
+	var buf bytes.Buffer
+	maybeShowClusterValidatorLogs(&buf, []selfhosted.CheckResult{
+		{ID: "cluster-validator", Logs: "control-plane transcript\n"},
+		{ID: "cluster-validator", Logs: "compute-plane transcript\n"},
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, "control-plane transcript")
+	assert.Contains(t, out, "compute-plane transcript")
+	assert.Equal(t, 2, strings.Count(out, "--- cluster-validator logs ---"))
+}

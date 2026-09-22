@@ -139,7 +139,7 @@ func TestWriteDockerConfigSecret_Create(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	cfg := dockerConfigBlob(t, "private.registry.test", "$oauthtoken", "key")
 
-	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, cfg))
+	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, cfg, false), false)
 
 	got, err := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestWriteDockerConfigSecret_Update(t *testing.T) {
 		Data: map[string][]byte{corev1.DockerConfigJsonKey: old},
 	})
 
-	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh))
+	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false), false)
 
 	got, _ := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
 	assert.Equal(t, fresh, got.Data[corev1.DockerConfigJsonKey], "data must be updated to the fresh body")
@@ -191,7 +191,7 @@ func TestWriteDockerConfigSecret_TypeMismatchReplaces(t *testing.T) {
 		Data: map[string][]byte{"some-key": []byte("some-value")},
 	})
 
-	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh))
+	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false), false)
 
 	got, err := client.CoreV1().Secrets("default").Get(context.Background(), "nvcr-pull-secret", metav1.GetOptions{})
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func TestWriteDockerConfigSecret_TypeMismatchRefusesUnlabeledSecret(t *testing.T
 		Data: map[string][]byte{"operator-payload": operatorPayload},
 	})
 
-	err := writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh)
+	err := writeDockerConfigSecret(context.Background(), client, "default", "nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false)
 	require.Error(t, err, "must refuse to destroy a non-CLI-managed secret")
 	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
 
@@ -236,7 +236,7 @@ func TestScanAndMirrorPullSecret_FoundInDefault(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "operator-secret", name)
 
@@ -257,7 +257,7 @@ func TestScanAndMirrorPullSecret_FoundInNvcfMirroredToDefault(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), name)
 
@@ -279,14 +279,14 @@ func TestScanAndMirrorPullSecret_RegistryMismatch(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "", name, "secret for a different registry must not match")
 }
 
 func TestScanAndMirrorPullSecret_NoSecrets(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "", name)
 }
@@ -306,7 +306,7 @@ func TestScanAndMirrorPullSecret_PrefersDefaultNamespace(t *testing.T) {
 		},
 	)
 
-	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole)
+	name, err := scanAndMirrorPullSecret(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "in-default", name)
 }
@@ -318,7 +318,7 @@ func TestAutoCreatePullSecretFromEnv_NoEnv(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset()
 
-	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole)
+	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "", got, "no env var set means no secret minted")
 
@@ -333,7 +333,7 @@ func TestAutoCreatePullSecretFromEnv_KeyPresent(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "nvapi-test-123")
 
 	client := fake.NewSimpleClientset()
-	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "nvcr.io", clusterValidatorControlPlaneRole)
+	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "nvcr.io", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), got)
 
@@ -345,7 +345,7 @@ func TestAutoCreatePullSecretFromEnv_KeyPresent(t *testing.T) {
 
 func TestResolveValidatorPullSecret_FlagOverride(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	got, err := resolveValidatorPullSecret(context.Background(), client, "custom-secret", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "custom-secret", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "custom-secret", got, "explicit override always wins")
 
@@ -365,7 +365,7 @@ func TestResolveValidatorPullSecret_ScanWins(t *testing.T) {
 		Data:       map[string][]byte{corev1.DockerConfigJsonKey: cfg},
 	})
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	// Mirror destination is the validator's well-known name, not the
 	// source secret's name (avoids same-name collisions with operator
@@ -384,7 +384,7 @@ func TestResolveValidatorPullSecret_EnvFallback(t *testing.T) {
 	t.Setenv("NVCF_NGC_API_KEY", "nvapi-fallback")
 	client := fake.NewSimpleClientset()
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), got)
 
@@ -403,7 +403,7 @@ func TestResolveValidatorPullSecret_EnvFallbackRefusesMirroredRegistry(t *testin
 	client := fake.NewSimpleClientset()
 
 	got, err := resolveValidatorPullSecret(context.Background(), client, "",
-		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
+		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Empty(t, got, "no secret may be minted for a non-NGC registry")
 }
@@ -414,7 +414,7 @@ func TestResolveValidatorPullSecret_AllEmpty(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset()
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "", got, "no override, no scan match, no env var -> empty so kubelet surfaces ImagePullBackOff")
 }
@@ -425,7 +425,7 @@ func TestResolveValidatorPullSecret_UnparsableImage(t *testing.T) {
 	}
 	client := fake.NewSimpleClientset()
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "bareimage", clusterValidatorControlPlaneRole)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "bareimage", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "", got, "no registry hostname means no scan target and no auto-create")
 
@@ -450,12 +450,12 @@ func TestManagedPullSecret_IsScopedPerRole(t *testing.T) {
 	cfg := dockerConfigBlob(t, "private.registry.test", "user", "pass")
 	client := fake.NewSimpleClientset()
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		cpName, clusterValidatorControlPlaneRole, cfg))
+		cpName, clusterValidatorControlPlaneRole, cfg, false))
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		gpuName, "compute-plane", cfg))
+		gpuName, "compute-plane", cfg, false))
 	// Our labels, but not a name we generate: must survive.
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		"operator-owned-secret", clusterValidatorControlPlaneRole, cfg))
+		"operator-owned-secret", clusterValidatorControlPlaneRole, cfg, false))
 
 	sweepManagedPullSecrets(ctx, client, clusterValidatorControlPlaneRole)
 
@@ -481,7 +481,7 @@ func TestManagedPullSecret_LabelsMatchOnlyItsOwnRole(t *testing.T) {
 	cfg := dockerConfigBlob(t, "private.registry.test", "user", "pass")
 	require.NoError(t, writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
 		validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
-		clusterValidatorControlPlaneRole, cfg))
+		clusterValidatorControlPlaneRole, cfg, false))
 
 	got, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(ctx,
 		validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
@@ -513,7 +513,7 @@ func TestWriteDockerConfigSecret_RefusesUnmanagedSameTypeSecret(t *testing.T) {
 	})
 
 	err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace,
-		"nvcf-preflight-pull-secret-control-plane", clusterValidatorControlPlaneRole, ours)
+		"nvcf-preflight-pull-secret-control-plane", clusterValidatorControlPlaneRole, ours, false)
 
 	require.Error(t, err, "an unmanaged secret of the same type must not be overwritten")
 	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
@@ -568,7 +568,7 @@ func TestWriteDockerConfigSecret_RefusesUnmanagedAfterCreateRace(t *testing.T) {
 	})
 
 	err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, name,
-		clusterValidatorControlPlaneRole, ours)
+		clusterValidatorControlPlaneRole, ours, false)
 
 	require.Error(t, err, "losing the create race to an unmanaged secret must not overwrite it")
 	assert.Contains(t, err.Error(), "not managed by nvcf-cli")
@@ -599,7 +599,7 @@ func TestWriteDockerConfigSecret_TypeMismatchDeletePinsTheInspectedObject(t *tes
 	})
 
 	require.NoError(t, writeDockerConfigSecret(context.Background(), client, "default",
-		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh))
+		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false), false)
 
 	require.NotNil(t, opts.Preconditions, "delete must carry preconditions")
 	require.NotNil(t, opts.Preconditions.UID)
@@ -635,7 +635,7 @@ func TestWriteDockerConfigSecret_TypeMismatchStopsOnDeleteConflict(t *testing.T)
 	})
 
 	err := writeDockerConfigSecret(context.Background(), client, "default",
-		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh)
+		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh, false)
 	require.Error(t, err, "a changed object must abort the replace")
 	assert.False(t, created, "must not create over an object that was never vetted")
 }
@@ -649,7 +649,7 @@ func TestAutoCreatePullSecretFromEnv_RefusesNonNGCRegistry(t *testing.T) {
 	client := fake.NewSimpleClientset()
 
 	name, err := autoCreatePullSecretFromEnv(context.Background(), client,
-		"ghcr.io", clusterValidatorControlPlaneRole)
+		"ghcr.io", clusterValidatorControlPlaneRole, false)
 	require.NoError(t, err)
 	assert.Empty(t, name, "no secret may be minted for a non-NGC registry")
 
@@ -676,7 +676,7 @@ func TestScanAndMirrorPullSecret_DoesNotAdoptTheOtherRolesSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(otherRole)
 
 	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
-		clusterValidatorComputePlaneRole)
+		clusterValidatorComputePlaneRole, false)
 	require.NoError(t, err)
 	assert.NotEqual(t, otherRole.Name, got,
 		"the compute role must not adopt the control-plane role's managed Secret")
@@ -694,7 +694,7 @@ func TestScanAndMirrorPullSecret_AdoptsOperatorSuppliedSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(operator)
 
 	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
-		clusterValidatorComputePlaneRole)
+		clusterValidatorComputePlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, "operator-pull", got)
 }
@@ -714,7 +714,7 @@ func TestScanAndMirrorPullSecret_AdoptsOwnRoleSecret(t *testing.T) {
 	client := fake.NewSimpleClientset(own)
 
 	got, err := scanAndMirrorPullSecret(context.Background(), client, "nvcr.io",
-		clusterValidatorComputePlaneRole)
+		clusterValidatorComputePlaneRole, false)
 	require.NoError(t, err)
 	assert.Equal(t, own.Name, got)
 }

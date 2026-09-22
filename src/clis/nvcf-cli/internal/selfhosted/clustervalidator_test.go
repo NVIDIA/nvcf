@@ -246,7 +246,7 @@ func TestEnsureClusterValidatorRBAC_WritableResources(t *testing.T) {
 
 	const role = clusterValidatorControlPlaneRole
 	const runID = "testrunid"
-	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role, runID))
+	require.NoError(t, ensureClusterValidatorRBAC(ctx, client, role, runID, false))
 
 	cr, err := client.RbacV1().ClusterRoles().Get(ctx, clusterValidatorRBACName(role, runID), metav1.GetOptions{})
 	require.NoError(t, err)
@@ -706,7 +706,7 @@ func TestEnsureClusterValidatorRBAC_DoesNotAdoptExistingObjects(t *testing.T) {
 		},
 	})
 
-	err := ensureClusterValidatorRBAC(ctx, client, role, runID)
+	err := ensureClusterValidatorRBAC(ctx, client, role, runID, false)
 	require.Error(t, err, "a pre-existing object must not be adopted, forged labels or not")
 
 	_, bindErr := client.RbacV1().ClusterRoleBindings().Get(ctx, name, metav1.GetOptions{})
@@ -831,13 +831,17 @@ func TestSweepClusterValidatorConfig_DeletesOwnAndSparesOperators(t *testing.T) 
 func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
 	prior := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
 		Name: clusterValidatorName + "-earlier", Namespace: clusterValidatorNamespace,
-		Labels: clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
+		Labels:            clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
+		CreationTimestamp: metav1.NewTime(time.Now()),
 	}}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
 			Namespace: clusterValidatorNamespace,
 			Labels:    clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
+			// The fake clientset leaves this zero, which the orphan sweeper
+			// reads as older than any TTL. A real apiserver stamps it.
+			CreationTimestamp: metav1.NewTime(time.Now()),
 		},
 		Type: corev1.SecretTypeDockerConfigJson,
 	}
@@ -891,4 +895,125 @@ func TestBuildClusterValidatorJob_MatchesChartPodShape(t *testing.T) {
 
 	assert.False(t, spec.Containers[0].Resources.Requests.Cpu().IsZero(),
 		"a namespace with a LimitRange or quota rejects a pod with no requests")
+}
+
+// An ImagePullBackOff Job never reaches a terminal state on its own, so
+// TTLSecondsAfterFinished never fires and the Job, its cluster-wide RBAC and
+// its NGC-derived pull secret persist forever. The deferred sweeps are
+// suppressed on that path by design, so the deadline is the only reclaim.
+func TestBuildClusterValidatorJob_SetsActiveDeadline(t *testing.T) {
+	job := buildClusterValidatorJob("j", "nvcr.io/x/validator:1", "",
+		clusterValidatorControlPlaneRole, "runid", false)
+	require.NotNil(t, job.Spec.ActiveDeadlineSeconds,
+		"a Job with no deadline cannot terminate itself on a pull failure")
+	assert.Greater(t, *job.Spec.ActiveDeadlineSeconds, int64(clusterValidatorTimeout/time.Second),
+		"the deadline must outlast the runner's own wait so it never truncates a live run")
+}
+
+// The pull secret holds $oauthtoken:$NGC_API_KEY, and the deferred sweep is
+// skipped whenever the pod may still be running, which is the pull-failure
+// path. The orphan sweeper is its only other reclaim.
+func TestSweepOrphanClusterValidatorRBAC_ReclaimsStalePullSecret(t *testing.T) {
+	old := metav1.NewTime(time.Now().Add(-time.Hour))
+	stale := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:              validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+		Namespace:         clusterValidatorNamespace,
+		Labels:            clusterValidatorLabels(),
+		CreationTimestamp: old,
+	}}
+	client := fake.NewSimpleClientset(stale)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+
+	_, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(
+		context.Background(), stale.Name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "a stale managed pull secret must be reclaimed")
+}
+
+// A fresh secret may belong to a concurrent run, and an operator-supplied one
+// carries neither our labels nor our name.
+func TestSweepOrphanClusterValidatorRBAC_SparesFreshAndUnmanagedSecrets(t *testing.T) {
+	fresh := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:              validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+		Namespace:         clusterValidatorNamespace,
+		Labels:            clusterValidatorLabels(),
+		CreationTimestamp: metav1.NewTime(time.Now()),
+	}}
+	operator := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name:              "operator-pull",
+		Namespace:         clusterValidatorNamespace,
+		Labels:            clusterValidatorLabels(),
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
+	}}
+	client := fake.NewSimpleClientset(fresh, operator)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+
+	for _, name := range []string{fresh.Name, operator.Name} {
+		_, err := client.CoreV1().Secrets(clusterValidatorNamespace).Get(
+			context.Background(), name, metav1.GetOptions{})
+		assert.NoError(t, err, "%s must survive the orphan sweep", name)
+	}
+}
+
+// The preflight ConfigMap must not switch on active NetworkPolicy enforcement.
+// VALIDATOR_PREFLIGHT only suppresses the summary write, so enforcement would
+// still create namespaces, pods and NetworkPolicies and pull busybox from
+// Docker Hub, on a cluster where nothing is installed yet.
+func TestBuildControlPlaneValidatorConfig_EnforcementDisabledForPreflight(t *testing.T) {
+	cfg := buildControlPlaneValidatorConfig(nil)
+	idx := strings.Index(cfg, "enforcement:")
+	require.GreaterOrEqual(t, idx, 0, "the enforcement block must be present")
+	assert.Contains(t, cfg[idx:], "enabled: false",
+		"a read-only readiness check must not mutate the cluster or need Docker Hub")
+}
+
+// --no-cleanup must outlast the orphan TTL. Without a preserve marker the
+// orphan sweeper reclaims a deliberately kept run after 30 minutes, which
+// makes the flag mean "keep for 30 minutes".
+func TestSweepOrphanClusterValidatorRBAC_SparesPreservedObjects(t *testing.T) {
+	labels := clusterValidatorLabels()
+	labels[clusterValidatorPreserveLabel] = "true"
+	old := metav1.NewTime(time.Now().Add(-time.Hour))
+	client := fake.NewSimpleClientset(
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: clusterValidatorName + "-control-plane-abc", Labels: labels, CreationTimestamp: old,
+		}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+			Namespace: clusterValidatorNamespace, Labels: labels, CreationTimestamp: old,
+		}},
+	)
+	sweepOrphanClusterValidatorRBAC(context.Background(), client, orphanValidatorRBACTTL)
+
+	_, err := client.RbacV1().ClusterRoles().Get(context.Background(),
+		clusterValidatorName+"-control-plane-abc", metav1.GetOptions{})
+	assert.NoError(t, err, "a preserved ClusterRole must survive the orphan sweep")
+	_, err = client.CoreV1().Secrets(clusterValidatorNamespace).Get(context.Background(),
+		validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
+	assert.NoError(t, err, "a preserved pull secret must survive the orphan sweep")
+}
+
+// The preserve marker has to be applied at creation, not just honoured by the
+// sweeper, or the mechanism is inert.
+func TestEnsureClusterValidatorRBAC_LabelsPreservedRun(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client,
+		clusterValidatorControlPlaneRole, "abc123", true))
+
+	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
+		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "abc123"), metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "true", cr.Labels[clusterValidatorPreserveLabel],
+		"--no-cleanup must mark its objects so the orphan sweeper spares them")
+}
+
+func TestEnsureClusterValidatorRBAC_NoPreserveLabelByDefault(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	require.NoError(t, ensureClusterValidatorRBAC(context.Background(), client,
+		clusterValidatorControlPlaneRole, "abc123", false))
+
+	cr, err := client.RbacV1().ClusterRoles().Get(context.Background(),
+		clusterValidatorRBACName(clusterValidatorControlPlaneRole, "abc123"), metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.NotContains(t, cr.Labels, clusterValidatorPreserveLabel,
+		"an ordinary run must stay reclaimable")
 }
