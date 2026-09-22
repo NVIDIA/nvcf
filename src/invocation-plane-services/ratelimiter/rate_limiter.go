@@ -809,7 +809,7 @@ func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitReq
 	return tiers
 }
 
-// rateLimitNcaId is the account rate limits apply to: the key owner's, falling back to ncaId for callers that don't send it.
+// rateLimitNcaId is the key owner's account, or ncaId when a caller that predates ownerNcaId leaves it empty.
 func rateLimitNcaId(request *pb.RateLimitRequest) string {
 	if request.OwnerNcaId != "" {
 		return request.OwnerNcaId

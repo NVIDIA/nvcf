@@ -85,7 +85,8 @@ type RateLimitRequest struct {
 	// ncaId which is the account the request is authorized against. These differ
 	// only for keys whose owner was granted access to another account.
 	// When set, rate limiting uses ownerNcaId in place of ncaId: per-NCA-ID rate
-	// matching, excluded NCA IDs, and counter keys. Empty falls back to ncaId.
+	// matching, excluded NCA IDs, and counter keys. Empty, as sent by callers that
+	// predate this field, falls back to ncaId.
 	OwnerNcaId    string `protobuf:"bytes,5,opt,name=ownerNcaId,proto3" json:"ownerNcaId,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
