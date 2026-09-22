@@ -269,6 +269,38 @@ func (m *webhookManager) runWithReload(parentCtx context.Context) error {
 	}
 }
 
+// effectiveHandlerTimeout returns the per-request admission deadline, falling back to the
+// API server's default admission timeout when none was configured.
+func (m *webhookManager) effectiveHandlerTimeout() time.Duration {
+	if m.handlerTimeout <= 0 {
+		return defaultAdmissionHandlerTimeout
+	}
+	return m.handlerTimeout
+}
+
+// newRouter builds the webhook router with the metrics route and the shared HTTP
+// middleware applied. Webhook handlers are registered on it with handleWebhook.
+func (m *webhookManager) newRouter(ctx context.Context) *mux.Router {
+	log := core.GetLogger(ctx)
+	r := mux.NewRouter()
+
+	nvcametrics.AddMetricsRoute(r, log, nil, "")
+
+	// Use a max request size of 7MB like controller-runtime does
+	// since full object(s) are embedded in webhook req/res.
+	// https://github.com/kubernetes-sigs/controller-runtime/blob/961fc2c/pkg/webhook/admission/http.go#L55
+	const maxRequestSize = int64(7 * 1024 * 1024)
+	httpOpts := []core.HTTPMiddlewareOption{
+		core.WithRequestBodyLimit(maxRequestSize),
+		// The shared middleware defaults to a 5s http.TimeoutHandler, which replies with a
+		// plain-text HTTP 503 that the API server surfaces as a failed pod create. Match the
+		// admission timeout instead so the API server's own deadline is the one that applies.
+		core.WithHandlerTimeout(m.effectiveHandlerTimeout()),
+	}
+	r.Use(core.NewHTTPMiddleware(ctx, httpOpts...)...)
+	return r
+}
+
 func isPortFree(ctx context.Context, addr string) bool {
 	conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", addr)
 	if err == nil {
@@ -284,26 +316,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, shutdownSignal chan 
 	m.certMu.Lock()
 	defer m.certMu.Unlock()
 
-	r := mux.NewRouter()
-
-	nvcametrics.AddMetricsRoute(r, log, nil, "")
-
-	// Use a max request size of 7MB like controller-runtime does
-	// since full object(s) are embedded in webhook req/res.
-	// https://github.com/kubernetes-sigs/controller-runtime/blob/961fc2c/pkg/webhook/admission/http.go#L55
-	const maxRequestSize = int64(7 * 1024 * 1024)
-	handlerTimeout := m.handlerTimeout
-	if handlerTimeout <= 0 {
-		handlerTimeout = defaultAdmissionHandlerTimeout
-	}
-	httpOpts := []core.HTTPMiddlewareOption{
-		core.WithRequestBodyLimit(maxRequestSize),
-		// The shared middleware defaults to a 5s http.TimeoutHandler, which replies with a
-		// plain-text HTTP 503 that the API server surfaces as a failed pod create. Match the
-		// admission timeout instead so the API server's own deadline is the one that applies.
-		core.WithHandlerTimeout(handlerTimeout),
-	}
-	r.Use(core.NewHTTPMiddleware(ctx, httpOpts...)...)
+	r := m.newRouter(ctx)
 
 	if featureflag.AttrHostIsolation.Enabled() && featureflag.AttrAccountIsolation.Enabled() {
 		log.Error("account and workload isolation are mutually exclusive")

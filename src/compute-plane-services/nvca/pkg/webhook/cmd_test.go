@@ -32,14 +32,17 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -53,6 +56,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
+	whmetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/webhook/metrics"
 )
 
 func generateTestCertificates(t *testing.T) (caCert, caKey, cert, key []byte) {
@@ -596,4 +600,60 @@ func decodePatches(t *testing.T, resBody []byte) (patches []map[string]any, allo
 	require.NoError(t, err)
 
 	return patches, true
+}
+
+func TestManagerEffectiveHandlerTimeout(t *testing.T) {
+	// The API server gives a webhook 10s by default. Answering earlier with the
+	// middleware's own 503 turns a slow but valid request into a failed pod create.
+	const apiServerDefaultAdmissionTimeout = 10 * time.Second
+	assert.GreaterOrEqual(t, defaultAdmissionHandlerTimeout, apiServerDefaultAdmissionTimeout)
+
+	assert.Equal(t, defaultAdmissionHandlerTimeout, (&webhookManager{}).effectiveHandlerTimeout(),
+		"zero falls back to the admission default")
+	assert.Equal(t, defaultAdmissionHandlerTimeout, (&webhookManager{handlerTimeout: -time.Second}).effectiveHandlerTimeout())
+	assert.Equal(t, 3*time.Second, (&webhookManager{handlerTimeout: 3 * time.Second}).effectiveHandlerTimeout())
+}
+
+// TestManagerRouterHandlerTimeout proves the router honours the configured handler
+// timeout rather than the shared middleware default: a handler that finishes inside
+// the deadline is answered normally, one that overruns gets the TimeoutHandler 503.
+func TestManagerRouterHandlerTimeout(t *testing.T) {
+	ctx := core.WithDefaultLogger(context.Background())
+	ctx = whmetrics.WithDefaultMetrics(ctx, whmetrics.WithRegisterer(prometheus.NewRegistry()))
+
+	const handlerTimeout = 300 * time.Millisecond
+	m := &webhookManager{handlerTimeout: handlerTimeout}
+	r := m.newRouter(ctx)
+
+	sleepHandler := func(d time.Duration) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(d)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		})
+	}
+	handleWebhook(ctx, r, "/within-deadline", sleepHandler(handlerTimeout/3))
+	handleWebhook(ctx, r, "/over-deadline", sleepHandler(handlerTimeout*3))
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	post := func(path string) (int, string) {
+		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader("{}"))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp.StatusCode, string(body)
+	}
+
+	code, body := post("/within-deadline")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, "ok", body)
+
+	code, body = post("/over-deadline")
+	assert.Equal(t, http.StatusServiceUnavailable, code,
+		"http.TimeoutHandler answers an overrun with a plain 503, which the API server reports as "+
+			"'the server is currently unable to handle the request'")
+	assert.Contains(t, body, "Request timed out")
 }
