@@ -70,7 +70,7 @@ func TestProbeStaleNamespaces_TerminatingIsByPhase(t *testing.T) {
 }
 
 func TestProbeStaleNamespaces_EmptyShellNoHelmSecrets(t *testing.T) {
-	// Namespace exists and is Active but holds no Helm release secrets →
+	// Namespace exists and is Active but holds no Helm release secrets ->
 	// leftover empty shell from a partial helm uninstall.
 	client := fake.NewSimpleClientset(&corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
@@ -84,7 +84,7 @@ func TestProbeStaleNamespaces_EmptyShellNoHelmSecrets(t *testing.T) {
 }
 
 func TestProbeStaleNamespaces_HealthyReleaseNotStale(t *testing.T) {
-	// Namespace exists and carries an owner=helm secret → active Helm release,
+	// Namespace exists and carries an owner=helm secret -> active Helm release,
 	// not stale.
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{

@@ -333,13 +333,13 @@ func TestAutoCreatePullSecretFromEnv_KeyPresent(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "nvapi-test-123")
 
 	client := fake.NewSimpleClientset()
-	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "private.registry.test", clusterValidatorControlPlaneRole)
+	got, err := autoCreatePullSecretFromEnv(context.Background(), client, "nvcr.io", clusterValidatorControlPlaneRole)
 	require.NoError(t, err)
 	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), got)
 
 	s, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
 	require.NoError(t, err)
-	assert.True(t, dockerConfigHasRegistry(s.Data[corev1.DockerConfigJsonKey], "private.registry.test"),
+	assert.True(t, dockerConfigHasRegistry(s.Data[corev1.DockerConfigJsonKey], "nvcr.io"),
 		"minted secret must contain auth for the validator image's registry")
 }
 
@@ -384,13 +384,28 @@ func TestResolveValidatorPullSecret_EnvFallback(t *testing.T) {
 	t.Setenv("NVCF_NGC_API_KEY", "nvapi-fallback")
 	client := fake.NewSimpleClientset()
 
-	got, err := resolveValidatorPullSecret(context.Background(), client, "", "private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
+	got, err := resolveValidatorPullSecret(context.Background(), client, "", "nvcr.io/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
 	require.NoError(t, err)
 	assert.Equal(t, validatorPullSecretRoleName(clusterValidatorControlPlaneRole), got)
 
 	s, err := client.CoreV1().Secrets("default").Get(context.Background(), validatorPullSecretRoleName(clusterValidatorControlPlaneRole), metav1.GetOptions{})
 	require.NoError(t, err)
-	assert.True(t, dockerConfigHasRegistry(s.Data[corev1.DockerConfigJsonKey], "private.registry.test"))
+	assert.True(t, dockerConfigHasRegistry(s.Data[corev1.DockerConfigJsonKey], "nvcr.io"))
+}
+
+// A mirrored validator image must not receive the NGC key via the env
+// fallback: the kubelet would send it to that registry as Basic auth.
+func TestResolveValidatorPullSecret_EnvFallbackRefusesMirroredRegistry(t *testing.T) {
+	for _, name := range ngcAPIKeyEnvNames {
+		t.Setenv(name, "")
+	}
+	t.Setenv("NVCF_NGC_API_KEY", "nvapi-fallback")
+	client := fake.NewSimpleClientset()
+
+	got, err := resolveValidatorPullSecret(context.Background(), client, "",
+		"private.registry.test/nvidia/nvcf-byoc/cluster-validator:rc26", clusterValidatorControlPlaneRole)
+	require.NoError(t, err)
+	assert.Empty(t, got, "no secret may be minted for a non-NGC registry")
 }
 
 func TestResolveValidatorPullSecret_AllEmpty(t *testing.T) {
@@ -588,9 +603,10 @@ func TestWriteDockerConfigSecret_TypeMismatchDeletePinsTheInspectedObject(t *tes
 
 	require.NotNil(t, opts.Preconditions, "delete must carry preconditions")
 	require.NotNil(t, opts.Preconditions.UID)
-	require.NotNil(t, opts.Preconditions.ResourceVersion)
 	assert.Equal(t, existing.UID, *opts.Preconditions.UID)
-	assert.Equal(t, existing.ResourceVersion, *opts.Preconditions.ResourceVersion)
+	assert.Nil(t, opts.Preconditions.ResourceVersion,
+		"UID alone pins identity; pinning ResourceVersion turns any concurrent "+
+			"write into a 409 that the sweeps swallow")
 }
 
 // A conflict means the object changed after the ownership check, so the run
@@ -622,4 +638,23 @@ func TestWriteDockerConfigSecret_TypeMismatchStopsOnDeleteConflict(t *testing.T)
 		"nvcr-pull-secret", clusterValidatorControlPlaneRole, fresh)
 	require.Error(t, err, "a changed object must abort the replace")
 	assert.False(t, created, "must not create over an object that was never vetted")
+}
+
+// NGC_API_KEY must never be minted as the password for a registry that is not
+// NGC. An operator who mirrors the validator image to ghcr.io or a corporate
+// Harbor and still exports NGC_API_KEY would otherwise have the kubelet send
+// the live key to a third party as HTTP Basic auth.
+func TestAutoCreatePullSecretFromEnv_RefusesNonNGCRegistry(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "nvapi-secret-value")
+	client := fake.NewSimpleClientset()
+
+	name, err := autoCreatePullSecretFromEnv(context.Background(), client,
+		"ghcr.io", clusterValidatorControlPlaneRole)
+	require.NoError(t, err)
+	assert.Empty(t, name, "no secret may be minted for a non-NGC registry")
+
+	secrets, err := client.CoreV1().Secrets(clusterValidatorNamespace).List(
+		context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, secrets.Items, "the NGC key must not reach a third-party registry")
 }

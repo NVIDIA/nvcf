@@ -45,6 +45,15 @@ const (
 	binaryVersionMessage = "%s %s on PATH (%s required)"
 )
 
+// Severity values for CheckResult. Typed constants rather than bare strings:
+// a typo'd "Error" silently downgraded a hard failure to a warning, and the
+// exit code keys off an exact match.
+const (
+	SeverityInfo    = "info"
+	SeverityWarning = "warning"
+	SeverityError   = "error"
+)
+
 // One row in the linkerd-style output. Logs is internal-only and is not
 // forwarded into the CheckCompleted JSONL wire event, so it never leaks
 // into the stable JSON contract.
@@ -318,6 +327,14 @@ type RoleConfig struct {
 	// so the check follows the stack instead of drifting from it.
 	StackDir string
 
+	// ExtraStaleNamespaces are merged into this role's stale-namespace scan.
+	// In ModeSingle both roles share one cluster, so only one of them runs the
+	// probe to avoid emitting the same check ID twice; the other role's
+	// namespaces are passed here instead of being dropped. The two roles probe
+	// disjoint lists, so without this the skipped role's namespaces are never
+	// scanned on the one topology where they sit on the same cluster.
+	ExtraStaleNamespaces []string
+
 	// ClusterValidatorRegistries is an optional list of "host:port" registry
 	// endpoints added to the control-plane validator ConfigMap alongside the
 	// built-in nvcr.io probe. Ignored for the compute-plane validator.
@@ -351,7 +368,7 @@ func buildCategories(cfg PreflightConfig, role Role, rc RoleConfig) []categorySp
 		out = append(out, *local)
 	}
 
-	// Registry credential check runs from the operator's machine — no cluster
+	// Registry credential check runs from the operator's machine - no cluster
 	// contact needed. RunPreflightForRole is called once per role, so the
 	// caller clears Registries on every role but one to avoid duplicate
 	// check_started/check_completed events. Deduplicating on the role here
@@ -412,7 +429,8 @@ func controlPlaneCheckCategory(rc RoleConfig) categorySpec {
 	if rc.StaleNamespaceProber != nil {
 		cat.checks = append(cat.checks,
 			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
-				resolveStackNamespaces(rc.StackDir, nvcfControlPlaneNamespaces)))
+				mergeNamespaces(resolveStackNamespaces(rc.StackDir, nvcfControlPlaneNamespaces),
+					rc.ExtraStaleNamespaces)))
 	}
 	// Containerized cluster-validator probe for control-plane checks
 	// (Gateway API CRDs, Envoy Gateway, StorageClass, external LB,
@@ -448,7 +466,8 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 	if rc.StaleNamespaceProber != nil {
 		cat.checks = append([]binaryCheckSpec{
 			staleNamespaceCheck(rc.StaleNamespaceProber, rc.KubeContext,
-				resolveStackNamespaces(rc.StackDir, nvcfComputePlaneNamespaces)),
+				mergeNamespaces(resolveStackNamespaces(rc.StackDir, nvcfComputePlaneNamespaces),
+					rc.ExtraStaleNamespaces)),
 		}, cat.checks...)
 	}
 	if rc.SISURL != "" {
@@ -648,7 +667,7 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 	}
 	return binaryCheckSpec{
 		ID:         id,
-		HumanLabel: fmt.Sprintf("checking credentials for %s…", entry.Registry),
+		HumanLabel: fmt.Sprintf("checking credentials for %s...", entry.Registry),
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{
 				ID:       id,
@@ -688,11 +707,31 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 // staleNamespaceCheck detects NVCF namespaces stuck Terminating or left as
 // empty shells after a partial teardown. Severity is error; prober errors
 // degrade to warning so transient kubeconfig issues don't falsely fail.
+// mergeNamespaces returns the union of two namespace lists, order-stable and
+// de-duplicated.
+func mergeNamespaces(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, list := range [][]string{base, extra} {
+		for _, ns := range list {
+			if ns == "" || seen[ns] {
+				continue
+			}
+			seen[ns] = true
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
 func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namespaces []string) binaryCheckSpec {
 	const id = "stale-namespaces"
 	return binaryCheckSpec{
 		ID:         id,
-		HumanLabel: "checking for stale NVCF namespaces…",
+		HumanLabel: "checking for stale NVCF namespaces...",
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: "error"}
 			// Resolve the context before probing, then probe that exact name.
@@ -927,4 +966,15 @@ func (*noopSink) Close() error                               { return nil }
 // Cluster-side checks land in M3 (need a kubectl client wired up).
 func RunPreflight(ctx context.Context, cfg PreflightConfig) []CheckResult {
 	return RunPreflightStreaming(ctx, cfg, &noopSink{})
+}
+
+// ControlPlaneStaleNamespaces and ComputePlaneStaleNamespaces expose each
+// role's stale-namespace list so the cmd layer can merge the two when a single
+// cluster hosts both roles and only one probe runs.
+func ControlPlaneStaleNamespaces(stackDir string) []string {
+	return resolveStackNamespaces(stackDir, nvcfControlPlaneNamespaces)
+}
+
+func ComputePlaneStaleNamespaces(stackDir string) []string {
+	return resolveStackNamespaces(stackDir, nvcfComputePlaneNamespaces)
 }

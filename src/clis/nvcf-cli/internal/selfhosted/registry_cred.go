@@ -122,7 +122,7 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		}
 		return requireConfiguredCredentials(registry)
 	case http.StatusUnauthorized:
-		// Auth required — proceed with token exchange.
+		// Auth required - proceed with token exchange.
 	default:
 		resp.Body.Close()
 		return fmt.Errorf("unexpected status %s from %s", resp.Status, registry)
@@ -147,7 +147,7 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	_, err = exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth)
 	if err != nil {
 		// Use credentialsForRegistry (not ngcCredentials) so NGC_API_KEY does
-		// not masquerade as credentials for quay.io, GHCR, or Harbor — those
+		// not masquerade as credentials for quay.io, GHCR, or Harbor - those
 		// registries reject NGC tokens, which would wrongly produce "credentials
 		// rejected" when the real diagnosis is "no credentials configured."
 		if _, _, hasCreds := credentialsForRegistry(registry); !hasCreds {
@@ -245,13 +245,23 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 		if registry == "" || seen[registry] {
 			return
 		}
+		// Every source goes through the same host validation. The probe builds
+		// "https://" + registry + "/v2/", so a value carrying "/" or "@" moves
+		// the host: global.image.registry set to "nvcr.io@attacker.example.com"
+		// in a values file the CLI finds by walking up from CWD would otherwise
+		// aim an outbound request wherever that names. Extras were guarded via
+		// parseRegistryHostPort; the image ref and the values file were not.
+		if !isBareRegistryHost(strings.TrimSuffix(strings.TrimPrefix(registry, "["), "]")) &&
+			!isBareRegistryHost(registry) {
+			return
+		}
 		seen[registry] = true
 		out = append(out, RegistryEntry{Registry: registry, RepoHint: repoHint, Critical: critical})
 	}
 
 	// Source 1: base registry from the configured validator image.
 	// Carry the repo path as a scope hint so the token exchange uses the
-	// operator's actual org rather than a fake one — NGC returns 403 for
+	// operator's actual org rather than a fake one - NGC returns 403 for
 	// orgs the API key cannot access, even if the key itself is valid.
 	//
 	// Critical follows the same rule as every other source rather than being
@@ -296,8 +306,13 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 		reg := host
 		if port != 0 && port != 443 {
 			reg = net.JoinHostPort(host, strconv.Itoa(port))
-		} else if strings.Contains(host, ":") {
-			reg = "[" + host + "]" // bare IPv6 literal on the default port
+		} else if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+			// Bare IPv6 literal on the default port. parseRegistryHostPort
+			// returns the input verbatim when SplitHostPort fails, and it
+			// fails on an already-bracketed "[fd00::1]" with missingPort, so
+			// without the prefix guard that arrives here still bracketed and
+			// becomes "[[fd00::1]]", which is not a parseable URL host.
+			reg = "[" + host + "]"
 		}
 		add(reg, "", false)
 	}

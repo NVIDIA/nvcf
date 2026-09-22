@@ -205,7 +205,7 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	realm, service, scope := parseWWWAuthenticate(wwwAuthenticate)
 
 	if realm == "" {
-		// No parseable WWW-Authenticate — use NGC's /proxy_auth as fallback.
+		// No parseable WWW-Authenticate - use NGC's /proxy_auth as fallback.
 		return exchangeNGCBearerToken(ctx, client, registry, repo)
 	}
 
@@ -252,7 +252,7 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	// Use scope from the WWW-Authenticate header when present.
 	// When scope is empty and a repo is provided, synthesize the standard
 	// pull scope. When neither is present (credential probe, no specific
-	// repo needed), omit scope entirely — most registries issue a valid
+	// repo needed), omit scope entirely - most registries issue a valid
 	// token and the absence of a resource scope avoids org-level 403s for
 	// non-existent repositories.
 	if scope == "" && repo != "" {
@@ -269,7 +269,7 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	}
 	// Add credentials when present. Docker config covers any registry;
 	// NGC API key is only applicable to NGC-hosted registries.
-	// Critically: do NOT apply NGC_API_KEY to non-NGC registries — quay.io,
+	// Critically: do NOT apply NGC_API_KEY to non-NGC registries - quay.io,
 	// GHCR, and Harbor will reject it, producing a misleading "credentials
 	// rejected" error when the real situation is "no credentials configured."
 	if user, pass, ok := credentialsForRegistry(registry); ok {

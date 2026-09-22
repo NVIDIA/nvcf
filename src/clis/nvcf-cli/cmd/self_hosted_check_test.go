@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/kubectx"
 	"nvcf-cli/internal/selfhosted/progress"
 )
@@ -368,8 +369,8 @@ func TestComputePlaneIsTargeted(t *testing.T) {
 		{"--compute-plane split", false, true, false, kubectx.ModeSplit, true},
 		{"--all single", false, false, true, kubectx.ModeSingle, true},
 		{"--all split", false, false, true, kubectx.ModeSplit, true},
-		{"--pre single — implicit compute plane", true, false, false, kubectx.ModeSingle, true},
-		{"--pre split — must not target compute plane", true, false, false, kubectx.ModeSplit, false},
+		{"--pre single - implicit compute plane", true, false, false, kubectx.ModeSingle, true},
+		{"--pre split - must not target compute plane", true, false, false, kubectx.ModeSplit, false},
 		{"--control-plane only", false, false, false, kubectx.ModeSingle, false},
 		{"no relevant flag", false, false, false, kubectx.ModeSingle, false},
 	}
@@ -513,11 +514,11 @@ func TestCheck_ValidatorSkipNoteAppearsOnComputePlane(t *testing.T) {
 		"expected skip note when compute plane is targeted and --skip-cluster-validation is set")
 }
 
-// TestCheck_ValidatorSkipNoteAbsentForPreInSplitMode verifies that the
-// "cluster-validator skipped" note does NOT appear when --pre is used in
-// split mode, because the compute plane is not explicitly targeted and
-// ModeSplit + --pre does not implicitly make either context the compute plane.
-func TestCheck_ValidatorSkipNoteAbsentForPreInSplitMode(t *testing.T) {
+// --pre in ModeSplit visits both clusters, so when the validator is skipped the
+// operator must be told why. This previously asserted silence, which is the
+// "no validator row vs validator silently dropped" confusion the note exists
+// to prevent.
+func TestCheck_ValidatorSkipNotePresentForPreInSplitMode(t *testing.T) {
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -539,13 +540,10 @@ func TestCheck_ValidatorSkipNoteAbsentForPreInSplitMode(t *testing.T) {
 	})
 	_ = rootCmd.Execute()
 
-	assert.NotContains(t, stderr.String(), "cluster-validator skipped",
-		"skip note must not appear for --pre in split mode (compute plane not targeted)")
+	assert.Contains(t, stderr.String(), "cluster-validator skipped",
+		"--pre in split mode visits both clusters, so an explicit skip must be explained")
 }
 
-// parseJSONLLines splits s into non-empty lines, skips any non-JSON lines
-// (e.g. cobra error messages written to stderr), and unmarshals each JSON line
-// as an object. Returns them in order.
 func parseJSONLLines(t *testing.T, s string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -675,4 +673,40 @@ func TestCheck_HostLocalChecksRunOnce(t *testing.T) {
 	for id, n := range counts {
 		assert.Equal(t, 1, n, "check %s emitted %d times", id, n)
 	}
+}
+
+// The JSON verdict and the exit code must derive from the same predicate. A
+// warning-severity result previously emitted success:false / verdict:failed
+// while the process exited 0, so a CI gate on final.success broke for every
+// user whose registry credentials live in a Docker credential helper.
+func TestEmitCheckFinal_WarningIsNotAFailure(t *testing.T) {
+	results := []selfhosted.CheckResult{
+		{ID: "a", Passed: true, Severity: selfhosted.SeverityInfo},
+		{ID: "b", Passed: false, Severity: selfhosted.SeverityWarning},
+	}
+	assert.False(t, anyFailed(results), "a warning must not set the exit code")
+
+	var buf bytes.Buffer
+	sink := progress.NewJSONLRenderer(&buf)
+	emitCheckFinal(context.Background(), sink, results)
+
+	line := buf.String()
+	assert.Contains(t, line, `"verdict":"warnings"`)
+	assert.Contains(t, line, `"success":true`,
+		"success must agree with the exit code")
+	assert.Contains(t, line, `"failedCount":0`)
+}
+
+func TestEmitCheckFinal_ErrorIsAFailure(t *testing.T) {
+	results := []selfhosted.CheckResult{
+		{ID: "a", Passed: true, Severity: selfhosted.SeverityInfo},
+		{ID: "b", Passed: false, Severity: selfhosted.SeverityError},
+	}
+	assert.True(t, anyFailed(results))
+
+	var buf bytes.Buffer
+	sink := progress.NewJSONLRenderer(&buf)
+	emitCheckFinal(context.Background(), sink, results)
+	assert.Contains(t, buf.String(), `"verdict":"failed"`)
+	assert.Contains(t, buf.String(), `"success":false`)
 }

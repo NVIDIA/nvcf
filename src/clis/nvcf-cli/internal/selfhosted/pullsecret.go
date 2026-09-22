@@ -38,10 +38,15 @@ import (
 // preconditions the delete lands on whatever holds the name by then; with them
 // the apiserver rejects it as a conflict instead.
 func deleteExactly(o metav1.Object) metav1.DeleteOptions {
+	// UID only. UID already pins identity, which is the whole goal: a
+	// delete-and-recreate under the same name changes it. ResourceVersion
+	// additionally pins the object's version, so any concurrent write turns
+	// the delete into a 409 that every sweep then swallows. That bites hardest
+	// on the singleton Job sweep, whose only target is an active Job whose
+	// .status the Job controller mutates continuously.
 	uid := o.GetUID()
-	rv := o.GetResourceVersion()
 	return metav1.DeleteOptions{
-		Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv},
+		Preconditions: &metav1.Preconditions{UID: &uid},
 	}
 }
 
@@ -209,6 +214,15 @@ func dockerConfigHasRegistry(cfg []byte, registry string) bool {
 func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interface, registry, role string) (string, error) {
 	apiKey := firstNonEmptyEnv(ngcAPIKeyEnvNames...)
 	if apiKey == "" {
+		return "", nil
+	}
+	// Only ever hand the NGC key to NGC. Without this an operator who mirrors
+	// the validator image to ghcr.io or a corporate Harbor and still exports
+	// NGC_API_KEY gets it written as that registry's password, and the kubelet
+	// then sends the live key to a third party as HTTP Basic auth, where it
+	// lands in their access logs. The local probe already guards this the same
+	// way; the Secret path did not.
+	if !isNGCRegistry(registry) {
 		return "", nil
 	}
 	cfg, err := buildDockerConfigJSON(registry, "$oauthtoken", apiKey)

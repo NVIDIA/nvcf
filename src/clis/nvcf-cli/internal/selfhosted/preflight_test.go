@@ -670,3 +670,35 @@ func TestParseInotifyOutput(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// In ModeSingle one cluster hosts both roles and only one stale-namespace
+// probe runs, so the skipped role's namespaces must be merged in. Dropping
+// them means a kai-scheduler or nvca-operator namespace wedged Terminating is
+// reported as "no stale NVCF namespaces detected".
+func TestStaleNamespaceCheck_MergesTheOtherRolesNamespaces(t *testing.T) {
+	var probed []string
+	prober := func(_ context.Context, _ string, namespaces []string) ([]StaleNamespace, error) {
+		probed = namespaces
+		return nil, nil
+	}
+	rc := RoleConfig{
+		StaleNamespaceProber: prober,
+		ExtraStaleNamespaces: ComputePlaneStaleNamespaces(""),
+	}
+	cat := controlPlaneCheckCategory(rc)
+	require.NotEmpty(t, cat.checks)
+	cat.checks[0].Run(context.Background())
+
+	for _, ns := range []string{"nvcf", "vault-system"} {
+		assert.Contains(t, probed, ns, "the control-plane list must still be covered")
+	}
+	for _, ns := range []string{"nvca-operator", "kai-scheduler"} {
+		assert.Contains(t, probed, ns, "the compute-plane list must be merged in, not dropped")
+	}
+}
+
+func TestMergeNamespaces_DedupesAndKeepsOrder(t *testing.T) {
+	got := mergeNamespaces([]string{"a", "b"}, []string{"b", "c", ""})
+	assert.Equal(t, []string{"a", "b", "c"}, got)
+	assert.Nil(t, mergeNamespaces(nil, nil))
+}

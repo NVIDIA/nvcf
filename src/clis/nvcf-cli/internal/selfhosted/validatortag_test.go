@@ -277,7 +277,7 @@ func TestParseWWWAuthenticate_GHCR(t *testing.T) {
 }
 
 func TestParseWWWAuthenticate_NoBearer(t *testing.T) {
-	// Basic auth challenge — should return empty strings.
+	// Basic auth challenge - should return empty strings.
 	realm, service, scope := parseWWWAuthenticate(`Basic realm="My Registry"`)
 	assert.Empty(t, realm)
 	assert.Empty(t, service)

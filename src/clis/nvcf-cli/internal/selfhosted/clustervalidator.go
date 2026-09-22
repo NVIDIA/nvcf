@@ -146,8 +146,12 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	// under a pod that is still retrying its pull, which the kubelet then
 	// reports as FailedToRetrieveImagePullSecret. Operator-supplied secrets via
 	// the flag aren't labeled by us and are skipped.
+	// --no-cleanup is honoured here as it is for the RBAC below: an operator
+	// who keeps the Job for debugging and then re-runs the preserved pod would
+	// otherwise hit FailedToRetrieveImagePullSecret, the exact symptom the
+	// per-role secret scoping exists to prevent.
 	defer func() {
-		if !podMayBeRunning {
+		if !noCleanup && !podMayBeRunning {
 			sweepManagedPullSecrets(context.Background(), client, role)
 		}
 	}()
@@ -159,25 +163,38 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	if err != nil {
 		return ClusterValidatorResult{Err: err}
 	}
-	if err := ensureClusterValidatorRBAC(vctx, client, role, runID); err != nil {
-		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
-	}
-	// Remove the ClusterRole and ClusterRoleBinding to minimize the window in
-	// which the elevated SA exists. When --no-cleanup is set the operator
-	// expects to inspect the Job, so the RBAC stays either way.
+	// Register the cleanup before the bootstrap, not after. ensureClusterValidatorRBAC
+	// creates three objects in sequence and returns on the first failure, so a
+	// kubeconfig that can create a ServiceAccount but not a cluster-scoped
+	// ClusterRole would otherwise abandon the ServiceAccount on every attempt.
+	// The names are per-run now, so nothing self-heals by reuse: under --wait
+	// that leaks one object per poll. The sweep is name-scoped and
+	// label-guarded, so running it when nothing was created is a no-op.
 	defer func() {
 		if !noCleanup && !podMayBeRunning {
 			sweepClusterValidatorRBAC(context.Background(), client, role, runID)
 		}
 	}()
+	if err := ensureClusterValidatorRBAC(vctx, client, role, runID); err != nil {
+		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
+	}
 
 	// For the control-plane role, create a ConfigMap with reachability
 	// endpoints and enforcement config so the validator runs its configurable
 	// checks. Best-effort: a failure here is logged but does not abort the
-	// run — the validator gracefully skips configurable checks when the
+	// run - the validator gracefully skips configurable checks when the
 	// ConfigMap is absent.
 	var configNote string
 	if role == clusterValidatorControlPlaneRole {
+		// The ConfigMap is the one object this run creates that had no cleanup
+		// path, so it was left in the cluster forever. Same gating as the
+		// other sweeps: keep it when the pod may still read it, or when the
+		// operator asked to keep the run's artifacts.
+		defer func() {
+			if !noCleanup && !podMayBeRunning {
+				sweepClusterValidatorConfig(context.Background(), client)
+			}
+		}()
 		if err := ensureClusterValidatorConfig(vctx, client, registries); err != nil {
 			// Non-fatal: continue without the ConfigMap; the validator skips
 			// configurable reachability and enforcement checks silently unless
@@ -187,7 +204,12 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	}
 
 	sweepOrphanClusterValidatorRBAC(vctx, client, orphanValidatorRBACTTL)
-	sweepPriorClusterValidatorJobs(vctx, client, role)
+	// Skipped under --no-cleanup: this runs before the new Job is created, so
+	// otherwise the next same-role run destroys the Job the operator asked to
+	// keep. The singleton guarantee is worth less than the artifact they kept.
+	if !noCleanup {
+		sweepPriorClusterValidatorJobs(vctx, client, role)
+	}
 
 	jobName := fmt.Sprintf("%s-%d", clusterValidatorName, time.Now().UnixNano())
 	if _, err := client.BatchV1().Jobs(clusterValidatorNamespace).Create(
@@ -617,7 +639,7 @@ func parseRegistryHostPort(s string) (host string, port int) {
 	}
 	h, p, err := net.SplitHostPort(s)
 	if err != nil {
-		// No port present (e.g. "nvcr.io") — return the input as-is.
+		// No port present (e.g. "nvcr.io") - return the input as-is.
 		return s, 443
 	}
 	if p == "" {
@@ -825,4 +847,16 @@ func kubectlLogsHint(kubeContext, jobName string) string {
 	}
 	return fmt.Sprintf("kubectl%s logs -n %s job/%s --tail=-1",
 		kubectlContextArg(kubeContext), clusterValidatorNamespace, jobName)
+}
+
+// sweepClusterValidatorConfig removes the network-checks ConfigMap this run
+// created. Only ours: the name is a constant an operator could also be using,
+// so the managed labels decide. Errors are swallowed, as with the other sweeps.
+func sweepClusterValidatorConfig(ctx context.Context, client kubernetes.Interface) {
+	cms := client.CoreV1().ConfigMaps(clusterValidatorNamespace)
+	cm, err := cms.Get(ctx, clusterValidatorConfigName, metav1.GetOptions{})
+	if err != nil || !hasValidatorManagedLabels(cm.Labels) {
+		return
+	}
+	_ = cms.Delete(ctx, clusterValidatorConfigName, deleteExactly(cm))
 }

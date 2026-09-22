@@ -423,8 +423,8 @@ func TestRetryAfterFromError_Parsing(t *testing.T) {
 		{"Retry-After: 120s", 120},
 		{"retry-after: 5", 5},
 		{"no header here", 5},        // default
-		{"Retry-After: ", 5},         // no digits → default
-		{"Retry-After: 0", 5},        // zero → default
+		{"Retry-After: ", 5},         // no digits -> default
+		{"Retry-After: 0", 5},        // zero -> default
 		{"Retry-After: 300 ok", 300}, // stops at first non-digit
 	}
 	for _, tc := range cases {

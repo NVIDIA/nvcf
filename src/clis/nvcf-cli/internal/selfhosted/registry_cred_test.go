@@ -34,7 +34,7 @@ import (
 // -- probeRegistryCredential --
 
 func TestProbeRegistryCredential_PublicRegistry(t *testing.T) {
-	// Registry returns 200 on /v2/ with the registry API header → public,
+	// Registry returns 200 on /v2/ with the registry API header -> public,
 	// no credentials needed.
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
@@ -88,7 +88,7 @@ func TestProbeRegistryCredential_AuthSucceeds(t *testing.T) {
 }
 
 func TestProbeRegistryCredential_AuthFails(t *testing.T) {
-	// Registry returns 401 but the token endpoint returns 401 too → bad credentials.
+	// Registry returns 401 but the token endpoint returns 401 too -> bad credentials.
 	tokenSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -179,7 +179,7 @@ func TestEnumerateRegistries_ExtrasAppended(t *testing.T) {
 }
 
 func TestEnumerateRegistries_NoDuplicates(t *testing.T) {
-	// Pass nvcr.io both as the image registry and as an extra — must not dedup.
+	// Pass nvcr.io both as the image registry and as an extra - must not dedup.
 	entries := EnumerateRegistries("nvcr.io/some/image:1.0", "",
 		[]string{"nvcr.io"})
 
@@ -383,4 +383,48 @@ func TestEnumerateRegistries_FallbackDoesNotDuplicateNamedNGC(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, n, "nvcr.io must appear exactly once")
+}
+
+// parseRegistryHostPort returns its input verbatim when SplitHostPort fails,
+// and it fails on an already-bracketed literal with missingPort. Without a
+// prefix guard that arrives here still bracketed and becomes "[[fd00::1]]",
+// which http.NewRequest rejects. The documented bracketed form must work.
+func TestEnumerateRegistries_DoesNotDoubleBracketIPv6(t *testing.T) {
+	for _, in := range []string{"[fd00::1]", "fd00::1"} {
+		got := EnumerateRegistries("", "", []string{in})
+		var found string
+		for _, e := range got {
+			if strings.Contains(e.Registry, "fd00") {
+				found = e.Registry
+			}
+		}
+		assert.Equal(t, "[fd00::1]", found, "input %q must yield a singly-bracketed host", in)
+	}
+}
+
+func TestEnumerateRegistries_KeepsBracketedIPv6WithPort(t *testing.T) {
+	got := EnumerateRegistries("", "", []string{"[fd00::1]:5000"})
+	var found string
+	for _, e := range got {
+		if strings.Contains(e.Registry, "fd00") {
+			found = e.Registry
+		}
+	}
+	assert.Equal(t, "[fd00::1]:5000", found)
+}
+
+// The probe builds "https://" + registry + "/v2/", so a registry string that
+// carries "/" or "@" moves the host. A values file the CLI finds by walking up
+// from CWD must not be able to aim an outbound request.
+func TestEnumerateRegistries_RejectsHostMovingRegistryStrings(t *testing.T) {
+	dir := t.TempDir()
+	values := filepath.Join(dir, "base.yaml")
+	require.NoError(t, os.WriteFile(values,
+		[]byte("global:\n  image:\n    registry: nvcr.io@attacker.example.com\n"), 0o600))
+
+	for _, e := range EnumerateRegistries("nvcr.io@evil.test/x/y:1", values, nil) {
+		assert.NotContains(t, e.Registry, "@", "a host-moving string must not be probed")
+		assert.NotContains(t, e.Registry, "attacker.example.com")
+		assert.NotContains(t, e.Registry, "evil.test")
+	}
 }

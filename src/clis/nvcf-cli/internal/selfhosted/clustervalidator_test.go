@@ -122,6 +122,26 @@ func TestClusterValidatorCheck_OrchestratorErrorStaysWarning(t *testing.T) {
 	assert.Contains(t, r.Message, "cluster-validator did not complete")
 }
 
+// driveJobToSuccess wires the reactors that make a created Job reach a
+// Succeeded terminal state, mirroring TestRunClusterValidator_HappyPath.
+func driveJobToSuccess(client *fake.Clientset) {
+	var jobName atomic.Value
+	jobName.Store("")
+	client.PrependReactor("create", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+		job := action.(ktesting.CreateAction).GetObject().(*batchv1.Job)
+		jobName.Store(job.Name)
+		return false, nil, nil
+	})
+	client.PrependReactor("get", "jobs", func(action ktesting.Action) (bool, runtime.Object, error) {
+		name := jobName.Load().(string)
+		if name == "" {
+			return false, nil, nil
+		}
+		return jobSucceededReactor(name)(action)
+	})
+	client.PrependReactor("list", "pods", podListReactor(""))
+}
+
 func TestRunClusterValidator_HappyPath(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	// Capture the Job name the runner picks, then drive Get/List reactors to
@@ -624,7 +644,7 @@ func TestBuildControlPlaneValidatorConfig_WithExtras(t *testing.T) {
 }
 
 func TestBuildControlPlaneValidatorConfig_InvalidRegistrySkipped(t *testing.T) {
-	// A blank entry is parsed as host="" → skipped; only the valid entry appears.
+	// A blank entry is parsed as host="" -> skipped; only the valid entry appears.
 	got := buildControlPlaneValidatorConfig([]string{"  ", "valid.registry.internal:5000"})
 	assert.Contains(t, got, "valid.registry.internal", "valid registry must appear")
 	// The blank entry must not add an empty host: line.
@@ -639,9 +659,9 @@ func TestParseRegistryHostPort(t *testing.T) {
 	}{
 		{"nvcr.io:443", "nvcr.io", 443},
 		{"harbor.company.internal:5000", "harbor.company.internal", 5000},
-		{"registry.example.com", "registry.example.com", 443}, // no port → 443
-		{"", "", 0},   // empty → skip
-		{"  ", "", 0}, // blank → skip
+		{"registry.example.com", "registry.example.com", 443}, // no port -> 443
+		{"", "", 0},   // empty -> skip
+		{"  ", "", 0}, // blank -> skip
 		// IPv6: net.SplitHostPort handles bracketed literals correctly.
 		{"[::1]:5000", "::1", 5000},
 		{"[2001:db8::1]:443", "2001:db8::1", 443},
@@ -829,4 +849,59 @@ func TestSweepPriorClusterValidatorJobs_RequiresGeneratedName(t *testing.T) {
 
 	_, err = jobs.Get(ctx, clusterValidatorName+"-9999999999", metav1.GetOptions{})
 	assert.NoError(t, err, "the other role's Job must survive")
+}
+
+// The network-checks ConfigMap was the one object a run created with no
+// cleanup path, so it accumulated in the cluster forever.
+func TestSweepClusterValidatorConfig_DeletesOwnAndSparesOperators(t *testing.T) {
+	managed := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: clusterValidatorConfigName, Namespace: clusterValidatorNamespace,
+		Labels: clusterValidatorLabels(),
+	}}
+	client := fake.NewSimpleClientset(managed)
+	sweepClusterValidatorConfig(context.Background(), client)
+	_, err := client.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
+		context.Background(), clusterValidatorConfigName, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "our own ConfigMap must be reclaimed")
+
+	// Same name, operator-owned: the name is a constant they could also use.
+	operator := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: clusterValidatorConfigName, Namespace: clusterValidatorNamespace,
+		Labels: map[string]string{"owner": "operator"},
+	}}
+	client2 := fake.NewSimpleClientset(operator)
+	sweepClusterValidatorConfig(context.Background(), client2)
+	_, err = client2.CoreV1().ConfigMaps(clusterValidatorNamespace).Get(
+		context.Background(), clusterValidatorConfigName, metav1.GetOptions{})
+	assert.NoError(t, err, "an unmanaged ConfigMap with the same name must survive")
+}
+
+// --no-cleanup must preserve the whole run, not just the Job: an operator who
+// keeps the Job and re-runs the pod needs its pull secret to still exist.
+func TestRunClusterValidator_NoCleanupKeepsPullSecretAndPriorJob(t *testing.T) {
+	prior := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name: clusterValidatorName + "-earlier", Namespace: clusterValidatorNamespace,
+		Labels: clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
+	}}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      validatorPullSecretRoleName(clusterValidatorControlPlaneRole),
+			Namespace: clusterValidatorNamespace,
+			Labels:    clusterValidatorRoleLabels(clusterValidatorControlPlaneRole),
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+	}
+	client := fake.NewSimpleClientset(prior, secret)
+	driveJobToSuccess(client)
+
+	runClusterValidator(context.Background(), client, "nvcr.io/x/validator:1",
+		"", true /* noCleanup */, clusterValidatorControlPlaneRole, nil)
+
+	_, err := client.BatchV1().Jobs(clusterValidatorNamespace).Get(
+		context.Background(), prior.Name, metav1.GetOptions{})
+	assert.NoError(t, err, "--no-cleanup must not destroy a deliberately preserved Job")
+
+	_, err = client.CoreV1().Secrets(clusterValidatorNamespace).Get(
+		context.Background(), secret.Name, metav1.GetOptions{})
+	assert.NoError(t, err, "--no-cleanup must keep the pull secret the preserved pod needs")
 }
