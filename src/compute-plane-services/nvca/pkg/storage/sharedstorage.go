@@ -62,6 +62,10 @@ const (
 	readOnlyDirMode   = "0555"
 	readOnlyFileMode  = "0444"
 	smbGID            = uint16(1000)
+
+	conditionTypeTaskDataStorageClassAvailable = "TaskDataStorageClassAvailable"
+	conditionReasonStorageClassFound           = "StorageClassFound"
+	conditionReasonStorageClassNotFound        = "StorageClassNotFound"
 )
 
 //nolint:gocyclo
@@ -152,6 +156,29 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 		stCopy.Status.Phase = nvcav1new.StoragePending
 	case nvcav1new.StoragePending:
 		var objsToCreate []client.Object
+		if taskData := st.Spec.SharedStorage.TaskData; taskData != nil && taskData.StorageClassName != nil {
+			storageClassName := *taskData.StorageClassName
+			found, err := storageClassExists(ctx, r.Client, storageClassName)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			condition := metav1.Condition{
+				Type:    conditionTypeTaskDataStorageClassAvailable,
+				Status:  metav1.ConditionTrue,
+				Reason:  conditionReasonStorageClassFound,
+				Message: fmt.Sprintf("task-data StorageClass %q exists", storageClassName),
+			}
+			if !found {
+				condition.Status = metav1.ConditionFalse
+				condition.Reason = conditionReasonStorageClassNotFound
+				condition.Message = fmt.Sprintf("task-data StorageClass %q does not exist", storageClassName)
+				meta.SetStatusCondition(&stCopy.Status.Conditions, condition)
+				rerr = reconcile.TerminalError(fmt.Errorf("task-data StorageClass %q not found", storageClassName))
+				stCopy.Status.Phase = nvcav1new.StorageFailed
+				goto done
+			}
+			meta.SetStatusCondition(&stCopy.Status.Conditions, condition)
+		}
 
 		configureSMBPod(smbPod, st)
 
