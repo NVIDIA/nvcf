@@ -81,8 +81,14 @@ type RateLimitRequest struct {
 	// user-tier rate limit is enforced on top of the NCA-tier limit. Empty value
 	// skips user-tier checks (legacy behavior).
 	ClientAuthSubject string `protobuf:"bytes,4,opt,name=clientAuthSubject,proto3" json:"clientAuthSubject,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// ownerNcaId is the account the invoking key's owner belongs to, as opposed to
+	// ncaId which is the account the request is authorized against. These differ
+	// only for keys whose owner was granted access to another account.
+	// When set, rate limiting uses ownerNcaId in place of ncaId: per-NCA-ID rate
+	// matching, excluded NCA IDs, and counter keys. Empty falls back to ncaId.
+	OwnerNcaId    string `protobuf:"bytes,5,opt,name=ownerNcaId,proto3" json:"ownerNcaId,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RateLimitRequest) Reset() {
@@ -143,6 +149,13 @@ func (x *RateLimitRequest) GetClientAuthSubject() string {
 	return ""
 }
 
+func (x *RateLimitRequest) GetOwnerNcaId() string {
+	if x != nil {
+		return x.OwnerNcaId
+	}
+	return ""
+}
+
 type RateLimitResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Result        RateLimitResult        `protobuf:"varint,1,opt,name=result,proto3,enum=nvcfratelimiter.RateLimitResult" json:"result,omitempty"`
@@ -191,14 +204,17 @@ var File_ratelimiter_proto protoreflect.FileDescriptor
 
 const file_ratelimiter_proto_rawDesc = "" +
 	"\n" +
-	"\x11ratelimiter.proto\x12\x0fnvcfratelimiter\"\xa4\x01\n" +
+	"\x11ratelimiter.proto\x12\x0fnvcfratelimiter\"\xc4\x01\n" +
 	"\x10RateLimitRequest\x12\x14\n" +
 	"\x05ncaId\x18\x01 \x01(\tR\x05ncaId\x12\x1e\n" +
 	"\n" +
 	"functionId\x18\x02 \x01(\tR\n" +
 	"functionId\x12,\n" +
 	"\x11functionVersionId\x18\x03 \x01(\tR\x11functionVersionId\x12,\n" +
-	"\x11clientAuthSubject\x18\x04 \x01(\tR\x11clientAuthSubject\"M\n" +
+	"\x11clientAuthSubject\x18\x04 \x01(\tR\x11clientAuthSubject\x12\x1e\n" +
+	"\n" +
+	"ownerNcaId\x18\x05 \x01(\tR\n" +
+	"ownerNcaId\"M\n" +
 	"\x11RateLimitResponse\x128\n" +
 	"\x06result\x18\x01 \x01(\x0e2 .nvcfratelimiter.RateLimitResultR\x06result**\n" +
 	"\x0fRateLimitResult\x12\t\n" +
