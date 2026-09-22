@@ -200,7 +200,8 @@ export COMPUTE_STACK_VERSION="1.0.0"
 export OBSERVABILITY_STACK_VERSION="1.0.0"
 
 # Download a specific control-plane stack version
-# Publication pending: nvcf-self-managed-stack 1.0.1 is not yet available for download.
+ngc registry resource download-version \
+  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
 
 # Download a specific compute-plane stack version
 # Publication pending: nvcf-compute-plane-stack 1.0.0 is not yet available for download.
@@ -226,7 +227,13 @@ and its listed artifact versions are QA-qualified together.
 {/*docs-version-sync:BEGIN image-mirroring-stack-snippet*/}
 
 ```bash
-# Publication pending: nvcf-self-managed-stack 1.0.1 is not yet available for download.
+# Set the version
+export VERSION="1.0.1"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
+   mkdir -p nvcf-self-managed-stack && \
+   tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
+   rm -rf nvcf-self-managed-stack_v${VERSION}
 ```
 
 {/*docs-version-sync:END image-mirroring-stack-snippet*/}
