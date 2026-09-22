@@ -161,6 +161,13 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 			storageClassName := *taskData.StorageClassName
 			found, err := storageClassExists(ctx, r.Client, storageClassName)
 			if err != nil {
+				if nvcak8sutil.IsTransientK8sError(err) {
+					log.V(1).Info("Transient error checking task-data StorageClass, will retry",
+						"storage_class", storageClassName, "error", err)
+					return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
+				}
+				log.Error(err, "Non-transient error checking task-data StorageClass",
+					"storage_class", storageClassName)
 				return reconcile.Result{}, err
 			}
 			condition := metav1.Condition{
