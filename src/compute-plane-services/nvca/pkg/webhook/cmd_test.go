@@ -44,6 +44,7 @@ import (
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/bombsimon/logrusr/v4"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -726,8 +727,8 @@ func TestManagerRouterHandlerTimeout(t *testing.T) {
 			_, _ = w.Write([]byte("ok"))
 		})
 	}
-	handleWebhook(ctx, r, "/within-deadline", sleepHandler(handlerTimeout/3))
-	handleWebhook(ctx, r, "/over-deadline", sleepHandler(handlerTimeout*3))
+	handleWebhook(ctx, r, "/within-deadline", sleepHandler(handlerTimeout/3), handlerTimeout)
+	handleWebhook(ctx, r, "/over-deadline", sleepHandler(handlerTimeout*3), handlerTimeout)
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -749,5 +750,11 @@ func TestManagerRouterHandlerTimeout(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, code,
 		"http.TimeoutHandler answers an overrun with a plain 503, which the API server reports as "+
 			"'the server is currently unable to handle the request'")
-	assert.Contains(t, body, "Request timed out")
+	assert.Equal(t, admissionTimeoutBody, body, "the webhook deadline fires, not the router backstop")
+
+	// The deadline is applied inside the metrics wrapper, so the 503 is counted.
+	reqTotal := whmetrics.FromContext(ctx).RequestTotal
+	assert.Equal(t, 1.0, testutil.ToFloat64(reqTotal.WithLabelValues("/over-deadline", "503")))
+	assert.Equal(t, 0.0, testutil.ToFloat64(reqTotal.WithLabelValues("/over-deadline", "200")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(reqTotal.WithLabelValues("/within-deadline", "200")))
 }
