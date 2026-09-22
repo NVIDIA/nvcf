@@ -1,6 +1,16 @@
 {
     "title": "Chart Values",
     "type": "object",
+    "definitions": {
+        "resourceQuantity": {
+            "type": "string",
+            "pattern": "^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        },
+        "optionalResourceQuantity": {
+            "type": "string",
+            "pattern": "^$|^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        }
+    },
     "properties": {
         "image": {
             "type": "object",
@@ -63,11 +73,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the OTel collector container",
                                     "default": "1000m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the OTel collector container",
                                     "default": "1Gi"
                                 }
@@ -78,11 +90,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the OTel collector container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the OTel collector container",
                                     "default": "256Mi"
                                 }
@@ -267,13 +281,13 @@
                         "limits": {
                             "type": "object",
                             "additionalProperties": {
-                                "type": "string"
+                                "$ref": "#/definitions/resourceQuantity"
                             }
                         },
                         "requests": {
                             "type": "object",
                             "additionalProperties": {
-                                "type": "string"
+                                "$ref": "#/definitions/resourceQuantity"
                             }
                         }
                     }
@@ -300,7 +314,7 @@
                 "additionalResourceOverhead": {
                     "type": "object",
                     "additionalProperties": {
-                        "type": "string"
+                        "$ref": "#/definitions/resourceQuantity"
                     }
                 },
                 "fluentbit": {
@@ -312,13 +326,13 @@
                                 "limits": {
                                     "type": "object",
                                     "additionalProperties": {
-                                        "type": "string"
+                                        "$ref": "#/definitions/resourceQuantity"
                                     }
                                 },
                                 "requests": {
                                     "type": "object",
                                     "additionalProperties": {
-                                        "type": "string"
+                                        "$ref": "#/definitions/resourceQuantity"
                                     }
                                 }
                             }
@@ -334,7 +348,7 @@
                     "type": "object",
                     "description": "Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.",
                     "additionalProperties": {
-                        "type": "string"
+                        "$ref": "#/definitions/resourceQuantity"
                     }
                 }
             }
@@ -359,13 +373,13 @@
                                         "limits": {
                                             "type": "object",
                                             "additionalProperties": {
-                                                "type": "string"
+                                                "$ref": "#/definitions/resourceQuantity"
                                             }
                                         },
                                         "requests": {
                                             "type": "object",
                                             "additionalProperties": {
-                                                "type": "string"
+                                                "$ref": "#/definitions/resourceQuantity"
                                             }
                                         }
                                     }
@@ -388,6 +402,7 @@
                                 },
                                 "storageCapacity": {
                                     "type": "string",
+                                    "$ref": "#/definitions/optionalResourceQuantity",
                                     "default": ""
                                 }
                             }
@@ -404,7 +419,7 @@
                         "hardResourceQuota": {
                             "type": "object",
                             "additionalProperties": {
-                                "type": "string"
+                                "$ref": "#/definitions/resourceQuantity"
                             }
                         }
                     }
@@ -552,11 +567,13 @@
                     "properties": {
                         "cpu": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "CPU limit for the nvca-operator container",
                             "default": "500m"
                         },
                         "memory": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "Memory limit for the nvca-operator container",
                             "default": "500Mi"
                         }
@@ -567,11 +584,13 @@
                     "properties": {
                         "cpu": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "CPU request for the nvca-operator container",
                             "default": "50m"
                         },
                         "memory": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "Memory request for the nvca-operator container",
                             "default": "50Mi"
                         }
@@ -590,11 +609,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the nvca agent container",
                                     "default": "1000m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the nvca agent container",
                                     "default": "4Gi"
                                 }
@@ -605,11 +626,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the nvca agent container",
                                     "default": "100m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the nvca agent container",
                                     "default": "200Mi"
                                 }
@@ -811,11 +834,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the nvca webhook container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the nvca webhook container",
                                     "default": "200Mi"
                                 }
@@ -826,11 +851,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the nvca webhook container",
                                     "default": "50m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the nvca webhook container",
                                     "default": "50Mi"
                                 }
@@ -1374,11 +1401,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the cluster-validator container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the cluster-validator container",
                                     "default": "128Mi"
                                 }
@@ -1389,11 +1418,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the cluster-validator container",
                                     "default": "100m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the cluster-validator container",
                                     "default": "64Mi"
                                 }

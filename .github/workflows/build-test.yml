@@ -112,6 +112,9 @@ jobs:
           NVCA_OTEL_COLLECTOR_IMAGE_TAG="$(yq '.otelCollector.imageTag' nvca-operator/values.yaml)" \
             make check-vendor-chart
 
+      - name: Test NVCA chart resource quantity schema
+        run: |
+          make -C deploy/helm/nvca-operator test-resource-quantity-schema
       - name: Run self-managed Helmfile render tests
         run: make -C deploy/stacks/self-managed test
 
