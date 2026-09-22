@@ -931,35 +931,51 @@ func TestDoSharedStorageSMB_TaskDataStorageClass(t *testing.T) {
 	storageClassName := "task-data"
 
 	for _, tt := range []struct {
-		name            string
-		storageClasses  []client.Object
-		wantPhase       nvcav1new.StoragePhase
-		wantStatus      metav1.ConditionStatus
-		wantReason      string
-		wantErrContains string
+		name                string
+		storageClassName    string
+		storageClassPresent bool
+		wantPhase           nvcav1new.StoragePhase
+		wantCondition       bool
+		wantStatus          metav1.ConditionStatus
+		wantReason          string
+		wantErrContains     string
 	}{
 		{
-			name:            "missing",
-			wantPhase:       nvcav1new.StorageFailed,
-			wantStatus:      metav1.ConditionFalse,
-			wantReason:      conditionReasonStorageClassNotFound,
-			wantErrContains: `task-data StorageClass "task-data" not found`,
+			name:             "missing",
+			storageClassName: storageClassName,
+			wantPhase:        nvcav1new.StorageFailed,
+			wantCondition:    true,
+			wantStatus:       metav1.ConditionFalse,
+			wantReason:       conditionReasonStorageClassNotFound,
+			wantErrContains:  `task-data StorageClass "task-data" not found`,
 		},
 		{
-			name: "available",
-			storageClasses: []client.Object{&storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{Name: storageClassName},
-			}},
-			wantPhase:  nvcav1new.StorageInitRunning,
-			wantStatus: metav1.ConditionTrue,
-			wantReason: conditionReasonStorageClassFound,
+			name:                "available",
+			storageClassName:    storageClassName,
+			storageClassPresent: true,
+			wantPhase:           nvcav1new.StorageInitRunning,
+			wantCondition:       true,
+			wantStatus:          metav1.ConditionTrue,
+			wantReason:          conditionReasonStorageClassFound,
+		},
+		{
+			name:      "explicit empty class",
+			wantPhase: nvcav1new.StorageInitRunning,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sch := newTestScheme()
-			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "task-data-" + tt.name}}
-			objects := append([]client.Object{namespace}, tt.storageClasses...)
+			namespace := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "task-data-" + strings.ReplaceAll(tt.name, " ", "-")},
+			}
+			objects := []client.Object{namespace}
+			if tt.storageClassPresent {
+				objects = append(objects, &storagev1.StorageClass{
+					ObjectMeta: metav1.ObjectMeta{Name: tt.storageClassName},
+				})
+			}
 			k8sClient := newFakeClient(sch, objects...)
+			configuredStorageClassName := tt.storageClassName
 			stReq := &nvcav1new.StorageRequest{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "shared-storage",
@@ -972,7 +988,7 @@ func TestDoSharedStorageSMB_TaskDataStorageClass(t *testing.T) {
 						SMBContainerImage: "smb:latest",
 						Size:              resource.MustParse("1Gi"),
 						TaskData: &nvcav1new.SharedStorageTaskDataSpec{
-							StorageClassName: &storageClassName,
+							StorageClassName: &configuredStorageClassName,
 							Size:             resource.MustParse("1Gi"),
 						},
 					},
@@ -992,10 +1008,14 @@ func TestDoSharedStorageSMB_TaskDataStorageClass(t *testing.T) {
 			assert.Equal(t, tt.wantPhase, stCopy.Status.Phase)
 			condition := meta.FindStatusCondition(
 				stCopy.Status.Conditions, conditionTypeTaskDataStorageClassAvailable)
-			require.NotNil(t, condition)
-			assert.Equal(t, tt.wantStatus, condition.Status)
-			assert.Equal(t, tt.wantReason, condition.Reason)
-			assert.Contains(t, condition.Message, storageClassName)
+			if tt.wantCondition {
+				require.NotNil(t, condition)
+				assert.Equal(t, tt.wantStatus, condition.Status)
+				assert.Equal(t, tt.wantReason, condition.Reason)
+				assert.Contains(t, condition.Message, tt.storageClassName)
+			} else {
+				assert.Nil(t, condition)
+			}
 
 			if tt.wantPhase == nvcav1new.StorageFailed {
 				err := k8sClient.Get(ctx, client.ObjectKey{

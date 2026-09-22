@@ -156,7 +156,8 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 		stCopy.Status.Phase = nvcav1new.StoragePending
 	case nvcav1new.StoragePending:
 		var objsToCreate []client.Object
-		if taskData := st.Spec.SharedStorage.TaskData; taskData != nil && taskData.StorageClassName != nil {
+		if taskData := st.Spec.SharedStorage.TaskData; taskData != nil && taskData.StorageClassName != nil &&
+			*taskData.StorageClassName != "" {
 			storageClassName := *taskData.StorageClassName
 			found, err := storageClassExists(ctx, r.Client, storageClassName)
 			if err != nil {
