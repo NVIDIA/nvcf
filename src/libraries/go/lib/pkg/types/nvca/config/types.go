@@ -777,6 +777,22 @@ type SharedStorageTaskDataConfig struct {
 	StorageCapacity resource.Quantity `yaml:",omitempty"`
 }
 
+func (c SharedStorageTaskDataConfig) MarshalYAML() (any, error) {
+	storageCapacity := ""
+	if !c.StorageCapacity.IsZero() {
+		storageCapacity = c.StorageCapacity.String()
+	}
+	return struct {
+		StorageClassName *string  `yaml:"storageClassName,omitempty"`
+		PVMountOptions   []string `yaml:"pvMountOptions,omitempty"`
+		StorageCapacity  string   `yaml:"storageCapacity,omitempty"`
+	}{
+		StorageClassName: c.StorageClassName,
+		PVMountOptions:   c.PVMountOptions,
+		StorageCapacity:  storageCapacity,
+	}, nil
+}
+
 type ModelCacheConfig struct {
 	// StorageClassName is the storage class model cache volumes are provisioned on. Empty uses the default.
 	// Both the storage controller (which creates the volumes) and model cache backend selection (which checks
