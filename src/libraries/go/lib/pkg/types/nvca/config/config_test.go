@@ -181,6 +181,28 @@ func TestConfig_DecodeSharedStorageCapacity(t *testing.T) {
 	})
 }
 
+func TestConfig_EncodeSharedStorageCapacity(t *testing.T) {
+	want := resource.MustParse("20Gi")
+	cfg := Config{
+		Agent: AgentConfig{
+			SharedStorage: SharedStorageConfig{
+				TaskData: SharedStorageTaskDataConfig{
+					StorageCapacity: want,
+				},
+			},
+		},
+	}
+
+	encoded, err := EncodeConfig(cfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), "storageCapacity: 20Gi")
+	assert.NotContains(t, string(encoded), "format: BinarySI")
+
+	decoded, err := DecodeConfig(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, want, decoded.Agent.SharedStorage.TaskData.StorageCapacity)
+}
+
 func TestStringToResourceQuantityHookFunc_IgnoresUnsupportedTypes(t *testing.T) {
 	quantityType := reflect.TypeFor[resource.Quantity]()
 	tests := []struct {
