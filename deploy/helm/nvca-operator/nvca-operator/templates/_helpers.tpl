@@ -183,6 +183,9 @@ transition.
 {{- $_ := set $agent "sharedStorage" $sharedStorageEffective -}}
 {{- end -}}
 {{- $internalPersistentStorage := $storage.internalPersistentStorage | default dict -}}
+{{- if and $internalPersistentStorage.hardResourceQuota (not $internalPersistentStorage.storageClassName) -}}
+{{- fail "storage.internalPersistentStorage.storageClassName is required when hardResourceQuota is configured" -}}
+{{- end -}}
 {{- $ipsEffective := dict -}}
 {{- with $internalPersistentStorage.storageClassName }}
 {{- $_ := set $ipsEffective "storageClassName" . -}}

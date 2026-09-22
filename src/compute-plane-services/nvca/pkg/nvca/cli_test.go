@@ -34,6 +34,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cli "github.com/urfave/cli/v2"
+	corev1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -299,6 +300,71 @@ workload:
 		}
 		assert.NoError(t, err)
 		assert.Equal(t, "LogPosting,-HelmResourceConstraints", gotFFs)
+	})
+
+	t.Run("internal persistent storage config activates runtime feature", func(t *testing.T) {
+		t.Setenv("NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64", "")
+		a, block := newMockCLIAgent()
+		cmd := newCobraCommand(
+			newAgentFunc(a),
+			setFlag,
+			initLogger,
+		)
+
+		cfgFilePath := filepath.Join(t.TempDir(), "config.yaml")
+		err := os.WriteFile(cfgFilePath, []byte(`
+agent:
+  icmsURL: https://test.example.com
+  internalPersistentStorage:
+    storageClassName: gp2
+    hardResourceQuota:
+      requests.storage: 7Gi
+`), 0600)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		errCh := make(chan error)
+		go func() {
+			cmd.SetArgs([]string{"--config=" + cfgFilePath})
+			errCh <- cmd.ExecuteContext(ctx)
+		}()
+
+		select {
+		case <-block:
+			cancel()
+			err = <-errCh
+		case err = <-errCh:
+			cancel()
+		}
+		require.NoError(t, err)
+		assert.True(t, featureflag.HelmInternalPersistentStorage.Enabled())
+		assert.Equal(t, "gp2", featureflag.HelmInternalPersistentStorage.Spec.StorageClassName)
+		quota := featureflag.HelmInternalPersistentStorage.Spec.ResourceQuota.Hard[corev1.ResourceRequestsStorage]
+		assert.Equal(t, "7Gi", quota.String())
+	})
+
+	t.Run("invalid internal persistent storage config fails startup", func(t *testing.T) {
+		t.Setenv("NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64", "")
+		a, _ := newMockCLIAgent()
+		cmd := newCobraCommand(
+			newAgentFunc(a),
+			setFlag,
+			initLogger,
+		)
+
+		cfgFilePath := filepath.Join(t.TempDir(), "config.yaml")
+		err := os.WriteFile(cfgFilePath, []byte(`
+agent:
+  icmsURL: https://test.example.com
+  internalPersistentStorage:
+    hardResourceQuota:
+      requests.storage: 7Gi
+`), 0600)
+		require.NoError(t, err)
+
+		cmd.SetArgs([]string{"--config=" + cfgFilePath})
+		err = cmd.ExecuteContext(t.Context())
+		require.ErrorContains(t, err, "agent.internalPersistentStorage.storageClassName is required")
 	})
 }
 

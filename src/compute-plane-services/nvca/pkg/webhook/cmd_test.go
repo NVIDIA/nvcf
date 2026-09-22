@@ -48,6 +48,7 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	v1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
@@ -143,6 +144,13 @@ func newTestLogger(debug ...bool) *logrus.Entry {
 }
 
 func TestCmd(t *testing.T) {
+	t.Setenv("NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64", "")
+	t.Cleanup(func() {
+		require.NoError(t, featureflag.ConfigureHelmInternalPersistentStorage(
+			core.WithDefaultLogger(context.Background()),
+			nvcaconfig.InternalPersistentStorageConfig{},
+		))
+	})
 	cmd := NewCommand()
 
 	ctx := t.Context()
@@ -171,6 +179,11 @@ func TestCmd(t *testing.T) {
 	}
 
 	cfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			InternalPersistentStorage: nvcaconfig.InternalPersistentStorageConfig{
+				StorageClassName: "gp2",
+			},
+		},
 		Webhook: nvcaconfig.WebhookConfig{
 			SvcAddress:  addr,
 			TLSCertFile: certFilePath,
@@ -213,6 +226,8 @@ func TestCmd(t *testing.T) {
 			assert.EqualValues(ct, http.StatusOK, res.StatusCode)
 		}
 	}, 5*time.Second, 100*time.Millisecond)
+	assert.True(t, featureflag.HelmInternalPersistentStorage.Enabled())
+	assert.Equal(t, "gp2", featureflag.HelmInternalPersistentStorage.Spec.StorageClassName)
 
 	// Service req/res limit tests.
 	var bodySize int64 = 5000000
@@ -279,6 +294,28 @@ func TestCmd(t *testing.T) {
 	cancel()
 	<-runReturned
 	assert.NoError(t, runErr)
+}
+
+func TestCmdRejectsInvalidInternalPersistentStorageConfig(t *testing.T) {
+	t.Setenv("NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64", "")
+	cfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			InternalPersistentStorage: nvcaconfig.InternalPersistentStorageConfig{
+				HardResourceQuota: nvcaconfig.ResourceList{
+					v1.ResourceRequestsStorage: resource.MustParse("7Gi"),
+				},
+			},
+		},
+	}
+	cfgBytes, err := nvcaconfig.EncodeConfig(cfg)
+	require.NoError(t, err)
+	cfgFilePath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFilePath, cfgBytes, 0600))
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"--config", cfgFilePath})
+	err = cmd.ExecuteContext(t.Context())
+	require.ErrorContains(t, err, "agent.internalPersistentStorage.storageClassName is required")
 }
 
 func TestManagerRunTLS(t *testing.T) {

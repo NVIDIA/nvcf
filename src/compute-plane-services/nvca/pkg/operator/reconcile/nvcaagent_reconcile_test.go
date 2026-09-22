@@ -2380,99 +2380,6 @@ func Test_NVLinkOptimized(t *testing.T) {
 	assert.Equal(t, expCRole, gotCRole)
 }
 
-func TestGetInternalPersistentStorageConfig(t *testing.T) {
-	tests := []struct {
-		name        string
-		nb          *nvidiaiov1.NVCFBackend
-		expected    string
-		expectedErr bool
-	}{
-		{
-			name: "empty feature gate",
-			nb: &nvidiaiov1.NVCFBackend{
-				Spec: nvidiaiov1.NVCFBackendSpec{
-					Overrides: &nvidiaiov1.NVCFBackendSpecT{
-						FeatureGate: nvidiaiov1.FeatureGate{
-							InternalPersistentStorage: nil,
-						},
-					},
-				},
-			},
-			expected:    "",
-			expectedErr: false,
-		},
-		{
-			name: "feature gate disabled",
-			nb: &nvidiaiov1.NVCFBackend{
-				Spec: nvidiaiov1.NVCFBackendSpec{
-					Overrides: &nvidiaiov1.NVCFBackendSpecT{
-						FeatureGate: nvidiaiov1.FeatureGate{
-							InternalPersistentStorage: &nvidiaiov1.InternalPersistentStorageSpec{
-								Enabled: false,
-							},
-						},
-					},
-				},
-			},
-			expected:    "",
-			expectedErr: false,
-		},
-		{
-			name: "missing storage class name",
-			nb: &nvidiaiov1.NVCFBackend{
-				Spec: nvidiaiov1.NVCFBackendSpec{
-					Overrides: &nvidiaiov1.NVCFBackendSpecT{
-						FeatureGate: nvidiaiov1.FeatureGate{
-							InternalPersistentStorage: &nvidiaiov1.InternalPersistentStorageSpec{
-								Enabled: true,
-							},
-						},
-					},
-				},
-			},
-			expected:    "",
-			expectedErr: true,
-		},
-		{
-			name: "valid config",
-			nb: &nvidiaiov1.NVCFBackend{
-				Spec: nvidiaiov1.NVCFBackendSpec{
-					Overrides: &nvidiaiov1.NVCFBackendSpecT{
-						FeatureGate: nvidiaiov1.FeatureGate{
-							InternalPersistentStorage: &nvidiaiov1.InternalPersistentStorageSpec{
-								Enabled:          true,
-								StorageClassName: "my-storage-class",
-								ResourceQuota: nvidiaiov1.InternalPersistentStorageResourceQuotaSpec{
-									Hard: map[corev1.ResourceName]resource.Quantity{
-										corev1.ResourceRequestsStorage: resource.MustParse("1Gi"),
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			expected:    "eyJlbmFibGVkIjp0cnVlLCJzdG9yYWdlQ2xhc3NOYW1lIjoibXktc3RvcmFnZS1jbGFzcyIsInJlc291cmNlUXVvdGEiOnsiaGFyZCI6eyJyZXF1ZXN0cy5zdG9yYWdlIjoiMUdpIn19fQo=",
-			expectedErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			err := mergeOverrides(tt.nb)
-			require.NoError(t, err)
-			actual, err := getInternalPersistentStorageConfig(ctx, tt.nb)
-			if tt.expectedErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.Equal(t, tt.expected, actual)
-		})
-	}
-}
-
 func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	expNPNames := []string{
 		EgressNetworkPolicyNameKey,
@@ -5226,6 +5133,53 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 	assert.Equal(t, "sha256:95b3dc7dfd3212a6f02c644527f0a65890a9a9c80acf7551be6aa89b1f98fe86",
 		gotCfg.Workload.TransportTLS.TrustBundleFingerprint)
 	assert.Equal(t, transportTrustTestPEM, gotCfg.Workload.TransportTLS.TrustBundlePEM)
+}
+
+func TestSetupAgentConfigConfigMapMergesInternalPersistentStorageFromChartConfig(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+
+	mergeCfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			InternalPersistentStorage: nvcaconfig.InternalPersistentStorageConfig{
+				StorageClassName: "gp2",
+				HardResourceQuota: nvcaconfig.ResourceList{
+					corev1.ResourceRequestsStorage: resource.MustParse("7Gi"),
+				},
+			},
+		},
+	}
+	mergeCfgBytes, err := nvcaconfig.EncodeConfig(mergeCfg)
+	require.NoError(t, err)
+
+	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{agentConfigFile: string(mergeCfgBytes)},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+	require.NoError(t, bc.setupAgentConfigConfigMap(ctx, desiredConfigMap))
+
+	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(
+		ctx, agentConfigConfigMapName, metav1.GetOptions{})
+	require.NoError(t, err)
+	gotCfg, err := nvcaconfig.DecodeConfig([]byte(gotCM.Data[agentConfigFile]))
+	require.NoError(t, err)
+
+	assert.Equal(t, "gp2", gotCfg.Agent.InternalPersistentStorage.StorageClassName)
+	assert.Equal(t, resource.MustParse("7Gi"),
+		corev1.ResourceList(gotCfg.Agent.InternalPersistentStorage.HardResourceQuota)[corev1.ResourceRequestsStorage])
 }
 
 func TestGetChartDefaultAgentConfig(t *testing.T) {
