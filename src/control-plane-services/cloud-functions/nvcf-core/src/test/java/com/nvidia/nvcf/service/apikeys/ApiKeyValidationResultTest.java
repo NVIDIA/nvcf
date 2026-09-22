@@ -18,8 +18,10 @@ package com.nvidia.nvcf.service.apikeys;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.Policy;
 import com.nvidia.nvcf.service.apikeys.ApiKeyValidationResult.Resource;
 import java.util.List;
 import java.util.UUID;
@@ -28,8 +30,34 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import tools.jackson.databind.json.JsonMapper;
 
 class ApiKeyValidationResultTest {
+
+    private static final JsonMapper OBJECT_MAPPER = new JsonMapper();
+
+    @Test
+    void deserializesOwnerNcaIdFromResponse() {
+        var json = """
+                {"allowed": true, "ncaId": "nca-1", "ownerNcaId": "owner-nca-1",
+                 "ownerId": "owner-1",
+                 "policy": {"resources": [], "scopes": [], "product": "nv-cloud-functions"}}
+                """;
+
+        var result = OBJECT_MAPPER.readValue(json, ApiKeyValidationResult.class);
+
+        assertEquals("nca-1", result.ncaId());
+        assertEquals("owner-nca-1", result.ownerNcaId());
+    }
+
+    @Test
+    void validDoesNotRequireOwnerNcaId() {
+        var result = new ApiKeyValidationResult(true, "nca-1", null, "owner-1",
+                new Policy(List.of(), List.of(), "nv-cloud-functions"));
+
+        assertNull(result.ownerNcaId());
+        assertTrue(result.valid());
+    }
 
     static Stream<Arguments> resourceMatchesFunctionArgs() {
         var FID1 = UUID.fromString("3c000ce0-87a7-4a15-bf32-c77f088f2975");
